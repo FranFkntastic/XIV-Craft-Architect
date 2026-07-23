@@ -17,7 +17,6 @@
 @inject IndexedDbService IndexedDb
 @inject WebPlanPersistenceService PlanPersistence
 @inject AcquisitionDecisionService AcquisitionDecisionService
-@inject MarketEvidenceHydrationService MarketEvidenceHydration
 @inject ILogger<Index> Logger
 @implements IDisposable
 
@@ -251,15 +250,21 @@
 
     private async Task OpenPlanEditorAsync()
     {
-        if (AppState.CurrentPlan == null)
+        var stored = await WorkerSession.ExportStoredPlanAsync(
+            "editor",
+            _recipe?.PlanName ?? "Plan");
+        var currentPlan = stored?.PlanJson is { Length: > 0 } planJson
+            ? RecipeCalculationService.DeserializePlan(planJson)
+            : null;
+        if (currentPlan == null || stored is null)
         {
             return;
         }
 
         var parameters = new DialogParameters
         {
-            ["CurrentPlan"] = AppState.CurrentPlan,
-            ["SelectedNode"] = AppState.CurrentPlan.FindNodeByNodeId(_selectedNode?.NodeId)
+            ["CurrentPlan"] = currentPlan,
+            ["SelectedNode"] = currentPlan.FindNodeByNodeId(_selectedNode?.NodeId)
         };
         var options = new DialogOptions
         {
@@ -275,13 +280,39 @@
             return;
         }
 
-        var editResult = RecipePlannerCommandService.ApplyPlanEditorEdit(new ApplyPlanEditorEditRequest(
-            editorResult.NodeIds,
-            editorResult.Options,
-            editorResult.RequireHqMaterials));
-        await WorkerSession.CommitCurrentCandidateAsync();
+        var selectedNodeIds = editorResult.NodeIds.ToHashSet(StringComparer.Ordinal);
+        var selectedNodes = PlanBulkEditService
+            .FlattenPlanNodes(currentPlan)
+            .Where(row => selectedNodeIds.Contains(row.Node.NodeId))
+            .Select(row => row.Node)
+            .ToList();
+        var editResult = PlanBulkEditService.ApplyBulkEdit(
+            selectedNodes,
+            editorResult.Options);
+        if (editorResult.RequireHqMaterials)
+        {
+            foreach (var node in selectedNodes.Where(node => node.Children.Any()))
+            {
+                var materialResult = PlanBulkEditService.RequireHqMaterials(
+                    node,
+                    includeNested: true);
+                editResult.ChangedNodes += materialResult.ChangedNodes;
+                editResult.SkippedNodes += materialResult.SkippedNodes;
+                editResult.SwitchedMarketBuys += materialResult.SwitchedMarketBuys;
+            }
+        }
+        stored.PlanJson = RecipeCalculationService.SerializePlan(currentPlan);
+        stored.MarketPlansJson = null;
+        stored.MarketIntelligenceJson = null;
+        stored.MarketItemAnalysesJson = null;
+        stored.ProcurementRouteJson = null;
+        await WorkerSession.ReplaceStoredPlanAsync(
+            stored,
+            trackStoredPlanIdentity: false);
         _recipe = await WorkerSession.GetRecipeProjectionAsync();
-        Snackbar.Add(editResult.Message, Severity.Success);
+        Snackbar.Add(
+            $"Updated {editResult.ChangedNodes} node{(editResult.ChangedNodes == 1 ? "" : "s")}; skipped {editResult.SkippedNodes}.",
+            Severity.Success);
     }
 
     private async Task BuildPlanAsync()
@@ -299,13 +330,9 @@
                     _recipe.ProjectItems,
                     _recipe.SelectedDataCenter,
                     _recipe.SelectedRegion,
-                    AppState.DefaultMarketFetchScope));
+                    MarketFetchScope.EntireRegion));
             _recipe = result.Recipe;
             _selectedNode = result.Recipe.Roots.FirstOrDefault();
-            if (result.Built)
-            {
-                MarketEvidenceHydration.ScheduleForCurrentPlan();
-            }
             Snackbar.Add(
                 result.Message,
                 result.MessageLevel switch
@@ -358,7 +385,6 @@
                 request.Node.ItemId,
                 Source: null,
                 MustBeHq: request.MustBeHq));
-        MarketEvidenceHydration.ScheduleForCurrentPlan();
     }
 
     private static WorkerRecipeNodeProjection? FindRecipeNode(
@@ -388,29 +414,34 @@
 
     private async Task SaveToBrowserAsync()
     {
-        if (!AppState.HasProjectItems)
+        if (_recipe?.ProjectItems.Count is not > 0)
             return;
 
         try
         {
-            // Use existing plan ID if available (overwrite), otherwise generate new
-            var planId = AppState.CurrentPlanId ?? Guid.NewGuid().ToString();
-            var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? $"Plan_{DateTime.Now:yyyyMMdd_HHmm}";
-            var isNewSave = AppState.CurrentPlanId == null;
-
-            // If this is a new save (no CurrentPlanId), set it for future overwrites
-            if (isNewSave)
-            {
-                AppState.TrackCurrentPlanIdentity(planId, planName);
-            }
-
-            var existingSummary = AppState.SavedPlans.FirstOrDefault(plan => plan.Id == planId);
-            var success = await PlanPersistence.SaveCurrentPlanAsync(
+            var planId = _recipe.PlanId ?? Guid.NewGuid().ToString();
+            var planName = _recipe.PlanName ?? $"Plan_{DateTime.Now:yyyyMMdd_HHmm}";
+            var isNewSave = _recipe.PlanId == null;
+            var snapshot = await WorkerSession.ExportStoredPlanAsync(
                 planId,
                 planName,
-                existingSummary?.SavedAt);
+                includeSourcePlanIdentity: true);
+            if (snapshot is null)
+            {
+                return;
+            }
+            snapshot.SourcePlanId = planId;
+            snapshot.SourcePlanName = planName;
+            var success = await PlanPersistence.SaveSnapshotAsync(snapshot);
             if (success)
             {
+                if (isNewSave)
+                {
+                    await WorkerSession.ReplaceStoredPlanAsync(
+                        snapshot,
+                        trackStoredPlanIdentity: true);
+                    _recipe = await WorkerSession.GetRecipeProjectionAsync();
+                }
                 var action = isNewSave ? "Saved" : "Updated";
                 Snackbar.Add($"{action} '{planName}' to browser storage", Severity.Success);
                 await RefreshSavedPlansListAsync();
@@ -430,22 +461,19 @@
     {
         try
         {
-            var result = await PlanPersistence.LoadPlanIntoSessionAsync(planId);
-            if (result == null)
+            var stored = await PlanPersistence.LoadPlanPayloadAsync(planId);
+            if (stored == null)
             {
                 Snackbar.Add("Plan not found", Severity.Error);
                 return;
             }
-            if (!string.IsNullOrWhiteSpace(result.Warning))
-            {
-                Snackbar.Add($"Warning: {result.Warning}", Severity.Warning);
-            }
-
-            await WorkerSession.CommitCurrentCandidateAsync();
+            await WorkerSession.ReplaceStoredPlanAsync(
+                stored,
+                trackStoredPlanIdentity: true);
             _recipe = await WorkerSession.GetRecipeProjectionAsync();
             _selectedNode = _recipe?.Roots.FirstOrDefault();
 
-            Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
+            Snackbar.Add($"Loaded '{stored.Name}'", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -472,17 +500,22 @@
 
     private async Task ExportPlanAsync()
     {
-        if (AppState.CurrentPlan == null)
+        var stored = await WorkerSession.ExportStoredPlanAsync(
+            "export",
+            _recipe?.PlanName ?? "Plan");
+        if (stored?.PlanJson is not { Length: > 0 } planJson)
             return;
 
         try
         {
-            var json = RecipeCalculationService.SerializePlan(AppState.CurrentPlan);
-            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+            var bytes = System.Text.Encoding.UTF8.GetBytes(planJson);
             var stream = new MemoryStream(bytes);
 
             using var streamRef = new DotNetStreamReference(stream);
-            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", $"{AppState.CurrentPlan.Name}.json", streamRef);
+            await JSRuntime.InvokeVoidAsync(
+                "downloadFileFromStream",
+                $"{_recipe?.PlanName ?? "plan"}.json",
+                streamRef);
 
             Snackbar.Add("Plan exported to Downloads!", Severity.Success);
         }

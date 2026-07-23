@@ -85,7 +85,7 @@ internal sealed class WorkerCanonicalSession
                 : null,
             MarketAnalysisRecipeBasisJson = snapshot.MarketAnalysisRecipeBasisJson,
             MarketAnalysisScopeSnapshotJson = _legacyMarketAnalysisScopeSnapshotJson,
-            ProcurementRouteJson = _legacyProcurementRouteJson,
+            ProcurementRouteJson = BuildProcurementRouteJson() ?? _legacyProcurementRouteJson,
             SavedRecommendationMode = snapshot.SavedRecommendationMode,
             SavedMarketAnalysisLens = snapshot.SavedMarketAnalysisLens,
             SourcePlanId = snapshot.SourcePlanId,
@@ -96,6 +96,26 @@ internal sealed class WorkerCanonicalSession
     public void InvalidateLegacyProcurementRoute()
     {
         _legacyProcurementRouteJson = null;
+    }
+
+    private string? BuildProcurementRouteJson()
+    {
+        var overlay = _session.ProcurementOverlay;
+        if (overlay?.ShoppingPlans is not { Count: > 0 } shoppingPlans ||
+            overlay.RouteDecision is null)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Serialize(new StoredProcurementRoute(
+            SchemaVersion: 4,
+            OptimizerVersion: "worker-owned-v1",
+            ShoppingPlans: shoppingPlans,
+            Decision: overlay.RouteDecision,
+            Basis: null,
+            PlanHash: string.Empty,
+            MarketEvidenceHash: null,
+            PayloadHash: null));
     }
 
     private void RestoreLegacyProcurementOverlay(string? routeJson)

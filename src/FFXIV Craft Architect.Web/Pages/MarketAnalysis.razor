@@ -1,446 +1,309 @@
 @page "/market"
 @using FFXIV_Craft_Architect.Core.Models
-@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
-@using static FFXIV_Craft_Architect.Core.Models.MarketSortOption
-@inject RecipePlannerCommandService RecipePlannerCommandService
-@inject MarketAnalysisWorkflowService MarketAnalysisWorkflow
-@inject MarketAnalysisItemRefreshService MarketAnalysisItemRefreshService
+@inject WorkerSessionCoordinator WorkerSession
+@inject WorkerProjectionStore WorkerProjections
+@inject NavigationManager Navigation
 @inject ISnackbar Snackbar
-@inject AppState AppState
-@inject NavigationManager NavigationManager
-@inject CancellableOperationService CancellableOperations
-@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @implements IDisposable
 
-<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 ma-page-container">
-    <div class="ma-grid-layout">
-        <MarketAnalysisControlsPanel
-            AppState="AppState"
-            IsAnalyzing="_isAnalyzing"
-            IsRefreshingPrices="_isRefreshingPrices"
-            CanAnalyze="CanAnalyze()"
-            CanRefreshPrices="CanRefreshPrices()"
-            OnLensChangedRequested="OnLensChanged"
-            OnRunAnalysisRequested="RunMarketAnalysisAsync"
-            OnRefreshPricesRequested="RefreshPricesAsync"
-            OnGoToProcurementRequested="GoToProcurement" />
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-4">
+    <MudPaper Class="pa-4 mb-3" Elevation="0" Outlined="true">
+        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+            <div style="min-width:230px; flex:1;">
+                <MudText Typo="Typo.h5">Market Analysis</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    @ScopeSummary
+                </MudText>
+            </div>
 
-        <MarketAnalysisResultsPanel
-            BuyItems="GetBuyItems()"
-            ShoppingPlans="AppState.ShoppingPlans"
-            MarketItemAnalyses="AppState.MarketItemAnalyses"
-            CurrentLens="AppState.MarketAnalysisLens"
-            CurrentSort="AppState.MarketSortPreference"
-            EvidenceOverlay="AppState.MarketAnalysisEvidenceOverlay"
-            SortColumn="AppState.MarketAnalysisGridSortColumn"
-            SortDescending="AppState.MarketAnalysisGridSortDescending"
-            WorldSortColumn="AppState.MarketAnalysisWorldGridSortColumn"
-            WorldSortDescending="AppState.MarketAnalysisWorldGridSortDescending"
-            SelectedItemId="AppState.SelectedMarketAnalysisItemId"
-            ExpandedWorldKeys="AppState.ExpandedMarketAnalysisWorlds"
-            ShowWorldsColumn="AppState.SearchEntireRegion"
-            IsAnalyzing="_isAnalyzing"
-            IsRefreshingItem="_isRefreshingSelectedItem || _isAnalyzing || _isRefreshingPrices"
-            OnSelectedItemChanged="SelectMarketAnalysisItem"
-            OnRefreshItemRequested="RefreshSelectedMarketItemAsync"
-            OnWorldExpansionToggled="ToggleMarketAnalysisWorld"
-            OnSortChanged="SetMarketAnalysisSort"
-            OnWorldSortChanged="SetMarketAnalysisWorldSort"
-            OnGoToPlannerRequested="GoToPlanner"
-            OnRunAnalysisRequested="RunMarketAnalysisAsync" />
-    </div>
+            <MudSwitch T="bool"
+                       Value="@(_scope == MarketFetchScope.EntireRegion)"
+                       ValueChanged="SetRegionalScope"
+                       Color="Color.Primary"
+                       Dense="true"
+                       Label="Search the whole region"
+                       Disabled="_isAnalyzing" />
+
+            <MudSelect T="MarketAcquisitionLens"
+                       Value="_lens"
+                       ValueChanged="SetLensAsync"
+                       Label="Buying strategy"
+                       Dense="true"
+                       Variant="Variant.Outlined"
+                       Disabled="@(_isAnalyzing || _market?.HasAnalysis != true)"
+                       Style="min-width:190px;">
+                <MudSelectItem Value="MarketAcquisitionLens.MinimumUpfrontCost">
+                    Lowest checkout cost
+                </MudSelectItem>
+                <MudSelectItem Value="MarketAcquisitionLens.BulkValue">
+                    Best bulk value
+                </MudSelectItem>
+            </MudSelect>
+
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       Disabled="@(!CanAnalyze)"
+                       data-benchmark-id="market-analysis-run"
+                       data-can-analyze="@CanAnalyze.ToString().ToLowerInvariant()"
+                       data-is-analyzing="@_isAnalyzing.ToString().ToLowerInvariant()"
+                       OnClick="@(() => RunAsync(forceRefresh: false))">
+                @(_market?.HasAnalysis == true ? "Reconcile" : "Analyze market")
+            </MudButton>
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Primary"
+                       Disabled="@(!CanAnalyze)"
+                       OnClick="@(() => RunAsync(forceRefresh: true))">
+                Refresh prices
+            </MudButton>
+        </div>
+    </MudPaper>
+
+    @if (_isAnalyzing)
+    {
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-3" />
+    }
+
+    @if (_market?.HasAnalysis == true)
+    {
+        <div style="display:grid; grid-template-columns:repeat(4, minmax(130px, 1fr)); gap:8px; margin-bottom:12px;">
+            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                <MudText Typo="Typo.caption">Market candidates</MudText>
+                <MudText Typo="Typo.h6">@_market.CandidateCount</MudText>
+            </MudPaper>
+            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                <MudText Typo="Typo.caption">Priced</MudText>
+                <MudText Typo="Typo.h6">@_market.AvailableCount</MudText>
+            </MudPaper>
+            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                <MudText Typo="Typo.caption">Unavailable</MudText>
+                <MudText Typo="Typo.h6">@_market.UnavailableCount</MudText>
+            </MudPaper>
+            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                <MudText Typo="Typo.caption">Estimated checkout</MudText>
+                <MudText Typo="Typo.h6">@($"{_market.EstimatedTotalCost:N0}g")</MudText>
+            </MudPaper>
+        </div>
+
+        <MudPaper Elevation="0" Outlined="true">
+            <MudTable Items="_market.Items" Dense="true" Hover="true" Elevation="0">
+                <HeaderContent>
+                    <MudTh>Item</MudTh>
+                    <MudTh Align="Right">Needed</MudTh>
+                    <MudTh>Recommendation</MudTh>
+                    <MudTh Align="Right">Unit</MudTh>
+                    <MudTh Align="Right">Total</MudTh>
+                    <MudTh>Evidence</MudTh>
+                </HeaderContent>
+                <RowTemplate Context="item">
+                    <MudTd DataLabel="Item">
+                        <MudButton Variant="Variant.Text"
+                                   Size="Size.Small"
+                                   OnClick="@(() => ToggleItem(item.ItemId))">
+                            @item.Name
+                        </MudButton>
+                    </MudTd>
+                    <MudTd DataLabel="Needed" Align="Right">@item.QuantityNeeded</MudTd>
+                    <MudTd DataLabel="Recommendation">
+                        @if (item.IsAvailable)
+                        {
+                            <span>@item.RecommendedWorld</span>
+                            @if (!item.HasSufficientStock)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning">
+                                    @($"{item.AvailableQuantity}/{item.QuantityNeeded}")
+                                </MudChip>
+                            }
+                        }
+                        else
+                        {
+                            <span>Unavailable in this scope</span>
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Unit" Align="Right">
+                        @(item.IsAvailable ? $"{item.EstimatedUnitPrice:N0}g" : "-")
+                    </MudTd>
+                    <MudTd DataLabel="Total" Align="Right">
+                        @(item.IsAvailable ? $"{item.EstimatedTotalCost:N0}g" : "-")
+                    </MudTd>
+                    <MudTd DataLabel="Evidence">@FormatQuality(item.DataQuality)</MudTd>
+                </RowTemplate>
+                <ChildRowContent Context="item">
+                    @if (_expandedItemId == item.ItemId)
+                    {
+                        <MudTr>
+                            <MudTd ColSpan="6">
+                                @if (!string.IsNullOrWhiteSpace(item.Warning))
+                                {
+                                    <MudText Typo="Typo.body2" Color="Color.Warning">
+                                        @item.Warning
+                                    </MudText>
+                                }
+                                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:6px; padding:8px 0;">
+                                    @foreach (var world in item.Worlds)
+                                    {
+                                        <MudPaper Class="pa-2" Elevation="0" Outlined="true">
+                                            <MudText Typo="Typo.subtitle2">@world.WorldName</MudText>
+                                            <MudText Typo="Typo.caption">@world.DataCenter · @world.Quantity available</MudText>
+                                            <MudText Typo="Typo.body2">
+                                                @($"{world.AverageUnitPrice:N0}g each · {world.TotalCost:N0}g")
+                                            </MudText>
+                                        </MudPaper>
+                                    }
+                                </div>
+                            </MudTd>
+                        </MudTr>
+                    }
+                </ChildRowContent>
+            </MudTable>
+        </MudPaper>
+
+        <div style="display:flex; justify-content:flex-end; margin-top:12px;">
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       OnClick="@(() => Navigation.NavigateTo("/procurement"))">
+                Build procurement route
+            </MudButton>
+        </div>
+    }
+    else if (_market?.HasPlan == true)
+    {
+        <MudPaper Class="pa-6" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.h6">Ready to price @_market.CandidateCount items</MudText>
+            <MudText Typo="Typo.body2">
+                Market Analysis evaluates every valid acquisition candidate. Procurement routing comes afterward and cannot change whether an item should be crafted, bought, or vendor-purchased.
+            </MudText>
+        </MudPaper>
+    }
+    else
+    {
+        <MudPaper Class="pa-6" Elevation="0" Outlined="true">
+            <MudText Typo="Typo.h6">Build a recipe plan first</MudText>
+        </MudPaper>
+    }
 </MudContainer>
 
 @code {
-    private bool _isAnalyzing = false;
-    private bool _isRefreshingPrices = false;
-    private bool _isRefreshingSelectedItem = false;
-    private CancellableOperationLease? _marketAnalysisOperation;
-    private CancellableOperationLease? _priceRefreshOperation;
-    private CancellableOperationLease? _itemRefreshOperation;
+    private WorkerMarketProjection? _market;
+    private MarketFetchScope _scope = MarketFetchScope.EntireRegion;
+    private MarketAcquisitionLens _lens = MarketAcquisitionLens.MinimumUpfrontCost;
+    private int? _expandedItemId;
+    private bool _isAnalyzing;
 
-    // Settings now stored in AppState for persistence across page navigations
+    private bool CanAnalyze =>
+        !_isAnalyzing &&
+        _market?.HasPlan == true &&
+        _market.CandidateCount > 0 &&
+        !string.IsNullOrWhiteSpace(_market.SelectedDataCenter);
 
-    protected override void OnInitialized()
+    private string ScopeSummary =>
+        _scope == MarketFetchScope.EntireRegion
+            ? $"{_market?.SelectedRegion ?? "North America"} · regional evidence"
+            : $"{_market?.SelectedDataCenter ?? "Aether"} · data-center evidence";
+
+    protected override async Task OnInitializedAsync()
     {
-        // Subscribe to plan changes (including restoration from auto-save)
-        AppState.OnStateChanged += OnStateChanged;
-        AppState.OnPlanChanged += OnPlanChanged;
-        AppState.OnShoppingListChanged += OnShoppingListChanged;
-        AppState.ApplyPendingMarketItemAutoExpand();
-    }
-
-    private void OnStateChanged(AppStateChange change)
-    {
-        if (change.HasScope(AppStateChangeScope.MarketAnalysisView))
+        WorkerProjections.Changed += ProjectionChanged;
+        _market = await WorkerSession.GetMarketProjectionAsync();
+        if (_market is not null)
         {
-            InvokeAsync(StateHasChanged);
+            _scope = _market.Scope;
+            _lens = _market.Lens;
         }
     }
 
-    private void OnPlanChanged()
+    private void ProjectionChanged()
     {
-        InvokeAsync(StateHasChanged);
+        _market = WorkerProjections.Market ?? _market;
+        _ = InvokeAsync(StateHasChanged);
     }
 
-    private void OnShoppingListChanged()
-    {
-        InvokeAsync(StateHasChanged);
-    }
-
-    private void SelectMarketAnalysisItem(int? itemId)
-    {
-        AppState.SelectMarketAnalysisItem(itemId);
-    }
-
-    private void ToggleMarketAnalysisWorld(MarketAnalysisExpandedWorldKey key)
-    {
-        AppState.ToggleMarketAnalysisWorld(key.ItemId, key.DataCenter, key.WorldName);
-    }
-
-    private void SetMarketAnalysisSort(MarketAnalysisGridSortState sort)
-    {
-        AppState.SetMarketAnalysisGridSort(sort.Column, sort.Descending);
-    }
-
-    private void SetMarketAnalysisWorldSort(MarketAnalysisWorldGridSortState sort)
-    {
-        AppState.SetMarketAnalysisWorldGridSort(sort.Column, sort.Descending);
-    }
-
-    public void Dispose()
-    {
-        CancellableOperations.Cancel(CancellableOperationWorkflow.MarketAnalysis);
-        CancellableOperations.Cancel(CancellableOperationWorkflow.PriceRefresh);
-        CancellableOperations.Cancel(CancellableOperationWorkflow.ItemMarketRefresh);
-        _marketAnalysisOperation = null;
-        _priceRefreshOperation = null;
-        _itemRefreshOperation = null;
-        AppState.OnStateChanged -= OnStateChanged;
-        AppState.OnPlanChanged -= OnPlanChanged;
-        AppState.OnShoppingListChanged -= OnShoppingListChanged;
-    }
-
-    /// <summary>
-    /// Get the current items marked for buying from the recipe plan.
-    /// This dynamically reflects any changes made in the recipe tree.
-    /// </summary>
-    private List<MaterialAggregate> GetBuyItems()
-    {
-        return RecipeLayerWorkflowService
-            .BuildMarketAnalysisCandidates(AppState.CurrentPlan)
-            .ToList();
-    }
-
-    private bool CanAnalyze()
-    {
-        return GetBuyItems().Any() && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
-    }
-
-    private bool CanRefreshPrices()
-    {
-        return AppState.CurrentPlan != null && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
-    }
-
-    private async Task RefreshPricesAsync()
-    {
-        if (AppState.CurrentPlan == null) return;
-
-        CancellableOperations.Cancel(CancellableOperationWorkflow.ItemMarketRefresh);
-        _isRefreshingPrices = true;
-        using var operation = CancellableOperations.Start(
-            CancellableOperationWorkflow.PriceRefresh,
-            "Price Refresh",
-            "Fetching latest market data...");
-        _priceRefreshOperation = operation;
-
-        try
-        {
-            operation.ReportStatus("Fetching market prices...");
-            await RecipePlannerCommandService.RefreshPricesAsync(
-                new RefreshRecipePlanPricesRequest(
-                    AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter,
-                    AppState.SelectedDataCenter,
-                    AppState.SelectedRegion,
-                    ForceRefreshData: true),
-                operation.Token);
-            if (!operation.IsCurrent)
-            {
-                return;
-            }
-
-            // Recompute from the freshly updated cache so Procurement reflects the manual refresh.
-            var canReanalyze = GetBuyItems().Any() && !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
-            if (canReanalyze)
-            {
-                var rebuilt = await RunMarketAnalysisAsync(forceRefreshData: false, showCompletionSnackbar: false);
-                if (!operation.IsCurrent)
-                {
-                    return;
-                }
-
-                if (rebuilt)
-                {
-                    if (AppState.UnavailableMarketItems.Any())
-                    {
-                        var warning = CoreMarketPriceAvailability.FormatUnavailableMessage(AppState.UnavailableMarketItems);
-                        Snackbar.Add($"Prices refreshed with warnings. {warning}", Severity.Warning);
-                    }
-                    else
-                    {
-                        Snackbar.Add("Prices refreshed and procurement plan rebuilt", Severity.Success);
-                    }
-                }
-                else
-                {
-                    Snackbar.Add("Prices refreshed, but failed to rebuild procurement plan", Severity.Warning);
-                }
-            }
-            else
-            {
-                operation.Complete("Prices refreshed");
-                if (AppState.UnavailableMarketItems.Any())
-                {
-                    Snackbar.Add(CoreMarketPriceAvailability.FormatUnavailableMessage(AppState.UnavailableMarketItems), Severity.Warning);
-                }
-                else
-                {
-                    Snackbar.Add("Prices refreshed", Severity.Success);
-                }
-            }
-        }
-        catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
-        {
-            operation.Cancel();
-        }
-        catch (Exception ex)
-        {
-            if (operation.ShouldReportError(ex))
-            {
-                operation.Complete($"Price refresh failed: {ex.Message}");
-                Snackbar.Add($"Failed to refresh prices: {ex.Message}", Severity.Error);
-            }
-        }
-        finally
-        {
-            if (ReferenceEquals(_priceRefreshOperation, operation))
-            {
-                _priceRefreshOperation = null;
-                _isRefreshingPrices = false;
-            }
-        }
-    }
-
-    private async Task RefreshSelectedMarketItemAsync(DetailedShoppingPlan plan)
-    {
-        if (AppState.CurrentPlan == null)
-        {
-            Snackbar.Add("Refresh market data failed: no active recipe plan.", Severity.Warning);
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
-        {
-            Snackbar.Add("Refresh market data failed: no selected data center.", Severity.Warning);
-            return;
-        }
-
-        var refreshScope = AppState.SearchEntireRegion
+    private void SetRegionalScope(bool regional) =>
+        _scope = regional
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
-        var selectedDataCenter = AppState.SelectedDataCenter;
-        var selectedRegion = AppState.SelectedRegion;
-        var lens = AppState.MarketAnalysisLens;
 
-        _isRefreshingSelectedItem = true;
-        using var operation = CancellableOperations.Start(
-            CancellableOperationWorkflow.ItemMarketRefresh,
-            "Item Market Refresh",
-            $"Refreshing {plan.Name} market data...");
-        _itemRefreshOperation = operation;
-
-        try
-        {
-            var progress = new Progress<string>(message => operation.ReportStatus(message));
-            var result = await MarketAnalysisItemRefreshService.RefreshItemMarketDataAsync(
-                new MarketAnalysisItemRefreshWorkflowRequest(
-                    plan.ItemId,
-                    IsCurrentOperation: () => operation.IsCurrent,
-                    ExecutionOptions: MarketAnalysisExecutionOptions.Interactive)
-                {
-                    Scope = refreshScope,
-                    IsCurrentConfiguration = () =>
-                        (AppState.SearchEntireRegion ? MarketFetchScope.EntireRegion : MarketFetchScope.SelectedDataCenter) == refreshScope &&
-                        string.Equals(AppState.SelectedDataCenter, selectedDataCenter, StringComparison.Ordinal) &&
-                        string.Equals(AppState.SelectedRegion, selectedRegion, StringComparison.Ordinal) &&
-                        AppState.MarketAnalysisLens == lens
-                },
-                progress,
-                operation.Token);
-            if (!operation.IsCurrent)
-            {
-                return;
-            }
-
-            if (result.Status == MarketAnalysisItemRefreshStatus.Refreshed)
-            {
-                if (string.IsNullOrWhiteSpace(result.ItemName))
-                {
-                    throw new InvalidOperationException("Item refresh reported success without a refreshed item name.");
-                }
-
-                operation.Complete($"{result.ItemName} market data refreshed.");
-                Snackbar.Add($"Refreshed {result.ItemName} market data.", Severity.Success);
-                return;
-            }
-
-            if (IsDiscardedItemRefreshStatus(result.Status))
-            {
-                operation.Cancel(FormatItemRefreshStatus(result.Status));
-                Snackbar.Add($"Item refresh was discarded: {FormatItemRefreshStatus(result.Status)}.", Severity.Info);
-                return;
-            }
-
-            operation.Complete($"Refresh market data failed: {result.Status}");
-            Snackbar.Add($"Refresh market data failed for {plan.Name}: {FormatItemRefreshStatus(result.Status)}", Severity.Warning);
-        }
-        catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
-        {
-            operation.Cancel();
-        }
-        catch (Exception ex)
-        {
-            if (operation.ShouldReportError(ex))
-            {
-                operation.Complete($"Refresh market data failed: {ex.Message}");
-                Snackbar.Add($"Refresh market data failed for {plan.Name}: {ex.Message}", Severity.Error);
-            }
-        }
-        finally
-        {
-            if (ReferenceEquals(_itemRefreshOperation, operation))
-            {
-                _itemRefreshOperation = null;
-                _isRefreshingSelectedItem = false;
-            }
-        }
-    }
-
-    private async Task RunMarketAnalysisAsync()
+    private async Task SetLensAsync(MarketAcquisitionLens lens)
     {
-        await RunMarketAnalysisAsync(forceRefreshData: false, showCompletionSnackbar: true);
-    }
-
-    private async Task<bool> RunMarketAnalysisAsync(bool forceRefreshData, bool showCompletionSnackbar)
-    {
-        var materials = GetBuyItems();
-
-        var plan = AppState.CurrentPlan;
-        if (plan == null || !materials.Any() || string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+        if (_market?.HasAnalysis != true || lens == _lens)
         {
-            return false;
+            _lens = lens;
+            return;
         }
 
         _isAnalyzing = true;
-        AppState.ClearMarketAnalysisState();
-        CancellableOperations.Cancel(CancellableOperationWorkflow.ItemMarketRefresh);
-        using var operation = CancellableOperations.Start(
-            CancellableOperationWorkflow.MarketAnalysis,
-            "Market Analysis",
-            $"Analyzing {materials.Count} items on {AppState.SelectedDataCenter}...");
-        _marketAnalysisOperation = operation;
-
         try
         {
-            var progress = new Progress<string>(msg => operation.ReportStatus(msg));
-            var result = await MarketAnalysisWorkflow.RunAnalysisAsync(
-                new MarketAnalysisWorkflowRequest(forceRefreshData),
-                progress,
-                operation.Token);
-            if (!operation.IsCurrent)
-            {
-                return false;
-            }
-
-            if (!result.Published)
-            {
-                return false;
-            }
-
-            // Ensure the status message is properly set to completion
-            var analyzedItemLabel = result.AnalyzedCount == 1 ? "item" : "items";
-            operation.Complete($"Analysis complete. {result.AnalyzedCount} {analyzedItemLabel} analyzed.");
-            if (showCompletionSnackbar)
-            {
-                Snackbar.Add("Market analysis complete!", Severity.Success);
-            }
-
-            return true;
-        }
-        catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
-        {
-            operation.Cancel();
-            return false;
+            _market = await WorkerSession.ApplyMarketLensAsync(lens);
+            _lens = lens;
         }
         catch (Exception ex)
         {
-            if (operation.ShouldReportError(ex))
-            {
-                operation.Complete($"Analysis failed: {ex.Message}");
-                Snackbar.Add($"Market analysis failed: {ex.Message}", Severity.Error);
-            }
-            return false;
+            Snackbar.Add(ex.Message, Severity.Error);
         }
         finally
         {
-            if (ReferenceEquals(_marketAnalysisOperation, operation))
-            {
-                _marketAnalysisOperation = null;
-                _isAnalyzing = false;
-            }
+            _isAnalyzing = false;
         }
     }
 
-    private async Task OnLensChanged(MarketAcquisitionLens lens)
+    private async Task RunAsync(bool forceRefresh)
     {
-        await MarketAnalysisWorkflow.ApplyLensAsync(lens);
-    }
-
-    private static string FormatItemRefreshStatus(MarketAnalysisItemRefreshStatus status)
-    {
-        return status switch
+        if (!CanAnalyze || _market is null)
         {
-            MarketAnalysisItemRefreshStatus.NoPlan => "no active recipe plan",
-            MarketAnalysisItemRefreshStatus.NotFound => "item is not present in the current market-analysis candidate set",
-            MarketAnalysisItemRefreshStatus.NoData => "Universalis returned no market data for the item",
-            MarketAnalysisItemRefreshStatus.StaleDecision => "plan decisions changed before the refresh finished",
-            MarketAnalysisItemRefreshStatus.StaleConfiguration => "market analysis settings changed before the refresh finished",
-            MarketAnalysisItemRefreshStatus.StalePlan => "recipe plan changed before the refresh finished",
-            MarketAnalysisItemRefreshStatus.Superseded => "a newer item refresh replaced this request",
-            _ => status.ToString()
+            return;
+        }
+
+        _isAnalyzing = true;
+        try
+        {
+            var outcome = await WorkerSession.RunMarketAnalysisAsync(
+                new WorkerMarketAnalysisRequest(
+                    forceRefresh,
+                    _scope,
+                    _market.SelectedDataCenter,
+                    _market.SelectedRegion,
+                    _lens));
+            _market = outcome.Market;
+            if (_market.UnavailableCount > 0)
+            {
+                Snackbar.Add(
+                    $"Market Analysis priced {_market.AvailableCount}/{_market.CandidateCount} items; {_market.UnavailableCount} have no usable evidence in this scope.",
+                    Severity.Warning);
+            }
+            else
+            {
+                Snackbar.Add(
+                    $"Market Analysis priced {_market.AvailableCount} items using {outcome.FetchedCount} fresh market responses.",
+                    Severity.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Market Analysis failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isAnalyzing = false;
+        }
+    }
+
+    private void ToggleItem(int itemId) =>
+        _expandedItemId = _expandedItemId == itemId ? null : itemId;
+
+    private static string FormatQuality(MarketDataQualityBucket quality) =>
+        quality switch
+        {
+            MarketDataQualityBucket.Current => "Current",
+            MarketDataQualityBucket.Aging => "Aging",
+            MarketDataQualityBucket.Old => "Old",
+            MarketDataQualityBucket.VeryOld => "Very old",
+            MarketDataQualityBucket.Ancient => "Ancient",
+            _ => "Missing"
         };
-    }
 
-    private static bool IsDiscardedItemRefreshStatus(MarketAnalysisItemRefreshStatus status)
+    public void Dispose()
     {
-        return status is
-            MarketAnalysisItemRefreshStatus.StaleDecision or
-            MarketAnalysisItemRefreshStatus.StaleConfiguration or
-            MarketAnalysisItemRefreshStatus.StalePlan or
-            MarketAnalysisItemRefreshStatus.Superseded;
+        WorkerProjections.Changed -= ProjectionChanged;
     }
-
-    private void GoToPlanner()
-    {
-        // Use relative path (no leading slash) so it resolves against base href correctly
-        NavigationManager.NavigateTo("./");
-    }
-
-    private void GoToProcurement()
-    {
-        // Use relative path (no leading slash) so it resolves against base href correctly
-        NavigationManager.NavigateTo("acquisition");
-    }
-
 }

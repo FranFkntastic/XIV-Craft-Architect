@@ -1,38 +1,25 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
+using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
 /// <summary>
-/// Compatibility-window bridge that commits main-thread candidates into the
-/// revision-fenced Worker session. The Worker acknowledgement is authoritative;
-/// this service will be deleted once every mutation is issued as a Worker command.
+/// Main-thread command facade for the Worker-owned durable session.
 /// </summary>
 public sealed class WorkerSessionCoordinator : IAsyncDisposable
 {
-    private static readonly TimeSpan CoalescingDelay = TimeSpan.FromMilliseconds(150);
     private readonly CraftArchitectEngineHost _engineHost;
     private readonly WorkerProjectionStore _projections;
-    private readonly AppState _appState;
-    private readonly StoredPlanSnapshotBuilder _snapshotBuilder;
     private readonly ExperimentalProcurementEngineCapability _capability;
-    private readonly SemaphoreSlim _commit = new(1, 1);
-    private readonly object _sync = new();
-    private CancellationTokenSource? _scheduledCommit;
-    private bool _suppressCompatibilityCommit;
-    private bool _disposed;
 
     public WorkerSessionCoordinator(
         CraftArchitectEngineHost engineHost,
         WorkerProjectionStore projections,
-        AppState appState,
-        StoredPlanSnapshotBuilder snapshotBuilder,
         ExperimentalProcurementEngineCapability capability)
     {
         _engineHost = engineHost;
         _projections = projections;
-        _appState = appState;
-        _snapshotBuilder = snapshotBuilder;
         _capability = capability;
     }
 
@@ -55,22 +42,74 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         return _projections.Shell;
     }
 
-    public void ScheduleCompatibilityCommit()
+    public async Task<StoredPlan?> ExportStoredPlanAsync(
+        string planId,
+        string planName,
+        bool includeSourcePlanIdentity = true,
+        CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled || _disposed || _suppressCompatibilityCommit)
+        var result = await _engineHost.ExportSessionAsync(
+            _projections.Shell.Revision,
+            new WorkerSessionExportRequest(
+                planId,
+                planName,
+                includeSourcePlanIdentity,
+                IncludeLegacyMarketAnalysisFields: true),
+            cancellationToken);
+        var export = result.Projection.Deserialize<WorkerSessionExportProjection>(
+            EngineJsonSerializerOptions.CreateWire());
+        if (!result.Accepted || export is null)
         {
-            return;
+            throw CreateConflict(result);
         }
 
-        CancellationTokenSource cancellation;
-        lock (_sync)
+        return export.StoredPlan;
+    }
+
+    public async Task ReplaceStoredPlanAsync(
+        StoredPlan storedPlan,
+        bool trackStoredPlanIdentity,
+        CancellationToken cancellationToken = default) =>
+        await ReplaceStoredPlanCoreAsync(
+            storedPlan,
+            trackStoredPlanIdentity,
+            cancellationToken);
+
+    public async Task ClearSessionAsync(
+        CancellationToken cancellationToken = default) =>
+        await ReplaceStoredPlanCoreAsync(
+            storedPlan: null,
+            trackStoredPlanIdentity: false,
+            cancellationToken);
+
+    private async Task ReplaceStoredPlanCoreAsync(
+        StoredPlan? storedPlan,
+        bool trackStoredPlanIdentity,
+        CancellationToken cancellationToken)
+    {
+        var result = await _engineHost.ReplaceSessionAsync(
+            _projections.Shell.Revision,
+            storedPlan,
+            trackStoredPlanIdentity,
+            cancellationToken);
+        if (!result.Accepted || !_projections.TryPublish(result))
         {
-            _scheduledCommit?.Cancel();
-            _scheduledCommit?.Dispose();
-            _scheduledCommit = new CancellationTokenSource();
-            cancellation = _scheduledCommit;
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
         }
-        _ = CommitAfterDelayAsync(cancellation);
+
+        var recipe = await _engineHost.GetRecipeProjectionAsync(
+            result.Revision,
+            cancellationToken);
+        _projections.TryPublishRecipe(recipe);
+        var market = await _engineHost.GetMarketProjectionAsync(
+            result.Revision,
+            cancellationToken);
+        _projections.TryPublishMarket(market);
+        var procurement = await _engineHost.GetProcurementProjectionAsync(
+            result.Revision,
+            cancellationToken);
+        _projections.TryPublishProcurement(procurement);
     }
 
     public async Task<WorkerRecipePlannerProjection?> GetRecipeProjectionAsync(
@@ -113,6 +152,44 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         return _projections.Acquisition;
     }
 
+    public async Task<WorkerMarketProjection?> GetMarketProjectionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsEnabled)
+        {
+            return null;
+        }
+
+        var result = await _engineHost.GetMarketProjectionAsync(
+            _projections.Shell.Revision,
+            cancellationToken);
+        if (!_projections.TryPublishMarket(result))
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            return _projections.Market;
+        }
+        return _projections.Market;
+    }
+
+    public async Task<WorkerProcurementProjection?> GetProcurementProjectionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsEnabled)
+        {
+            return null;
+        }
+
+        var result = await _engineHost.GetProcurementProjectionAsync(
+            _projections.Shell.Revision,
+            cancellationToken);
+        if (!_projections.TryPublishProcurement(result))
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            return _projections.Procurement;
+        }
+        return _projections.Procurement;
+    }
+
     public async Task<WorkerRecipePlannerProjection> MutateProjectItemsAsync(
         WorkerProjectItemsMutation mutation,
         CancellationToken cancellationToken = default)
@@ -130,7 +207,6 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
-        await HydrateCompatibilityMirrorAsync(cancellationToken);
         return projection;
     }
 
@@ -151,7 +227,6 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
-        await HydrateCompatibilityMirrorAsync(cancellationToken);
         return outcome;
     }
 
@@ -172,7 +247,6 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
-        await HydrateCompatibilityMirrorAsync(cancellationToken);
         return projection;
     }
 
@@ -186,119 +260,84 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             ?? throw new InvalidOperationException("The Worker did not publish acquisition evaluation.");
     }
 
-    public async Task<bool> CommitCurrentCandidateAsync(
+    public async Task<WorkerMarketAnalysisOutcome> RunMarketAnalysisAsync(
+        WorkerMarketAnalysisRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled || !_appState.HasPlanOrProjectItems)
-        {
-            return false;
-        }
-
-        await _commit.WaitAsync(cancellationToken);
-        try
-        {
-            var snapshot = _snapshotBuilder.Build(
-                "autosave",
-                "Autosave",
-                DateTime.UtcNow,
-                includeSourcePlanIdentity: true,
-                includeLegacyMarketAnalysisFields: false);
-            var expectedRevision = _projections.Shell.Revision;
-            var result = await _engineHost.ReplaceSessionAsync(
-                expectedRevision,
-                snapshot,
-                trackStoredPlanIdentity: false,
-                cancellationToken);
-            if (result.Accepted)
-            {
-                if (!_projections.TryPublish(result))
-                {
-                    return false;
-                }
-                var recipe = await _engineHost.GetRecipeProjectionAsync(
-                    result.Revision,
-                    cancellationToken);
-                _projections.TryPublishRecipe(recipe);
-                return true;
-            }
-
-            if (string.Equals(result.RejectionCode, "stale-revision", StringComparison.Ordinal))
-            {
-                var current = await _engineHost.GetShellProjectionAsync(
-                    result.Revision,
-                    cancellationToken);
-                _projections.TryPublish(current);
-            }
-            return false;
-        }
-        finally
-        {
-            _commit.Release();
-        }
-    }
-
-    private async Task CommitAfterDelayAsync(CancellationTokenSource scheduled)
-    {
-        try
-        {
-            await Task.Delay(CoalescingDelay, scheduled.Token);
-            await CommitCurrentCandidateAsync(scheduled.Token);
-        }
-        catch (OperationCanceledException) when (scheduled.IsCancellationRequested)
-        {
-        }
-        finally
-        {
-            lock (_sync)
-            {
-                if (ReferenceEquals(_scheduledCommit, scheduled))
-                {
-                    _scheduledCommit = null;
-                }
-            }
-            scheduled.Dispose();
-        }
-    }
-
-    private async Task HydrateCompatibilityMirrorAsync(CancellationToken cancellationToken)
-    {
-        var shell = _projections.Shell;
-        var result = await _engineHost.ExportSessionAsync(
-            shell.Revision,
-            new WorkerSessionExportRequest(
-                "autosave",
-                "Autosave",
-                IncludeSourcePlanIdentity: true,
-                IncludeLegacyMarketAnalysisFields: true),
+        var result = await _engineHost.RunMarketAnalysisAsync(
+            _projections.Shell.Revision,
+            request,
             cancellationToken);
-        var export = result.Projection.Deserialize<WorkerSessionExportProjection>(
-            EngineJsonSerializerOptions.CreateWire());
-        if (!result.Accepted || export is null)
+        if (!_projections.TryPublishMutation<WorkerMarketAnalysisOutcome>(
+                result,
+                out var outcome) ||
+            outcome is null)
         {
-            throw new InvalidOperationException(
-                result.Message ?? "The Worker did not export its accepted session.");
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
         }
 
-        _suppressCompatibilityCommit = true;
-        try
+        return outcome;
+    }
+
+    public async Task<WorkerMarketProjection> ApplyMarketLensAsync(
+        MarketAcquisitionLens lens,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _engineHost.ApplyMarketLensAsync(
+            _projections.Shell.Revision,
+            new WorkerMarketLensMutation(lens),
+            cancellationToken);
+        if (!_projections.TryPublishMutation<WorkerMarketProjection>(
+                result,
+                out var market) ||
+            market is null)
         {
-            if (export.StoredPlan is null)
-            {
-                _appState.ClearPlan();
-            }
-            else
-            {
-                var prepared = PlanSessionLoadService.Prepare(export.StoredPlan);
-                _appState.ApplyLoadedPlanSession(
-                    prepared,
-                    trackStoredPlanIdentity: false,
-                    markRestoredStatePersisted: true);
-            }
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
         }
-        finally
+
+        return market;
+    }
+
+    public async Task<WorkerProcurementOutcome> RunProcurementAsync(
+        WorkerProcurementRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _engineHost.RunProcurementAsync(
+            _projections.Shell.Revision,
+            request,
+            cancellationToken);
+        if (!_projections.TryPublishMutation<WorkerProcurementOutcome>(
+                result,
+                out var outcome) ||
+            outcome is null)
         {
-            _suppressCompatibilityCommit = false;
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
         }
+
+        return outcome;
+    }
+
+    public async Task<WorkerProcurementProjection> SelectProcurementToleranceAsync(
+        int travelTolerance,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _engineHost.SelectProcurementToleranceAsync(
+            _projections.Shell.Revision,
+            travelTolerance,
+            cancellationToken);
+        if (!_projections.TryPublishMutation<WorkerProcurementProjection>(
+                result,
+                out var procurement) ||
+            procurement is null)
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
+        }
+
+        return procurement;
     }
 
     private async Task RefreshAfterConflictAsync(
@@ -328,18 +367,6 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        lock (_sync)
-        {
-            if (_disposed)
-            {
-                return ValueTask.CompletedTask;
-            }
-            _disposed = true;
-            _scheduledCommit?.Cancel();
-            _scheduledCommit?.Dispose();
-            _scheduledCommit = null;
-        }
-        _commit.Dispose();
         return ValueTask.CompletedTask;
     }
 }

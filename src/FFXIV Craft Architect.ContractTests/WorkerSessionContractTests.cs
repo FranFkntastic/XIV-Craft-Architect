@@ -122,6 +122,28 @@ public sealed class WorkerSessionContractTests
         Assert.NotNull(mutatedRecipe);
         Assert.Equal(2, mutatedRecipe.ProjectItems.Count);
 
+        var market = await SendAsync(
+            WorkerSessionCommandKinds.MarketProjection,
+            expectedRevision: 2,
+            new { });
+        Assert.True(market.Accepted);
+        var marketProjection =
+            market.Projection.Deserialize<WorkerMarketProjection>(WireOptions);
+        Assert.NotNull(marketProjection);
+        Assert.True(marketProjection.HasPlan);
+        Assert.False(marketProjection.HasAnalysis);
+
+        var procurement = await SendAsync(
+            WorkerSessionCommandKinds.ProcurementProjection,
+            expectedRevision: 2,
+            new { });
+        Assert.True(procurement.Accepted);
+        var procurementProjection =
+            procurement.Projection.Deserialize<WorkerProcurementProjection>(WireOptions);
+        Assert.NotNull(procurementProjection);
+        Assert.True(procurementProjection.HasPlan);
+        Assert.False(procurementProjection.HasRoute);
+
         var exported = await SendAsync(
             "export",
             expectedRevision: 2,

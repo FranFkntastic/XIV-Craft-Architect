@@ -404,6 +404,19 @@ public sealed class CraftSessionState
         return MarkPlanStructureChanged(reason);
     }
 
+    public CraftSessionChange ReplaceActiveContext(
+        CraftSessionActiveContext activeContext,
+        string reason = "active session context changed")
+    {
+        ArgumentNullException.ThrowIfNull(activeContext);
+        lock (_gate)
+        {
+            _activeContext = activeContext;
+        }
+
+        return MarkMarketAnalysisSettingsChanged(reason);
+    }
+
     public bool TryReplaceActivePlanPrices(
         CraftSessionVersionStamp expectedStamp,
         CraftingPlan plan,
@@ -647,6 +660,53 @@ public sealed class CraftSessionState
         });
 
         return published && applied;
+    }
+
+    public bool TrySelectProcurementTravelTolerance(int travelTolerance)
+    {
+        var normalized = Math.Clamp(travelTolerance, 0, 11);
+        var overlay = ProcurementOverlay;
+        var currentDecision = overlay?.RouteDecision;
+        var selection = currentDecision?.ToleranceSelections
+            .FirstOrDefault(option => option.Contains(normalized));
+        if (overlay is null || currentDecision is null || selection is null)
+        {
+            return false;
+        }
+
+        var selectedDecision = new MarketRouteDecision(
+            normalized,
+            MarketRouteScoring.GetMaximumPremiumRate(normalized),
+            currentDecision.CheapestGilCost,
+            selection.GilCost,
+            selection.EvidencePenalty,
+            currentDecision.CheapestWorldStops,
+            selection.WorldStops,
+            currentDecision.CheapestDataCenterTransfers,
+            selection.DataCenterTransfers,
+            currentDecision.StartsFromHomeDataCenter,
+            currentDecision.HomeDataCenter,
+            currentDecision.TravelPriority,
+            currentDecision.RepresentativeRoutes,
+            selection.ItemDecisions)
+        {
+            FixedAcquisitionGilCost = selection.FixedAcquisitionGilCost,
+            RouteSearchWasTruncated = currentDecision.RouteSearchWasTruncated,
+            ToleranceSelections = currentDecision.ToleranceSelections
+        };
+        PublishProcurementOverlay(
+            overlay with
+            {
+                PublishedAtUtc = DateTime.UtcNow,
+                SourceDescription = "procurement route tolerance selection",
+                ShoppingPlans = selection.ShoppingPlans,
+                RouteCards = ProcurementWorldCardBuilder.BuildWorldCards(
+                    selection.ShoppingPlans,
+                    ActiveContext.DataCenter ?? "Aether"),
+                RouteDecision = selectedDecision
+            },
+            "procurement route tolerance selected");
+        return true;
     }
 
     private CraftSessionChange MarkProcurementOverlayPublished(string reason, Action? mutateState = null) =>

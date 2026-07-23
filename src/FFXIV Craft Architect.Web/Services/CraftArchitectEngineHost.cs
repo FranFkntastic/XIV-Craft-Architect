@@ -182,7 +182,7 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
 
     public Task<WorkerSessionResultEnvelope> ReplaceSessionAsync(
         long expectedRevision,
-        StoredPlan storedPlan,
+        StoredPlan? storedPlan,
         bool trackStoredPlanIdentity,
         CancellationToken cancellationToken = default) =>
         EnqueueSessionCommandAsync(
@@ -257,6 +257,70 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             EngineCommandPriority.Interactive,
             cancellationToken);
 
+    public Task<WorkerSessionResultEnvelope> GetMarketProjectionAsync(
+        long expectedRevision,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.MarketProjection,
+            expectedRevision,
+            new { },
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> RunMarketAnalysisAsync(
+        long expectedRevision,
+        WorkerMarketAnalysisRequest request,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.MarketAnalysisRun,
+            expectedRevision,
+            request,
+            EngineCommandPriority.UserRequestedDerivation,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> ApplyMarketLensAsync(
+        long expectedRevision,
+        WorkerMarketLensMutation mutation,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.MarketLensMutation,
+            expectedRevision,
+            mutation,
+            EngineCommandPriority.UserRequestedDerivation,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> GetProcurementProjectionAsync(
+        long expectedRevision,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.ProcurementProjection,
+            expectedRevision,
+            new { },
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> RunProcurementAsync(
+        long expectedRevision,
+        WorkerProcurementRequest request,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.ProcurementRun,
+            expectedRevision,
+            request,
+            EngineCommandPriority.UserRequestedDerivation,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> SelectProcurementToleranceAsync(
+        long expectedRevision,
+        int travelTolerance,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.ProcurementToleranceMutation,
+            expectedRevision,
+            new WorkerProcurementToleranceMutation(travelTolerance),
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
     internal Task<EngineResultEnvelope> ExecuteAsync(
         EngineExecutionHost executionHost,
         EngineRequestEnvelope request,
@@ -325,7 +389,7 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             commandId,
             commandId,
             JsonSerializer.SerializeToElement(command, EngineJsonSerializerOptions.CreateWire()));
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        using var timeout = new CancellationTokenSource(BrowserComputationTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeout.Token);

@@ -164,6 +164,58 @@ public sealed class ProcurementSafetyContractTests
         Assert.True(new AppState().ProcurementSearchEntireRegion);
     }
 
+    [Fact]
+    public void WorkerSessionToleranceSelection_UsesPublishedFrontierWithoutReanalysis()
+    {
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+        var plan = CreatePlan(100);
+        session.ActivatePlan(
+            plan,
+            [],
+            new CraftSessionActiveContext(
+                "North America",
+                "Aether",
+                "Siren",
+                MarketFetchScope.EntireRegion),
+            "test plan");
+        var selections = new[]
+        {
+            new MarketRouteToleranceSelection(
+                0, 5, "fewest", 500, 0, 1, 0, 0,
+                [RoutePlan(100, "Siren")], []),
+            new MarketRouteToleranceSelection(
+                6, 11, "cheapest", 400, 0, 2, 0, 0,
+                [RoutePlan(100, "Faerie")], [])
+        };
+        session.PublishProcurementOverlay(
+            new CraftSessionProcurementOverlay(
+                DateTime.UtcNow,
+                [100],
+                "test frontier",
+                selections[0].ShoppingPlans,
+                ProcurementWorldCardBuilder.BuildWorldCards(
+                    selections[0].ShoppingPlans,
+                    "Aether"),
+                new MarketRouteDecision(
+                    0, null, 400, 500, 0, 2, 1, 0, 0, false, null)
+                {
+                    ToleranceSelections = selections
+                }),
+            "test route");
+        var marketVersion = session.Versions.MarketAnalysis;
+
+        var selected = session.TrySelectProcurementTravelTolerance(11);
+
+        Assert.True(selected);
+        Assert.Equal(11, session.ProcurementOverlay?.RouteDecision?.TravelTolerance);
+        Assert.Equal(400, session.ProcurementOverlay?.RouteDecision?.SelectedGilCost);
+        Assert.Equal(
+            "Faerie",
+            Assert.Single(session.ProcurementOverlay!.ShoppingPlans!)
+                .RecommendedWorld?.WorldName);
+        Assert.Equal(marketVersion, session.Versions.MarketAnalysis);
+    }
+
     private static ProcurementWorkflowService CreateService(
         AppState state,
         IProcurementRouteExecutionService execution,

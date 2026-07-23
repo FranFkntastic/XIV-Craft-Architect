@@ -7,13 +7,7 @@
 @inject NavigationManager NavigationManager
 @inject AppState AppState
 @inject ISettingsService Settings
-@inject IndexedDbService IndexedDb
 @inject WebPlanPersistenceService PlanPersistence
-@inject PlanSessionLoadService PlanSessionLoad
-@inject MarketEvidenceHydrationService MarketEvidenceHydration
-@inject ProcurementRouteReconciliationService ProcurementRouteReconciliation
-@inject CancellableOperationService CancellableOperations
-@inject IndexedDbMarketCacheService MarketCache
 @inject PackagedWorldDirectoryService PackagedWorldDirectory
 @inject StartupInitializationService StartupInitialization
 @inject CraftArchitectEngineHost EngineHost
@@ -25,10 +19,7 @@
 @inject IDialogService DialogService
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
-@inject RecipePlannerCommandService RecipePlannerCommandService
 @inject NativePlanImportClassifier NativePlanImportClassifier
-@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
-@inject MarketAnalysisDiagnosticDumpService MarketAnalysisDiagnosticDumpService
 @inject RecipePlanDiagnosticDumpService RecipePlanDiagnosticDumpService
 @inject ILogger<MainLayout> Logger
 @implements IDisposable
@@ -36,48 +27,35 @@
 <MudThemeProvider @ref="_mudThemeProvider" Theme="_theme" @bind-IsDarkMode="_isDarkMode" />
 @if (AppState.SecretDebugToolsEnabled)
 {
-    var publication = AppState.MarketIntelligencePublicationContext;
-    var routeBasis = AppState.ProcurementRoutePublicationBasis;
-    var cacheDecision = MarketCache.LastDecisionSnapshot;
+    var recipeProbe = WorkerProjections.Recipe;
+    var marketProbe = WorkerProjections.Market;
+    var routeProbe = WorkerProjections.Procurement;
+    var workerBusy = EngineHost.Health.IsExecuting;
     <div data-benchmark-id="operation-lifecycle"
          hidden
-         data-plan-session-version="@AppState.PlanSessionVersion"
-         data-plan-root-count="@(AppState.CurrentPlan?.RootItems.Count ?? 0)"
-         data-plan-node-count="@CountPlanNodes(AppState.CurrentPlan)"
-         data-plan-edge-count="@CountPlanEdges(AppState.CurrentPlan)"
-         data-market-candidate-count="@CountMarketCandidates(AppState.CurrentPlan)"
-         data-plan-leaf-item-ids="@string.Join(",", GetPlanLeafItemIds(AppState.CurrentPlan))"
-         data-market-analysis-count="@AppState.MarketItemAnalyses.Count"
-         data-market-intelligence-id="@AppState.MarketIntelligenceId"
-         data-publication-plan-session-version="@publication.WebPlanSessionVersion"
-         data-publication-market-version="@publication.WebMarketAnalysisVersion"
-         data-publication-kind="@publication.Kind"
-         data-route-validity="@AppState.ProcurementRouteValidity"
-         data-route-has-decision="@BoolText(AppState.ProcurementRouteDecision is not null)"
-         data-route-failure="@AppState.ProcurementRouteFailure"
-         data-route-restore-diagnostic="@AppState.ProcurementRouteRestoreDiagnostic"
-         data-route-restore-diagnostic-details="@AppState.ProcurementRouteRestoreDiagnosticDetails"
-         data-route-basis-plan-session-version="@routeBasis?.PlanSessionVersion"
-         data-route-basis-market-intelligence-id="@routeBasis?.MarketIntelligenceId"
-         data-route-reconciling="@BoolText(AppState.IsProcurementRouteReconciling)"
-         data-route-reconciliation-scheduled="@BoolText(ProcurementRouteReconciliation.IsScheduled)"
-         data-is-busy="@BoolText(AppState.IsBusy)"
-         data-progress-percent="@AppState.ProgressPercent"
-         data-current-operation="@AppState.CurrentOperation"
-         data-status-message="@AppState.StatusMessage"
-         data-active-workflows="@string.Join(",", CancellableOperations.ActiveWorkflows)"
-         data-dirty-persisted-buckets="@AppState.GetDirtyPersistedBuckets()"
-         data-last-autosave="@AppState.LastAutoSave?.ToString("O")"
-         data-cache-fresh-hits="@cacheDecision?.FreshHitCount"
-         data-cache-stale-entries="@cacheDecision?.StaleExistingEntryCount"
-         data-cache-missing-entries="@cacheDecision?.MissingEntryCount"
-         data-cache-fetched-pairs="@((cacheDecision?.OrdinaryFetchedPairCount ?? 0) + (cacheDecision?.ForcedRefreshPairCount ?? 0))"
-         data-cache-cleaned-entries="@cacheDecision?.CleanupStaleDeletionCount">
+         data-plan-session-version="@WorkerProjections.Shell.PlanSessionVersion"
+         data-plan-root-count="@(recipeProbe?.Roots.Count ?? 0)"
+         data-plan-node-count="@CountRecipeNodes(recipeProbe?.Roots)"
+         data-plan-edge-count="@CountRecipeEdges(recipeProbe?.Roots)"
+         data-market-candidate-count="@(marketProbe?.CandidateCount ?? WorkerProjections.Acquisition?.MarketCandidateCount ?? 0)"
+         data-plan-leaf-item-ids="@string.Join(",", GetRecipeLeafItemIds(recipeProbe?.Roots))"
+         data-market-analysis-count="@WorkerProjections.Shell.MarketAnalysisCount"
+         data-market-intelligence-id="@WorkerProjections.Shell.Versions.MarketAnalysisVersion"
+         data-publication-plan-session-version="@WorkerProjections.Shell.PlanSessionVersion"
+         data-publication-market-version="@WorkerProjections.Shell.Versions.MarketAnalysisVersion"
+         data-publication-kind="@(marketProbe?.HasAnalysis == true ? "Known" : "None")"
+         data-route-validity="@(routeProbe?.HasRoute == true ? "Current" : "None")"
+         data-route-has-decision="@BoolText(routeProbe?.HasRoute == true)"
+         data-route-failure=""
+         data-route-reconciling="@BoolText(false)"
+         data-route-reconciliation-scheduled="@BoolText(false)"
+         data-is-busy="@BoolText(workerBusy)"
+         data-progress-percent="@(workerBusy ? 1 : 0)"
+         data-current-operation="@(workerBusy ? "Worker command" : null)"
+         data-status-message="@(workerBusy ? "Working" : "Ready")"
+         data-active-workflows="@(workerBusy ? "Worker" : null)"
+         data-dirty-persisted-buckets="">
     </div>
-    <button data-benchmark-id="lock-current-acquisition-decisions"
-            hidden
-            @onclick="LockCurrentAcquisitionDecisionsForBenchmark">
-    </button>
 }
 <MudDialogProvider />
 <MudSnackbarProvider MaxDisplayedSnackbars="3" 
@@ -230,13 +208,6 @@
                                EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Tools</MudButton>
                 </ActivatorContent>
                 <ChildContent>
-                    <MudMenuItem OnClick="OnFetchPrices" Icon="@Icons.Material.Filled.Refresh" Disabled="true">
-                        Fetch Prices
-                    </MudMenuItem>
-                    <MudMenuItem Disabled="true" Icon="@Icons.Material.Filled.BarChart">
-                        View Plan Market Data
-                    </MudMenuItem>
-                    <MudDivider />
                     <MudMenuItem OnClick="OnOptions" Icon="@Icons.Material.Filled.Settings">
                         Options...
                     </MudMenuItem>
@@ -257,12 +228,6 @@
                         </MudMenuItem>
                         @if (_debugToolsMenuOpen)
                         {
-                            <MudMenuItem OnClick="OnDumpSelectedMarketAnalysisItem"
-                                         Icon="@Icons.Material.Filled.Download"
-                                         Disabled="@(!CanDumpSelectedMarketAnalysisItem)"
-                                         Style="padding-left: 32px;">
-                                Dump Selected Market Analysis Item
-                            </MudMenuItem>
                             <MudMenuItem OnClick="OnDumpRecipePlanDiagnostics"
                                          Icon="@Icons.Material.Filled.Assignment"
                                          Style="padding-left: 32px;">
@@ -301,9 +266,6 @@
     private bool _debugToolsMenuOpen;
     private bool IsDebugToolsAvailable => AppState.SecretDebugToolsEnabled;
     private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
-    private bool CanDumpSelectedMarketAnalysisItem =>
-        AppState.SelectedMarketAnalysisItemId.HasValue &&
-        AppState.MarketItemAnalyses.Any(analysis => analysis.ItemId == AppState.SelectedMarketAnalysisItemId.Value);
     private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;
     
     private readonly MudTheme _theme = AppTheme.CreateTheme();
@@ -323,7 +285,7 @@
         NavigationManager.LocationChanged += OnLocationChanged;
         StartupInitialization.StatusChanged += OnStartupStatusChanged;
         AppState.OnStateChanged += OnAppStateChanged;
-        ProcurementRouteReconciliation.Start();
+        WorkerProjections.Changed += OnWorkerProjectionChanged;
     }
     
     protected override void OnAfterRender(bool firstRender)
@@ -355,7 +317,7 @@
                 InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(
                     PackagedWorldDirectory,
                     UniversalisService),
-                StartAutoSave: () => AppState.StartAutoSaveTimer(AutoSaveCallback),
+                StartAutoSave: () => { },
                 RestoreAutoSaveAsync: _ => RestoreAutoSaveAsync()));
         }
     }
@@ -370,17 +332,11 @@
         _ = InvokeAsync(StateHasChanged);
     }
 
+    private void OnWorkerProjectionChanged() =>
+        _ = InvokeAsync(StateHasChanged);
+
     private void OnAppStateChanged(AppStateChange change)
     {
-        const AppStateChangeScope persistedScopes =
-            AppStateChangeScope.PlanCore |
-            AppStateChangeScope.MarketAnalysis |
-            AppStateChangeScope.ProcurementOverlay |
-            AppStateChangeScope.Settings;
-        if ((change.Scopes & persistedScopes) != AppStateChangeScope.None)
-        {
-            WorkerSession.ScheduleCompatibilityCommit();
-        }
         if (change.HasScope(AppStateChangeScope.Settings) ||
             AppState.SecretDebugToolsEnabled && change.Scopes != AppStateChangeScope.None)
         {
@@ -396,27 +352,6 @@
         _debugToolsMenuOpen = !_debugToolsMenuOpen;
     }
     
-    private async Task AutoSaveCallback()
-    {
-        if (!AppState.IsAutoSaveEnabled || AppState.IsBusy || CancellableOperations.ActiveWorkflows.Count > 0)
-            return;
-            
-        try
-        {
-            var success = await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: true);
-            if (success)
-            {
-                var completedAt = DateTime.Now;
-                AppState.RecordAutoSaveCompleted(completedAt);
-                Logger?.LogDebug("Auto-saved state at {Time}", completedAt.ToString("HH:mm:ss"));
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger?.LogError(ex, "Auto-save failed");
-        }
-    }
-
     private async Task LoadSettingsAsync()
     {
         try
@@ -461,67 +396,17 @@
         catch { /* Ignore settings load errors */ }
     }
 
-    private async Task<StartupAutoSaveRestoreResult> RestoreAutoSaveAsync()
+    private Task<StartupAutoSaveRestoreResult> RestoreAutoSaveAsync()
     {
-        try
+        var shell = WorkerProjections.Shell;
+        if (!shell.HasSession)
         {
-            var totalElapsed = System.Diagnostics.Stopwatch.StartNew();
-
-            // Only restore if no plan is currently loaded
-            if (AppState.HasPlanOrProjectItems)
-                return StartupAutoSaveRestoreResult.NoAutoSave();
-
-            var loadElapsed = System.Diagnostics.Stopwatch.StartNew();
-            var autoSave = await PlanPersistence.LoadPlanPayloadAsync("autosave");
-            loadElapsed.Stop();
-            if (autoSave?.ProjectItems.Any() != true)
-                return StartupAutoSaveRestoreResult.NoAutoSave();
-
-            // Deserialize and validate the plan before applying state.
-            var planDeserializeElapsed = System.Diagnostics.Stopwatch.StartNew();
-            var loadResult = PlanSessionLoad.PrepareSession(autoSave);
-            planDeserializeElapsed.Stop();
-            string? warning = null;
-            if (!string.IsNullOrWhiteSpace(loadResult.Warning))
-            {
-                warning = loadResult.Warning;
-                Logger?.LogWarning("Failed to deserialize plan JSON from auto-save: {Warning}", loadResult.Warning);
-            }
-
-            if (AppState.HasPlanOrProjectItems)
-            {
-                Logger?.LogInformation("Skipped auto-save restore because a plan was loaded while restore was pending");
-                return StartupAutoSaveRestoreResult.NoAutoSave();
-            }
-
-            // Load the plan into AppState
-            var stateLoadElapsed = System.Diagnostics.Stopwatch.StartNew();
-            PlanSessionLoad.ApplyPreparedSession(
-                loadResult,
-                trackStoredPlanIdentity: false,
-                markRestoredStatePersisted: true);
-            IndexedDb.RememberRestoredMarketEvidence(AppState, autoSave);
-            MarketEvidenceHydration.ScheduleAfterPlanLoad(loadResult);
-            stateLoadElapsed.Stop();
-            totalElapsed.Stop();
-            
-            Snackbar.Add("Restored previous session", Severity.Info);
-            Logger?.LogInformation(
-                "Auto-restored plan '{PlanName}' with {ProjectItemCount} items and {MarketPlanCount} market plans in {TotalElapsedMs} ms (load {LoadElapsedMs} ms, plan JSON {PlanDeserializeElapsedMs} ms, state load {StateLoadElapsedMs} ms)",
-                autoSave.Name, 
-                autoSave.ProjectItems.Count,
-                AppState.ShoppingPlans.Count,
-                totalElapsed.ElapsedMilliseconds,
-                loadElapsed.ElapsedMilliseconds,
-                planDeserializeElapsed.ElapsedMilliseconds,
-                stateLoadElapsed.ElapsedMilliseconds);
-            return StartupAutoSaveRestoreResult.Restored(warning);
+            return Task.FromResult(StartupAutoSaveRestoreResult.NoAutoSave());
         }
-        catch (Exception ex)
-        {
-            Logger?.LogError(ex, "Failed to restore auto-save");
-            return StartupAutoSaveRestoreResult.Restored($"Failed to restore autosave: {ex.Message}");
-        }
+
+        Snackbar.Add("Restored previous session", Severity.Info);
+        return Task.FromResult(
+            StartupAutoSaveRestoreResult.Restored(shell.RestoreWarning));
     }
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
@@ -552,11 +437,6 @@
             _activeTab = "planner";
     }
     
-    private bool HasPlan()
-    {
-        return AppState.CurrentPlan != null || AppState.ShoppingItems.Any();
-    }
-
     private bool IsActiveTab(string tab)
     {
         return _activeTab == tab;
@@ -614,9 +494,9 @@
 
     // ==================== FILE MENU ====================
     
-    private void OnNewPlan()
+    private async Task OnNewPlan()
     {
-        AppState.ClearPlan();
+        await WorkerSession.ClearSessionAsync();
         Snackbar.Add("New plan started", Severity.Info);
     }
 
@@ -630,21 +510,19 @@
     {
         try
         {
-            var result = await PlanPersistence.LoadPlanIntoSessionAsync(planId);
-            if (result == null)
+            var stored = await PlanPersistence.LoadPlanPayloadAsync(planId);
+            if (stored == null)
             {
                 Snackbar.Add("Plan not found", Severity.Error);
                 return;
             }
-            if (!string.IsNullOrWhiteSpace(result.Warning))
-            {
-                Snackbar.Add($"Warning: {result.Warning}", Severity.Warning);
-            }
-
-            Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
+            await WorkerSession.ReplaceStoredPlanAsync(
+                stored,
+                trackStoredPlanIdentity: true);
+            Snackbar.Add($"Loaded '{stored.Name}'", Severity.Success);
             
             // Navigate to planner if we have a plan
-            if (result.Plan != null || AppState.HasProjectItems)
+            if (stored.PlanJson != null || stored.ProjectItems.Count > 0)
             {
                 // Use relative path (no leading slash) so it resolves against base href correctly
                 NavigationManager.NavigateTo("./");
@@ -706,27 +584,35 @@
                             MustBeHq = item.MustBeHq
                         })
                         .ToList();
-                var importCommandResult = await RecipePlannerCommandService.ImportProjectItemsAsync(
-                    new ImportProjectItemsRequest(
-                        projectItems,
-                        AppState.SelectedDataCenter,
-                        AppState.SelectedRegion,
-                        AppState.DefaultMarketFetchScope));
+                await WorkerSession.MutateProjectItemsAsync(
+                    new WorkerProjectItemsMutation(
+                        "replace",
+                        Items: projectItems));
+                WorkerRecipeBuildOutcome? importCommandResult = null;
+                if (projectItems.Count > 0)
+                {
+                    importCommandResult = await WorkerSession.BuildRecipeAsync(
+                        new WorkerRecipeBuildRequest(
+                            projectItems,
+                            WorkerProjections.Shell.SelectedDataCenter,
+                            WorkerProjections.Shell.SelectedRegion,
+                            MarketFetchScope.EntireRegion));
+                }
 
                 Snackbar.Add($"Imported {items.Count} {(items.Count == 1 ? "item" : "items")}", Severity.Success);
-                if (items.Count > 0)
+                if (importCommandResult is not null)
                 {
-                    if (importCommandResult.BuildResult.Built)
+                    if (importCommandResult.Built)
                     {
                         Snackbar.Add("Plan rebuilt from imported items", Severity.Success);
                     }
                     else if (importCommandResult.MessageLevel == RecipePlannerCommandMessageLevel.Error)
                     {
-                        Snackbar.Add($"Failed to rebuild plan: {importCommandResult.BuildResult.Message}", Severity.Error);
+                        Snackbar.Add($"Failed to rebuild plan: {importCommandResult.Message}", Severity.Error);
                     }
                     else
                     {
-                        Snackbar.Add(importCommandResult.BuildResult.Message, Severity.Info);
+                        Snackbar.Add(importCommandResult.Message, Severity.Info);
                     }
                 }
             }
@@ -775,69 +661,6 @@
         }
     }
 
-    private async Task OnDumpSelectedMarketAnalysisItem()
-    {
-        if (!IsDebugToolsAvailable)
-        {
-            Snackbar.Add("Debug dumps are not available.", Severity.Warning);
-            return;
-        }
-
-        if (!AppState.SelectedMarketAnalysisItemId.HasValue)
-        {
-            Snackbar.Add("Select a market analysis item before dumping diagnostics.", Severity.Warning);
-            return;
-        }
-
-        try
-        {
-            var dump = MarketAnalysisDiagnosticDumpService.BuildDump(
-                AppState.MarketItemAnalyses,
-                AppState.ShoppingPlans,
-                new MarketAnalysisDiagnosticDumpContext(
-                    AppState.CurrentPlan?.Name,
-                    AppState.SelectedDataCenter,
-                    AppState.SelectedRegion,
-                    AppState.SearchEntireRegion,
-                    AppState.MarketAnalysisLens,
-                    AppState.MarketSortPreference,
-                    AppState.MarketAnalysisGridSortColumn,
-                    AppState.MarketAnalysisGridSortDescending,
-                    AppState.MarketAnalysisWorldGridSortColumn,
-                    AppState.MarketAnalysisWorldGridSortDescending,
-                    AppState.SelectedMarketAnalysisItemId));
-            if (dump == null)
-            {
-                Snackbar.Add("Selected market analysis item is no longer available.", Severity.Warning);
-                return;
-            }
-
-            var json = MarketAnalysisDiagnosticDumpService.Serialize(dump);
-            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
-            using var stream = new MemoryStream(bytes);
-            using var streamRef = new DotNetStreamReference(stream);
-            var fileName = CreateMarketAnalysisDumpFileName(dump);
-            await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
-            Snackbar.Add($"Downloaded {fileName}", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to dump market analysis: {ex.Message}", Severity.Error);
-        }
-    }
-
-    private static string CreateMarketAnalysisDumpFileName(MarketAnalysisDiagnosticDump dump)
-    {
-        var timestamp = dump.ExportedAtUtc.ToString("yyyyMMdd-HHmmss");
-        var itemName = string.Join("_", dump.Selection.ExportedItemName.Split(Path.GetInvalidFileNameChars()));
-        if (itemName.Length > 48)
-        {
-            itemName = itemName[..48];
-        }
-
-        return $"market-analysis-{dump.Selection.ExportedItemId}-{itemName}-{timestamp}.json";
-    }
-
     private async Task OnDumpRecipePlanDiagnostics()
     {
         if (!IsDebugToolsAvailable)
@@ -848,14 +671,33 @@
 
         try
         {
-            var dump = RecipePlanDiagnosticDumpService.BuildDump();
-            var json = RecipePlanDiagnosticDumpService.Serialize(dump);
+            var stored = await WorkerSession.ExportStoredPlanAsync(
+                "diagnostic",
+                WorkerProjections.Recipe?.PlanName ?? "Plan");
+            var exportedAt = DateTime.UtcNow;
+            var json = System.Text.Json.JsonSerializer.Serialize(
+                new
+                {
+                    SchemaVersion = 2,
+                    ExportedAtUtc = exportedAt,
+                    Revision = WorkerProjections.Shell.Revision,
+                    Session = stored,
+                    Recipe = WorkerProjections.Recipe,
+                    Acquisition = WorkerProjections.Acquisition,
+                    Market = WorkerProjections.Market,
+                    Procurement = WorkerProjections.Procurement
+                },
+                new System.Text.Json.JsonSerializerOptions(
+                    System.Text.Json.JsonSerializerDefaults.Web)
+                {
+                    WriteIndented = true
+                });
             var bytes = System.Text.Encoding.UTF8.GetBytes(json);
             using var stream = new MemoryStream(bytes);
             using var streamRef = new DotNetStreamReference(stream);
             var fileName = RecipePlanDiagnosticDumpService.CreateFileName(
-                dump.Context.CurrentPlanName,
-                dump.ExportedAtUtc);
+                WorkerProjections.Recipe?.PlanName,
+                exportedAt);
             await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);
             Snackbar.Add($"Downloaded {fileName}", Severity.Success);
         }
@@ -873,63 +715,36 @@
     {
         try
         {
-            var result = await RecipePlannerCommandService.ActivatePlanAsync(
-                new ActivateRecipePlanRequest(
-                    plan,
-                    clearCurrentPlanId,
-                    RefreshVendorPricesOnActivation: refreshPrices,
-                    RefreshMarketPricesOnActivation: refreshPrices,
-                    AppState.DefaultMarketFetchScope,
-                    AppState.SelectedDataCenter,
-                    AppState.SelectedRegion));
+            var stored = new StoredPlan
+            {
+                Id = "import",
+                Name = plan.Name,
+                DataCenter = string.IsNullOrWhiteSpace(plan.DataCenter)
+                    ? WorkerProjections.Shell.SelectedDataCenter
+                    : plan.DataCenter,
+                ProjectItems = CraftPlanStateMapper.GetRootProjectItems(plan)
+                    .Select(item => new StoredProjectItem
+                    {
+                        Id = item.Id,
+                        Name = item.Name,
+                        IconId = item.IconId,
+                        Quantity = item.Quantity,
+                        MustBeHq = item.MustBeHq
+                    })
+                    .ToList(),
+                PlanJson = RecipeService.SerializePlan(plan),
+                SavedAt = DateTime.UtcNow,
+                ModifiedAt = DateTime.UtcNow
+            };
+            await WorkerSession.ReplaceStoredPlanAsync(
+                stored,
+                trackStoredPlanIdentity: !clearCurrentPlanId);
 
             Snackbar.Add(successMessage, Severity.Success);
-            if (result.MessageLevel == RecipePlannerCommandMessageLevel.Warning)
-            {
-                Snackbar.Add(result.Message, Severity.Warning);
-            }
-            else if (refreshPrices)
-            {
-                Snackbar.Add("Vendor prices updated", Severity.Success);
-                Logger.LogInformation(
-                    "Loaded {Count} market entries from cache scope {Scope}",
-                    result.PriceRefresh.FetchedCount,
-                    AppState.DefaultMarketFetchScope);
-                Snackbar.Add("Market prices updated", Severity.Success);
-            }
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Failed to rebuild plan: {ex.Message}", Severity.Warning);
-        }
-    }
-
-    private void LockCurrentAcquisitionDecisionsForBenchmark()
-    {
-        if (!AppState.SecretDebugToolsEnabled || AppState.CurrentPlan is null)
-        {
-            return;
-        }
-
-        foreach (var root in AppState.CurrentPlan.RootItems)
-        {
-            LockMarketAcquisitionDecision(root);
-        }
-
-        AppState.ApplyPlanDecisionChange(
-            AcquisitionPlanningService.GetActiveProcurementItems(AppState.CurrentPlan),
-            clearProcurementOverlay: true);
-    }
-
-    private static void LockMarketAcquisitionDecision(PlanNode node)
-    {
-        node.Source = node.MustBeHq
-            ? AcquisitionSource.MarketBuyHq
-            : AcquisitionSource.MarketBuyNq;
-        node.SourceReason = AcquisitionSourceReason.UserSelected;
-        foreach (var child in node.Children)
-        {
-            LockMarketAcquisitionDecision(child);
         }
     }
 
@@ -942,27 +757,28 @@
 
     private static string BoolText(bool value) => value ? "true" : "false";
 
-    private static int CountPlanNodes(CraftingPlan? plan) =>
-        plan?.RootItems.Sum(CountPlanNodes) ?? 0;
+    private static int CountRecipeNodes(
+        IReadOnlyList<WorkerRecipeNodeProjection>? roots) =>
+        roots?.Sum(CountRecipeNodes) ?? 0;
 
-    private static int CountPlanNodes(PlanNode node) =>
-        1 + node.Children.Sum(CountPlanNodes);
+    private static int CountRecipeNodes(WorkerRecipeNodeProjection node) =>
+        1 + node.Children.Sum(CountRecipeNodes);
 
-    private static int CountPlanEdges(CraftingPlan? plan) =>
-        Math.Max(0, CountPlanNodes(plan) - (plan?.RootItems.Count ?? 0));
+    private static int CountRecipeEdges(
+        IReadOnlyList<WorkerRecipeNodeProjection>? roots) =>
+        Math.Max(0, CountRecipeNodes(roots) - (roots?.Count ?? 0));
 
-    private static int CountMarketCandidates(CraftingPlan? plan) =>
-        plan is null ? 0 : AcquisitionPlanningService.GetMarketAnalysisCandidates(plan).Count;
-
-    private static IEnumerable<int> GetPlanLeafItemIds(CraftingPlan? plan) =>
-        plan is null
+    private static IEnumerable<int> GetRecipeLeafItemIds(
+        IReadOnlyList<WorkerRecipeNodeProjection>? roots) =>
+        roots is null
             ? []
-            : plan.RootItems.SelectMany(GetPlanLeafItemIds).Distinct().Order();
+            : roots.SelectMany(GetRecipeLeafItemIds).Distinct().Order();
 
-    private static IEnumerable<int> GetPlanLeafItemIds(PlanNode node) =>
+    private static IEnumerable<int> GetRecipeLeafItemIds(
+        WorkerRecipeNodeProjection node) =>
         node.Children.Count == 0
             ? [node.ItemId]
-            : node.Children.SelectMany(GetPlanLeafItemIds);
+            : node.Children.SelectMany(GetRecipeLeafItemIds);
 
     private static string NormalizeDevPlanPath(string input)
     {
@@ -991,7 +807,15 @@
     
     private async Task ShowExportDialog(int activeTab)
     {
-        var parameters = new DialogParameters { ["ActiveTab"] = activeTab };
+        var snapshot = await WorkerSession.ExportStoredPlanAsync(
+            "export",
+            WorkerProjections.Recipe?.PlanName ?? "Plan");
+        var parameters = new DialogParameters
+        {
+            ["ActiveTab"] = activeTab,
+            ["SessionSnapshot"] = snapshot,
+            ["Recipe"] = WorkerProjections.Recipe
+        };
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium };
         DialogService.Show<ExportDialog>("Export", parameters, options);
     }
@@ -1041,40 +865,37 @@
 
     private List<Core.Models.MaterialAggregate> CreateMaterialsForQuickCopy()
     {
-        var planMaterials = RecipeLayerWorkflowService
-            .BuildActiveProcurementItems(AppState.CurrentPlan)
-            .Where(item => item.TotalQuantity > 0)
-            .Select(CloneMaterial)
-            .ToList();
-
-        return planMaterials.Count > 0
-            ? planMaterials
-            : CreateMaterialsFromShoppingItems();
-    }
-
-    private static Core.Models.MaterialAggregate CloneMaterial(Core.Models.MaterialAggregate item)
-    {
-        return new Core.Models.MaterialAggregate
-        {
-            ItemId = item.ItemId,
-            Name = item.Name,
-            TotalQuantity = item.TotalQuantity,
-            UnitPrice = item.UnitPrice,
-            Sources = item.Sources.ToList()
-        };
-    }
-
-    private List<Core.Models.MaterialAggregate> CreateMaterialsFromShoppingItems()
-    {
-        return AppState.ShoppingItems
-            .Select(item => new Core.Models.MaterialAggregate
+        var routed = WorkerProjections.Procurement?.Worlds
+            .SelectMany(world => world.Items)
+            .GroupBy(item => new { item.ItemId, item.Name })
+            .Select(group =>
             {
-                ItemId = item.Id,
-                Name = item.Name,
-                TotalQuantity = item.Quantity,
+                var quantity = group.Sum(item => item.Quantity);
+                var total = group.Sum(item => item.TotalCost);
+                return new Core.Models.MaterialAggregate
+                {
+                    ItemId = group.Key.ItemId,
+                    Name = group.Key.Name,
+                    TotalQuantity = quantity,
+                    UnitPrice = quantity > 0 ? total / (decimal)quantity : 0
+                };
+            })
+            .ToList() ?? [];
+        if (routed.Count > 0)
+        {
+            return routed;
+        }
+
+        return WorkerProjections.Acquisition?.Rows
+            .Where(row => row.IsActiveProcurement && row.ActiveQuantity > 0)
+            .Select(row => new Core.Models.MaterialAggregate
+            {
+                ItemId = row.ItemId,
+                Name = row.ItemName,
+                TotalQuantity = row.ActiveQuantity,
                 UnitPrice = 0
             })
-            .ToList();
+            .ToList() ?? [];
     }
     
     private async Task CopyTextToClipboardAsync(string text, string successMessage)
@@ -1092,18 +913,6 @@
 
     // ==================== TOOLS MENU ====================
     
-    private void OnFetchPrices()
-    {
-        if (AppState.CurrentPlan == null && !AppState.ShoppingItems.Any())
-        {
-            Snackbar.Add("No plan to fetch prices for. Create a plan first.", Severity.Warning);
-            return;
-        }
-        
-        Snackbar.Add("Fetching prices...", Severity.Info);
-        AppState.RequestPlanAndMarketRefresh();
-    }
-
     private async Task OnOptions()
     {
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
@@ -1118,33 +927,12 @@
             NavigationManager.LocationChanged -= OnLocationChanged;
             StartupInitialization.StatusChanged -= OnStartupStatusChanged;
             AppState.OnStateChanged -= OnAppStateChanged;
-            ProcurementRouteReconciliation.Dispose();
-            
-            // Stop auto-save timer
-            AppState.StopAutoSaveTimer();
-            
-            // Final auto-save on dispose
-            if (AppState.IsAutoSaveEnabled)
-            {
-                _ = FinalAutoSaveAsync();
-            }
+            WorkerProjections.Changed -= OnWorkerProjectionChanged;
             
             _disposed = true;
         }
     }
 
-    private async Task FinalAutoSaveAsync()
-    {
-        try
-        {
-            await IndexedDb.AutoSaveStateAsync(AppState);
-        }
-        catch (Exception ex)
-        {
-            Logger?.LogError(ex, "Final auto-save failed");
-        }
-    }
-    
     private static MarketFetchScope ParseMarketFetchScope(string? value)
     {
         return Enum.TryParse<MarketFetchScope>(value, ignoreCase: true, out var scope)

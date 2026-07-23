@@ -75,15 +75,6 @@ public sealed class CoreMarketAnalysisWorkflowService
                 return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
             }
 
-            _session.ClearMarketAnalysis("market analysis run started");
-            operation.RefreshSessionStamp();
-            plan = _session.ActivePlan;
-            if (plan == null || _session.PlanSessionVersion != planSessionVersion)
-            {
-                operation.Cancel();
-                return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
-            }
-
             var capturedVersions = _session.CaptureVersionStamp();
             var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
                 new MarketEvidenceReconciliationRequest

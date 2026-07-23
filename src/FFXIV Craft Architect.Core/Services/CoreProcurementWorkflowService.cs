@@ -110,7 +110,7 @@ public sealed class CoreProcurementWorkflowService
             }
 
             using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct, operation.Token);
-            var activeItems = await _recipeLayerWorkflow.BuildCurrentMarketAnalysisCandidatesAsync(
+            var activeItems = await _recipeLayerWorkflow.BuildCurrentActiveProcurementItemsAsync(
                 plan,
                 linkedCancellation.Token);
             if (activeItems == null || _session.PlanSessionVersion != planSessionVersion)

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -32,7 +33,7 @@ public sealed record WorkerSessionRestorePayload(
     bool MigratedFromLegacy);
 
 public sealed record WorkerSessionReplacePayload(
-    StoredPlan StoredPlan,
+    StoredPlan? StoredPlan,
     bool TrackStoredPlanIdentity);
 
 public sealed record WorkerSessionShellProjection(
@@ -70,6 +71,12 @@ public static class WorkerSessionCommandKinds
     public const string RecipeBuild = "mutate-recipe-build";
     public const string AcquisitionMutation = "mutate-acquisition";
     public const string AcquisitionProjection = "acquisition-projection";
+    public const string MarketAnalysisRun = "mutate-market-analysis";
+    public const string MarketLensMutation = "mutate-market-lens";
+    public const string MarketProjection = "market-projection";
+    public const string ProcurementRun = "mutate-procurement";
+    public const string ProcurementToleranceMutation = "mutate-procurement-tolerance";
+    public const string ProcurementProjection = "procurement-projection";
 
     public static bool IsMutation(string commandKind) =>
         commandKind.StartsWith("mutate-", StringComparison.Ordinal);
@@ -186,3 +193,122 @@ public sealed record WorkerAcquisitionOptionProjection(
     string CostText,
     bool IsAvailable,
     bool IsProjectedUnsupported);
+
+public sealed record WorkerMarketAnalysisRequest(
+    bool ForceRefreshData,
+    MarketFetchScope Scope,
+    string SelectedDataCenter,
+    string SelectedRegion,
+    MarketAcquisitionLens Lens);
+
+public sealed record WorkerMarketLensMutation(MarketAcquisitionLens Lens);
+
+public sealed record WorkerMarketAnalysisOutcome(
+    bool Published,
+    int AnalyzedCount,
+    int ChangedDecisionCount,
+    int FetchedCount,
+    WorkerMarketProjection Market);
+
+public sealed record WorkerMarketProjection(
+    long Revision,
+    bool HasPlan,
+    bool HasAnalysis,
+    MarketFetchScope Scope,
+    string SelectedDataCenter,
+    string SelectedRegion,
+    MarketAcquisitionLens Lens,
+    int CandidateCount,
+    int AvailableCount,
+    int UnavailableCount,
+    long EstimatedTotalCost,
+    IReadOnlyList<WorkerMarketItemProjection> Items);
+
+public sealed record WorkerMarketItemProjection(
+    int ItemId,
+    string Name,
+    int IconId,
+    int QuantityNeeded,
+    bool IsAvailable,
+    bool HasSufficientStock,
+    int AvailableQuantity,
+    long EstimatedTotalCost,
+    decimal EstimatedUnitPrice,
+    string RecommendedWorld,
+    int WorldCount,
+    MarketDataQualityBucket DataQuality,
+    string? Warning,
+    IReadOnlyList<WorkerMarketWorldProjection> Worlds);
+
+public sealed record WorkerMarketWorldProjection(
+    string DataCenter,
+    string WorldName,
+    int Quantity,
+    long TotalCost,
+    decimal AverageUnitPrice,
+    bool HasSufficientStock,
+    MarketDataQualityBucket DataQuality,
+    TimeSpan? DataAge);
+
+public sealed record WorkerProcurementRequest(
+    MarketFetchScope Scope,
+    string SelectedDataCenter,
+    string SelectedRegion,
+    MarketAcquisitionLens Lens,
+    int TravelTolerance,
+    bool IncludeSplitPurchases,
+    bool StartFromHomeDataCenter,
+    MarketTravelPriority TravelPriority);
+
+public sealed record WorkerProcurementToleranceMutation(int TravelTolerance);
+
+public sealed record WorkerProcurementOutcome(
+    CoreProcurementWorkflowStatus Status,
+    int ShoppingPlanCount,
+    WorkerProcurementProjection Procurement);
+
+public sealed record WorkerProcurementProjection(
+    long Revision,
+    bool HasPlan,
+    bool HasMarketEvidence,
+    bool HasRoute,
+    int ActiveItemCount,
+    int TravelTolerance,
+    string TravelToleranceLabel,
+    MarketTravelPriority TravelPriority,
+    bool SearchesEntireRegion,
+    bool IncludeSplitPurchases,
+    long SelectedGilCost,
+    long CheapestGilCost,
+    long PremiumGil,
+    int WorldStops,
+    int DataCenterTransfers,
+    bool RouteSearchWasTruncated,
+    IReadOnlyList<WorkerProcurementToleranceProjection> ToleranceOptions,
+    IReadOnlyList<WorkerProcurementWorldProjection> Worlds);
+
+public sealed record WorkerProcurementToleranceProjection(
+    int MinimumTolerance,
+    int MaximumTolerance,
+    long GilCost,
+    int WorldStops,
+    int DataCenterTransfers);
+
+public sealed record WorkerProcurementWorldProjection(
+    string DataCenter,
+    string WorldName,
+    bool IsVendor,
+    long TotalCost,
+    int ItemCount,
+    int TotalQuantity,
+    IReadOnlyList<WorkerProcurementItemProjection> Items);
+
+public sealed record WorkerProcurementItemProjection(
+    int ItemId,
+    string Name,
+    int IconId,
+    int Quantity,
+    int TotalQuantityNeeded,
+    decimal UnitPrice,
+    long TotalCost,
+    bool IsSplitPurchase);

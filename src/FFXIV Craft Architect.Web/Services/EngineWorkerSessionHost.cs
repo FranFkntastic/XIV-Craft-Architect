@@ -13,6 +13,10 @@ public static partial class ManagedHost
 {
     private static readonly SemaphoreSlim SessionGate = new(1, 1);
     private static readonly HttpClient SessionHttp = new();
+    private static readonly UniversalisService SessionUniversalis = new(SessionHttp);
+    private static readonly WorkerMarketCacheService SessionMarketCache =
+        new(SessionUniversalis);
+    private static readonly MarketPriceLadderAnalysisService SessionMarketLadder = new();
     private static readonly RecipeCalculationService SessionRecipeCalculator =
         new(
             new GarlandService(SessionHttp),
@@ -120,12 +124,32 @@ public static partial class ManagedHost
                     null,
                     null,
                     CaptureAcquisitionProjection(command)),
+                WorkerSessionCommandKinds.MarketProjection => CreateSessionResult(
+                    command.CommandKind,
+                    accepted: true,
+                    null,
+                    null,
+                    CaptureMarketProjection()),
+                WorkerSessionCommandKinds.ProcurementProjection => CreateSessionResult(
+                    command.CommandKind,
+                    accepted: true,
+                    null,
+                    null,
+                    CaptureProcurementProjection()),
                 WorkerSessionCommandKinds.ProjectItemsMutation =>
                     MutateProjectItems(command),
                 WorkerSessionCommandKinds.AcquisitionMutation =>
                     MutateAcquisition(command),
                 WorkerSessionCommandKinds.RecipeBuild =>
                     await BuildRecipeAsync(command),
+                WorkerSessionCommandKinds.MarketAnalysisRun =>
+                    await RunMarketAnalysisAsync(command),
+                WorkerSessionCommandKinds.MarketLensMutation =>
+                    await ApplyMarketLensAsync(command),
+                WorkerSessionCommandKinds.ProcurementRun =>
+                    await RunProcurementAsync(command),
+                WorkerSessionCommandKinds.ProcurementToleranceMutation =>
+                    MutateProcurementTolerance(command),
                 _ => CreateSessionResult(
                     command.CommandKind,
                     accepted: false,
@@ -162,6 +186,7 @@ public static partial class ManagedHost
             restore.StoredPlan,
             restore.TrackStoredPlanIdentity);
         _canonicalSession = replacement;
+        SessionMarketCache.Seed(_canonicalSession.Session.MarketEvidence.ItemAnalyses);
         _sessionRevision = restore.Revision;
         _sessionRestoreWarning = warning;
         _sessionMigratedFromLegacy = restore.MigratedFromLegacy;
@@ -338,6 +363,197 @@ public static partial class ManagedHost
                 recipe));
     }
 
+    private static async Task<WorkerSessionResultEnvelope> RunMarketAnalysisAsync(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request = command.Payload.Deserialize<WorkerMarketAnalysisRequest>(WireJsonOptions)
+            ?? throw new InvalidOperationException("Market-analysis request is empty.");
+        var session = _canonicalSession.Session;
+        if (session.ActivePlan is null)
+        {
+            throw new InvalidOperationException("Build a recipe plan before running Market Analysis.");
+        }
+
+        var workflow = CreateMarketWorkflow(session);
+        var worldData = await SessionUniversalis.GetWorldDataAsync();
+        var expectedWorlds = MarketFetchScopeResolver
+            .GetDataCenters(request.Scope, request.SelectedDataCenter, request.SelectedRegion)
+            .Where(dataCenter => worldData.DataCenterToWorlds.ContainsKey(dataCenter))
+            .ToDictionary(
+                dataCenter => dataCenter,
+                dataCenter => (IReadOnlyList<string>)worldData.DataCenterToWorlds[dataCenter],
+                StringComparer.OrdinalIgnoreCase);
+        var result = await workflow.RunAnalysisAsync(
+            new CoreMarketAnalysisWorkflowRequest(
+                request.ForceRefreshData,
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion,
+                request.Lens,
+                expectedWorlds,
+                MarketAnalysisExecutionOptions.Synchronous));
+        if (!result.Published)
+        {
+            throw new InvalidOperationException(
+                "Market Analysis could not publish against the active plan revision.");
+        }
+
+        session.ReplaceActiveContext(
+            new CraftSessionActiveContext(
+                request.SelectedRegion,
+                request.SelectedDataCenter,
+                session.ActiveContext.World,
+                request.Scope),
+            "market analysis context published");
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        SessionMarketCache.Seed(session.MarketEvidence.ItemAnalyses);
+        _sessionRevision++;
+        return CreateMutationResult(
+            command.CommandKind,
+            new WorkerMarketAnalysisOutcome(
+                result.Published,
+                result.AnalyzedCount,
+                result.ChangedDecisionCount,
+                result.FetchedCount,
+                CaptureMarketProjection()));
+    }
+
+    private static async Task<WorkerSessionResultEnvelope> ApplyMarketLensAsync(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request = command.Payload.Deserialize<WorkerMarketLensMutation>(WireJsonOptions)
+            ?? throw new InvalidOperationException("Market-lens request is empty.");
+        var result = await CreateMarketWorkflow(_canonicalSession.Session)
+            .ApplyLensAsync(new CoreApplyMarketAnalysisLensRequest(request.Lens));
+        if (!result.Published)
+        {
+            throw new InvalidOperationException(
+                "The market lens cannot be applied until Market Analysis has evidence.");
+        }
+
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        _sessionRevision++;
+        return CreateMutationResult(command.CommandKind, CaptureMarketProjection());
+    }
+
+    private static async Task<WorkerSessionResultEnvelope> RunProcurementAsync(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request = command.Payload.Deserialize<WorkerProcurementRequest>(WireJsonOptions)
+            ?? throw new InvalidOperationException("Procurement request is empty.");
+        var session = _canonicalSession.Session;
+        if (session.ActivePlan is null)
+        {
+            throw new InvalidOperationException("Build a recipe plan before generating a route.");
+        }
+        if (session.MarketEvidence.ShoppingPlans is not { Count: > 0 } sourcePlans)
+        {
+            throw new InvalidOperationException(
+                "Run Market Analysis before generating a procurement route.");
+        }
+
+        var execution = new MarketAnalysisExecutionService(
+            SessionMarketCache,
+            SessionMarketLadder);
+        var reconciliation = new MarketEvidenceReconciliationService(
+            execution,
+            SessionMarketCache,
+            SessionUniversalis,
+            SessionMarketLadder);
+        var shopping = new MarketShoppingService(SessionMarketCache);
+        var worldData = await SessionUniversalis.GetWorldDataAsync();
+        shopping.SetWorldNameToIdMapping(
+            worldData.WorldIdToName.ToDictionary(pair => pair.Value, pair => pair.Key));
+        var workflow = new CoreProcurementWorkflowService(
+            session,
+            new ProcurementRouteExecutionService(reconciliation, shopping),
+            reconciliation,
+            new WorkerRecipeLayerWorkflow(session),
+            new CraftOperationCoordinator(session, new CraftOperationState()));
+        var expectedWorlds = MarketFetchScopeResolver
+            .GetDataCenters(request.Scope, request.SelectedDataCenter, request.SelectedRegion)
+            .Where(dataCenter => worldData.DataCenterToWorlds.ContainsKey(dataCenter))
+            .ToDictionary(
+                dataCenter => dataCenter,
+                dataCenter => (IReadOnlyList<string>)worldData.DataCenterToWorlds[dataCenter],
+                StringComparer.OrdinalIgnoreCase);
+        var result = await workflow.RunAnalysisAsync(
+            new CoreProcurementWorkflowRequest(
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion,
+                request.Lens,
+                new MarketAnalysisConfig
+                {
+                    TravelTolerance = request.TravelTolerance,
+                    EnableSplitWorld = request.IncludeSplitPurchases,
+                    StartFromHomeDataCenter = request.StartFromHomeDataCenter,
+                    HomeDataCenter = request.SelectedDataCenter,
+                    TravelPriority = request.TravelPriority
+                },
+                request.IncludeSplitPurchases,
+                sourcePlans,
+                new HashSet<MarketWorldKey>(),
+                new HashSet<MarketItemWorldKey>(),
+                expectedWorlds,
+                ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous));
+        if (result.Status != CoreProcurementWorkflowStatus.Published)
+        {
+            throw new InvalidOperationException(
+                $"Procurement route was not published ({result.Status}).");
+        }
+
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        _sessionRevision++;
+        return CreateMutationResult(
+            command.CommandKind,
+            new WorkerProcurementOutcome(
+                result.Status,
+                result.ShoppingPlanCount,
+                CaptureProcurementProjection()));
+    }
+
+    private static WorkerSessionResultEnvelope MutateProcurementTolerance(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request =
+            command.Payload.Deserialize<WorkerProcurementToleranceMutation>(WireJsonOptions)
+            ?? throw new InvalidOperationException("Procurement tolerance request is empty.");
+        if (!_canonicalSession.Session.TrySelectProcurementTravelTolerance(
+                request.TravelTolerance))
+        {
+            throw new InvalidOperationException(
+                "This route does not contain a precomputed selection for that tolerance.");
+        }
+
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        return CompleteMutation(
+            command.CommandKind,
+            CaptureProcurementProjection);
+    }
+
+    private static CoreMarketAnalysisWorkflowService CreateMarketWorkflow(
+        CraftSessionState session)
+    {
+        var execution = new MarketAnalysisExecutionService(
+            SessionMarketCache,
+            SessionMarketLadder);
+        var reconciliation = new MarketEvidenceReconciliationService(
+            execution,
+            SessionMarketCache,
+            SessionUniversalis,
+            SessionMarketLadder);
+        var operations = new CraftOperationCoordinator(
+            session,
+            new CraftOperationState());
+        return new CoreMarketAnalysisWorkflowService(
+            session,
+            reconciliation,
+            SessionMarketLadder,
+            new WorkerRecipeLayerWorkflow(session),
+            operations);
+    }
+
     private static WorkerSessionResultEnvelope CompleteMutation(
         string commandKind,
         Func<object> capturePublicProjection)
@@ -398,6 +614,129 @@ public static partial class ManagedHost
                 ?? Array.Empty<WorkerRecipeNodeProjection>(),
             evidence.ItemAnalyses.Count > 0 || shoppingPlans.Count > 0,
             route?.RouteDecision is not null);
+    }
+
+    private static WorkerMarketProjection CaptureMarketProjection()
+    {
+        var session = _canonicalSession.Session;
+        var evidence = session.MarketEvidence;
+        var analyses = evidence.ItemAnalyses.ToDictionary(analysis => analysis.ItemId);
+        var items = (evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>())
+            .Select(plan =>
+            {
+                analyses.TryGetValue(plan.ItemId, out var analysis);
+                var totalCost = plan.SplitTotalCost ??
+                                plan.RecommendedWorld?.TotalCost ??
+                                0;
+                var worldName = plan.RequiresSplitPurchase
+                    ? $"{plan.RecommendedSplit!.Count} world split"
+                    : plan.RecommendedWorld?.WorldName ?? "Unavailable";
+                var worlds = plan.WorldOptions
+                    .OrderBy(world => world.LensRank)
+                    .ThenBy(world => world.TotalCost)
+                    .Select(world => new WorkerMarketWorldProjection(
+                        world.DataCenter,
+                        world.WorldName,
+                        world.TotalQuantityPurchased,
+                        world.TotalCost,
+                        world.AveragePricePerUnit,
+                        world.HasSufficientStock,
+                        world.MarketDataQualityBucket,
+                        world.MarketDataAge))
+                    .ToArray();
+                return new WorkerMarketItemProjection(
+                    plan.ItemId,
+                    plan.Name,
+                    plan.IconId,
+                    plan.QuantityNeeded,
+                    plan.HasOptions && string.IsNullOrWhiteSpace(plan.Error),
+                    plan.HasSufficientStock,
+                    plan.TotalAvailableQuantity,
+                    totalCost,
+                    plan.QuantityNeeded > 0 ? totalCost / (decimal)plan.QuantityNeeded : 0,
+                    worldName,
+                    worlds.Length,
+                    analysis?.WorstDataQualityBucket ?? MarketDataQualityBucket.Missing,
+                    plan.Error ?? plan.MarketDataWarning ?? analysis?.Warning,
+                    worlds);
+            })
+            .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var context = session.ActiveContext;
+        var candidateCount = new WorkerRecipeLayerWorkflow(session)
+            .BuildMarketAnalysisCandidates(session.ActivePlan)
+            .Count;
+        return new WorkerMarketProjection(
+            _sessionRevision,
+            session.ActivePlan is not null,
+            items.Length > 0,
+            context.MarketFetchScope ?? MarketFetchScope.EntireRegion,
+            context.DataCenter ?? "Aether",
+            context.Region ?? "North America",
+            evidence.Lens,
+            candidateCount,
+            items.Count(item => item.IsAvailable),
+            Math.Max(0, candidateCount - items.Count(item => item.IsAvailable)),
+            items.Sum(item => item.EstimatedTotalCost),
+            items);
+    }
+
+    private static WorkerProcurementProjection CaptureProcurementProjection()
+    {
+        var session = _canonicalSession.Session;
+        var overlay = session.ProcurementOverlay;
+        var decision = overlay?.RouteDecision;
+        var activeItems = new WorkerRecipeLayerWorkflow(session)
+            .BuildActiveProcurementItems(session.ActivePlan);
+        var worlds = (overlay?.RouteCards ?? Array.Empty<WorldProcurementCardModel>())
+            .Select(world => new WorkerProcurementWorldProjection(
+                world.DataCenter,
+                world.WorldName,
+                world.IsVendor,
+                world.TotalCost,
+                world.ItemCount,
+                world.TotalQuantity,
+                world.Items.Select(item => new WorkerProcurementItemProjection(
+                    item.ItemId,
+                    item.ItemName,
+                    item.IconId,
+                    item.QuantityOnThisWorld,
+                    item.TotalQuantityNeeded,
+                    item.PricePerUnit,
+                    item.TotalCost,
+                    item.IsSplitPurchase)).ToArray()))
+            .OrderBy(world => world.IsVendor ? 1 : 0)
+            .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var fixedCost = decision?.FixedAcquisitionGilCost ?? 0;
+        var tolerance = decision?.TravelTolerance ?? 0;
+        return new WorkerProcurementProjection(
+            _sessionRevision,
+            session.ActivePlan is not null,
+            session.MarketEvidence.ShoppingPlans is { Count: > 0 },
+            decision is not null,
+            activeItems.Count,
+            tolerance,
+            MarketRouteScoring.GetToleranceLabel(tolerance),
+            decision?.TravelPriority ?? MarketTravelPriority.DataCenterTransfersFirst,
+            session.ActiveContext.MarketFetchScope == MarketFetchScope.EntireRegion,
+            overlay?.ShoppingPlans?.Any(plan => plan.RequiresSplitPurchase) == true,
+            (decision?.SelectedGilCost ?? 0) + fixedCost,
+            (decision?.CheapestGilCost ?? 0) + fixedCost,
+            decision?.PremiumGil ?? 0,
+            decision?.SelectedWorldStops ?? 0,
+            decision?.SelectedDataCenterTransfers ?? 0,
+            decision?.RouteSearchWasTruncated ?? false,
+            decision?.ToleranceSelections.Select(selection =>
+                new WorkerProcurementToleranceProjection(
+                    selection.MinimumTolerance,
+                    selection.MaximumTolerance,
+                    selection.GilCost + selection.FixedAcquisitionGilCost,
+                    selection.WorldStops,
+                    selection.DataCenterTransfers)).ToArray()
+                ?? Array.Empty<WorkerProcurementToleranceProjection>(),
+            worlds);
     }
 
     private static WorkerAcquisitionProjection CaptureAcquisitionProjection(
@@ -704,6 +1043,81 @@ public static partial class ManagedHost
             Quantity = item.Quantity,
             MustBeHq = item.MustBeHq
         };
+
+    private sealed class WorkerRecipeLayerWorkflow : ICoreRecipeLayerWorkflowService
+    {
+        private readonly CraftSessionState _session;
+        private readonly RecipeDemandProjectionService _projection = new();
+
+        public WorkerRecipeLayerWorkflow(CraftSessionState session)
+        {
+            _session = session;
+        }
+
+        public RecipeOperationSnapshotIdentity CreateSnapshotIdentity()
+        {
+            var versions = _session.CaptureVersionStamp();
+            return new RecipeOperationSnapshotIdentity(
+                _session.PlanSessionVersion,
+                versions.PlanCore,
+                versions.PlanDecision,
+                versions.PlanPrice,
+                versions.SettingsContext,
+                "worker-canonical-plan");
+        }
+
+        public RecipeDemandProjection BuildDemandProjection(CraftingPlan? plan) =>
+            _projection.Build(plan, snapshot: null);
+
+        public IReadOnlyList<MaterialAggregate> BuildMarketAnalysisCandidates(
+            CraftingPlan? plan) =>
+            BuildDemandProjection(plan).ToMarketAnalysisMaterialAggregates();
+
+        public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(
+            CraftingPlan? plan) =>
+            BuildDemandProjection(plan).ToActiveProcurementMaterialAggregates();
+
+        public Task<RecipeDemandProjection?> BuildCurrentDemandProjectionAsync(
+            CraftingPlan? plan,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<RecipeDemandProjection?>(
+                BuildDemandProjection(plan));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?>
+            BuildCurrentMarketAnalysisCandidatesAsync(
+                CraftingPlan? plan,
+                CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(
+                BuildMarketAnalysisCandidates(plan));
+        }
+
+        public Task<CoreMarketAnalysisCandidateBuildResult?>
+            BuildCurrentMarketAnalysisCandidateResultAsync(
+                CraftingPlan? plan,
+                CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<CoreMarketAnalysisCandidateBuildResult?>(
+                new CoreMarketAnalysisCandidateBuildResult(
+                    BuildMarketAnalysisCandidates(plan),
+                    RecipeBasis: null));
+        }
+
+        public Task<IReadOnlyList<MaterialAggregate>?>
+            BuildCurrentActiveProcurementItemsAsync(
+                CraftingPlan? plan,
+                CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<MaterialAggregate>?>(
+                BuildActiveProcurementItems(plan));
+        }
+    }
 
     private sealed class WorkerVendorCache : IVendorCacheService
     {
