@@ -52,6 +52,31 @@ public sealed class ProcurementRouteCompactionTests
         Assert.All(compact.WorldOptions, world => Assert.Single(world.Listings));
     }
 
+    [Fact]
+    public void CompactResultShoppingPlans_KeepsVendorRecommendationOutOfMarketWorldOptions()
+    {
+        var vendor = World(MarketShoppingConstants.VendorWorldName);
+        vendor.DataCenter = MarketShoppingConstants.VendorWorldName;
+        var source = new DetailedShoppingPlan
+        {
+            ItemId = 101,
+            Name = "Vendor Item",
+            QuantityNeeded = 2,
+            RecommendedWorld = vendor,
+            WorldOptions = [World("Alpha"), vendor],
+            Vendors =
+            [
+                new VendorInfo { Name = "Supplier", Location = "Limsa", Price = 50, Currency = "gil" }
+            ]
+        };
+
+        var compact = Assert.Single(ProcurementRouteExecutionService.CompactResultShoppingPlans([source]));
+
+        Assert.Equal(MarketShoppingConstants.VendorWorldName, compact.RecommendedWorld?.WorldName);
+        Assert.Empty(compact.WorldOptions);
+        Assert.Single(compact.Vendors);
+    }
+
     private static WorldShoppingSummary World(string name) => new()
     {
         DataCenter = "Aether",

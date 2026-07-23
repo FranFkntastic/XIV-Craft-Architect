@@ -175,5 +175,5 @@ public static class EngineSemanticSnapshotHash
         EngineCanonicalHash.Compute(new { Domain = "analysis-result-v1", Snapshot = snapshot });
 
     public static string Route(EngineRouteSemanticSnapshot snapshot) =>
-        EngineCanonicalHash.Compute(new { Domain = "route-result-v3", Snapshot = snapshot });
+        EngineCanonicalHash.Compute(new { Domain = "route-result-v4", Snapshot = snapshot });
 }

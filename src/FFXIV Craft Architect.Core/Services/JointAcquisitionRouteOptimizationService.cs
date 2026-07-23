@@ -37,6 +37,7 @@ public sealed class JointAcquisitionRouteOptimizationService
         var lowerBoundUnitCosts = evidenceByItem.ToDictionary(
             pair => pair.Key,
             pair => pair.Value.WorldOptions
+                .Where(IsMarketWorld)
                 .SelectMany(world => world.Listings)
                 .Where(listing => listing.PricePerUnit > 0)
                 .Select(listing => listing.PricePerUnit)
@@ -306,6 +307,7 @@ public sealed class JointAcquisitionRouteOptimizationService
     private static DetailedShoppingPlan AdjustEvidence(DetailedShoppingPlan source, MarketDemand demand)
     {
         var worlds = source.WorldOptions
+            .Where(IsMarketWorld)
             .Select(world => AdjustWorld(world, demand.Quantity, demand.HqQuantity))
             .Where(world => world.TotalQuantityPurchased > 0)
             .ToList();
@@ -325,6 +327,12 @@ public sealed class JointAcquisitionRouteOptimizationService
             Vendors = source.Vendors.ToList()
         };
     }
+
+    private static bool IsMarketWorld(WorldShoppingSummary world) =>
+        !string.Equals(
+            world.WorldName,
+            MarketShoppingConstants.VendorWorldName,
+            StringComparison.OrdinalIgnoreCase);
 
     private static WorldShoppingSummary AdjustWorld(
         WorldShoppingSummary source,

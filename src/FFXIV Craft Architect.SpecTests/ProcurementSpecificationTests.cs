@@ -82,7 +82,16 @@ public sealed class ProcurementSpecificationTests
                 new VendorInfo { Name = "Chosen", Location = "Limsa", Price = 18, Currency = "gil" }
             ]
         };
-        var shopping = SpecificationFixtures.Evidence(104, node.Name, 5);
+        var shopping = SpecificationFixtures.Evidence(
+            104,
+            node.Name,
+            5,
+            SpecificationFixtures.World("Aether", "Siren", 5, 25),
+            SpecificationFixtures.World(
+                MarketShoppingConstants.VendorWorldName,
+                MarketShoppingConstants.VendorWorldName,
+                5,
+                12));
 
         new MarketShoppingService(null!).ApplyVendorPurchaseOverrides(
             new CraftingPlan { RootItems = [node] },
@@ -91,6 +100,8 @@ public sealed class ProcurementSpecificationTests
         Assert.Equal(MarketShoppingConstants.VendorWorldName, shopping.RecommendedWorld?.WorldName);
         Assert.Equal(90, shopping.RecommendedWorld?.TotalCost);
         Assert.Equal("Chosen (Limsa)", shopping.RecommendedWorld?.VendorName);
+        var marketWorld = Assert.Single(shopping.WorldOptions);
+        Assert.Equal("Siren", marketWorld.WorldName);
     }
 
     [Fact]

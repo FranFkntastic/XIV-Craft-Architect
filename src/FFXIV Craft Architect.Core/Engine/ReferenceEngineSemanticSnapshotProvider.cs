@@ -6,7 +6,8 @@ namespace FFXIV_Craft_Architect.Core.Engine;
 public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSemanticSnapshotProvider
 {
     private const string InputSchemaVersion = "1";
-    private const string OutputSchemaVersion = "10";
+    private const string AnalysisOutputSchemaVersion = "10";
+    private const string RouteOutputSchemaVersion = "11";
     private static readonly JsonSerializerOptions InputJsonOptions = EngineJsonSerializerOptions.CreateWire();
 
     public ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request)
@@ -44,7 +45,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
     {
         ArgumentNullException.ThrowIfNull(result);
         return new EngineAnalysisSemanticSnapshot(
-            OutputSchemaVersion,
+            AnalysisOutputSchemaVersion,
             result.Analyses
                 .OrderBy(item => item.ItemId)
                 .Select(item => new EngineAnalysisItemSnapshot(
@@ -90,7 +91,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                 group.Select(item => item.ItemId).Distinct().ToArray()))
             .ToArray();
         return new EngineRouteSemanticSnapshot(
-            OutputSchemaVersion,
+            RouteOutputSchemaVersion,
             stops,
             orderedItems,
             result.RouteDecision?.SelectedGilCost ?? orderedItems.Sum(item => item.TotalGil),

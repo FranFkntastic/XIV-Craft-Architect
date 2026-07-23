@@ -16,8 +16,8 @@ internal sealed record ReusableStoredMarketEvidence(
 
 public sealed class StoredPlanSnapshotBuilder
 {
-    public const int ProcurementRouteSchemaVersion = 3;
-    public const string ProcurementOptimizerVersion = "bounded-joint-v2";
+    public const int ProcurementRouteSchemaVersion = 4;
+    public const string ProcurementOptimizerVersion = "bounded-joint-v3";
     private readonly AppState _appState;
 
     public StoredPlanSnapshotBuilder(AppState appState)

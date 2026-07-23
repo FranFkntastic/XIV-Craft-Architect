@@ -159,6 +159,54 @@ public sealed class JointOptimizerSpecificationTests
     }
 
     [Fact]
+    public async Task LegacyVendorWorldCannotMasqueradeAsMarketEvidence()
+    {
+        var node = new PlanNode
+        {
+            ItemId = 302,
+            Name = "Vendor material",
+            NodeId = "vendor-material",
+            Quantity = 5,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanBuyFromMarket = true,
+            CanBuyFromVendor = true,
+            VendorPrice = 18,
+            VendorOptions =
+            [
+                new VendorInfo { Name = "Supplier", Location = "Limsa", Price = 18, Currency = "gil" }
+            ]
+        };
+        var evidence = SpecificationFixtures.Evidence(
+            node.ItemId,
+            node.Name,
+            node.Quantity,
+            SpecificationFixtures.World("Aether", "Exodus", 10, 30),
+            SpecificationFixtures.World(
+                MarketShoppingConstants.VendorWorldName,
+                MarketShoppingConstants.VendorWorldName,
+                node.Quantity,
+                12));
+
+        var result = await SpecificationFixtures.JointService().OptimizeAsync(
+            new CraftingPlan { RootItems = [node] },
+            [evidence],
+            SpecificationFixtures.Config(11),
+            includeSplitPurchases: true,
+            MarketAnalysisExecutionOptions.Synchronous);
+
+        Assert.Equal(AcquisitionSource.VendorBuy, Assert.Single(result.OptimizedPlan.RootItems).Source);
+        var shoppingPlan = Assert.Single(result.ShoppingPlans);
+        Assert.Equal(MarketShoppingConstants.VendorWorldName, shoppingPlan.RecommendedWorld?.WorldName);
+        Assert.DoesNotContain(
+            shoppingPlan.WorldOptions,
+            world => string.Equals(
+                world.WorldName,
+                MarketShoppingConstants.VendorWorldName,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task TravelWorkLimitReturnsCompleteMarkedIncumbent()
     {
         var (plan, evidence) = BuildBinaryCorpus(3, lastItemRequiresHq: true);

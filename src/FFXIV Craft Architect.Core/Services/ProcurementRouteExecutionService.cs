@@ -215,6 +215,14 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
     {
         if (plan.RecommendedWorld is { } recommended)
         {
+            if (string.Equals(
+                    recommended.WorldName,
+                    MarketShoppingConstants.VendorWorldName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return [];
+            }
+
             return [recommended];
         }
         if (plan.RecommendedSplit?.Count > 0)

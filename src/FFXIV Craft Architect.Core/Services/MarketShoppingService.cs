@@ -1978,11 +1978,10 @@ public class MarketShoppingService
             shoppingPlan.RecommendedWorld = vendorWorldSummary;
             shoppingPlan.RecommendedSplit = null;
             shoppingPlan.Vendors = gilVendors;
-
-            if (shoppingPlan.WorldOptions.All(w => !string.Equals(w.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase)))
-            {
-                shoppingPlan.WorldOptions.Insert(0, vendorWorldSummary);
-            }
+            shoppingPlan.WorldOptions.RemoveAll(world => string.Equals(
+                world.WorldName,
+                MarketShoppingConstants.VendorWorldName,
+                StringComparison.OrdinalIgnoreCase));
         }
     }
 
