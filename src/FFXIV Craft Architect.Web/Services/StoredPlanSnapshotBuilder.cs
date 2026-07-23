@@ -11,12 +11,11 @@ internal sealed record ReusableStoredMarketEvidence(
     long SettingsVersion,
     string? MarketIntelligenceJson,
     string? MarketAnalysisRecipeBasisJson,
-    string? MarketAnalysisScopeSnapshotJson,
-    string? MarketEvidenceHash);
+    string? MarketAnalysisScopeSnapshotJson);
 
 public sealed class StoredPlanSnapshotBuilder
 {
-    public const int ProcurementRouteSchemaVersion = 4;
+    public const int ProcurementRouteSchemaVersion = 5;
     public const string ProcurementOptimizerVersion = "bounded-joint-v3";
     private readonly AppState _appState;
 
@@ -119,13 +118,11 @@ public sealed class StoredPlanSnapshotBuilder
         string? marketIntelligenceJson;
         string? marketAnalysisRecipeBasisJson;
         string? marketAnalysisScopeSnapshotJson;
-        string? marketEvidenceHash;
         if (canReuseMarketEvidence)
         {
             marketIntelligenceJson = reusableMarketEvidence!.MarketIntelligenceJson;
             marketAnalysisRecipeBasisJson = reusableMarketEvidence.MarketAnalysisRecipeBasisJson;
             marketAnalysisScopeSnapshotJson = reusableMarketEvidence.MarketAnalysisScopeSnapshotJson;
-            marketEvidenceHash = reusableMarketEvidence.MarketEvidenceHash;
         }
         else
         {
@@ -142,9 +139,6 @@ public sealed class StoredPlanSnapshotBuilder
             marketAnalysisScopeSnapshotJson = appState.PublishedMarketAnalysisScope is { } scope
                 ? JsonSerializer.Serialize(scope)
                 : null;
-            marketEvidenceHash = marketIntelligenceJson is null
-                ? null
-                : ComputeMarketEvidenceHash(marketIntelligenceJson);
         }
 
         capturedMarketEvidence = canReuseMarketEvidence
@@ -154,8 +148,7 @@ public sealed class StoredPlanSnapshotBuilder
                 versions.SettingsVersion,
                 marketIntelligenceJson,
                 marketAnalysisRecipeBasisJson,
-                marketAnalysisScopeSnapshotJson,
-                marketEvidenceHash);
+                marketAnalysisScopeSnapshotJson);
 
         return new StoredPlan
         {
@@ -176,7 +169,7 @@ public sealed class StoredPlanSnapshotBuilder
                 ? JsonSerializer.Serialize(appState.CurrentPlan)
                 : null,
             MarketIntelligenceJson = marketIntelligenceJson,
-            ProcurementRouteJson = BuildProcurementRouteJson(appState, marketEvidenceHash),
+            ProcurementRouteJson = BuildProcurementRouteJson(appState),
             MarketPlansJson = includeLegacyMarketAnalysisFields && appState.ShoppingPlans.Any()
                 ? JsonSerializer.Serialize(appState.ShoppingPlans)
                 : null,
@@ -192,9 +185,7 @@ public sealed class StoredPlanSnapshotBuilder
         };
     }
 
-    internal static string? BuildProcurementRouteJson(
-        AppState appState,
-        string? marketEvidenceHash)
+    internal static string? BuildProcurementRouteJson(AppState appState)
     {
         if (appState.CurrentPlan is not { } currentPlan ||
             appState.ProcurementRouteValidity != ProcurementRoutePublicationValidity.Current ||
@@ -204,11 +195,6 @@ public sealed class StoredPlanSnapshotBuilder
             return null;
         }
 
-        if (string.IsNullOrWhiteSpace(marketEvidenceHash))
-        {
-            throw new InvalidOperationException("Current market intelligence has no persistence hash.");
-        }
-
         return JsonSerializer.Serialize(new StoredProcurementRoute(
             ProcurementRouteSchemaVersion,
             ProcurementOptimizerVersion,
@@ -216,8 +202,8 @@ public sealed class StoredPlanSnapshotBuilder
             routeDecision,
             routeBasis,
             ComputePlanHash(currentPlan),
-            marketEvidenceHash,
-            ComputeRoutePayloadHash(appState.ProcurementShoppingPlans, routeDecision)));
+            MarketEvidenceHash: null,
+            PayloadHash: null));
     }
 
     public static string ComputePlanHash(CraftingPlan plan)
@@ -261,20 +247,4 @@ public sealed class StoredPlanSnapshotBuilder
         }
     }
 
-    public static string ComputeMarketEvidenceHash(string marketIntelligenceJson)
-    {
-        using var document = JsonDocument.Parse(marketIntelligenceJson);
-        return EngineCanonicalHash.Compute(new
-        {
-            Domain = "stored-route-market-evidence-v1",
-            IntelligenceHash = EngineCanonicalHash.Compute(document.RootElement)
-        });
-    }
-
-    public static string ComputeRoutePayloadHash(
-        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        MarketRouteDecision decision) =>
-        EngineCanonicalHash.Compute(
-            new { Domain = "stored-route-payload-v1", ShoppingPlans = shoppingPlans, Decision = decision },
-            EngineJsonSerializerOptions.CreateWire());
 }

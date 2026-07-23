@@ -177,22 +177,6 @@ public partial class AppState
                 ProcurementRouteRestoreDiagnostic = "plan-hash-mismatch";
                 return;
             }
-            if (!string.Equals(
-                    storedRoute.MarketEvidenceHash,
-                    StoredPlanSnapshotBuilder.ComputeMarketEvidenceHash(marketIntelligenceJson),
-                    StringComparison.Ordinal))
-            {
-                ProcurementRouteRestoreDiagnostic = "market-evidence-hash-mismatch";
-                return;
-            }
-            if (!string.Equals(
-                    storedRoute.PayloadHash,
-                    StoredPlanSnapshotBuilder.ComputeRoutePayloadHash(shoppingPlans, decision),
-                    StringComparison.Ordinal))
-            {
-                ProcurementRouteRestoreDiagnostic = "route-payload-hash-mismatch";
-                return;
-            }
         }
         catch (Exception ex) when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException)
         {

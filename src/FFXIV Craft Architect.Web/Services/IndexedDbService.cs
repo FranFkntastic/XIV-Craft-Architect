@@ -110,28 +110,13 @@ public class IndexedDbService
             return;
         }
 
-        string? marketEvidenceHash = null;
-        if (state.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
-            !string.IsNullOrWhiteSpace(storedPlan.ProcurementRouteJson))
-        {
-            try
-            {
-                marketEvidenceHash = JsonSerializer.Deserialize<StoredProcurementRoute>(
-                    storedPlan.ProcurementRouteJson)?.MarketEvidenceHash;
-            }
-            catch (JsonException)
-            {
-            }
-        }
-
         var versions = state.CurrentVersions;
         _reusableStoredMarketEvidence = new ReusableStoredMarketEvidence(
             versions.MarketAnalysisVersion,
             versions.SettingsVersion,
             storedPlan.MarketIntelligenceJson,
             storedPlan.MarketAnalysisRecipeBasisJson,
-            storedPlan.MarketAnalysisScopeSnapshotJson,
-            marketEvidenceHash);
+            storedPlan.MarketAnalysisScopeSnapshotJson);
     }
 
     /// <summary>
@@ -574,22 +559,7 @@ public class IndexedDbService
                  !string.IsNullOrWhiteSpace(reusableMarketEvidence.MarketIntelligenceJson)))
             {
                 var routeSnapshotElapsed = Stopwatch.StartNew();
-                var marketEvidenceHash = reusableMarketEvidence.MarketEvidenceHash;
-                if (state.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
-                    string.IsNullOrWhiteSpace(marketEvidenceHash))
-                {
-                    marketEvidenceHash = StoredPlanSnapshotBuilder.ComputeMarketEvidenceHash(
-                        reusableMarketEvidence.MarketIntelligenceJson
-                            ?? throw new InvalidOperationException(
-                                "Reusable market evidence lost its canonical payload."));
-                    _reusableStoredMarketEvidence = reusableMarketEvidence with
-                    {
-                        MarketEvidenceHash = marketEvidenceHash
-                    };
-                }
-                var routeJson = StoredPlanSnapshotBuilder.BuildProcurementRouteJson(
-                    state,
-                    marketEvidenceHash);
+                var routeJson = StoredPlanSnapshotBuilder.BuildProcurementRouteJson(state);
                 var planPatch = new StoredPlanCorePatch
                 {
                     DataCenter = state.SelectedDataCenter,
@@ -932,8 +902,8 @@ public sealed record StoredProcurementRoute(
     MarketRouteDecision? Decision,
     ProcurementRoutePublicationBasis? Basis,
     string PlanHash,
-    string MarketEvidenceHash,
-    string PayloadHash);
+    string? MarketEvidenceHash,
+    string? PayloadHash);
 
 /// <summary>
 /// Stored project item for IndexedDB.
