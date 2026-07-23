@@ -82,6 +82,7 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
                 .ToArray(),
             SourceMarketAnalyses = _appState.MarketItemAnalyses
                 .Where(analysis => activeItemIds.Contains(analysis.ItemId))
+                .Select(CreateReconciliationAnalysisSnapshot)
                 .ToArray(),
             Scope = scope,
             SelectedDataCenter = request.RouteBasis.SelectedDataCenter,
@@ -305,6 +306,34 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
             AddVendorDecisionNodes(node.Children, activeItemIds, vendorNodes);
         }
     }
+
+    private static MarketItemAnalysis CreateReconciliationAnalysisSnapshot(
+        MarketItemAnalysis analysis) =>
+        new()
+        {
+            ItemId = analysis.ItemId,
+            Name = analysis.Name,
+            QuantityNeeded = analysis.QuantityNeeded,
+            Scope = analysis.Scope,
+            LoadedAtUtc = analysis.LoadedAtUtc,
+            LastReconciledAtUtc = analysis.LastReconciledAtUtc,
+            RequestedDataCenters = analysis.RequestedDataCenters,
+            PresentDataCenters = analysis.PresentDataCenters,
+            MissingDataCenters = analysis.MissingDataCenters,
+            Worlds = analysis.Worlds
+                .Select(world => new WorldMarketAnalysis
+                {
+                    DataCenter = world.DataCenter,
+                    WorldName = world.WorldName,
+                    FetchedAtUtc = world.FetchedAtUtc,
+                    MarketUploadedAtUtc = world.MarketUploadedAtUtc,
+                    DataAgeSource = world.DataAgeSource,
+                    DataAge = world.DataAge,
+                    DataQualityScore = world.DataQualityScore,
+                    DataQualityBucket = world.DataQualityBucket
+                })
+                .ToList()
+        };
 
     private void LogPreparationStage(string stage, Stopwatch stopwatch)
     {
