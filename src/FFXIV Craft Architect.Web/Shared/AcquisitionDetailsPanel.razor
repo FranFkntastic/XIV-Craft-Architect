@@ -1,17 +1,15 @@
-@using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
-@inject MarketEvidenceHydrationService MarketEvidenceHydration
 @inject NavigationManager NavigationManager
 
 <div class="rp-column">
-    @if (Node == null && Row == null)
+    @if (Row == null)
     {
         <div class="rp-empty-state">
             <div class="rp-empty-title">Acquisition Details</div>
-            <div class="rp-empty-subtitle">Select a recipe node to review acquisition options.</div>
+            <div class="rp-empty-subtitle">Select a recipe item to review acquisition options.</div>
         </div>
     }
     else
@@ -20,7 +18,7 @@
             <div class="rp-panel-header">
                 <div class="rp-header-title">Acquisition Details</div>
                 <div class="rp-header-actions">
-                    @if (CanOpenMarketAnalysis)
+                    @if (Row.IsMarketCandidate)
                     {
                         <button type="button"
                                 class="rp-header-action"
@@ -32,23 +30,22 @@
                 </div>
             </div>
             <div class="rp-details-wrap">
-                <div class="rp-item-name">@ItemName</div>
-                <div class="rp-item-meta">Quantity: @DisplayQuantity</div>
-
+                <div class="rp-item-name">@Row.ItemName</div>
+                <div class="rp-item-meta">Quantity: @Row.TotalQuantity</div>
                 <div class="rp-detail-row">
                     <span class="rp-detail-label">Current source</span>
-                    <span class="rp-detail-value" style="color: @RecipePlanDisplayHelpers.GetSourceHexColor(CurrentSource)">
-                        @RecipePlanDisplayHelpers.GetSourceDisplayName(CurrentSource)
+                    <span class="rp-detail-value" style="color: @RecipePlanDisplayHelpers.GetSourceHexColor(Row.Source)">
+                        @RecipePlanDisplayHelpers.GetSourceDisplayName(Row.Source)
                     </span>
                 </div>
             </div>
         </div>
 
-        @if (IsMarketUnavailable)
+        @if (Row.IsMarketUnavailable)
         {
             <div class="rp-warning-block">
                 <div class="rp-warning-title">Market data unavailable</div>
-                <div>This item was not included in market pricing.</div>
+                <div>This item has no supported market-board evidence in the current scope.</div>
             </div>
         }
 
@@ -58,12 +55,12 @@
             </div>
             <div class="rp-details-wrap">
                 <div class="rp-method-list">
-                    @foreach (var option in GetOptions())
+                    @foreach (var option in Row.Options)
                     {
                         <button class="@GetOptionClass(option)"
                                 title="@(option.IsProjectedUnsupported ? ProjectedUnsupportedOptionTooltip : null)"
                                 disabled="@(!option.IsAvailable)"
-                                @onclick="() => SelectSource(option.Source)">
+                                @onclick="() => OnSourceChanged.InvokeAsync(option.Source)">
                             <span class="rp-method-main">
                                 <span class="rp-method-name">@option.Name</span>
                                 <span class="rp-method-detail">@option.Detail</span>
@@ -75,298 +72,52 @@
             </div>
         </div>
 
-        <ShoppingListPanel
-            CurrentPlan="@CurrentPlan"
-            Materials="@ActiveProcurementItems"
-            UnavailableMarketItems="@UnavailableMarketItems" />
+        <div class="rp-panel">
+            <div class="rp-panel-header">
+                <div class="rp-header-title">Plan Snapshot</div>
+            </div>
+            <div class="rp-details-wrap">
+                <div class="rp-detail-row"><span class="rp-detail-label">Target items</span><span class="rp-detail-value">@RootItemCount</span></div>
+                <div class="rp-detail-row"><span class="rp-detail-label">Items to obtain</span><span class="rp-detail-value">@ActiveProcurementCount</span></div>
+                <div class="rp-detail-row"><span class="rp-detail-label">Priced items</span><span class="rp-detail-value">@PricedItemCount</span></div>
+                <div class="rp-detail-row"><span class="rp-detail-label">Market unavailable</span><span class="rp-detail-value">@UnavailableItemCount</span></div>
+            </div>
+        </div>
     }
 </div>
 
 @code {
-    [Parameter] public PlanNode? Node { get; set; }
-    [Parameter] public DecisionRow? Row { get; set; }
-    [Parameter] public CraftingPlan? CurrentPlan { get; set; }
-    [Parameter] public DetailedShoppingPlan? MarketPlan { get; set; }
-    [Parameter] public IReadOnlyList<DetailedShoppingPlan> MarketPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
-    [Parameter] public AcquisitionCostContext CostContext { get; set; } =
-        AcquisitionPlanningService.CreateCostContext(Array.Empty<DetailedShoppingPlan>());
-    [Parameter] public IReadOnlyList<MaterialAggregate>? ActiveProcurementItems { get; set; }
-    [Parameter] public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<CoreMarketDataUnavailableItem>();
-    [Parameter] public EventCallback<AcquisitionSourceChangeRequest> OnSourceChanged { get; set; }
+    [Parameter] public WorkerAcquisitionRowProjection? Row { get; set; }
+    [Parameter] public int RootItemCount { get; set; }
+    [Parameter] public int ActiveProcurementCount { get; set; }
+    [Parameter] public int PricedItemCount { get; set; }
+    [Parameter] public int UnavailableItemCount { get; set; }
+    [Parameter] public EventCallback<AcquisitionSource> OnSourceChanged { get; set; }
 
-    private int ItemId => Row?.ItemId ?? Node?.ItemId ?? 0;
-    private string ItemName => Row?.ItemName ?? Node?.Name ?? string.Empty;
-    private int DisplayQuantity => Row == null ? Node?.Quantity ?? 0 : AcquisitionEvaluationCostCalculator.GetCostQuantity(Row);
-    private AcquisitionSource CurrentSource => Row?.Source ?? Node?.Source ?? AcquisitionSource.UnknownSource;
-    private bool CanCraft => Row?.CanCraft ?? Node?.CanCraft ?? false;
-    private bool HasChildren => Row?.HasChildren ?? Node?.Children.Any() ?? false;
-    private bool CanBuyFromMarket => Row?.CanBuyFromMarket ?? Node?.CanBuyFromMarket ?? false;
-    private bool MustBeHq => Row?.MustBeHq ?? Node?.MustBeHq ?? false;
-    private bool CanBeHq => Row?.CanBeHq ?? Node?.CanBeHq ?? false;
-    private bool CanBuyFromVendor => Row?.CanBuyFromVendor ?? Node?.CanBuyFromVendor ?? false;
-    private decimal HqUnitPrice => Row?.HqUnitPrice ?? Node?.HqMarketPrice ?? 0;
-    private decimal UnitPrice => Row?.UnitPrice ?? Node?.MarketPrice ?? 0;
-    private IReadOnlyList<RecipeDemandVendorOption> VendorOptions => Row?.VendorOptions ?? GetNodeVendorOptions();
-    private bool IsMarketUnavailable => ItemId != 0 && UnavailableMarketItems.Any(i => i.ItemId == ItemId);
-    private bool CanOpenMarketAnalysis => ItemId != 0 && MarketPlans.Any(plan => plan.ItemId == ItemId);
-    private const string ProjectedUnsupportedOptionTooltip = "This is a projected cost. The current search scope cannot support this purchase.";
+    private const string ProjectedUnsupportedOptionTooltip =
+        "This is a projected cost. The current search scope cannot support this purchase.";
 
-    private async Task SelectSource(AcquisitionSource source)
-    {
-        if (Node == null)
-        {
-            return;
-        }
-
-        await OnSourceChanged.InvokeAsync(new AcquisitionSourceChangeRequest(Node, source));
-    }
-
-    private void GoToMarketAnalysis()
-    {
-        if (ItemId == 0)
-        {
-            return;
-        }
-
-        AppState.RequestMarketItemAutoExpand(ItemId);
-        NavigationManager.NavigateTo("market");
-    }
-
-    private List<AcquisitionOptionView> GetOptions()
-    {
-        var options = new List<AcquisitionOptionView>();
-        if (Node == null)
-        {
-            return options;
-        }
-
-        if (HasChildren && CanCraft)
-        {
-            var hasCraftCost = TryGetOptionCost(AcquisitionSource.Craft, out var craftCost);
-            options.Add(new AcquisitionOptionView(
-                AcquisitionSource.Craft,
-                "Craft",
-                MarketPlans.Any()
-                    ? "Uses the recipe tree with market evidence for child purchases."
-                    : "Uses the recipe tree below this item.",
-                hasCraftCost ? $"{craftCost:N0}g" : "-",
-                true,
-                IsProjectedUnsupported: false));
-        }
-
-        if (CanBuyFromMarket)
-        {
-            if (!MustBeHq)
-            {
-                var hasNqMarketCost = TryGetOptionCost(AcquisitionSource.MarketBuyNq, out var nqMarketCost);
-                var isProjectedUnsupported = IsProjectedUnsupportedOption(AcquisitionSource.MarketBuyNq);
-                options.Add(new AcquisitionOptionView(
-                    AcquisitionSource.MarketBuyNq,
-                    "Buy NQ",
-                    GetMarketPlanDetail("NQ"),
-                    hasNqMarketCost ? $"{nqMarketCost:N0}g" : "-",
-                    hasNqMarketCost && !isProjectedUnsupported,
-                    isProjectedUnsupported));
-            }
-
-            if (CanBeHq)
-            {
-                var hasHqMarketCost = TryGetOptionCost(AcquisitionSource.MarketBuyHq, out var hqMarketCost);
-                var isProjectedUnsupported = IsProjectedUnsupportedOption(AcquisitionSource.MarketBuyHq);
-                options.Add(new AcquisitionOptionView(
-                    AcquisitionSource.MarketBuyHq,
-                    "Buy HQ",
-                    GetMarketPlanDetail("HQ"),
-                    hasHqMarketCost ? $"{hqMarketCost:N0}g" : "-",
-                    hasHqMarketCost && !isProjectedUnsupported,
-                    isProjectedUnsupported));
-            }
-        }
-
-        if (CanBuyFromVendor)
-        {
-            var hasVendorCost = TryGetOptionCost(AcquisitionSource.VendorBuy, out var vendorCost);
-            options.Add(new AcquisitionOptionView(
-                AcquisitionSource.VendorBuy,
-                "Vendor",
-                GetVendorDetail(),
-                hasVendorCost ? $"{vendorCost:N0}g" : "-",
-                hasVendorCost,
-                IsProjectedUnsupported: false));
-        }
-
-        if (!CanBuyFromMarket && !CanBuyFromVendor && !HasChildren)
-        {
-            options.Add(new AcquisitionOptionView(
-                AcquisitionSource.UnknownSource,
-                "Figure it out",
-                "No supported craft, market, or vendor source is known.",
-                "-",
-                true,
-                IsProjectedUnsupported: false));
-        }
-
-        return options;
-    }
-
-    private string GetOptionClass(AcquisitionOptionView option)
+    private string GetOptionClass(WorkerAcquisitionOptionProjection option)
     {
         var classes = new List<string> { "rp-method-row" };
-        if (CurrentSource == option.Source)
+        if (Row?.Source == option.Source)
         {
             classes.Add("selected");
         }
-
         if (option.IsProjectedUnsupported)
         {
             classes.Add("projected-unsupported");
         }
-
         return string.Join(" ", classes);
     }
 
-    private string GetMarketPlanDetail(string quality)
+    private void GoToMarketAnalysis()
     {
-        var marketPlan = MarketPlan;
-        if (marketPlan == null && ItemId != 0)
+        if (Row == null)
         {
-            CostContext.TryGetShoppingPlan(ItemId, out marketPlan);
+            return;
         }
-
-        var hqOnly = quality == "HQ";
-        var estimate = MarketPurchaseCostProjectionService.Estimate(
-            marketPlan,
-            DisplayQuantity,
-            hqOnly,
-            includeVendor: false);
-        if (estimate.IsUnsupportedProjection)
-        {
-            return "Projected cost; current search scope cannot fill this purchase.";
-        }
-
-        if (estimate.World != null)
-        {
-            return $"{estimate.World.WorldName} can cover {estimate.World.TotalQuantityPurchased}/{marketPlan?.QuantityNeeded}.";
-        }
-
-        var recommendedSplit = marketPlan?.RecommendedSplit;
-        if (estimate.Kind == MarketPurchaseCostEstimateKind.SupportedEvidence &&
-            recommendedSplit != null &&
-            recommendedSplit.Sum(split => split.QuantityToBuy) >= DisplayQuantity)
-        {
-            return $"{recommendedSplit.Count} world split can cover market purchase.";
-        }
-
-        if (!string.IsNullOrWhiteSpace(marketPlan?.Error))
-        {
-            return marketPlan.Error;
-        }
-
-        if (AppState.IsMarketEvidenceHydrating)
-        {
-            return "Refreshing current market price...";
-        }
-
-        if ((hqOnly ? HqUnitPrice : UnitPrice) > 0)
-        {
-            return DescribeIncompleteMarketEvidence(quality);
-        }
-
-        return "Run Market Analysis for actionable market evidence.";
+        AppState.RequestMarketItemAutoExpand(Row.ItemId);
+        NavigationManager.NavigateTo("market");
     }
-
-    private string DescribeIncompleteMarketEvidence(string quality)
-    {
-        var purchase = $"{DisplayQuantity:N0} {quality}";
-        var run = MarketEvidenceHydration.LastRun;
-        return run.Status switch
-        {
-            MarketEvidenceHydrationStatus.Running => "Refreshing current market price...",
-            MarketEvidenceHydrationStatus.Published =>
-                $"Market refresh published, but no complete route covers {purchase}.",
-            MarketEvidenceHydrationStatus.NotNeeded =>
-                $"Loaded evidence was considered fresh, but no complete route covers {purchase}.",
-            MarketEvidenceHydrationStatus.NotPublished =>
-                "Automatic market refresh finished without publishing usable evidence.",
-            MarketEvidenceHydrationStatus.Failed =>
-                $"Automatic market refresh failed: {run.Message}",
-            MarketEvidenceHydrationStatus.Canceled or MarketEvidenceHydrationStatus.Superseded =>
-                "Automatic market refresh did not finish for the active plan.",
-            _ => "No actionable market evidence is loaded for this purchase."
-        };
-    }
-
-    private string GetVendorDetail()
-    {
-        if (VendorOptions.Any(vendor => vendor.IsGilVendor) != true)
-        {
-            return "No gil vendor price loaded.";
-        }
-
-        var vendor = VendorOptions
-            .Where(vendor => vendor.IsGilVendor)
-            .OrderBy(vendor => vendor.Price)
-            .First();
-
-        return $"{vendor.Name} - {vendor.Location}";
-    }
-
-    private bool TryGetOptionCost(AcquisitionSource source, out decimal cost)
-    {
-        if (Node == null)
-        {
-            cost = 0;
-            return false;
-        }
-
-        if (Row != null)
-        {
-            return AcquisitionEvaluationCostCalculator.TryGetCost(Row, source, CostContext, out cost);
-        }
-
-        return AcquisitionPlanningService.TryGetAcquisitionCost(Node, source, CostContext, out cost);
-    }
-
-    private bool IsProjectedUnsupportedOption(AcquisitionSource source)
-    {
-        var hqOnly = source == AcquisitionSource.MarketBuyHq;
-        if (source is not (AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq))
-        {
-            return false;
-        }
-
-        var marketPlan = MarketPlan;
-        if (marketPlan == null && ItemId != 0)
-        {
-            CostContext.TryGetShoppingPlan(ItemId, out marketPlan);
-        }
-
-        return MarketPurchaseCostProjectionService
-            .Estimate(marketPlan, DisplayQuantity, hqOnly, includeVendor: false)
-            .IsUnsupportedProjection;
-    }
-
-    private IReadOnlyList<RecipeDemandVendorOption> GetNodeVendorOptions()
-    {
-        if (Node == null)
-        {
-            return Array.Empty<RecipeDemandVendorOption>();
-        }
-
-        return Node.VendorOptions
-            .Select(vendor => new RecipeDemandVendorOption(
-                vendor.Name,
-                vendor.Location,
-                vendor.Price,
-                vendor.Currency))
-            .ToList();
-    }
-
-    private record AcquisitionOptionView(
-        AcquisitionSource Source,
-        string Name,
-        string Detail,
-        string CostText,
-        bool IsAvailable,
-        bool IsProjectedUnsupported);
 }

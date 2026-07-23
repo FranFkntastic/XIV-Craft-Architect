@@ -75,9 +75,56 @@ public sealed class WorkerSessionContractTests
         Assert.Equal("stale-revision", stale.RejectionCode);
         Assert.Equal(1, stale.Revision);
 
+        var recipe = await SendAsync(
+            WorkerSessionCommandKinds.RecipeProjection,
+            expectedRevision: 1,
+            new { });
+        Assert.True(recipe.Accepted);
+        var recipeProjection =
+            recipe.Projection.Deserialize<WorkerRecipePlannerProjection>(WireOptions);
+        Assert.NotNull(recipeProjection);
+        Assert.Single(recipeProjection.ProjectItems);
+        Assert.Single(recipeProjection.Roots);
+        Assert.Single(recipeProjection.Roots[0].Children);
+
+        var acquisition = await SendAsync(
+            WorkerSessionCommandKinds.AcquisitionProjection,
+            expectedRevision: 1,
+            new WorkerAcquisitionProjectionRequest("All"));
+        Assert.True(acquisition.Accepted);
+        var acquisitionProjection =
+            acquisition.Projection.Deserialize<WorkerAcquisitionProjection>(WireOptions);
+        Assert.NotNull(acquisitionProjection);
+        Assert.NotEmpty(acquisitionProjection.Rows);
+        Assert.DoesNotContain("\"node\":", acquisition.Projection.GetRawText());
+
+        var mutated = await SendAsync(
+            WorkerSessionCommandKinds.ProjectItemsMutation,
+            expectedRevision: 1,
+            new WorkerProjectItemsMutation(
+                "add",
+                Item: new ProjectItem
+                {
+                    Id = 44,
+                    Name = "Second target",
+                    Quantity = 3
+                }));
+        Assert.True(mutated.Accepted);
+        Assert.Equal(2, mutated.Revision);
+        var mutation =
+            mutated.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
+        Assert.NotNull(mutation);
+        Assert.Equal(2, mutation.Shell.Revision);
+        Assert.Equal(2, mutation.Shell.ProjectItemCount);
+        Assert.NotNull(mutation.DurableState.PlanJson);
+        var mutatedRecipe =
+            mutation.PublicProjection.Deserialize<WorkerRecipePlannerProjection>(WireOptions);
+        Assert.NotNull(mutatedRecipe);
+        Assert.Equal(2, mutatedRecipe.ProjectItems.Count);
+
         var exported = await SendAsync(
             "export",
-            expectedRevision: 1,
+            expectedRevision: 2,
             new WorkerSessionExportRequest(
                 "autosave",
                 "Autosave",
@@ -86,7 +133,7 @@ public sealed class WorkerSessionContractTests
         Assert.True(exported.Accepted);
         var export = exported.Projection.Deserialize<WorkerSessionExportProjection>(WireOptions);
         Assert.NotNull(export);
-        Assert.Equal(1, export.Revision);
+        Assert.Equal(2, export.Revision);
         Assert.NotNull(export.StoredPlan?.PlanJson);
     }
 

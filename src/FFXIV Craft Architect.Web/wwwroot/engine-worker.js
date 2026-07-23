@@ -217,6 +217,10 @@ async function executeSessionCommand(messageJson, host) {
     if (command.commandKind === "replace") {
         return await replaceDurableSession(host, message);
     }
+    if (typeof command.commandKind === "string" &&
+        command.commandKind.startsWith("mutate-")) {
+        return await mutateDurableSession(host, message);
+    }
     return await host.ExecuteSessionCommandJson(messageJson);
 }
 
@@ -291,6 +295,47 @@ async function replaceDurableSession(host, requestMessage) {
     } catch (error) {
         sessionBootstrapPromise = null;
         throw new Error(`Worker session durable commit failed: ${String(error)}`);
+    }
+}
+
+async function mutateDurableSession(host, requestMessage) {
+    const command = requestMessage.payload;
+    const current = await loadDurableSession();
+    if (current.revision !== command.expectedRevision) {
+        return await host.ExecuteSessionCommandJson(JSON.stringify(createManagedSessionMessage(
+            requestMessage,
+            "shell",
+            command.expectedRevision,
+            {})));
+    }
+
+    const resultJson = await host.ExecuteSessionCommandJson(JSON.stringify(requestMessage));
+    const result = JSON.parse(resultJson);
+    if (result.payload?.accepted !== true) {
+        return resultJson;
+    }
+
+    const carrier = result.payload.projection;
+    const targetRevision = current.revision + 1;
+    if (result.payload.revision !== targetRevision ||
+        carrier?.shell?.revision !== targetRevision ||
+        !carrier?.durableState) {
+        throw new Error("Worker mutation did not return one durable successor revision.");
+    }
+
+    try {
+        await commitDurableSession(
+            current.revision,
+            targetRevision,
+            carrier.durableState);
+        result.payload.projection = {
+            shell: carrier.shell,
+            view: carrier.publicProjection
+        };
+        return JSON.stringify(result);
+    } catch (error) {
+        sessionBootstrapPromise = null;
+        throw new Error(`Worker session durable mutation failed: ${String(error)}`);
     }
 }
 

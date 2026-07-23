@@ -391,6 +391,19 @@ public sealed class CraftSessionState
         return change;
     }
 
+    public CraftSessionChange ReplaceProjectItems(
+        IEnumerable<ProjectItem> projectItems,
+        string reason = "project items changed")
+    {
+        ArgumentNullException.ThrowIfNull(projectItems);
+        lock (_gate)
+        {
+            _projectItems = projectItems.Select(CloneProjectItem).ToArray();
+        }
+
+        return MarkPlanStructureChanged(reason);
+    }
+
     public bool TryReplaceActivePlanPrices(
         CraftSessionVersionStamp expectedStamp,
         CraftingPlan plan,

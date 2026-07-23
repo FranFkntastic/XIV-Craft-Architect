@@ -169,6 +169,11 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
         });
         const staleSession = await sendSessionCommand('shell', 1, {});
         const currentSession = await sendSessionCommand('shell', 2, {});
+        const mutatedSession = await sendSessionCommand('mutate-project-items', 2, {
+          operation: 'add',
+          item: { id: 44, name: 'Worker-owned item', iconId: 0, quantity: 3, mustBeHq: false }
+        });
+        const durableMutationShell = await sendSessionCommand('shell', 3, {});
 
         const malformedExecutionId = crypto.randomUUID();
         const malformedTransactionId = crypto.randomUUID();
@@ -295,6 +300,8 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           replacedSession,
           staleSession,
           currentSession,
+          mutatedSession,
+          durableMutationShell,
           malformed,
           result,
           secondResult,
@@ -324,6 +331,13 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(evidence.staleSession.payload.rejectionCode, 'stale-revision');
       assert.equal(evidence.currentSession.payload.accepted, true);
       assert.equal(evidence.currentSession.payload.revision, 2);
+      assert.equal(evidence.mutatedSession.payload.accepted, true);
+      assert.equal(evidence.mutatedSession.payload.revision, 3);
+      assert.equal(evidence.mutatedSession.payload.projection.shell.projectItemCount, 3);
+      assert.equal(evidence.mutatedSession.payload.projection.view.projectItems.length, 3);
+      assert.equal(evidence.mutatedSession.payload.projection.durableState, undefined);
+      assert.equal(evidence.durableMutationShell.payload.accepted, true);
+      assert.equal(evidence.durableMutationShell.payload.revision, 3);
       assert.equal(evidence.malformed.payload.code, 'managed-json-invalid');
 
       assert.equal(evidence.result.kind, 'computation-result');

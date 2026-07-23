@@ -8,6 +8,8 @@
 @inject GarlandService GarlandService
 @inject RecipeCalculationService RecipeCalculationService
 @inject RecipePlannerCommandService RecipePlannerCommandService
+@inject WorkerSessionCoordinator WorkerSession
+@inject WorkerProjectionStore WorkerProjections
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -29,10 +31,10 @@
         OnSearchKeyUp="OnSearchKeyUp"
         IsSearching="@_isSearching"
         IsBuildingPlan="@_isBuildingPlan"
-        ShowPlanActions="@AppState.HasPlanOrProjectItems"
+        ShowPlanActions="@(_recipe?.ProjectItems.Count > 0 || _recipe?.Roots.Count > 0)"
         LastAutoSave="@AppState.LastAutoSave"
         SearchResults="@_searchResults"
-        ProjectItems="@AppState.ProjectItems"
+        ProjectItems="@(_recipe?.ProjectItems ?? Array.Empty<ProjectItem>())"
         OnSearchRequested="SearchItemsAsync"
         OnOpenPlanBuilderRequested="OpenPlanBuilderAsync"
         OnAddProjectItem="AddProjectItem"
@@ -45,8 +47,7 @@
 
     <!-- Middle Column: Recipe Tree -->
     <RecipePlanPanel
-        CurrentPlan="@AppState.CurrentPlan"
-        ShoppingPlans="@AppState.ShoppingPlans"
+        Recipe="@_recipe"
         SavedPlans="@AppState.SavedPlans"
         OnExpandAllRequested="ExpandAllRecipeNodes"
         OnCollapseAllRequested="CollapseAllRecipeNodes"
@@ -54,6 +55,8 @@
         OnLoadPlanRequested="LoadSavedPlanAsync"
         OnDeletePlanRequested="DeleteSavedPlanAsync"
         SelectedNode="@_selectedNode"
+        ExpandVersion="_expandVersion"
+        ExpandAll="_expandAll"
         OnNodeSelected="OnNodeSelected"
         OnNodeHqChanged="OnNodeHqChanged" />
 
@@ -65,16 +68,22 @@
     private List<GarlandSearchResult> _searchResults = new();
 
     private bool _isBuildingPlan = false;
-    private PlanNode? _selectedNode;
+    private WorkerRecipePlannerProjection? _recipe;
+    private WorkerRecipeNodeProjection? _selectedNode;
+    private int _expandVersion;
+    private bool _expandAll = true;
 
     protected override async Task OnInitializedAsync()
     {
         // Subscribe to state changes
         AppState.OnPlanChanged += OnPlanChanged;
         AppState.OnShoppingListChanged += OnShoppingListChanged;
+        WorkerProjections.Changed += OnWorkerProjectionChanged;
 
         // Load saved plans list
         await RefreshSavedPlansListAsync();
+        _recipe = await WorkerSession.GetRecipeProjectionAsync();
+        EnsureSelectedNode();
 
         // Note: WorldData, auto-save restoration, and auto-save timer are now
         // all handled centrally in MainLayout.razor
@@ -90,8 +99,16 @@
     {
         AppState.OnPlanChanged -= OnPlanChanged;
         AppState.OnShoppingListChanged -= OnShoppingListChanged;
+        WorkerProjections.Changed -= OnWorkerProjectionChanged;
 
         // Note: Auto-save timer is now managed centrally in MainLayout.razor
+    }
+
+    private void OnWorkerProjectionChanged()
+    {
+        _recipe = WorkerProjections.Recipe;
+        EnsureSelectedNode();
+        _ = InvokeAsync(StateHasChanged);
     }
 
     private void OnShoppingListChanged()
@@ -145,51 +162,65 @@
 
     private Task ExpandAllRecipeNodes()
     {
-        AppState.ExpandAllRecipeNodes();
+        _expandAll = true;
+        _expandVersion++;
         return Task.CompletedTask;
     }
 
     private Task CollapseAllRecipeNodes()
     {
-        AppState.CollapseAllRecipeNodes();
+        _expandAll = false;
+        _expandVersion++;
         return Task.CompletedTask;
     }
 
-    private void AddProjectItem(GarlandSearchResult result)
+    private async Task AddProjectItem(GarlandSearchResult result)
     {
-        AppState.AddProjectItem(new ProjectItem
-            {
-                Id = result.Id,
-                Name = result.Object.Name,
-                IconId = result.Object.IconId,
-                Quantity = 1,
-                MustBeHq = false
-            });
+        await WorkerSession.MutateProjectItemsAsync(
+            new WorkerProjectItemsMutation(
+                "add",
+                new ProjectItem
+                {
+                    Id = result.Id,
+                    Name = result.Object.Name,
+                    IconId = result.Object.IconId,
+                    Quantity = 1,
+                    MustBeHq = false
+                }));
 
         _searchResults.Clear();
         _searchQuery = string.Empty;
     }
 
-    private void RemoveProjectItem(ProjectItem item)
+    private async Task RemoveProjectItem(ProjectItem item)
     {
-        AppState.RemoveProjectItem(item);
+        await WorkerSession.MutateProjectItemsAsync(
+            new WorkerProjectItemsMutation("remove", ItemId: item.Id));
     }
 
-    private void ToggleItemHq(ProjectItem item)
+    private async Task ToggleItemHq(ProjectItem item)
     {
-        AppState.ToggleProjectItemHq(item);
+        await WorkerSession.MutateProjectItemsAsync(
+            new WorkerProjectItemsMutation(
+                "hq",
+                ItemId: item.Id,
+                MustBeHq: !item.MustBeHq));
     }
 
-    private void UpdateItemQuantity(ProjectItemsPanel.ProjectItemQuantityChangeRequest request)
+    private async Task UpdateItemQuantity(ProjectItemsPanel.ProjectItemQuantityChangeRequest request)
     {
-        AppState.UpdateProjectItemQuantity(request.Item, request.Quantity);
+        await WorkerSession.MutateProjectItemsAsync(
+            new WorkerProjectItemsMutation(
+                "quantity",
+                ItemId: request.Item.Id,
+                Quantity: request.Quantity));
     }
 
     private async Task OpenPlanBuilderAsync()
     {
         var parameters = new DialogParameters
         {
-            ["InitialItems"] = AppState.ProjectItems
+            ["InitialItems"] = _recipe?.ProjectItems ?? Array.Empty<ProjectItem>()
         };
 
         var options = new DialogOptions
@@ -207,7 +238,10 @@
             return;
         }
 
-        AppState.ReplaceProjectItems(builderResult.Items);
+        await WorkerSession.MutateProjectItemsAsync(
+            new WorkerProjectItemsMutation(
+                "replace",
+                Items: builderResult.Items));
 
         if (builderResult.BuildAfterApply)
         {
@@ -225,7 +259,7 @@
         var parameters = new DialogParameters
         {
             ["CurrentPlan"] = AppState.CurrentPlan,
-            ["SelectedNode"] = _selectedNode
+            ["SelectedNode"] = AppState.CurrentPlan.FindNodeByNodeId(_selectedNode?.NodeId)
         };
         var options = new DialogOptions
         {
@@ -245,12 +279,14 @@
             editorResult.NodeIds,
             editorResult.Options,
             editorResult.RequireHqMaterials));
+        await WorkerSession.CommitCurrentCandidateAsync();
+        _recipe = await WorkerSession.GetRecipeProjectionAsync();
         Snackbar.Add(editResult.Message, Severity.Success);
     }
 
     private async Task BuildPlanAsync()
     {
-        if (!AppState.HasProjectItems || _isBuildingPlan)
+        if (_recipe?.ProjectItems.Count is not > 0 || _isBuildingPlan)
             return;
 
         _isBuildingPlan = true;
@@ -258,13 +294,14 @@
 
         try
         {
-            var result = await RecipePlannerCommandService.BuildPlanAsync(
-                new BuildRecipePlanRequest(
-                    AppState.ProjectItems,
-                    AppState.SelectedDataCenter,
-                    AppState.SelectedRegion,
+            var result = await WorkerSession.BuildRecipeAsync(
+                new WorkerRecipeBuildRequest(
+                    _recipe.ProjectItems,
+                    _recipe.SelectedDataCenter,
+                    _recipe.SelectedRegion,
                     AppState.DefaultMarketFetchScope));
-            _selectedNode = result.SelectedNode;
+            _recipe = result.Recipe;
+            _selectedNode = result.Recipe.Roots.FirstOrDefault();
             if (result.Built)
             {
                 MarketEvidenceHydration.ScheduleForCurrentPlan();
@@ -297,26 +334,56 @@
             AppState.SelectedRegion);
     }
 
-    private void OnNodeSelected(PlanNode node)
+    private void OnNodeSelected(WorkerRecipeNodeProjection node)
     {
         _selectedNode = node;
     }
 
     private void EnsureSelectedNode()
     {
-        if (AppState.CurrentPlan == null)
+        if (_recipe?.Roots.Count is not > 0)
         {
             _selectedNode = null;
             return;
         }
 
-        _selectedNode = AppState.CurrentPlan.FindNodeByNodeId(_selectedNode?.NodeId)
-            ?? AppState.CurrentPlan.RootItems.FirstOrDefault();
+        _selectedNode = FindRecipeNode(_recipe.Roots, _selectedNode?.NodeId)
+            ?? _recipe.Roots.FirstOrDefault();
     }
 
-    private void OnNodeHqChanged(PlanNodeHqChangeRequest request)
+    private async Task OnNodeHqChanged(WorkerRecipeNodeHqChangeRequest request)
     {
-        AcquisitionDecisionService.ChangeMarketHq(request.Node, request.MustBeHq);
+        _recipe = await WorkerSession.MutateAcquisitionAsync(
+            new WorkerAcquisitionMutation(
+                request.Node.ItemId,
+                Source: null,
+                MustBeHq: request.MustBeHq));
+        MarketEvidenceHydration.ScheduleForCurrentPlan();
+    }
+
+    private static WorkerRecipeNodeProjection? FindRecipeNode(
+        IEnumerable<WorkerRecipeNodeProjection> roots,
+        string? nodeId)
+    {
+        if (string.IsNullOrWhiteSpace(nodeId))
+        {
+            return null;
+        }
+
+        var pending = new Stack<WorkerRecipeNodeProjection>(roots.Reverse());
+        while (pending.Count > 0)
+        {
+            var node = pending.Pop();
+            if (string.Equals(node.NodeId, nodeId, StringComparison.Ordinal))
+            {
+                return node;
+            }
+            foreach (var child in node.Children.Reverse())
+            {
+                pending.Push(child);
+            }
+        }
+        return null;
     }
 
     private async Task SaveToBrowserAsync()
@@ -374,7 +441,9 @@
                 Snackbar.Add($"Warning: {result.Warning}", Severity.Warning);
             }
 
-            _selectedNode = AppState.CurrentPlan?.RootItems.FirstOrDefault();
+            await WorkerSession.CommitCurrentCandidateAsync();
+            _recipe = await WorkerSession.GetRecipeProjectionAsync();
+            _selectedNode = _recipe?.Roots.FirstOrDefault();
 
             Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
         }

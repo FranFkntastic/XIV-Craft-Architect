@@ -1,28 +1,16 @@
 @page "/acquisition"
 @using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Core.Models
-@using FFXIV_Craft_Architect.Core.Services
-@using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
-@inject AppState AppState
-@inject WebPlanPersistenceService PlanPersistence
-@inject MarketShoppingService MarketShoppingService
-@inject AcquisitionDecisionService AcquisitionDecisionService
-@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
-@inject AcquisitionEvaluationWorkflowService AcquisitionEvaluationWorkflow
-@inject AcquisitionDiagnosticSelectionService DiagnosticSelection
-@inject MarketEvidenceHydrationService MarketEvidenceHydration
-@inject ProcurementRouteAvailability RouteAvailability
+@inject WorkerSessionCoordinator WorkerSession
+@inject WorkerProjectionStore WorkerProjections
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
-@inject ILogger<AcquisitionEvaluation> Logger
 @implements IDisposable
 
 @{
-    var rows = _snapshot.Rows;
-    var visibleRows = GetOrderedVisibleRows();
-    var marketCandidateCount = _snapshot.MarketAnalysisCandidates.Count;
-    var activeProcurementCount = _snapshot.ActiveProcurementItems.Count;
+    var rows = GetOrderedRows();
+    var projection = _projection;
 }
 
 <div class="ae-page">
@@ -32,50 +20,42 @@
         <div class="ae-stat-grid">
             <div class="ae-stat">
                 <span>@rows.Count</span>
-                <small>items in plan</small>
+                <small>items shown</small>
             </div>
             <div class="ae-stat">
-                <span>@marketCandidateCount</span>
+                <span>@(projection?.MarketCandidateCount ?? 0)</span>
                 <small>items compared</small>
             </div>
             <div class="ae-stat">
-                <span>@activeProcurementCount</span>
+                <span>@(projection?.ActiveProcurementCount ?? 0)</span>
                 <small>items to obtain</small>
             </div>
             <div class="ae-stat">
-                <span>@AppState.ShoppingPlans.Count</span>
+                <span>@(projection?.PricedItemCount ?? 0)</span>
                 <small>with prices</small>
             </div>
         </div>
 
         <div class="ae-filter-group">
-            <button class="@GetFilterClass(AcquisitionFilter.All)" @onclick="() => SetFilter(AcquisitionFilter.All)">All</button>
-            <button class="@GetFilterClass(AcquisitionFilter.Active)" @onclick="() => SetFilter(AcquisitionFilter.Active)">Active</button>
-            <button class="@GetFilterClass(AcquisitionFilter.Market)" @onclick="() => SetFilter(AcquisitionFilter.Market)">Market</button>
-            <button class="@GetFilterClass(AcquisitionFilter.Suppressed)" @onclick="() => SetFilter(AcquisitionFilter.Suppressed)">Skipped</button>
+            <button class="@GetFilterClass(AcquisitionFilter.All)" @onclick="() => SetFilterAsync(AcquisitionFilter.All)">All</button>
+            <button class="@GetFilterClass(AcquisitionFilter.Active)" @onclick="() => SetFilterAsync(AcquisitionFilter.Active)">Active</button>
+            <button class="@GetFilterClass(AcquisitionFilter.Market)" @onclick="() => SetFilterAsync(AcquisitionFilter.Market)">Market</button>
+            <button class="@GetFilterClass(AcquisitionFilter.Suppressed)" @onclick="() => SetFilterAsync(AcquisitionFilter.Suppressed)">Skipped</button>
         </div>
 
         <div class="ae-info">
-            @if (RouteAvailability.IsGenerationEnabled)
-            {
-                <div class="ae-info-title">How automatic choices work</div>
-                <div>CA compares every item you could buy and chooses what to craft or purchase. Procurement then routes the selected purchases. Your manual choices stay locked. Items marked Skipped are already covered by a parent item you are buying.</div>
-            }
-            else
-            {
-                <div class="ae-info-title">Automatic choices temporarily unavailable</div>
-                <div>Market prices and manual source choices remain available while procurement route generation is disabled.</div>
-            }
+            <div class="ae-info-title">How automatic choices work</div>
+            <div>Acquisition Evaluation owns make-or-buy choices. Procurement only routes the purchases selected here, and manual choices remain locked.</div>
         </div>
 
         <div class="ae-actions">
             <button @onclick="GoToMarket">Market Analysis</button>
-            <button @onclick="GoToProcurement" disabled="@(!AppState.ShoppingPlans.Any())">Procurement Plan</button>
+            <button @onclick="GoToProcurement" disabled="@(projection?.ActiveProcurementCount is not > 0)">Procurement Plan</button>
         </div>
     </aside>
 
     <main class="ae-ledger">
-        @if (AppState.CurrentPlan == null)
+        @if (projection?.HasPlan != true)
         {
             <div class="ae-empty">
                 <MudIcon Icon="@Icons.Material.Filled.FactCheck" Size="Size.Large" Class="ae-empty-icon" />
@@ -94,7 +74,7 @@
             <div class="ae-ledger-header">
                 <div>
                     <div class="ae-ledger-title">Acquisition decisions</div>
-                    <div class="ae-ledger-subtitle">@visibleRows.Count shown from @FormatUniqueItemCount(rows.Count)</div>
+                    <div class="ae-ledger-subtitle">@rows.Count shown</div>
                 </div>
                 <div class="ae-legend">
                     <span><i class="is-active"></i>Active</span>
@@ -103,32 +83,16 @@
                 </div>
             </div>
 
-            @if (RouteAvailability.IsGenerationEnabled &&
-                (AppState.IsProcurementRouteReconciling ||
-                 AppState.IsProcurementRouteStale && string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure)))
-            {
-                <div class="ae-route-state is-working" role="status">
-                    Updating the route and its automatic acquisition choices…
-                </div>
-            }
-            else if (RouteAvailability.IsGenerationEnabled &&
-                     !string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
-            {
-                <div class="ae-route-state is-error" role="alert">
-                    Automatic route update failed. @AppState.ProcurementRouteFailure
-                </div>
-            }
-
-            <WebGridTable TItem="DecisionRow"
+            <WebGridTable TItem="WorkerAcquisitionRowProjection"
                           TColumnId="AcquisitionDecisionLedgerSortColumn"
                           CssClass="ae-table"
-                          Items="@visibleRows"
+                          Items="@rows"
                           Columns="@GetLedgerColumns()"
                           GetRowKey="row => row.NodeId"
                           GetRowClass="GetLedgerRowClass"
                           Selection="@GetLedgerSelection()"
                           RowActionLabel="@(row => $"Select {row.ItemName}")"
-                          RowActivated="SelectNodeFromRow"
+                          RowActivated="SelectRow"
                           SortState="@_sortState"
                           SortChanged="OnLedgerSortChanged"
                           Resizable="false"
@@ -137,15 +101,12 @@
     </main>
 
     <AcquisitionDetailsPanel
-        Node="@_selectedNode"
         Row="@GetSelectedRow()"
-        CurrentPlan="@AppState.CurrentPlan"
-        MarketPlan="@GetMarketPlan(GetSelectedRow())"
-        MarketPlans="@AppState.ShoppingPlans"
-        CostContext="@_snapshot.CostContext"
-        ActiveProcurementItems="@_snapshot.ActiveProcurementItems"
-        UnavailableMarketItems="@AppState.UnavailableMarketItems"
-        OnSourceChanged="OnNodeSourceChanged" />
+        RootItemCount="@(projection?.RootItemCount ?? 0)"
+        ActiveProcurementCount="@(projection?.ActiveProcurementCount ?? 0)"
+        PricedItemCount="@(projection?.PricedItemCount ?? 0)"
+        UnavailableItemCount="@(projection?.UnavailableItemCount ?? 0)"
+        OnSourceChanged="OnSelectedSourceChanged" />
 </div>
 
 @code {
@@ -155,326 +116,177 @@
     [SupplyParameterFromQuery(Name = "itemId")]
     public int? RequestedItemId { get; set; }
 
-    private PlanNode? _selectedNode;
+    private WorkerAcquisitionProjection? _projection;
+    private string? _selectedNodeId;
     private AcquisitionFilter _filter = AcquisitionFilter.All;
-    private readonly AcquisitionEvaluationLedgerCache _ledgerCache = new();
-    private AcquisitionEvaluationSnapshot _snapshot = AcquisitionEvaluationSnapshotBuilder.Build(
-        null,
-        Array.Empty<DetailedShoppingPlan>(),
-        Array.Empty<CoreMarketDataUnavailableItem>(),
-        AcquisitionFilter.All,
-        new RecipeDemandProjection([], [], [], []));
-    private const string CalculatedTotalHeaderTooltip = "Calculated Total is the gil cost computed for the row's selected source and needed quantity. Craft totals roll up selected child acquisition costs, market totals use market evidence when available, and vendor totals use loaded gil vendor prices.";
-    private WebTableSortState<AcquisitionDecisionLedgerSortColumn> _sortState = WebTableSortState<AcquisitionDecisionLedgerSortColumn>.Unsorted;
-    private long? _sortPlanSessionVersion;
-    private CancellationTokenSource? _refreshCts;
-    private long _refreshRequestId;
-    private string? _appliedRequestedNodeId;
-    private int? _appliedRequestedItemId;
+    private WebTableSortState<AcquisitionDecisionLedgerSortColumn> _sortState =
+        WebTableSortState<AcquisitionDecisionLedgerSortColumn>.Unsorted;
 
     protected override async Task OnInitializedAsync()
     {
-        AppState.OnStateChanged += OnStateChanged;
-        await RefreshLedgerSnapshotAsync();
+        WorkerProjections.Changed += OnWorkerProjectionChanged;
+        await RefreshProjectionAsync();
     }
 
     protected override void OnParametersSet()
     {
-        if (!string.Equals(RequestedNodeId, _appliedRequestedNodeId, StringComparison.Ordinal))
-        {
-            SelectRequestedNodeFromSnapshot();
-        }
-
-        if (RequestedItemId != _appliedRequestedItemId)
-        {
-            SelectRequestedItemFromSnapshot();
-        }
+        ApplyRequestedSelection();
     }
 
     public void Dispose()
     {
-        AppState.OnStateChanged -= OnStateChanged;
-        _refreshCts?.Cancel();
-        _refreshCts?.Dispose();
+        WorkerProjections.Changed -= OnWorkerProjectionChanged;
     }
 
-    private void OnStateChanged(AppStateChange change)
+    private void OnWorkerProjectionChanged()
     {
-        if (!AcquisitionEvaluationLedgerCache.IsRelevantStateChange(change.Scopes))
+        if (WorkerProjections.Acquisition is { } projection &&
+            projection.Revision >= (_projection?.Revision ?? 0))
+        {
+            _projection = projection;
+            EnsureSelection();
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task RefreshProjectionAsync()
+    {
+        _projection = await WorkerSession.GetAcquisitionProjectionAsync(_filter.ToString());
+        EnsureSelection();
+    }
+
+    private async Task SetFilterAsync(AcquisitionFilter filter)
+    {
+        if (_filter == filter)
         {
             return;
         }
-
-        InvalidateLedgerSnapshot();
-        _ = InvokeAsync(async () =>
-        {
-            await RefreshLedgerSnapshotAsync();
-            StateHasChanged();
-        });
+        _filter = filter;
+        await RefreshProjectionAsync();
     }
 
-    private async Task LoadSavedPlanAsync(string planId)
-    {
-        var result = await PlanPersistence.LoadPlanIntoSessionAsync(planId);
-        if (result == null)
-        {
-            Snackbar.Add("Plan not found", Severity.Error);
-            return;
-        }
-        if (!string.IsNullOrWhiteSpace(result.Warning))
-        {
-            Snackbar.Add($"Warning: {result.Warning}", Severity.Warning);
-        }
-
-        PopulateShoppingListFromPlan();
-        await RefreshLedgerSnapshotAsync();
-
-        Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
-    }
-
-    private void SelectNode(PlanNode node)
-    {
-        _selectedNode = node;
-        UpdateDiagnosticSelection();
-    }
-
-    private async Task OnNodeSourceChanged(AcquisitionSourceChangeRequest request)
-    {
-        await ApplyNodeSourceChangeAsync(request.Node, request.Source);
-    }
-
-    private void UpdateDiagnosticSelection()
+    private async Task OnSelectedSourceChanged(AcquisitionSource source)
     {
         var row = GetSelectedRow();
-        if (row == null)
-        {
-            DiagnosticSelection.Clear();
-            return;
-        }
-
-        DiagnosticSelection.SetSelection(row, GetMarketPlan(row), AppState.PlanSessionVersion);
-    }
-
-    private async Task OnNodeSourceSelected(PlanNode node, ChangeEventArgs args)
-    {
-        if (args.Value is string value && Enum.TryParse<AcquisitionSource>(value, out var source))
-        {
-            await ApplyNodeSourceChangeAsync(node, source);
-        }
-    }
-
-    private async Task ApplyNodeSourceChangeAsync(PlanNode node, AcquisitionSource source)
-    {
-        var change = AcquisitionDecisionService.ChangeSource(node, source);
-        if (change.Changed)
-        {
-            await PersistCurrentPlanDecisionAsync();
-        }
-
-        await InvokeAsync(async () =>
-        {
-            await RefreshLedgerSnapshotAsync();
-            StateHasChanged();
-        });
-    }
-
-    private async Task PersistCurrentPlanDecisionAsync()
-    {
-        if (AppState.CurrentPlan == null || string.IsNullOrWhiteSpace(AppState.CurrentPlanId))
+        if (row is null)
         {
             return;
         }
 
-        var planId = AppState.CurrentPlanId;
-        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan.Name ?? "Craft plan";
-        var versions = AppState.CurrentVersions;
-        var saved = await PlanPersistence.SaveCurrentPlanAsync(planId, planName, DateTime.UtcNow);
-        if (!saved)
+        try
         {
-            Snackbar.Add("Source changed, but failed to save the linked craft plan.", Severity.Error);
-            return;
+            _projection = await WorkerSession.MutateAcquisitionAndProjectAsync(
+                new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null),
+                _filter.ToString());
+            EnsureSelection();
         }
-
-        AppState.TrackCurrentPlanIdentity(planId, planName);
-        AppState.MarkPersisted(PersistedStateBucket.PlanCore, versions);
-    }
-
-    private void PopulateShoppingListFromPlan()
-    {
-        AppState.ReplaceShoppingItemsFromActivePlan(
-            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan));
-    }
-
-    private DetailedShoppingPlan? GetMarketPlan(PlanNode? node)
-    {
-        if (node == null)
+        catch (Exception ex)
         {
-            return null;
+            Snackbar.Add(ex.Message, Severity.Error);
         }
-
-        _snapshot.CostContext.TryGetShoppingPlan(node.ItemId, out var marketPlan);
-        return marketPlan;
     }
 
-    private DetailedShoppingPlan? GetMarketPlan(DecisionRow? row)
+    private async Task OnSourceSelected(
+        WorkerAcquisitionRowProjection row,
+        ChangeEventArgs args)
     {
-        if (row == null)
-        {
-            return null;
-        }
-
-        _snapshot.CostContext.TryGetShoppingPlan(row.ItemId, out var marketPlan);
-        return marketPlan;
-    }
-
-    private DecisionRow? GetSelectedRow()
-    {
-        if (_selectedNode == null)
-        {
-            return null;
-        }
-
-        return _snapshot.Rows.FirstOrDefault(row => row.NodeId == _selectedNode.NodeId) ??
-            _snapshot.Rows.FirstOrDefault(row => row.ItemId == _selectedNode.ItemId);
-    }
-
-    private string GetFilterClass(AcquisitionFilter filter)
-    {
-        return _filter == filter ? "selected" : string.Empty;
-    }
-
-    private void SetFilter(AcquisitionFilter filter)
-    {
-        _filter = filter;
-        _ = InvokeAsync(async () =>
-        {
-            await RefreshLedgerSnapshotAsync();
-            StateHasChanged();
-        });
-    }
-
-    private bool IsSelected(PlanNode node)
-    {
-        return _selectedNode?.NodeId == node.NodeId;
-    }
-
-    private IReadOnlyList<DecisionRow> GetOrderedVisibleRows()
-    {
-        return _sortState.Column.HasValue
-            ? AcquisitionDecisionLedgerOrdering.GetOrderedRows(
-                _snapshot.VisibleRows,
-                _sortState.Column.Value,
-                _sortState.Descending)
-            : _snapshot.VisibleRows;
-    }
-
-    private IReadOnlyList<WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>> GetLedgerColumns()
-    {
-        return
-        [
-            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
-            {
-                Id = AcquisitionDecisionLedgerSortColumn.Item,
-                Header = "Item",
-                Size = new WebTableColumnSize(260, 120),
-                HeaderCssClass = "ae-head-cell",
-                CellCssClass = "ae-item-cell",
-                CellTemplate = RenderItemCell
-            },
-            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
-            {
-                Id = AcquisitionDecisionLedgerSortColumn.Source,
-                Header = "Source",
-                Size = new WebTableColumnSize(140, 105),
-                HeaderCssClass = "ae-head-cell",
-                CellCssClass = "ae-source-cell",
-                SuppressRowActivation = true,
-                CellTemplate = RenderSourceCell
-            },
-            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
-            {
-                Id = AcquisitionDecisionLedgerSortColumn.UsedIn,
-                Header = "Used In",
-                Size = new WebTableColumnSize(210, 105),
-                HeaderCssClass = "ae-head-cell",
-                CellCssClass = "ae-used-cell",
-                CellTitleSelector = row => row.UsedIn,
-                CellTemplate = RenderUsedInCell
-            },
-            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
-            {
-                Id = AcquisitionDecisionLedgerSortColumn.Role,
-                Header = "Role",
-                Size = new WebTableColumnSize(155, 105),
-                HeaderCssClass = "ae-head-cell",
-                CellCssClass = "ae-role-cell",
-                CellTemplate = RenderRoleCell
-            },
-            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
-            {
-                Id = AcquisitionDecisionLedgerSortColumn.MarketEvidence,
-                Header = "Market Evidence",
-                Size = new WebTableColumnSize(170, 115),
-                HeaderCssClass = "ae-head-cell",
-                CellCssClass = "ae-market-cell",
-                CellTitleSelector = row => row.MarketEvidence,
-                CellTemplate = RenderMarketEvidenceCell
-            },
-            new WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>
-            {
-                Id = AcquisitionDecisionLedgerSortColumn.CalculatedTotal,
-                Header = "Total",
-                HeaderTooltip = CalculatedTotalHeaderTooltip,
-                Size = new WebTableColumnSize(145, 100),
-                HeaderCssClass = "ae-head-cell",
-                CellCssClassSelector = GetCalculatedTotalClass,
-                CellTitleSelector = GetCalculatedTotalTooltip,
-                CellTemplate = RenderCalculatedTotalCell
-            }
-        ];
-    }
-
-    private WebTableSelection<string> GetLedgerSelection()
-    {
-        return _selectedNode == null
-            ? WebTableSelection<string>.None
-            : WebTableSelection<string>.Single(_selectedNode.NodeId);
-    }
-
-    private string GetLedgerRowClass(DecisionRow row)
-    {
-        return WebTableColumn<DecisionRow, AcquisitionDecisionLedgerSortColumn>.CombineClasses(
-            "ae-row",
-            IsSelected(row.Node) ? "selected" : null,
-            row.IsActiveProcurement ? "active" : null,
-            row.IsFullySuppressed ? "suppressed" : null,
-            row.HasSuppressedOccurrences && !row.IsFullySuppressed ? "partial" : null);
-    }
-
-    private async Task SelectNodeFromRow(DecisionRow row)
-    {
-        SelectNode(row.Node);
-        await Task.CompletedTask;
-    }
-
-    private Task OnLedgerSortChanged(WebTableSortState<AcquisitionDecisionLedgerSortColumn> sortState)
-    {
-        _sortState = sortState;
-        return Task.CompletedTask;
-    }
-
-    private void ResetLedgerSortForPlanSession(long planSessionVersion)
-    {
-        if (_sortPlanSessionVersion == planSessionVersion)
+        if (args.Value is not string value ||
+            !Enum.TryParse<AcquisitionSource>(value, out var source))
         {
             return;
         }
 
-        _sortPlanSessionVersion = planSessionVersion;
-        _sortState = WebTableSortState<AcquisitionDecisionLedgerSortColumn>.Unsorted;
+        _selectedNodeId = row.NodeId;
+        await OnSelectedSourceChanged(source);
     }
 
-    private RenderFragment<DecisionRow> RenderItemCell => row => builder =>
+    private IReadOnlyList<WorkerAcquisitionRowProjection> GetOrderedRows()
+    {
+        var rows = _projection?.Rows ?? Array.Empty<WorkerAcquisitionRowProjection>();
+        if (!_sortState.Column.HasValue)
+        {
+            return rows;
+        }
+
+        Func<WorkerAcquisitionRowProjection, object?> key = _sortState.Column.Value switch
+        {
+            AcquisitionDecisionLedgerSortColumn.Item => row => row.ItemName,
+            AcquisitionDecisionLedgerSortColumn.Source => row => row.Source,
+            AcquisitionDecisionLedgerSortColumn.UsedIn => row => row.UsedIn,
+            AcquisitionDecisionLedgerSortColumn.Role => row => GetDecisionStatus(row),
+            AcquisitionDecisionLedgerSortColumn.MarketEvidence => row => row.MarketEvidence,
+            AcquisitionDecisionLedgerSortColumn.CalculatedTotal => row => row.EstimatedCost,
+            _ => row => row.ItemName
+        };
+        return (_sortState.Descending
+                ? rows.OrderByDescending(key)
+                : rows.OrderBy(key))
+            .ThenBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private IReadOnlyList<WebTableColumn<WorkerAcquisitionRowProjection, AcquisitionDecisionLedgerSortColumn>>
+        GetLedgerColumns() =>
+    [
+        new()
+        {
+            Id = AcquisitionDecisionLedgerSortColumn.Item,
+            Header = "Item",
+            Size = new WebTableColumnSize(260, 120),
+            HeaderCssClass = "ae-head-cell",
+            CellCssClass = "ae-item-cell",
+            CellTemplate = RenderItemCell
+        },
+        new()
+        {
+            Id = AcquisitionDecisionLedgerSortColumn.Source,
+            Header = "Source",
+            Size = new WebTableColumnSize(140, 105),
+            HeaderCssClass = "ae-head-cell",
+            CellCssClass = "ae-source-cell",
+            SuppressRowActivation = true,
+            CellTemplate = RenderSourceCell
+        },
+        new()
+        {
+            Id = AcquisitionDecisionLedgerSortColumn.UsedIn,
+            Header = "Used In",
+            Size = new WebTableColumnSize(210, 105),
+            HeaderCssClass = "ae-head-cell",
+            CellCssClass = "ae-used-cell",
+            CellTitleSelector = row => row.UsedIn,
+            CellTemplate = row => builder => builder.AddContent(0, row.UsedIn)
+        },
+        new()
+        {
+            Id = AcquisitionDecisionLedgerSortColumn.Role,
+            Header = "Role",
+            Size = new WebTableColumnSize(155, 105),
+            HeaderCssClass = "ae-head-cell",
+            CellCssClass = "ae-role-cell",
+            CellTemplate = row => builder => builder.AddContent(0, GetDecisionStatus(row))
+        },
+        new()
+        {
+            Id = AcquisitionDecisionLedgerSortColumn.MarketEvidence,
+            Header = "Market Evidence",
+            Size = new WebTableColumnSize(170, 115),
+            HeaderCssClass = "ae-head-cell",
+            CellCssClass = "ae-market-cell",
+            CellTitleSelector = row => row.MarketEvidence,
+            CellTemplate = row => builder => builder.AddContent(0, row.MarketEvidence)
+        },
+        new()
+        {
+            Id = AcquisitionDecisionLedgerSortColumn.CalculatedTotal,
+            Header = "Total",
+            Size = new WebTableColumnSize(145, 100),
+            HeaderCssClass = "ae-head-cell",
+            CellTemplate = row => builder => builder.AddContent(0, row.EstimatedCost)
+        }
+    ];
+
+    private RenderFragment<WorkerAcquisitionRowProjection> RenderItemCell => row => builder =>
     {
         builder.OpenElement(0, "span");
         builder.AddAttribute(1, "class", "ae-item-name");
@@ -485,281 +297,102 @@
         builder.CloseElement();
     };
 
-    private RenderFragment<DecisionRow> RenderSourceCell => row => builder =>
+    private RenderFragment<WorkerAcquisitionRowProjection> RenderSourceCell => row => builder =>
     {
         var sequence = 0;
         builder.OpenElement(sequence++, "select");
         builder.AddAttribute(sequence++, "class", "ae-source-select");
         builder.AddAttribute(sequence++, "aria-label", $"Acquisition source for {row.ItemName}");
-        builder.AddAttribute(sequence++, "style", $"border-color: {RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)}; color: {RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)}");
+        builder.AddAttribute(sequence++, "style",
+            $"border-color: {RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)}; color: {RecipePlanDisplayHelpers.GetSourceHexColor(row.Source)}");
         builder.AddAttribute(sequence++, "value", row.Source.ToString());
         builder.AddAttribute(sequence++, "disabled", !row.HasEditableOccurrences);
-        builder.AddAttribute(sequence++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, args => OnNodeSourceSelected(row.Node, args)));
-
-        foreach (var option in GetSourceOptions(row.Node))
+        builder.AddAttribute(sequence++, "onchange",
+            EventCallback.Factory.Create<ChangeEventArgs>(this, args => OnSourceSelected(row, args)));
+        foreach (var option in row.AvailableSources)
         {
             builder.OpenElement(sequence++, "option");
             builder.AddAttribute(sequence++, "value", option.ToString());
             builder.AddContent(sequence++, RecipePlanDisplayHelpers.GetSourceDisplayName(option));
             builder.CloseElement();
         }
-
         builder.CloseElement();
     };
 
-    private RenderFragment<DecisionRow> RenderUsedInCell => row => builder =>
-    {
-        builder.AddContent(0, row.UsedIn);
-    };
+    private WebTableSelection<string> GetLedgerSelection() =>
+        string.IsNullOrWhiteSpace(_selectedNodeId)
+            ? WebTableSelection<string>.None
+            : WebTableSelection<string>.Single(_selectedNodeId);
 
-    private RenderFragment<DecisionRow> RenderRoleCell => row => builder =>
-    {
-        // The column truncates long statuses, so surface the full text on hover.
-        builder.OpenComponent<MudTooltip>(0);
-        builder.AddAttribute(1, "Text", GetDecisionStatus(row));
-        builder.AddAttribute(2, "ChildContent", (RenderFragment)(content => content.AddContent(0, GetDecisionStatus(row))));
-        builder.CloseComponent();
-    };
+    private string GetLedgerRowClass(WorkerAcquisitionRowProjection row) =>
+        WebTableColumn<WorkerAcquisitionRowProjection, AcquisitionDecisionLedgerSortColumn>.CombineClasses(
+            "ae-row",
+            row.NodeId == _selectedNodeId ? "selected" : null,
+            row.IsActiveProcurement ? "active" : null,
+            row.IsFullySuppressed ? "suppressed" : null,
+            row.HasSuppressedOccurrences && !row.IsFullySuppressed ? "partial" : null);
 
-    private RenderFragment<DecisionRow> RenderMarketEvidenceCell => row => builder =>
+    private Task SelectRow(WorkerAcquisitionRowProjection row)
     {
-        builder.AddContent(0, row.MarketEvidence);
-    };
+        _selectedNodeId = row.NodeId;
+        return Task.CompletedTask;
+    }
 
-    private RenderFragment<DecisionRow> RenderCalculatedTotalCell => row => builder =>
+    private Task OnLedgerSortChanged(
+        WebTableSortState<AcquisitionDecisionLedgerSortColumn> sortState)
     {
-        builder.AddContent(0, row.EstimatedCost);
-    };
+        _sortState = sortState;
+        return Task.CompletedTask;
+    }
 
-    private async Task RefreshLedgerSnapshotAsync()
+    private WorkerAcquisitionRowProjection? GetSelectedRow() =>
+        _projection?.Rows.FirstOrDefault(row => row.NodeId == _selectedNodeId);
+
+    private void EnsureSelection()
     {
-        var elapsed = System.Diagnostics.Stopwatch.StartNew();
-        var requestId = Interlocked.Increment(ref _refreshRequestId);
-        _refreshCts?.Cancel();
-        _refreshCts?.Dispose();
-        _refreshCts = new CancellationTokenSource();
-        var token = _refreshCts.Token;
-        var plan = AppState.CurrentPlan;
-        var planSessionVersion = AppState.PlanSessionVersion;
-        ResetLedgerSortForPlanSession(planSessionVersion);
-
-        var key = CreateLedgerKey();
-        if (_ledgerCache.TryGet(key, _filter, out var cachedSnapshot))
+        ApplyRequestedSelection();
+        if (_projection?.Rows.Any(row => row.NodeId == _selectedNodeId) != true)
         {
-            _snapshot = cachedSnapshot;
-        }
-        else
-        {
-            try
-            {
-                var snapshot = await AcquisitionEvaluationWorkflow.BuildCurrentSnapshotAsync(
-                    plan,
-                    AppState.ShoppingPlans,
-                    AppState.UnavailableMarketItems,
-                    _filter,
-                    token);
-                if (snapshot == null ||
-                    requestId != _refreshRequestId ||
-                    token.IsCancellationRequested ||
-                    !AppState.IsCurrentPlanSession(plan, planSessionVersion))
-                {
-                    return;
-                }
-
-                _snapshot = _ledgerCache.Store(key, _filter, snapshot);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                return;
-            }
-        }
-
-        EnsureSelectedNodeFromSnapshot();
-        UpdateDiagnosticSelection();
-        elapsed.Stop();
-
-        if (elapsed.ElapsedMilliseconds > 100)
-        {
-            Logger.LogInformation(
-                "Acquisition evaluation snapshot ensured in {ElapsedMs} ms with {RowCount} rows and {VisibleRowCount} visible rows",
-                elapsed.ElapsedMilliseconds,
-                _snapshot.Rows.Count,
-                _snapshot.VisibleRows.Count);
+            _selectedNodeId = _projection?.Rows.FirstOrDefault()?.NodeId;
         }
     }
 
-    private AcquisitionEvaluationLedgerKey CreateLedgerKey()
+    private void ApplyRequestedSelection()
     {
-        var versions = AppState.CurrentVersions;
-        return new AcquisitionEvaluationLedgerKey(
-            versions.PlanStructureVersion,
-            versions.PlanDecisionVersion,
-            versions.PlanPriceVersion,
-            versions.MarketAnalysisVersion,
-            versions.ProcurementOverlayVersion);
+        var requested = !string.IsNullOrWhiteSpace(RequestedNodeId)
+            ? _projection?.Rows.FirstOrDefault(row => row.NodeId == RequestedNodeId)
+            : RequestedItemId.HasValue
+                ? _projection?.Rows.FirstOrDefault(row => row.ItemId == RequestedItemId.Value)
+                : null;
+        if (requested is not null)
+        {
+            _selectedNodeId = requested.NodeId;
+        }
     }
 
-    private void InvalidateLedgerSnapshot()
-    {
-        _ledgerCache.Invalidate();
-    }
+    private string GetFilterClass(AcquisitionFilter filter) =>
+        _filter == filter ? "selected" : string.Empty;
 
-    private string GetDecisionStatus(DecisionRow row)
+    private static string GetDecisionStatus(WorkerAcquisitionRowProjection row)
     {
         if (row.IsFullySuppressed)
         {
             return $"Skipped by {string.Join(", ", row.SuppressedBy)}";
         }
-
         if (row.IsActiveProcurement && row.CanBuyFromMarket && row.MarketEvidence == "Not analyzed")
         {
             return "Needs analysis";
         }
-
         if (row.IsActiveProcurement && row.CanBuyFromMarket && row.MarketEvidence == "Needs data")
         {
             return "Missing market data";
         }
-
-        if (row.IsActiveProcurement)
-        {
-            return row.HasSuppressedOccurrences
-                ? "Partially active"
-                : "Ready for procurement";
-        }
-
-        if (row.Source == AcquisitionSource.Craft)
-        {
-            return "Craft path";
-        }
-
-        return "Reference";
+        return row.IsActiveProcurement
+            ? row.HasSuppressedOccurrences ? "Partially active" : "Ready for procurement"
+            : "Covered by plan";
     }
 
-    private static string GetCalculatedTotalClass(DecisionRow row)
-    {
-        return IsUnsupportedProjectedTotal(row)
-            ? "ae-cost-cell projected-unsupported"
-            : "ae-cost-cell";
-    }
-
-    private static string GetCalculatedTotalTooltip(DecisionRow row)
-    {
-        var quantity = AcquisitionEvaluationCostCalculator.GetCostQuantity(row);
-        var source = RecipePlanDisplayHelpers.GetSourceDisplayName(row.Source);
-        var baseText = $"Calculated Total is the gil cost computed for {quantity:N0} needed from {source}.";
-
-        if (IsUnsupportedProjectedTotal(row))
-        {
-            return $"{baseText} This row is projected because the current market search scope cannot support the purchase, so it is highlighted as unsupported.";
-        }
-
-        return row.Source switch
-        {
-            AcquisitionSource.Craft => $"{baseText} Craft totals roll up selected child acquisition costs from the current recipe tree.",
-            AcquisitionSource.VendorBuy => $"{baseText} Vendor totals use loaded gil vendor prices.",
-            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq => $"{baseText} Market totals use loaded listing evidence for the selected market purchase.",
-            _ => baseText
-        };
-    }
-
-    private static bool IsUnsupportedProjectedTotal(DecisionRow row)
-    {
-        return string.Equals(row.MarketEvidence, "Projected only", StringComparison.Ordinal);
-    }
-
-    private static List<AcquisitionSource> GetSourceOptions(PlanNode node)
-    {
-        var options = AcquisitionPlanningService.GetAvailableSources(node);
-        if (!options.Contains(node.Source))
-        {
-            options.Insert(0, node.Source);
-        }
-
-        return options;
-    }
-
-    private void EnsureSelectedNodeFromSnapshot()
-    {
-        if (AppState.CurrentPlan == null)
-        {
-            _selectedNode = null;
-            return;
-        }
-
-        if (SelectRequestedNodeFromSnapshot())
-        {
-            return;
-        }
-
-        if (SelectRequestedItemFromSnapshot())
-        {
-            return;
-        }
-
-        _selectedNode = _snapshot.Rows
-            .FirstOrDefault(row => string.Equals(row.NodeId, _selectedNode?.NodeId, StringComparison.Ordinal))
-            ?.Node ?? _snapshot.Rows.FirstOrDefault()?.Node;
-    }
-
-    private bool SelectRequestedNodeFromSnapshot()
-    {
-        if (string.IsNullOrWhiteSpace(RequestedNodeId) ||
-            string.Equals(RequestedNodeId, _appliedRequestedNodeId, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var row = _snapshot.Rows.FirstOrDefault(row => row.NodeId == RequestedNodeId);
-        if (row == null)
-        {
-            return false;
-        }
-
-        SelectNode(row.Node);
-        _appliedRequestedNodeId = RequestedNodeId;
-        return true;
-    }
-
-    private bool SelectRequestedItemFromSnapshot()
-    {
-        if (!RequestedItemId.HasValue ||
-            RequestedItemId == _appliedRequestedItemId)
-        {
-            return false;
-        }
-
-        var row = _snapshot.Rows
-            .Where(row => row.ItemId == RequestedItemId.Value)
-            .OrderByDescending(row => row.IsActiveProcurement)
-            .ThenBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault();
-        if (row == null)
-        {
-            return false;
-        }
-
-        SelectNode(row.Node);
-        _appliedRequestedItemId = RequestedItemId;
-        return true;
-    }
-
-    private void GoToMarket()
-    {
-        NavigationManager.NavigateTo("market");
-    }
-
-    private void GoToPlanner()
-    {
-        NavigationManager.NavigateTo("");
-    }
-
-    private void GoToProcurement()
-    {
-        NavigationManager.NavigateTo("procurement");
-    }
-
-    private static string FormatUniqueItemCount(int count) =>
-        $"{count:N0} unique item{(count == 1 ? string.Empty : "s")}";
-
+    private void GoToPlanner() => NavigationManager.NavigateTo("./");
+    private void GoToMarket() => NavigationManager.NavigateTo("market");
+    private void GoToProcurement() => NavigationManager.NavigateTo("procurement");
 }

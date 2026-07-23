@@ -203,6 +203,60 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             EngineCommandPriority.Interactive,
             cancellationToken);
 
+    public Task<WorkerSessionResultEnvelope> GetRecipeProjectionAsync(
+        long expectedRevision,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.RecipeProjection,
+            expectedRevision,
+            new { },
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> GetAcquisitionProjectionAsync(
+        long expectedRevision,
+        string filter,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.AcquisitionProjection,
+            expectedRevision,
+            new WorkerAcquisitionProjectionRequest(filter),
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> MutateProjectItemsAsync(
+        long expectedRevision,
+        WorkerProjectItemsMutation mutation,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.ProjectItemsMutation,
+            expectedRevision,
+            mutation,
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> BuildRecipeAsync(
+        long expectedRevision,
+        WorkerRecipeBuildRequest request,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.RecipeBuild,
+            expectedRevision,
+            request,
+            EngineCommandPriority.UserRequestedDerivation,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> MutateAcquisitionAsync(
+        long expectedRevision,
+        WorkerAcquisitionMutation mutation,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.AcquisitionMutation,
+            expectedRevision,
+            mutation,
+            EngineCommandPriority.Interactive,
+            cancellationToken);
+
     internal Task<EngineResultEnvelope> ExecuteAsync(
         EngineExecutionHost executionHost,
         EngineRequestEnvelope request,
@@ -287,7 +341,9 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             throw new TimeoutException(
                 $"Worker session command '{commandKind}' did not finish before its deadline.");
         }
-        catch when (string.Equals(commandKind, "replace", StringComparison.Ordinal))
+        catch when (
+            string.Equals(commandKind, "replace", StringComparison.Ordinal) ||
+            WorkerSessionCommandKinds.IsMutation(commandKind))
         {
             // A replacement mutates managed Worker state before IndexedDB commits its
             // revision. If the protocol or durable write fails, replace the Worker so
