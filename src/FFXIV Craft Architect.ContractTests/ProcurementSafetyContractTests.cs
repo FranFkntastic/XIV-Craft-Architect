@@ -113,7 +113,12 @@ public sealed class ProcurementSafetyContractTests
         {
             ToleranceSelections = toleranceSelections
         };
+        state.ReplaceMarketAnalysis(
+            [new MarketItemAnalysis { ItemId = 100, Name = "Item 100", QuantityNeeded = 5 }],
+            [RoutePlan(100, "Siren")]);
         state.ReplaceProcurementOverlay([RoutePlan(100, "Siren")], decision);
+        state.MarkPersisted(PersistedStateBucket.ProcurementRoute, state.CurrentVersions);
+        var storedAtPositionZero = state.CreateStoredPlanSnapshot("autosave", "Autosave");
         var workflow = new FakeWorkflow();
         using var reconciliation = new ProcurementRouteReconciliationService(
             state,
@@ -131,8 +136,26 @@ public sealed class ProcurementSafetyContractTests
         Assert.Equal(ProcurementRoutePublicationValidity.Current, state.ProcurementRouteValidity);
         Assert.Equal("Faerie", Assert.Single(state.ProcurementShoppingPlans).RecommendedWorld?.WorldName);
         Assert.Equal(400, state.ProcurementRouteDecision?.SelectedGilCost);
+        Assert.False(state.IsPersistedBucketDirty(PersistedStateBucket.ProcurementRoute));
         Assert.False(reconciliation.IsScheduled);
         Assert.Equal(0, workflow.Calls);
+
+        var restored = new AppState();
+        restored.SetProcurementSettings(
+            state.ProcurementSearchEntireRegion,
+            state.ProcurementEnableSplitWorldPurchases,
+            travelTolerance: 11,
+            state.TemporaryWorldBlacklistDurationMinutes);
+        restored.LoadStoredPlan(
+            storedAtPositionZero,
+            state.CurrentPlan!,
+            trackStoredPlanIdentity: false);
+
+        Assert.Null(restored.ProcurementRouteRestoreDiagnostic);
+        Assert.Equal(ProcurementRoutePublicationValidity.Current, restored.ProcurementRouteValidity);
+        Assert.Equal(11, restored.ProcurementTravelTolerance);
+        Assert.Equal("Faerie", Assert.Single(restored.ProcurementShoppingPlans).RecommendedWorld?.WorldName);
+        Assert.Equal(400, restored.ProcurementRouteDecision?.SelectedGilCost);
     }
 
     [Fact]
@@ -171,6 +194,7 @@ public sealed class ProcurementSafetyContractTests
                 Name = $"Item {itemId}",
                 Quantity = 5,
                 Source = AcquisitionSource.MarketBuyNq,
+                SourceReason = AcquisitionSourceReason.UserSelected,
                 CanBuyFromMarket = true,
             },
         ],

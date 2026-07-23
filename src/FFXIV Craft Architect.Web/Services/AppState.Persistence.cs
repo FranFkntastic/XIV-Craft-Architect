@@ -208,8 +208,16 @@ public partial class AppState
         };
         if (!restoredBasis.Matches(currentBasis))
         {
-            ProcurementRouteRestoreDiagnostic = "route-basis-mismatch";
-            return;
+            if (!restoredBasis.HasSameRouteInputsAs(currentBasis) ||
+                !TryBuildProcurementTravelToleranceSelection(
+                    decision,
+                    currentBasis.TravelTolerance,
+                    out shoppingPlans,
+                    out decision))
+            {
+                ProcurementRouteRestoreDiagnostic = "route-basis-mismatch";
+                return;
+            }
         }
 
         ReplaceProcurementOverlay(shoppingPlans, decision);

@@ -397,14 +397,51 @@ public partial class AppState
             return false;
         }
 
-        var selection = currentDecision.ToleranceSelections
-            .FirstOrDefault(option => option.Contains(normalized));
-        if (selection == null)
+        if (!TryBuildProcurementTravelToleranceSelection(
+                currentDecision,
+                normalized,
+                out var selectedShoppingPlans,
+                out var selectedDecision))
         {
             return false;
         }
 
-        var selectedDecision = new MarketRouteDecision(
+        using (BeginStateChangeBatch())
+        {
+            ProcurementTravelTolerance = normalized;
+            if (!ApplyProcurementRoute(
+                    currentPlan,
+                    AcquisitionPlanningService.GetActiveProcurementItems(currentPlan),
+                    selectedShoppingPlans,
+                    selectedDecision))
+            {
+                return false;
+            }
+            MarkPersisted(PersistedStateBucket.ProcurementRoute, CurrentVersions);
+            NotifySettingsChanged();
+        }
+
+        return true;
+    }
+
+    private static bool TryBuildProcurementTravelToleranceSelection(
+        MarketRouteDecision currentDecision,
+        int travelTolerance,
+        out IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        out MarketRouteDecision selectedDecision)
+    {
+        var normalized = Math.Clamp(travelTolerance, 0, 11);
+        var selection = currentDecision.ToleranceSelections
+            .FirstOrDefault(option => option.Contains(normalized));
+        if (selection == null)
+        {
+            shoppingPlans = [];
+            selectedDecision = currentDecision;
+            return false;
+        }
+
+        shoppingPlans = selection.ShoppingPlans;
+        selectedDecision = new MarketRouteDecision(
             normalized,
             MarketRouteScoring.GetMaximumPremiumRate(normalized),
             currentDecision.CheapestGilCost,
@@ -424,21 +461,6 @@ public partial class AppState
             RouteSearchWasTruncated = currentDecision.RouteSearchWasTruncated,
             ToleranceSelections = currentDecision.ToleranceSelections
         };
-
-        using (BeginStateChangeBatch())
-        {
-            ProcurementTravelTolerance = normalized;
-            if (!ApplyProcurementRoute(
-                    currentPlan,
-                    AcquisitionPlanningService.GetActiveProcurementItems(currentPlan),
-                    selection.ShoppingPlans,
-                    selectedDecision))
-            {
-                return false;
-            }
-            NotifySettingsChanged();
-        }
-
         return true;
     }
 
