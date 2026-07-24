@@ -680,11 +680,11 @@ public static partial class ManagedHost
         var request = command.Payload.Deserialize<WorkerProcurementRequest>(WireJsonOptions)
             ?? throw new InvalidOperationException("Procurement request is empty.");
         var session = _canonicalSession.Session;
-        if (session.ActivePlan is null)
+        if (session.BorrowActivePlan() is null)
         {
             throw new InvalidOperationException("Build a recipe plan before generating a route.");
         }
-        if (session.MarketEvidence.ShoppingPlans is not { Count: > 0 } sourcePlans)
+        if (session.BorrowMarketEvidence().ShoppingPlans is not { Count: > 0 } sourcePlans)
         {
             throw new InvalidOperationException(
                 "Run Market Analysis before generating a procurement route.");

@@ -69,7 +69,7 @@ internal sealed class WorkerCanonicalSession
         bool includeSourcePlanIdentity,
         bool includeLegacyMarketAnalysisFields)
     {
-        if (_session.ActivePlan is null && _session.ProjectItems.Count == 0)
+        if (_session.BorrowActivePlan() is null && _session.ProjectItems.Count == 0)
         {
             return null;
         }
