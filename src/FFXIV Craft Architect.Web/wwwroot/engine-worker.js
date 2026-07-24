@@ -242,7 +242,9 @@ async function ensureSessionBootstrapped(host, requestMessage) {
 }
 
 async function bootstrapSession(host, requestMessage) {
+    const startedAt = performance.now();
     const durable = await loadDurableSession();
+    const loadedAt = performance.now();
     const restoreMessage = createManagedSessionMessage(
         requestMessage,
         "restore",
@@ -254,6 +256,7 @@ async function bootstrapSession(host, requestMessage) {
             migratedFromLegacy: durable.migratedFromLegacy
         });
     const resultJson = await host.ExecuteSessionCommandJson(JSON.stringify(restoreMessage));
+    const restoredAt = performance.now();
     const result = JSON.parse(resultJson);
     if (result.payload?.accepted !== true) {
         return resultJson;
@@ -262,6 +265,10 @@ async function bootstrapSession(host, requestMessage) {
     if (durable.migratedFromLegacy && durable.storedPlan) {
         await commitDurableSession(0, durable.revision, durable.storedPlan);
     }
+    console.info(
+        `[EngineSession] bootstrap load=${Math.round(loadedAt - startedAt)}ms ` +
+        `managed-restore=${Math.round(restoredAt - loadedAt)}ms ` +
+        `total=${Math.round(performance.now() - startedAt)}ms`);
     return resultJson;
 }
 
@@ -306,8 +313,10 @@ async function replaceDurableSession(host, requestMessage) {
 }
 
 async function mutateDurableSession(host, requestMessage) {
+    const startedAt = performance.now();
     const command = requestMessage.payload;
     const current = await loadDurableSession();
+    const loadedAt = performance.now();
     if (current.revision !== command.expectedRevision) {
         return await host.ExecuteSessionCommandJson(JSON.stringify(createManagedSessionMessage(
             requestMessage,
@@ -317,6 +326,7 @@ async function mutateDurableSession(host, requestMessage) {
     }
 
     const resultJson = await host.ExecuteSessionCommandJson(JSON.stringify(requestMessage));
+    const managedAt = performance.now();
     const result = JSON.parse(resultJson);
     if (result.payload?.accepted !== true) {
         return resultJson;
@@ -326,15 +336,24 @@ async function mutateDurableSession(host, requestMessage) {
     const targetRevision = current.revision + 1;
     if (result.payload.revision !== targetRevision ||
         carrier?.shell?.revision !== targetRevision ||
-        !carrier?.durableState) {
+        (!carrier?.durableState && !carrier?.durablePatch)) {
         throw new Error("Worker mutation did not return one durable successor revision.");
     }
 
     try {
+        const durableState = carrier.durableState ??
+            applyDurablePatch(current.storedPlan, carrier.durablePatch);
         await commitDurableSession(
             current.revision,
             targetRevision,
-            carrier.durableState);
+            durableState);
+        const committedAt = performance.now();
+        console.info(
+            `[EngineSession] ${command.commandKind} load=${Math.round(loadedAt - startedAt)}ms ` +
+            `managed=${Math.round(managedAt - loadedAt)}ms ` +
+            `commit=${Math.round(committedAt - managedAt)}ms ` +
+            `durable=${carrier.durablePatch ? "patch" : "snapshot"} ` +
+            `total=${Math.round(committedAt - startedAt)}ms`);
         result.payload.projection = {
             shell: carrier.shell,
             view: carrier.publicProjection
@@ -344,6 +363,16 @@ async function mutateDurableSession(host, requestMessage) {
         sessionBootstrapPromise = null;
         throw new Error(`Worker session durable mutation failed: ${String(error)}`);
     }
+}
+
+function applyDurablePatch(storedPlan, patch) {
+    if (!storedPlan || typeof patch?.procurementRouteJson !== "string") {
+        throw new Error("Worker session durable patch is incomplete.");
+    }
+    return {
+        ...storedPlan,
+        procurementRouteJson: patch.procurementRouteJson
+    };
 }
 
 function createManagedSessionMessage(requestMessage, commandKind, expectedRevision, payload) {

@@ -135,6 +135,51 @@ public sealed class ProcurementSpecificationTests
     }
 
     [Fact]
+    public async Task GeneratedToleranceFrontierDoesNotDependOnTheInitiallySelectedPosition()
+    {
+        var worlds = new[]
+        {
+            ("Aether", "Siren"),
+            ("Aether", "Cactuar"),
+            ("Aether", "Faerie"),
+            ("Aether", "Gilgamesh"),
+            ("Primal", "Behemoth"),
+            ("Primal", "Excalibur"),
+            ("Crystal", "Balmung"),
+            ("Crystal", "Goblin")
+        };
+        var evidence = Enumerable.Range(0, worlds.Length)
+            .Select(itemIndex => SpecificationFixtures.Evidence(
+                200 + itemIndex,
+                $"Frontier item {itemIndex}",
+                1,
+                worlds.Select((world, worldIndex) => SpecificationFixtures.World(
+                        world.Item1,
+                        world.Item2,
+                        1,
+                        worldIndex == itemIndex ? 100 : worldIndex == 0 ? 110 : 150))
+                    .ToArray()))
+            .ToArray();
+        var shopping = new MarketShoppingService(null!);
+
+        var travelFirst = await shopping.OptimizeProcurementRouteWithDecisionAsync(
+            evidence,
+            SpecificationFixtures.Config(tolerance: 0));
+        var priceFirst = await shopping.OptimizeProcurementRouteWithDecisionAsync(
+            evidence,
+            SpecificationFixtures.Config(tolerance: 11));
+
+        Assert.Equal(
+            travelFirst.Decision!.ToleranceSelections.Select(SelectionIdentity),
+            priceFirst.Decision!.ToleranceSelections.Select(SelectionIdentity));
+
+        static string SelectionIdentity(MarketRouteToleranceSelection selection) =>
+            $"{selection.MinimumTolerance}-{selection.MaximumTolerance}:" +
+            $"{selection.GilCost}:{selection.WorldStops}:{selection.DataCenterTransfers}:" +
+            selection.SelectionKey;
+    }
+
+    [Fact]
     public void VendorAvailabilityDoesNotMasqueradeAsVendorSelection()
     {
         var node = new PlanNode

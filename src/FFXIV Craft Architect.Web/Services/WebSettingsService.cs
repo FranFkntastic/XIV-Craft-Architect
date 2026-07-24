@@ -13,6 +13,8 @@ public class WebSettingsService : ISettingsService
     private readonly IndexedDbService _indexedDb;
     private readonly ILogger<WebSettingsService>? _logger;
     private readonly Dictionary<string, object> _cache = new();
+    private readonly object _loadSync = new();
+    private Task? _loadTask;
     private bool _isLoaded = false;
 
     private static readonly Dictionary<string, object> DefaultSettings = new()
@@ -54,28 +56,37 @@ public class WebSettingsService : ISettingsService
         _logger = logger;
     }
 
-    private async Task EnsureLoadedAsync()
+    private Task EnsureLoadedAsync()
     {
         if (_isLoaded)
         {
-            return;
+            return Task.CompletedTask;
         }
 
+        lock (_loadSync)
+        {
+            return _loadTask ??= LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
         try
         {
             await ApplyMigrationsAsync();
 
-            // Load all settings from IndexedDB
-            foreach (var key in DefaultSettings.Keys)
+            var storedSettings = await _indexedDb.LoadAllSettingsAsync();
+            foreach (var (key, defaultValue) in DefaultSettings)
             {
-                var value = await _indexedDb.LoadSettingAsync<object>(key);
-                if (value != null)
+                if (storedSettings.TryGetValue(key, out var serialized) &&
+                    !string.IsNullOrWhiteSpace(serialized))
                 {
-                    _cache[key] = value;
+                    _cache[key] = JsonSerializer.Deserialize<object>(serialized)
+                        ?? defaultValue;
                 }
                 else
                 {
-                    _cache[key] = DefaultSettings[key];
+                    _cache[key] = defaultValue;
                 }
             }
             _isLoaded = true;

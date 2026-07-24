@@ -2118,16 +2118,21 @@ public class MarketShoppingService
             return OrderRouteStates(distinctStates, config).ToList();
         }
 
-        var preferred = OrderRouteStates(distinctStates, config)
-            .Take(MaxProcurementRouteBeamWidth - 16);
         var cheapest = distinctStates
             .OrderBy(state => state.TotalGilCost)
             .ThenBy(state => state.TotalEvidencePenalty)
             .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
             .Take(16);
+        var toleranceAnchors = Enumerable.Range(0, 12)
+            .SelectMany(tolerance => OrderRouteStates(
+                    distinctStates,
+                    config,
+                    travelToleranceOverride: tolerance)
+                .Take(4));
 
-        return preferred
-            .Concat(cheapest)
+        return cheapest
+            .Concat(toleranceAnchors)
+            .Concat(distinctStates.OrderBy(state => state.TieBreakKey, StringComparer.Ordinal))
             .DistinctBy(state => state.RouteShapeKey, StringComparer.Ordinal)
             .Take(MaxProcurementRouteBeamWidth)
             .ToList();

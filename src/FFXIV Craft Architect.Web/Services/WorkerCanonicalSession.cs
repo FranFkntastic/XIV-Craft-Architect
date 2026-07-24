@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
@@ -23,6 +24,7 @@ internal sealed class WorkerCanonicalSession
 
     public string? Restore(StoredPlan? storedPlan, bool trackStoredPlanIdentity)
     {
+        var timing = Stopwatch.StartNew();
         _session = CreateSession();
         _legacyMarketAnalysisScopeSnapshotJson = storedPlan?.MarketAnalysisScopeSnapshotJson;
         _legacyProcurementRouteJson = storedPlan?.ProcurementRouteJson;
@@ -33,6 +35,7 @@ internal sealed class WorkerCanonicalSession
 
         var loader = new CorePlanSessionLoadService(_session);
         var result = loader.Load(ToCoreSnapshot(storedPlan), trackStoredPlanIdentity);
+        var coreRestoreMilliseconds = timing.ElapsedMilliseconds;
         if (!result.CanLoad)
         {
             throw new InvalidOperationException(
@@ -40,11 +43,15 @@ internal sealed class WorkerCanonicalSession
         }
 
         RestoreLegacyProcurementOverlay(storedPlan.ProcurementRouteJson);
+        var routeRestoreMilliseconds = timing.ElapsedMilliseconds - coreRestoreMilliseconds;
         _session.MarkCurrentPersisted(
             CraftSessionDirtyBucket.PlanCore,
             CraftSessionDirtyBucket.MarketAnalysis,
             CraftSessionDirtyBucket.Procurement,
             CraftSessionDirtyBucket.SettingsContext);
+        Console.WriteLine(
+            $"[EngineSession] restore core={coreRestoreMilliseconds}ms " +
+            $"route={routeRestoreMilliseconds}ms total={timing.ElapsedMilliseconds}ms");
         return result.Warning;
     }
 
@@ -103,6 +110,10 @@ internal sealed class WorkerCanonicalSession
     {
         _legacyProcurementRouteJson = null;
     }
+
+    public string ExportProcurementRoute() =>
+        BuildProcurementRouteJson()
+        ?? throw new InvalidOperationException("The current procurement route is unavailable.");
 
     private string? BuildProcurementRouteJson()
     {

@@ -138,7 +138,10 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         if (!_projections.TryPublishRecipe(result))
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
-            return _projections.Recipe;
+            result = await _engineHost.GetRecipeProjectionAsync(
+                _projections.Shell.Revision,
+                cancellationToken);
+            _projections.TryPublishRecipe(result);
         }
         return _projections.Recipe;
     }
@@ -159,7 +162,11 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         if (!_projections.TryPublishAcquisition(result))
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
-            return _projections.Acquisition;
+            result = await _engineHost.GetAcquisitionProjectionAsync(
+                _projections.Shell.Revision,
+                filter,
+                cancellationToken);
+            _projections.TryPublishAcquisition(result);
         }
         return _projections.Acquisition;
     }
@@ -180,7 +187,11 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         if (!_projections.TryPublishMarket(result))
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
-            return _projections.Market;
+            result = await _engineHost.GetMarketProjectionAsync(
+                _projections.Shell.Revision,
+                includeDetails,
+                cancellationToken: cancellationToken);
+            _projections.TryPublishMarket(result);
         }
         return _projections.Market;
     }
@@ -199,7 +210,10 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         if (!_projections.TryPublishProcurement(result))
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
-            return _projections.Procurement;
+            result = await _engineHost.GetProcurementProjectionAsync(
+                _projections.Shell.Revision,
+                cancellationToken);
+            _projections.TryPublishProcurement(result);
         }
         return _projections.Procurement;
     }
@@ -662,10 +676,6 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             result.Revision,
             cancellationToken);
         _projections.TryPublish(shell);
-        var recipe = await _engineHost.GetRecipeProjectionAsync(
-            result.Revision,
-            cancellationToken);
-        _projections.TryPublishRecipe(recipe);
     }
 
     private static InvalidOperationException CreateConflict(

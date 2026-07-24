@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
 using System.Text.Json;
@@ -675,6 +676,7 @@ public static partial class ManagedHost
     private static async Task<WorkerSessionResultEnvelope> RunProcurementAsync(
         WorkerSessionCommandEnvelope command)
     {
+        var timing = Stopwatch.StartNew();
         var request = command.Payload.Deserialize<WorkerProcurementRequest>(WireJsonOptions)
             ?? throw new InvalidOperationException("Procurement request is empty.");
         var session = _canonicalSession.Session;
@@ -698,6 +700,7 @@ public static partial class ManagedHost
             SessionMarketLadder);
         var shopping = new MarketShoppingService(SessionMarketCache);
         var worldData = await SessionUniversalis.GetWorldDataAsync();
+        var worldDataMilliseconds = timing.ElapsedMilliseconds;
         shopping.SetWorldNameToIdMapping(
             worldData.WorldIdToName.ToDictionary(pair => pair.Value, pair => pair.Key));
         var workflow = new CoreProcurementWorkflowService(
@@ -733,6 +736,7 @@ public static partial class ManagedHost
                 request.ExcludedItemWorlds?.ToHashSet() ?? new HashSet<MarketItemWorldKey>(),
                 expectedWorlds,
                 ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous));
+        var workflowMilliseconds = timing.ElapsedMilliseconds - worldDataMilliseconds;
         if (result.Status != CoreProcurementWorkflowStatus.Published)
         {
             throw new InvalidOperationException(
@@ -742,12 +746,20 @@ public static partial class ManagedHost
         SessionMarketCache.Clear();
         _canonicalSession.InvalidateLegacyProcurementRoute();
         _sessionRevision++;
-        return CreateMutationResult(
+        var projectionStarted = timing.ElapsedMilliseconds;
+        var mutation = CreateMutationResult(
             command.CommandKind,
             new WorkerProcurementOutcome(
                 result.Status,
                 result.ShoppingPlanCount,
-                CaptureProcurementProjection()));
+                CaptureProcurementProjection()),
+            new WorkerSessionDurablePatch(
+                _canonicalSession.ExportProcurementRoute()));
+        Console.WriteLine(
+            $"[EngineSession] procurement world-data={worldDataMilliseconds}ms " +
+            $"workflow={workflowMilliseconds}ms projection-and-patch=" +
+            $"{timing.ElapsedMilliseconds - projectionStarted}ms total={timing.ElapsedMilliseconds}ms");
+        return mutation;
     }
 
     private static WorkerSessionResultEnvelope MutateProcurementTolerance(
@@ -764,9 +776,12 @@ public static partial class ManagedHost
         }
 
         _canonicalSession.InvalidateLegacyProcurementRoute();
-        return CompleteMutation(
+        _sessionRevision++;
+        return CreateMutationResult(
             command.CommandKind,
-            CaptureProcurementProjection);
+            CaptureProcurementProjection(),
+            new WorkerSessionDurablePatch(
+                _canonicalSession.ExportProcurementRoute()));
     }
 
     private static CoreMarketAnalysisWorkflowService CreateMarketWorkflow(
@@ -801,19 +816,23 @@ public static partial class ManagedHost
 
     private static WorkerSessionResultEnvelope CreateMutationResult(
         string commandKind,
-        object publicProjection)
+        object publicProjection,
+        WorkerSessionDurablePatch? durablePatch = null)
     {
         try
         {
-            var durable = _canonicalSession.Export(
-                    "autosave",
-                    "Autosave",
-                    includeSourcePlanIdentity: true,
-                    includeLegacyMarketAnalysisFields: false)
-                ?? new StoredPlan { Id = "autosave", Name = "Autosave" };
+            var durable = durablePatch is null
+                ? _canonicalSession.Export(
+                      "autosave",
+                      "Autosave",
+                      includeSourcePlanIdentity: true,
+                      includeLegacyMarketAnalysisFields: false)
+                  ?? new StoredPlan { Id = "autosave", Name = "Autosave" }
+                : null;
             var carrier = new WorkerSessionMutationProjection(
                 CaptureShellProjection(),
                 durable,
+                durablePatch,
                 JsonSerializer.SerializeToElement(publicProjection, WireJsonOptions));
             return CreateSessionResult(
                 commandKind,
@@ -972,6 +991,10 @@ public static partial class ManagedHost
             session.ActivePlan is not null,
             session.MarketEvidence.ShoppingPlans is { Count: > 0 },
             decision is not null,
+            session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
+            session.ActiveContext.DataCenter ?? "Aether",
+            session.ActiveContext.Region ?? "North America",
+            session.MarketEvidence.Lens,
             activeItems.Count,
             tolerance,
             MarketRouteScoring.GetToleranceLabel(tolerance),
@@ -994,8 +1017,22 @@ public static partial class ManagedHost
                 ?? Array.Empty<WorkerProcurementToleranceProjection>(),
             worlds,
             overlay?.ShoppingPlans?.ToArray() ?? Array.Empty<DetailedShoppingPlan>(),
-            decision);
+            CompactProcurementDecision(decision));
     }
+
+    private static MarketRouteDecision? CompactProcurementDecision(
+        MarketRouteDecision? decision) =>
+        decision is null
+            ? null
+            : decision with
+            {
+                ToleranceSelections = decision.ToleranceSelections
+                    .Select(selection => selection with
+                    {
+                        ShoppingPlans = Array.Empty<DetailedShoppingPlan>()
+                    })
+                    .ToArray()
+            };
 
     private static WorkerAcquisitionProjection CaptureAcquisitionProjection(
         WorkerSessionCommandEnvelope command)

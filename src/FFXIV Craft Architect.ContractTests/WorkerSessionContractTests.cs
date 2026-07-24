@@ -117,7 +117,7 @@ public sealed class WorkerSessionContractTests
         Assert.NotNull(mutation);
         Assert.Equal(2, mutation.Shell.Revision);
         Assert.Equal(2, mutation.Shell.ProjectItemCount);
-        Assert.NotNull(mutation.DurableState.PlanJson);
+        Assert.NotNull(mutation.DurableState?.PlanJson);
         var mutatedRecipe =
             mutation.PublicProjection.Deserialize<WorkerRecipePlannerProjection>(WireOptions);
         Assert.NotNull(mutatedRecipe);

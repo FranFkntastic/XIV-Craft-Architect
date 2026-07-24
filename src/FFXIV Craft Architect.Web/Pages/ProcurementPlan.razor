@@ -20,8 +20,8 @@
     <div class="pp-grid-layout">
         <ProcurementControlsPanel
             SearchEntireRegion="_searchEntireRegion"
-            SelectedRegion="@(_market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion)"
-            SelectedDataCenter="@(_market?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter)"
+            SelectedRegion="@(_route?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion)"
+            SelectedDataCenter="@(_route?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter)"
             TravelTolerance="_travelTolerance"
             RouteDecision="_route?.RouteDecision"
             RouteValidity="@(_route?.HasRoute == true ? ProcurementRoutePublicationValidity.Current : ProcurementRoutePublicationValidity.None)"
@@ -52,7 +52,7 @@
         <ProcurementResultsShell
             ShoppingPlans="@(_route?.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>())"
             RouteDecision="_route?.RouteDecision"
-            SelectedDataCenter="@(_market?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter)"
+            SelectedDataCenter="@(_route?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter)"
             IsStale="false"
             IsAnalyzing="_isAnalyzing"
             FailureMessage="@_routeFailure"
@@ -76,7 +76,6 @@
     [SupplyParameterFromQuery(Name = "itemId")]
     public int? RequestedItemId { get; set; }
 
-    private WorkerMarketProjection? _market;
     private WorkerProcurementProjection? _route;
     private long _projectionRefreshRevision = -1;
     private bool _searchEntireRegion = true;
@@ -105,8 +104,7 @@
     private bool CanAnalyze =>
         !_isAnalyzing &&
         _route?.HasMarketEvidence == true &&
-        _route.ActiveItemCount > 0 &&
-        _market is not null;
+        _route.ActiveItemCount > 0;
 
     private bool CanExportCraftQuote =>
         !_isAnalyzing &&
@@ -139,7 +137,6 @@
             _travelPriority = MarketTravelPriority.DataCenterTransfersFirst;
         }
 
-        _market = await WorkerSession.GetMarketProjectionAsync();
         _route = await WorkerSession.GetProcurementProjectionAsync();
         ApplyRouteSettings();
 
@@ -156,7 +153,7 @@
     {
         var revision = WorkerProjections.Shell.Revision;
         if (revision > 0 &&
-            (_market?.Revision != revision || _route?.Revision != revision))
+            _route?.Revision != revision)
         {
             if (_projectionRefreshRevision != revision)
             {
@@ -166,7 +163,6 @@
             return;
         }
 
-        _market = WorkerProjections.Market ?? _market;
         _route = WorkerProjections.Procurement ?? _route;
         ApplyRouteSettings();
         _ = InvokeAsync(StateHasChanged);
@@ -176,12 +172,6 @@
     {
         try
         {
-            _market = await WorkerSession.GetMarketProjectionAsync();
-            if (WorkerProjections.Shell.Revision != revision)
-            {
-                return;
-            }
-
             _route = await WorkerSession.GetProcurementProjectionAsync();
             ApplyRouteSettings();
         }
@@ -207,7 +197,7 @@
 
     private async Task RunAnalysisAsync()
     {
-        if (!CanAnalyze || _market is null)
+        if (!CanAnalyze)
         {
             return;
         }
@@ -238,7 +228,7 @@
 
     private WorkerProcurementRequest BuildRequest()
     {
-        if (_market is null)
+        if (_route is null)
         {
             throw new InvalidOperationException("Market Analysis has not published evidence.");
         }
@@ -247,9 +237,9 @@
             _searchEntireRegion
                 ? MarketFetchScope.EntireRegion
                 : MarketFetchScope.SelectedDataCenter,
-            _market.SelectedDataCenter,
-            _market.SelectedRegion,
-            _market.Lens,
+            _route.SelectedDataCenter,
+            _route.SelectedRegion,
+            _route.Lens,
             _travelTolerance,
             _includeSplitPurchases,
             _startFromHomeDataCenter,
@@ -369,8 +359,8 @@
                 : null;
             var result = await CraftAppraisalQuoteExportService.CreateExportAsync(
                 plan,
-                _market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion,
-                _market?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter);
+                _route?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion,
+                _route?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter);
             if (!result.IsAvailable)
             {
                 Snackbar.Add(
@@ -496,7 +486,7 @@
         WorldItemProcurementAction action,
         MarketWorldEvidenceSnapshot? observedEvidence)
     {
-        if (_market is null)
+        if (_route is null)
         {
             return false;
         }
@@ -514,13 +504,12 @@
                     _searchEntireRegion
                         ? MarketFetchScope.EntireRegion
                         : MarketFetchScope.SelectedDataCenter,
-                    _market.SelectedDataCenter,
-                    _market.SelectedRegion,
-                    _market.Lens,
+                    _route.SelectedDataCenter,
+                    _route.SelectedRegion,
+                    _route.Lens,
                     action.World.DataCenter,
                     action.World.WorldName,
                     observedEvidence));
-            _market = outcome.Market;
             await RunAnalysisAsync();
             Snackbar.Add(
                 $"Rechecked {action.Item.ItemName} and updated the route.",
@@ -584,7 +573,7 @@
 
     private async Task HandleMarketMafiosoAsync(WorldItemProcurementAction action)
     {
-        if (!_marketMafiosoEnabled || _market is null)
+        if (!_marketMafiosoEnabled || _route is null)
         {
             return;
         }
@@ -650,7 +639,7 @@
             var draft = new MarketMafiosoSingleWorldHandoff(
                 action.Item.ItemId,
                 action.Item.ItemName,
-                _market.SelectedRegion,
+                _route.SelectedRegion,
                 action.World.DataCenter,
                 action.World.WorldName,
                 quantity,
@@ -882,7 +871,7 @@
         var world = ProcurementWorldCardBuilder
             .BuildWorldCards(
                 _route?.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>(),
-                _market?.SelectedDataCenter ??
+                _route?.SelectedDataCenter ??
                 WorkerProjections.Shell.SelectedDataCenter)
             .FirstOrDefault(candidate =>
                 candidate.DataCenter.Equals(

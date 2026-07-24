@@ -88,8 +88,12 @@ public static class WorkerSessionCommandKinds
 
 public sealed record WorkerSessionMutationProjection(
     WorkerSessionShellProjection Shell,
-    StoredPlan DurableState,
+    StoredPlan? DurableState,
+    WorkerSessionDurablePatch? DurablePatch,
     JsonElement PublicProjection);
+
+public sealed record WorkerSessionDurablePatch(
+    string ProcurementRouteJson);
 
 public sealed record WorkerAcceptedMutationProjection(
     WorkerSessionShellProjection Shell,
@@ -329,6 +333,10 @@ public sealed record WorkerProcurementProjection(
     bool HasPlan,
     bool HasMarketEvidence,
     bool HasRoute,
+    MarketFetchScope Scope,
+    string SelectedDataCenter,
+    string SelectedRegion,
+    MarketAcquisitionLens Lens,
     int ActiveItemCount,
     int TravelTolerance,
     string TravelToleranceLabel,
