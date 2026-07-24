@@ -989,10 +989,12 @@ public static partial class ManagedHost
     private static WorkerProcurementProjection CaptureProcurementProjection()
     {
         var session = _canonicalSession.Session;
+        var plan = session.BorrowActivePlan();
+        var evidence = session.BorrowMarketEvidence();
         var overlay = session.BorrowProcurementOverlay();
         var decision = overlay?.RouteDecision;
         var activeItems = new WorkerRecipeLayerWorkflow(_canonicalSession)
-            .BuildActiveProcurementItems(session.ActivePlan);
+            .BuildActiveProcurementItems(plan);
         var worlds = (overlay?.RouteCards ?? Array.Empty<WorldProcurementCardModel>())
             .Select(world => new WorkerProcurementWorldProjection(
                 world.DataCenter,
@@ -1026,13 +1028,13 @@ public static partial class ManagedHost
         var tolerance = decision?.TravelTolerance ?? 0;
         return new WorkerProcurementProjection(
             _sessionRevision,
-            session.ActivePlan is not null,
-            session.MarketEvidence.ShoppingPlans is { Count: > 0 },
+            plan is not null,
+            evidence.ShoppingPlans is { Count: > 0 },
             decision is not null,
             session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
             session.ActiveContext.DataCenter ?? "Aether",
             session.ActiveContext.Region ?? "North America",
-            session.MarketEvidence.Lens,
+            evidence.Lens,
             activeItems.Count,
             tolerance,
             MarketRouteScoring.GetToleranceLabel(tolerance),
