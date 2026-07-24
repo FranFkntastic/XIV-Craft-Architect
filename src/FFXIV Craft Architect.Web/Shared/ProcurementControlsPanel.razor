@@ -166,14 +166,8 @@
     private Task OnProcurementTravelToleranceChanged(int value) =>
         TravelToleranceChanged.InvokeAsync(value);
 
-    private async Task OnProcurementTravelToleranceCommitted(int value)
-    {
-        if (TravelTolerance != value)
-        {
-            await OnProcurementTravelToleranceChanged(value);
-        }
-        await TravelToleranceCommitted.InvokeAsync(value);
-    }
+    private Task OnProcurementTravelToleranceCommitted(int value) =>
+        TravelToleranceCommitted.InvokeAsync(value);
 
     private string GetTravelPreferenceHelp()
     {

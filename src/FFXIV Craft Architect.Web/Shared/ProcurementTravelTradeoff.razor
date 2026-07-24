@@ -185,11 +185,8 @@
     private Task SelectTolerance(int tolerance) =>
         CommitToleranceAsync(tolerance);
 
-    private async Task CommitToleranceAsync(int tolerance)
-    {
-        await TravelToleranceChanged.InvokeAsync(tolerance);
-        await TravelToleranceCommitted.InvokeAsync(tolerance);
-    }
+    private Task CommitToleranceAsync(int tolerance) =>
+        TravelToleranceCommitted.InvokeAsync(tolerance);
 
     private string GetExplanation()
     {
