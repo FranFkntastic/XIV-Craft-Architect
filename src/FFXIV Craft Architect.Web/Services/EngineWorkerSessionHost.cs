@@ -238,23 +238,23 @@ public static partial class ManagedHost
                 items.RemoveAll(item => item.Id == mutation.ItemId);
                 break;
             case "quantity":
-            {
-                var item = items.FirstOrDefault(candidate => candidate.Id == mutation.ItemId);
-                if (item is not null)
                 {
-                    item.Quantity = Math.Clamp(mutation.Quantity, 1, 9999);
+                    var item = items.FirstOrDefault(candidate => candidate.Id == mutation.ItemId);
+                    if (item is not null)
+                    {
+                        item.Quantity = Math.Clamp(mutation.Quantity, 1, 9999);
+                    }
+                    break;
                 }
-                break;
-            }
             case "hq":
-            {
-                var item = items.FirstOrDefault(candidate => candidate.Id == mutation.ItemId);
-                if (item is not null)
                 {
-                    item.MustBeHq = mutation.MustBeHq;
+                    var item = items.FirstOrDefault(candidate => candidate.Id == mutation.ItemId);
+                    if (item is not null)
+                    {
+                        item.MustBeHq = mutation.MustBeHq;
+                    }
+                    break;
                 }
-                break;
-            }
             case "replace":
                 items = mutation.Items?.Select(CloneProjectItem).ToList() ?? [];
                 break;
