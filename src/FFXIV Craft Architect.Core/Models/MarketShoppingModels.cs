@@ -1,7 +1,7 @@
-using FFXIV_Craft_Architect.Core.Services;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.Core.Models;
 
