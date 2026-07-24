@@ -99,6 +99,8 @@
 
         _market = await WorkerSession.GetMarketProjectionAsync();
         ApplyRequestedItem();
+        _selectedItemId ??= _market?.Items.FirstOrDefault()?.ItemId;
+        await EnsureSelectedWorldDetailsAsync();
     }
 
     protected override void OnParametersSet()
@@ -123,10 +125,24 @@
         }
     }
 
-    private Task SelectMarketAnalysisItem(int? itemId)
+    private async Task SelectMarketAnalysisItem(int? itemId)
     {
         _selectedItemId = itemId;
-        return Task.CompletedTask;
+        await EnsureSelectedWorldDetailsAsync();
+    }
+
+    private async Task EnsureSelectedWorldDetailsAsync()
+    {
+        if (!_selectedItemId.HasValue ||
+            _market?.ShoppingPlans.Count > 0 ||
+            _market?.Items.FirstOrDefault(item => item.ItemId == _selectedItemId.Value) is not
+                { WorldCount: > 0, Worlds.Count: 0 })
+        {
+            return;
+        }
+
+        _market = await WorkerSession.GetMarketProjectionAsync(
+            worldDetailItemId: _selectedItemId.Value);
     }
 
     private Task ToggleMarketAnalysisWorld(MarketAnalysisExpandedWorldKey key)

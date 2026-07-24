@@ -133,10 +133,8 @@ public static partial class ManagedHost
                     accepted: true,
                     null,
                     null,
-                    CaptureMarketProjection(
-                        command.Payload
-                            .Deserialize<WorkerMarketProjectionRequest>(WireJsonOptions)?
-                            .IncludeDetails ?? true)),
+                    CaptureMarketProjection(command.Payload
+                        .Deserialize<WorkerMarketProjectionRequest>(WireJsonOptions))),
                 WorkerSessionCommandKinds.ProcurementProjection => CreateSessionResult(
                     command.CommandKind,
                     accepted: true,
@@ -992,12 +990,30 @@ public static partial class ManagedHost
     }
 
     private static WorkerMarketProjection CaptureMarketProjection(
-        bool includeDetails = true)
+        bool includeDetails = true,
+        int? worldDetailItemId = null) =>
+        CaptureMarketProjection(new WorkerMarketProjectionRequest(
+            includeDetails,
+            worldDetailItemId));
+
+    private static WorkerMarketProjection CaptureMarketProjection(
+        WorkerMarketProjectionRequest? request)
     {
+        request ??= new WorkerMarketProjectionRequest();
+        var includeDetails = request.IncludeDetails;
         var session = _canonicalSession.Session;
         var evidence = session.BorrowMarketEvidence();
         var analyses = evidence.ItemAnalyses.ToDictionary(analysis => analysis.ItemId);
-        var items = (evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>())
+        var shoppingPlans = evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>();
+        var defaultWorldDetailItemId = includeDetails
+            ? null
+            : shoppingPlans
+                .OrderBy(plan => plan.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(plan => plan.ItemId)
+                .Select(plan => (int?)plan.ItemId)
+                .FirstOrDefault();
+        var worldDetailItemId = request.WorldDetailItemId ?? defaultWorldDetailItemId;
+        var items = shoppingPlans
             .Select(plan =>
             {
                 analyses.TryGetValue(plan.ItemId, out var analysis);
@@ -1007,19 +1023,24 @@ public static partial class ManagedHost
                 var worldName = plan.RequiresSplitPurchase
                     ? $"{plan.RecommendedSplit!.Count} world split"
                     : plan.RecommendedWorld?.WorldName ?? "Unavailable";
-                var worlds = plan.WorldOptions
-                    .OrderBy(world => world.LensRank)
-                    .ThenBy(world => world.TotalCost)
-                    .Select(world => new WorkerMarketWorldProjection(
-                        world.DataCenter,
-                        world.WorldName,
-                        world.TotalQuantityPurchased,
-                        world.TotalCost,
-                        world.AveragePricePerUnit,
-                        world.HasSufficientStock,
-                        world.MarketDataQualityBucket,
-                        world.MarketDataAge))
-                    .ToArray();
+                var includeWorlds =
+                    includeDetails ||
+                    plan.ItemId == worldDetailItemId;
+                var worlds = includeWorlds
+                    ? plan.WorldOptions
+                        .OrderBy(world => world.LensRank)
+                        .ThenBy(world => world.TotalCost)
+                        .Select(world => new WorkerMarketWorldProjection(
+                            world.DataCenter,
+                            world.WorldName,
+                            world.TotalQuantityPurchased,
+                            world.TotalCost,
+                            world.AveragePricePerUnit,
+                            world.HasSufficientStock,
+                            world.MarketDataQualityBucket,
+                            world.MarketDataAge))
+                        .ToArray()
+                    : Array.Empty<WorkerMarketWorldProjection>();
                 return new WorkerMarketItemProjection(
                     plan.ItemId,
                     plan.Name,
@@ -1031,7 +1052,7 @@ public static partial class ManagedHost
                     totalCost,
                     plan.QuantityNeeded > 0 ? totalCost / (decimal)plan.QuantityNeeded : 0,
                     worldName,
-                    worlds.Length,
+                    plan.WorldOptions.Count,
                     analysis?.WorstDataQualityBucket ?? MarketDataQualityBucket.Missing,
                     plan.Error ?? plan.MarketDataWarning ?? analysis?.Warning,
                     worlds);

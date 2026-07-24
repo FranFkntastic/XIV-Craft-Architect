@@ -269,7 +269,8 @@ public sealed record WorkerMarketEvidenceCommitProjection(
     int FetchedCount);
 
 public sealed record WorkerMarketProjectionRequest(
-    bool IncludeDetails = true);
+    bool IncludeDetails = true,
+    int? WorldDetailItemId = null);
 
 public sealed record WorkerMarketEvidencePublicationRequest(
     MarketFetchScope Scope,

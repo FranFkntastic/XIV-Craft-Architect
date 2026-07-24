@@ -268,6 +268,29 @@ public sealed class WorkerSessionContractTests
         Assert.True(compactMarketProjection.HasAnalysis);
         Assert.Empty(compactMarketProjection.ItemAnalyses);
         Assert.Empty(compactMarketProjection.ShoppingPlans);
+        var compactWorldDetail = Assert.Single(
+            compactMarketProjection.Items,
+            item => item.Worlds.Count > 0);
+        Assert.Equal(
+            compactMarketProjection.Items.First().ItemId,
+            compactWorldDetail.ItemId);
+        Assert.All(
+            compactMarketProjection.Items,
+            item => Assert.True(item.WorldCount >= item.Worlds.Count));
+
+        var targetedMarket = await SendAsync(
+            WorkerSessionCommandKinds.MarketProjection,
+            expectedRevision: 3,
+            new WorkerMarketProjectionRequest(
+                IncludeDetails: false,
+                WorldDetailItemId: compactMarketProjection.Items.Last().ItemId));
+        var targetedMarketProjection =
+            targetedMarket.Projection.Deserialize<WorkerMarketProjection>(WireOptions);
+        Assert.NotNull(targetedMarketProjection);
+        Assert.NotEmpty(targetedMarketProjection.Items.Last().Worlds);
+        Assert.All(
+            targetedMarketProjection.Items.Take(targetedMarketProjection.Items.Count - 1),
+            item => Assert.Empty(item.Worlds));
 
         var procurement = await SendAsync(
             WorkerSessionCommandKinds.ProcurementProjection,

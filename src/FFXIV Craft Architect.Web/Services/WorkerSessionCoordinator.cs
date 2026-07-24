@@ -172,16 +172,30 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public async Task<WorkerMarketProjection?> GetMarketProjectionAsync(
         CancellationToken cancellationToken = default,
-        bool includeDetails = false)
+        bool includeDetails = false,
+        int? worldDetailItemId = null)
     {
         if (!IsEnabled)
         {
             return null;
         }
 
+        var cached = _projections.Market;
+        if (cached?.Revision == _projections.Shell.Revision &&
+            (!includeDetails ||
+             cached.ShoppingPlans.Count > 0) &&
+            (!worldDetailItemId.HasValue ||
+             cached.Items.Any(item =>
+                 item.ItemId == worldDetailItemId.Value &&
+                 (item.WorldCount == 0 || item.Worlds.Count > 0))))
+        {
+            return cached;
+        }
+
         var result = await _engineHost.GetMarketProjectionAsync(
             _projections.Shell.Revision,
             includeDetails,
+            worldDetailItemId,
             cancellationToken: cancellationToken);
         if (!_projections.TryPublishMarket(result))
         {
@@ -189,6 +203,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             result = await _engineHost.GetMarketProjectionAsync(
                 _projections.Shell.Revision,
                 includeDetails,
+                worldDetailItemId,
                 cancellationToken: cancellationToken);
             _projections.TryPublishMarket(result);
         }
