@@ -205,6 +205,7 @@ const sessionManifestStore = "engineSessionManifests";
 const sessionRevisionStore = "engineSessionRevisions";
 const sessionComponentStore = "engineSessionComponents";
 const legacyPlanStore = "plans";
+const savedPlanComponentStore = "planComponents";
 const activeSessionManifestId = "active";
 const sessionRevisionSchemaVersion = 2;
 const sessionComponentFields = Object.freeze([
@@ -454,8 +455,9 @@ async function loadDurableSession() {
                     : "The Worker session manifest does not reference a recoverable revision.");
         }
 
-        const legacy = await readStoreValue(database, legacyPlanStore, "autosave");
-        if (legacy) {
+        const legacyRecord = await readStoreValue(database, legacyPlanStore, "autosave");
+        if (legacyRecord) {
+            const legacy = await materializeSavedPlan(database, legacyRecord);
             return {
                 revision: 1,
                 storedPlan: legacy,
@@ -495,6 +497,38 @@ function openSessionDatabase() {
             resolve(database);
         };
     });
+}
+
+async function materializeSavedPlan(database, record) {
+    if (record?.schemaVersion !== 2 ||
+        !record.storedPlanMetadata ||
+        !record.componentRefs) {
+        return record;
+    }
+    if (!database.objectStoreNames.contains(savedPlanComponentStore)) {
+        throw new Error("The autosave references unavailable saved-plan components.");
+    }
+
+    const referencedIds = Object.values(record.componentRefs)
+        .filter(id => typeof id === "string");
+    const components = await readStoreValues(
+        database,
+        savedPlanComponentStore,
+        [...new Set(referencedIds)]);
+    const storedPlan = { ...record.storedPlanMetadata };
+    for (const field of sessionComponentFields) {
+        const componentId = record.componentRefs[field];
+        if (componentId == null) {
+            storedPlan[field] = null;
+            continue;
+        }
+        const component = components.get(componentId);
+        if (!component || component.planId !== record.id || component.field !== field) {
+            throw new Error(`The autosave is missing component '${field}'.`);
+        }
+        storedPlan[field] = component.payload;
+    }
+    return storedPlan;
 }
 
 function readStoreValue(database, storeName, key) {

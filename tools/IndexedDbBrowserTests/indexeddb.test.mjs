@@ -19,13 +19,13 @@ before(async () => {
       response.end('<!doctype html>');
       return;
     }
-    if (request.url === '/indexedDB.js?v=18') {
+    if (request.url === '/indexedDB.js?v=19') {
       response.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' });
       response.end(script);
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
-    response.end('<!doctype html><script src="/indexedDB.js?v=18"></script>');
+    response.end('<!doctype html><script src="/indexedDB.js?v=19"></script>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -80,7 +80,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
       const page = await context.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 18);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 19);
       const repaired = await page.evaluate(async () => {
         await IndexedDB.getTradeStoreDiagnostics();
         const request = indexedDB.open('FFXIVCraftArchitect');
@@ -118,6 +118,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           hasSessionManifestStore: database.objectStoreNames.contains('engineSessionManifests'),
           hasSessionRevisionStore: database.objectStoreNames.contains('engineSessionRevisions'),
           hasSessionComponentStore: database.objectStoreNames.contains('engineSessionComponents'),
+          hasPlanComponentStore: database.objectStoreNames.contains('planComponents'),
           hasUpdatedIndex: store.indexNames.contains('updatedAtUnixMilliseconds'),
           hasTerminalIndex: store.indexNames.contains('terminalUpdatedAtUnixMilliseconds'),
           terminalIndexCount,
@@ -134,6 +135,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
         hasSessionManifestStore: true,
         hasSessionRevisionStore: true,
         hasSessionComponentStore: true,
+        hasPlanComponentStore: true,
         hasUpdatedIndex: true,
         hasTerminalIndex: true,
           terminalIndexCount: 128,
@@ -156,7 +158,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       });
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 18);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 19);
 
       const result = await page.evaluate(async () => {
         await window.IndexedDB.clearMarketCache();
@@ -217,7 +219,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 18);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 19);
 
       const patched = await page.evaluate(async () => {
         await IndexedDB.savePlan({
@@ -245,12 +247,86 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     }
   });
 
+  test(`${name}: legacy saved plan migrates copy-on-write on first patch`, { timeout: 30_000 }, async () => {
+    const browser = await browserType.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(origin, { waitUntil: 'load' });
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 19);
+
+      const migrated = await page.evaluate(async () => {
+        await IndexedDB.loadPlan('initialize-schema');
+        const open = indexedDB.open('FFXIVCraftArchitect');
+        const database = await new Promise((resolve, reject) => {
+          open.onsuccess = () => resolve(open.result);
+          open.onerror = () => reject(open.error);
+        });
+        await new Promise((resolve, reject) => {
+          const transaction = database.transaction(['plans', 'planSummaries'], 'readwrite');
+          transaction.objectStore('plans').put({
+            id: 'legacy-plan',
+            name: 'Legacy Plan',
+            projectItems: [{ id: 1, name: 'Legacy' }],
+            planJson: '{"plan":"legacy"}',
+            marketIntelligenceJson: '{"evidence":"legacy"}',
+            procurementRouteJson: null,
+            savedAt: '2026-01-01T00:00:00Z',
+            modifiedAt: '2026-01-01T00:00:00Z'
+          });
+          transaction.oncomplete = resolve;
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error);
+        });
+        database.close();
+
+        const before = await IndexedDB.loadPlan('legacy-plan');
+        await IndexedDB.patchPlanAndProcurementRoute('legacy-plan', {
+          procurementRouteJson: '{"route":"migrated"}'
+        });
+        const after = await IndexedDB.loadPlan('legacy-plan');
+        const reopened = indexedDB.open('FFXIVCraftArchitect');
+        const migratedDatabase = await new Promise((resolve, reject) => {
+          reopened.onsuccess = () => resolve(reopened.result);
+          reopened.onerror = () => reject(reopened.error);
+        });
+        const raw = await new Promise((resolve, reject) => {
+          const request = migratedDatabase.transaction('plans').objectStore('plans').get('legacy-plan');
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const componentCount = await new Promise((resolve, reject) => {
+          const request = migratedDatabase.transaction('planComponents').objectStore('planComponents').count();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        migratedDatabase.close();
+        return {
+          before,
+          after,
+          rawSchemaVersion: raw.schemaVersion,
+          rawEmbedsPlanJson: Object.prototype.hasOwnProperty.call(raw, 'planJson'),
+          componentCount
+        };
+      });
+
+      assert.equal(migrated.before.planJson, '{"plan":"legacy"}');
+      assert.equal(migrated.after.planJson, '{"plan":"legacy"}');
+      assert.equal(migrated.after.marketIntelligenceJson, '{"evidence":"legacy"}');
+      assert.equal(migrated.after.procurementRouteJson, '{"route":"migrated"}');
+      assert.equal(migrated.rawSchemaVersion, 2);
+      assert.equal(migrated.rawEmbedsPlanJson, false);
+      assert.equal(migrated.componentCount, 3);
+    } finally {
+      await browser.close();
+    }
+  });
+
   test(`${name}: procurement route patch preserves the large stored evidence payload`, { timeout: 30_000 }, async () => {
     const browser = await browserType.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 18);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 19);
 
       const patched = await page.evaluate(async () => {
         const marketIntelligenceJson = JSON.stringify({ evidence: 'x'.repeat(1024 * 1024) });
@@ -262,21 +338,59 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           marketIntelligenceJson,
           procurementRouteJson: null
         });
+        const openBefore = indexedDB.open('FFXIVCraftArchitect');
+        const databaseBefore = await new Promise((resolve, reject) => {
+          openBefore.onsuccess = () => resolve(openBefore.result);
+          openBefore.onerror = () => reject(openBefore.error);
+        });
+        const beforeRecord = await new Promise((resolve, reject) => {
+          const request = databaseBefore.transaction('plans').objectStore('plans').get('autosave');
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        databaseBefore.close();
         await IndexedDB.patchPlanAndProcurementRoute('autosave', {
           planJson: '{"plan":"current"}',
           procurementRouteJson: '{"route":"current"}'
         });
         const plan = await IndexedDB.loadPlan('autosave');
+        const openAfter = indexedDB.open('FFXIVCraftArchitect');
+        const databaseAfter = await new Promise((resolve, reject) => {
+          openAfter.onsuccess = () => resolve(openAfter.result);
+          openAfter.onerror = () => reject(openAfter.error);
+        });
+        const afterRecord = await new Promise((resolve, reject) => {
+          const request = databaseAfter.transaction('plans').objectStore('plans').get('autosave');
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const componentCount = await new Promise((resolve, reject) => {
+          const request = databaseAfter.transaction('planComponents').objectStore('planComponents').count();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        databaseAfter.close();
         return {
           planJson: plan.planJson,
           marketIntelligenceJsonMatches: plan.marketIntelligenceJson === marketIntelligenceJson,
-          procurementRouteJson: plan.procurementRouteJson
+          procurementRouteJson: plan.procurementRouteJson,
+          schemaVersion: afterRecord.schemaVersion,
+          marketEvidenceRefReused:
+            beforeRecord.componentRefs.marketIntelligenceJson ===
+            afterRecord.componentRefs.marketIntelligenceJson,
+          planRefReplaced:
+            beforeRecord.componentRefs.planJson !== afterRecord.componentRefs.planJson,
+          componentCount
         };
       });
 
       assert.equal(patched.planJson, '{"plan":"current"}');
       assert.equal(patched.marketIntelligenceJsonMatches, true);
       assert.equal(patched.procurementRouteJson, '{"route":"current"}');
+      assert.equal(patched.schemaVersion, 2);
+      assert.equal(patched.marketEvidenceRefReused, true);
+      assert.equal(patched.planRefReplaced, true);
+      assert.equal(patched.componentCount, 3);
     } finally {
       await browser.close();
     }
@@ -287,7 +401,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 18);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 19);
       const initial = await page.evaluate(async () => {
         const bounded = (label, operation) => Promise.race([
           operation,
@@ -328,7 +442,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(initial.terminal.terminalResultJson, initial.terminalJson);
 
       await page.reload({ waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 18);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 19);
       const recovered = await page.evaluate(async ({ abandonedId, canonicalHash }) => {
         const claim = await IndexedDB.claimEngineTransaction(abandonedId, canonicalHash);
         await IndexedDB.releaseEngineTransaction(

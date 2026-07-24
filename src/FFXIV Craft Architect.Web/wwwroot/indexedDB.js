@@ -2,12 +2,13 @@
 // Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 14;  // Adds component-referenced Worker session revisions
-const MODULE_REVISION = 18;
+const DB_VERSION = 15;  // Adds component-referenced saved plans
+const MODULE_REVISION = 19;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const ENGINE_TERMINAL_RETENTION_LIMIT = 128;
 const ENGINE_TERMINAL_RETENTION_SCHEMA = 1;
 const STORE_PLANS = 'plans';
+const STORE_PLAN_COMPONENTS = 'planComponents';
 const STORE_PLAN_SUMMARIES = 'planSummaries';
 const STORE_SETTINGS = 'settings';
 const STORE_MARKET_CACHE = 'marketCache';
@@ -20,6 +21,16 @@ const STORE_ENGINE_TRANSACTIONS = 'engineTransactions';
 const STORE_ENGINE_SESSION_MANIFESTS = 'engineSessionManifests';
 const STORE_ENGINE_SESSION_REVISIONS = 'engineSessionRevisions';
 const STORE_ENGINE_SESSION_COMPONENTS = 'engineSessionComponents';
+const STORED_PLAN_SCHEMA_VERSION = 2;
+const STORED_PLAN_COMPONENT_FIELDS = Object.freeze([
+    'planJson',
+    'marketPlansJson',
+    'marketIntelligenceJson',
+    'marketItemAnalysesJson',
+    'marketAnalysisRecipeBasisJson',
+    'marketAnalysisScopeSnapshotJson',
+    'procurementRouteJson'
+]);
 
 let db = null;
 const engineTransactionLocks = new Map();
@@ -89,6 +100,13 @@ async function initDB() {
                 const planStore = database.createObjectStore(STORE_PLANS, { keyPath: 'id' });
                 planStore.createIndex('name', 'name', { unique: false });
                 planStore.createIndex('modifiedAt', 'modifiedAt', { unique: false });
+            }
+
+            if (!database.objectStoreNames.contains(STORE_PLAN_COMPONENTS)) {
+                const componentStore = database.createObjectStore(
+                    STORE_PLAN_COMPONENTS,
+                    { keyPath: 'id' });
+                componentStore.createIndex('planId', 'planId', { unique: false });
             }
 
             if (!database.objectStoreNames.contains(STORE_PLAN_SUMMARIES)) {
@@ -232,7 +250,8 @@ function createTradeStoreDiagnostics(database, errorMessage = null) {
 }
 
 function hasRequiredTradeStores(database) {
-    return database.objectStoreNames.contains(STORE_TRADE_COMPANY_PROFILES) &&
+    return database.objectStoreNames.contains(STORE_PLAN_COMPONENTS) &&
+        database.objectStoreNames.contains(STORE_TRADE_COMPANY_PROFILES) &&
         database.objectStoreNames.contains(STORE_TRADE_CRAFTERS) &&
         database.objectStoreNames.contains(STORE_TRADE_ORDERS) &&
         database.objectStoreNames.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS) &&
@@ -269,6 +288,14 @@ function openTradeStoreRepairUpgrade(repairVersion) {
         };
         request.onupgradeneeded = (event) => {
             const database = event.target.result;
+
+            if (!database.objectStoreNames.contains(STORE_PLAN_COMPONENTS)) {
+                const componentStore = database.createObjectStore(
+                    STORE_PLAN_COMPONENTS,
+                    { keyPath: 'id' });
+                componentStore.createIndex('planId', 'planId', { unique: false });
+                console.log('[IndexedDB] Repaired missing saved-plan component store');
+            }
 
             if (!database.objectStoreNames.contains(STORE_TRADE_COMPANY_PROFILES)) {
                 const profileStore = database.createObjectStore(STORE_TRADE_COMPANY_PROFILES, { keyPath: 'id' });
@@ -376,14 +403,126 @@ async function getTradeStoreDiagnostics() {
 }
 
 function toPlanSummary(planData) {
+    const metadata = planData?.storedPlanMetadata ?? planData;
     return {
-        id: planData.id,
-        name: planData.name || 'Saved Plan',
-        modifiedAt: planData.modifiedAt,
-        savedAt: planData.savedAt,
-        dataCenter: planData.dataCenter || 'Aether',
-        itemCount: Array.isArray(planData.projectItems) ? planData.projectItems.length : 0
+        id: metadata.id,
+        name: metadata.name || 'Saved Plan',
+        modifiedAt: metadata.modifiedAt,
+        savedAt: metadata.savedAt,
+        dataCenter: metadata.dataCenter || 'Aether',
+        itemCount: Array.isArray(metadata.projectItems) ? metadata.projectItems.length : 0
     };
+}
+
+function isComponentStoredPlan(record) {
+    return record?.schemaVersion === STORED_PLAN_SCHEMA_VERSION &&
+        record.storedPlanMetadata &&
+        record.componentRefs;
+}
+
+function createStoredPlanComponent(planId, field, payload) {
+    return {
+        id: `${planId}:${field}:${crypto.randomUUID()}`,
+        schemaVersion: 1,
+        planId,
+        field,
+        payload
+    };
+}
+
+function createStoredPlanRecord(planData, previousRecord = null, changedFields = null) {
+    const data = {
+        ...planData,
+        savedAt: planData.savedAt || new Date().toISOString(),
+        modifiedAt: planData.modifiedAt || new Date().toISOString()
+    };
+    const metadata = { ...data };
+    for (const field of STORED_PLAN_COMPONENT_FIELDS) {
+        delete metadata[field];
+    }
+
+    const canReuse = isComponentStoredPlan(previousRecord) && changedFields instanceof Set;
+    const componentRefs = {};
+    const components = [];
+    for (const field of STORED_PLAN_COMPONENT_FIELDS) {
+        if (canReuse && !changedFields.has(field)) {
+            componentRefs[field] = previousRecord.componentRefs[field] ?? null;
+            continue;
+        }
+        const payload = data[field] ?? null;
+        if (payload === null) {
+            componentRefs[field] = null;
+            continue;
+        }
+        const component = createStoredPlanComponent(data.id, field, payload);
+        componentRefs[field] = component.id;
+        components.push(component);
+    }
+
+    return {
+        record: {
+            id: data.id,
+            schemaVersion: STORED_PLAN_SCHEMA_VERSION,
+            name: metadata.name,
+            modifiedAt: metadata.modifiedAt,
+            savedAt: metadata.savedAt,
+            storedPlanMetadata: metadata,
+            componentRefs
+        },
+        components
+    };
+}
+
+function deleteReplacedPlanComponents(componentStore, previousRecord, successorRecord) {
+    if (!isComponentStoredPlan(previousRecord)) {
+        return;
+    }
+    const retained = new Set(
+        Object.values(successorRecord.componentRefs).filter(id => typeof id === 'string'));
+    for (const componentId of Object.values(previousRecord.componentRefs)) {
+        if (typeof componentId === 'string' && !retained.has(componentId)) {
+            componentStore.delete(componentId);
+        }
+    }
+}
+
+function materializeStoredPlanRecord(transaction, record, onmaterialized) {
+    if (!record || !isComponentStoredPlan(record)) {
+        onmaterialized(record || null);
+        return;
+    }
+
+    const storedPlan = { ...record.storedPlanMetadata };
+    const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
+    const fields = STORED_PLAN_COMPONENT_FIELDS.filter(
+        field => typeof record.componentRefs[field] === 'string');
+    for (const field of STORED_PLAN_COMPONENT_FIELDS) {
+        if (!record.componentRefs[field]) {
+            storedPlan[field] = null;
+        }
+    }
+    if (fields.length === 0) {
+        onmaterialized(storedPlan);
+        return;
+    }
+
+    let remaining = fields.length;
+    for (const field of fields) {
+        const request = componentStore.get(record.componentRefs[field]);
+        request.onerror = () => transaction.abort();
+        request.onsuccess = () => {
+            const component = request.result;
+            if (!component || component.planId !== record.id || component.field !== field) {
+                transaction.abort();
+                return;
+            }
+            storedPlan[field] = component.payload;
+            remaining--;
+            if (remaining === 0) {
+                onmaterialized(storedPlan);
+            }
+        };
+    }
 }
 
 /**
@@ -393,18 +532,24 @@ async function savePlan(planData) {
     const database = await initDB();
     
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
+            'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
+        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
         const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
-        
-        const data = {
-            ...planData,
-            savedAt: planData.savedAt || new Date().toISOString(),
-            modifiedAt: planData.modifiedAt || new Date().toISOString()
+        const request = store.get(planData.id);
+
+        request.onerror = () => transaction.abort();
+        request.onsuccess = () => {
+            const successor = createStoredPlanRecord(planData);
+            deleteReplacedPlanComponents(componentStore, request.result, successor.record);
+            for (const component of successor.components) {
+                componentStore.put(component);
+            }
+            store.put(successor.record);
+            summaryStore.put(toPlanSummary(successor.record));
         };
-        
-        store.put(data);
-        summaryStore.put(toPlanSummary(data));
 
         transaction.oncomplete = () => resolve(true);
         transaction.onerror = (event) => reject(transaction.error || event.target?.error);
@@ -419,12 +564,22 @@ async function loadPlan(planId) {
     const database = await initDB();
     
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS], 'readonly');
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS],
+            'readonly');
         const store = transaction.objectStore(STORE_PLANS);
         const request = store.get(planId);
-        
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => reject(request.error);
+        let materialized = null;
+
+        request.onsuccess = () =>
+            materializeStoredPlanRecord(transaction, request.result, value => {
+                materialized = value;
+            });
+        request.onerror = () => transaction.abort();
+        transaction.oncomplete = () => resolve(materialized);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) =>
+            reject(transaction.error || event.target?.error || new Error('Saved plan is incomplete.'));
     });
 }
 
@@ -443,20 +598,24 @@ async function patchMarketAnalysis(
     const database = await initDB();
 
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
+            'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
+        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
         const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         const request = store.get(planId);
 
         request.onsuccess = () => {
-            const plan = request.result;
-            if (!plan) {
+            const previous = request.result;
+            if (!previous) {
                 resolve(false);
                 return;
             }
-
-            const patched = {
-                ...plan,
+            const base = isComponentStoredPlan(previous)
+                ? previous.storedPlanMetadata
+                : previous;
+            const patch = {
                 marketPlansJson,
                 marketIntelligenceJson,
                 marketItemAnalysesJson,
@@ -467,9 +626,23 @@ async function patchMarketAnalysis(
                 savedMarketAnalysisLens: marketAnalysisLens,
                 modifiedAt: new Date().toISOString()
             };
-
-            store.put(patched);
-            summaryStore.put(toPlanSummary(patched));
+            const successor = createStoredPlanRecord(
+                { ...base, ...patch },
+                previous,
+                new Set([
+                    'marketPlansJson',
+                    'marketIntelligenceJson',
+                    'marketItemAnalysesJson',
+                    'marketAnalysisRecipeBasisJson',
+                    'marketAnalysisScopeSnapshotJson',
+                    'procurementRouteJson'
+                ]));
+            deleteReplacedPlanComponents(componentStore, previous, successor.record);
+            for (const component of successor.components) {
+                componentStore.put(component);
+            }
+            store.put(successor.record);
+            summaryStore.put(toPlanSummary(successor.record));
         };
 
         request.onerror = () => reject(request.error);
@@ -487,25 +660,37 @@ async function patchPlanAndProcurementRoute(planId, planPatch) {
     const database = await initDB();
 
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
+            'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
+        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
         const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         const request = store.get(planId);
 
         request.onsuccess = () => {
-            const plan = request.result;
-            if (!plan) {
+            const previous = request.result;
+            if (!previous) {
                 resolve(false);
                 return;
             }
-
-            const patched = {
-                ...plan,
-                ...planPatch,
-                modifiedAt: new Date().toISOString()
-            };
-            store.put(patched);
-            summaryStore.put(toPlanSummary(patched));
+            const base = isComponentStoredPlan(previous)
+                ? previous.storedPlanMetadata
+                : previous;
+            const patch = { ...planPatch, modifiedAt: new Date().toISOString() };
+            const changedFields = new Set(
+                STORED_PLAN_COMPONENT_FIELDS.filter(field =>
+                    Object.prototype.hasOwnProperty.call(planPatch, field)));
+            const successor = createStoredPlanRecord(
+                { ...base, ...patch },
+                previous,
+                changedFields);
+            deleteReplacedPlanComponents(componentStore, previous, successor.record);
+            for (const component of successor.components) {
+                componentStore.put(component);
+            }
+            store.put(successor.record);
+            summaryStore.put(toPlanSummary(successor.record));
         };
 
         request.onerror = () => reject(request.error);
@@ -520,27 +705,27 @@ async function patchPlanAndProcurementRoute(planId, planPatch) {
  */
 async function loadAllPlans() {
     const database = await initDB();
-    
-    return new Promise((resolve, reject) => {
+    const planIds = await new Promise((resolve, reject) => {
         const transaction = database.transaction([STORE_PLANS], 'readonly');
         const store = transaction.objectStore(STORE_PLANS);
         const index = store.index('modifiedAt');
         const request = index.openCursor(null, 'prev');
         
-        const plans = [];
+        const ids = [];
         
         request.onsuccess = (event) => {
             const cursor = event.target.result;
             if (cursor) {
-                plans.push(cursor.value);
+                ids.push(cursor.primaryKey);
                 cursor.continue();
             } else {
-                resolve(plans);
+                resolve(ids);
             }
         };
         
         request.onerror = () => reject(request.error);
     });
+    return await Promise.all(planIds.map(planId => loadPlan(planId)));
 }
 
 /**
@@ -797,11 +982,24 @@ async function deletePlan(planId) {
     const database = await initDB();
     
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
+            'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
+        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
         const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
-        store.delete(planId);
-        summaryStore.delete(planId);
+        const request = store.get(planId);
+
+        request.onerror = () => transaction.abort();
+        request.onsuccess = () => {
+            for (const componentId of Object.values(request.result?.componentRefs ?? {})) {
+                if (typeof componentId === 'string') {
+                    componentStore.delete(componentId);
+                }
+            }
+            store.delete(planId);
+            summaryStore.delete(planId);
+        };
 
         transaction.oncomplete = () => resolve(true);
         transaction.onerror = (event) => reject(transaction.error || event.target?.error);
@@ -887,12 +1085,24 @@ async function savePlansBatch(plans) {
     const database = await initDB();
 
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
+            'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
+        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
         const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         for (const plan of plans || []) {
-            store.put(plan);
-            summaryStore.put(toPlanSummary(plan));
+            const request = store.get(plan.id);
+            request.onerror = () => transaction.abort();
+            request.onsuccess = () => {
+                const successor = createStoredPlanRecord(plan);
+                deleteReplacedPlanComponents(componentStore, request.result, successor.record);
+                for (const component of successor.components) {
+                    componentStore.put(component);
+                }
+                store.put(successor.record);
+                summaryStore.put(toPlanSummary(successor.record));
+            };
         }
 
         transaction.oncomplete = () => resolve(true);
@@ -908,10 +1118,14 @@ async function clearAllPlans() {
     const database = await initDB();
     
     return new Promise((resolve, reject) => {
-        const transaction = database.transaction([STORE_PLANS, STORE_PLAN_SUMMARIES], 'readwrite');
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
+            'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
+        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
         const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         store.clear();
+        componentStore.clear();
         summaryStore.clear();
 
         transaction.oncomplete = () => resolve(true);
