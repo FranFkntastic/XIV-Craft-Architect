@@ -101,11 +101,12 @@ public sealed class ProcurementSpecificationTests
                     }
                 ],
                 SelectedDataCenter = "Aether",
-                SelectedRegion = "North America"
+                SelectedRegion = "North America",
+                UsePublishedEvidenceAsAuthority = true
             });
         var shopping = Assert.Single(route.ShoppingPlans);
 
-        Assert.Empty(reconciliation.LastRequest!.Items);
+        Assert.Null(reconciliation.LastRequest);
         Assert.Equal(MarketShoppingConstants.VendorWorldName, shopping.RecommendedWorld?.WorldName);
         Assert.Equal(90, shopping.RecommendedWorld?.TotalCost);
         Assert.Equal("Chosen (Limsa)", shopping.RecommendedWorld?.VendorName);

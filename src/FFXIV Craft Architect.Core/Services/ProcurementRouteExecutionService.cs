@@ -24,7 +24,9 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        progress?.Report("Reconciling procurement market evidence...");
+        progress?.Report(request.UsePublishedEvidenceAsAuthority
+            ? "Preparing authoritative procurement evidence..."
+            : "Reconciling procurement market evidence...");
         var activeProcurementItems = GetActiveProcurementItems(request);
         var vendorEvidence = new List<DetailedShoppingPlan>();
         _marketShoppingService.ApplySelectedVendorPurchases(
@@ -37,32 +39,48 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         var marketProcurementItems = activeProcurementItems
             .Where(item => !vendorItemIds.Contains(item.ItemId))
             .ToList();
-        var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
-            new MarketEvidenceReconciliationRequest
-            {
-                Items = marketProcurementItems,
-                PublishedAnalyses = request.SourceMarketAnalyses,
-                PublishedShoppingPlans = request.SourceShoppingPlans,
-                Scope = request.Scope,
-                SelectedDataCenter = request.SelectedDataCenter,
-                SelectedRegion = request.SelectedRegion,
-                RecommendationMode = RecommendationMode.MinimizeTotalCost,
-                Lens = request.Lens,
-                ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,
-                Policy = request.ReconciliationPolicy
-            },
-            progress,
-            ct,
-            executionOptions);
-        var evidencePlans = reconciliation.ShoppingPlans
-            .Concat(vendorEvidence)
-            .ToList();
-        var reusableEvidence = evidencePlans
-            .Where(plan => reconciliation.ReusedItemIds.Contains(plan.ItemId))
-            .ToList();
-        var refreshedEvidence = evidencePlans
-            .Where(plan => reconciliation.RefreshedItemIds.Contains(plan.ItemId))
-            .ToList();
+        MarketEvidenceReconciliationResult? reconciliation = null;
+        List<DetailedShoppingPlan> evidencePlans;
+        if (request.UsePublishedEvidenceAsAuthority)
+        {
+            evidencePlans = request.SourceShoppingPlans
+                .Where(plan => !vendorItemIds.Contains(plan.ItemId))
+                .Concat(vendorEvidence)
+                .ToList();
+        }
+        else
+        {
+            reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+                new MarketEvidenceReconciliationRequest
+                {
+                    Items = marketProcurementItems,
+                    PublishedAnalyses = request.SourceMarketAnalyses,
+                    PublishedShoppingPlans = request.SourceShoppingPlans,
+                    Scope = request.Scope,
+                    SelectedDataCenter = request.SelectedDataCenter,
+                    SelectedRegion = request.SelectedRegion,
+                    RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                    Lens = request.Lens,
+                    ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,
+                    Policy = request.ReconciliationPolicy
+                },
+                progress,
+                ct,
+                executionOptions);
+            evidencePlans = reconciliation.ShoppingPlans
+                .Concat(vendorEvidence)
+                .ToList();
+        }
+        var reusableEvidence = request.UsePublishedEvidenceAsAuthority
+            ? evidencePlans
+            : evidencePlans
+                .Where(plan => reconciliation!.ReusedItemIds.Contains(plan.ItemId))
+                .ToList();
+        var refreshedEvidence = request.UsePublishedEvidenceAsAuthority
+            ? []
+            : evidencePlans
+                .Where(plan => reconciliation!.RefreshedItemIds.Contains(plan.ItemId))
+                .ToList();
         var scopedEvidence = PrepareProcurementEvidenceForScope(evidencePlans, request);
         progress?.Report($"Optimizing procurement route for {scopedEvidence.Count} items...");
         var procurementConfig = ProcurementRouteConfigFactory.Create(request);
@@ -82,11 +100,17 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             request.IncludeReconciliationEvidenceInResult ? evidencePlans : [],
             request.IncludeReconciliationEvidenceInResult ? reusableEvidence : [],
             request.IncludeReconciliationEvidenceInResult ? refreshedEvidence : [],
-            request.IncludeReconciliationEvidenceInResult ? reconciliation.ReconciledItems : [],
+            request.IncludeReconciliationEvidenceInResult
+                ? reconciliation?.ReconciledItems ?? []
+                : [],
             optimization.Decision,
-            request.IncludeReconciliationEvidenceInResult ? reconciliation.Items : [],
+            request.IncludeReconciliationEvidenceInResult
+                ? reconciliation?.Items ?? []
+                : [],
             ActiveProcurementItems: request.IncludeReconciliationEvidenceInResult ? activeProcurementItems : null,
-            EvidenceAnalyses: request.IncludeReconciliationEvidenceInResult ? reconciliation.Analyses : null,
+            EvidenceAnalyses: request.IncludeReconciliationEvidenceInResult
+                ? reconciliation?.Analyses ?? request.SourceMarketAnalyses
+                : null,
             IsComplete: optimization.IsComplete);
     }
 

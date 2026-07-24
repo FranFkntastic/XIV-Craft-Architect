@@ -33,6 +33,8 @@ public sealed class ProcurementRouteExecutionRequest
 
     public MarketEvidenceReconciliationPolicy ReconciliationPolicy { get; init; } = new();
 
+    public bool UsePublishedEvidenceAsAuthority { get; init; }
+
     public bool IncludeReconciliationEvidenceInResult { get; init; } = true;
 }
 

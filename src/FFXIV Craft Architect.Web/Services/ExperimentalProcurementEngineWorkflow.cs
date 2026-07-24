@@ -156,6 +156,7 @@ public sealed class ExperimentalProcurementEngineWorkflow : IExperimentalProcure
             BlacklistedWorlds = request.RouteBasis.BlacklistedWorlds,
             ExcludedItemWorlds = request.RouteBasis.ExcludedItemWorlds,
             ExpectedWorldsByDataCenter = _appState.GetExpectedMarketWorlds(scope),
+            UsePublishedEvidenceAsAuthority = true,
             IncludeReconciliationEvidenceInResult = false
         };
         LogPreparationStage("route request captured", preparation);

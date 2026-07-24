@@ -169,7 +169,9 @@ public sealed class CoreProcurementWorkflowService
                     IncludeSplitPurchases = request.IncludeSplitPurchases,
                     BlacklistedWorlds = blacklistedWorlds,
                     ExcludedItemWorlds = excludedItemWorlds,
-                    ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter
+                    ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,
+                    UsePublishedEvidenceAsAuthority = true,
+                    IncludeReconciliationEvidenceInResult = false
                 },
                 guardedProgress,
                 linkedCancellation.Token,

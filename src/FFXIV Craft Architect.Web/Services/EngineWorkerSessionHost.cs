@@ -721,7 +721,8 @@ public static partial class ManagedHost
         var workflowProgress = new ImmediateProgress<string>(message =>
         {
             if (preparationCompletedAt == 0 &&
-                message.StartsWith("Reconciling ", StringComparison.Ordinal))
+                (message.StartsWith("Reconciling ", StringComparison.Ordinal) ||
+                 message.StartsWith("Preparing authoritative ", StringComparison.Ordinal)))
             {
                 preparationCompletedAt = timing.ElapsedMilliseconds;
             }
