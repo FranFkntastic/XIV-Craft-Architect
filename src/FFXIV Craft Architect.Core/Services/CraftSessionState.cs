@@ -747,7 +747,11 @@ public sealed class CraftSessionState
     public bool TrySelectProcurementTravelTolerance(int travelTolerance)
     {
         var normalized = Math.Clamp(travelTolerance, 0, 11);
-        var overlay = ProcurementOverlay;
+        CraftSessionProcurementOverlay? overlay;
+        lock (_gate)
+        {
+            overlay = _procurementOverlay;
+        }
         var currentDecision = overlay?.RouteDecision;
         var selection = currentDecision?.ToleranceSelections
             .FirstOrDefault(option => option.Contains(normalized));
@@ -776,18 +780,21 @@ public sealed class CraftSessionState
             RouteSearchWasTruncated = currentDecision.RouteSearchWasTruncated,
             ToleranceSelections = currentDecision.ToleranceSelections
         };
-        PublishProcurementOverlay(
-            overlay with
+        MarkProcurementOverlayPublished(
+            "procurement route tolerance selected",
+            () =>
             {
-                PublishedAtUtc = DateTime.UtcNow,
-                SourceDescription = "procurement route tolerance selection",
-                ShoppingPlans = selection.ShoppingPlans,
-                RouteCards = ProcurementWorldCardBuilder.BuildWorldCards(
-                    selection.ShoppingPlans,
-                    ActiveContext.DataCenter ?? "Aether"),
-                RouteDecision = selectedDecision
-            },
-            "procurement route tolerance selected");
+                _procurementOverlay = overlay with
+                {
+                    PublishedAtUtc = DateTime.UtcNow,
+                    SourceDescription = "procurement route tolerance selection",
+                    ShoppingPlans = selection.ShoppingPlans,
+                    RouteCards = ProcurementWorldCardBuilder.BuildWorldCards(
+                        selection.ShoppingPlans,
+                        _activeContext.DataCenter ?? "Aether"),
+                    RouteDecision = selectedDecision
+                };
+            });
         return true;
     }
 
