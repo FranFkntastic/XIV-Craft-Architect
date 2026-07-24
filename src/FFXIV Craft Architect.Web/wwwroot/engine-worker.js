@@ -203,8 +203,19 @@ function dispatchManagedSessionCommandJson(messageJson, identity, host) {
 const sessionDatabaseName = "FFXIVCraftArchitect";
 const sessionManifestStore = "engineSessionManifests";
 const sessionRevisionStore = "engineSessionRevisions";
+const sessionComponentStore = "engineSessionComponents";
 const legacyPlanStore = "plans";
 const activeSessionManifestId = "active";
+const sessionRevisionSchemaVersion = 2;
+const sessionComponentFields = Object.freeze([
+    "planJson",
+    "marketPlansJson",
+    "marketIntelligenceJson",
+    "marketItemAnalysesJson",
+    "marketAnalysisRecipeBasisJson",
+    "marketAnalysisScopeSnapshotJson",
+    "procurementRouteJson"
+]);
 
 async function executeSessionCommand(messageJson, host) {
     const message = JSON.parse(messageJson);
@@ -263,7 +274,12 @@ async function bootstrapSession(host, requestMessage) {
     }
 
     if (durable.migratedFromLegacy && durable.storedPlan) {
-        await commitDurableSession(0, durable.revision, durable.storedPlan);
+        await commitDurableSession(
+            0,
+            durable.revision,
+            durable.storedPlan,
+            null,
+            durable.trackStoredPlanIdentity);
     }
     console.info(
         `[EngineSession] bootstrap load=${Math.round(loadedAt - startedAt)}ms ` +
@@ -304,7 +320,9 @@ async function replaceDurableSession(host, requestMessage) {
         await commitDurableSession(
             current.revision,
             targetRevision,
-            command.payload?.storedPlan ?? null);
+            command.payload?.storedPlan ?? null,
+            null,
+            command.payload?.trackStoredPlanIdentity !== false);
         return resultJson;
     } catch (error) {
         sessionBootstrapPromise = null;
@@ -346,7 +364,9 @@ async function mutateDurableSession(host, requestMessage) {
         await commitDurableSession(
             current.revision,
             targetRevision,
-            durableState);
+            durableState,
+            carrier.durablePatch ?? null,
+            current.trackStoredPlanIdentity);
         const committedAt = performance.now();
         console.info(
             `[EngineSession] ${command.commandKind} load=${Math.round(loadedAt - startedAt)}ms ` +
@@ -400,11 +420,14 @@ async function loadDurableSession() {
     try {
         const manifest = await readStoreValue(database, sessionManifestStore, activeSessionManifestId);
         if (manifest?.activeRevision > 0) {
-            const active = await readStoreValue(
-                database,
-                sessionRevisionStore,
-                revisionRecordId(manifest.activeRevision));
-            if (active?.storedPlan) {
+            let active = null;
+            let activeError = null;
+            try {
+                active = await loadRevision(database, manifest.activeRevision);
+            } catch (error) {
+                activeError = error;
+            }
+            if (active) {
                 return {
                     revision: manifest.activeRevision,
                     storedPlan: active.storedPlan,
@@ -414,11 +437,8 @@ async function loadDurableSession() {
             }
 
             if (manifest.previousRevision > 0) {
-                const previous = await readStoreValue(
-                    database,
-                    sessionRevisionStore,
-                    revisionRecordId(manifest.previousRevision));
-                if (previous?.storedPlan) {
+                const previous = await loadRevision(database, manifest.previousRevision);
+                if (previous) {
                     await repairManifestToPrevious(database, manifest.previousRevision);
                     return {
                         revision: manifest.previousRevision,
@@ -428,7 +448,10 @@ async function loadDurableSession() {
                     };
                 }
             }
-            throw new Error("The Worker session manifest does not reference a recoverable revision.");
+            throw new Error(
+                activeError
+                    ? `The active Worker session revision is corrupt and no predecessor is recoverable: ${String(activeError)}`
+                    : "The Worker session manifest does not reference a recoverable revision.");
         }
 
         const legacy = await readStoreValue(database, legacyPlanStore, "autosave");
@@ -460,6 +483,7 @@ function openSessionDatabase() {
             const required = [
                 sessionManifestStore,
                 sessionRevisionStore,
+                sessionComponentStore,
                 legacyPlanStore
             ];
             const missing = required.filter(name => !database.objectStoreNames.contains(name));
@@ -482,20 +506,182 @@ function readStoreValue(database, storeName, key) {
     });
 }
 
-function commitDurableSession(expectedRevision, revision, storedPlan) {
-    return new Promise(async (resolve, reject) => {
-        let database;
-        try {
-            database = await openSessionDatabase();
-        } catch (error) {
-            reject(error);
+function readStoreValues(database, storeName, keys) {
+    return new Promise((resolve, reject) => {
+        const values = new Map();
+        if (keys.length === 0) {
+            resolve(values);
             return;
         }
+        const transaction = database.transaction(storeName, "readonly");
+        const store = transaction.objectStore(storeName);
+        for (const key of keys) {
+            const request = store.get(key);
+            request.onsuccess = () => values.set(key, request.result ?? null);
+        }
+        transaction.oncomplete = () => resolve(values);
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () =>
+            reject(transaction.error ?? new Error("Worker session component read aborted."));
+    });
+}
+
+async function loadRevision(database, revision) {
+    const record = await readStoreValue(
+        database,
+        sessionRevisionStore,
+        revisionRecordId(revision));
+    if (!record) {
+        return null;
+    }
+    if (record.schemaVersion === sessionRevisionSchemaVersion) {
+        return {
+            storedPlan: await materializeStoredPlan(database, record),
+            trackStoredPlanIdentity: record.trackStoredPlanIdentity !== false
+        };
+    }
+    if (Object.prototype.hasOwnProperty.call(record, "storedPlan")) {
+        return {
+            storedPlan: record.storedPlan ?? null,
+            trackStoredPlanIdentity: record.trackStoredPlanIdentity !== false
+        };
+    }
+    throw new Error(`Worker session revision ${revision} has an unsupported record shape.`);
+}
+
+async function materializeStoredPlan(database, record) {
+    if (record.storedPlanMetadata === null) {
+        return null;
+    }
+    if (!record.storedPlanMetadata || !record.componentRefs) {
+        throw new Error(`Worker session revision ${record.revision} is missing v2 metadata.`);
+    }
+
+    const referencedIds = sessionComponentFields
+        .map(field => record.componentRefs[field])
+        .filter(id => typeof id === "string");
+    const components = await readStoreValues(
+        database,
+        sessionComponentStore,
+        [...new Set(referencedIds)]);
+    const storedPlan = { ...record.storedPlanMetadata };
+    for (const field of sessionComponentFields) {
+        const componentId = record.componentRefs[field];
+        if (componentId == null) {
+            storedPlan[field] = null;
+            continue;
+        }
+        const component = components.get(componentId);
+        if (!component || component.field !== field) {
+            throw new Error(
+                `Worker session revision ${record.revision} is missing component '${field}'.`);
+        }
+        storedPlan[field] = component.payload;
+    }
+    return storedPlan;
+}
+
+function createV2RevisionRecord(
+    revision,
+    storedPlan,
+    trackStoredPlanIdentity,
+    previousRecord,
+    durablePatch)
+{
+    const createdAtUnixMilliseconds = Date.now();
+    if (!storedPlan) {
+        return {
+            record: {
+                id: revisionRecordId(revision),
+                schemaVersion: sessionRevisionSchemaVersion,
+                revision,
+                storedPlanMetadata: null,
+                componentRefs: Object.fromEntries(
+                    sessionComponentFields.map(field => [field, null])),
+                trackStoredPlanIdentity,
+                createdAtUnixMilliseconds
+            },
+            components: []
+        };
+    }
+
+    const metadata = { ...storedPlan };
+    for (const field of sessionComponentFields) {
+        delete metadata[field];
+    }
+    const canReuseComponents = Boolean(
+        previousRecord?.schemaVersion === sessionRevisionSchemaVersion &&
+        durablePatch);
+    const changedFields = new Set();
+    if (typeof durablePatch?.procurementRouteJson === "string") {
+        changedFields.add("procurementRouteJson");
+    }
+    const componentRefs = {};
+    const components = [];
+    for (const field of sessionComponentFields) {
+        const payload = storedPlan[field] ?? null;
+        const previousRef = previousRecord?.componentRefs?.[field] ?? null;
+        if (canReuseComponents && !changedFields.has(field)) {
+            componentRefs[field] = previousRef;
+            continue;
+        }
+        if (payload === null) {
+            componentRefs[field] = null;
+            continue;
+        }
+        const id = componentRecordId(revision, field);
+        componentRefs[field] = id;
+        components.push({
+            id,
+            schemaVersion: 1,
+            field,
+            payload,
+            createdAtUnixMilliseconds
+        });
+    }
+
+    return {
+        record: {
+            id: revisionRecordId(revision),
+            schemaVersion: sessionRevisionSchemaVersion,
+            revision,
+            storedPlanMetadata: metadata,
+            componentRefs,
+            trackStoredPlanIdentity,
+            createdAtUnixMilliseconds
+        },
+        components
+    };
+}
+
+async function commitDurableSession(
+    expectedRevision,
+    revision,
+    storedPlan,
+    durablePatch = null,
+    trackStoredPlanIdentity = storedPlan?.id !== "autosave")
+{
+    const database = await openSessionDatabase();
+    const previousRecord = expectedRevision > 0
+        ? await readStoreValue(
+            database,
+            sessionRevisionStore,
+            revisionRecordId(expectedRevision))
+        : null;
+    const successor = createV2RevisionRecord(
+        revision,
+        storedPlan,
+        trackStoredPlanIdentity,
+        previousRecord,
+        durablePatch);
+
+    return new Promise((resolve, reject) => {
         const transaction = database.transaction(
-            [sessionManifestStore, sessionRevisionStore],
+            [sessionManifestStore, sessionRevisionStore, sessionComponentStore],
             "readwrite");
         const manifests = transaction.objectStore(sessionManifestStore);
         const revisions = transaction.objectStore(sessionRevisionStore);
+        const components = transaction.objectStore(sessionComponentStore);
         const manifestRequest = manifests.get(activeSessionManifestId);
         let rejected = false;
 
@@ -523,20 +709,43 @@ function commitDurableSession(expectedRevision, revision, storedPlan) {
                     `Worker session revision changed from ${expectedRevision} to ${activeRevision}.`));
                 return;
             }
-            revisions.put({
-                id: revisionRecordId(revision),
-                revision,
-                storedPlan,
-                trackStoredPlanIdentity: storedPlan?.id !== "autosave",
-                createdAtUnixMilliseconds: Date.now()
-            });
-            manifests.put({
-                id: activeSessionManifestId,
-                schemaVersion: 1,
-                activeRevision: revision,
-                previousRevision: activeRevision,
-                updatedAtUnixMilliseconds: Date.now()
-            });
+
+            const persistSuccessor = () => {
+                for (const component of successor.components) {
+                    components.put(component);
+                }
+                revisions.put(successor.record);
+                manifests.put({
+                    id: activeSessionManifestId,
+                    schemaVersion: sessionRevisionSchemaVersion,
+                    activeRevision: revision,
+                    previousRevision: activeRevision,
+                    updatedAtUnixMilliseconds: Date.now()
+                });
+            };
+            const retiredRevision = manifest?.previousRevision ?? 0;
+            if (retiredRevision <= 0 || retiredRevision === activeRevision) {
+                persistSuccessor();
+                return;
+            }
+
+            const retiredRequest = revisions.get(revisionRecordId(retiredRevision));
+            retiredRequest.onerror = () => transaction.abort();
+            retiredRequest.onsuccess = () => {
+                const retainedComponentIds = new Set([
+                    ...Object.values(previousRecord?.componentRefs ?? {}),
+                    ...Object.values(successor.record.componentRefs ?? {})
+                ].filter(id => typeof id === "string"));
+                const retiredRecord = retiredRequest.result;
+                for (const componentId of Object.values(retiredRecord?.componentRefs ?? {})) {
+                    if (typeof componentId === "string" &&
+                        !retainedComponentIds.has(componentId)) {
+                        components.delete(componentId);
+                    }
+                }
+                revisions.delete(revisionRecordId(retiredRevision));
+                persistSuccessor();
+            };
         };
     });
 }
@@ -546,7 +755,7 @@ function repairManifestToPrevious(database, previousRevision) {
         const transaction = database.transaction(sessionManifestStore, "readwrite");
         transaction.objectStore(sessionManifestStore).put({
             id: activeSessionManifestId,
-            schemaVersion: 1,
+            schemaVersion: sessionRevisionSchemaVersion,
             activeRevision: previousRevision,
             previousRevision: 0,
             updatedAtUnixMilliseconds: Date.now()
@@ -559,6 +768,10 @@ function repairManifestToPrevious(database, previousRevision) {
 
 function revisionRecordId(revision) {
     return `active:${revision}`;
+}
+
+function componentRecordId(revision, field) {
+    return `active:${revision}:${field}`;
 }
 
 function postProtocolError(message, code, errorMessage) {

@@ -2,8 +2,8 @@
 // Uses Unix timestamps (seconds since epoch) for serialization safety
 
 const DB_NAME = 'FFXIVCraftArchitect';
-const DB_VERSION = 13;  // Adds revisioned Worker-owned session persistence
-const MODULE_REVISION = 17;
+const DB_VERSION = 14;  // Adds component-referenced Worker session revisions
+const MODULE_REVISION = 18;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const ENGINE_TERMINAL_RETENTION_LIMIT = 128;
 const ENGINE_TERMINAL_RETENTION_SCHEMA = 1;
@@ -19,6 +19,7 @@ const STORE_TRADE_PAYROLL_DRAFTS = 'tradePayrollDrafts';
 const STORE_ENGINE_TRANSACTIONS = 'engineTransactions';
 const STORE_ENGINE_SESSION_MANIFESTS = 'engineSessionManifests';
 const STORE_ENGINE_SESSION_REVISIONS = 'engineSessionRevisions';
+const STORE_ENGINE_SESSION_COMPONENTS = 'engineSessionComponents';
 
 let db = null;
 const engineTransactionLocks = new Map();
@@ -190,6 +191,14 @@ async function initDB() {
                 console.log('[IndexedDB] Created Worker session revision store');
             }
 
+            if (!database.objectStoreNames.contains(STORE_ENGINE_SESSION_COMPONENTS)) {
+                const componentStore = database.createObjectStore(
+                    STORE_ENGINE_SESSION_COMPONENTS,
+                    { keyPath: 'id' });
+                componentStore.createIndex('createdAtUnixMilliseconds', 'createdAtUnixMilliseconds', { unique: false });
+                console.log('[IndexedDB] Created Worker session component store');
+            }
+
         };
     });
 }
@@ -230,7 +239,8 @@ function hasRequiredTradeStores(database) {
         database.objectStoreNames.contains(STORE_TRADE_PAYROLL_DRAFTS) &&
         database.objectStoreNames.contains(STORE_ENGINE_TRANSACTIONS) &&
         database.objectStoreNames.contains(STORE_ENGINE_SESSION_MANIFESTS) &&
-        database.objectStoreNames.contains(STORE_ENGINE_SESSION_REVISIONS);
+        database.objectStoreNames.contains(STORE_ENGINE_SESSION_REVISIONS) &&
+        database.objectStoreNames.contains(STORE_ENGINE_SESSION_COMPONENTS);
 }
 
 async function ensureTradeStores(database) {
@@ -329,6 +339,14 @@ function openTradeStoreRepairUpgrade(repairVersion) {
                     { keyPath: 'id' });
                 revisionStore.createIndex('createdAtUnixMilliseconds', 'createdAtUnixMilliseconds', { unique: false });
                 console.log('[IndexedDB] Repaired missing Worker session revision store');
+            }
+
+            if (!database.objectStoreNames.contains(STORE_ENGINE_SESSION_COMPONENTS)) {
+                const componentStore = database.createObjectStore(
+                    STORE_ENGINE_SESSION_COMPONENTS,
+                    { keyPath: 'id' });
+                componentStore.createIndex('createdAtUnixMilliseconds', 'createdAtUnixMilliseconds', { unique: false });
+                console.log('[IndexedDB] Repaired missing Worker session component store');
             }
         };
         request.onsuccess = () => {

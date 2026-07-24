@@ -519,7 +519,7 @@ workflow: try {
 
   setPhase('application-startup');
   await withDeadline('navigate to application', () => page.goto(`${url}?benchmark-defer-route=1`, { waitUntil: 'networkidle' }), budgets.importMs);
-  await withDeadline('wait for IndexedDB module', () => page.waitForFunction(() => window.IndexedDB?.moduleRevision === 17), budgets.importMs);
+  await withDeadline('wait for IndexedDB module', () => page.waitForFunction(() => window.IndexedDB?.moduleRevision === 18), budgets.importMs);
   stage('app-ready', { moduleRevision: await withDeadline('read IndexedDB module revision', () => page.evaluate(() => window.IndexedDB.moduleRevision)) });
   await withDeadline('enable benchmark settings', () => page.evaluate(async () => {
     await window.IndexedDB.saveSetting('debug.secret_tools_enabled', 'true');

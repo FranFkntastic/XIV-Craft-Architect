@@ -128,10 +128,10 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
         });
 
         const active = await startWorker(1);
-        async function sendSessionCommand(commandKind, expectedRevision, payload) {
+        async function sendSessionCommandTo(runtime, generation, commandKind, expectedRevision, payload) {
           const commandId = crypto.randomUUID();
           const responsePromise = waitFor(
-            active.worker,
+            runtime.worker,
             message => {
               if (message?.kind !== 'managed-json' || message.messageKind !== 'session-result') return false;
               const decoded = JSON.parse(message.messageJson);
@@ -142,7 +142,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           const message = {
             protocolVersion: '4',
             kind: 'session-command',
-            generation: 1,
+            generation,
             executionId: commandId,
             transactionId: commandId,
             payload: {
@@ -152,16 +152,64 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
               payload
             }
           };
-          active.worker.postMessage({
+          runtime.worker.postMessage({
             kind: 'managed-json',
             messageJson: JSON.stringify(message),
-            generation: 1,
+            generation,
             messageKind: 'session-command',
             executionId: commandId,
             transactionId: commandId
           });
           const response = await responsePromise;
           return JSON.parse(response.messageJson);
+        }
+        const sendSessionCommand = (commandKind, expectedRevision, payload) =>
+          sendSessionCommandTo(active, 1, commandKind, expectedRevision, payload);
+
+        async function inspectDurableSession() {
+          const database = await new Promise((resolve, reject) => {
+            const request = indexedDB.open('FFXIVCraftArchitect');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          const read = (storeName, key) => new Promise((resolve, reject) => {
+            const transaction = database.transaction(storeName, 'readonly');
+            const request = transaction.objectStore(storeName).get(key);
+            request.onsuccess = () => resolve(request.result ?? null);
+            request.onerror = () => reject(request.error);
+          });
+          const manifest = await read('engineSessionManifests', 'active');
+          const activeRecord = await read(
+            'engineSessionRevisions',
+            `active:${manifest.activeRevision}`);
+          const previousRecord = manifest.previousRevision > 0
+            ? await read('engineSessionRevisions', `active:${manifest.previousRevision}`)
+            : null;
+          const retiredRecord = await read('engineSessionRevisions', 'active:1');
+          const componentCount = await new Promise((resolve, reject) => {
+            const transaction = database.transaction('engineSessionComponents', 'readonly');
+            const request = transaction.objectStore('engineSessionComponents').count();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          database.close();
+          return { manifest, activeRecord, previousRecord, retiredRecord, componentCount };
+        }
+
+        async function deleteSessionComponent(componentId) {
+          const database = await new Promise((resolve, reject) => {
+            const request = indexedDB.open('FFXIVCraftArchitect');
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          await new Promise((resolve, reject) => {
+            const transaction = database.transaction('engineSessionComponents', 'readwrite');
+            transaction.objectStore('engineSessionComponents').delete(componentId);
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => reject(transaction.error);
+            transaction.onabort = () => reject(transaction.error);
+          });
+          database.close();
         }
 
         // The routed page can request a projection before MainLayout reaches its
@@ -179,6 +227,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
               { id: 43, name: 'Second item', iconId: 0, quantity: 1, mustBeHq: false }
             ],
             planJson: null,
+            marketAnalysisScopeSnapshotJson: '{"scope":"worker-test"}',
             savedAt: new Date().toISOString()
           },
           trackStoredPlanIdentity: false
@@ -190,6 +239,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           item: { id: 44, name: 'Worker-owned item', iconId: 0, quantity: 3, mustBeHq: false }
         });
         const durableMutationShell = await sendSessionCommand('shell', 3, {});
+        const durablePersistence = await inspectDurableSession();
 
         const malformedExecutionId = crypto.randomUUID();
         const malformedTransactionId = crypto.randomUUID();
@@ -289,6 +339,22 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
         clearInterval(heartbeat);
         active.worker.terminate();
 
+        const corruptedComponentId =
+          durablePersistence.activeRecord.componentRefs.marketAnalysisScopeSnapshotJson;
+        await deleteSessionComponent(corruptedComponentId);
+        const repaired = await startWorker(2);
+        const repairedBootstrap = await sendSessionCommandTo(repaired, 2, 'bootstrap', 0, {});
+        const repairedShell = await sendSessionCommandTo(repaired, 2, 'shell', 2, {});
+        const clearedSession = await sendSessionCommandTo(repaired, 2, 'replace', 2, {
+          storedPlan: null,
+          trackStoredPlanIdentity: false
+        });
+        repaired.worker.terminate();
+        const cleared = await startWorker(3);
+        const clearedBootstrap = await sendSessionCommandTo(cleared, 3, 'bootstrap', 0, {});
+        const clearedShell = await sendSessionCommandTo(cleared, 3, 'shell', 3, {});
+        cleared.worker.terminate();
+
         const hanging = await startWorker(10);
         const hangStarted = waitFor(
           hanging.worker,
@@ -319,6 +385,12 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           currentSession,
           mutatedSession,
           durableMutationShell,
+          durablePersistence,
+          repairedBootstrap,
+          repairedShell,
+          clearedSession,
+          clearedBootstrap,
+          clearedShell,
           malformed,
           result,
           secondResult,
@@ -358,6 +430,36 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(evidence.mutatedSession.payload.projection.durableState, undefined);
       assert.equal(evidence.durableMutationShell.payload.accepted, true);
       assert.equal(evidence.durableMutationShell.payload.revision, 3);
+      assert.equal(evidence.durablePersistence.manifest.schemaVersion, 2);
+      assert.equal(evidence.durablePersistence.manifest.activeRevision, 3);
+      assert.equal(evidence.durablePersistence.manifest.previousRevision, 2);
+      assert.equal(evidence.durablePersistence.activeRecord.schemaVersion, 2);
+      assert.equal(evidence.durablePersistence.activeRecord.storedPlan, undefined);
+      assert.equal(evidence.durablePersistence.activeRecord.storedPlanMetadata.projectItems.length, 3);
+      assert.equal(evidence.durablePersistence.retiredRecord, null);
+      assert.equal(evidence.durablePersistence.componentCount, 2);
+      assert.match(
+        evidence.durablePersistence.activeRecord.componentRefs.marketAnalysisScopeSnapshotJson,
+        /^active:3:/);
+      assert.match(
+        evidence.durablePersistence.previousRecord.componentRefs.marketAnalysisScopeSnapshotJson,
+        /^active:2:/);
+      assert.notEqual(
+        evidence.durablePersistence.activeRecord.componentRefs.marketAnalysisScopeSnapshotJson,
+        evidence.durablePersistence.previousRecord.componentRefs.marketAnalysisScopeSnapshotJson);
+      assert.equal(evidence.repairedBootstrap.payload.accepted, true);
+      assert.equal(evidence.repairedBootstrap.payload.revision, 2);
+      assert.equal(evidence.repairedShell.payload.accepted, true);
+      assert.equal(evidence.repairedShell.payload.revision, 2);
+      assert.equal(evidence.repairedShell.payload.projection.projectItemCount, 2);
+      assert.equal(evidence.clearedSession.payload.accepted, true);
+      assert.equal(evidence.clearedSession.payload.revision, 3);
+      assert.equal(evidence.clearedSession.payload.projection.hasSession, false);
+      assert.equal(evidence.clearedBootstrap.payload.accepted, true);
+      assert.equal(evidence.clearedBootstrap.payload.revision, 3);
+      assert.equal(evidence.clearedShell.payload.accepted, true);
+      assert.equal(evidence.clearedShell.payload.revision, 3);
+      assert.equal(evidence.clearedShell.payload.projection.hasSession, false);
       assert.equal(evidence.malformed.payload.code, 'managed-json-invalid');
 
       assert.equal(evidence.result.kind, 'computation-result');
