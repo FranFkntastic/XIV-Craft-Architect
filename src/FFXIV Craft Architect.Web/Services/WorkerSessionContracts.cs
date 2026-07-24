@@ -217,6 +217,14 @@ public sealed record WorkerMarketAnalysisOutcome(
     int FetchedCount,
     WorkerMarketProjection Market);
 
+public sealed record WorkerMarketEvidenceCommitProjection(
+    int AnalyzedCount,
+    int ChangedDecisionCount,
+    int FetchedCount);
+
+public sealed record WorkerMarketProjectionRequest(
+    bool IncludeDetails = true);
+
 public sealed record WorkerMarketEvidencePublicationRequest(
     MarketFetchScope Scope,
     string SelectedDataCenter,

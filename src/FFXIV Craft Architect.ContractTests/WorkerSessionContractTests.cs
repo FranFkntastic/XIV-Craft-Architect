@@ -208,11 +208,39 @@ public sealed class WorkerSessionContractTests
         Assert.Equal(1, accepted.Shell.MarketAnalysisCount);
         Assert.Equal(1, accepted.Shell.ShoppingPlanCount);
         var published =
-            accepted.PublicProjection.Deserialize<WorkerMarketAnalysisOutcome>(WireOptions);
+            accepted.PublicProjection.Deserialize<WorkerMarketEvidenceCommitProjection>(
+                WireOptions);
         Assert.NotNull(published);
-        Assert.True(published.Market.HasAnalysis);
-        Assert.Empty(published.Market.ItemAnalyses);
-        Assert.Empty(published.Market.ShoppingPlans);
+        Assert.Equal(1, published.AnalyzedCount);
+
+        var projectionStore = new WorkerProjectionStore();
+        Assert.True(projectionStore.TryPublish(staged));
+        var browserResult = completed with
+        {
+            Projection = JsonSerializer.SerializeToElement(
+                new WorkerAcceptedMutationProjection(
+                    accepted.Shell,
+                    accepted.PublicProjection),
+                WireOptions)
+        };
+        Assert.True(
+            projectionStore.TryPublishMutation<WorkerMarketEvidenceCommitProjection>(
+                browserResult,
+                out var browserOutcome));
+        Assert.NotNull(browserOutcome);
+        Assert.Equal(1, browserOutcome.AnalyzedCount);
+
+        var compactMarket = await SendAsync(
+            WorkerSessionCommandKinds.MarketProjection,
+            expectedRevision: 3,
+            new WorkerMarketProjectionRequest(IncludeDetails: false));
+        Assert.True(compactMarket.Accepted);
+        var compactMarketProjection =
+            compactMarket.Projection.Deserialize<WorkerMarketProjection>(WireOptions);
+        Assert.NotNull(compactMarketProjection);
+        Assert.True(compactMarketProjection.HasAnalysis);
+        Assert.Empty(compactMarketProjection.ItemAnalyses);
+        Assert.Empty(compactMarketProjection.ShoppingPlans);
 
         var procurement = await SendAsync(
             WorkerSessionCommandKinds.ProcurementProjection,

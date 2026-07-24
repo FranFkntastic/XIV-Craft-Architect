@@ -132,7 +132,10 @@ public static partial class ManagedHost
                     accepted: true,
                     null,
                     null,
-                    CaptureMarketProjection()),
+                    CaptureMarketProjection(
+                        command.Payload
+                            .Deserialize<WorkerMarketProjectionRequest>(WireJsonOptions)?
+                            .IncludeDetails ?? true)),
                 WorkerSessionCommandKinds.ProcurementProjection => CreateSessionResult(
                     command.CommandKind,
                     accepted: true,
@@ -509,12 +512,10 @@ public static partial class ManagedHost
         _sessionRevision++;
         return CreateMutationResult(
             command.CommandKind,
-            new WorkerMarketAnalysisOutcome(
-                Published: true,
+            new WorkerMarketEvidenceCommitProjection(
                 request.ShoppingPlans.Count,
                 changedDecisions,
-                request.FetchedCount,
-                CaptureMarketProjection(request.IncludeDetailsInProjection)));
+                request.FetchedCount));
     }
 
     private static WorkerSessionResultEnvelope PublishMarketItemEvidence(
@@ -796,22 +797,32 @@ public static partial class ManagedHost
         string commandKind,
         object publicProjection)
     {
-        var durable = _canonicalSession.Export(
-                "autosave",
-                "Autosave",
-                includeSourcePlanIdentity: true,
-                includeLegacyMarketAnalysisFields: false)
-            ?? new StoredPlan { Id = "autosave", Name = "Autosave" };
-        var carrier = new WorkerSessionMutationProjection(
-            CaptureShellProjection(),
-            durable,
-            JsonSerializer.SerializeToElement(publicProjection, WireJsonOptions));
-        return CreateSessionResult(
-            commandKind,
-            accepted: true,
-            null,
-            null,
-            carrier);
+        try
+        {
+            var durable = _canonicalSession.Export(
+                    "autosave",
+                    "Autosave",
+                    includeSourcePlanIdentity: true,
+                    includeLegacyMarketAnalysisFields: false)
+                ?? new StoredPlan { Id = "autosave", Name = "Autosave" };
+            var carrier = new WorkerSessionMutationProjection(
+                CaptureShellProjection(),
+                durable,
+                JsonSerializer.SerializeToElement(publicProjection, WireJsonOptions));
+            return CreateSessionResult(
+                commandKind,
+                accepted: true,
+                null,
+                null,
+                carrier);
+        }
+        catch
+        {
+            // A rejected mutation must never strand the main thread behind a
+            // revision that was not durably committed by engine-worker.js.
+            _sessionRevision--;
+            throw;
+        }
     }
 
     private static WorkerRecipePlannerProjection CaptureRecipeProjection()

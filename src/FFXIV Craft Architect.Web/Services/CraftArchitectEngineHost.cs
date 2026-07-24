@@ -259,11 +259,12 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
 
     public Task<WorkerSessionResultEnvelope> GetMarketProjectionAsync(
         long expectedRevision,
+        bool includeDetails = true,
         CancellationToken cancellationToken = default) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.MarketProjection,
             expectedRevision,
-            new { },
+            new WorkerMarketProjectionRequest(includeDetails),
             EngineCommandPriority.Interactive,
             cancellationToken);
 

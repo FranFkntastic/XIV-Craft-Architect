@@ -115,7 +115,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         _projections.TryPublishRecipe(recipe);
         var market = await _engineHost.GetMarketProjectionAsync(
             result.Revision,
-            cancellationToken);
+            cancellationToken: cancellationToken);
         _projections.TryPublishMarket(market);
         var procurement = await _engineHost.GetProcurementProjectionAsync(
             result.Revision,
@@ -173,7 +173,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
         var result = await _engineHost.GetMarketProjectionAsync(
             _projections.Shell.Revision,
-            cancellationToken);
+            cancellationToken: cancellationToken);
         if (!_projections.TryPublishMarket(result))
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
@@ -390,6 +390,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                     cancellationToken);
             if (!result.Accepted)
             {
+                await RefreshAfterConflictAsync(result, cancellationToken);
                 throw CreateConflict(result);
             }
         }
@@ -399,19 +400,35 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw new InvalidOperationException(
                 "The market analysis produced no evidence publication batches.");
         }
-        if (!_projections.TryPublishMutation<WorkerMarketAnalysisOutcome>(
+        if (!_projections.TryPublishMutation<WorkerMarketEvidenceCommitProjection>(
                 result,
-                out var outcome) ||
-            outcome is null)
+                out var commit) ||
+            commit is null)
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
             throw CreateConflict(result);
         }
 
+        var marketResult = await _engineHost.GetMarketProjectionAsync(
+            _projections.Shell.Revision,
+            includeDetails: false,
+            cancellationToken: cancellationToken);
+        if (!_projections.TryPublishMarket(marketResult) ||
+            _projections.Market is null)
+        {
+            await RefreshAfterConflictAsync(marketResult, cancellationToken);
+            throw CreateConflict(marketResult);
+        }
+
         var marketWithDetails = _projections.AttachMarketDetails(
             shoppingPlans,
             analyses);
-        return outcome with { Market = marketWithDetails };
+        return new WorkerMarketAnalysisOutcome(
+            Published: true,
+            commit.AnalyzedCount,
+            commit.ChangedDecisionCount,
+            commit.FetchedCount,
+            marketWithDetails);
     }
 
     public static void CompactMarketAnalysisForPublication(MarketItemAnalysis analysis)

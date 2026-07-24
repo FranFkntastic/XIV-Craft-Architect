@@ -42,15 +42,13 @@
             SelectedItemId="_selectedItemId"
             ExpandedWorldKeys="_expandedWorldKeys"
             ShowWorldsColumn="_searchEntireRegion"
-            IsAnalyzing="_isAnalyzing"
             IsRefreshingItem="@(_isRefreshingSelectedItem || _isAnalyzing || _isRefreshingPrices)"
             OnSelectedItemChanged="SelectMarketAnalysisItem"
             OnRefreshItemRequested="RefreshSelectedMarketItemAsync"
             OnWorldExpansionToggled="ToggleMarketAnalysisWorld"
             OnSortChanged="SetMarketAnalysisSort"
             OnWorldSortChanged="SetMarketAnalysisWorldSort"
-            OnGoToPlannerRequested="GoToPlanner"
-            OnRunAnalysisRequested="RunMarketAnalysisAsync" />
+            OnGoToPlannerRequested="GoToPlanner" />
     </div>
 </MudContainer>
 

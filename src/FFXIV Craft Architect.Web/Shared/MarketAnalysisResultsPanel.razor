@@ -47,25 +47,8 @@
                 <MudIcon Icon="@Icons.Material.Filled.Analytics" Size="Size.Large" Class="ma-state-icon" />
                 <MudText Typo="Typo.h6" Class="ma-state-title">Ready to Analyze</MudText>
                 <MudText Typo="Typo.body2" Class="ma-state-body">
-                    Found @FormatItemCount(BuyItems.Count) to analyze. Select "Analyze Market" to compare prices across worlds.
+                    @FormatItemCount(BuyItems.Count) ready for market comparison.
                 </MudText>
-
-                <MudButton OnClick="OnRunAnalysisRequested"
-                           Color="Color.Primary"
-                           Variant="Variant.Filled"
-                           Size="Size.Large"
-                           StartIcon="@Icons.Material.Filled.Analytics"
-                           Disabled="IsAnalyzing">
-                    @if (IsAnalyzing)
-                    {
-                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                        <span>Analyzing...</span>
-                    }
-                    else
-                    {
-                        <span>Analyze Market</span>
-                    }
-                </MudButton>
             </div>
         </MudPaper>
     }
@@ -85,11 +68,9 @@
     [Parameter] public int? SelectedItemId { get; set; }
     [Parameter] public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedWorldKeys { get; set; } = new HashSet<MarketAnalysisExpandedWorldKey>();
     [Parameter] public bool ShowWorldsColumn { get; set; }
-    [Parameter] public bool IsAnalyzing { get; set; }
     [Parameter] public bool IsRefreshingItem { get; set; }
 
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
-    [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
     [Parameter] public EventCallback<int?> OnSelectedItemChanged { get; set; }
     [Parameter] public EventCallback<DetailedShoppingPlan> OnRefreshItemRequested { get; set; }
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
