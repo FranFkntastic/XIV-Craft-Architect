@@ -33,6 +33,14 @@ before(async () => {
   server = http.createServer(async (request, response) => {
     try {
       const requestPath = new URL(request.url, 'http://localhost').pathname;
+      if (requestPath === '/engine-worker-harness.html') {
+        response.writeHead(200, {
+          'content-type': 'text/html',
+          'cache-control': 'no-store'
+        });
+        response.end('<!doctype html><script src="/indexedDB.js"></script>');
+        return;
+      }
       const relativePath = requestPath === '/' ? 'index.html' : decodeURIComponent(requestPath.slice(1));
       const filePath = path.resolve(publishRoot, relativePath);
       if (!filePath.startsWith(`${publishRoot}${path.sep}`) && filePath !== path.join(publishRoot, 'index.html')) {
@@ -70,7 +78,11 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
         if (message.type() === 'error') errors.push(message.text());
       });
       page.on('pageerror', error => errors.push(error.message));
-      await page.goto(origin, { waitUntil: 'load' });
+      // Exercise the Worker in its real origin without booting a second copy of
+      // the application. The production topology owns one replaceable Worker;
+      // loading index.html here would start the app Worker against the same
+      // IndexedDB session while this harness deliberately mutates it directly.
+      await page.goto(`${origin}/engine-worker-harness.html`, { waitUntil: 'load' });
 
       const evidence = await page.evaluate(async () => {
         function waitFor(worker, predicate, timeoutMs, description) {
