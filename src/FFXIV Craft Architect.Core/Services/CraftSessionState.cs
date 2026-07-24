@@ -77,6 +77,14 @@ public sealed class CraftSessionState
         }
     }
 
+    internal CraftingPlan? BorrowActivePlan()
+    {
+        lock (_gate)
+        {
+            return _activePlan;
+        }
+    }
+
     public CraftSessionActiveContext ActiveContext
     {
         get
@@ -96,6 +104,14 @@ public sealed class CraftSessionState
             {
                 return CloneMarketEvidence(_marketEvidence);
             }
+        }
+    }
+
+    internal CraftSessionMarketEvidence BorrowMarketEvidence()
+    {
+        lock (_gate)
+        {
+            return _marketEvidence;
         }
     }
 
@@ -580,7 +596,10 @@ public sealed class CraftSessionState
                 return;
             }
 
-            _activePlan = ClonePlan(plan);
+            if (!ReferenceEquals(_activePlan, plan))
+            {
+                _activePlan = ClonePlan(plan);
+            }
             MarkMarketAnalysisPublished(reason);
             if (acquisitionDecisionsChanged)
             {
@@ -588,9 +607,9 @@ public sealed class CraftSessionState
             }
 
             _marketEvidence = new CraftSessionMarketEvidence(
-                analysisList.Select(CloneMarketItemAnalysis).ToArray(),
+                analysisList,
                 unavailableIds.ToHashSet(),
-                shoppingPlanList.Select(CloneDetailedShoppingPlan).ToArray(),
+                shoppingPlanList,
                 _versions.Capture(_planSessionVersion),
                 recommendationMode,
                 lens,

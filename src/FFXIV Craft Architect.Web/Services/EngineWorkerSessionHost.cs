@@ -432,7 +432,7 @@ public static partial class ManagedHost
                 WireJsonOptions)
             ?? throw new InvalidOperationException("Market-evidence publication is empty.");
         var session = _canonicalSession.Session;
-        var plan = session.ActivePlan
+        var plan = session.BorrowActivePlan()
             ?? throw new InvalidOperationException(
                 "Build a recipe plan before publishing market evidence.");
         var planSessionVersion = session.PlanSessionVersion;
@@ -481,10 +481,10 @@ public static partial class ManagedHost
                 WireJsonOptions)
             ?? throw new InvalidOperationException("Market-item evidence publication is empty.");
         var session = _canonicalSession.Session;
-        var plan = session.ActivePlan
+        var plan = session.BorrowActivePlan()
             ?? throw new InvalidOperationException(
                 "Build a recipe plan before publishing market evidence.");
-        var evidence = session.MarketEvidence;
+        var evidence = session.BorrowMarketEvidence();
         var analyses = MarketEvidenceCollectionMerger.MergeAnalyses(
             evidence.ItemAnalyses,
             [request.ItemAnalysis]);
@@ -774,8 +774,8 @@ public static partial class ManagedHost
     private static WorkerRecipePlannerProjection CaptureRecipeProjection()
     {
         var session = _canonicalSession.Session;
-        var plan = session.ActivePlan;
-        var evidence = session.MarketEvidence;
+        var plan = session.BorrowActivePlan();
+        var evidence = session.BorrowMarketEvidence();
         var shoppingPlans = evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>();
         var displayStates = RecipePlanTreeDisplayBuilder.Build(
             plan,
@@ -806,7 +806,7 @@ public static partial class ManagedHost
     private static WorkerMarketProjection CaptureMarketProjection()
     {
         var session = _canonicalSession.Session;
-        var evidence = session.MarketEvidence;
+        var evidence = session.BorrowMarketEvidence();
         var analyses = evidence.ItemAnalyses.ToDictionary(analysis => analysis.ItemId);
         var items = (evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>())
             .Select(plan =>
@@ -851,12 +851,12 @@ public static partial class ManagedHost
             .ToArray();
         var context = session.ActiveContext;
         var candidateItems = new WorkerRecipeLayerWorkflow(session)
-            .BuildMarketAnalysisCandidates(session.ActivePlan)
+            .BuildMarketAnalysisCandidates(session.BorrowActivePlan())
             .ToArray();
         var candidateCount = candidateItems.Length;
         return new WorkerMarketProjection(
             _sessionRevision,
-            session.ActivePlan is not null,
+            session.BorrowActivePlan() is not null,
             items.Length > 0,
             context.MarketFetchScope ?? MarketFetchScope.EntireRegion,
             context.DataCenter ?? "Aether",

@@ -337,6 +337,10 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 },
                 ct: cancellationToken,
                 executionOptions: MarketAnalysisExecutionOptions.Interactive);
+            foreach (var analysis in reconciliation.Analyses)
+            {
+                CompactMarketAnalysisForPublication(analysis);
+            }
             analyses.AddRange(reconciliation.Analyses);
             shoppingPlans.AddRange(reconciliation.ShoppingPlans);
             unavailableItemIds.UnionWith(reconciliation.UnavailableItemIds);
@@ -370,6 +374,50 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
 
         return outcome;
+    }
+
+    public static void CompactMarketAnalysisForPublication(MarketItemAnalysis analysis)
+    {
+        foreach (var world in analysis.Worlds)
+        {
+            if (world.Listings.Count == 0)
+            {
+                continue;
+            }
+
+            var retainedSortIndexes = SelectCoverageListings(
+                    world.Listings,
+                    analysis.QuantityNeeded,
+                    static _ => true)
+                .Concat(SelectCoverageListings(
+                    world.Listings,
+                    analysis.QuantityNeeded,
+                    static listing => listing.IsHq))
+                .Select(listing => listing.SortIndex)
+                .ToHashSet();
+            world.Listings.RemoveAll(listing =>
+                !retainedSortIndexes.Contains(listing.SortIndex));
+        }
+    }
+
+    private static IEnumerable<AnalyzedMarketListing> SelectCoverageListings(
+        IEnumerable<AnalyzedMarketListing> listings,
+        int quantityNeeded,
+        Func<AnalyzedMarketListing, bool> predicate)
+    {
+        var remaining = Math.Max(0, quantityNeeded);
+        foreach (var listing in listings
+                     .Where(predicate)
+                     .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
+                     .OrderBy(listing => listing.SortIndex))
+        {
+            yield return listing;
+            remaining -= listing.Quantity;
+            if (remaining <= 0)
+            {
+                yield break;
+            }
+        }
     }
 
     public async Task<WorkerMarketProjection> ApplyMarketLensAsync(
