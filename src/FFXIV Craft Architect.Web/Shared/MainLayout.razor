@@ -32,6 +32,7 @@
     var workerBusy = EngineHost.Health.IsExecuting;
     <div data-benchmark-id="operation-lifecycle"
          hidden
+         data-session-revision="@WorkerProjections.Shell.Revision"
          data-plan-session-version="@WorkerProjections.Shell.PlanSessionVersion"
          data-plan-root-count="@(recipeProbe?.Roots.Count ?? 0)"
          data-plan-node-count="@CountRecipeNodes(recipeProbe?.Roots)"
