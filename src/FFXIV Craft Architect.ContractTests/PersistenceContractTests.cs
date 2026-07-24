@@ -8,6 +8,28 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class PersistenceContractTests
 {
     [Fact]
+    public void CompressedMarketIntelligence_RoundTripsThroughSharedCodec()
+    {
+        var original = JsonSerializer.Deserialize<StoredMarketIntelligence>(
+            CurrentMarketIntelligenceJson);
+        Assert.NotNull(original);
+
+        var compressed = MarketIntelligencePayloadCodec.Serialize(
+            original,
+            compress: true);
+        var restored = MarketIntelligencePayloadCodec.Deserialize(compressed);
+
+        Assert.True(MarketIntelligencePayloadCodec.IsCompressed(compressed));
+        Assert.NotNull(restored);
+        Assert.Equal(original.MarketIntelligenceId, restored.MarketIntelligenceId);
+        Assert.Equal(original.ItemAnalyses.Count, restored.ItemAnalyses.Count);
+        Assert.Equal(original.Recommendations.Count, restored.Recommendations.Count);
+        Assert.Equal(
+            original.RecipeBasis?.Metadata.RecipeDataIdentity,
+            restored.RecipeBasis?.Metadata.RecipeDataIdentity);
+    }
+
+    [Fact]
     public void CurrentRecipeBasis_RestoresIdentityOperationsAndDemand()
     {
         using var document = JsonDocument.Parse(CurrentMarketIntelligenceJson);

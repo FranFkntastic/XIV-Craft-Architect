@@ -18,7 +18,8 @@ public sealed class CoreStoredPlanSnapshotBuilder
         DateTime? savedAt = null,
         bool includeSourcePlanIdentity = false,
         bool includeLegacyMarketAnalysisFields = true,
-        bool borrowCanonicalState = false)
+        bool borrowCanonicalState = false,
+        bool compressMarketIntelligence = false)
     {
         var plan = borrowCanonicalState
             ? _session.BorrowActivePlan()
@@ -55,7 +56,9 @@ public sealed class CoreStoredPlanSnapshotBuilder
             MarketIntelligenceJson = intelligence.HasPublishedMarketAnalysis ||
                                      intelligence.HasRecommendations ||
                                      intelligence.HasUnavailableMarketItems
-                ? JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(intelligence))
+                ? MarketIntelligencePayloadCodec.Serialize(
+                    StoredMarketIntelligence.FromMarketIntelligence(intelligence),
+                    compressMarketIntelligence)
                 : null,
             MarketItemAnalysesJson = includeLegacyMarketAnalysisFields &&
                                      evidence.ItemAnalyses.Any()

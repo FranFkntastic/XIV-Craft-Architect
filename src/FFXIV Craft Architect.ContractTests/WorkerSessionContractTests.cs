@@ -2,6 +2,7 @@ using System.Text.Json;
 using CraftArchitectEngineWorker;
 using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Services;
 
 namespace FFXIV_Craft_Architect.Tests;
@@ -265,6 +266,8 @@ public sealed class WorkerSessionContractTests
         Assert.Equal(3, export.Revision);
         Assert.NotNull(export.StoredPlan?.PlanJson);
         Assert.NotNull(export.StoredPlan.MarketIntelligenceJson);
+        Assert.True(MarketIntelligencePayloadCodec.IsCompressed(
+            export.StoredPlan.MarketIntelligenceJson));
         Assert.Null(export.StoredPlan.MarketPlansJson);
         Assert.Null(export.StoredPlan.MarketItemAnalysesJson);
     }

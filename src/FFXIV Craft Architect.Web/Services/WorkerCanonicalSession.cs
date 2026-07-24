@@ -62,7 +62,8 @@ internal sealed class WorkerCanonicalSession
             DateTime.UtcNow,
             includeSourcePlanIdentity,
             includeLegacyMarketAnalysisFields,
-            borrowCanonicalState: true);
+            borrowCanonicalState: true,
+            compressMarketIntelligence: true);
         return new StoredPlan
         {
             Id = snapshot.Id,

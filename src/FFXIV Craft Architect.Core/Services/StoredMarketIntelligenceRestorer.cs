@@ -265,7 +265,7 @@ public static class StoredMarketIntelligenceRestorer
 
         try
         {
-            var stored = JsonSerializer.Deserialize<StoredMarketIntelligence>(json);
+            var stored = MarketIntelligencePayloadCodec.Deserialize(json);
             if (stored == null)
             {
                 warning = "Stored market intelligence payload was empty.";
@@ -301,11 +301,20 @@ public static class StoredMarketIntelligenceRestorer
             warning = $"Stored market intelligence could not be deserialized: {ex.Message}";
             return null;
         }
+        catch (Exception ex) when (ex is FormatException or InvalidDataException)
+        {
+            warning = $"Stored market intelligence could not be deserialized: {ex.Message}";
+            return null;
+        }
     }
 
     private static bool ContainsLegacyListingOutlierField(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
+        {
+            return false;
+        }
+        if (MarketIntelligencePayloadCodec.IsCompressed(json))
         {
             return false;
         }
