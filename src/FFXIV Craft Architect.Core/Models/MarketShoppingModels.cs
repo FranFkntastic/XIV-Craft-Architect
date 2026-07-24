@@ -1,4 +1,7 @@
 using FFXIV_Craft_Architect.Core.Services;
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace FFXIV_Craft_Architect.Core.Models;
 
@@ -667,6 +670,7 @@ public class WorldShoppingSummary
     /// Single-world mode: ValueScore = TotalCost (Infinity if can't fulfill)
     /// Split mode: ValueScore = ModePrice / StockRatio
     /// </summary>
+    [JsonConverter(typeof(ExactDecimalJsonConverter))]
     public decimal ValueScore { get; set; }
 
     /// <summary>
@@ -1228,4 +1232,36 @@ public class PurchaseSummary
     /// Price per unit display: "~1,364g/ea".
     /// </summary>
     public string PricePerUnitDisplay => $"~{AveragePricePerUnit:N0}g/ea";
+}
+
+internal sealed class ExactDecimalJsonConverter : JsonConverter<decimal>
+{
+    public override decimal Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Number && reader.TryGetDecimal(out var number))
+        {
+            return number;
+        }
+
+        if (reader.TokenType == JsonTokenType.String &&
+            decimal.TryParse(
+                reader.GetString(),
+                NumberStyles.Number,
+                CultureInfo.InvariantCulture,
+                out var text))
+        {
+            return text;
+        }
+
+        throw new JsonException("Expected an exact decimal number or invariant decimal string.");
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        decimal value,
+        JsonSerializerOptions options) =>
+        writer.WriteStringValue(value.ToString(CultureInfo.InvariantCulture));
 }

@@ -1,3 +1,5 @@
+using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
@@ -10,6 +12,7 @@ public sealed class ProcurementRouteCompactionTests
     {
         var first = World("Alpha");
         var second = World("Beta");
+        second.ValueScore = decimal.MaxValue;
         var coverage = new MarketCoverageOption(
             "coverage",
             MarketCoverageTier.CompactSplit,
@@ -50,6 +53,13 @@ public sealed class ProcurementRouteCompactionTests
         Assert.Equal(["Alpha", "Beta"], compact.WorldOptions.Select(world => world.WorldName));
         Assert.All(compact.WorldOptions, world => Assert.Empty(world.ExcludedListings));
         Assert.All(compact.WorldOptions, world => Assert.Single(world.Listings));
+
+        var json = JsonSerializer.Serialize(compact, EngineJsonSerializerOptions.CreateWire());
+        Assert.Contains("\"valueScore\":\"79228162514264337593543950335\"", json);
+        var roundTrip = JsonSerializer.Deserialize<DetailedShoppingPlan>(
+            json,
+            EngineJsonSerializerOptions.CreateWire());
+        Assert.Equal(decimal.MaxValue, roundTrip!.WorldOptions[1].ValueScore);
     }
 
     [Fact]
