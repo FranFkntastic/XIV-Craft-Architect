@@ -366,13 +366,54 @@ async function mutateDurableSession(host, requestMessage) {
 }
 
 function applyDurablePatch(storedPlan, patch) {
-    if (!storedPlan || typeof patch?.procurementRouteJson !== "string") {
+    if (!storedPlan || !patch ||
+        (typeof patch.procurementRouteJson !== "string" &&
+         !Number.isSafeInteger(patch.procurementTravelTolerance))) {
         throw new Error("Worker session durable patch is incomplete.");
     }
+    const procurementRouteJson = typeof patch.procurementRouteJson === "string"
+        ? patch.procurementRouteJson
+        : applyProcurementTolerancePatch(
+            storedPlan.procurementRouteJson,
+            patch.procurementTravelTolerance,
+            patch.procurementMaximumPremiumRate ?? null);
     return {
         ...storedPlan,
-        procurementRouteJson: patch.procurementRouteJson
+        procurementRouteJson
     };
+}
+
+function applyProcurementTolerancePatch(
+    procurementRouteJson,
+    travelTolerance,
+    maximumPremiumRate) {
+    if (typeof procurementRouteJson !== "string" ||
+        !Number.isSafeInteger(travelTolerance)) {
+        throw new Error("The persisted procurement route cannot accept a tolerance patch.");
+    }
+    const normalized = Math.max(0, Math.min(11, travelTolerance));
+    const route = JSON.parse(procurementRouteJson);
+    const decision = route?.decision;
+    const selection = decision?.toleranceSelections?.find(option =>
+        normalized >= option.minimumTolerance &&
+        normalized <= option.maximumTolerance);
+    if (!selection || !Array.isArray(selection.shoppingPlans)) {
+        throw new Error(
+            `The persisted procurement route has no selection for tolerance ${normalized}.`);
+    }
+    route.shoppingPlans = selection.shoppingPlans;
+    route.decision = {
+        ...decision,
+        travelTolerance: normalized,
+        maximumPremiumRate,
+        selectedGilCost: selection.gilCost,
+        selectedEvidencePenalty: selection.evidencePenalty,
+        selectedWorldStops: selection.worldStops,
+        selectedDataCenterTransfers: selection.dataCenterTransfers,
+        fixedAcquisitionGilCost: selection.fixedAcquisitionGilCost,
+        itemDecisions: selection.itemDecisions
+    };
+    return JSON.stringify(route);
 }
 
 function createManagedSessionMessage(requestMessage, commandKind, expectedRevision, payload) {

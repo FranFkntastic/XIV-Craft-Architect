@@ -127,9 +127,7 @@ internal sealed class WorkerCanonicalSession
             _activeProcurementItemsVersion is { } cached &&
             cached.PlanSession == version.PlanSession &&
             cached.PlanCore == version.PlanCore &&
-            cached.PlanDecision == version.PlanDecision &&
-            cached.PlanPrice == version.PlanPrice &&
-            cached.SettingsContext == version.SettingsContext)
+            cached.PlanDecision == version.PlanDecision)
         {
             return _activeProcurementItems;
         }

@@ -93,7 +93,9 @@ public sealed record WorkerSessionMutationProjection(
     JsonElement PublicProjection);
 
 public sealed record WorkerSessionDurablePatch(
-    string ProcurementRouteJson);
+    string? ProcurementRouteJson = null,
+    int? ProcurementTravelTolerance = null,
+    decimal? ProcurementMaximumPremiumRate = null);
 
 public sealed record WorkerAcceptedMutationProjection(
     WorkerSessionShellProjection Shell,
