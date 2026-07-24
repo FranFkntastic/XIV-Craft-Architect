@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
+using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -142,6 +143,25 @@ public sealed class WorkerProjectionStore
         Procurement = procurement;
         Changed?.Invoke();
         return true;
+    }
+
+    public WorkerMarketProjection AttachMarketDetails(
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        IReadOnlyList<MarketItemAnalysis> itemAnalyses)
+    {
+        if (Market is null)
+        {
+            throw new InvalidOperationException(
+                "The Worker market projection must be published before display details can be attached.");
+        }
+
+        Market = Market with
+        {
+            ShoppingPlans = shoppingPlans,
+            ItemAnalyses = itemAnalyses
+        };
+        Changed?.Invoke();
+        return Market;
     }
 
     public bool TryPublishMutation<TProjection>(

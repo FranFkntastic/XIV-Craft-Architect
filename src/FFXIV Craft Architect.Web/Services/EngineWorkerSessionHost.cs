@@ -24,6 +24,7 @@ public static partial class ManagedHost
     private static readonly RecipeCalculationService SessionRecipeCalculator =
         new(SessionGarland, SessionVendorCache);
     private static WorkerCanonicalSession _canonicalSession = new();
+    private static PendingMarketEvidencePublication? _pendingMarketEvidencePublication;
     private static long _sessionRevision;
     private static string? _sessionRestoreWarning;
     private static bool _sessionMigratedFromLegacy;
@@ -146,6 +147,8 @@ public static partial class ManagedHost
                     await BuildRecipeAsync(command),
                 WorkerSessionCommandKinds.MarketAnalysisRun =>
                     await RunMarketAnalysisAsync(command),
+                WorkerSessionCommandKinds.MarketEvidencePublicationStage =>
+                    PublishMarketEvidence(command),
                 WorkerSessionCommandKinds.MarketEvidencePublication =>
                     PublishMarketEvidence(command),
                 WorkerSessionCommandKinds.MarketItemEvidencePublication =>
@@ -431,6 +434,46 @@ public static partial class ManagedHost
         var request = command.Payload.Deserialize<WorkerMarketEvidencePublicationRequest>(
                 WireJsonOptions)
             ?? throw new InvalidOperationException("Market-evidence publication is empty.");
+        if (request.ResetStaging)
+        {
+            _pendingMarketEvidencePublication = new PendingMarketEvidencePublication(
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion,
+                request.Lens);
+        }
+
+        var staging = _pendingMarketEvidencePublication
+            ?? throw new InvalidOperationException(
+                "Market-evidence publication staging was not initialized.");
+        staging.Validate(request);
+        staging.ItemAnalyses.AddRange(request.ItemAnalyses);
+        staging.ShoppingPlans.AddRange(request.ShoppingPlans);
+        staging.UnavailableItemIds.UnionWith(request.UnavailableItemIds);
+        staging.FetchedCount += request.FetchedCount;
+        if (!request.CompleteStaging)
+        {
+            return CreateSessionResult(
+                command.CommandKind,
+                accepted: true,
+                null,
+                null,
+                CaptureShellProjection());
+        }
+
+        request = new WorkerMarketEvidencePublicationRequest(
+            staging.Scope,
+            staging.SelectedDataCenter,
+            staging.SelectedRegion,
+            staging.Lens,
+            staging.ItemAnalyses,
+            staging.ShoppingPlans,
+            staging.UnavailableItemIds,
+            staging.FetchedCount,
+            ResetStaging: true,
+            CompleteStaging: true,
+            IncludeDetailsInProjection: request.IncludeDetailsInProjection);
+        _pendingMarketEvidencePublication = null;
         var session = _canonicalSession.Session;
         var plan = session.BorrowActivePlan()
             ?? throw new InvalidOperationException(
@@ -471,7 +514,7 @@ public static partial class ManagedHost
                 request.ShoppingPlans.Count,
                 changedDecisions,
                 request.FetchedCount,
-                CaptureMarketProjection()));
+                CaptureMarketProjection(request.IncludeDetailsInProjection)));
     }
 
     private static WorkerSessionResultEnvelope PublishMarketItemEvidence(
@@ -803,7 +846,8 @@ public static partial class ManagedHost
             route?.RouteDecision is not null);
     }
 
-    private static WorkerMarketProjection CaptureMarketProjection()
+    private static WorkerMarketProjection CaptureMarketProjection(
+        bool includeDetails = true)
     {
         var session = _canonicalSession.Session;
         var evidence = session.BorrowMarketEvidence();
@@ -868,8 +912,12 @@ public static partial class ManagedHost
             items.Sum(item => item.EstimatedTotalCost),
             items,
             candidateItems,
-            evidence.ShoppingPlans?.ToArray() ?? Array.Empty<DetailedShoppingPlan>(),
-            evidence.ItemAnalyses.ToArray());
+            includeDetails
+                ? evidence.ShoppingPlans?.ToArray() ?? Array.Empty<DetailedShoppingPlan>()
+                : Array.Empty<DetailedShoppingPlan>(),
+            includeDetails
+                ? evidence.ItemAnalyses.ToArray()
+                : Array.Empty<MarketItemAnalysis>());
     }
 
     private static WorkerProcurementProjection CaptureProcurementProjection()
@@ -1189,9 +1237,9 @@ public static partial class ManagedHost
     private static WorkerSessionShellProjection CaptureShellProjection()
     {
         var session = _canonicalSession.Session;
-        var plan = session.ActivePlan;
+        var plan = session.BorrowActivePlan();
         var context = session.ActiveContext;
-        var evidence = session.MarketEvidence;
+        var evidence = session.BorrowMarketEvidence();
         var versions = session.Versions;
         return new WorkerSessionShellProjection(
             _sessionRevision,
@@ -1250,6 +1298,48 @@ public static partial class ManagedHost
             Quantity = item.Quantity,
             MustBeHq = item.MustBeHq
         };
+
+    private sealed class PendingMarketEvidencePublication
+    {
+        public PendingMarketEvidencePublication(
+            MarketFetchScope scope,
+            string selectedDataCenter,
+            string selectedRegion,
+            MarketAcquisitionLens lens)
+        {
+            Scope = scope;
+            SelectedDataCenter = selectedDataCenter;
+            SelectedRegion = selectedRegion;
+            Lens = lens;
+        }
+
+        public MarketFetchScope Scope { get; }
+        public string SelectedDataCenter { get; }
+        public string SelectedRegion { get; }
+        public MarketAcquisitionLens Lens { get; }
+        public List<MarketItemAnalysis> ItemAnalyses { get; } = [];
+        public List<DetailedShoppingPlan> ShoppingPlans { get; } = [];
+        public HashSet<int> UnavailableItemIds { get; } = [];
+        public int FetchedCount { get; set; }
+
+        public void Validate(WorkerMarketEvidencePublicationRequest request)
+        {
+            if (request.Scope != Scope ||
+                request.Lens != Lens ||
+                !string.Equals(
+                    request.SelectedDataCenter,
+                    SelectedDataCenter,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(
+                    request.SelectedRegion,
+                    SelectedRegion,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Market-evidence publication staging context changed before completion.");
+            }
+        }
+    }
 
     private sealed class WorkerRecipeLayerWorkflow : ICoreRecipeLayerWorkflowService
     {

@@ -81,6 +81,7 @@ public sealed class CraftSessionState
     {
         lock (_gate)
         {
+            RegisterPlanInstance(_activePlan, _planSessionVersion);
             return _activePlan;
         }
     }

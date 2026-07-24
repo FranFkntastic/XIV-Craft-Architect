@@ -352,18 +352,53 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 $"The market source returned no usable evidence for {market.CandidateItems.Count:N0} items.");
         }
 
-        var result = await _engineHost.PublishMarketEvidenceAsync(
-            _projections.Shell.Revision,
-            new WorkerMarketEvidencePublicationRequest(
-                request.Scope,
-                request.SelectedDataCenter,
-                request.SelectedRegion,
-                request.Lens,
-                analyses,
-                shoppingPlans,
-                unavailableItemIds,
-                fetchedCount),
-            cancellationToken);
+        WorkerSessionResultEnvelope? result = null;
+        var publicationItemIds = analyses
+            .Select(analysis => analysis.ItemId)
+            .Concat(shoppingPlans.Select(plan => plan.ItemId))
+            .Distinct()
+            .ToArray();
+        const int publicationBatchSize = 4;
+        for (var offset = 0; offset < publicationItemIds.Length; offset += publicationBatchSize)
+        {
+            var itemIds = publicationItemIds
+                .Skip(offset)
+                .Take(publicationBatchSize)
+                .ToHashSet();
+            var isFirst = offset == 0;
+            var isFinal = offset + publicationBatchSize >= publicationItemIds.Length;
+            var publicationRequest = new WorkerMarketEvidencePublicationRequest(
+                    request.Scope,
+                    request.SelectedDataCenter,
+                    request.SelectedRegion,
+                    request.Lens,
+                    analyses.Where(analysis => itemIds.Contains(analysis.ItemId)).ToArray(),
+                    shoppingPlans.Where(plan => itemIds.Contains(plan.ItemId)).ToArray(),
+                    isFinal ? unavailableItemIds : new HashSet<int>(),
+                    isFinal ? fetchedCount : 0,
+                    ResetStaging: isFirst,
+                    CompleteStaging: isFinal,
+                    IncludeDetailsInProjection: false);
+            result = isFinal
+                ? await _engineHost.PublishMarketEvidenceAsync(
+                    _projections.Shell.Revision,
+                    publicationRequest,
+                    cancellationToken)
+                : await _engineHost.StageMarketEvidenceAsync(
+                    _projections.Shell.Revision,
+                    publicationRequest,
+                    cancellationToken);
+            if (!result.Accepted)
+            {
+                throw CreateConflict(result);
+            }
+        }
+
+        if (result is null)
+        {
+            throw new InvalidOperationException(
+                "The market analysis produced no evidence publication batches.");
+        }
         if (!_projections.TryPublishMutation<WorkerMarketAnalysisOutcome>(
                 result,
                 out var outcome) ||
@@ -373,7 +408,10 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
-        return outcome;
+        var marketWithDetails = _projections.AttachMarketDetails(
+            shoppingPlans,
+            analyses);
+        return outcome with { Market = marketWithDetails };
     }
 
     public static void CompactMarketAnalysisForPublication(MarketItemAnalysis analysis)

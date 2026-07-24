@@ -133,9 +133,90 @@ public sealed class WorkerSessionContractTests
         Assert.True(marketProjection.HasPlan);
         Assert.False(marketProjection.HasAnalysis);
 
+        var world = new WorldShoppingSummary
+        {
+            DataCenter = "Aether",
+            WorldName = "Sargatanas",
+            TotalCost = 40,
+            AveragePricePerUnit = 10,
+            TotalQuantityPurchased = 4,
+            HasSufficientStock = true,
+            Listings =
+            [
+                new ShoppingListingEntry
+                {
+                    Quantity = 4,
+                    NeededFromStack = 4,
+                    PricePerUnit = 10
+                }
+            ]
+        };
+        var staged = await SendAsync(
+            WorkerSessionCommandKinds.MarketEvidencePublicationStage,
+            expectedRevision: 2,
+            new WorkerMarketEvidencePublicationRequest(
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                [
+                    new MarketItemAnalysis
+                    {
+                        ItemId = 43,
+                        Name = "Child",
+                        QuantityNeeded = 4,
+                        Scope = MarketFetchScope.SelectedDataCenter
+                    }
+                ],
+                [
+                    new DetailedShoppingPlan
+                    {
+                        ItemId = 43,
+                        Name = "Child",
+                        QuantityNeeded = 4,
+                        WorldOptions = [world],
+                        RecommendedWorld = world
+                    }
+                ],
+                new HashSet<int>(),
+                FetchedCount: 1,
+                ResetStaging: true,
+                CompleteStaging: false,
+                IncludeDetailsInProjection: false));
+        Assert.True(staged.Accepted);
+        Assert.Equal(2, staged.Revision);
+
+        var completed = await SendAsync(
+            WorkerSessionCommandKinds.MarketEvidencePublication,
+            expectedRevision: 2,
+            new WorkerMarketEvidencePublicationRequest(
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                [],
+                [],
+                new HashSet<int>(),
+                FetchedCount: 0,
+                CompleteStaging: true,
+                IncludeDetailsInProjection: false));
+        Assert.True(completed.Accepted, completed.Message);
+        Assert.Equal(3, completed.Revision);
+        var accepted =
+            completed.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
+        Assert.NotNull(accepted);
+        Assert.Equal(1, accepted.Shell.MarketAnalysisCount);
+        Assert.Equal(1, accepted.Shell.ShoppingPlanCount);
+        var published =
+            accepted.PublicProjection.Deserialize<WorkerMarketAnalysisOutcome>(WireOptions);
+        Assert.NotNull(published);
+        Assert.True(published.Market.HasAnalysis);
+        Assert.Empty(published.Market.ItemAnalyses);
+        Assert.Empty(published.Market.ShoppingPlans);
+
         var procurement = await SendAsync(
             WorkerSessionCommandKinds.ProcurementProjection,
-            expectedRevision: 2,
+            expectedRevision: 3,
             new { });
         Assert.True(procurement.Accepted);
         var procurementProjection =
@@ -146,7 +227,7 @@ public sealed class WorkerSessionContractTests
 
         var exported = await SendAsync(
             "export",
-            expectedRevision: 2,
+            expectedRevision: 3,
             new WorkerSessionExportRequest(
                 "autosave",
                 "Autosave",
@@ -155,8 +236,11 @@ public sealed class WorkerSessionContractTests
         Assert.True(exported.Accepted);
         var export = exported.Projection.Deserialize<WorkerSessionExportProjection>(WireOptions);
         Assert.NotNull(export);
-        Assert.Equal(2, export.Revision);
+        Assert.Equal(3, export.Revision);
         Assert.NotNull(export.StoredPlan?.PlanJson);
+        Assert.NotNull(export.StoredPlan.MarketIntelligenceJson);
+        Assert.Null(export.StoredPlan.MarketPlansJson);
+        Assert.Null(export.StoredPlan.MarketItemAnalysesJson);
     }
 
     private static async Task<WorkerSessionResultEnvelope> SendAsync<TPayload>(

@@ -60,7 +60,9 @@ internal sealed class WorkerCanonicalSession
             planId,
             planName,
             DateTime.UtcNow,
-            includeSourcePlanIdentity);
+            includeSourcePlanIdentity,
+            includeLegacyMarketAnalysisFields,
+            borrowCanonicalState: true);
         return new StoredPlan
         {
             Id = snapshot.Id,

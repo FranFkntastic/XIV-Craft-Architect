@@ -16,12 +16,18 @@ public sealed class CoreStoredPlanSnapshotBuilder
         string planId,
         string planName,
         DateTime? savedAt = null,
-        bool includeSourcePlanIdentity = false)
+        bool includeSourcePlanIdentity = false,
+        bool includeLegacyMarketAnalysisFields = true,
+        bool borrowCanonicalState = false)
     {
-        var plan = _session.ActivePlan;
+        var plan = borrowCanonicalState
+            ? _session.BorrowActivePlan()
+            : _session.ActivePlan;
         var projectItems = _session.ProjectItems;
         var activeContext = _session.ActiveContext;
-        var evidence = _session.MarketEvidence;
+        var evidence = borrowCanonicalState
+            ? _session.BorrowMarketEvidence()
+            : _session.MarketEvidence;
         var intelligence = MarketIntelligence.FromCraftSessionMarketEvidence(evidence);
         var identity = _session.Identity;
         var now = DateTime.UtcNow;
@@ -42,7 +48,8 @@ public sealed class CoreStoredPlanSnapshotBuilder
                 MustBeHq = item.MustBeHq
             }).ToList(),
             PlanJson = plan != null ? JsonSerializer.Serialize(plan) : null,
-            MarketPlansJson = evidence.ShoppingPlans?.Any() == true
+            MarketPlansJson = includeLegacyMarketAnalysisFields &&
+                              evidence.ShoppingPlans?.Any() == true
                 ? JsonSerializer.Serialize(evidence.ShoppingPlans)
                 : null,
             MarketIntelligenceJson = intelligence.HasPublishedMarketAnalysis ||
@@ -50,7 +57,8 @@ public sealed class CoreStoredPlanSnapshotBuilder
                                      intelligence.HasUnavailableMarketItems
                 ? JsonSerializer.Serialize(StoredMarketIntelligence.FromMarketIntelligence(intelligence))
                 : null,
-            MarketItemAnalysesJson = evidence.ItemAnalyses.Any()
+            MarketItemAnalysesJson = includeLegacyMarketAnalysisFields &&
+                                     evidence.ItemAnalyses.Any()
                 ? JsonSerializer.Serialize(evidence.ItemAnalyses)
                 : null,
             MarketAnalysisRecipeBasisJson = evidence.RecipeBasis != null

@@ -289,6 +289,17 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             EngineCommandPriority.UserRequestedDerivation,
             cancellationToken);
 
+    public Task<WorkerSessionResultEnvelope> StageMarketEvidenceAsync(
+        long expectedRevision,
+        WorkerMarketEvidencePublicationRequest request,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.MarketEvidencePublicationStage,
+            expectedRevision,
+            request,
+            EngineCommandPriority.UserRequestedDerivation,
+            cancellationToken);
+
     public Task<WorkerSessionResultEnvelope> ApplyMarketLensAsync(
         long expectedRevision,
         WorkerMarketLensMutation mutation,

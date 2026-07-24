@@ -72,6 +72,7 @@ public static class WorkerSessionCommandKinds
     public const string AcquisitionMutation = "mutate-acquisition";
     public const string AcquisitionProjection = "acquisition-projection";
     public const string MarketAnalysisRun = "mutate-market-analysis";
+    public const string MarketEvidencePublicationStage = "stage-market-evidence-publication";
     public const string MarketEvidencePublication = "mutate-market-evidence-publication";
     public const string MarketItemEvidencePublication = "mutate-market-item-evidence-publication";
     public const string MarketItemRefresh = "mutate-market-item-refresh";
@@ -224,7 +225,10 @@ public sealed record WorkerMarketEvidencePublicationRequest(
     IReadOnlyList<MarketItemAnalysis> ItemAnalyses,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
     IReadOnlySet<int> UnavailableItemIds,
-    int FetchedCount);
+    int FetchedCount,
+    bool ResetStaging = false,
+    bool CompleteStaging = true,
+    bool IncludeDetailsInProjection = true);
 
 public sealed record WorkerMarketItemEvidencePublicationRequest(
     int ItemId,
