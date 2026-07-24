@@ -13,7 +13,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 {
     private readonly CraftArchitectEngineHost _engineHost;
     private readonly WorkerProjectionStore _projections;
-    private readonly ExperimentalProcurementEngineCapability _capability;
+    private readonly CraftArchitectEngineCapability _capability;
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly IMarketCacheService _marketCache;
     private readonly IUniversalisService _universalis;
@@ -21,7 +21,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     public WorkerSessionCoordinator(
         CraftArchitectEngineHost engineHost,
         WorkerProjectionStore projections,
-        ExperimentalProcurementEngineCapability capability,
+        CraftArchitectEngineCapability capability,
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
         IMarketCacheService marketCache,
         IUniversalisService universalis)
@@ -217,6 +217,31 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         return _projections.Procurement;
     }
 
+    public async Task<WorkerTradeProjection?> GetTradeProjectionAsync(
+        bool includeCraftLabor = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsEnabled)
+        {
+            return null;
+        }
+
+        var result = await _engineHost.GetTradeProjectionAsync(
+            _projections.Shell.Revision,
+            includeCraftLabor,
+            cancellationToken);
+        if (!result.Accepted)
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
+        }
+
+        return result.Projection.Deserialize<WorkerTradeProjection>(
+            EngineJsonSerializerOptions.CreateWire())
+            ?? throw new InvalidOperationException(
+                "The Worker did not publish a valid Trade projection.");
+    }
+
     public async Task<WorkerRecipePlannerProjection> MutateProjectItemsAsync(
         WorkerProjectItemsMutation mutation,
         CancellationToken cancellationToken = default)
@@ -235,6 +260,27 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
 
         return projection;
+    }
+
+    public async Task<WorkerSessionShellProjection> MutatePlanIdentityAsync(
+        string planId,
+        string planName,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _engineHost.MutatePlanIdentityAsync(
+            _projections.Shell.Revision,
+            new WorkerPlanIdentityMutation(planId, planName),
+            cancellationToken);
+        if (!_projections.TryPublishMutation<WorkerSessionShellProjection>(
+                result,
+                out var shell) ||
+            shell is null)
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
+        }
+
+        return shell;
     }
 
     public async Task<WorkerRecipeBuildOutcome> BuildRecipeAsync(

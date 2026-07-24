@@ -24,6 +24,7 @@ const STORE_ENGINE_SESSION_COMPONENTS = 'engineSessionComponents';
 const STORED_PLAN_SCHEMA_VERSION = 2;
 const STORED_PLAN_COMPONENT_FIELDS = Object.freeze([
     'planJson',
+    'planStateJson',
     'marketPlansJson',
     'marketIntelligenceJson',
     'marketItemAnalysesJson',

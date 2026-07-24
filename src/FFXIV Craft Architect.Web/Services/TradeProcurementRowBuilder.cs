@@ -9,7 +9,7 @@ public static class TradeProcurementRowBuilder
         TradeOrder order,
         TradePayrollWorkflowDraft? draft,
         string? activePlanId,
-        AcquisitionEvaluationSnapshot? liveSnapshot)
+        WorkerTradeProjection? liveSnapshot)
     {
         ArgumentNullException.ThrowIfNull(order);
 
@@ -20,9 +20,12 @@ public static class TradeProcurementRowBuilder
 
         var snapshot = liveSnapshot!;
         var responsibilities = BuildResponsibilityLookup(draft);
+        var lines = snapshot.MaterialLines
+            .GroupBy(line => line.ItemId)
+            .ToDictionary(group => group.Key, group => group.First());
 
-        return snapshot.Rows
-            .Select(row => ToTradeRow(row, snapshot.CostContext, responsibilities))
+        return snapshot.AcquisitionRows
+            .Select(row => ToTradeRow(row, lines, responsibilities))
             .OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
@@ -30,7 +33,7 @@ public static class TradeProcurementRowBuilder
     private static bool CanUseLiveProjection(
         TradeOrder order,
         string? activePlanId,
-        AcquisitionEvaluationSnapshot? liveSnapshot)
+        WorkerTradeProjection? liveSnapshot)
     {
         return liveSnapshot != null &&
             !string.IsNullOrWhiteSpace(order.CraftPlanId) &&
@@ -46,17 +49,14 @@ public static class TradeProcurementRowBuilder
     }
 
     private static TradeOrderProcurementRow ToTradeRow(
-        DecisionRow row,
-        AcquisitionCostContext costContext,
+        WorkerAcquisitionRowProjection row,
+        IReadOnlyDictionary<int, CommissionPayrollInputLine> lines,
         IReadOnlyDictionary<(int ItemId, bool RequiresHq), CommissionMaterialResponsibility> responsibilities)
     {
-        var totalCost = TryGetTotalCost(row, costContext, out var calculatedCost)
-            ? calculatedCost
-            : 0m;
+        lines.TryGetValue(row.ItemId, out var line);
         var quantity = Math.Max(row.TotalQuantity, 0);
-        var unitCost = quantity > 0 && totalCost > 0
-            ? totalCost / quantity
-            : 0m;
+        var unitCost = line?.UnitCost ?? row.UnitPrice;
+        var totalCost = unitCost * (line?.Quantity ?? quantity);
         var warnings = GetWarnings(row);
         return new TradeOrderProcurementRow(
             $"{row.ItemId}:{row.MustBeHq}",
@@ -68,11 +68,11 @@ public static class TradeProcurementRowBuilder
             unitCost,
             totalCost,
             GetResponsibility(row, responsibilities),
-            row.MarketEvidence,
+            line?.EvidenceSource ?? row.MarketEvidence,
             GetEvidenceStatus(row, totalCost),
-            row.EstimatedCost,
+            line?.UnitCostExplanation ?? row.EstimatedCost,
             warnings.Count > 0 ? warnings[0] : string.Empty,
-            warnings,
+            warnings.Concat(line?.Warnings ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
             IsLiveAcquisitionRow: true,
             IsActiveProcurement: row.IsActiveProcurement,
             HasSuppressedOccurrences: row.HasSuppressedOccurrences,
@@ -84,13 +84,8 @@ public static class TradeProcurementRowBuilder
             Source: row.Source);
     }
 
-    private static bool TryGetTotalCost(DecisionRow row, AcquisitionCostContext costContext, out decimal totalCost)
-    {
-        return AcquisitionEvaluationCostCalculator.TryGetCost(row, row.Source, costContext, out totalCost);
-    }
-
     private static CommissionMaterialResponsibility GetResponsibility(
-        DecisionRow row,
+        WorkerAcquisitionRowProjection row,
         IReadOnlyDictionary<(int ItemId, bool RequiresHq), CommissionMaterialResponsibility> responsibilities)
     {
         return responsibilities.TryGetValue((row.ItemId, row.MustBeHq), out var responsibility)
@@ -98,7 +93,7 @@ public static class TradeProcurementRowBuilder
             : CommissionMaterialResponsibility.Crafter;
     }
 
-    private static string GetEvidenceStatus(DecisionRow row, decimal totalCost)
+    private static string GetEvidenceStatus(WorkerAcquisitionRowProjection row, decimal totalCost)
     {
         if (row.IsFullySuppressed)
         {
@@ -118,7 +113,7 @@ public static class TradeProcurementRowBuilder
         return "Inactive";
     }
 
-    private static IReadOnlyList<string> GetWarnings(DecisionRow row)
+    private static IReadOnlyList<string> GetWarnings(WorkerAcquisitionRowProjection row)
     {
         if (row.IsFullySuppressed && row.SuppressedBy.Count > 0)
         {

@@ -315,15 +315,17 @@
                 BootstrapEngineSessionAsync: BootstrapEngineSessionAsync,
                 InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(
                     PackagedWorldDirectory,
-                    UniversalisService),
-                StartAutoSave: () => { },
-                RestoreAutoSaveAsync: _ => RestoreAutoSaveAsync()));
+                    UniversalisService)));
         }
     }
 
     private async Task BootstrapEngineSessionAsync(CancellationToken cancellationToken)
     {
-        await WorkerSession.BootstrapAsync(cancellationToken);
+        var shell = await WorkerSession.BootstrapAsync(cancellationToken);
+        if (!string.IsNullOrWhiteSpace(shell?.RestoreWarning))
+        {
+            Snackbar.Add(shell.RestoreWarning, Severity.Warning);
+        }
     }
 
     private void OnStartupStatusChanged()
@@ -355,7 +357,6 @@
     {
         try
         {
-            var autoSave = await Settings.GetAsync("ui.auto_save_enabled", true);
             var defaultDc = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
             var region = await Settings.GetAsync("market.region", "North America") ?? "North America";
             var secretDebugToolsEnabled = await Settings.GetAsync("debug.secret_tools_enabled", false);
@@ -375,7 +376,6 @@
                     "procurement.travel_priority",
                     nameof(MarketTravelPriority.DataCenterTransfersFirst)));
 
-            AppState.SetAutoSaveEnabled(autoSave);
             AppState.SetSecretDebugToolsEnabled(secretDebugToolsEnabled);
             AppState.SetBenchmarkWorkflowDeferral(
                 secretDebugToolsEnabled && deferAutomaticRoute || IsLocalBenchmarkWorkflowRequest());
@@ -393,19 +393,6 @@
             AppState.SetProcurementTravelPriority(procurementTravelPriority);
         }
         catch { /* Ignore settings load errors */ }
-    }
-
-    private Task<StartupAutoSaveRestoreResult> RestoreAutoSaveAsync()
-    {
-        var shell = WorkerProjections.Shell;
-        if (!shell.HasSession)
-        {
-            return Task.FromResult(StartupAutoSaveRestoreResult.NoAutoSave());
-        }
-
-        Snackbar.Add("Restored previous session", Severity.Info);
-        return Task.FromResult(
-            StartupAutoSaveRestoreResult.Restored(shell.RestoreWarning));
     }
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)

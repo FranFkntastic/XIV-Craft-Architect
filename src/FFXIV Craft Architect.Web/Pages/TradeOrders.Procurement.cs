@@ -57,19 +57,22 @@ public partial class TradeOrders
         return TradeProcurementRowBuilder.BuildRows(
             _selectedOrder,
             GetPayrollDraftForOrder(_selectedOrder),
-            AppState.CurrentPlanId,
+            WorkerProjections.Shell.PlanId,
             GetCurrentLiveProcurementSnapshot());
     }
 
     private bool IsSelectedOrderLinkedPlanActive()
     {
         return _selectedOrder != null &&
-            AppState.CurrentPlan != null &&
+            WorkerProjections.Shell.HasSession &&
             !string.IsNullOrWhiteSpace(_selectedOrder.CraftPlanId) &&
-            string.Equals(_selectedOrder.CraftPlanId, AppState.CurrentPlanId, StringComparison.Ordinal);
+            string.Equals(
+                _selectedOrder.CraftPlanId,
+                WorkerProjections.Shell.PlanId,
+                StringComparison.Ordinal);
     }
 
-    private AcquisitionEvaluationSnapshot? GetCurrentLiveProcurementSnapshot()
+    private WorkerTradeProjection? GetCurrentLiveProcurementSnapshot()
     {
         var key = CreateLiveProcurementKey();
         return key.HasValue && key.Value.Equals(_liveProcurementKey)
@@ -93,18 +96,11 @@ public partial class TradeOrders
         }
 
         var requestId = Interlocked.Increment(ref _liveProcurementRefreshRequestId);
-        var plan = AppState.CurrentPlan;
-        var planSessionVersion = AppState.PlanSessionVersion;
         _isRefreshingLiveProcurement = true;
         try
         {
-            var snapshot = await AcquisitionEvaluationWorkflow.BuildCurrentSnapshotAsync(
-                plan,
-                AppState.ShoppingPlans,
-                AppState.UnavailableMarketItems,
-                AcquisitionFilter.All);
-            if (requestId != _liveProcurementRefreshRequestId ||
-                !AppState.IsCurrentPlanSession(plan, planSessionVersion))
+            var snapshot = await WorkerSession.GetTradeProjectionAsync();
+            if (requestId != _liveProcurementRefreshRequestId)
             {
                 return;
             }
@@ -144,15 +140,10 @@ public partial class TradeOrders
             return null;
         }
 
-        var versions = AppState.CurrentVersions;
         return new LiveProcurementKey(
             _selectedOrder.Id,
-            AppState.CurrentPlanId ?? string.Empty,
-            AppState.PlanSessionVersion,
-            versions.PlanStructureVersion,
-            versions.PlanDecisionVersion,
-            versions.PlanPriceVersion,
-            versions.MarketAnalysisVersion);
+            WorkerProjections.Shell.PlanId ?? string.Empty,
+            WorkerProjections.Shell.Revision);
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetOrderedProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)
@@ -360,51 +351,35 @@ public partial class TradeOrders
             return;
         }
 
-        var plan = AppState.CurrentPlan;
-        if (plan == null)
+        var live = await WorkerSession.GetTradeProjectionAsync();
+        if (live == null || !live.HasPlan)
         {
             Snackbar.Add("Linked craft plan could not be loaded.", Severity.Warning);
             return;
         }
 
-        var beforeProjection = RecipeLayerWorkflowService.BuildDemandProjection(plan);
-        var matchingNodes = FindPlanNodesByItemId(AppState.CurrentPlan, row.ItemId).ToArray();
-        if (matchingNodes.Length == 0)
+        var liveRow = live.AcquisitionRows.FirstOrDefault(candidate =>
+            candidate.ItemId == row.ItemId);
+        if (liveRow == null)
         {
             Snackbar.Add("This material could not be found in the linked craft plan.", Severity.Warning);
             return;
         }
 
-        var node = matchingNodes[0];
-        var previousSource = node.Source;
-        if (!AcquisitionPlanningService.CanUseAcquisitionSource(node, source))
+        if (!liveRow.AvailableSources.Contains(source))
         {
             Snackbar.Add($"{RecipePlanDisplayHelpers.GetSourceDisplayName(source)} is not available for {row.ItemName}.", Severity.Warning);
             return;
         }
 
-        var change = AcquisitionDecisionService.ChangeSource(node, source);
-        if (!change.Changed)
-        {
-            Snackbar.Add("Acquisition source was already set.", Severity.Info);
-            return;
-        }
-
-        var afterProjection = RecipeLayerWorkflowService.BuildDemandProjection(plan);
-        var marketItemIdsToRefresh = AcquisitionSourceChangeImpactService.GetMarketRefreshItemIds(
-            beforeProjection,
-            afterProjection,
-            row.ItemId,
-            previousSource,
-            source);
+        await WorkerSession.MutateAcquisitionAsync(
+            new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null));
         var savedAt = DateTime.UtcNow;
-        var planSaved = await PlanPersistence.SaveGeneratedOrderPlanAsync(
+        var stored = await WorkerSession.ExportStoredPlanAsync(
             _selectedOrder.CraftPlanId!,
             _selectedOrder.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(_selectedOrder),
-            plan,
-            GetOrderRootItems(_selectedOrder),
-            savedAt);
-        if (!planSaved)
+            includeSourcePlanIdentity: true);
+        if (stored == null || !await PlanPersistence.SaveSnapshotAsync(stored))
         {
             Snackbar.Add("Source changed, but failed to save the linked craft plan.", Severity.Error);
             return;
@@ -412,8 +387,12 @@ public partial class TradeOrders
 
         var pricingResult = await TradeOrderPricingWorkflow.RepriceActivePlanAsync(
             _selectedOrder,
-            marketItemIdsToRefresh);
-        var orderToSave = pricingResult.UpdatedOrder ?? BuildFallbackOrderAfterSourceChange(_selectedOrder, savedAt);
+            source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq
+                ? [row.ItemId]
+                : null);
+        var current = await WorkerSession.GetTradeProjectionAsync();
+        var orderToSave = pricingResult.UpdatedOrder ??
+            BuildFallbackOrderAfterSourceChange(_selectedOrder, current, savedAt);
         var savedOrder = await SaveOrderAndNotifyAsync(orderToSave);
         if (!savedOrder)
         {
@@ -430,7 +409,10 @@ public partial class TradeOrders
         Snackbar.Add(pricingResult.Message, ToSeverity(pricingResult.MessageLevel));
     }
 
-    private TradeOrder BuildFallbackOrderAfterSourceChange(TradeOrder order, DateTime savedAt)
+    private TradeOrder BuildFallbackOrderAfterSourceChange(
+        TradeOrder order,
+        WorkerTradeProjection? source,
+        DateTime savedAt)
     {
         var outputs = GetOrderRootItems(order)
             .Select(item => new TradeRequestedOrderOutput(
@@ -442,7 +424,7 @@ public partial class TradeOrders
             .ToArray();
         var orderToSave = TradeOrderWorkflow.CopyOrder(order);
         orderToSave.SourceSnapshot.Materials = TradeRequestedOrderWorkflow.BuildMaterialSnapshots(
-            RecipeLayerWorkflowService.BuildActiveProcurementItems(AppState.CurrentPlan),
+            source?.ActiveProcurementItems ?? Array.Empty<MaterialAggregate>(),
             outputs);
         orderToSave.SourceSnapshot.Warnings = AppendDistinctWarning(
             orderToSave.SourceSnapshot.Warnings,
@@ -472,38 +454,6 @@ public partial class TradeOrders
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-    }
-
-    private static IEnumerable<PlanNode> FindPlanNodesByItemId(CraftingPlan? plan, int itemId)
-    {
-        if (plan == null)
-        {
-            yield break;
-        }
-
-        foreach (var root in plan.RootItems)
-        {
-            foreach (var node in FindPlanNodesByItemId(root, itemId))
-            {
-                yield return node;
-            }
-        }
-    }
-
-    private static IEnumerable<PlanNode> FindPlanNodesByItemId(PlanNode node, int itemId)
-    {
-        if (node.ItemId == itemId)
-        {
-            yield return node;
-        }
-
-        foreach (var child in node.Children)
-        {
-            foreach (var match in FindPlanNodesByItemId(child, itemId))
-            {
-                yield return match;
-            }
-        }
     }
 
 }

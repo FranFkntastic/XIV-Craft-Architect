@@ -49,6 +49,7 @@ public sealed class CoreStoredPlanSnapshotBuilder
                 MustBeHq = item.MustBeHq
             }).ToList(),
             PlanJson = plan != null ? JsonSerializer.Serialize(plan) : null,
+            PlanStateJson = plan != null ? StoredPlanRuntimeState.Capture(plan) : null,
             MarketPlansJson = includeLegacyMarketAnalysisFields &&
                               evidence.ShoppingPlans?.Any() == true
                 ? JsonSerializer.Serialize(evidence.ShoppingPlans)

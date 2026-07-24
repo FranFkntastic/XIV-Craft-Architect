@@ -125,11 +125,7 @@ public partial class TradeOrders
     private readonly record struct LiveProcurementKey(
         Guid OrderId,
         string PlanId,
-        long PlanSessionVersion,
-        long PlanStructureVersion,
-        long PlanDecisionVersion,
-        long PlanPriceVersion,
-        long MarketAnalysisVersion);
+        long Revision);
 
     private enum TradeOrderProcurementColumn
     {

@@ -981,6 +981,22 @@ public sealed class CraftSessionState
         MarkPlanStructureChanged("session identity replaced");
     }
 
+    public void TrackSourceIdentity(string sourcePlanId, string sourcePlanName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePlanId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePlanName);
+
+        lock (_gate)
+        {
+            Identity = Identity with
+            {
+                Name = sourcePlanName,
+                SourcePlanId = sourcePlanId,
+                SourcePlanName = sourcePlanName
+            };
+        }
+    }
+
     public bool RenameSourceIdentity(string sourcePlanId, string sourcePlanName)
     {
         lock (_gate)

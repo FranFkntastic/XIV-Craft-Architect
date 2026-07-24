@@ -5,69 +5,41 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class TradePayrollDraftFactory
 {
-    private readonly CommissionCostBasisResolver _costBasisResolver;
     private readonly CommissionPayrollService _payrollService;
-    private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
 
-    public TradePayrollDraftFactory(
-        CommissionCostBasisResolver costBasisResolver,
-        CommissionPayrollService payrollService,
-        IRecipeLayerWorkflowService recipeLayerWorkflow)
+    public TradePayrollDraftFactory(CommissionPayrollService payrollService)
     {
-        _costBasisResolver = costBasisResolver;
         _payrollService = payrollService;
-        _recipeLayerWorkflow = recipeLayerWorkflow;
     }
 
-    public TradePayrollDraftCreateResult CreateFromCurrentPlan(AppState appState)
+    public TradePayrollDraftCreateResult CreateFromCurrentPlan(WorkerTradeProjection source)
     {
-        ArgumentNullException.ThrowIfNull(appState);
+        ArgumentNullException.ThrowIfNull(source);
 
-        if (appState.CurrentPlan == null)
+        if (!source.HasPlan)
         {
             return TradePayrollDraftCreateResult.Unavailable("Create or load a craft plan before starting payroll.");
         }
 
-        var demand = _recipeLayerWorkflow.BuildDemandProjection(appState.CurrentPlan)
-            .ActiveProcurementDemand
-            .Where(row => row.Quantity > 0)
-            .ToArray();
-        if (demand.Length == 0)
+        if (source.MaterialLines.Count == 0)
         {
             return TradePayrollDraftCreateResult.Unavailable("The active craft plan does not have material demand to pay against.");
         }
 
-        var warnings = new List<string>();
-        if (appState.MarketItemAnalyses.Count == 0)
-        {
-            warnings.Add("No market-analysis evidence is loaded. Payroll uses plan prices where available and may be incomplete.");
-        }
-        else if (!string.IsNullOrWhiteSpace(appState.MarketAnalysisScopeWarning))
-        {
-            warnings.Add(appState.MarketAnalysisScopeWarning);
-        }
-
-        var lines = _costBasisResolver.BuildSelectedSourceLines(
-            demand,
-            appState.MarketItemAnalyses.ToArray(),
-            appState.ShoppingPlans.ToArray());
-        warnings.AddRange(lines.SelectMany(line => line.Warnings));
-
-        var versions = appState.CurrentVersions;
         var snapshot = new TradePayrollImportSnapshot(
-            appState.PlanSessionVersion,
-            versions.MarketAnalysisVersion,
-            string.IsNullOrWhiteSpace(appState.CurrentPlanName) ? "Active craft plan" : appState.CurrentPlanName,
+            source.PlanSessionVersion,
+            source.MarketAnalysisVersion,
+            source.PlanName,
             DateTime.UtcNow,
-            appState.SelectedDataCenter,
-            appState.SelectedRegion,
-            appState.DefaultMarketFetchScope,
-            appState.MarketAnalysisLens,
-            CraftPlanStateMapper.GetRootProjectItems(appState.CurrentPlan),
-            lines,
-            warnings.Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase).ToArray());
+            source.SelectedDataCenter,
+            source.SelectedRegion,
+            source.MarketFetchScope,
+            source.MarketLens,
+            source.CraftedItems,
+            source.MaterialLines,
+            source.Warnings);
 
-        var payroll = _payrollService.Calculate(lines, CommissionPayoutPolicy.Default);
+        var payroll = _payrollService.Calculate(source.MaterialLines, CommissionPayoutPolicy.Default);
         return TradePayrollDraftCreateResult.Available(new TradePayrollDraft(snapshot, payroll));
     }
 }

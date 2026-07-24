@@ -2,16 +2,14 @@
 @using System.Text
 @using FFXIV_Craft_Architect.Core.Helpers
 @inject AppState AppState
+@inject WorkerSessionCoordinator WorkerSession
+@inject WorkerProjectionStore WorkerProjections
 @inject GarlandService GarlandService
 @inject TradeOrderDraftFactory TradeOrderDraftFactory
 @inject TradeOrderPricingWorkflowService TradeOrderPricingWorkflow
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
 @inject WebPlanPersistenceService PlanPersistence
-@inject AcquisitionDecisionService AcquisitionDecisionService
-@inject AcquisitionEvaluationWorkflowService AcquisitionEvaluationWorkflow
-@inject AcquisitionSourceChangeImpactService AcquisitionSourceChangeImpactService
-@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject IJSRuntime JSRuntime

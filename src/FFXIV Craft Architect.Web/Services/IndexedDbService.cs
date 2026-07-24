@@ -1,787 +1,249 @@
-using System.Diagnostics;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.Core.Services;
 using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
-public enum AutoSaveStateOutcome
-{
-    Saved,
-    AlreadyPersisted,
-    Skipped,
-    Failed
-}
-
-public sealed record AutoSavePerformanceTiming(
-    long SnapshotMilliseconds,
-    long MetricsMilliseconds,
-    long SaveMilliseconds,
-    long TotalMilliseconds,
-    bool ReusedMarketEvidence);
-
 /// <summary>
-/// Service for persisting plans and settings in browser IndexedDB.
-/// Provides local storage that survives page refreshes.
+/// Narrow browser-storage gateway for named plans, UI settings, and Trade data.
+/// The Worker owns active-session persistence and autosave revisions directly.
 /// </summary>
-public class IndexedDbService
+public sealed class IndexedDbService
 {
     private readonly IJSRuntime _jsRuntime;
     private readonly ILogger<IndexedDbService>? _logger;
-    private bool _isInitialized = false;
-    private ReusableStoredMarketEvidence? _reusableStoredMarketEvidence;
 
-    public AutoSavePerformanceTiming? LastAutoSavePerformanceTiming { get; private set; }
-
-    public IndexedDbService(IJSRuntime jsRuntime, ILogger<IndexedDbService>? logger = null)
+    public IndexedDbService(
+        IJSRuntime jsRuntime,
+        ILogger<IndexedDbService>? logger = null)
     {
         _jsRuntime = jsRuntime;
         _logger = logger;
     }
 
-    /// <summary>
-    /// Save a plan to IndexedDB.
-    /// </summary>
     public async Task<bool> SavePlanAsync(StoredPlan plan)
     {
         try
         {
-            await EnsureInitialized();
             if (plan.SavedAt == default)
             {
                 plan.SavedAt = DateTime.UtcNow;
             }
-            var result = await _jsRuntime.InvokeAsync<bool>("IndexedDB.savePlan", plan);
-            _logger?.LogInformation("Saved plan '{PlanName}' ({PlanId}) to IndexedDB", plan.Name, plan.Id);
-            return result;
+            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.savePlan", plan);
         }
         catch (OutOfMemoryException)
         {
-            // Do not attach the exception here. Blazor's managed OOM stack can contain
-            // hundreds of thousands of characters, and Chromium retains console messages;
-            // logging the full exception compounds the memory failure we are reporting.
             _logger?.LogError(
-                "Failed to save plan '{PlanName}' to IndexedDB because browser memory was exhausted",
+                "Failed to save plan '{PlanName}' because browser memory was exhausted",
                 plan.Name);
             return false;
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Failed to save plan '{PlanName}' to IndexedDB", plan.Name);
+            _logger?.LogError(ex, "Failed to save plan '{PlanName}'", plan.Name);
             return false;
         }
     }
 
-    public async Task<bool> PatchPlanAndProcurementRouteAsync(
-        string planId,
-        StoredPlanCorePatch planPatch)
+    public Task<StoredPlan?> LoadPlanAsync(string planId) =>
+        InvokeOrDefaultAsync<StoredPlan?>(
+            "IndexedDB.loadPlan",
+            null,
+            $"load plan {planId}",
+            planId);
+
+    public Task<List<StoredPlan>> LoadAllPlansAsync() =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.loadAllPlans",
+            new List<StoredPlan>(),
+            "load plans");
+
+    public Task<List<StoredPlanSummary>> LoadPlanSummariesAsync() =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.loadPlanSummaries",
+            new List<StoredPlanSummary>(),
+            "load plan summaries");
+
+    public Task<bool> DeletePlanAsync(string planId) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.deletePlan",
+            false,
+            $"delete plan {planId}",
+            planId);
+
+    public Task<bool> ClearAllPlansAsync() =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.clearAllPlans",
+            false,
+            "clear plans");
+
+    public async Task<bool> SaveSettingAsync<T>(string key, T value) =>
+        await InvokeOrDefaultAsync(
+            "IndexedDB.saveSetting",
+            false,
+            $"save setting {key}",
+            key,
+            JsonSerializer.Serialize(value));
+
+    public async Task<T?> LoadSettingAsync<T>(
+        string key,
+        T? defaultValue = default)
     {
+        var serialized = await InvokeOrDefaultAsync<string?>(
+            "IndexedDB.loadSetting",
+            null,
+            $"load setting {key}",
+            key);
+        if (string.IsNullOrEmpty(serialized))
+        {
+            return defaultValue;
+        }
         try
         {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>(
-                "IndexedDB.patchPlanAndProcurementRoute",
-                planId,
-                planPatch);
-        }
-        catch (OutOfMemoryException)
-        {
-            _logger?.LogError(
-                "Failed to patch plan decisions and procurement route for {PlanId} because browser memory was exhausted",
-                planId);
-            return false;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to patch plan decisions and the procurement route for plan {PlanId}", planId);
-            return false;
-        }
-    }
-
-    public void RememberRestoredMarketEvidence(AppState state, StoredPlan storedPlan)
-    {
-        ArgumentNullException.ThrowIfNull(state);
-        ArgumentNullException.ThrowIfNull(storedPlan);
-
-        if (string.IsNullOrWhiteSpace(storedPlan.MarketIntelligenceJson))
-        {
-            _reusableStoredMarketEvidence = null;
-            return;
-        }
-
-        var versions = state.CurrentVersions;
-        _reusableStoredMarketEvidence = new ReusableStoredMarketEvidence(
-            versions.MarketAnalysisVersion,
-            versions.SettingsVersion,
-            storedPlan.MarketIntelligenceJson,
-            storedPlan.MarketAnalysisRecipeBasisJson,
-            storedPlan.MarketAnalysisScopeSnapshotJson);
-    }
-
-    /// <summary>
-    /// Load a specific plan by ID.
-    /// </summary>
-    public async Task<StoredPlan?> LoadPlanAsync(string planId)
-    {
-        try
-        {
-            await EnsureInitialized();
-            var result = await _jsRuntime.InvokeAsync<StoredPlan?>("IndexedDB.loadPlan", planId);
-            if (result != null)
-            {
-                _logger?.LogDebug("Loaded plan '{PlanName}' ({PlanId}) from IndexedDB", result.Name, planId);
-            }
-            return result;
-        }
-        catch (OutOfMemoryException)
-        {
-            _logger?.LogError(
-                "Failed to load plan {PlanId} from IndexedDB because browser memory was exhausted",
-                planId);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to load plan {PlanId} from IndexedDB", planId);
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Load all saved plans, sorted by modified date (newest first).
-    /// </summary>
-    public async Task<List<StoredPlan>> LoadAllPlansAsync()
-    {
-        try
-        {
-            await EnsureInitialized();
-            var plans = await _jsRuntime.InvokeAsync<List<StoredPlan>>("IndexedDB.loadAllPlans");
-            _logger?.LogInformation("Loaded {Count} plans from IndexedDB", plans.Count);
-            return plans;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to load plans from IndexedDB");
-            return new List<StoredPlan>();
-        }
-    }
-
-    /// <summary>
-    /// Load saved plan summaries without transferring full serialized plan payloads.
-    /// </summary>
-    public async Task<List<StoredPlanSummary>> LoadPlanSummariesAsync()
-    {
-        try
-        {
-            await EnsureInitialized();
-            var summaries = await _jsRuntime.InvokeAsync<List<StoredPlanSummary>>("IndexedDB.loadPlanSummaries");
-            _logger?.LogInformation("Loaded {Count} plan summaries from IndexedDB", summaries.Count);
-            return summaries;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to load plan summaries from IndexedDB");
-            return new List<StoredPlanSummary>();
-        }
-    }
-
-    /// <summary>
-    /// Delete a plan from IndexedDB.
-    /// </summary>
-    public async Task<bool> DeletePlanAsync(string planId)
-    {
-        try
-        {
-            await EnsureInitialized();
-            var result = await _jsRuntime.InvokeAsync<bool>("IndexedDB.deletePlan", planId);
-            _logger?.LogInformation("Deleted plan {PlanId} from IndexedDB", planId);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to delete plan {PlanId} from IndexedDB", planId);
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Clear all plans from IndexedDB.
-    /// </summary>
-    public async Task<bool> ClearAllPlansAsync()
-    {
-        try
-        {
-            await EnsureInitialized();
-            var result = await _jsRuntime.InvokeAsync<bool>("IndexedDB.clearAllPlans");
-            _logger?.LogWarning("Cleared all plans from IndexedDB");
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to clear plans from IndexedDB");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Save a setting value.
-    /// </summary>
-    public async Task<bool> SaveSettingAsync<T>(string key, T value)
-    {
-        try
-        {
-            await EnsureInitialized();
-            var serialized = JsonSerializer.Serialize(value);
-            var result = await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveSetting", key, serialized);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save setting {Key} to IndexedDB", key);
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Load a setting value.
-    /// </summary>
-    public async Task<T?> LoadSettingAsync<T>(string key, T? defaultValue = default)
-    {
-        try
-        {
-            await EnsureInitialized();
-            var serialized = await _jsRuntime.InvokeAsync<string?>("IndexedDB.loadSetting", key);
-
-            if (string.IsNullOrEmpty(serialized))
-            {
-                return defaultValue;
-            }
-
             return JsonSerializer.Deserialize<T>(serialized);
         }
-        catch (Exception ex)
+        catch (JsonException ex)
         {
-            _logger?.LogError(ex, "Failed to load setting {Key} from IndexedDB", key);
+            _logger?.LogWarning(ex, "Ignoring invalid setting {Key}", key);
             return defaultValue;
         }
     }
 
-    public async Task<Dictionary<string, string>> LoadAllSettingsAsync()
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<Dictionary<string, string>>("IndexedDB.loadAllSettings");
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to load all settings from IndexedDB");
-            return new Dictionary<string, string>();
-        }
-    }
+    public Task<Dictionary<string, string>> LoadAllSettingsAsync() =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.loadAllSettings",
+            new Dictionary<string, string>(),
+            "load settings");
 
-    public async Task<bool> SaveSettingsBatchAsync(Dictionary<string, string> settings)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveSettingsBatch", settings);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save settings batch to IndexedDB");
-            return false;
-        }
-    }
+    public Task<bool> SaveSettingsBatchAsync(
+        Dictionary<string, string> settings) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.saveSettingsBatch",
+            false,
+            "save settings",
+            settings);
 
-    public async Task<bool> SavePlansBatchAsync(IReadOnlyList<StoredPlan> plans)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.savePlansBatch", plans);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save plans batch to IndexedDB");
-            return false;
-        }
-    }
+    public Task<bool> SavePlansBatchAsync(IReadOnlyList<StoredPlan> plans) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.savePlansBatch",
+            false,
+            "save plans batch",
+            plans);
 
-    public async Task<bool> SaveTradeCraftersBatchAsync(IReadOnlyList<TradeCrafterProfile> crafters)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeCraftersBatch", crafters);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save Trade crafters batch to IndexedDB");
-            return false;
-        }
-    }
+    public Task<bool> SaveTradeCompanyProfileAsync(
+        TradeCompanyProfile profile) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.saveTradeCompanyProfile",
+            false,
+            $"save Trade company {profile.Id}",
+            profile);
 
-    public async Task<bool> SaveTradeOrdersBatchAsync(IReadOnlyList<TradeOrder> orders)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeOrdersBatch", orders);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save Trade orders batch to IndexedDB");
-            return false;
-        }
-    }
-
-    public async Task<bool> SaveTradePayrollDraftsBatchAsync(IReadOnlyList<TradePayrollWorkflowDraft> drafts)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradePayrollDraftsBatch", drafts);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save Trade payroll drafts batch to IndexedDB");
-            return false;
-        }
-    }
-
-    public async Task<bool> SaveTradeCompanyProfileAsync(TradeCompanyProfile profile)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeCompanyProfile", profile);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save Trade company profile {ProfileId}", profile.Id);
-            return false;
-        }
-    }
-
-    public async Task<TradeIndexedDbDiagnostics> GetTradeStoreDiagnosticsAsync()
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<TradeIndexedDbDiagnostics>("IndexedDB.getTradeStoreDiagnostics");
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to get Trade IndexedDB diagnostics");
-            return new TradeIndexedDbDiagnostics
+    public Task<TradeIndexedDbDiagnostics> GetTradeStoreDiagnosticsAsync() =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.getTradeStoreDiagnostics",
+            new TradeIndexedDbDiagnostics
             {
-                ErrorMessage = $"Could not run Trade storage diagnostics: {ex.Message}"
-            };
-        }
-    }
+                ErrorMessage = "Trade storage diagnostics were unavailable."
+            },
+            "read Trade storage diagnostics");
 
-    public async Task<List<TradeCompanyProfile>> LoadTradeCompanyProfilesAsync()
+    public Task<List<TradeCompanyProfile>> LoadTradeCompanyProfilesAsync() =>
+        InvokeRequiredAsync<List<TradeCompanyProfile>>(
+            "IndexedDB.loadTradeCompanyProfiles",
+            "load Trade company profiles");
+
+    public Task<bool> SaveTradeCrafterAsync(TradeCrafterProfile crafter) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.saveTradeCrafter",
+            false,
+            $"save Trade crafter {crafter.Id}",
+            crafter);
+
+    public Task<List<TradeCrafterProfile>> LoadTradeCraftersAsync(
+        Guid companyProfileId) =>
+        InvokeRequiredAsync<List<TradeCrafterProfile>>(
+            "IndexedDB.loadTradeCrafters",
+            "load Trade crafters",
+            companyProfileId);
+
+    public Task<bool> SaveTradeOrderAsync(TradeOrder order) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.saveTradeOrder",
+            false,
+            $"save Trade order {order.Id}",
+            order);
+
+    public Task<List<TradeOrder>> LoadTradeOrdersAsync(Guid companyProfileId) =>
+        InvokeRequiredAsync<List<TradeOrder>>(
+            "IndexedDB.loadTradeOrders",
+            "load Trade orders",
+            companyProfileId);
+
+    public Task<bool> DeleteTradeOrderAsync(Guid orderId) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.deleteTradeOrder",
+            false,
+            $"delete Trade order {orderId}",
+            orderId);
+
+    public Task<bool> SaveTradePayrollDraftAsync(
+        TradePayrollWorkflowDraft draft) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.saveTradePayrollDraft",
+            false,
+            $"save Trade payroll draft {draft.Id}",
+            draft);
+
+    public Task<List<TradePayrollWorkflowDraft>> LoadTradePayrollDraftsAsync(
+        Guid companyProfileId) =>
+        InvokeRequiredAsync<List<TradePayrollWorkflowDraft>>(
+            "IndexedDB.loadTradePayrollDrafts",
+            "load Trade payroll drafts",
+            companyProfileId);
+
+    public Task<bool> DeleteTradePayrollDraftAsync(string draftId) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.deleteTradePayrollDraft",
+            false,
+            $"delete Trade payroll draft {draftId}",
+            draftId);
+
+    public Task<StoredPlan?> LoadAutoSaveAsync() =>
+        LoadPlanAsync("autosave");
+
+    private async Task<T> InvokeOrDefaultAsync<T>(
+        string identifier,
+        T fallback,
+        string operation,
+        params object?[] args)
     {
         try
         {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<List<TradeCompanyProfile>>("IndexedDB.loadTradeCompanyProfiles");
+            return await _jsRuntime.InvokeAsync<T>(identifier, args);
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Failed to load Trade company profiles");
-            throw new InvalidOperationException("Failed to load Trade company profiles from browser storage.", ex);
+            _logger?.LogError(ex, "Failed to {Operation}", operation);
+            return fallback;
         }
     }
 
-    public async Task<bool> SaveTradeCrafterAsync(TradeCrafterProfile crafter)
+    private async Task<T> InvokeRequiredAsync<T>(
+        string identifier,
+        string operation,
+        params object?[] args)
     {
         try
         {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeCrafter", crafter);
+            return await _jsRuntime.InvokeAsync<T>(identifier, args);
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Failed to save Trade crafter {CrafterId}", crafter.Id);
-            return false;
+            _logger?.LogError(ex, "Failed to {Operation}", operation);
+            throw new InvalidOperationException(
+                $"Failed to {operation} from browser storage.",
+                ex);
         }
-    }
-
-    public async Task<List<TradeCrafterProfile>> LoadTradeCraftersAsync(Guid companyProfileId)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<List<TradeCrafterProfile>>("IndexedDB.loadTradeCrafters", companyProfileId);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to load Trade crafters for company profile {ProfileId}", companyProfileId);
-            throw new InvalidOperationException("Failed to load Trade crafters from browser storage.", ex);
-        }
-    }
-
-    public async Task<bool> SaveTradeOrderAsync(TradeOrder order)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradeOrder", order);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save Trade order {OrderId}", order.Id);
-            return false;
-        }
-    }
-
-    public async Task<List<TradeOrder>> LoadTradeOrdersAsync(Guid companyProfileId)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<List<TradeOrder>>("IndexedDB.loadTradeOrders", companyProfileId);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to load Trade orders for company profile {ProfileId}", companyProfileId);
-            throw new InvalidOperationException("Failed to load Trade orders from browser storage.", ex);
-        }
-    }
-
-    public async Task<bool> DeleteTradeOrderAsync(Guid orderId)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.deleteTradeOrder", orderId);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to delete Trade order {OrderId}", orderId);
-            return false;
-        }
-    }
-
-    public async Task<bool> SaveTradePayrollDraftAsync(TradePayrollWorkflowDraft draft)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.saveTradePayrollDraft", draft);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save Trade payroll draft {DraftId}", draft.Id);
-            return false;
-        }
-    }
-
-    public async Task<List<TradePayrollWorkflowDraft>> LoadTradePayrollDraftsAsync(Guid companyProfileId)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<List<TradePayrollWorkflowDraft>>("IndexedDB.loadTradePayrollDrafts", companyProfileId);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to load Trade payroll drafts for company profile {ProfileId}", companyProfileId);
-            throw new InvalidOperationException("Failed to load Trade payroll drafts from browser storage.", ex);
-        }
-    }
-
-    public async Task<bool> DeleteTradePayrollDraftAsync(string draftId)
-    {
-        try
-        {
-            await EnsureInitialized();
-            return await _jsRuntime.InvokeAsync<bool>("IndexedDB.deleteTradePayrollDraft", draftId);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to delete Trade payroll draft {DraftId}", draftId);
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Save the current app state (auto-save functionality).
-    /// </summary>
-    public async Task<bool> AutoSaveStateAsync(
-        AppState state,
-        string planName = "AutoSave",
-        bool skipIfInFlight = false,
-        bool allowDuringEngineMemoryPressure = false) =>
-        await AutoSaveStateWithOutcomeAsync(
-            state,
-            planName,
-            skipIfInFlight,
-            allowDuringEngineMemoryPressure) == AutoSaveStateOutcome.Saved;
-
-    public async Task<AutoSaveStateOutcome> AutoSaveStateWithOutcomeAsync(
-        AppState state,
-        string planName = "AutoSave",
-        bool skipIfInFlight = false,
-        bool allowDuringEngineMemoryPressure = false)
-    {
-        AppStateAutoSaveLease? autoSaveLease = null;
-        var success = false;
-        LastAutoSavePerformanceTiming = null;
-
-        try
-        {
-            var totalElapsed = Stopwatch.StartNew();
-
-            if (!state.HasPlanOrProjectItems)
-            {
-                return AutoSaveStateOutcome.Failed;
-            }
-
-            autoSaveLease = await state.BeginAutoSaveAsync(
-                skipIfInFlight,
-                allowDuringEngineMemoryPressure);
-            if (autoSaveLease == null)
-            {
-                return state.GetDirtyPersistedBuckets() == PersistedStateBucket.None
-                    ? AutoSaveStateOutcome.AlreadyPersisted
-                    : AutoSaveStateOutcome.Skipped;
-            }
-
-            if ((autoSaveLease.DirtyBuckets & PersistedStateBucket.MarketAnalysis) == PersistedStateBucket.None &&
-                _reusableStoredMarketEvidence is { } reusableMarketEvidence &&
-                reusableMarketEvidence.MarketAnalysisVersion == state.CurrentVersions.MarketAnalysisVersion &&
-                reusableMarketEvidence.SettingsVersion == state.CurrentVersions.SettingsVersion &&
-                (state.ProcurementRouteValidity != ProcurementRoutePublicationValidity.Current ||
-                 !string.IsNullOrWhiteSpace(reusableMarketEvidence.MarketIntelligenceJson)))
-            {
-                var routeSnapshotElapsed = Stopwatch.StartNew();
-                var routeJson = StoredPlanSnapshotBuilder.BuildProcurementRouteJson(state);
-                var planPatch = new StoredPlanCorePatch
-                {
-                    DataCenter = state.SelectedDataCenter,
-                    ProjectItems = state.ProjectItems.Select(item => new StoredProjectItem
-                    {
-                        Id = item.Id,
-                        Name = item.Name,
-                        IconId = item.IconId,
-                        Quantity = item.Quantity,
-                        MustBeHq = item.MustBeHq
-                    }).ToList(),
-                    PlanJson = state.CurrentPlan is null
-                        ? null
-                        : JsonSerializer.Serialize(state.CurrentPlan),
-                    ProcurementRouteJson = routeJson,
-                    SourcePlanId = state.CurrentPlanId,
-                    SourcePlanName = state.CurrentPlanName,
-                    SavedAt = DateTime.UtcNow
-                };
-                routeSnapshotElapsed.Stop();
-
-                await Task.Delay(50);
-                var routeSaveElapsed = Stopwatch.StartNew();
-                success = await PatchPlanAndProcurementRouteAsync("autosave", planPatch);
-                routeSaveElapsed.Stop();
-                totalElapsed.Stop();
-                LastAutoSavePerformanceTiming = new AutoSavePerformanceTiming(
-                    routeSnapshotElapsed.ElapsedMilliseconds,
-                    0,
-                    routeSaveElapsed.ElapsedMilliseconds,
-                    totalElapsed.ElapsedMilliseconds,
-                    ReusedMarketEvidence: true);
-                _logger?.LogInformation(
-                    "Auto-save patched plan decisions and the procurement route without retransferring market evidence in {TotalElapsedMs} ms",
-                    totalElapsed.ElapsedMilliseconds);
-                return success ? AutoSaveStateOutcome.Saved : AutoSaveStateOutcome.Failed;
-            }
-
-            var snapshotElapsed = Stopwatch.StartNew();
-            var planData = StoredPlanSnapshotBuilder.BuildForAutoSave(
-                state,
-                "autosave",
-                planName,
-                savedAt: null,
-                includeSourcePlanIdentity: true,
-                includeLegacyMarketAnalysisFields: false,
-                _reusableStoredMarketEvidence,
-                out var capturedMarketEvidence);
-            snapshotElapsed.Stop();
-
-            StoredPlanSnapshotMetrics? metrics = null;
-            var metricsElapsed = Stopwatch.StartNew();
-            if (_logger?.IsEnabled(LogLevel.Debug) == true)
-            {
-                metrics = StoredPlanSnapshotMetrics.FromStoredPlan(planData);
-            }
-            metricsElapsed.Stop();
-
-            // Timer-backed yield lets the browser paint before IndexedDB serialization starts.
-            await Task.Delay(50);
-            var saveElapsed = Stopwatch.StartNew();
-            success = await SavePlanAsync(planData);
-            saveElapsed.Stop();
-            totalElapsed.Stop();
-            LastAutoSavePerformanceTiming = new AutoSavePerformanceTiming(
-                snapshotElapsed.ElapsedMilliseconds,
-                metricsElapsed.ElapsedMilliseconds,
-                saveElapsed.ElapsedMilliseconds,
-                totalElapsed.ElapsedMilliseconds,
-                ReferenceEquals(capturedMarketEvidence, _reusableStoredMarketEvidence));
-            if (success)
-            {
-                _reusableStoredMarketEvidence = capturedMarketEvidence;
-            }
-
-            if (metrics != null)
-            {
-                _logger?.LogDebug(
-                    "Auto-save wrote {PlanNodeCount} nodes, {ShoppingPlanCount} shopping plans, {MarketAnalysisCount} analyses, {TotalJsonBytes} JSON bytes in {TotalElapsedMs} ms (snapshot {SnapshotElapsedMs} ms, metrics {MetricsElapsedMs} ms, save {SaveElapsedMs} ms)",
-                    metrics.PlanNodeCount,
-                    metrics.ShoppingPlanCount,
-                    metrics.MarketAnalysisCount,
-                    metrics.TotalJsonBytes,
-                    totalElapsed.ElapsedMilliseconds,
-                    snapshotElapsed.ElapsedMilliseconds,
-                    metricsElapsed.ElapsedMilliseconds,
-                    saveElapsed.ElapsedMilliseconds);
-            }
-
-            return success ? AutoSaveStateOutcome.Saved : AutoSaveStateOutcome.Failed;
-        }
-        catch (OutOfMemoryException)
-        {
-            _logger?.LogError("Failed to auto-save state because browser memory was exhausted");
-            return AutoSaveStateOutcome.Failed;
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to auto-save state");
-            return AutoSaveStateOutcome.Failed;
-        }
-        finally
-        {
-            if (autoSaveLease != null)
-            {
-                state.CompleteAutoSave(
-                    success,
-                    autoSaveLease.CapturedVersions,
-                    autoSaveLease.DirtyBuckets);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Save market analysis results for a plan.
-    /// </summary>
-    public async Task<bool> SaveMarketAnalysisAsync(
-        string planId,
-        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketItemAnalysis> marketItemAnalyses,
-        RecommendationMode mode,
-        MarketAcquisitionLens lens,
-        StoredRecipeOperationSnapshot? recipeBasis = null,
-        PublishedMarketAnalysisScopeSnapshot? publishedScope = null,
-        MarketIntelligence? marketIntelligence = null)
-    {
-        try
-        {
-            await EnsureInitialized();
-            var storedMarketIntelligence = CreateStoredMarketIntelligence(
-                shoppingPlans,
-                marketItemAnalyses,
-                mode,
-                lens,
-                recipeBasis,
-                publishedScope,
-                marketIntelligence);
-            return await _jsRuntime.InvokeAsync<bool>(
-                "IndexedDB.patchMarketAnalysis",
-                planId,
-                JsonSerializer.Serialize(shoppingPlans),
-                JsonSerializer.Serialize(marketItemAnalyses),
-                storedMarketIntelligence != null ? JsonSerializer.Serialize(storedMarketIntelligence) : null,
-                mode,
-                lens,
-                recipeBasis != null ? JsonSerializer.Serialize(recipeBasis) : null,
-                publishedScope != null ? JsonSerializer.Serialize(publishedScope) : null);
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Failed to save market analysis for plan {PlanId}", planId);
-            return false;
-        }
-    }
-
-    private static StoredMarketIntelligence? CreateStoredMarketIntelligence(
-        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketItemAnalysis> marketItemAnalyses,
-        RecommendationMode mode,
-        MarketAcquisitionLens lens,
-        StoredRecipeOperationSnapshot? recipeBasis,
-        PublishedMarketAnalysisScopeSnapshot? publishedScope,
-        MarketIntelligence? marketIntelligence)
-    {
-        var intelligence = marketIntelligence;
-        if (intelligence == null &&
-            (shoppingPlans.Count > 0 || marketItemAnalyses.Count > 0))
-        {
-            var context = publishedScope != null
-                ? new MarketIntelligencePublicationContext(
-                    MarketIntelligencePublicationContextKind.Known,
-                    publishedScope.Scope,
-                    publishedScope.SelectedDataCenter,
-                    publishedScope.SelectedRegion,
-                    publishedScope.RequestedDataCenters.ToArray(),
-                    new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
-                    null,
-                    false,
-                    mode,
-                    lens,
-                    null,
-                    publishedScope.PlanSessionVersion,
-                    null,
-                    publishedScope.PublishedAtUtc)
-                : MarketIntelligencePublicationContext.UnknownLegacy(mode, lens);
-
-            intelligence = new MarketIntelligence(
-                Guid.NewGuid(),
-                marketItemAnalyses.ToArray(),
-                shoppingPlans.ToArray(),
-                Array.Empty<CoreMarketDataUnavailableItem>(),
-                context,
-                recipeBasis);
-        }
-
-        if (intelligence == null ||
-            (!intelligence.HasPublishedMarketAnalysis &&
-             !intelligence.HasRecommendations &&
-             !intelligence.HasUnavailableMarketItems))
-        {
-            return null;
-        }
-
-        return StoredMarketIntelligence.FromMarketIntelligence(intelligence);
-    }
-
-    /// <summary>
-    /// Load auto-saved state.
-    /// </summary>
-    public async Task<StoredPlan?> LoadAutoSaveAsync()
-    {
-        return await LoadPlanAsync("autosave");
-    }
-
-    private async Task EnsureInitialized()
-    {
-        if (!_isInitialized)
-        {
-            // The JS module auto-initializes on first call
-            _isInitialized = true;
-        }
-        await Task.CompletedTask;
     }
 }
 
@@ -803,25 +265,21 @@ public sealed class TradeIndexedDbDiagnostics
 
     public string ToDisplayMessage()
     {
-        var details = $"Trade storage diagnostics: database v{DatabaseVersion}; stores company={HasCompanyProfilesStore}, crafters={HasCraftersStore}, orders={HasOrdersStore}, payrollDrafts={HasPayrollDraftsStore}.";
+        var details =
+            $"Trade storage diagnostics: database v{DatabaseVersion}; " +
+            $"stores company={HasCompanyProfilesStore}, crafters={HasCraftersStore}, " +
+            $"orders={HasOrdersStore}, payrollDrafts={HasPayrollDraftsStore}.";
         if (!string.IsNullOrWhiteSpace(ErrorMessage))
         {
             return $"{details} {ErrorMessage}";
         }
-
-        if (!IsReady)
-        {
-            return $"{details} Reload the page after closing other FFXIV Craft Architect tabs so the browser can finish the IndexedDB upgrade.";
-        }
-
-        return details;
+        return IsReady
+            ? details
+            : $"{details} Reload after closing other Craft Architect tabs so the browser can finish the IndexedDB upgrade.";
     }
 }
 
-/// <summary>
-/// Stored plan data structure for IndexedDB.
-/// </summary>
-public class StoredPlan
+public sealed class StoredPlan
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string Name { get; set; } = "New Plan";
@@ -829,75 +287,22 @@ public class StoredPlan
     public DateTime ModifiedAt { get; set; } = DateTime.UtcNow;
     public DateTime SavedAt { get; set; } = DateTime.UtcNow;
     public string DataCenter { get; set; } = "Aether";
-    public List<StoredProjectItem> ProjectItems { get; set; } = new();
-    public string? PlanJson { get; set; }
-
-    /// <summary>
-    /// Serialized market analysis shopping plans.
-    /// </summary>
-    public string? MarketPlansJson { get; set; }
-
-    /// <summary>
-    /// Serialized canonical market intelligence publication.
-    /// </summary>
-    public string? MarketIntelligenceJson { get; set; }
-
-    /// <summary>
-    /// Serialized current procurement route and the inputs that make it valid.
-    /// </summary>
-    public string? ProcurementRouteJson { get; set; }
-
-    /// <summary>
-    /// Selected position within the persisted procurement route frontier.
-    /// </summary>
-    public int? ProcurementTravelTolerance { get; set; }
-
-    /// <summary>
-    /// Serialized immutable market analysis source data.
-    /// </summary>
-    public string? MarketItemAnalysesJson { get; set; }
-
-    /// <summary>
-    /// Serialized recipe-operation basis used to validate restored market analysis.
-    /// </summary>
-    public string? MarketAnalysisRecipeBasisJson { get; set; }
-
-    /// <summary>
-    /// Serialized market-analysis publication scope used to detect stale-scope evidence.
-    /// </summary>
-    public string? MarketAnalysisScopeSnapshotJson { get; set; }
-
-    /// <summary>
-    /// Recommendation mode used for the saved market analysis.
-    /// </summary>
-    public RecommendationMode SavedRecommendationMode { get; set; } = RecommendationMode.MinimizeTotalCost;
-
-    /// <summary>
-    /// Market analysis lens used to project the saved shopping plans.
-    /// </summary>
-    public MarketAcquisitionLens SavedMarketAnalysisLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
-
-    /// <summary>
-    /// Named plan identity active when this autosave was captured.
-    /// Autosave itself should not become the user's current named plan.
-    /// </summary>
-    public string? SourcePlanId { get; set; }
-
-    /// <summary>
-    /// Named plan display name active when this autosave was captured.
-    /// </summary>
-    public string? SourcePlanName { get; set; }
-}
-
-public sealed class StoredPlanCorePatch
-{
-    public string DataCenter { get; set; } = "Aether";
     public List<StoredProjectItem> ProjectItems { get; set; } = [];
     public string? PlanJson { get; set; }
+    public string? PlanStateJson { get; set; }
+    public string? MarketPlansJson { get; set; }
+    public string? MarketIntelligenceJson { get; set; }
     public string? ProcurementRouteJson { get; set; }
+    public int? ProcurementTravelTolerance { get; set; }
+    public string? MarketItemAnalysesJson { get; set; }
+    public string? MarketAnalysisRecipeBasisJson { get; set; }
+    public string? MarketAnalysisScopeSnapshotJson { get; set; }
+    public RecommendationMode SavedRecommendationMode { get; set; } =
+        RecommendationMode.MinimizeTotalCost;
+    public MarketAcquisitionLens SavedMarketAnalysisLens { get; set; } =
+        MarketAcquisitionLens.MinimumUpfrontCost;
     public string? SourcePlanId { get; set; }
     public string? SourcePlanName { get; set; }
-    public DateTime SavedAt { get; set; } = DateTime.UtcNow;
 }
 
 public sealed record StoredProcurementRoute(
@@ -910,10 +315,7 @@ public sealed record StoredProcurementRoute(
     string? MarketEvidenceHash,
     string? PayloadHash);
 
-/// <summary>
-/// Stored project item for IndexedDB.
-/// </summary>
-public class StoredProjectItem
+public sealed class StoredProjectItem
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;

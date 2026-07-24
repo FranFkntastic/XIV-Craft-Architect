@@ -123,12 +123,6 @@
             </button>
         </div>
 
-        @if (LastAutoSave.HasValue)
-        {
-            <div class="lp-autosave-meta">
-                Saved automatically at @LastAutoSave.Value.ToString("HH:mm:ss")
-            </div>
-        }
     }
 </div>
 
@@ -139,8 +133,6 @@
     [Parameter] public bool IsSearching { get; set; }
     [Parameter] public bool IsBuildingPlan { get; set; }
     [Parameter] public bool ShowPlanActions { get; set; }
-    [Parameter] public DateTime? LastAutoSave { get; set; }
-
     [Parameter] public IReadOnlyList<GarlandSearchResult> SearchResults { get; set; } = Array.Empty<GarlandSearchResult>();
     [Parameter] public IReadOnlyList<ProjectItem> ProjectItems { get; set; } = Array.Empty<ProjectItem>();
 

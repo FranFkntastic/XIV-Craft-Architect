@@ -5,60 +5,25 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class TradeOrderDraftFactory
 {
-    private readonly IRecipeLayerWorkflowService _recipeLayerWorkflow;
-    private readonly CommissionCostBasisResolver _costBasisResolver;
-
-    public TradeOrderDraftFactory(
-        IRecipeLayerWorkflowService recipeLayerWorkflow,
-        CommissionCostBasisResolver costBasisResolver)
-    {
-        _recipeLayerWorkflow = recipeLayerWorkflow;
-        _costBasisResolver = costBasisResolver;
-    }
-
     public TradeOrderDraftCreateResult CreateFromCurrentPlan(TradeOrderCreateRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var appState = request.AppState;
-        var plan = appState.CurrentPlan;
-        if (plan == null)
+        var source = request.Source;
+        if (!source.HasPlan)
         {
             return TradeOrderDraftCreateResult.Unavailable("Create or load a craft plan before creating a Trade order.");
         }
 
-        var rootItems = plan.RootItems
-            .Select(ToRootSnapshot)
-            .ToArray();
+        var rootItems = source.RootItems.ToArray();
         if (rootItems.Length == 0)
         {
             return TradeOrderDraftCreateResult.Unavailable("The active craft plan does not contain root items to commission.");
         }
 
-        var demandProjection = _recipeLayerWorkflow.BuildDemandProjection(plan);
-        var activeProcurementItems = demandProjection.ToActiveProcurementMaterialAggregates()
-            .Where(item => item.TotalQuantity > 0)
-            .ToArray();
-        var activeDemandRows = demandProjection.ActiveProcurementDemand
-            .Where(row => row.Quantity > 0)
-            .ToArray();
-        var warnings = new List<string>();
-        if (appState.MarketItemAnalyses.Count == 0)
-        {
-            warnings.Add("No market-analysis evidence is loaded. Payment uses plan prices where available and may be incomplete.");
-        }
-        else if (!string.IsNullOrWhiteSpace(appState.MarketAnalysisScopeWarning))
-        {
-            warnings.Add(appState.MarketAnalysisScopeWarning);
-        }
-
-        var lines = _costBasisResolver.BuildSelectedSourceLines(
-            activeDemandRows,
-            appState.MarketItemAnalyses.ToArray(),
-            appState.ShoppingPlans.ToArray());
-        warnings.AddRange(lines.SelectMany(line => line.Warnings));
+        var warnings = source.Warnings.ToList();
         warnings.Add("Labor-standard evidence is unavailable until this order is repriced from its linked craft plan.");
-        var materials = TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(lines);
+        var materials = TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(source.MaterialLines);
         var title = string.IsNullOrWhiteSpace(request.Title)
             ? CreateSuggestedTitle(rootItems)
             : request.Title.Trim();
@@ -74,7 +39,7 @@ public sealed class TradeOrderDraftFactory
                 CompanyProfileId = request.CompanyProfileId,
                 OrderId = orderId,
                 Kind = TradeOrderHistoryEventKind.Created,
-                Note = $"Imported from {GetPlanName(appState)}.",
+                Note = $"Imported from {source.PlanName}.",
                 ToStatus = status,
                 CreatedAtUtc = request.CreatedAtUtc
             }
@@ -95,7 +60,6 @@ public sealed class TradeOrderDraftFactory
             });
         }
 
-        var versions = appState.CurrentVersions;
         var order = new TradeOrder
         {
             Id = orderId,
@@ -109,11 +73,11 @@ public sealed class TradeOrderDraftFactory
             SourceSnapshot = new TradeOrderSourceSnapshot
             {
                 SourceKind = TradeOrderSourceKind.ActiveCraftPlan,
-                SourcePlanId = appState.CurrentPlanId,
-                SourcePlanName = GetPlanName(appState),
-                DataCenter = appState.SelectedDataCenter,
-                PlanSessionVersion = appState.PlanSessionVersion,
-                MarketAnalysisVersion = versions.MarketAnalysisVersion,
+                SourcePlanId = source.PlanId,
+                SourcePlanName = source.PlanName,
+                DataCenter = source.SelectedDataCenter,
+                PlanSessionVersion = source.PlanSessionVersion,
+                MarketAnalysisVersion = source.MarketAnalysisVersion,
                 ImportedAtUtc = request.CreatedAtUtc,
                 RootItems = rootItems,
                 Materials = materials,
@@ -183,23 +147,6 @@ public sealed class TradeOrderDraftFactory
         return TradeOrderDraftCreateResult.Available(order);
     }
 
-    private static string GetPlanName(AppState appState)
-    {
-        return string.IsNullOrWhiteSpace(appState.CurrentPlanName)
-            ? appState.CurrentPlan?.Name ?? "Active craft plan"
-            : appState.CurrentPlanName;
-    }
-
-    private static TradeOrderRootItemSnapshot ToRootSnapshot(PlanNode node)
-    {
-        return new TradeOrderRootItemSnapshot(
-            node.ItemId,
-            node.Name,
-            node.Quantity,
-            node.MustBeHq,
-            EstimateRootSaleValue(node));
-    }
-
     private static TradeOrderRootItemSnapshot ToRootSnapshot(TradeRequestedOrderOutput output)
     {
         return new TradeOrderRootItemSnapshot(
@@ -208,14 +155,6 @@ public sealed class TradeOrderDraftFactory
             output.Quantity,
             output.MustBeHq,
             output.EstimatedSaleValue);
-    }
-
-    private static decimal EstimateRootSaleValue(PlanNode node)
-    {
-        var unitPrice = node.MustBeHq && node.HqMarketPrice > 0
-            ? node.HqMarketPrice
-            : node.MarketPrice;
-        return unitPrice * node.Quantity;
     }
 
     private static string CreateSuggestedTitle(IReadOnlyList<TradeOrderRootItemSnapshot> rootItems)
@@ -274,7 +213,7 @@ public sealed class TradeOrderDraftFactory
 }
 
 public sealed record TradeOrderCreateRequest(
-    AppState AppState,
+    WorkerTradeProjection Source,
     Guid CompanyProfileId,
     Guid? AssignedCrafterId,
     string? Title,

@@ -59,7 +59,7 @@ public partial class TradeOrders
     private Guid? _pendingNavigationOrderId;
     private bool _isArchiveCollapsed = true;
     private HashSet<TradeOrderStatus> _collapsedStatuses = [];
-    private AcquisitionEvaluationSnapshot? _liveProcurementSnapshot;
+    private WorkerTradeProjection? _liveProcurementSnapshot;
     private LiveProcurementKey? _liveProcurementKey;
     private int _liveProcurementRefreshRequestId;
 
@@ -215,15 +215,22 @@ public partial class TradeOrders
         return saved;
     }
 
-    private void PrepareOrderImport()
+    private async Task PrepareOrderImport()
     {
         if (_companyProfile == null)
         {
             return;
         }
 
+        var source = await WorkerSession.GetTradeProjectionAsync();
+        if (source == null)
+        {
+            Snackbar.Add("The active Worker plan is unavailable.", Severity.Warning);
+            return;
+        }
+
         var result = TradeOrderDraftFactory.CreateFromCurrentPlan(new TradeOrderCreateRequest(
-            AppState,
+            source,
             _companyProfile.Id,
             _newOrderCrafterId,
             null,

@@ -98,6 +98,7 @@ internal sealed class WorkerCanonicalSession
                 MustBeHq = item.MustBeHq
             }).ToList(),
             PlanJson = snapshot.PlanJson,
+            PlanStateJson = snapshot.PlanStateJson,
             MarketIntelligenceJson = snapshot.MarketIntelligenceJson,
             MarketAnalysisRecipeBasisJson = snapshot.MarketAnalysisRecipeBasisJson,
             MarketAnalysisScopeSnapshotJson = _legacyMarketAnalysisScopeSnapshotJson,
@@ -120,6 +121,82 @@ internal sealed class WorkerCanonicalSession
     public string ExportProcurementRoute() =>
         BuildProcurementRouteJson()
         ?? throw new InvalidOperationException("The current procurement route is unavailable.");
+
+    public WorkerSessionDurablePatch CreateDurablePatch(
+        bool replacePlanJson = false,
+        bool replacePlanStateJson = false,
+        bool replaceProjectItems = false,
+        bool replaceMarketEvidence = false,
+        bool replaceProcurementRoute = false,
+        int? procurementTravelTolerance = null,
+        bool replaceContext = false,
+        bool replaceSourceIdentity = false)
+    {
+        var plan = _session.BorrowActivePlan();
+        var evidence = _session.BorrowMarketEvidence();
+        var identity = _session.Identity;
+        var intelligence = replaceMarketEvidence
+            ? MarketIntelligence.FromCraftSessionMarketEvidence(evidence)
+            : null;
+        var marketIntelligenceJson = intelligence is
+        {
+            HasPublishedMarketAnalysis: true
+        } or
+        {
+            HasRecommendations: true
+        } or
+        {
+            HasUnavailableMarketItems: true
+        }
+                ? MarketIntelligencePayloadCodec.Serialize(
+                    StoredMarketIntelligence.FromMarketIntelligence(intelligence),
+                    compress: true)
+                : null;
+
+        return new WorkerSessionDurablePatch(
+            ReplacePlanJson: replacePlanJson,
+            PlanJson: replacePlanJson && plan is not null
+                ? JsonSerializer.Serialize(plan)
+                : null,
+            ReplacePlanStateJson: replacePlanStateJson,
+            PlanStateJson: replacePlanStateJson && plan is not null
+                ? StoredPlanRuntimeState.Capture(plan)
+                : null,
+            ReplaceProjectItems: replaceProjectItems,
+            ProjectItems: replaceProjectItems
+                ? _session.ProjectItems.Select(item => new StoredProjectItem
+                {
+                    Id = item.Id,
+                    Name = item.Name,
+                    IconId = item.IconId,
+                    Quantity = item.Quantity,
+                    MustBeHq = item.MustBeHq
+                }).ToArray()
+                : null,
+            ReplaceMarketEvidence: replaceMarketEvidence,
+            MarketIntelligenceJson: marketIntelligenceJson,
+            MarketAnalysisRecipeBasisJson: replaceMarketEvidence && evidence.RecipeBasis is not null
+                ? JsonSerializer.Serialize(evidence.RecipeBasis)
+                : null,
+            SavedRecommendationMode: replaceMarketEvidence
+                ? evidence.RecommendationMode
+                : null,
+            SavedMarketAnalysisLens: replaceMarketEvidence
+                ? evidence.Lens
+                : null,
+            ReplaceProcurementRoute: replaceProcurementRoute,
+            ProcurementRouteJson: replaceProcurementRoute
+                ? BuildProcurementRouteJson() ?? _legacyProcurementRouteJson
+                : null,
+            ProcurementTravelTolerance: procurementTravelTolerance,
+            ReplaceContext: replaceContext,
+            DataCenter: replaceContext
+                ? _session.ActiveContext.DataCenter ?? plan?.DataCenter ?? "Aether"
+                : null,
+            ReplaceSourceIdentity: replaceSourceIdentity,
+            SourcePlanId: replaceSourceIdentity ? identity.SourcePlanId : null,
+            SourcePlanName: replaceSourceIdentity ? identity.SourcePlanName : null);
+    }
 
     public IReadOnlyList<MaterialAggregate> GetActiveProcurementItems(
         Func<IReadOnlyList<MaterialAggregate>> build)
@@ -209,6 +286,7 @@ internal sealed class WorkerCanonicalSession
                 MustBeHq = item.MustBeHq
             }).ToList(),
             PlanJson = storedPlan.PlanJson,
+            PlanStateJson = storedPlan.PlanStateJson,
             MarketPlansJson = storedPlan.MarketPlansJson,
             MarketIntelligenceJson = storedPlan.MarketIntelligenceJson,
             MarketItemAnalysesJson = storedPlan.MarketItemAnalysesJson,

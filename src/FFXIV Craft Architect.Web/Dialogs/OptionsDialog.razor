@@ -52,12 +52,8 @@
                  aria-labelledby="@GetTabId(_activePanel)">
             @if (_activePanel == OptionsPanel.General)
             {
-                <MudSwitch @bind-Value="_autoSaveEnabled" 
-                           Label="Auto-save plans" 
-                           Color="Color.Primary"
-                           Class="my-2" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    Automatically save your work every 30 seconds
+                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                    Craft Architect saves each accepted plan change in this browser.
                 </MudText>
             }
             
@@ -1021,7 +1017,6 @@
         await _tabElements[nextIndex].FocusAsync();
     }
     
-    private bool _autoSaveEnabled = true;
     private string _defaultDataCenter = "Aether";
     private string _selectedRegion = "North America";
     private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.EntireRegion;
@@ -1143,7 +1138,6 @@
         _activePanel = initialTab.DeveloperOnly && !AppState.SecretDebugToolsEnabled
             ? OptionsPanel.General
             : initialTab.Panel;
-        _autoSaveEnabled = await Settings.GetAsync("ui.auto_save_enabled", true);
         _defaultDataCenter = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
         _defaultMarketFetchScope = ParseMarketFetchScope(
@@ -1906,7 +1900,6 @@
             }
         }
 
-        AppState.SetAutoSaveEnabled(_autoSaveEnabled);
         AppState.SetMarketEvidenceSettings(
             _defaultDataCenter,
             _selectedRegion,
@@ -1921,7 +1914,6 @@
         AppState.SetProcurementTravelPriority(_procurementTravelPriority);
 
         // Persist settings via ISettingsService
-        await Settings.SetAsync("ui.auto_save_enabled", _autoSaveEnabled);
         await Settings.SetAsync("market.default_datacenter", _defaultDataCenter);
         await Settings.SetAsync("market.region", _selectedRegion);
         await Settings.SetAsync("market.default_search_scope", _defaultMarketFetchScope.ToString());

@@ -35,7 +35,6 @@ builder.Services.AddScoped<IRecipeResolutionService, RecipeResolutionService>();
 builder.Services.AddScoped<IRecipeOperationSnapshotService, RecipeOperationSnapshotService>();
 builder.Services.AddScoped<IRecipeOperationSnapshotLifecycleService, RecipeOperationSnapshotLifecycleService>();
 builder.Services.AddScoped<IRecipeDemandProjectionService, RecipeDemandProjectionService>();
-builder.Services.AddScoped<IRecipeLayerWorkflowService, RecipeLayerWorkflowService>();
 builder.Services.AddScoped<IArtisanService, ArtisanService>();
 builder.Services.AddScoped<IndexedDbMarketCacheService>();
 builder.Services.AddScoped<IMarketCacheService>(provider =>
@@ -60,36 +59,23 @@ builder.Services.AddScoped<ISettingsService, WebSettingsService>();
 
 // Register App State (singleton to persist across tab switches)
 builder.Services.AddSingleton<AppState>();
-builder.Services.AddScoped<AcquisitionDecisionService>();
-builder.Services.AddScoped<StoredPlanSnapshotBuilder>();
-builder.Services.AddScoped<PlanSessionLoadService>();
 builder.Services.AddScoped<WebPlanPersistenceService>();
-builder.Services.AddScoped<IMarketAnalysisPersistence, IndexedDbMarketAnalysisPersistence>();
 builder.Services.AddScoped<PackagedWorldDirectoryService>();
 builder.Services.AddScoped<StartupInitializationService>();
 builder.Services.AddScoped<CancellableOperationService>();
 builder.Services.AddScoped<NativePlanImportClassifier>();
-builder.Services.AddScoped<MarketAnalysisWorkflowService>();
-builder.Services.AddScoped<MarketAnalysisSubsetRefreshService>();
-builder.Services.AddScoped<MarketAnalysisItemRefreshService>();
 builder.Services.AddScoped<GitHubIssueReportService>();
 builder.Services.AddScoped<BrowserFileExportService>();
 builder.Services.AddSingleton(new ProcurementRouteAvailability(
     bool.TryParse(builder.Configuration["ProcurementRoutes:GenerationEnabled"], out var routeGenerationEnabled) &&
     routeGenerationEnabled));
-builder.Services.AddExperimentalProcurementEngine(builder.Configuration);
-builder.Services.AddScoped<ProcurementWorkflowService>();
-builder.Services.AddScoped<IProcurementWorkflowService>(provider =>
-    provider.GetRequiredService<ProcurementWorkflowService>());
+builder.Services.AddWorkerEngine(builder.Configuration);
 builder.Services.AddScoped<MarketMafiosoAcquisitionWorkflowService>();
 builder.Services.AddScoped<MarketMafiosoIntegrationState>();
-builder.Services.AddScoped<AcquisitionEvaluationWorkflowService>();
-builder.Services.AddScoped<AcquisitionSourceChangeImpactService>();
 builder.Services.AddScoped<TradePayrollDraftFactory>();
 builder.Services.AddScoped<ITradePayrollDraftStore, IndexedDbTradePayrollDraftStore>();
 builder.Services.AddScoped<TradePayrollPersistenceService>();
 builder.Services.AddScoped<TradeOrderDraftFactory>();
-builder.Services.AddScoped<TradeOrderCraftPlanBuildService>();
 builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
 builder.Services.AddScoped<TradeCompanyProfilePackageService>();

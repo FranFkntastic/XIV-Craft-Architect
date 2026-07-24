@@ -13,6 +13,7 @@ public sealed class CoreStoredPlanSnapshot
     public string DataCenter { get; set; } = "Aether";
     public List<CoreStoredProjectItem> ProjectItems { get; set; } = new();
     public string? PlanJson { get; set; }
+    public string? PlanStateJson { get; set; }
     public string? MarketPlansJson { get; set; }
     public string? MarketIntelligenceJson { get; set; }
     public string? MarketItemAnalysesJson { get; set; }

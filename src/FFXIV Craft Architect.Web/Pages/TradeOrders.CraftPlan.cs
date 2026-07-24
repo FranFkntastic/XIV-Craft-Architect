@@ -277,16 +277,15 @@ public partial class TradeOrders
                 return;
             }
 
-            var result = await PlanPersistence.LoadPlanIntoSessionAsync(_selectedOrder.CraftPlanId!);
-            if (result == null)
+            if (!await LoadStoredPlanIntoWorkerAsync(_selectedOrder.CraftPlanId!))
             {
                 Snackbar.Add("Linked Craft Architect plan could not be loaded.", Severity.Warning);
                 return;
             }
 
-            if (!string.IsNullOrWhiteSpace(result.Warning))
+            if (!string.IsNullOrWhiteSpace(WorkerProjections.Shell.RestoreWarning))
             {
-                Snackbar.Add(result.Warning, Severity.Warning);
+                Snackbar.Add(WorkerProjections.Shell.RestoreWarning, Severity.Warning);
             }
             else
             {
@@ -308,9 +307,7 @@ public partial class TradeOrders
             return;
         }
 
-        AppState.SelectMarketAnalysisItem(row.ItemId);
-        AppState.RequestMarketItemAutoExpand(row.ItemId);
-        NavigationManager.NavigateTo("market");
+        NavigationManager.NavigateTo($"market?itemId={row.ItemId}");
     }
 
     private async Task OpenAcquisitionEvaluationForProcurementRowAsync(TradeOrderProcurementRow row)
@@ -343,16 +340,15 @@ public partial class TradeOrders
             return false;
         }
 
-        var result = await PlanPersistence.LoadPlanIntoSessionAsync(_selectedOrder.CraftPlanId!);
-        if (result == null)
+        if (!await LoadStoredPlanIntoWorkerAsync(_selectedOrder.CraftPlanId!))
         {
             Snackbar.Add("Linked Craft Architect plan could not be loaded.", Severity.Warning);
             return false;
         }
 
-        if (!string.IsNullOrWhiteSpace(result.Warning))
+        if (!string.IsNullOrWhiteSpace(WorkerProjections.Shell.RestoreWarning))
         {
-            Snackbar.Add(result.Warning, Severity.Warning);
+            Snackbar.Add(WorkerProjections.Shell.RestoreWarning, Severity.Warning);
         }
 
         return true;
@@ -433,66 +429,33 @@ public partial class TradeOrders
         string actionLabel,
         string? targetPlanId)
     {
-        if (!ShouldGuardActiveCraftPlanReplacement(targetPlanId))
+        if (!WorkerProjections.Shell.HasSession ||
+            string.Equals(
+                WorkerProjections.Shell.PlanId,
+                targetPlanId,
+                StringComparison.Ordinal))
         {
             return true;
         }
 
-        var parameters = new DialogParameters
-        {
-            ["ActionLabel"] = actionLabel,
-            ["CurrentPlanName"] = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name,
-            ["HasNamedPlan"] = !string.IsNullOrWhiteSpace(AppState.CurrentPlanId)
-        };
-        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
-        var dialog = await DialogService.ShowAsync<TradeActivePlanSaveGuardDialog>(
-            "Active Craft Plan",
-            parameters,
-            options);
-        var result = await dialog.Result;
-        if (result == null || result.Canceled)
-        {
-            return false;
-        }
-
-        return result.Data is TradeActivePlanSaveGuardChoice choice &&
-            (choice == TradeActivePlanSaveGuardChoice.ContinueWithoutSaving ||
-             await SaveActiveCraftPlanBeforeTradeActionAsync());
-    }
-
-    private bool ShouldGuardActiveCraftPlanReplacement(string? targetPlanId)
-    {
-        if (!AppState.HasPlanOrProjectItems)
-        {
-            return false;
-        }
-
-        var dirtyBuckets = AppState.GetDirtyPersistedBuckets();
-        if (string.IsNullOrWhiteSpace(AppState.CurrentPlanId))
+        if (string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId))
         {
             return true;
         }
 
-        if (!string.IsNullOrWhiteSpace(targetPlanId) &&
-            string.Equals(AppState.CurrentPlanId, targetPlanId, StringComparison.Ordinal) &&
-            dirtyBuckets == PersistedStateBucket.None)
-        {
-            return false;
-        }
-
-        return dirtyBuckets != PersistedStateBucket.None;
+        return await SaveActiveCraftPlanBeforeTradeActionAsync();
     }
 
     private async Task<bool> SaveActiveCraftPlanBeforeTradeActionAsync()
     {
-        if (!AppState.HasProjectItems)
+        if (!WorkerProjections.Shell.HasSession)
         {
             Snackbar.Add("There are no project items to save.", Severity.Warning);
             return false;
         }
 
-        var planId = AppState.CurrentPlanId;
-        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name;
+        var planId = WorkerProjections.Shell.PlanId;
+        var planName = WorkerProjections.Shell.PlanName;
         if (string.IsNullOrWhiteSpace(planId))
         {
             var dialog = await DialogService.ShowAsync<SavePlanDialog>("Save Plan");
@@ -510,29 +473,37 @@ public partial class TradeOrders
             planName = "Saved Plan";
         }
 
-        var versions = AppState.CurrentVersions;
-        var dirtyBuckets = AppState.GetDirtyPersistedBuckets();
-        var saved = await PlanPersistence.SaveCurrentPlanAsync(planId, planName);
+        var snapshot = await WorkerSession.ExportStoredPlanAsync(
+            planId,
+            planName,
+            includeSourcePlanIdentity: true);
+        var saved = snapshot != null && await PlanPersistence.SaveSnapshotAsync(snapshot);
         if (!saved)
         {
             Snackbar.Add("Failed to save the active Craft plan.", Severity.Error);
             return false;
         }
 
-        AppState.TrackCurrentPlanIdentity(planId, planName);
-        if (dirtyBuckets != PersistedStateBucket.None)
+        Snackbar.Add($"Saved '{planName}'", Severity.Success);
+        return true;
+    }
+
+    private async Task<bool> LoadStoredPlanIntoWorkerAsync(string planId)
+    {
+        var stored = await PlanPersistence.LoadPlanPayloadAsync(planId);
+        if (stored == null)
         {
-            AppState.MarkPersisted(dirtyBuckets, versions);
+            return false;
         }
 
-        Snackbar.Add($"Saved '{planName}'", Severity.Success);
+        await WorkerSession.ReplaceStoredPlanAsync(stored, trackStoredPlanIdentity: true);
         return true;
     }
 
     private string GetOrderDataCenter(TradeOrder order)
     {
         return string.IsNullOrWhiteSpace(order.SourceSnapshot.DataCenter)
-            ? AppState.SelectedDataCenter
+            ? WorkerProjections.Shell.SelectedDataCenter
             : order.SourceSnapshot.DataCenter;
     }
 

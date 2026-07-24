@@ -93,6 +93,10 @@ public sealed class CorePlanSessionLoadService
             try
             {
                 plan = JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson);
+                if (plan is not null)
+                {
+                    StoredPlanRuntimeState.Apply(plan, storedPlan.PlanStateJson);
+                }
                 RestoreParentLinks(plan);
             }
             catch (Exception ex)

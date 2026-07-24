@@ -209,7 +209,9 @@ const savedPlanComponentStore = "planComponents";
 const activeSessionManifestId = "active";
 const sessionRevisionSchemaVersion = 2;
 const sessionComponentFields = Object.freeze([
+    "revisionMarkerJson",
     "planJson",
+    "planStateJson",
     "marketPlansJson",
     "marketIntelligenceJson",
     "marketItemAnalysesJson",
@@ -387,21 +389,64 @@ async function mutateDurableSession(host, requestMessage) {
 }
 
 function applyDurablePatch(storedPlan, patch) {
-    if (!storedPlan || !patch ||
-        (typeof patch.procurementRouteJson !== "string" &&
-         !Number.isSafeInteger(patch.procurementTravelTolerance))) {
+    const hasReplacement =
+        patch?.replacePlanJson === true ||
+        patch?.replacePlanStateJson === true ||
+        patch?.replaceProjectItems === true ||
+        patch?.replaceMarketEvidence === true ||
+        patch?.replaceProcurementRoute === true ||
+        patch?.replaceContext === true ||
+        patch?.replaceSourceIdentity === true ||
+        Number.isSafeInteger(patch?.procurementTravelTolerance);
+    if (!patch || !hasReplacement) {
         throw new Error("Worker session durable patch is incomplete.");
     }
-    const procurementRouteJson = typeof patch.procurementRouteJson === "string"
-        ? patch.procurementRouteJson
-        : storedPlan.procurementRouteJson;
-    return {
-        ...storedPlan,
-        procurementRouteJson,
-        procurementTravelTolerance: Number.isSafeInteger(patch.procurementTravelTolerance)
-            ? Math.max(0, Math.min(11, patch.procurementTravelTolerance))
-            : storedPlan.procurementTravelTolerance ?? null
+    const successor = {
+        ...(storedPlan ?? {
+            id: "autosave",
+            name: "Autosave",
+            projectItems: []
+        }),
+        modifiedAt: new Date().toISOString(),
+        savedAt: storedPlan?.savedAt ?? new Date().toISOString()
     };
+    if (patch.replacePlanJson === true) {
+        successor.planJson = patch.planJson ?? null;
+    }
+    if (patch.replacePlanStateJson === true) {
+        successor.planStateJson = patch.planStateJson ?? null;
+    }
+    if (patch.replaceProjectItems === true) {
+        successor.projectItems = Array.isArray(patch.projectItems)
+            ? patch.projectItems
+            : [];
+    }
+    if (patch.replaceMarketEvidence === true) {
+        successor.marketPlansJson = null;
+        successor.marketItemAnalysesJson = null;
+        successor.marketIntelligenceJson = patch.marketIntelligenceJson ?? null;
+        successor.marketAnalysisRecipeBasisJson =
+            patch.marketAnalysisRecipeBasisJson ?? null;
+        successor.savedRecommendationMode =
+            patch.savedRecommendationMode ?? successor.savedRecommendationMode ?? 0;
+        successor.savedMarketAnalysisLens =
+            patch.savedMarketAnalysisLens ?? successor.savedMarketAnalysisLens ?? 0;
+    }
+    if (patch.replaceProcurementRoute === true) {
+        successor.procurementRouteJson = patch.procurementRouteJson ?? null;
+    }
+    if (Number.isSafeInteger(patch.procurementTravelTolerance)) {
+        successor.procurementTravelTolerance =
+            Math.max(0, Math.min(11, patch.procurementTravelTolerance));
+    }
+    if (patch.replaceContext === true) {
+        successor.dataCenter = patch.dataCenter || "Aether";
+    }
+    if (patch.replaceSourceIdentity === true) {
+        successor.sourcePlanId = patch.sourcePlanId ?? null;
+        successor.sourcePlanName = patch.sourcePlanName ?? null;
+    }
+    return successor;
 }
 
 function createManagedSessionMessage(requestMessage, commandKind, expectedRevision, payload) {
@@ -647,13 +692,28 @@ function createV2RevisionRecord(
         previousRecord?.schemaVersion === sessionRevisionSchemaVersion &&
         durablePatch);
     const changedFields = new Set();
-    if (typeof durablePatch?.procurementRouteJson === "string") {
+    changedFields.add("revisionMarkerJson");
+    if (durablePatch?.replacePlanJson === true) {
+        changedFields.add("planJson");
+    }
+    if (durablePatch?.replacePlanStateJson === true) {
+        changedFields.add("planStateJson");
+    }
+    if (durablePatch?.replaceMarketEvidence === true) {
+        changedFields.add("marketPlansJson");
+        changedFields.add("marketItemAnalysesJson");
+        changedFields.add("marketIntelligenceJson");
+        changedFields.add("marketAnalysisRecipeBasisJson");
+    }
+    if (durablePatch?.replaceProcurementRoute === true) {
         changedFields.add("procurementRouteJson");
     }
     const componentRefs = {};
     const components = [];
     for (const field of sessionComponentFields) {
-        const payload = storedPlan[field] ?? null;
+        const payload = field === "revisionMarkerJson"
+            ? JSON.stringify({ schemaVersion: 1, revision })
+            : storedPlan[field] ?? null;
         const previousRef = previousRecord?.componentRefs?.[field] ?? null;
         if (canReuseComponents && !changedFields.has(field)) {
             componentRefs[field] = previousRef;

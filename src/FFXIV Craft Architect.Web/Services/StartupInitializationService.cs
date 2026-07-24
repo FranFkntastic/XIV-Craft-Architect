@@ -3,7 +3,6 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public sealed class StartupInitializationService
 {
     private bool _hasStarted;
-    private Action? _pendingStartAutoSave;
 
     public StartupStatus Status { get; private set; } = StartupStatus.InProgress("Starting...");
 
@@ -28,22 +27,6 @@ public sealed class StartupInitializationService
                 steps.BootstrapEngineSessionAsync,
                 cancellationToken);
             await RunStepAsync("Loading world data...", steps.InitializeWorldDataAsync, cancellationToken);
-
-            _pendingStartAutoSave = steps.StartAutoSave;
-
-            UpdateStatus(StartupStatus.InProgress("Checking autosave..."));
-            UpdateStatus(StartupStatus.InProgress("Restoring autosave..."));
-            var restoreResult = await steps.RestoreAutoSaveAsync(cancellationToken);
-
-            if (!string.IsNullOrWhiteSpace(restoreResult.Warning))
-            {
-                UpdateStatus(StartupStatus.Warning(
-                    restoreResult.WasRestored ? "Restored autosave with warnings" : "Startup warning",
-                    restoreResult.Warning));
-                return;
-            }
-
-            StartAutoSaveIfPending();
             UpdateStatus(StartupStatus.Complete());
         }
         catch (OperationCanceledException)
@@ -63,20 +46,7 @@ public sealed class StartupInitializationService
             return;
         }
 
-        StartAutoSaveIfPending();
         UpdateStatus(StartupStatus.Complete());
-    }
-
-    private void StartAutoSaveIfPending()
-    {
-        var startAutoSave = _pendingStartAutoSave;
-        if (startAutoSave == null)
-        {
-            return;
-        }
-
-        _pendingStartAutoSave = null;
-        startAutoSave();
     }
 
     private async Task RunStepAsync(
@@ -98,9 +68,7 @@ public sealed class StartupInitializationService
 public sealed record StartupInitializationSteps(
     Func<CancellationToken, Task> LoadSettingsAsync,
     Func<CancellationToken, Task> BootstrapEngineSessionAsync,
-    Func<CancellationToken, Task> InitializeWorldDataAsync,
-    Action StartAutoSave,
-    Func<CancellationToken, Task<StartupAutoSaveRestoreResult>> RestoreAutoSaveAsync);
+    Func<CancellationToken, Task> InitializeWorldDataAsync);
 
 public sealed record StartupStatus(
     string StepText,
@@ -122,18 +90,5 @@ public sealed record StartupStatus(
     public static StartupStatus Complete()
     {
         return new StartupStatus("Ready", IsInitializing: false, IsWarning: false, CanContinue: false, WarningMessage: null);
-    }
-}
-
-public sealed record StartupAutoSaveRestoreResult(bool WasRestored, string? Warning)
-{
-    public static StartupAutoSaveRestoreResult NoAutoSave()
-    {
-        return new StartupAutoSaveRestoreResult(WasRestored: false, Warning: null);
-    }
-
-    public static StartupAutoSaveRestoreResult Restored(string? warning = null)
-    {
-        return new StartupAutoSaveRestoreResult(WasRestored: true, warning);
     }
 }

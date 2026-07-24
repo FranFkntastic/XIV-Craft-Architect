@@ -67,6 +67,7 @@ public static class WorkerSessionCommandKinds
 {
     public const string RecipeProjection = "recipe-projection";
     public const string ProjectItemsMutation = "mutate-project-items";
+    public const string PlanIdentityMutation = "mutate-plan-identity";
     public const string RecipeBuild = "mutate-recipe-build";
     public const string AcquisitionMutation = "mutate-acquisition";
     public const string AcquisitionProjection = "acquisition-projection";
@@ -80,10 +81,32 @@ public static class WorkerSessionCommandKinds
     public const string ProcurementRun = "mutate-procurement";
     public const string ProcurementToleranceMutation = "mutate-procurement-tolerance";
     public const string ProcurementProjection = "procurement-projection";
+    public const string TradeProjection = "trade-projection";
 
     public static bool IsMutation(string commandKind) =>
         commandKind.StartsWith("mutate-", StringComparison.Ordinal);
 }
+
+public sealed record WorkerTradeProjectionRequest(bool IncludeCraftLabor = false);
+
+public sealed record WorkerTradeProjection(
+    long Revision,
+    bool HasPlan,
+    string? PlanId,
+    string PlanName,
+    string SelectedDataCenter,
+    string SelectedRegion,
+    MarketFetchScope MarketFetchScope,
+    MarketAcquisitionLens MarketLens,
+    long PlanSessionVersion,
+    long MarketAnalysisVersion,
+    IReadOnlyList<ProjectItem> CraftedItems,
+    IReadOnlyList<TradeOrderRootItemSnapshot> RootItems,
+    IReadOnlyList<CommissionPayrollInputLine> MaterialLines,
+    IReadOnlyList<MaterialAggregate> ActiveProcurementItems,
+    IReadOnlyList<WorkerAcquisitionRowProjection> AcquisitionRows,
+    IReadOnlyList<TradeOrderCraftLaborSnapshot> CraftLabor,
+    IReadOnlyList<string> Warnings);
 
 public sealed record WorkerSessionMutationProjection(
     WorkerSessionShellProjection Shell,
@@ -92,8 +115,25 @@ public sealed record WorkerSessionMutationProjection(
     JsonElement PublicProjection);
 
 public sealed record WorkerSessionDurablePatch(
+    bool ReplacePlanJson = false,
+    string? PlanJson = null,
+    bool ReplacePlanStateJson = false,
+    string? PlanStateJson = null,
+    bool ReplaceProjectItems = false,
+    IReadOnlyList<StoredProjectItem>? ProjectItems = null,
+    bool ReplaceMarketEvidence = false,
+    string? MarketIntelligenceJson = null,
+    string? MarketAnalysisRecipeBasisJson = null,
+    RecommendationMode? SavedRecommendationMode = null,
+    MarketAcquisitionLens? SavedMarketAnalysisLens = null,
+    bool ReplaceProcurementRoute = false,
     string? ProcurementRouteJson = null,
-    int? ProcurementTravelTolerance = null);
+    int? ProcurementTravelTolerance = null,
+    bool ReplaceContext = false,
+    string? DataCenter = null,
+    bool ReplaceSourceIdentity = false,
+    string? SourcePlanId = null,
+    string? SourcePlanName = null);
 
 public sealed record WorkerAcceptedMutationProjection(
     WorkerSessionShellProjection Shell,
@@ -106,6 +146,8 @@ public sealed record WorkerProjectItemsMutation(
     int Quantity = 0,
     bool MustBeHq = false,
     IReadOnlyList<ProjectItem>? Items = null);
+
+public sealed record WorkerPlanIdentityMutation(string PlanId, string PlanName);
 
 public sealed record WorkerRecipeBuildRequest(
     IReadOnlyList<ProjectItem> ProjectItems,

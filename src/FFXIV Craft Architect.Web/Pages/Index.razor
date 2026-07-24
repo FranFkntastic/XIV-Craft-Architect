@@ -7,6 +7,7 @@
 @using Microsoft.AspNetCore.Components.Forms
 @inject GarlandService GarlandService
 @inject RecipeCalculationService RecipeCalculationService
+@inject AppState AppState
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
 @inject IJSRuntime JSRuntime
@@ -285,6 +286,7 @@
             }
         }
         stored.PlanJson = RecipeCalculationService.SerializePlan(currentPlan);
+        stored.PlanStateJson = null;
         stored.MarketPlansJson = null;
         stored.MarketIntelligenceJson = null;
         stored.MarketItemAnalysesJson = null;
@@ -311,9 +313,9 @@
             var result = await WorkerSession.BuildRecipeAsync(
                 new WorkerRecipeBuildRequest(
                     _recipe.ProjectItems,
-                    _recipe.SelectedDataCenter,
-                    _recipe.SelectedRegion,
-                    MarketFetchScope.EntireRegion));
+                    AppState.SelectedDataCenter,
+                    AppState.SelectedRegion,
+                    AppState.DefaultMarketFetchScope));
             _recipe = result.Recipe;
             _selectedNode = result.Recipe.Roots.FirstOrDefault();
             Snackbar.Add(

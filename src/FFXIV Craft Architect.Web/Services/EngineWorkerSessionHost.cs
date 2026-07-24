@@ -143,8 +143,16 @@ public static partial class ManagedHost
                     null,
                     null,
                     CaptureProcurementProjection()),
+                WorkerSessionCommandKinds.TradeProjection => CreateSessionResult(
+                    command.CommandKind,
+                    accepted: true,
+                    null,
+                    null,
+                    await CaptureTradeProjectionAsync(command)),
                 WorkerSessionCommandKinds.ProjectItemsMutation =>
                     MutateProjectItems(command),
+                WorkerSessionCommandKinds.PlanIdentityMutation =>
+                    MutatePlanIdentity(command),
                 WorkerSessionCommandKinds.AcquisitionMutation =>
                     MutateAcquisition(command),
                 WorkerSessionCommandKinds.RecipeBuild =>
@@ -280,7 +288,16 @@ public static partial class ManagedHost
                     "session cleared",
                     CraftSessionIdentity.CreateNew());
                 _canonicalSession.InvalidateLegacyProcurementRoute();
-                return CompleteMutation(command.CommandKind, CaptureRecipeProjection);
+                return CompleteMutation(
+                    command.CommandKind,
+                    CaptureRecipeProjection,
+                    _canonicalSession.CreateDurablePatch(
+                        replacePlanJson: true,
+                        replacePlanStateJson: true,
+                        replaceProjectItems: true,
+                        replaceMarketEvidence: true,
+                        replaceProcurementRoute: true,
+                        replaceSourceIdentity: true));
             default:
                 throw new InvalidOperationException(
                     $"Unknown project-items operation '{mutation.Operation}'.");
@@ -288,7 +305,32 @@ public static partial class ManagedHost
 
         _canonicalSession.Session.ReplaceProjectItems(items);
         _canonicalSession.InvalidateLegacyProcurementRoute();
-        return CompleteMutation(command.CommandKind, CaptureRecipeProjection);
+        return CompleteMutation(
+            command.CommandKind,
+            CaptureRecipeProjection,
+            _canonicalSession.CreateDurablePatch(
+                replaceProjectItems: true,
+                replaceProcurementRoute: true));
+    }
+
+    private static WorkerSessionResultEnvelope MutatePlanIdentity(
+        WorkerSessionCommandEnvelope command)
+    {
+        var mutation = command.Payload.Deserialize<WorkerPlanIdentityMutation>(WireJsonOptions)
+            ?? throw new InvalidOperationException("Plan-identity mutation payload is empty.");
+        if (string.IsNullOrWhiteSpace(mutation.PlanId) ||
+            string.IsNullOrWhiteSpace(mutation.PlanName))
+        {
+            throw new InvalidOperationException("Plan identity requires an id and name.");
+        }
+
+        _canonicalSession.Session.TrackSourceIdentity(
+            mutation.PlanId.Trim(),
+            mutation.PlanName.Trim());
+        return CompleteMutation(
+            command.CommandKind,
+            CaptureShellProjection,
+            _canonicalSession.CreateDurablePatch(replaceSourceIdentity: true));
     }
 
     private static WorkerSessionResultEnvelope MutateAcquisition(
@@ -328,7 +370,12 @@ public static partial class ManagedHost
         }
 
         _canonicalSession.InvalidateLegacyProcurementRoute();
-        return CompleteMutation(command.CommandKind, CaptureRecipeProjection);
+        return CompleteMutation(
+            command.CommandKind,
+            CaptureRecipeProjection,
+            _canonicalSession.CreateDurablePatch(
+                replacePlanStateJson: true,
+                replaceProcurementRoute: true));
     }
 
     private static async Task<WorkerSessionResultEnvelope> BuildRecipeAsync(
@@ -373,7 +420,14 @@ public static partial class ManagedHost
                 true,
                 message,
                 RecipePlannerCommandMessageLevel.Success,
-                recipe));
+                recipe),
+            _canonicalSession.CreateDurablePatch(
+                replacePlanJson: true,
+                replacePlanStateJson: true,
+                replaceProjectItems: true,
+                replaceMarketEvidence: true,
+                replaceProcurementRoute: true,
+                replaceContext: true));
     }
 
     private static async Task<WorkerSessionResultEnvelope> RunMarketAnalysisAsync(
@@ -428,7 +482,12 @@ public static partial class ManagedHost
                 result.AnalyzedCount,
                 result.ChangedDecisionCount,
                 result.FetchedCount,
-                CaptureMarketProjection()));
+                CaptureMarketProjection()),
+            _canonicalSession.CreateDurablePatch(
+                replacePlanStateJson: true,
+                replaceMarketEvidence: true,
+                replaceProcurementRoute: true,
+                replaceContext: true));
     }
 
     private static WorkerSessionResultEnvelope PublishMarketEvidence(
@@ -519,7 +578,12 @@ public static partial class ManagedHost
             new WorkerMarketEvidenceCommitProjection(
                 request.ShoppingPlans.Count,
                 changedDecisions,
-                request.FetchedCount));
+                request.FetchedCount),
+            _canonicalSession.CreateDurablePatch(
+                replacePlanStateJson: true,
+                replaceMarketEvidence: true,
+                replaceProcurementRoute: true,
+                replaceContext: true));
     }
 
     private static WorkerSessionResultEnvelope PublishMarketItemEvidence(
@@ -578,7 +642,12 @@ public static partial class ManagedHost
             new WorkerMarketItemRefreshOutcome(
                 CoreProcurementItemRefreshStatus.Refreshed,
                 request.ShoppingPlan.Name,
-                CaptureMarketProjection()));
+                CaptureMarketProjection()),
+            _canonicalSession.CreateDurablePatch(
+                replacePlanStateJson: true,
+                replaceMarketEvidence: true,
+                replaceProcurementRoute: true,
+                replaceContext: true));
     }
 
     private static async Task<WorkerSessionResultEnvelope> ApplyMarketLensAsync(
@@ -598,7 +667,12 @@ public static partial class ManagedHost
         _sessionRevision++;
         return CreateMutationResult(
             command.CommandKind,
-            CaptureMarketProjection(includeDetails: false));
+            CaptureMarketProjection(includeDetails: false),
+            _canonicalSession.CreateDurablePatch(
+                replacePlanStateJson: true,
+                replaceMarketEvidence: true,
+                replaceProcurementRoute: true,
+                replaceContext: true));
     }
 
     private static async Task<WorkerSessionResultEnvelope> RefreshMarketItemAsync(
@@ -669,7 +743,12 @@ public static partial class ManagedHost
             new WorkerMarketItemRefreshOutcome(
                 result.Status,
                 result.ItemName,
-                CaptureMarketProjection(includeDetails: false)));
+                CaptureMarketProjection(includeDetails: false)),
+            _canonicalSession.CreateDurablePatch(
+                replacePlanStateJson: true,
+                replaceMarketEvidence: true,
+                replaceProcurementRoute: true,
+                replaceContext: true));
     }
 
     private static async Task<WorkerSessionResultEnvelope> RunProcurementAsync(
@@ -777,6 +856,7 @@ public static partial class ManagedHost
                 CaptureProcurementProjection(),
                 diagnostics),
             new WorkerSessionDurablePatch(
+                ReplaceProcurementRoute: true,
                 ProcurementRouteJson: _canonicalSession.ExportProcurementRoute(),
                 ProcurementTravelTolerance: request.TravelTolerance));
         Console.WriteLine(
@@ -837,10 +917,11 @@ public static partial class ManagedHost
 
     private static WorkerSessionResultEnvelope CompleteMutation(
         string commandKind,
-        Func<object> capturePublicProjection)
+        Func<object> capturePublicProjection,
+        WorkerSessionDurablePatch durablePatch)
     {
         _sessionRevision++;
-        return CreateMutationResult(commandKind, capturePublicProjection());
+        return CreateMutationResult(commandKind, capturePublicProjection(), durablePatch);
     }
 
     private static WorkerSessionResultEnvelope CreateMutationResult(
@@ -1067,6 +1148,142 @@ public static partial class ManagedHost
                 ?? Array.Empty<WorkerProcurementIssueProjection>(),
             Array.Empty<DetailedShoppingPlan>(),
             CompactProcurementDecision(decision));
+    }
+
+    private static async Task<WorkerTradeProjection> CaptureTradeProjectionAsync(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request = command.Payload.Deserialize<WorkerTradeProjectionRequest>(WireJsonOptions)
+            ?? new WorkerTradeProjectionRequest();
+        var session = _canonicalSession.Session;
+        var plan = session.BorrowActivePlan();
+        if (plan is null)
+        {
+            return new WorkerTradeProjection(
+                _sessionRevision,
+                HasPlan: false,
+                session.Identity.SourcePlanId,
+                session.Identity.SourcePlanName ?? "Active craft plan",
+                session.ActiveContext.DataCenter ?? "Aether",
+                session.ActiveContext.Region ?? "North America",
+                session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
+                session.BorrowMarketEvidence().Lens,
+                session.PlanSessionVersion,
+                session.Versions.MarketAnalysis,
+                Array.Empty<ProjectItem>(),
+                Array.Empty<TradeOrderRootItemSnapshot>(),
+                Array.Empty<CommissionPayrollInputLine>(),
+                Array.Empty<MaterialAggregate>(),
+                Array.Empty<WorkerAcquisitionRowProjection>(),
+                Array.Empty<TradeOrderCraftLaborSnapshot>(),
+                Array.Empty<string>());
+        }
+
+        var recipeLayer = new WorkerRecipeLayerWorkflow(_canonicalSession);
+        var demand = recipeLayer.BuildDemandProjection(plan);
+        var activeDemand = demand.ActiveProcurementDemand
+            .Where(row => row.Quantity > 0)
+            .ToArray();
+        var activeItems = demand.ToActiveProcurementMaterialAggregates()
+            .Where(item => item.TotalQuantity > 0)
+            .ToArray();
+        var evidence = session.BorrowMarketEvidence();
+        var overlay = session.BorrowProcurementOverlay();
+        var costPlans = overlay?.ShoppingPlans is { Count: > 0 }
+            ? overlay.ShoppingPlans
+            : evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>();
+        var materialLines = new CommissionCostBasisResolver()
+            .BuildSelectedSourceLines(
+                activeDemand,
+                evidence.ItemAnalyses,
+                costPlans);
+        var acquisition = CaptureAcquisitionProjection(new WorkerSessionCommandEnvelope(
+            WorkerSessionProtocol.ContractVersion,
+            WorkerSessionCommandKinds.AcquisitionProjection,
+            _sessionRevision,
+            JsonSerializer.SerializeToElement(
+                new WorkerAcquisitionProjectionRequest("All"),
+                WireJsonOptions)));
+
+        var warnings = new List<string>();
+        if (evidence.ItemAnalyses.Count == 0)
+        {
+            warnings.Add(
+                "No market-analysis evidence is loaded. Payment uses plan prices where available and may be incomplete.");
+        }
+        warnings.AddRange(materialLines.SelectMany(line => line.Warnings));
+
+        var craftLabor = Array.Empty<TradeOrderCraftLaborSnapshot>();
+        if (request.IncludeCraftLabor)
+        {
+            var snapshotService = new RecipeOperationSnapshotService(
+                SessionGarland,
+                new RecipeResolutionService(),
+                NullLogger<RecipeOperationSnapshotService>.Instance);
+            var snapshot = await snapshotService.BuildAsync(plan);
+            craftLabor = snapshot.GetRequiredCrafts()
+                .Where(craft => craft.CraftCount > 0)
+                .Select(craft => new TradeOrderCraftLaborSnapshot(
+                    craft.NodeId,
+                    craft.ResultItemId,
+                    craft.ResultItemName,
+                    craft.RequestedQuantity,
+                    craft.CraftCount,
+                    craft.JobName,
+                    craft.RecipeLevel,
+                    craft.HasStructuralDiagnostics
+                        ? [$"Recipe-operation diagnostics exist for {craft.ResultItemName}."]
+                        : []))
+                .ToArray();
+            var unresolvedCount = snapshot.GetUnresolvedRequiredCrafts().Count();
+            if (unresolvedCount > 0)
+            {
+                warnings.Add(
+                    $"Labor-standard evidence is incomplete: {unresolvedCount:N0} active crafts could not be resolved.");
+            }
+            if (craftLabor.Length == 0)
+            {
+                warnings.Add(
+                    "Labor-standard evidence is unavailable. No active craft synths were resolved for this order.");
+            }
+        }
+
+        var rootItems = plan.RootItems
+            .Select(node =>
+            {
+                var unitPrice = node.MustBeHq && node.HqMarketPrice > 0
+                    ? node.HqMarketPrice
+                    : node.MarketPrice;
+                return new TradeOrderRootItemSnapshot(
+                    node.ItemId,
+                    node.Name,
+                    node.Quantity,
+                    node.MustBeHq,
+                    unitPrice * node.Quantity);
+            })
+            .ToArray();
+        return new WorkerTradeProjection(
+            _sessionRevision,
+            HasPlan: true,
+            session.Identity.SourcePlanId,
+            session.Identity.SourcePlanName ?? plan.Name ?? "Active craft plan",
+            session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
+            session.ActiveContext.Region ?? "North America",
+            session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
+            evidence.Lens,
+            session.PlanSessionVersion,
+            session.Versions.MarketAnalysis,
+            session.ProjectItems,
+            rootItems,
+            materialLines,
+            activeItems,
+            acquisition.Rows,
+            craftLabor,
+            warnings
+                .Where(warning => !string.IsNullOrWhiteSpace(warning))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
+                .ToArray());
     }
 
     private static MarketRouteDecision? CompactProcurementDecision(

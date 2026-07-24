@@ -12,16 +12,11 @@
             <tbody>
                 <tr><td>Saved plans</td><td>@AppState.SavedPlans.Count.ToString("N0")</td></tr>
                 <tr><td>Data center</td><td>@WorkerProjections.Shell.SelectedDataCenter</td></tr>
-                <tr><td>Automatic saving</td><td>@(AppState.IsAutoSaveEnabled ? "Enabled" : "Disabled")</td></tr>
                 @if (WorkerProjections.Shell.HasSession)
                 {
                     <tr><td>Active plan</td><td>@(WorkerProjections.Shell.PlanName ?? "Unsaved plan")</td></tr>
                     <tr><td>Target items</td><td>@FormatItemCount(WorkerProjections.Shell.ProjectItemCount)</td></tr>
                     <tr><td>Session revision</td><td>@WorkerProjections.Shell.Revision.ToString("N0")</td></tr>
-                }
-                @if (AppState.LastAutoSave.HasValue)
-                {
-                    <tr><td>Last automatic save</td><td>@AppState.LastAutoSave.Value.ToString("g")</td></tr>
                 }
             </tbody>
         </MudSimpleTable>

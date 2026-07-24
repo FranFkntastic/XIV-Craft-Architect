@@ -168,20 +168,13 @@
     private string StatusMessage => IsTradeRoute
         ? AppState.StatusMessage
         : IsBusy ? "Working" : "Ready";
-    private string SelectedRegion => IsTradeRoute
-        ? AppState.SelectedRegion
-        : WorkerProjections.Shell.SelectedRegion;
-    private string SelectedDataCenter => IsTradeRoute
-        ? AppState.SelectedDataCenter
-        : WorkerProjections.Shell.SelectedDataCenter;
-    private int MaterialCount => IsTradeRoute
-        ? AppState.ShoppingItems.Count
-        : WorkerProjections.Procurement?.ActiveItemCount
+    private string SelectedRegion => WorkerProjections.Shell.SelectedRegion;
+    private string SelectedDataCenter => WorkerProjections.Shell.SelectedDataCenter;
+    private int MaterialCount =>
+        WorkerProjections.Procurement?.ActiveItemCount
           ?? WorkerProjections.Acquisition?.ActiveProcurementCount
           ?? 0;
-    private int TargetCount => IsTradeRoute
-        ? AppState.ProjectItemCount
-        : WorkerProjections.Shell.ProjectItemCount;
+    private int TargetCount => WorkerProjections.Shell.ProjectItemCount;
     private static string FormatCount(int count, string noun) =>
         $"{count:N0} {noun}{(count == 1 ? string.Empty : "s")}";
 
@@ -193,8 +186,6 @@
     protected override void OnInitialized()
     {
         AppState.OnStatusChanged += OnStatusChanged;
-        AppState.OnShoppingListChanged += OnStatusChanged;
-        AppState.OnPlanChanged += OnStatusChanged;
         WorkerProjections.Changed += OnStatusChanged;
         NavigationManager.LocationChanged += OnLocationChanged;
     }
@@ -240,8 +231,6 @@
     public void Dispose()
     {
         AppState.OnStatusChanged -= OnStatusChanged;
-        AppState.OnShoppingListChanged -= OnStatusChanged;
-        AppState.OnPlanChanged -= OnStatusChanged;
         WorkerProjections.Changed -= OnStatusChanged;
         NavigationManager.LocationChanged -= OnLocationChanged;
     }

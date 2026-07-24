@@ -121,7 +121,9 @@ public sealed class WorkerSessionContractTests
         Assert.NotNull(mutation);
         Assert.Equal(2, mutation.Shell.Revision);
         Assert.Equal(2, mutation.Shell.ProjectItemCount);
-        Assert.NotNull(mutation.DurableState?.PlanJson);
+        Assert.Null(mutation.DurableState);
+        Assert.True(mutation.DurablePatch?.ReplaceProjectItems);
+        Assert.False(mutation.DurablePatch?.ReplacePlanJson);
         var mutatedRecipe =
             mutation.PublicProjection.Deserialize<WorkerRecipePlannerProjection>(WireOptions);
         Assert.NotNull(mutatedRecipe);
@@ -229,6 +231,9 @@ public sealed class WorkerSessionContractTests
         Assert.NotNull(accepted);
         Assert.Equal(1, accepted.Shell.MarketAnalysisCount);
         Assert.Equal(2, accepted.Shell.ShoppingPlanCount);
+        Assert.True(accepted.DurablePatch?.ReplacePlanStateJson);
+        Assert.False(accepted.DurablePatch?.ReplacePlanJson);
+        Assert.True(accepted.DurablePatch?.ReplaceMarketEvidence);
         var published =
             accepted.PublicProjection.Deserialize<WorkerMarketEvidenceCommitProjection>(
                 WireOptions);
@@ -292,6 +297,7 @@ public sealed class WorkerSessionContractTests
         var generatedMutation =
             generatedRoute.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
         Assert.NotNull(generatedMutation);
+        Assert.True(generatedMutation.DurablePatch?.ReplaceProcurementRoute);
         Assert.NotNull(generatedMutation.DurablePatch?.ProcurementRouteJson);
         Assert.Equal(0, generatedMutation.DurablePatch.ProcurementTravelTolerance);
 
@@ -304,12 +310,39 @@ public sealed class WorkerSessionContractTests
         var toleranceMutation =
             selectedTolerance.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
         Assert.NotNull(toleranceMutation);
+        Assert.False(toleranceMutation.DurablePatch?.ReplaceProcurementRoute);
         Assert.Null(toleranceMutation.DurablePatch?.ProcurementRouteJson);
         Assert.Equal(11, toleranceMutation.DurablePatch?.ProcurementTravelTolerance);
 
+        var identified = await SendAsync(
+            WorkerSessionCommandKinds.PlanIdentityMutation,
+            expectedRevision: 5,
+            new WorkerPlanIdentityMutation("named-plan", "Named worker plan"));
+        Assert.True(identified.Accepted, identified.Message);
+        Assert.Equal(6, identified.Revision);
+        var identityMutation =
+            identified.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
+        Assert.NotNull(identityMutation);
+        Assert.True(identityMutation.DurablePatch?.ReplaceSourceIdentity);
+        Assert.False(identityMutation.DurablePatch?.ReplacePlanJson);
+        Assert.False(identityMutation.DurablePatch?.ReplaceMarketEvidence);
+        Assert.False(identityMutation.DurablePatch?.ReplaceProcurementRoute);
+
+        var tradeResult = await SendAsync(
+            WorkerSessionCommandKinds.TradeProjection,
+            expectedRevision: 6,
+            new WorkerTradeProjectionRequest(IncludeCraftLabor: false));
+        Assert.True(tradeResult.Accepted, tradeResult.Message);
+        var trade = tradeResult.Projection.Deserialize<WorkerTradeProjection>(WireOptions);
+        Assert.NotNull(trade);
+        Assert.True(trade.HasPlan);
+        Assert.Equal("named-plan", trade.PlanId);
+        Assert.NotEmpty(trade.RootItems);
+        Assert.NotEmpty(trade.AcquisitionRows);
+
         var exported = await SendAsync(
             "export",
-            expectedRevision: 5,
+            expectedRevision: 6,
             new WorkerSessionExportRequest(
                 "autosave",
                 "Autosave",
@@ -317,7 +350,7 @@ public sealed class WorkerSessionContractTests
         Assert.True(exported.Accepted);
         var export = exported.Projection.Deserialize<WorkerSessionExportProjection>(WireOptions);
         Assert.NotNull(export);
-        Assert.Equal(5, export.Revision);
+        Assert.Equal(6, export.Revision);
         Assert.NotNull(export.StoredPlan?.PlanJson);
         Assert.Equal(11, export.StoredPlan.ProcurementTravelTolerance);
         Assert.NotNull(export.StoredPlan.MarketIntelligenceJson);
@@ -335,9 +368,9 @@ public sealed class WorkerSessionContractTests
 
         var reloaded = await SendAsync(
             "restore",
-            expectedRevision: 5,
+            expectedRevision: 6,
             new WorkerSessionRestorePayload(
-                Revision: 6,
+                Revision: 7,
                 export.StoredPlan,
                 TrackStoredPlanIdentity: false,
                 MigratedFromLegacy: false));
@@ -345,7 +378,7 @@ public sealed class WorkerSessionContractTests
 
         var reloadedMarket = await SendAsync(
             WorkerSessionCommandKinds.MarketProjection,
-            expectedRevision: 6,
+            expectedRevision: 7,
             new WorkerMarketProjectionRequest(IncludeDetails: true));
         Assert.True(reloadedMarket.Accepted);
         var reloadedMarketProjection =

@@ -89,7 +89,11 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
               worker.removeEventListener('message', listener);
-              reject(new Error(`${description} timed out.`));
+              const diagnostics = Array.isArray(worker.__acceptanceDiagnostics)
+                ? worker.__acceptanceDiagnostics.join(' | ')
+                : '';
+              reject(new Error(
+                `${description} timed out.${diagnostics ? ` ${diagnostics}` : ''}`));
             }, timeoutMs);
             const listener = event => {
               if (!predicate(event.data)) return;
@@ -105,6 +109,14 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           const worker = new Worker('/engine-worker.js?acceptance=true', {
             type: 'module',
             name: `engine-worker-test-${generation}`
+          });
+          worker.__acceptanceDiagnostics = [];
+          worker.addEventListener('error', event => {
+            worker.__acceptanceDiagnostics.push(
+              `worker-error=${event.message || 'unknown'}`);
+          });
+          worker.addEventListener('messageerror', () => {
+            worker.__acceptanceDiagnostics.push('worker-message-error');
           });
           const capabilityPromise = waitFor(
             worker,
@@ -133,6 +145,10 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           const responsePromise = waitFor(
             runtime.worker,
             message => {
+              if (message?.kind === 'protocol-error') {
+                return message.executionId === commandId &&
+                  message.transactionId === commandId;
+              }
               if (message?.kind !== 'managed-json' || message.messageKind !== 'session-result') return false;
               const decoded = JSON.parse(message.messageJson);
               return decoded.executionId === commandId && decoded.transactionId === commandId;
@@ -161,6 +177,10 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
             transactionId: commandId
           });
           const response = await responsePromise;
+          if (response.kind === 'protocol-error') {
+            throw new Error(
+              `Worker session ${commandKind} rejected: ${response.payload?.code || 'unknown'} ${response.payload?.message || ''}`);
+          }
           return JSON.parse(response.messageJson);
         }
         const sendSessionCommand = (commandKind, expectedRevision, payload) =>
@@ -340,7 +360,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
         active.worker.terminate();
 
         const corruptedComponentId =
-          durablePersistence.activeRecord.componentRefs.marketAnalysisScopeSnapshotJson;
+          durablePersistence.activeRecord.componentRefs.revisionMarkerJson;
         await deleteSessionComponent(corruptedComponentId);
         const repaired = await startWorker(2);
         const repairedBootstrap = await sendSessionCommandTo(repaired, 2, 'bootstrap', 0, {});
@@ -437,16 +457,19 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(evidence.durablePersistence.activeRecord.storedPlan, undefined);
       assert.equal(evidence.durablePersistence.activeRecord.storedPlanMetadata.projectItems.length, 3);
       assert.equal(evidence.durablePersistence.retiredRecord, null);
-      assert.equal(evidence.durablePersistence.componentCount, 2);
+      assert.equal(evidence.durablePersistence.componentCount, 3);
       assert.match(
         evidence.durablePersistence.activeRecord.componentRefs.marketAnalysisScopeSnapshotJson,
-        /^active:3:/);
+        /^active:2:/);
       assert.match(
         evidence.durablePersistence.previousRecord.componentRefs.marketAnalysisScopeSnapshotJson,
         /^active:2:/);
-      assert.notEqual(
+      assert.equal(
         evidence.durablePersistence.activeRecord.componentRefs.marketAnalysisScopeSnapshotJson,
         evidence.durablePersistence.previousRecord.componentRefs.marketAnalysisScopeSnapshotJson);
+      assert.notEqual(
+        evidence.durablePersistence.activeRecord.componentRefs.revisionMarkerJson,
+        evidence.durablePersistence.previousRecord.componentRefs.revisionMarkerJson);
       assert.equal(evidence.repairedBootstrap.payload.accepted, true);
       assert.equal(evidence.repairedBootstrap.payload.revision, 2);
       assert.equal(evidence.repairedShell.payload.accepted, true);

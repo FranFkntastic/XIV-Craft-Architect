@@ -491,6 +491,36 @@ public sealed class PersistenceContractTests
     }
 
     [Fact]
+    public void RuntimeState_OverlaysMutableDecisionsAndPricesWithoutRewritingGraph()
+    {
+        var baseline = Plan(100, "Varnish");
+        var graphJson = JsonSerializer.Serialize(baseline);
+        var changed = JsonSerializer.Deserialize<CraftingPlan>(graphJson)!;
+        var node = Assert.Single(changed.RootItems);
+        node.Source = AcquisitionSource.VendorBuy;
+        node.SourceReason = AcquisitionSourceReason.UserSelected;
+        node.MustBeHq = true;
+        node.MarketPrice = 12_345;
+        node.HqMarketPrice = 23_456;
+        node.VendorPrice = 120;
+        node.SelectedVendorIndex = 2;
+
+        var stateJson = StoredPlanRuntimeState.Capture(changed);
+        var restored = JsonSerializer.Deserialize<CraftingPlan>(graphJson)!;
+        StoredPlanRuntimeState.Apply(restored, stateJson);
+
+        var restoredNode = Assert.Single(restored.RootItems);
+        Assert.Equal(AcquisitionSource.VendorBuy, restoredNode.Source);
+        Assert.Equal(AcquisitionSourceReason.UserSelected, restoredNode.SourceReason);
+        Assert.True(restoredNode.MustBeHq);
+        Assert.Equal(12_345, restoredNode.MarketPrice);
+        Assert.Equal(23_456, restoredNode.HqMarketPrice);
+        Assert.Equal(120, restoredNode.VendorPrice);
+        Assert.Equal(2, restoredNode.SelectedVendorIndex);
+        Assert.Equal(graphJson, JsonSerializer.Serialize(baseline));
+    }
+
+    [Fact]
     public async Task FileStore_ReloadsCanonicalEconomicEvidenceAfterAdapterRestart()
     {
         var root = Path.Combine(Path.GetTempPath(), $"ca-persistence-contract-{Guid.NewGuid():N}");
@@ -530,73 +560,6 @@ public sealed class PersistenceContractTests
                 Directory.Delete(root, recursive: true);
             }
         }
-    }
-
-    [Fact]
-    public void AutosaveSnapshot_RecordsNamedSourceIdentityOnlyWhenRequested()
-    {
-        var state = new AppState();
-        state.ApplyBuiltRecipePlan(Plan(100, "Varnish"), []);
-        state.TrackCurrentPlanIdentity("named-plan", "Workshop Restock");
-
-        var autosave = StoredPlanSnapshotBuilder.Build(
-            state,
-            "autosave",
-            "Autosave",
-            new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc),
-            includeSourcePlanIdentity: true);
-        var ordinary = StoredPlanSnapshotBuilder.Build(
-            state,
-            "copy",
-            "Copy",
-            includeSourcePlanIdentity: false);
-
-        Assert.Equal("named-plan", autosave.SourcePlanId);
-        Assert.Equal("Workshop Restock", autosave.SourcePlanName);
-        Assert.Null(ordinary.SourcePlanId);
-        Assert.Null(ordinary.SourcePlanName);
-    }
-
-    [Fact]
-    public void AutosaveRestoration_PreservesNamedSourceIdentity()
-    {
-        var stored = WebStoredPlan(
-            "autosave",
-            "Autosave",
-            sourcePlanId: "named-plan",
-            sourcePlanName: "Workshop Restock");
-        var state = new AppState();
-
-        new PlanSessionLoadService(state).Load(stored, trackStoredPlanIdentity: false);
-
-        Assert.Equal("named-plan", state.CurrentPlanId);
-        Assert.Equal("Workshop Restock", state.CurrentPlanName);
-    }
-
-    [Fact]
-    public void AutosaveRestoration_CanStartFromItsAlreadyPersistedSnapshot()
-    {
-        var stored = WebStoredPlan("autosave", "Autosave");
-        var state = new AppState();
-
-        new PlanSessionLoadService(state).Load(
-            stored,
-            trackStoredPlanIdentity: false,
-            markRestoredStatePersisted: true);
-
-        Assert.Equal(PersistedStateBucket.None, state.GetDirtyPersistedBuckets());
-    }
-
-    [Fact]
-    public void NamedPlanRestoration_TracksStoredIdentityAndStartsClean()
-    {
-        var state = new AppState();
-
-        new PlanSessionLoadService(state).Load(WebStoredPlan("saved-plan", "Saved Plan"));
-
-        Assert.Equal("saved-plan", state.CurrentPlanId);
-        Assert.Equal("Saved Plan", state.CurrentPlanName);
-        Assert.Equal(PersistedStateBucket.None, state.GetDirtyPersistedBuckets());
     }
 
     private static StoredRecipeOperationSnapshot RecipeBasis() => new()

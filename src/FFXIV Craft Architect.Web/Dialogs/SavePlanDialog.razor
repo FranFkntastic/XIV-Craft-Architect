@@ -1,5 +1,4 @@
 @using FFXIV_Craft_Architect.Web.Services
-@inject AppState AppState
 @inject WorkerProjectionStore WorkerProjections
 
 <MudDialog>
@@ -28,18 +27,13 @@
 
     private string FormatProjectItemCount()
     {
-        var count = WorkerProjections.Shell.HasSession
-            ? WorkerProjections.Shell.ProjectItemCount
-            : AppState.ProjectItemCount;
+        var count = WorkerProjections.Shell.ProjectItemCount;
         return count == 1
             ? "1 target item"
             : $"{count:N0} target items";
     }
 
-    private string SelectedDataCenter =>
-        WorkerProjections.Shell.HasSession
-            ? WorkerProjections.Shell.SelectedDataCenter
-            : AppState.SelectedDataCenter;
+    private string SelectedDataCenter => WorkerProjections.Shell.SelectedDataCenter;
     
     protected override void OnInitialized()
     {
@@ -48,10 +42,6 @@
         if (!string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanName))
         {
             _planName = WorkerProjections.Shell.PlanName;
-        }
-        else if (AppState.CurrentPlan?.Name != null)
-        {
-            _planName = AppState.CurrentPlan.Name;
         }
     }
     

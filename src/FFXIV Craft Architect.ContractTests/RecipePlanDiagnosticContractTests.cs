@@ -71,6 +71,53 @@ public sealed class RecipePlanDiagnosticContractTests
         }
     }
 
+    [Fact]
+    public void Architecture_AppStateCannotBecomeASecondDomainAuthority()
+    {
+        var root = LocateRepositoryRoot();
+        var web = Path.Combine(root, "src", "FFXIV Craft Architect.Web");
+        var appState = File.ReadAllText(Path.Combine(web, "Services", "AppState.cs"));
+        var program = File.ReadAllText(Path.Combine(web, "Program.cs"));
+        var engineHost = File.ReadAllText(Path.Combine(web, "Services", "CraftArchitectEngineHost.cs"));
+        var engineComposition = File.ReadAllText(Path.Combine(
+            web,
+            "Services",
+            "WorkerEngineServiceCollectionExtensions.cs"));
+        var retiredAuthority = new[]
+        {
+            "CurrentPlan",
+            "MarketItemAnalyses",
+            "ShoppingPlans",
+            "ProcurementShoppingPlans",
+            "BeginAutoSaveAsync",
+            "BeginEngineMemoryPressureLeaseAsync"
+        };
+        var retiredPipelines = new[]
+        {
+            "MarketAnalysisWorkflowService",
+            "ProcurementWorkflowService",
+            "PlanSessionLoadService",
+            "StoredPlanSnapshotBuilder",
+            "WebMarketAnalysisEngineSettlement",
+            "WebProcurementEngineSettlement"
+        };
+
+        foreach (var member in retiredAuthority)
+        {
+            Assert.DoesNotContain(member, appState, StringComparison.Ordinal);
+        }
+
+        foreach (var type in retiredPipelines)
+        {
+            Assert.DoesNotContain(type, program, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("CreateExecution(", engineHost, StringComparison.Ordinal);
+        Assert.DoesNotContain("AppState", engineHost, StringComparison.Ordinal);
+        Assert.Contains("AddWorkerEngine", program, StringComparison.Ordinal);
+        Assert.Contains("WorkerSessionCoordinator", engineComposition, StringComparison.Ordinal);
+    }
+
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

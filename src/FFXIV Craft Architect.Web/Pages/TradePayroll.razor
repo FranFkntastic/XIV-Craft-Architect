@@ -4,7 +4,7 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
-@inject AppState AppState
+@inject WorkerSessionCoordinator WorkerSession
 @inject NavigationManager NavigationManager
 @inject TradePayrollDraftFactory DraftFactory
 @inject TradeOrderDraftFactory TradeOrderDraftFactory
@@ -13,7 +13,6 @@
 @inject CommissionPayrollService PayrollService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
-@implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-page">
     @if (!string.IsNullOrWhiteSpace(_unavailableReason))
@@ -208,6 +207,7 @@
     private List<TradeOrder> _orders = [];
     private Guid? _assignedCrafterId;
     private bool _hasLoaded;
+    private WorkerTradeProjection? _activePlan;
     private static readonly IReadOnlyList<CompactSelectOption> MaterialResponsibilityOptions =
     [
         new(nameof(CommissionMaterialResponsibility.Crafter), "Crafter"),
@@ -228,7 +228,6 @@
             return;
         }
 
-        AppState.OnStateChanged += OnAppStateChanged;
         await EnsureLoadedAsync();
     }
 
@@ -239,16 +238,6 @@
             .Trim('/')
             .Split('?', 2)[0];
         return string.Equals(path, "trade", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private void OnAppStateChanged(AppStateChange change)
-    {
-        if (!change.HasScope(AppStateChangeScope.Settings))
-        {
-            return;
-        }
-
-        _ = InvokeAsync(EnsureLoadedAsync);
     }
 
     private async Task EnsureLoadedAsync()
@@ -266,7 +255,11 @@
 
     private async Task CreateDraftAsync()
     {
-        var result = DraftFactory.CreateFromCurrentPlan(AppState);
+        _activePlan = await WorkerSession.GetTradeProjectionAsync();
+        var result = _activePlan == null
+            ? TradePayrollDraftCreateResult.Unavailable(
+                "The Worker did not publish the active craft plan.")
+            : DraftFactory.CreateFromCurrentPlan(_activePlan);
         if (!result.CanCreate || result.Draft == null)
         {
             _source = null;
@@ -425,8 +418,14 @@
             return null;
         }
 
+        if (_activePlan == null)
+        {
+            Snackbar.Add("The active Worker plan is unavailable.", Severity.Warning);
+            return null;
+        }
+
         var result = TradeOrderDraftFactory.CreateFromCurrentPlan(new TradeOrderCreateRequest(
-            AppState,
+            _activePlan,
             _companyProfile.Id,
             _assignedCrafterId,
             null,
@@ -805,11 +804,6 @@
             RemoteId = order.RemoteId,
             SyncState = order.SyncState
         };
-    }
-
-    public void Dispose()
-    {
-        AppState.OnStateChanged -= OnAppStateChanged;
     }
 
     private sealed class TradePayrollLineEditor

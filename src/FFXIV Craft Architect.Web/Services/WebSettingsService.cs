@@ -42,7 +42,6 @@ public class WebSettingsService : ISettingsService
         ["marketmafioso.active_item_id"] = 0,
         ["marketmafioso.active_data_center"] = "",
         ["marketmafioso.active_purchase_world"] = "",
-        ["ui.auto_save_enabled"] = true,
         ["ui.accent_color"] = "#d4af37",
         ["ui.use_split_pane_market_view"] = true,
         ["planning.default_recommendation_mode"] = "MinimizeTotalCost",

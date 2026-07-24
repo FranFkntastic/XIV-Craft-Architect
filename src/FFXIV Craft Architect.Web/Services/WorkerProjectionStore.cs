@@ -222,6 +222,10 @@ public sealed class WorkerProjectionStore
         {
             Procurement = route.Procurement;
         }
+        else if (projection is WorkerSessionShellProjection shell)
+        {
+            Shell = shell;
+        }
         Changed?.Invoke();
         return true;
     }
