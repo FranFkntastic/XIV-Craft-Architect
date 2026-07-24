@@ -31,19 +31,16 @@
             <div class="pp-decision-copy">
                 <strong>@MarketRouteScoring.GetToleranceLabel(RouteDecision.TravelTolerance)</strong>
                 <span>@GetDecisionExplanation(RouteDecision)</span>
+                @if (RouteDecision.RouteSearchWasTruncated)
+                {
+                    <small>Best complete route found within the search limit; some alternatives were not compared.</small>
+                }
             </div>
             <div class="pp-decision-metrics">
                 <span><strong>@RouteDecision.SelectedWorldStops</strong> @Pluralize(RouteDecision.SelectedWorldStops, "world", "worlds")</span>
                 <span><strong>@RouteDecision.SelectedDataCenterTransfers</strong> DC @Pluralize(RouteDecision.SelectedDataCenterTransfers, "transfer", "transfers")</span>
             </div>
         </div>
-        @if (RouteDecision.RouteSearchWasTruncated)
-        {
-            <div class="pp-decision-warning" role="status">
-                <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Small" />
-                <span>Some per-route combinations exceeded the local search width. The displayed route is complete but approximate.</span>
-            </div>
-        }
     }
 
     <div class="pp-route-content">

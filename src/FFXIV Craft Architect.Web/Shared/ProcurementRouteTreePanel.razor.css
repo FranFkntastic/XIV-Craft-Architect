@@ -76,6 +76,11 @@
     font-size: .82rem;
 }
 
+.pp-decision-copy small {
+    color: #87949b;
+    font-size: .7rem;
+}
+
 .pp-decision-metrics {
     display: flex;
     flex-shrink: 0;
@@ -92,19 +97,6 @@
 
 .pp-decision-metrics strong {
     color: #f2f2f2;
-}
-
-.pp-decision-warning {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: -4px;
-    padding: 9px 12px;
-    border: 1px solid #76522e;
-    border-radius: 7px;
-    background: #2b241d;
-    color: #f0bd7b;
-    font-size: .76rem;
 }
 
 .pp-route-content {
