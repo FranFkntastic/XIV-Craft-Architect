@@ -12,11 +12,11 @@
                 <h2 id="procurement-route-title" class="pp-route-title">Procurement Route</h2>
                 @if (_routeCards.Count > 0)
                 {
-                    <p class="pp-route-subtitle">@FormatCount(_routeCards.Count, "world stop") · @FormatCount(ShoppingPlans.Count, "item")</p>
+                    <p class="pp-route-subtitle">@FormatCount(_routeCards.Count, "world stop") · @FormatCount(GetItemCount(), "item")</p>
                 }
             </div>
         </div>
-        @if (ShoppingPlans.Count > 0)
+        @if (_routeCards.Count > 0)
         {
             <div class="pp-route-total">
                 <span>@GetTotalCost().ToString("N0")g</span>
@@ -44,7 +44,7 @@
     }
 
     <div class="pp-route-content">
-        @if (ShoppingPlans.Count == 0)
+        @if (_routeCards.Count == 0)
         {
             <div class="pp-route-empty">
                 <MudIcon Icon="@Icons.Material.Filled.Map" Size="Size.Large" />
@@ -60,9 +60,9 @@
                 .OrderBy(group => group.Key)
                 .ToList();
             var vendorCard = _routeCards.FirstOrDefault(card => card.IsVendor);
-            var errorItems = ShoppingPlans.Where(plan => !string.IsNullOrEmpty(plan.Error)).ToList();
-            var warningItems = ShoppingPlans
-                .Where(plan => string.IsNullOrEmpty(plan.Error) && !string.IsNullOrEmpty(plan.MarketDataWarning))
+            var errorItems = Issues.Where(issue => !string.IsNullOrEmpty(issue.Error)).ToList();
+            var warningItems = Issues
+                .Where(issue => string.IsNullOrEmpty(issue.Error) && !string.IsNullOrEmpty(issue.Warning))
                 .ToList();
 
             <div class="pp-route-tree">
@@ -121,7 +121,7 @@
                         </div>
                         @foreach (var plan in warningItems)
                         {
-                            <div class="pp-error-row"><strong>@plan.Name</strong><span>@plan.MarketDataWarning</span></div>
+                            <div class="pp-error-row"><strong>@plan.Name</strong><span>@plan.Warning</span></div>
                         }
                     </section>
                 }
@@ -131,7 +131,8 @@
 </section>
 
 @code {
-    [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
+    [Parameter] public IReadOnlyList<WorkerProcurementWorldProjection> Worlds { get; set; } = Array.Empty<WorkerProcurementWorldProjection>();
+    [Parameter] public IReadOnlyList<WorkerProcurementIssueProjection> Issues { get; set; } = Array.Empty<WorkerProcurementIssueProjection>();
     [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
     [Parameter] public string SelectedDataCenter { get; set; } = "Aether";
     [Parameter] public string EmptyTitle { get; set; } = "Route ready to generate";
@@ -154,9 +155,9 @@
 
     protected override void OnParametersSet()
     {
-        _routeCards = ShoppingPlans.Count == 0
+        _routeCards = Worlds.Count == 0
             ? Array.Empty<WorldProcurementCardModel>()
-            : ProcurementWorldCardBuilder.BuildWorldCards(ShoppingPlans, SelectedDataCenter);
+            : Worlds.Select(WorkerProcurementProjectionMapper.ToWorldCard).ToArray();
 
         var activeKeys = _routeCards.Select(GetWorldKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
         _expandedWorlds.RemoveWhere(key => !activeKeys.Contains(key));
@@ -172,6 +173,14 @@
 
         ApplyRequestedItemFocus();
     }
+
+    private int GetItemCount() =>
+        _routeCards
+            .SelectMany(world => world.Items)
+            .Select(item => item.ItemId)
+            .Concat(Issues.Select(issue => issue.ItemId))
+            .Distinct()
+            .Count();
 
     private RenderFragment RenderWorldNode(WorldProcurementCardModel world) => @<article class="pp-world-node @(world.IsVendor ? "is-vendor" : null) @(world.IsCongested ? "is-congested" : null)">
         <div class="pp-world-row-wrap">
@@ -413,7 +422,7 @@
         NavigationManager.NavigateTo($"market?itemId={item.ItemId}");
     }
 
-    private decimal GetTotalCost() => ShoppingPlans.Sum(PurchaseRecommendationCost.GetRecommendedCost);
+    private decimal GetTotalCost() => _routeCards.Sum(world => world.TotalCost);
 
     private static string GetDecisionExplanation(MarketRouteDecision decision)
     {

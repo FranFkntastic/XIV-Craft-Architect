@@ -999,9 +999,14 @@ public static partial class ManagedHost
                 world.DataCenter,
                 world.WorldName,
                 world.IsVendor,
+                world.IsCongested,
+                world.CongestedWarning,
+                world.Classification,
                 world.TotalCost,
                 world.ItemCount,
                 world.TotalQuantity,
+                world.Vendors,
+                world.SelectedVendorName,
                 world.Items.Select(item => new WorkerProcurementItemProjection(
                     item.ItemId,
                     item.ItemName,
@@ -1009,8 +1014,11 @@ public static partial class ManagedHost
                     item.QuantityOnThisWorld,
                     item.TotalQuantityNeeded,
                     item.PricePerUnit,
+                    item.PriceIsEffectiveCost,
                     item.TotalCost,
-                    item.IsSplitPurchase)).ToArray()))
+                    item.IsSplitPurchase,
+                    item.TravelContext,
+                    item.Vendor)).ToArray()))
             .OrderBy(world => world.IsVendor ? 1 : 0)
             .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
             .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
@@ -1047,7 +1055,18 @@ public static partial class ManagedHost
                     selection.DataCenterTransfers)).ToArray()
                 ?? Array.Empty<WorkerProcurementToleranceProjection>(),
             worlds,
-            overlay?.ShoppingPlans?.ToArray() ?? Array.Empty<DetailedShoppingPlan>(),
+            overlay?.ShoppingPlans?
+                .Where(plan =>
+                    !string.IsNullOrWhiteSpace(plan.Error) ||
+                    !string.IsNullOrWhiteSpace(plan.MarketDataWarning))
+                .Select(plan => new WorkerProcurementIssueProjection(
+                    plan.ItemId,
+                    plan.Name,
+                    plan.Error,
+                    plan.MarketDataWarning))
+                .ToArray()
+                ?? Array.Empty<WorkerProcurementIssueProjection>(),
+            Array.Empty<DetailedShoppingPlan>(),
             CompactProcurementDecision(decision));
     }
 

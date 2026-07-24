@@ -1,7 +1,7 @@
 @using FFXIV_Craft_Architect.Core.Models
 
 <main class="pp-results-column" aria-label="Procurement route results">
-    @if (ShoppingPlans.Count > 0 && (IsStale || IsAnalyzing || !string.IsNullOrWhiteSpace(FailureMessage)))
+    @if (Worlds.Count > 0 && (IsStale || IsAnalyzing || !string.IsNullOrWhiteSpace(FailureMessage)))
     {
         <div class="pp-route-state @(FailureMessage != null ? "is-error" : "is-stale")" role="status">
             <MudIcon Icon="@(FailureMessage != null ? Icons.Material.Filled.ErrorOutline : IsAnalyzing ? Icons.Material.Filled.Sync : Icons.Material.Filled.Update)"
@@ -38,7 +38,8 @@
         </div>
     }
 
-    <ProcurementRouteTreePanel ShoppingPlans="ShoppingPlans"
+    <ProcurementRouteTreePanel Worlds="Worlds"
+                               Issues="Issues"
                                RouteDecision="RouteDecision"
                                SelectedDataCenter="SelectedDataCenter"
                                EmptyTitle="@EmptyTitle"
@@ -58,7 +59,8 @@
     private MudButton? _undoButton;
     private string? _focusedExclusionOutcome;
 
-    [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
+    [Parameter] public IReadOnlyList<WorkerProcurementWorldProjection> Worlds { get; set; } = Array.Empty<WorkerProcurementWorldProjection>();
+    [Parameter] public IReadOnlyList<WorkerProcurementIssueProjection> Issues { get; set; } = Array.Empty<WorkerProcurementIssueProjection>();
     [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
     [Parameter] public string SelectedDataCenter { get; set; } = "Aether";
     [Parameter] public bool IsStale { get; set; }

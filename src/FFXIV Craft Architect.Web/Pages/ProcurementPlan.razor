@@ -57,7 +57,8 @@
             OnGoToMarketAnalysisRequested="GoToMarketAnalysis" />
 
         <ProcurementResultsShell
-            ShoppingPlans="@(_route?.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>())"
+            Worlds="@(_route?.Worlds ?? Array.Empty<WorkerProcurementWorldProjection>())"
+            Issues="@(_route?.Issues ?? Array.Empty<WorkerProcurementIssueProjection>())"
             RouteDecision="_route?.RouteDecision"
             SelectedDataCenter="@(_route?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter)"
             IsStale="false"
@@ -891,23 +892,21 @@
     private WorldItemProcurementAction? FindMarketMafiosoAction(
         MarketItemWorldKey key)
     {
-        var world = ProcurementWorldCardBuilder
-            .BuildWorldCards(
-                _route?.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>(),
-                _route?.SelectedDataCenter ??
-                WorkerProjections.Shell.SelectedDataCenter)
-            .FirstOrDefault(candidate =>
+        var world = _route?.Worlds.FirstOrDefault(candidate =>
                 candidate.DataCenter.Equals(
                     key.World.DataCenter,
                     StringComparison.OrdinalIgnoreCase) &&
                 candidate.WorldName.Equals(
                     key.World.WorldName,
                     StringComparison.OrdinalIgnoreCase));
-        var item = world?.Items.FirstOrDefault(
-            candidate => candidate.ItemId == key.ItemId);
-        return world == null || item == null
+        var card = world is null
             ? null
-            : new WorldItemProcurementAction { World = world, Item = item };
+            : WorkerProcurementProjectionMapper.ToWorldCard(world);
+        var item = card?.Items.FirstOrDefault(
+            candidate => candidate.ItemId == key.ItemId);
+        return card == null || item == null
+            ? null
+            : new WorldItemProcurementAction { World = card, Item = item };
     }
 
     private async Task ClearActiveMarketMafiosoRequestAsync(string requestId)

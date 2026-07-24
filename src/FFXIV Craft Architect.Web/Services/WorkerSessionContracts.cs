@@ -361,6 +361,7 @@ public sealed record WorkerProcurementProjection(
     bool RouteSearchWasTruncated,
     IReadOnlyList<WorkerProcurementToleranceProjection> ToleranceOptions,
     IReadOnlyList<WorkerProcurementWorldProjection> Worlds,
+    IReadOnlyList<WorkerProcurementIssueProjection> Issues,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
     MarketRouteDecision? RouteDecision);
 
@@ -375,9 +376,14 @@ public sealed record WorkerProcurementWorldProjection(
     string DataCenter,
     string WorldName,
     bool IsVendor,
+    bool IsCongested,
+    string? CongestedWarning,
+    WorldClassification Classification,
     long TotalCost,
     int ItemCount,
     int TotalQuantity,
+    IReadOnlyList<VendorInfo> Vendors,
+    string? SelectedVendorName,
     IReadOnlyList<WorkerProcurementItemProjection> Items);
 
 public sealed record WorkerProcurementItemProjection(
@@ -387,5 +393,14 @@ public sealed record WorkerProcurementItemProjection(
     int Quantity,
     int TotalQuantityNeeded,
     decimal UnitPrice,
+    bool PriceIsEffectiveCost,
     long TotalCost,
-    bool IsSplitPurchase);
+    bool IsSplitPurchase,
+    string TravelContext,
+    VendorInfo? Vendor);
+
+public sealed record WorkerProcurementIssueProjection(
+    int ItemId,
+    string Name,
+    string? Error,
+    string? Warning);
