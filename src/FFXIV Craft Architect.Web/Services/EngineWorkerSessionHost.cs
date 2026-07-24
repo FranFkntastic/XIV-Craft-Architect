@@ -483,7 +483,7 @@ public static partial class ManagedHost
                 "Build a recipe plan before publishing market evidence.");
         var planSessionVersion = session.PlanSessionVersion;
         var stamp = session.CaptureVersionStamp();
-        var recipeLayer = new WorkerRecipeLayerWorkflow(session);
+        var recipeLayer = new WorkerRecipeLayerWorkflow(_canonicalSession);
         var recipeBasis = recipeLayer.BuildMarketAnalysisRecipeBasis(
             plan,
             request.UnavailableItemIds);
@@ -631,7 +631,7 @@ public static partial class ManagedHost
             session,
             new ProcurementRouteExecutionService(reconciliation, shopping),
             reconciliation,
-            new WorkerRecipeLayerWorkflow(session),
+            new WorkerRecipeLayerWorkflow(_canonicalSession),
             new CraftOperationCoordinator(session, new CraftOperationState()));
         var expectedWorlds = MarketFetchScopeResolver
             .GetDataCenters(
@@ -707,7 +707,7 @@ public static partial class ManagedHost
             session,
             new ProcurementRouteExecutionService(reconciliation, shopping),
             reconciliation,
-            new WorkerRecipeLayerWorkflow(session),
+            new WorkerRecipeLayerWorkflow(_canonicalSession),
             new CraftOperationCoordinator(session, new CraftOperationState()));
         var expectedWorlds = MarketFetchScopeResolver
             .GetDataCenters(request.Scope, request.SelectedDataCenter, request.SelectedRegion)
@@ -831,7 +831,7 @@ public static partial class ManagedHost
             session,
             reconciliation,
             SessionMarketLadder,
-            new WorkerRecipeLayerWorkflow(session),
+            new WorkerRecipeLayerWorkflow(_canonicalSession),
             operations);
     }
 
@@ -959,7 +959,7 @@ public static partial class ManagedHost
             .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var context = session.ActiveContext;
-        var candidateItems = new WorkerRecipeLayerWorkflow(session)
+        var candidateItems = new WorkerRecipeLayerWorkflow(_canonicalSession)
             .BuildMarketAnalysisCandidates(session.BorrowActivePlan())
             .ToArray();
         var candidateCount = candidateItems.Length;
@@ -990,7 +990,7 @@ public static partial class ManagedHost
         var session = _canonicalSession.Session;
         var overlay = session.ProcurementOverlay;
         var decision = overlay?.RouteDecision;
-        var activeItems = new WorkerRecipeLayerWorkflow(session)
+        var activeItems = new WorkerRecipeLayerWorkflow(_canonicalSession)
             .BuildActiveProcurementItems(session.ActivePlan);
         var worlds = (overlay?.RouteCards ?? Array.Empty<WorldProcurementCardModel>())
             .Select(world => new WorkerProcurementWorldProjection(
@@ -1426,12 +1426,14 @@ public static partial class ManagedHost
 
     private sealed class WorkerRecipeLayerWorkflow : ICoreRecipeLayerWorkflowService
     {
+        private readonly WorkerCanonicalSession _canonicalSession;
         private readonly CraftSessionState _session;
         private readonly RecipeDemandProjectionService _projection = new();
 
-        public WorkerRecipeLayerWorkflow(CraftSessionState session)
+        public WorkerRecipeLayerWorkflow(WorkerCanonicalSession canonicalSession)
         {
-            _session = session;
+            _canonicalSession = canonicalSession;
+            _session = canonicalSession.Session;
         }
 
         public RecipeOperationSnapshotIdentity CreateSnapshotIdentity()
@@ -1487,7 +1489,8 @@ public static partial class ManagedHost
 
         public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(
             CraftingPlan? plan) =>
-            BuildDemandProjection(plan).ToActiveProcurementMaterialAggregates();
+            _canonicalSession.GetActiveProcurementItems(
+                () => BuildDemandProjection(plan).ToActiveProcurementMaterialAggregates());
 
         public Task<RecipeDemandProjection?> BuildCurrentDemandProjectionAsync(
             CraftingPlan? plan,

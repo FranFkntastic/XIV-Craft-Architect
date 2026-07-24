@@ -126,7 +126,7 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             DCAveragePrice = plan.DCAveragePrice,
             HQAveragePrice = plan.HQAveragePrice,
             RecommendedWorld = plan.RecommendedWorld is null ? null : CompactWorld(plan.RecommendedWorld),
-            RecommendedSplit = plan.RecommendedSplit,
+            RecommendedSplit = plan.RecommendedSplit?.Select(CompactSplit).ToList(),
             CoverageSet = CompactCoverageSet(plan),
             WorldOptions = GetSelectedWorldOptions(plan).Select(CompactWorld).ToList(),
             Error = plan.Error,
@@ -142,7 +142,7 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         TotalCost = world.TotalCost,
         AveragePricePerUnit = world.AveragePricePerUnit,
         ListingsUsed = world.ListingsUsed,
-        Listings = world.Listings.Select(CloneListing).ToList(),
+        Listings = [],
         IsFullyUnderAverage = world.IsFullyUnderAverage,
         TotalQuantityPurchased = world.TotalQuantityPurchased,
         ExcessQuantity = world.ExcessQuantity,
@@ -159,7 +159,7 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         VendorName = world.VendorName,
         HasSufficientStock = world.HasSufficientStock,
         ShortfallQuantity = world.ShortfallQuantity,
-        BestSingleListing = world.BestSingleListing is null ? null : CloneListing(world.BestSingleListing),
+        BestSingleListing = null,
         Classification = world.Classification,
         IsHomeWorld = world.IsHomeWorld,
         IsBlacklisted = world.IsBlacklisted,
@@ -167,16 +167,18 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         CongestedWarning = world.CongestedWarning
     };
 
-    private static ShoppingListingEntry CloneListing(ShoppingListingEntry listing) => new()
+    private static SplitWorldPurchase CompactSplit(SplitWorldPurchase split) => new()
     {
-        Quantity = listing.Quantity,
-        PricePerUnit = listing.PricePerUnit,
-        RetainerName = listing.RetainerName,
-        IsUnderAverage = listing.IsUnderAverage,
-        IsHq = listing.IsHq,
-        NeededFromStack = listing.NeededFromStack,
-        ExcessQuantity = listing.ExcessQuantity,
-        IsAdditionalOption = listing.IsAdditionalOption
+        DataCenter = split.DataCenter,
+        WorldName = split.WorldName,
+        QuantityToBuy = split.QuantityToBuy,
+        PricePerUnit = split.PricePerUnit,
+        EffectivePricePerNeededUnit = split.EffectivePricePerNeededUnit,
+        TotalCost = split.TotalCost,
+        IsPartial = split.IsPartial,
+        TravelContext = split.TravelContext,
+        ExcessAvailable = split.ExcessAvailable,
+        Listings = []
     };
 
     private static List<WorldShoppingSummary> GetSelectedWorldOptions(DetailedShoppingPlan plan)
@@ -222,15 +224,16 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         {
             return null;
         }
+        var compactCoverage = coverage with { Listings = [] };
         return new MarketCoverageSet(
             source.ItemId,
             source.ItemName,
             source.QuantityNeeded,
-            coverage.Tier == MarketCoverageTier.SingleWorld ? coverage : null,
-            coverage.Tier == MarketCoverageTier.CompactSplit ? coverage : null,
-            coverage.Tier == MarketCoverageTier.WideSplit ? coverage : null,
-            coverage.Tier == MarketCoverageTier.CheapestObserved ? coverage : null,
-            [coverage]);
+            compactCoverage.Tier == MarketCoverageTier.SingleWorld ? compactCoverage : null,
+            compactCoverage.Tier == MarketCoverageTier.CompactSplit ? compactCoverage : null,
+            compactCoverage.Tier == MarketCoverageTier.WideSplit ? compactCoverage : null,
+            compactCoverage.Tier == MarketCoverageTier.CheapestObserved ? compactCoverage : null,
+            [compactCoverage]);
     }
 
     private static IReadOnlyList<MaterialAggregate> GetActiveProcurementItems(ProcurementRouteExecutionRequest request)

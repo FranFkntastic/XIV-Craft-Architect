@@ -30,7 +30,7 @@ public sealed class ProcurementRouteCompactionTests
                 new MarketCoverageWorld("Aether", "Alpha", 1, 1, 50, 50),
                 new MarketCoverageWorld("Aether", "Beta", 1, 1, 50, 50)
             ],
-            [],
+            [new MarketCoverageListing("Aether", "Alpha", 2, 1, 2, 50, true)],
             new MarketCoverageFriction(2, 1, 1, 1, 0),
             MarketCoverageSavings.None,
             true,
@@ -51,9 +51,10 @@ public sealed class ProcurementRouteCompactionTests
         Assert.Equal("coverage", Assert.Single(compact.CoverageSet!.AllCandidates).CandidateId);
         Assert.Null(compact.CoverageSet.SingleWorld);
         Assert.Equal("coverage", compact.CoverageSet.CompactSplit?.CandidateId);
+        Assert.Empty(compact.CoverageSet.CompactSplit!.Listings);
         Assert.Equal(["Alpha", "Beta"], compact.WorldOptions.Select(world => world.WorldName));
         Assert.All(compact.WorldOptions, world => Assert.Empty(world.ExcludedListings));
-        Assert.All(compact.WorldOptions, world => Assert.Single(world.Listings));
+        Assert.All(compact.WorldOptions, world => Assert.Empty(world.Listings));
 
         var json = JsonSerializer.Serialize(compact, EngineJsonSerializerOptions.CreateWire());
         Assert.Contains("\"valueScore\":\"79228162514264337593543950335\"", json);

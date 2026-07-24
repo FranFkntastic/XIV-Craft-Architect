@@ -19,6 +19,8 @@ internal sealed class WorkerCanonicalSession
     private CraftSessionState _session = CreateSession();
     private string? _legacyMarketAnalysisScopeSnapshotJson;
     private string? _legacyProcurementRouteJson;
+    private CraftSessionVersionStamp? _activeProcurementItemsVersion;
+    private IReadOnlyList<MaterialAggregate>? _activeProcurementItems;
 
     public CraftSessionState Session => _session;
 
@@ -26,6 +28,8 @@ internal sealed class WorkerCanonicalSession
     {
         var timing = Stopwatch.StartNew();
         _session = CreateSession();
+        _activeProcurementItemsVersion = null;
+        _activeProcurementItems = null;
         _legacyMarketAnalysisScopeSnapshotJson = storedPlan?.MarketAnalysisScopeSnapshotJson;
         _legacyProcurementRouteJson = storedPlan?.ProcurementRouteJson;
         if (storedPlan is null)
@@ -114,6 +118,26 @@ internal sealed class WorkerCanonicalSession
     public string ExportProcurementRoute() =>
         BuildProcurementRouteJson()
         ?? throw new InvalidOperationException("The current procurement route is unavailable.");
+
+    public IReadOnlyList<MaterialAggregate> GetActiveProcurementItems(
+        Func<IReadOnlyList<MaterialAggregate>> build)
+    {
+        var version = _session.CaptureVersionStamp();
+        if (_activeProcurementItems is not null &&
+            _activeProcurementItemsVersion is { } cached &&
+            cached.PlanSession == version.PlanSession &&
+            cached.PlanCore == version.PlanCore &&
+            cached.PlanDecision == version.PlanDecision &&
+            cached.PlanPrice == version.PlanPrice &&
+            cached.SettingsContext == version.SettingsContext)
+        {
+            return _activeProcurementItems;
+        }
+
+        _activeProcurementItems = build();
+        _activeProcurementItemsVersion = version;
+        return _activeProcurementItems;
+    }
 
     private string? BuildProcurementRouteJson()
     {
