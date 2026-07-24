@@ -474,8 +474,7 @@ public static partial class ManagedHost
             staging.UnavailableItemIds,
             staging.FetchedCount,
             ResetStaging: true,
-            CompleteStaging: true,
-            IncludeDetailsInProjection: request.IncludeDetailsInProjection);
+            CompleteStaging: true);
         _pendingMarketEvidencePublication = null;
         var session = _canonicalSession.Session;
         var plan = session.BorrowActivePlan()
@@ -486,7 +485,7 @@ public static partial class ManagedHost
         var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(
             plan,
             request.ShoppingPlans);
-        if (!session.TryPublishMarketAnalysis(
+        if (!session.TryPublishOwnedMarketAnalysis(
                 stamp,
                 plan,
                 planSessionVersion,

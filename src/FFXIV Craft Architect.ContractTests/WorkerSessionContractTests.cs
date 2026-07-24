@@ -181,8 +181,7 @@ public sealed class WorkerSessionContractTests
                 new HashSet<int>(),
                 FetchedCount: 1,
                 ResetStaging: true,
-                CompleteStaging: false,
-                IncludeDetailsInProjection: false));
+                CompleteStaging: false));
         Assert.True(staged.Accepted);
         Assert.Equal(2, staged.Revision);
 
@@ -198,8 +197,7 @@ public sealed class WorkerSessionContractTests
                 [],
                 new HashSet<int>(),
                 FetchedCount: 0,
-                CompleteStaging: true,
-                IncludeDetailsInProjection: false));
+                CompleteStaging: true));
         Assert.True(completed.Accepted, completed.Message);
         Assert.Equal(3, completed.Revision);
         var accepted =

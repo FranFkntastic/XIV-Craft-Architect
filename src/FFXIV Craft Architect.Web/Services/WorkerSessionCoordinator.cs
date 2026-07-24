@@ -377,8 +377,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                     isFinal ? unavailableItemIds : new HashSet<int>(),
                     isFinal ? fetchedCount : 0,
                     ResetStaging: isFirst,
-                    CompleteStaging: isFinal,
-                    IncludeDetailsInProjection: false);
+                    CompleteStaging: isFinal);
             result = isFinal
                 ? await _engineHost.PublishMarketEvidenceAsync(
                     _projections.Shell.Revision,

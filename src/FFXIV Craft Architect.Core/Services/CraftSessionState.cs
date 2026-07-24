@@ -586,10 +586,72 @@ public sealed class CraftSessionState
         ArgumentNullException.ThrowIfNull(itemAnalyses);
         ArgumentNullException.ThrowIfNull(shoppingPlans);
 
-        var published = false;
         var analysisList = itemAnalyses.Select(CloneMarketItemAnalysis).ToArray();
         var shoppingPlanList = shoppingPlans.Select(CloneDetailedShoppingPlan).ToArray();
         var unavailableIds = unavailableMarketItemIds?.ToHashSet() ?? new HashSet<int>();
+        return TryPublishMarketAnalysisCore(
+            expectedStamp,
+            plan,
+            planSessionVersion,
+            analysisList,
+            shoppingPlanList,
+            unavailableIds,
+            acquisitionDecisionsChanged,
+            reason,
+            recommendationMode,
+            lens,
+            CloneRecipeBasis(recipeBasis));
+    }
+
+    /// <summary>
+    /// Publishes market evidence whose collections are surrendered to this session.
+    /// The caller must not mutate them after a successful publication.
+    /// </summary>
+    public bool TryPublishOwnedMarketAnalysis(
+        CraftSessionVersionStamp expectedStamp,
+        CraftingPlan plan,
+        long planSessionVersion,
+        IReadOnlyList<MarketItemAnalysis> itemAnalyses,
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        bool acquisitionDecisionsChanged,
+        string reason,
+        IReadOnlySet<int>? unavailableMarketItemIds = null,
+        RecommendationMode recommendationMode = RecommendationMode.MinimizeTotalCost,
+        MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost,
+        StoredRecipeOperationSnapshot? recipeBasis = null)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(itemAnalyses);
+        ArgumentNullException.ThrowIfNull(shoppingPlans);
+
+        return TryPublishMarketAnalysisCore(
+            expectedStamp,
+            plan,
+            planSessionVersion,
+            itemAnalyses,
+            shoppingPlans,
+            unavailableMarketItemIds ?? new HashSet<int>(),
+            acquisitionDecisionsChanged,
+            reason,
+            recommendationMode,
+            lens,
+            CloneRecipeBasis(recipeBasis));
+    }
+
+    private bool TryPublishMarketAnalysisCore(
+        CraftSessionVersionStamp expectedStamp,
+        CraftingPlan plan,
+        long planSessionVersion,
+        IReadOnlyList<MarketItemAnalysis> itemAnalyses,
+        IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
+        IReadOnlySet<int> unavailableMarketItemIds,
+        bool acquisitionDecisionsChanged,
+        string reason,
+        RecommendationMode recommendationMode,
+        MarketAcquisitionLens lens,
+        StoredRecipeOperationSnapshot? recipeBasis)
+    {
+        var published = false;
         var completed = TryPublishFrom(expectedStamp, () =>
         {
             if (!IsCurrentPlanSessionUnderLock(plan, planSessionVersion))
@@ -608,13 +670,13 @@ public sealed class CraftSessionState
             }
 
             _marketEvidence = new CraftSessionMarketEvidence(
-                analysisList,
-                unavailableIds.ToHashSet(),
-                shoppingPlanList,
+                itemAnalyses,
+                unavailableMarketItemIds,
+                shoppingPlans,
                 _versions.Capture(_planSessionVersion),
                 recommendationMode,
                 lens,
-                CloneRecipeBasis(recipeBasis));
+                recipeBasis);
 
             RegisterPlanInstance(plan, _planSessionVersion);
             RegisterPlanInstance(_activePlan, _planSessionVersion);

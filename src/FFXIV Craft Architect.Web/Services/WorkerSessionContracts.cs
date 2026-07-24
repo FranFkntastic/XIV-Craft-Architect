@@ -235,8 +235,7 @@ public sealed record WorkerMarketEvidencePublicationRequest(
     IReadOnlySet<int> UnavailableItemIds,
     int FetchedCount,
     bool ResetStaging = false,
-    bool CompleteStaging = true,
-    bool IncludeDetailsInProjection = true);
+    bool CompleteStaging = true);
 
 public sealed record WorkerMarketItemEvidencePublicationRequest(
     int ItemId,
