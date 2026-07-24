@@ -313,8 +313,7 @@ public sealed class WorkerSessionContractTests
             new WorkerSessionExportRequest(
                 "autosave",
                 "Autosave",
-                IncludeSourcePlanIdentity: true,
-                IncludeLegacyMarketAnalysisFields: false));
+                IncludeSourcePlanIdentity: true));
         Assert.True(exported.Accepted);
         var export = exported.Projection.Deserialize<WorkerSessionExportProjection>(WireOptions);
         Assert.NotNull(export);

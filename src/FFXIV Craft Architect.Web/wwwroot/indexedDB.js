@@ -486,6 +486,17 @@ function deleteReplacedPlanComponents(componentStore, previousRecord, successorR
     }
 }
 
+function persistStoredPlanSuccessor(transaction, previousRecord, successor) {
+    const planStore = transaction.objectStore(STORE_PLANS);
+    const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
+    deleteReplacedPlanComponents(componentStore, previousRecord, successor.record);
+    for (const component of successor.components) {
+        componentStore.put(component);
+    }
+    planStore.put(successor.record);
+    transaction.objectStore(STORE_PLAN_SUMMARIES).put(toPlanSummary(successor.record));
+}
+
 function materializeStoredPlanRecord(transaction, record, onmaterialized) {
     if (!record || !isComponentStoredPlan(record)) {
         onmaterialized(record || null);
@@ -536,20 +547,14 @@ async function savePlan(planData) {
             [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
             'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
-        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
-        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         const request = store.get(planData.id);
 
         request.onerror = () => transaction.abort();
-        request.onsuccess = () => {
-            const successor = createStoredPlanRecord(planData);
-            deleteReplacedPlanComponents(componentStore, request.result, successor.record);
-            for (const component of successor.components) {
-                componentStore.put(component);
-            }
-            store.put(successor.record);
-            summaryStore.put(toPlanSummary(successor.record));
-        };
+        request.onsuccess = () =>
+            persistStoredPlanSuccessor(
+                transaction,
+                request.result,
+                createStoredPlanRecord(planData));
 
         transaction.oncomplete = () => resolve(true);
         transaction.onerror = (event) => reject(transaction.error || event.target?.error);
@@ -583,18 +588,7 @@ async function loadPlan(planId) {
     });
 }
 
-/**
- * Patch market analysis fields without transferring or rewriting the full plan payload.
- */
-async function patchMarketAnalysis(
-    planId,
-    marketPlansJson,
-    marketItemAnalysesJson,
-    marketIntelligenceJson,
-    recommendationMode,
-    marketAnalysisLens,
-    marketAnalysisRecipeBasisJson,
-    marketAnalysisScopeSnapshotJson) {
+async function patchStoredPlan(planId, planPatch) {
     const database = await initDB();
 
     return new Promise((resolve, reject) => {
@@ -602,72 +596,9 @@ async function patchMarketAnalysis(
             [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
             'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
-        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
-        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         const request = store.get(planId);
 
-        request.onsuccess = () => {
-            const previous = request.result;
-            if (!previous) {
-                resolve(false);
-                return;
-            }
-            const base = isComponentStoredPlan(previous)
-                ? previous.storedPlanMetadata
-                : previous;
-            const patch = {
-                marketPlansJson,
-                marketIntelligenceJson,
-                marketItemAnalysesJson,
-                marketAnalysisRecipeBasisJson,
-                marketAnalysisScopeSnapshotJson,
-                procurementRouteJson: null,
-                savedRecommendationMode: recommendationMode,
-                savedMarketAnalysisLens: marketAnalysisLens,
-                modifiedAt: new Date().toISOString()
-            };
-            const successor = createStoredPlanRecord(
-                { ...base, ...patch },
-                previous,
-                new Set([
-                    'marketPlansJson',
-                    'marketIntelligenceJson',
-                    'marketItemAnalysesJson',
-                    'marketAnalysisRecipeBasisJson',
-                    'marketAnalysisScopeSnapshotJson',
-                    'procurementRouteJson'
-                ]));
-            deleteReplacedPlanComponents(componentStore, previous, successor.record);
-            for (const component of successor.components) {
-                componentStore.put(component);
-            }
-            store.put(successor.record);
-            summaryStore.put(toPlanSummary(successor.record));
-        };
-
-        request.onerror = () => reject(request.error);
-        transaction.oncomplete = () => resolve(true);
-        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
-        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
-    });
-}
-
-/**
- * Patch plan decisions and the procurement route without transferring the
- * large market-evidence payload back through WebAssembly interop.
- */
-async function patchPlanAndProcurementRoute(planId, planPatch) {
-    const database = await initDB();
-
-    return new Promise((resolve, reject) => {
-        const transaction = database.transaction(
-            [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
-            'readwrite');
-        const store = transaction.objectStore(STORE_PLANS);
-        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
-        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
-        const request = store.get(planId);
-
+        request.onerror = () => transaction.abort();
         request.onsuccess = () => {
             const previous = request.result;
             if (!previous) {
@@ -680,24 +611,52 @@ async function patchPlanAndProcurementRoute(planId, planPatch) {
             const patch = { ...planPatch, modifiedAt: new Date().toISOString() };
             const changedFields = new Set(
                 STORED_PLAN_COMPONENT_FIELDS.filter(field =>
-                    Object.prototype.hasOwnProperty.call(planPatch, field)));
-            const successor = createStoredPlanRecord(
-                { ...base, ...patch },
+                    Object.prototype.hasOwnProperty.call(patch, field)));
+            persistStoredPlanSuccessor(
+                transaction,
                 previous,
-                changedFields);
-            deleteReplacedPlanComponents(componentStore, previous, successor.record);
-            for (const component of successor.components) {
-                componentStore.put(component);
-            }
-            store.put(successor.record);
-            summaryStore.put(toPlanSummary(successor.record));
+                createStoredPlanRecord(
+                    { ...base, ...patch },
+                    previous,
+                    changedFields));
         };
 
-        request.onerror = () => reject(request.error);
         transaction.oncomplete = () => resolve(true);
         transaction.onerror = (event) => reject(transaction.error || event.target?.error);
         transaction.onabort = (event) => reject(transaction.error || event.target?.error);
     });
+}
+
+/**
+ * Patch market analysis fields without transferring or rewriting the full plan payload.
+ */
+async function patchMarketAnalysis(
+    planId,
+    marketPlansJson,
+    marketItemAnalysesJson,
+    marketIntelligenceJson,
+    recommendationMode,
+    marketAnalysisLens,
+    marketAnalysisRecipeBasisJson,
+    marketAnalysisScopeSnapshotJson) {
+    return await patchStoredPlan(planId, {
+        marketPlansJson,
+        marketIntelligenceJson,
+        marketItemAnalysesJson,
+        marketAnalysisRecipeBasisJson,
+        marketAnalysisScopeSnapshotJson,
+        procurementRouteJson: null,
+        savedRecommendationMode: recommendationMode,
+        savedMarketAnalysisLens: marketAnalysisLens
+    });
+}
+
+/**
+ * Patch plan decisions and the procurement route without transferring the
+ * large market-evidence payload back through WebAssembly interop.
+ */
+async function patchPlanAndProcurementRoute(planId, planPatch) {
+    return await patchStoredPlan(planId, planPatch);
 }
 
 /**
@@ -1089,20 +1048,14 @@ async function savePlansBatch(plans) {
             [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
             'readwrite');
         const store = transaction.objectStore(STORE_PLANS);
-        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
-        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
         for (const plan of plans || []) {
             const request = store.get(plan.id);
             request.onerror = () => transaction.abort();
-            request.onsuccess = () => {
-                const successor = createStoredPlanRecord(plan);
-                deleteReplacedPlanComponents(componentStore, request.result, successor.record);
-                for (const component of successor.components) {
-                    componentStore.put(component);
-                }
-                store.put(successor.record);
-                summaryStore.put(toPlanSummary(successor.record));
-            };
+            request.onsuccess = () =>
+                persistStoredPlanSuccessor(
+                    transaction,
+                    request.result,
+                    createStoredPlanRecord(plan));
         }
 
         transaction.oncomplete = () => resolve(true);

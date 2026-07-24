@@ -222,8 +222,7 @@ public static partial class ManagedHost
             _canonicalSession.Export(
                 request.PlanId,
                 request.PlanName,
-                request.IncludeSourcePlanIdentity,
-                request.IncludeLegacyMarketAnalysisFields));
+                request.IncludeSourcePlanIdentity));
         return CreateSessionResult(
             command.CommandKind,
             accepted: true,
@@ -855,8 +854,7 @@ public static partial class ManagedHost
                 ? _canonicalSession.Export(
                       "autosave",
                       "Autosave",
-                      includeSourcePlanIdentity: true,
-                      includeLegacyMarketAnalysisFields: false)
+                      includeSourcePlanIdentity: true)
                   ?? new StoredPlan { Id = "autosave", Name = "Autosave" }
                 : null;
             var carrier = new WorkerSessionMutationProjection(

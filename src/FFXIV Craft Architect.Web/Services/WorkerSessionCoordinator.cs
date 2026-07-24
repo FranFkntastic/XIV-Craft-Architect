@@ -64,8 +64,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             new WorkerSessionExportRequest(
                 planId,
                 planName,
-                includeSourcePlanIdentity,
-                IncludeLegacyMarketAnalysisFields: true),
+                includeSourcePlanIdentity),
             cancellationToken);
         var export = result.Projection.Deserialize<WorkerSessionExportProjection>(
             EngineJsonSerializerOptions.CreateWire());

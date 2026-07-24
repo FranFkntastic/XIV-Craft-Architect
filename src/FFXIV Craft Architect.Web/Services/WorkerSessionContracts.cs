@@ -57,8 +57,7 @@ public sealed record WorkerSessionShellProjection(
 public sealed record WorkerSessionExportRequest(
     string PlanId,
     string PlanName,
-    bool IncludeSourcePlanIdentity,
-    bool IncludeLegacyMarketAnalysisFields);
+    bool IncludeSourcePlanIdentity);
 
 public sealed record WorkerSessionExportProjection(
     long Revision,

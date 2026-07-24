@@ -66,8 +66,7 @@ internal sealed class WorkerCanonicalSession
     public StoredPlan? Export(
         string planId,
         string planName,
-        bool includeSourcePlanIdentity,
-        bool includeLegacyMarketAnalysisFields)
+        bool includeSourcePlanIdentity)
     {
         if (_session.BorrowActivePlan() is null && _session.ProjectItems.Count == 0)
         {
@@ -79,7 +78,7 @@ internal sealed class WorkerCanonicalSession
             planName,
             DateTime.UtcNow,
             includeSourcePlanIdentity,
-            includeLegacyMarketAnalysisFields,
+            includeLegacyMarketAnalysisFields: false,
             borrowCanonicalState: true,
             compressMarketIntelligence: true);
         return new StoredPlan
@@ -99,11 +98,7 @@ internal sealed class WorkerCanonicalSession
                 MustBeHq = item.MustBeHq
             }).ToList(),
             PlanJson = snapshot.PlanJson,
-            MarketPlansJson = snapshot.MarketPlansJson,
             MarketIntelligenceJson = snapshot.MarketIntelligenceJson,
-            MarketItemAnalysesJson = includeLegacyMarketAnalysisFields
-                ? snapshot.MarketItemAnalysesJson
-                : null,
             MarketAnalysisRecipeBasisJson = snapshot.MarketAnalysisRecipeBasisJson,
             MarketAnalysisScopeSnapshotJson = _legacyMarketAnalysisScopeSnapshotJson,
             ProcurementRouteJson = BuildProcurementRouteJson() ?? _legacyProcurementRouteJson,
