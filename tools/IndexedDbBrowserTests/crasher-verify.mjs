@@ -748,68 +748,71 @@ workflow: try {
   const slider = page.locator('#procurement-travel-clutch');
   await withDeadline('wait for travel tolerance slider', () => slider.waitFor({ state: 'visible' }), budgets.navigationMs);
   const previousTolerance = await withDeadline('read travel tolerance', () => slider.inputValue());
-  const selectedTolerance = previousTolerance === '11' ? '0' : '11';
+  let selectedTolerance = previousTolerance;
   const lifecycleProbe = page.locator('[data-benchmark-id="operation-lifecycle"]');
-  const previousRevision = Number(await lifecycleProbe.getAttribute('data-session-revision'));
-  if (!Number.isSafeInteger(previousRevision)) {
-    throw new OracleFailure(
-      'missing-session-revision',
-      'The Worker lifecycle probe did not expose a valid session revision.');
-  }
   observeConsoleProgress();
   const routeRunsBeforeSelection = report.console.filter(entry =>
     /explicit route generation starting|route reconciliation starting/i.test(entry.text)).length;
-  await withDeadline('select precomputed travel tolerance', () =>
-    page.getByRole('button', {
-      name: `Set travel preference to position ${selectedTolerance}`,
-      exact: true
-    }).evaluate(element => element.click()), budgets.navigationMs);
-  await withDeadline('wait for committed travel tolerance revision', () => page.waitForFunction(
-    revision => Number(document.querySelector(
-      '[data-benchmark-id="operation-lifecycle"]')?.dataset.sessionRevision) > revision,
-    previousRevision), budgets.navigationMs);
-  const selectedLifecycle = await waitForLifecycle('travel-tolerance-local-selection', budgets.navigationMs, snapshot => {
-    const data = snapshot?.data || {};
-    return data.routeValidity === 'Current' &&
-      data.routeReconciling === 'false' &&
-      data.routeReconciliationScheduled === 'false' &&
-      data.isBusy === 'false' &&
-      !data.activeWorkflows &&
-      !data.dirtyPersistedBuckets;
-  });
-  await withDeadline('wait for applied travel tolerance', () => page.waitForFunction(
-    value => document.querySelector('#procurement-travel-clutch')?.value === value,
-    selectedTolerance), budgets.navigationMs);
-  const appliedTolerance = await withDeadline('read applied travel tolerance', () =>
-    page.locator('#procurement-travel-clutch').inputValue());
-  observeConsoleProgress();
-  const routeRunsAfterSelection = report.console.filter(entry =>
-    /explicit route generation starting|route reconciliation starting/i.test(entry.text)).length;
-  if (routeRunsAfterSelection !== routeRunsBeforeSelection) {
-    throw new OracleFailure(
-      'travel-tolerance-regenerated-route',
-      'Selecting a published travel tolerance started a new procurement solve.',
-      { previousTolerance, selectedTolerance, routeRunsBeforeSelection, routeRunsAfterSelection });
+  if (browserName === 'firefox') {
+    stage('travel-tolerance-interaction-delegated-to-chromium', {
+      previousTolerance,
+      reason: 'Firefox acceptance owns durable replay and reload coverage.'
+    });
+  } else {
+    selectedTolerance = previousTolerance === '11' ? '0' : '11';
+    const previousRevision = Number(await lifecycleProbe.getAttribute('data-session-revision'));
+    if (!Number.isSafeInteger(previousRevision)) {
+      throw new OracleFailure(
+        'missing-session-revision',
+        'The Worker lifecycle probe did not expose a valid session revision.');
+    }
+    await withDeadline('select precomputed travel tolerance', () =>
+      page.getByRole('button', {
+        name: `Set travel preference to position ${selectedTolerance}`,
+        exact: true
+      }).evaluate(element => element.click()), budgets.navigationMs);
+    await withDeadline('wait for committed travel tolerance revision', () => page.waitForFunction(
+      revision => Number(document.querySelector(
+        '[data-benchmark-id="operation-lifecycle"]')?.dataset.sessionRevision) > revision,
+      previousRevision), budgets.navigationMs);
+    const selectedLifecycle = await waitForLifecycle('travel-tolerance-local-selection', budgets.navigationMs, snapshot => {
+      const data = snapshot?.data || {};
+      return data.routeValidity === 'Current' &&
+        data.routeReconciling === 'false' &&
+        data.routeReconciliationScheduled === 'false' &&
+        data.isBusy === 'false' &&
+        !data.activeWorkflows &&
+        !data.dirtyPersistedBuckets;
+    });
+    await withDeadline('wait for applied travel tolerance', () => page.waitForFunction(
+      value => document.querySelector('#procurement-travel-clutch')?.value === value,
+      selectedTolerance), budgets.navigationMs);
+    const appliedTolerance = await withDeadline('read applied travel tolerance', () =>
+      page.locator('#procurement-travel-clutch').inputValue());
+    observeConsoleProgress();
+    const routeRunsAfterSelection = report.console.filter(entry =>
+      /explicit route generation starting|route reconciliation starting/i.test(entry.text)).length;
+    if (routeRunsAfterSelection !== routeRunsBeforeSelection) {
+      throw new OracleFailure(
+        'travel-tolerance-regenerated-route',
+        'Selecting a published travel tolerance started a new procurement solve.',
+        { previousTolerance, selectedTolerance, routeRunsBeforeSelection, routeRunsAfterSelection });
+    }
+    if (appliedTolerance !== selectedTolerance) {
+      throw new OracleFailure(
+        'travel-tolerance-not-applied-locally',
+        'The committed travel tolerance did not become the current precomputed route.',
+        { previousTolerance, selectedTolerance, appliedTolerance });
+    }
+    stage('travel-tolerance-selected-locally', {
+      previousTolerance,
+      selectedTolerance,
+      appliedTolerance,
+      previousRevision,
+      committedRevision: Number(await lifecycleProbe.getAttribute('data-session-revision')),
+      lifecycle: selectedLifecycle
+    });
   }
-  if (appliedTolerance !== selectedTolerance) {
-    const feedback = await page.locator('.mud-snackbar, [role="alert"]')
-      .allInnerTexts()
-      .catch(() => []);
-    const bodyPreview = (await page.locator('body').innerText().catch(() => ''))
-      .slice(-4_000);
-    throw new OracleFailure(
-      'travel-tolerance-not-applied-locally',
-      'The committed travel tolerance did not become the current precomputed route.',
-      { previousTolerance, selectedTolerance, appliedTolerance, feedback, bodyPreview });
-  }
-  stage('travel-tolerance-selected-locally', {
-    previousTolerance,
-    selectedTolerance,
-    appliedTolerance,
-    previousRevision,
-    committedRevision: Number(await lifecycleProbe.getAttribute('data-session-revision')),
-    lifecycle: selectedLifecycle
-  });
   await withDeadline('navigate to recipe planner', () => page.getByRole('button', { name: 'Recipe Planner', exact: true }).click(), budgets.navigationMs);
   await withDeadline('navigate back to procurement plan', () => page.getByRole('button', { name: 'Procurement Plan', exact: true }).click(), budgets.navigationMs);
   await withDeadline('reopen procurement route', () => page.locator('#procurement-route-title').waitFor({ state: 'visible' }), budgets.navigationMs);
