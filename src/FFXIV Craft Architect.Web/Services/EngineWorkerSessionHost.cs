@@ -482,6 +482,10 @@ public static partial class ManagedHost
                 "Build a recipe plan before publishing market evidence.");
         var planSessionVersion = session.PlanSessionVersion;
         var stamp = session.CaptureVersionStamp();
+        var recipeLayer = new WorkerRecipeLayerWorkflow(session);
+        var recipeBasis = recipeLayer.BuildMarketAnalysisRecipeBasis(
+            plan,
+            request.UnavailableItemIds);
         var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(
             plan,
             request.ShoppingPlans);
@@ -494,7 +498,8 @@ public static partial class ManagedHost
                 changedDecisions > 0,
                 "main-thread market evidence accepted by Worker",
                 request.UnavailableItemIds,
-                lens: request.Lens))
+                lens: request.Lens,
+                recipeBasis: recipeBasis))
         {
             throw new InvalidOperationException(
                 "Market evidence became stale before the Worker could publish it.");
@@ -1379,6 +1384,38 @@ public static partial class ManagedHost
         public IReadOnlyList<MaterialAggregate> BuildMarketAnalysisCandidates(
             CraftingPlan? plan) =>
             BuildDemandProjection(plan).ToMarketAnalysisMaterialAggregates();
+
+        public StoredRecipeOperationSnapshot BuildMarketAnalysisRecipeBasis(
+            CraftingPlan? plan,
+            IReadOnlySet<int> unavailableItemIds)
+        {
+            var candidates = BuildMarketAnalysisCandidates(plan);
+            var versions = _session.CaptureVersionStamp();
+            return new StoredRecipeOperationSnapshot
+            {
+                Metadata = new StoredRecipeOperationMetadata
+                {
+                    PlanSessionVersion = _session.PlanSessionVersion,
+                    PlanStructureVersion = versions.PlanCore,
+                    PlanDecisionVersion = versions.PlanDecision,
+                    PlanPriceVersion = versions.PlanPrice,
+                    SettingsVersion = versions.SettingsContext,
+                    RecipeDataIdentity = "worker-canonical-plan",
+                    CompletedAtUtc = DateTime.UtcNow,
+                    UniqueItemIdCount = candidates.Count
+                },
+                MarketAnalysisDemandItems = candidates.Select(candidate =>
+                    new StoredMarketAnalysisDemandItem
+                    {
+                        ItemId = candidate.ItemId,
+                        Name = candidate.Name,
+                        IconId = candidate.IconId,
+                        TotalQuantity = candidate.TotalQuantity,
+                        RequiresHq = candidate.RequiresHq
+                    }).ToList(),
+                UnavailableMarketItemIds = unavailableItemIds.ToHashSet()
+            };
+        }
 
         public IReadOnlyList<MaterialAggregate> BuildActiveProcurementItems(
             CraftingPlan? plan) =>

@@ -28,6 +28,7 @@ public sealed class WorkerSessionContractTests
                     ItemId = 42,
                     Name = "Root",
                     Quantity = 2,
+                    CanBuyFromMarket = false,
                     Children =
                     [
                         new PlanNode
@@ -270,6 +271,38 @@ public sealed class WorkerSessionContractTests
             export.StoredPlan.MarketIntelligenceJson));
         Assert.Null(export.StoredPlan.MarketPlansJson);
         Assert.Null(export.StoredPlan.MarketItemAnalysesJson);
+        var storedMarket = MarketIntelligencePayloadCodec.Deserialize(
+            export.StoredPlan.MarketIntelligenceJson);
+        Assert.NotNull(storedMarket);
+        Assert.Single(storedMarket.ItemAnalyses);
+        Assert.Single(storedMarket.Recommendations);
+        Assert.NotNull(storedMarket.RecipeBasis);
+        Assert.Single(storedMarket.RecipeBasis.MarketAnalysisDemandItems);
+
+        var reloaded = await SendAsync(
+            "restore",
+            expectedRevision: 3,
+            new WorkerSessionRestorePayload(
+                Revision: 4,
+                export.StoredPlan,
+                TrackStoredPlanIdentity: false,
+                MigratedFromLegacy: false));
+        Assert.True(reloaded.Accepted, reloaded.Message);
+
+        var reloadedMarket = await SendAsync(
+            WorkerSessionCommandKinds.MarketProjection,
+            expectedRevision: 4,
+            new WorkerMarketProjectionRequest(IncludeDetails: true));
+        Assert.True(reloadedMarket.Accepted);
+        var reloadedMarketProjection =
+            reloadedMarket.Projection.Deserialize<WorkerMarketProjection>(WireOptions);
+        Assert.NotNull(reloadedMarketProjection);
+        Assert.True(
+            reloadedMarketProjection.HasAnalysis,
+            reloaded.Message ?? "Reloaded market projection did not contain analysis.");
+        Assert.Single(reloadedMarketProjection.Items);
+        Assert.Single(reloadedMarketProjection.ItemAnalyses);
+        Assert.Single(reloadedMarketProjection.ShoppingPlans);
     }
 
     private static async Task<WorkerSessionResultEnvelope> SendAsync<TPayload>(
