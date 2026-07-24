@@ -11,6 +11,7 @@ public sealed class ProcurementRouteCompactionTests
     public void CompactResultShoppingPlans_PreservesHqCoverageAndSelectedWorlds()
     {
         var first = World("Alpha");
+        first.ProcurementPriorityScore = decimal.MaxValue;
         var second = World("Beta");
         second.ValueScore = decimal.MaxValue;
         var coverage = new MarketCoverageOption(
@@ -59,6 +60,7 @@ public sealed class ProcurementRouteCompactionTests
         var roundTrip = JsonSerializer.Deserialize<DetailedShoppingPlan>(
             json,
             EngineJsonSerializerOptions.CreateWire());
+        Assert.Equal(decimal.MaxValue, roundTrip!.WorldOptions[0].ProcurementPriorityScore);
         Assert.Equal(decimal.MaxValue, roundTrip!.WorldOptions[1].ValueScore);
     }
 

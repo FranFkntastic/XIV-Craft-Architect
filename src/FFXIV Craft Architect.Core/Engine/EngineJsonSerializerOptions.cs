@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -8,8 +9,41 @@ public static class EngineJsonSerializerOptions
     public static JsonSerializerOptions CreateWire()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new ExactDecimalJsonConverter());
         options.Converters.Add(new ReadOnlySetJsonConverterFactory());
         return options;
+    }
+
+    private sealed class ExactDecimalJsonConverter : JsonConverter<decimal>
+    {
+        public override decimal Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.Number && reader.TryGetDecimal(out var number))
+            {
+                return number;
+            }
+
+            if (reader.TokenType == JsonTokenType.String &&
+                decimal.TryParse(
+                    reader.GetString(),
+                    NumberStyles.Number,
+                    CultureInfo.InvariantCulture,
+                    out var text))
+            {
+                return text;
+            }
+
+            throw new JsonException("Expected an exact decimal number or invariant decimal string.");
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            decimal value,
+            JsonSerializerOptions options) =>
+            writer.WriteStringValue(value.ToString(CultureInfo.InvariantCulture));
     }
 
     private sealed class ReadOnlySetJsonConverterFactory : JsonConverterFactory
