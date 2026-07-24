@@ -13,9 +13,16 @@ public static class MarketEvidenceLoader
         TimeSpan? maxAge = null,
         bool forceRefreshData = false,
         IProgress<string>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool skipCachePopulation = false)
     {
         ArgumentNullException.ThrowIfNull(marketCache);
+        if (forceRefreshData && skipCachePopulation)
+        {
+            throw new ArgumentException(
+                "Forced refresh cannot skip cache population.",
+                nameof(skipCachePopulation));
+        }
         if (maxAge <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(
@@ -31,7 +38,7 @@ public static class MarketEvidenceLoader
             .ToList();
 
         var forceRefreshStartedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var fetchedCount = requests.Count == 0
+        var fetchedCount = requests.Count == 0 || skipCachePopulation
             ? 0
             : forceRefreshData
                 ? await marketCache.RefreshRequestedAsync(requests, progress, ct)

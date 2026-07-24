@@ -162,6 +162,13 @@ public sealed class MarketEvidenceReconciliationRequest
     public MarketEvidenceReconciliationPolicy Policy { get; init; } = new();
 
     /// <summary>
+    /// The caller already performed the bounded fetch pass for this scope.
+    /// Reconciliation reads the resulting cache snapshot without retrying
+    /// missing pairs item by item.
+    /// </summary>
+    public bool CacheAlreadyPopulated { get; init; }
+
+    /// <summary>
     /// Optional deterministic clock used by tests and diagnostics. Production callers leave this null.
     /// </summary>
     public DateTime? EvaluatedAtUtc { get; init; }

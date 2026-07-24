@@ -88,6 +88,7 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
                         ? null
                         : request.Policy.ReusableCacheMaxAge,
                     ForceRefreshData = request.Policy.RefreshMode == MarketEvidenceRefreshMode.ForceRefresh,
+                    SkipCachePopulation = request.CacheAlreadyPopulated,
                     RecommendationMode = request.RecommendationMode,
                     Lens = request.Lens,
                     AnalysisConfig = request.AnalysisConfig,

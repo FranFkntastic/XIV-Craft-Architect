@@ -333,6 +333,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
                     Lens = request.Lens,
+                    CacheAlreadyPopulated = true,
                     ExpectedWorldsByDataCenter = expectedWorlds
                 },
                 ct: cancellationToken,

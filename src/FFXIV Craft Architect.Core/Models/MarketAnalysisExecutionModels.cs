@@ -23,6 +23,8 @@ public sealed class MarketAnalysisExecutionRequest
     /// </summary>
     public bool ForceRefreshData { get; init; }
 
+    public bool SkipCachePopulation { get; init; }
+
     public RecommendationMode RecommendationMode { get; init; } = RecommendationMode.MinimizeTotalCost;
 
     public MarketAcquisitionLens Lens { get; init; } = MarketAcquisitionLens.MinimumUpfrontCost;
