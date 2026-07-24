@@ -1,4 +1,5 @@
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
@@ -12,6 +13,8 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// </summary>
 internal sealed class WorkerCanonicalSession
 {
+    private static readonly JsonSerializerOptions JsonOptions =
+        EngineJsonSerializerOptions.CreateWire();
     private CraftSessionState _session = CreateSession();
     private string? _legacyMarketAnalysisScopeSnapshotJson;
     private string? _legacyProcurementRouteJson;
@@ -118,7 +121,8 @@ internal sealed class WorkerCanonicalSession
             Basis: null,
             PlanHash: string.Empty,
             MarketEvidenceHash: null,
-            PayloadHash: null));
+            PayloadHash: null),
+            JsonOptions);
     }
 
     private void RestoreLegacyProcurementOverlay(string? routeJson)
@@ -130,7 +134,7 @@ internal sealed class WorkerCanonicalSession
 
         try
         {
-            var route = JsonSerializer.Deserialize<StoredProcurementRoute>(routeJson);
+            var route = JsonSerializer.Deserialize<StoredProcurementRoute>(routeJson, JsonOptions);
             if (route?.ShoppingPlans?.Count > 0 && route.Decision is not null)
             {
                 _session.PublishProcurementOverlay(

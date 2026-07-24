@@ -203,7 +203,8 @@ public sealed class StoredPlanSnapshotBuilder
             routeBasis,
             ComputePlanHash(currentPlan),
             MarketEvidenceHash: null,
-            PayloadHash: null));
+            PayloadHash: null),
+            EngineJsonSerializerOptions.CreateWire());
     }
 
     public static string ComputePlanHash(CraftingPlan plan)

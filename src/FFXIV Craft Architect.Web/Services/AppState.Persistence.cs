@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 
+using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
@@ -131,7 +132,9 @@ public partial class AppState
         StoredProcurementRoute? storedRoute;
         try
         {
-            storedRoute = System.Text.Json.JsonSerializer.Deserialize<StoredProcurementRoute>(routeJson);
+            storedRoute = System.Text.Json.JsonSerializer.Deserialize<StoredProcurementRoute>(
+                routeJson,
+                EngineJsonSerializerOptions.CreateWire());
         }
         catch (Exception ex) when (ex is System.Text.Json.JsonException or NotSupportedException or InvalidOperationException)
         {
