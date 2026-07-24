@@ -210,7 +210,14 @@ async function executeSessionCommand(messageJson, host) {
     const message = JSON.parse(messageJson);
     const command = message.payload ?? {};
     if (command.commandKind === "bootstrap") {
-        return await ensureSessionBootstrapped(host, message);
+        const bootstrapResultJson = await ensureSessionBootstrapped(host, message);
+        const bootstrapResult = JSON.parse(bootstrapResultJson);
+        return JSON.stringify({
+            ...bootstrapResult,
+            generation: message.generation,
+            executionId: message.executionId,
+            transactionId: message.transactionId
+        });
     }
 
     await ensureSessionBootstrapped(host, message);

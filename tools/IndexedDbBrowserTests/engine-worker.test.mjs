@@ -164,6 +164,10 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           return JSON.parse(response.messageJson);
         }
 
+        // The routed page can request a projection before MainLayout reaches its
+        // explicit startup bootstrap. The cached restore result must still be
+        // rebound to the later bootstrap command's identity.
+        const projectionBeforeBootstrap = await sendSessionCommand('shell', 0, {});
         const bootstrappedSession = await sendSessionCommand('bootstrap', 0, {});
         const replacedSession = await sendSessionCommand('replace', 1, {
           storedPlan: {
@@ -308,6 +312,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
         return {
           capability: active.capability,
+          projectionBeforeBootstrap,
           bootstrappedSession,
           replacedSession,
           staleSession,
@@ -333,6 +338,9 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       assert.equal(evidence.capability.payload.managedRuntimeAssembly, 'FFXIV_Craft_Architect.Web');
       assert.match(evidence.capability.payload.managedRuntimeProofHash, /^[0-9a-f]{64}$/i);
       assert.match(evidence.capability.payload.workerInstanceId, /^[0-9a-f-]{36}$/i);
+      assert.equal(evidence.projectionBeforeBootstrap.payload.accepted, false);
+      assert.equal(evidence.projectionBeforeBootstrap.payload.rejectionCode, 'stale-revision');
+      assert.equal(evidence.projectionBeforeBootstrap.payload.revision, 1);
       assert.equal(evidence.bootstrappedSession.payload.accepted, true);
       assert.equal(evidence.bootstrappedSession.payload.revision, 1);
       assert.equal(evidence.bootstrappedSession.payload.projection.migratedFromLegacy, true);
