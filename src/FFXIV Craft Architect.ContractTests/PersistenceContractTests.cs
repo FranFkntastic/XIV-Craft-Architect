@@ -13,6 +13,8 @@ public sealed class PersistenceContractTests
         var original = JsonSerializer.Deserialize<StoredMarketIntelligence>(
             CurrentMarketIntelligenceJson);
         Assert.NotNull(original);
+        original.Recommendations[0].WorldOptions[0].ValueScore = decimal.MaxValue;
+        original.Recommendations[0].WorldOptions[0].ProcurementPriorityScore = decimal.MaxValue;
 
         var compressed = MarketIntelligencePayloadCodec.Serialize(
             original,
@@ -27,6 +29,21 @@ public sealed class PersistenceContractTests
         Assert.Equal(
             original.RecipeBasis?.Metadata.RecipeDataIdentity,
             restored.RecipeBasis?.Metadata.RecipeDataIdentity);
+        Assert.Equal(
+            decimal.MaxValue,
+            restored.Recommendations[0].WorldOptions[0].ValueScore);
+        Assert.Equal(
+            decimal.MaxValue,
+            restored.Recommendations[0].WorldOptions[0].ProcurementPriorityScore);
+
+        var legacyRounded = MarketIntelligencePayloadCodec.Deserialize(
+            CurrentMarketIntelligenceJson.Replace(
+                "\"ValueScore\": 150",
+                "\"ValueScore\": 7.922816251426434e+28",
+                StringComparison.Ordinal));
+        Assert.Equal(
+            decimal.MaxValue,
+            legacyRounded!.Recommendations[0].WorldOptions[0].ValueScore);
     }
 
     [Fact]

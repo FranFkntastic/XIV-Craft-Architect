@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Core.Services;
@@ -7,6 +8,8 @@ namespace FFXIV_Craft_Architect.Core.Services;
 public static class MarketIntelligencePayloadCodec
 {
     private const string GZipBase64Prefix = "gz64:";
+    private static readonly JsonSerializerOptions JsonOptions =
+        EngineJsonSerializerOptions.CreateWire();
 
     public static bool IsCompressed(string? payload) =>
         payload?.StartsWith(GZipBase64Prefix, StringComparison.Ordinal) == true;
@@ -18,7 +21,7 @@ public static class MarketIntelligencePayloadCodec
         ArgumentNullException.ThrowIfNull(intelligence);
         if (!compress)
         {
-            return JsonSerializer.Serialize(intelligence);
+            return JsonSerializer.Serialize(intelligence, JsonOptions);
         }
 
         using var compressed = new MemoryStream();
@@ -27,7 +30,7 @@ public static class MarketIntelligencePayloadCodec
                    CompressionLevel.Fastest,
                    leaveOpen: true))
         {
-            JsonSerializer.Serialize(gzip, intelligence);
+            JsonSerializer.Serialize(gzip, intelligence, JsonOptions);
         }
 
         return GZipBase64Prefix +
@@ -42,7 +45,7 @@ public static class MarketIntelligencePayloadCodec
         ArgumentException.ThrowIfNullOrWhiteSpace(payload);
         if (!IsCompressed(payload))
         {
-            return JsonSerializer.Deserialize<StoredMarketIntelligence>(payload);
+            return JsonSerializer.Deserialize<StoredMarketIntelligence>(payload, JsonOptions);
         }
 
         var compressedBytes = Convert.FromBase64String(
@@ -52,6 +55,6 @@ public static class MarketIntelligencePayloadCodec
             compressed,
             CompressionMode.Decompress,
             leaveOpen: false);
-        return JsonSerializer.Deserialize<StoredMarketIntelligence>(gzip);
+        return JsonSerializer.Deserialize<StoredMarketIntelligence>(gzip, JsonOptions);
     }
 }
