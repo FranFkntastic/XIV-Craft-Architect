@@ -28,6 +28,8 @@ public sealed class WorkerSessionContractTests
                     ItemId = 42,
                     Name = "Root",
                     Quantity = 2,
+                    Source = AcquisitionSource.Craft,
+                    CanCraft = true,
                     Children =
                     [
                         new PlanNode
@@ -35,7 +37,9 @@ public sealed class WorkerSessionContractTests
                             NodeId = "child",
                             ItemId = 43,
                             Name = "Child",
-                            Quantity = 4
+                            Quantity = 4,
+                            Source = AcquisitionSource.MarketBuyNq,
+                            CanBuyFromMarket = true
                         }
                     ]
                 }
@@ -271,9 +275,42 @@ public sealed class WorkerSessionContractTests
         Assert.True(procurementProjection.HasPlan);
         Assert.False(procurementProjection.HasRoute);
 
+        var generatedRoute = await SendAsync(
+            WorkerSessionCommandKinds.ProcurementRun,
+            expectedRevision: 3,
+            new WorkerProcurementRequest(
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                TravelTolerance: 0,
+                IncludeSplitPurchases: true,
+                StartFromHomeDataCenter: false,
+                MarketTravelPriority.DataCenterTransfersFirst));
+        Assert.True(generatedRoute.Accepted, generatedRoute.Message);
+        Assert.Equal(4, generatedRoute.Revision);
+        var generatedMutation =
+            generatedRoute.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
+        Assert.NotNull(generatedMutation);
+        Assert.NotNull(generatedMutation.DurablePatch?.ProcurementRouteJson);
+        Assert.Null(generatedMutation.DurablePatch.ProcurementTravelTolerance);
+
+        var selectedTolerance = await SendAsync(
+            WorkerSessionCommandKinds.ProcurementToleranceMutation,
+            expectedRevision: 4,
+            new WorkerProcurementToleranceMutation(11));
+        Assert.True(selectedTolerance.Accepted, selectedTolerance.Message);
+        Assert.Equal(5, selectedTolerance.Revision);
+        var toleranceMutation =
+            selectedTolerance.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
+        Assert.NotNull(toleranceMutation);
+        Assert.Null(toleranceMutation.DurablePatch?.ProcurementRouteJson);
+        Assert.Equal(11, toleranceMutation.DurablePatch?.ProcurementTravelTolerance);
+        Assert.Equal(0m, toleranceMutation.DurablePatch?.ProcurementMaximumPremiumRate);
+
         var exported = await SendAsync(
             "export",
-            expectedRevision: 3,
+            expectedRevision: 5,
             new WorkerSessionExportRequest(
                 "autosave",
                 "Autosave",
@@ -282,7 +319,7 @@ public sealed class WorkerSessionContractTests
         Assert.True(exported.Accepted);
         var export = exported.Projection.Deserialize<WorkerSessionExportProjection>(WireOptions);
         Assert.NotNull(export);
-        Assert.Equal(3, export.Revision);
+        Assert.Equal(5, export.Revision);
         Assert.NotNull(export.StoredPlan?.PlanJson);
         Assert.NotNull(export.StoredPlan.MarketIntelligenceJson);
         Assert.True(MarketIntelligencePayloadCodec.IsCompressed(
@@ -299,9 +336,9 @@ public sealed class WorkerSessionContractTests
 
         var reloaded = await SendAsync(
             "restore",
-            expectedRevision: 3,
+            expectedRevision: 5,
             new WorkerSessionRestorePayload(
-                Revision: 4,
+                Revision: 6,
                 export.StoredPlan,
                 TrackStoredPlanIdentity: false,
                 MigratedFromLegacy: false));
@@ -309,7 +346,7 @@ public sealed class WorkerSessionContractTests
 
         var reloadedMarket = await SendAsync(
             WorkerSessionCommandKinds.MarketProjection,
-            expectedRevision: 4,
+            expectedRevision: 6,
             new WorkerMarketProjectionRequest(IncludeDetails: true));
         Assert.True(reloadedMarket.Accepted);
         var reloadedMarketProjection =
