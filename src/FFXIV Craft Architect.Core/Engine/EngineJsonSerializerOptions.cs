@@ -21,9 +21,22 @@ public static class EngineJsonSerializerOptions
             Type typeToConvert,
             JsonSerializerOptions options)
         {
-            if (reader.TokenType == JsonTokenType.Number && reader.TryGetDecimal(out var number))
+            if (reader.TokenType == JsonTokenType.Number)
             {
-                return number;
+                if (reader.TryGetDecimal(out var number))
+                {
+                    return number;
+                }
+
+                var rounded = reader.GetDouble();
+                if (rounded == (double)decimal.MaxValue)
+                {
+                    return decimal.MaxValue;
+                }
+                if (rounded == (double)decimal.MinValue)
+                {
+                    return decimal.MinValue;
+                }
             }
 
             if (reader.TokenType == JsonTokenType.String &&

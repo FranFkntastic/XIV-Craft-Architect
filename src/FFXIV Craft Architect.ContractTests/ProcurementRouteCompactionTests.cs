@@ -62,6 +62,11 @@ public sealed class ProcurementRouteCompactionTests
             EngineJsonSerializerOptions.CreateWire());
         Assert.Equal(decimal.MaxValue, roundTrip!.WorldOptions[0].ProcurementPriorityScore);
         Assert.Equal(decimal.MaxValue, roundTrip!.WorldOptions[1].ValueScore);
+        Assert.Equal(
+            decimal.MaxValue,
+            JsonSerializer.Deserialize<decimal>(
+                "7.922816251426434e+28",
+                EngineJsonSerializerOptions.CreateWire()));
     }
 
     [Fact]
