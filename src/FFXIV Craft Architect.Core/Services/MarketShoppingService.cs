@@ -309,13 +309,6 @@ public class MarketShoppingService
                             candidate.GilCost <= absoluteMaximumGilCost.Value - state.TotalGilCost)
                         .ToList();
                 }
-                candidates = candidates
-                    .OrderBy(c => c, Comparer<MarketPurchaseCandidate>.Create(
-                        (left, right) => MarketRouteScoring.CompareCandidates(left, right, state.Route, config)))
-                    .ThenBy(c => c.ItemId)
-                    .ThenBy(c => c.ItemName)
-                    .ToList();
-
                 if (candidates.Count == 0)
                 {
                     if (absoluteMaximumGilCost.HasValue && hadEligibleCandidate)
@@ -2123,12 +2116,14 @@ public class MarketShoppingService
             .ThenBy(state => state.TotalEvidencePenalty)
             .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal)
             .Take(16);
+        var cheapestGilCost = distinctStates.Min(state => state.TotalGilCost);
         var toleranceAnchors = Enumerable.Range(0, 12)
-            .SelectMany(tolerance => OrderRouteStates(
+            .SelectMany(tolerance => TakeBestRouteStates(
                     distinctStates,
                     config,
-                    travelToleranceOverride: tolerance)
-                .Take(4));
+                    tolerance,
+                    cheapestGilCost,
+                    count: 4));
 
         return cheapest
             .Concat(toleranceAnchors)
@@ -2179,27 +2174,98 @@ public class MarketShoppingService
         var cheapestGilCost = materialized.Count == 0
             ? 0
             : materialized.Min(state => state.TotalGilCost);
-        var travelTolerance = travelToleranceOverride ?? config.TravelTolerance;
-        var maximumPremiumRate = MarketRouteScoring.GetMaximumPremiumRate(travelTolerance);
-        var eligible = materialized
-            .OrderBy(state => absoluteMaximumGilCost.HasValue
-                ? state.TotalGilCost > absoluteMaximumGilCost.Value
-                : !MarketRouteScoring.IsWithinPremium(
-                    state.TotalGilCost,
-                    cheapestGilCost,
-                    maximumPremiumRate));
-        var travelOrdered = config.TravelPriority == MarketTravelPriority.WorldVisitsFirst
-            ? eligible
-                .ThenBy(state => state.WorldStops)
-                .ThenBy(state => state.GetDataCenterTransfers(config))
-            : eligible
-                .ThenBy(state => state.GetDataCenterTransfers(config))
-                .ThenBy(state => state.WorldStops);
+        var comparer = CreateRouteStateComparer(
+            config,
+            travelToleranceOverride ?? config.TravelTolerance,
+            cheapestGilCost,
+            absoluteMaximumGilCost);
+        return materialized.OrderBy(state => state, comparer);
+    }
 
-        return travelOrdered
-            .ThenBy(state => state.TotalEvidencePenalty)
-            .ThenBy(state => state.TotalGilCost)
-            .ThenBy(state => state.TieBreakKey, StringComparer.Ordinal);
+    private static IReadOnlyList<ProcurementRouteSearchState> TakeBestRouteStates(
+        IReadOnlyList<ProcurementRouteSearchState> states,
+        MarketAnalysisConfig config,
+        int travelTolerance,
+        long cheapestGilCost,
+        int count)
+    {
+        var comparer = CreateRouteStateComparer(
+            config,
+            travelTolerance,
+            cheapestGilCost,
+            absoluteMaximumGilCost: null);
+        var best = new List<ProcurementRouteSearchState>(count);
+        foreach (var state in states)
+        {
+            var insertionIndex = best.BinarySearch(state, comparer);
+            if (insertionIndex < 0)
+            {
+                insertionIndex = ~insertionIndex;
+            }
+            best.Insert(insertionIndex, state);
+            if (best.Count > count)
+            {
+                best.RemoveAt(count);
+            }
+        }
+        return best;
+    }
+
+    private static IComparer<ProcurementRouteSearchState> CreateRouteStateComparer(
+        MarketAnalysisConfig config,
+        int travelTolerance,
+        long cheapestGilCost,
+        long? absoluteMaximumGilCost)
+    {
+        var maximumPremiumRate = MarketRouteScoring.GetMaximumPremiumRate(travelTolerance);
+        return Comparer<ProcurementRouteSearchState>.Create((left, right) =>
+        {
+            var leftIneligible = absoluteMaximumGilCost.HasValue
+                ? left.TotalGilCost > absoluteMaximumGilCost.Value
+                : !MarketRouteScoring.IsWithinPremium(
+                    left.TotalGilCost,
+                    cheapestGilCost,
+                    maximumPremiumRate);
+            var rightIneligible = absoluteMaximumGilCost.HasValue
+                ? right.TotalGilCost > absoluteMaximumGilCost.Value
+                : !MarketRouteScoring.IsWithinPremium(
+                    right.TotalGilCost,
+                    cheapestGilCost,
+                    maximumPremiumRate);
+            var comparison = leftIneligible.CompareTo(rightIneligible);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = config.TravelPriority == MarketTravelPriority.WorldVisitsFirst
+                ? left.WorldStops.CompareTo(right.WorldStops)
+                : left.GetDataCenterTransfers(config).CompareTo(
+                    right.GetDataCenterTransfers(config));
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = config.TravelPriority == MarketTravelPriority.WorldVisitsFirst
+                ? left.GetDataCenterTransfers(config).CompareTo(
+                    right.GetDataCenterTransfers(config))
+                : left.WorldStops.CompareTo(right.WorldStops);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = left.TotalEvidencePenalty.CompareTo(right.TotalEvidencePenalty);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+            comparison = left.TotalGilCost.CompareTo(right.TotalGilCost);
+            return comparison != 0
+                ? comparison
+                : StringComparer.Ordinal.Compare(left.TieBreakKey, right.TieBreakKey);
+        });
     }
 
     private static IReadOnlyList<MarketRouteFrontierOption> BuildRepresentativeRoutes(

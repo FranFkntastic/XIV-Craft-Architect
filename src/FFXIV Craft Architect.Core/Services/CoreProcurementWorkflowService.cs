@@ -146,7 +146,7 @@ public sealed class CoreProcurementWorkflowService
                 .ToHashSet();
             var guardedProgress = progress == null
                 ? null
-                : new Progress<string>(message =>
+                : new ImmediateProgress<string>(message =>
                 {
                     if (IsCurrent(plan, planSessionVersion, capturedVersions, request.IsCurrentOperation))
                     {
@@ -470,6 +470,11 @@ public sealed class CoreProcurementWorkflowService
         }
 
         return null;
+    }
+
+    private sealed class ImmediateProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 
 }
