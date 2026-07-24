@@ -94,8 +94,7 @@ public sealed record WorkerSessionMutationProjection(
 
 public sealed record WorkerSessionDurablePatch(
     string? ProcurementRouteJson = null,
-    int? ProcurementTravelTolerance = null,
-    decimal? ProcurementMaximumPremiumRate = null);
+    int? ProcurementTravelTolerance = null);
 
 public sealed record WorkerAcceptedMutationProjection(
     WorkerSessionShellProjection Shell,

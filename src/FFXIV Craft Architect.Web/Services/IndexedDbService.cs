@@ -848,6 +848,11 @@ public class StoredPlan
     public string? ProcurementRouteJson { get; set; }
 
     /// <summary>
+    /// Selected position within the persisted procurement route frontier.
+    /// </summary>
+    public int? ProcurementTravelTolerance { get; set; }
+
+    /// <summary>
     /// Serialized immutable market analysis source data.
     /// </summary>
     public string? MarketItemAnalysesJson { get; set; }

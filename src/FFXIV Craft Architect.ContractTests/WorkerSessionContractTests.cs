@@ -293,7 +293,7 @@ public sealed class WorkerSessionContractTests
             generatedRoute.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
         Assert.NotNull(generatedMutation);
         Assert.NotNull(generatedMutation.DurablePatch?.ProcurementRouteJson);
-        Assert.Null(generatedMutation.DurablePatch.ProcurementTravelTolerance);
+        Assert.Equal(0, generatedMutation.DurablePatch.ProcurementTravelTolerance);
 
         var selectedTolerance = await SendAsync(
             WorkerSessionCommandKinds.ProcurementToleranceMutation,
@@ -306,7 +306,6 @@ public sealed class WorkerSessionContractTests
         Assert.NotNull(toleranceMutation);
         Assert.Null(toleranceMutation.DurablePatch?.ProcurementRouteJson);
         Assert.Equal(11, toleranceMutation.DurablePatch?.ProcurementTravelTolerance);
-        Assert.Equal(0m, toleranceMutation.DurablePatch?.ProcurementMaximumPremiumRate);
 
         var exported = await SendAsync(
             "export",
@@ -321,6 +320,7 @@ public sealed class WorkerSessionContractTests
         Assert.NotNull(export);
         Assert.Equal(5, export.Revision);
         Assert.NotNull(export.StoredPlan?.PlanJson);
+        Assert.Equal(11, export.StoredPlan.ProcurementTravelTolerance);
         Assert.NotNull(export.StoredPlan.MarketIntelligenceJson);
         Assert.True(MarketIntelligencePayloadCodec.IsCompressed(
             export.StoredPlan.MarketIntelligenceJson));

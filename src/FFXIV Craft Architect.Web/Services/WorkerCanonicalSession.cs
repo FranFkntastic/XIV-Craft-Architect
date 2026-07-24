@@ -47,6 +47,10 @@ internal sealed class WorkerCanonicalSession
         }
 
         RestoreLegacyProcurementOverlay(storedPlan.ProcurementRouteJson);
+        if (storedPlan.ProcurementTravelTolerance is { } tolerance)
+        {
+            _session.TrySelectProcurementTravelTolerance(tolerance);
+        }
         var routeRestoreMilliseconds = timing.ElapsedMilliseconds - coreRestoreMilliseconds;
         _session.MarkCurrentPersisted(
             CraftSessionDirtyBucket.PlanCore,
@@ -103,6 +107,9 @@ internal sealed class WorkerCanonicalSession
             MarketAnalysisRecipeBasisJson = snapshot.MarketAnalysisRecipeBasisJson,
             MarketAnalysisScopeSnapshotJson = _legacyMarketAnalysisScopeSnapshotJson,
             ProcurementRouteJson = BuildProcurementRouteJson() ?? _legacyProcurementRouteJson,
+            ProcurementTravelTolerance = _session.ProcurementOverlay?
+                .RouteDecision?
+                .TravelTolerance,
             SavedRecommendationMode = snapshot.SavedRecommendationMode,
             SavedMarketAnalysisLens = snapshot.SavedMarketAnalysisLens,
             SourcePlanId = snapshot.SourcePlanId,

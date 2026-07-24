@@ -170,6 +170,7 @@ public sealed class StoredPlanSnapshotBuilder
                 : null,
             MarketIntelligenceJson = marketIntelligenceJson,
             ProcurementRouteJson = BuildProcurementRouteJson(appState),
+            ProcurementTravelTolerance = appState.ProcurementRouteDecision?.TravelTolerance,
             MarketPlansJson = includeLegacyMarketAnalysisFields && appState.ShoppingPlans.Any()
                 ? JsonSerializer.Serialize(appState.ShoppingPlans)
                 : null,

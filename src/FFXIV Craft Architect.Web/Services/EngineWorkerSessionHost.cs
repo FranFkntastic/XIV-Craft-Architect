@@ -778,7 +778,8 @@ public static partial class ManagedHost
                 CaptureProcurementProjection(),
                 diagnostics),
             new WorkerSessionDurablePatch(
-                ProcurementRouteJson: _canonicalSession.ExportProcurementRoute()));
+                ProcurementRouteJson: _canonicalSession.ExportProcurementRoute(),
+                ProcurementTravelTolerance: request.TravelTolerance));
         Console.WriteLine(
             $"[EngineSession] procurement world-data={worldDataMilliseconds}ms " +
             $"workflow={workflowMilliseconds}ms projection-and-patch=" +
@@ -810,9 +811,7 @@ public static partial class ManagedHost
             command.CommandKind,
             CaptureProcurementProjection(),
             new WorkerSessionDurablePatch(
-                ProcurementTravelTolerance: request.TravelTolerance,
-                ProcurementMaximumPremiumRate:
-                    MarketRouteScoring.GetMaximumPremiumRate(request.TravelTolerance)));
+                ProcurementTravelTolerance: request.TravelTolerance));
     }
 
     private static CoreMarketAnalysisWorkflowService CreateMarketWorkflow(
