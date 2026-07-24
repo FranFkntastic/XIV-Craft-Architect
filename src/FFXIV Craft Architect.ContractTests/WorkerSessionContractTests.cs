@@ -180,7 +180,7 @@ public sealed class WorkerSessionContractTests
                         RecommendedWorld = world
                     }
                 ],
-                new HashSet<int>(),
+                new HashSet<int> { 43 },
                 FetchedCount: 1,
                 ResetStaging: true,
                 CompleteStaging: false));

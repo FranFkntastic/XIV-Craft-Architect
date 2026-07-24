@@ -383,13 +383,17 @@ public static class StoredMarketIntelligenceRestorer
         }
 
         var expected = recipeBasis.MarketAnalysisDemandItems
-            .Where(item => !recipeBasis.UnavailableMarketItemIds.Contains(item.ItemId))
             .ToDictionary(item => item.ItemId, item => item.TotalQuantity);
+        var analyzedItemIds = analyses
+            .Select(analysis => analysis.ItemId)
+            .ToHashSet();
 
-        return expected.Count == analyses.Count &&
-               analyses.All(analysis =>
+        return analyses.All(analysis =>
                    expected.TryGetValue(analysis.ItemId, out var quantityNeeded) &&
-                   quantityNeeded == analysis.QuantityNeeded);
+                   quantityNeeded == analysis.QuantityNeeded) &&
+               expected.Keys.All(itemId =>
+                   analyzedItemIds.Contains(itemId) ||
+                   recipeBasis.UnavailableMarketItemIds.Contains(itemId));
     }
 
     private static bool RestoredShoppingPlansMatchMarketAnalysis(
