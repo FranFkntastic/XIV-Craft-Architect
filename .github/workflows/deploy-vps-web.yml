@@ -48,8 +48,12 @@ jobs:
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             slot="${{ inputs.slot }}"
-            if [[ "$GITHUB_REF_TYPE" != "branch" || "$GITHUB_REF" != "refs/heads/$slot" ]]; then
-              echo "Dispatch ref '$GITHUB_REF_NAME' must match selected slot '$slot'." >&2
+            if [[ "$GITHUB_REF_TYPE" != "branch" ]]; then
+              echo "Dispatch ref '$GITHUB_REF_NAME' must be a branch." >&2
+              exit 1
+            fi
+            if [[ "$slot" == "main" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "The main slot may only be dispatched from main." >&2
               exit 1
             fi
             checkout_ref="$GITHUB_SHA"
