@@ -1,6 +1,8 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -12,15 +14,21 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     private readonly CraftArchitectEngineHost _engineHost;
     private readonly WorkerProjectionStore _projections;
     private readonly ExperimentalProcurementEngineCapability _capability;
+    private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
+    private readonly IUniversalisService _universalis;
 
     public WorkerSessionCoordinator(
         CraftArchitectEngineHost engineHost,
         WorkerProjectionStore projections,
-        ExperimentalProcurementEngineCapability capability)
+        ExperimentalProcurementEngineCapability capability,
+        IMarketEvidenceReconciliationService marketEvidenceReconciliation,
+        IUniversalisService universalis)
     {
         _engineHost = engineHost;
         _projections = projections;
         _capability = capability;
+        _marketEvidenceReconciliation = marketEvidenceReconciliation;
+        _universalis = universalis;
     }
 
     public bool IsEnabled => _capability.IsExecutionEnabled;
@@ -264,9 +272,55 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         WorkerMarketAnalysisRequest request,
         CancellationToken cancellationToken = default)
     {
-        var result = await _engineHost.RunMarketAnalysisAsync(
+        var market = _projections.Market ??
+            await GetMarketProjectionAsync(cancellationToken) ??
+            throw new InvalidOperationException(
+                "The Worker did not publish the active market-analysis candidates.");
+        if (market.CandidateItems.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "The active plan does not contain any market-analysis candidates.");
+        }
+
+        var expectedWorlds = await GetExpectedWorldsAsync(
+            request.Scope,
+            request.SelectedDataCenter,
+            request.SelectedRegion,
+            cancellationToken);
+        var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+            new MarketEvidenceReconciliationRequest
+            {
+                Items = market.CandidateItems,
+                PublishedAnalyses = market.ItemAnalyses,
+                PublishedShoppingPlans = market.ShoppingPlans,
+                Scope = request.Scope,
+                SelectedDataCenter = request.SelectedDataCenter,
+                SelectedRegion = request.SelectedRegion,
+                Lens = request.Lens,
+                ExpectedWorldsByDataCenter = expectedWorlds,
+                Policy = request.ForceRefreshData
+                    ? MarketEvidenceReconciliationPolicy.ForcedRefresh()
+                    : new MarketEvidenceReconciliationPolicy()
+            },
+            ct: cancellationToken,
+            executionOptions: MarketAnalysisExecutionOptions.Interactive);
+        if (reconciliation.ShoppingPlans.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"The market source returned no usable evidence for {market.CandidateItems.Count:N0} items.");
+        }
+
+        var result = await _engineHost.PublishMarketEvidenceAsync(
             _projections.Shell.Revision,
-            request,
+            new WorkerMarketEvidencePublicationRequest(
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion,
+                request.Lens,
+                reconciliation.Analyses,
+                reconciliation.ShoppingPlans,
+                reconciliation.UnavailableItemIds,
+                reconciliation.FetchedCount),
             cancellationToken);
         if (!_projections.TryPublishMutation<WorkerMarketAnalysisOutcome>(
                 result,
@@ -304,9 +358,82 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         WorkerMarketItemRefreshRequest request,
         CancellationToken cancellationToken = default)
     {
-        var result = await _engineHost.RefreshMarketItemAsync(
+        var market = _projections.Market ??
+            await GetMarketProjectionAsync(cancellationToken) ??
+            throw new InvalidOperationException(
+                "The Worker did not publish the active market-analysis candidates.");
+        var item = market.CandidateItems.FirstOrDefault(candidate =>
+            candidate.ItemId == request.ItemId)
+            ?? throw new InvalidOperationException(
+                $"{request.ItemName} is no longer part of the active market analysis.");
+        var expectedWorlds = await GetExpectedWorldsAsync(
+            request.Scope,
+            request.SelectedDataCenter,
+            request.SelectedRegion,
+            cancellationToken);
+
+        MarketItemAnalysis analysis;
+        DetailedShoppingPlan shoppingPlan;
+        if (!string.IsNullOrWhiteSpace(request.TargetDataCenter) &&
+            !string.IsNullOrWhiteSpace(request.TargetWorldName))
+        {
+            var worldResult = await _marketEvidenceReconciliation.ReconcileWorldAsync(
+                new MarketWorldEvidenceReconciliationRequest
+                {
+                    Item = item,
+                    DataCenter = request.TargetDataCenter,
+                    WorldName = request.TargetWorldName,
+                    ObservedEvidence = request.ObservedEvidence,
+                    Scope = request.Scope,
+                    SelectedDataCenter = request.SelectedDataCenter,
+                    SelectedRegion = request.SelectedRegion,
+                    Lens = request.Lens,
+                    ExpectedWorldsByDataCenter = expectedWorlds
+                },
+                ct: cancellationToken,
+                executionOptions: MarketAnalysisExecutionOptions.Interactive);
+            analysis = worldResult.Analysis;
+            shoppingPlan = worldResult.ShoppingPlan;
+        }
+        else
+        {
+            var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+                new MarketEvidenceReconciliationRequest
+                {
+                    Items = [item],
+                    PublishedAnalyses = market.ItemAnalyses
+                        .Where(candidate => candidate.ItemId == request.ItemId)
+                        .ToArray(),
+                    PublishedShoppingPlans = market.ShoppingPlans
+                        .Where(candidate => candidate.ItemId == request.ItemId)
+                        .ToArray(),
+                    Scope = request.Scope,
+                    SelectedDataCenter = request.SelectedDataCenter,
+                    SelectedRegion = request.SelectedRegion,
+                    Lens = request.Lens,
+                    ExpectedWorldsByDataCenter = expectedWorlds,
+                    Policy = MarketEvidenceReconciliationPolicy.ForcedRefresh()
+                },
+                ct: cancellationToken,
+                executionOptions: MarketAnalysisExecutionOptions.Interactive);
+            analysis = reconciliation.Analyses.SingleOrDefault()
+                ?? throw new InvalidOperationException(
+                    $"The market source returned no usable evidence for {request.ItemName}.");
+            shoppingPlan = reconciliation.ShoppingPlans.SingleOrDefault()
+                ?? throw new InvalidOperationException(
+                    $"The market source returned no purchase plan for {request.ItemName}.");
+        }
+
+        var result = await _engineHost.PublishMarketItemEvidenceAsync(
             _projections.Shell.Revision,
-            request,
+            new WorkerMarketItemEvidencePublicationRequest(
+                request.ItemId,
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion,
+                request.Lens,
+                analysis,
+                shoppingPlan),
             cancellationToken);
         if (!_projections.TryPublishMutation<WorkerMarketItemRefreshOutcome>(
                 result,
@@ -318,6 +445,24 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
 
         return outcome;
+    }
+
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>>
+        GetExpectedWorldsAsync(
+            MarketFetchScope scope,
+            string selectedDataCenter,
+            string selectedRegion,
+            CancellationToken cancellationToken)
+    {
+        var worldData = await _universalis.GetWorldDataAsync(cancellationToken);
+        return MarketFetchScopeResolver
+            .GetDataCenters(scope, selectedDataCenter, selectedRegion)
+            .Where(dataCenter => worldData.DataCenterToWorlds.ContainsKey(dataCenter))
+            .ToDictionary(
+                dataCenter => dataCenter,
+                dataCenter =>
+                    (IReadOnlyList<string>)worldData.DataCenterToWorlds[dataCenter],
+                StringComparer.OrdinalIgnoreCase);
     }
 
     public async Task<WorkerProcurementOutcome> RunProcurementAsync(

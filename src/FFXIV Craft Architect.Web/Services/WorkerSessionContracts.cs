@@ -72,6 +72,8 @@ public static class WorkerSessionCommandKinds
     public const string AcquisitionMutation = "mutate-acquisition";
     public const string AcquisitionProjection = "acquisition-projection";
     public const string MarketAnalysisRun = "mutate-market-analysis";
+    public const string MarketEvidencePublication = "mutate-market-evidence-publication";
+    public const string MarketItemEvidencePublication = "mutate-market-item-evidence-publication";
     public const string MarketItemRefresh = "mutate-market-item-refresh";
     public const string MarketLensMutation = "mutate-market-lens";
     public const string MarketProjection = "market-projection";
@@ -213,6 +215,25 @@ public sealed record WorkerMarketAnalysisOutcome(
     int ChangedDecisionCount,
     int FetchedCount,
     WorkerMarketProjection Market);
+
+public sealed record WorkerMarketEvidencePublicationRequest(
+    MarketFetchScope Scope,
+    string SelectedDataCenter,
+    string SelectedRegion,
+    MarketAcquisitionLens Lens,
+    IReadOnlyList<MarketItemAnalysis> ItemAnalyses,
+    IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
+    IReadOnlySet<int> UnavailableItemIds,
+    int FetchedCount);
+
+public sealed record WorkerMarketItemEvidencePublicationRequest(
+    int ItemId,
+    MarketFetchScope Scope,
+    string SelectedDataCenter,
+    string SelectedRegion,
+    MarketAcquisitionLens Lens,
+    MarketItemAnalysis ItemAnalysis,
+    DetailedShoppingPlan ShoppingPlan);
 
 public sealed record WorkerMarketItemRefreshRequest(
     int ItemId,

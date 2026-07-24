@@ -6,6 +6,7 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CraftArchitectEngineWorker;
 
@@ -17,10 +18,11 @@ public static partial class ManagedHost
     private static readonly WorkerMarketCacheService SessionMarketCache =
         new(SessionUniversalis);
     private static readonly MarketPriceLadderAnalysisService SessionMarketLadder = new();
+    private static readonly GarlandService SessionGarland = new(SessionHttp);
+    private static readonly VendorCacheService SessionVendorCache =
+        new(SessionGarland, NullLogger<VendorCacheService>.Instance);
     private static readonly RecipeCalculationService SessionRecipeCalculator =
-        new(
-            new GarlandService(SessionHttp),
-            new WorkerVendorCache());
+        new(SessionGarland, SessionVendorCache);
     private static WorkerCanonicalSession _canonicalSession = new();
     private static long _sessionRevision;
     private static string? _sessionRestoreWarning;
@@ -144,6 +146,10 @@ public static partial class ManagedHost
                     await BuildRecipeAsync(command),
                 WorkerSessionCommandKinds.MarketAnalysisRun =>
                     await RunMarketAnalysisAsync(command),
+                WorkerSessionCommandKinds.MarketEvidencePublication =>
+                    PublishMarketEvidence(command),
+                WorkerSessionCommandKinds.MarketItemEvidencePublication =>
+                    PublishMarketItemEvidence(command),
                 WorkerSessionCommandKinds.MarketItemRefresh =>
                     await RefreshMarketItemAsync(command),
                 WorkerSessionCommandKinds.MarketLensMutation =>
@@ -416,6 +422,114 @@ public static partial class ManagedHost
                 result.AnalyzedCount,
                 result.ChangedDecisionCount,
                 result.FetchedCount,
+                CaptureMarketProjection()));
+    }
+
+    private static WorkerSessionResultEnvelope PublishMarketEvidence(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request = command.Payload.Deserialize<WorkerMarketEvidencePublicationRequest>(
+                WireJsonOptions)
+            ?? throw new InvalidOperationException("Market-evidence publication is empty.");
+        var session = _canonicalSession.Session;
+        var plan = session.ActivePlan
+            ?? throw new InvalidOperationException(
+                "Build a recipe plan before publishing market evidence.");
+        var planSessionVersion = session.PlanSessionVersion;
+        var stamp = session.CaptureVersionStamp();
+        var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+            plan,
+            request.ShoppingPlans);
+        if (!session.TryPublishMarketAnalysis(
+                stamp,
+                plan,
+                planSessionVersion,
+                request.ItemAnalyses,
+                request.ShoppingPlans,
+                changedDecisions > 0,
+                "main-thread market evidence accepted by Worker",
+                request.UnavailableItemIds,
+                lens: request.Lens))
+        {
+            throw new InvalidOperationException(
+                "Market evidence became stale before the Worker could publish it.");
+        }
+
+        session.ReplaceActiveContext(
+            new CraftSessionActiveContext(
+                request.SelectedRegion,
+                request.SelectedDataCenter,
+                session.ActiveContext.World,
+                request.Scope),
+            "market analysis context published");
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        _sessionRevision++;
+        return CreateMutationResult(
+            command.CommandKind,
+            new WorkerMarketAnalysisOutcome(
+                Published: true,
+                request.ShoppingPlans.Count,
+                changedDecisions,
+                request.FetchedCount,
+                CaptureMarketProjection()));
+    }
+
+    private static WorkerSessionResultEnvelope PublishMarketItemEvidence(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request = command.Payload.Deserialize<WorkerMarketItemEvidencePublicationRequest>(
+                WireJsonOptions)
+            ?? throw new InvalidOperationException("Market-item evidence publication is empty.");
+        var session = _canonicalSession.Session;
+        var plan = session.ActivePlan
+            ?? throw new InvalidOperationException(
+                "Build a recipe plan before publishing market evidence.");
+        var evidence = session.MarketEvidence;
+        var analyses = MarketEvidenceCollectionMerger.MergeAnalyses(
+            evidence.ItemAnalyses,
+            [request.ItemAnalysis]);
+        var shoppingPlans = MarketEvidenceCollectionMerger.MergeShoppingPlans(
+            evidence.ShoppingPlans ?? [],
+            [request.ShoppingPlan]);
+        var unavailableItemIds = evidence.UnavailableMarketItemIds
+            .Where(itemId => itemId != request.ItemId)
+            .ToHashSet();
+        var planSessionVersion = session.PlanSessionVersion;
+        var stamp = session.CaptureVersionStamp();
+        var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+            plan,
+            shoppingPlans);
+        if (!session.TryPublishMarketAnalysis(
+                stamp,
+                plan,
+                planSessionVersion,
+                analyses,
+                shoppingPlans,
+                changedDecisions > 0,
+                "main-thread item evidence accepted by Worker",
+                unavailableItemIds,
+                evidence.RecommendationMode,
+                request.Lens,
+                evidence.RecipeBasis))
+        {
+            throw new InvalidOperationException(
+                "Market evidence became stale before the Worker could publish it.");
+        }
+
+        session.ReplaceActiveContext(
+            new CraftSessionActiveContext(
+                request.SelectedRegion,
+                request.SelectedDataCenter,
+                session.ActiveContext.World,
+                request.Scope),
+            "market item context published");
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        _sessionRevision++;
+        return CreateMutationResult(
+            command.CommandKind,
+            new WorkerMarketItemRefreshOutcome(
+                CoreProcurementItemRefreshStatus.Refreshed,
+                request.ShoppingPlan.Name,
                 CaptureMarketProjection()));
     }
 
@@ -1212,25 +1326,4 @@ public static partial class ManagedHost
         }
     }
 
-    private sealed class WorkerVendorCache : IVendorCacheService
-    {
-        public int Count => 0;
-        public VendorCacheEntry? Get(int itemId) => null;
-        public Task<VendorCacheEntry?> GetOrFetchAsync(
-            int itemId,
-            CancellationToken ct = default) =>
-            Task.FromResult<VendorCacheEntry?>(null);
-        public Task<Dictionary<int, VendorCacheEntry>> GetOrFetchBatchAsync(
-            IEnumerable<int> itemIds,
-            CancellationToken ct = default) =>
-            Task.FromResult(new Dictionary<int, VendorCacheEntry>());
-        public void Set(int itemId, VendorCacheEntry entry)
-        {
-        }
-        public void Clear()
-        {
-        }
-        public Task SaveAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task LoadAsync(CancellationToken ct = default) => Task.CompletedTask;
-    }
 }

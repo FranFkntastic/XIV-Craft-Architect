@@ -278,6 +278,17 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             EngineCommandPriority.UserRequestedDerivation,
             cancellationToken);
 
+    public Task<WorkerSessionResultEnvelope> PublishMarketEvidenceAsync(
+        long expectedRevision,
+        WorkerMarketEvidencePublicationRequest request,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.MarketEvidencePublication,
+            expectedRevision,
+            request,
+            EngineCommandPriority.UserRequestedDerivation,
+            cancellationToken);
+
     public Task<WorkerSessionResultEnvelope> ApplyMarketLensAsync(
         long expectedRevision,
         WorkerMarketLensMutation mutation,
@@ -295,6 +306,17 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.MarketItemRefresh,
+            expectedRevision,
+            request,
+            EngineCommandPriority.UserRequestedDerivation,
+            cancellationToken);
+
+    public Task<WorkerSessionResultEnvelope> PublishMarketItemEvidenceAsync(
+        long expectedRevision,
+        WorkerMarketItemEvidencePublicationRequest request,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.MarketItemEvidencePublication,
             expectedRevision,
             request,
             EngineCommandPriority.UserRequestedDerivation,

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services;
 using Microsoft.Extensions.Configuration;
@@ -102,6 +103,8 @@ public sealed class ExperimentalProcurementEngineRegistrationTests
         services.AddSingleton(new AppState());
         services.AddSingleton(provider => new IndexedDbService(provider.GetRequiredService<IJSRuntime>()));
         services.AddSingleton<IMarketEvidenceReconciliationService, NoopMarketEvidenceReconciliationService>();
+        services.AddSingleton<IUniversalisService>(
+            new UniversalisService(new HttpClient()));
         services.AddExperimentalProcurementEngine(configuration);
         return services.BuildServiceProvider(new ServiceProviderOptions
         {
