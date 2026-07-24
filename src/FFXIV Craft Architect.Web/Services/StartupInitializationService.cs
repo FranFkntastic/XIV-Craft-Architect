@@ -23,10 +23,6 @@ public sealed class StartupInitializationService
         try
         {
             await RunStepAsync("Loading settings...", steps.LoadSettingsAsync, cancellationToken);
-            await RunStepAsync(
-                "Restoring engine session...",
-                steps.BootstrapEngineSessionAsync,
-                cancellationToken);
             await RunStepAsync("Loading world data...", steps.InitializeWorldDataAsync, cancellationToken);
 
             _pendingStartAutoSave = steps.StartAutoSave;
@@ -97,7 +93,6 @@ public sealed class StartupInitializationService
 
 public sealed record StartupInitializationSteps(
     Func<CancellationToken, Task> LoadSettingsAsync,
-    Func<CancellationToken, Task> BootstrapEngineSessionAsync,
     Func<CancellationToken, Task> InitializeWorldDataAsync,
     Action StartAutoSave,
     Func<CancellationToken, Task<StartupAutoSaveRestoreResult>> RestoreAutoSaveAsync);

@@ -16,7 +16,6 @@
 @inject IndexedDbMarketCacheService MarketCache
 @inject PackagedWorldDirectoryService PackagedWorldDirectory
 @inject StartupInitializationService StartupInitialization
-@inject WorkerSessionCoordinator WorkerSession
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
 @inject ISnackbar Snackbar
@@ -278,7 +277,7 @@
                  Target="_blank" 
                  Style="color: #d4a73a; text-decoration: none; font-size: 14px;">GitHub</MudLink>
     </MudAppBar>
-
+    
     <MudMainContent Class="ca-main-content" Style="background-color: #1e1e1e; flex: 1; overflow-y: auto; overflow-x: hidden;">
         @Body
     </MudMainContent>
@@ -349,8 +348,6 @@
         {
             await StartupInitialization.InitializeAsync(new StartupInitializationSteps(
                 LoadSettingsAsync: _ => LoadSettingsAsync(),
-                BootstrapEngineSessionAsync: cancellationToken =>
-                    WorkerSession.BootstrapAsync(cancellationToken),
                 InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(
                     PackagedWorldDirectory,
                     UniversalisService),
@@ -385,7 +382,7 @@
     {
         if (!AppState.IsAutoSaveEnabled || AppState.IsBusy || CancellableOperations.ActiveWorkflows.Count > 0)
             return;
-
+            
         try
         {
             var success = await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: true);
@@ -489,11 +486,11 @@
             MarketEvidenceHydration.ScheduleAfterPlanLoad(loadResult);
             stateLoadElapsed.Stop();
             totalElapsed.Stop();
-
+            
             Snackbar.Add("Restored previous session", Severity.Info);
             Logger?.LogInformation(
                 "Auto-restored plan '{PlanName}' with {ProjectItemCount} items and {MarketPlanCount} market plans in {TotalElapsedMs} ms (load {LoadElapsedMs} ms, plan JSON {PlanDeserializeElapsedMs} ms, state load {StateLoadElapsedMs} ms)",
-                autoSave.Name,
+                autoSave.Name, 
                 autoSave.ProjectItems.Count,
                 AppState.ShoppingPlans.Count,
                 totalElapsed.ElapsedMilliseconds,
@@ -512,7 +509,7 @@
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         if (_disposed) return;
-
+        
         UpdateActiveTab(e.Location);
         _resetMainScrollAfterRender = true;
         _ = InvokeAsync(StateHasChanged);
@@ -627,7 +624,7 @@
             }
 
             Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
-
+            
             // Navigate to planner if we have a plan
             if (result.Plan != null || AppState.HasProjectItems)
             {
@@ -665,7 +662,7 @@
         if (result?.Data is ImportDialog.ImportResult importResult)
         {
             var items = importResult.Items;
-
+            
             // If we have a native plan, restore it fully
             var rebuildNativePlan = importResult.NativePlan != null &&
                 await NativePlanImportClassifier.RequiresRecipeGraphBuildAsync(importResult.NativePlan);
@@ -958,7 +955,7 @@
     }
 
     // ==================== EXPORT MENU ====================
-
+    
     private async Task OnExportNative()
     {
         await ShowExportDialog(0); // Native tab
@@ -1084,7 +1081,7 @@
             Snackbar.Add("No plan to fetch prices for. Create a plan first.", Severity.Warning);
             return;
         }
-
+        
         Snackbar.Add("Fetching prices...", Severity.Info);
         AppState.RequestPlanAndMarketRefresh();
     }
@@ -1104,10 +1101,10 @@
             StartupInitialization.StatusChanged -= OnStartupStatusChanged;
             AppState.OnStateChanged -= OnAppStateChanged;
             ProcurementRouteReconciliation.Dispose();
-
+            
             // Stop auto-save timer
             AppState.StopAutoSaveTimer();
-
+            
             // Final auto-save on dispose
             if (AppState.IsAutoSaveEnabled)
             {
@@ -1129,7 +1126,7 @@
             Logger?.LogError(ex, "Final auto-save failed");
         }
     }
-
+    
     private static MarketFetchScope ParseMarketFetchScope(string? value)
     {
         return Enum.TryParse<MarketFetchScope>(value, ignoreCase: true, out var scope)

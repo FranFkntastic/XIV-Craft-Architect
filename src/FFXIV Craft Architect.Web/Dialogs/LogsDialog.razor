@@ -1,6 +1,5 @@
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
-@inject WorkerProjectionStore WorkerProjections
 
 <MudDialog Style="min-width: 600px; max-width: 800px;">
     <DialogContent>
@@ -11,13 +10,12 @@
         <MudSimpleTable Dense="true" Striped="true">
             <tbody>
                 <tr><td>Saved plans</td><td>@AppState.SavedPlans.Count.ToString("N0")</td></tr>
-                <tr><td>Data center</td><td>@WorkerProjections.Shell.SelectedDataCenter</td></tr>
+                <tr><td>Data center</td><td>@AppState.SelectedDataCenter</td></tr>
                 <tr><td>Automatic saving</td><td>@(AppState.IsAutoSaveEnabled ? "Enabled" : "Disabled")</td></tr>
-                @if (WorkerProjections.Shell.HasSession)
+                @if (AppState.CurrentPlan != null)
                 {
-                    <tr><td>Active plan</td><td>@(WorkerProjections.Shell.PlanName ?? "Unsaved plan")</td></tr>
-                    <tr><td>Target items</td><td>@FormatItemCount(WorkerProjections.Shell.ProjectItemCount)</td></tr>
-                    <tr><td>Session revision</td><td>@WorkerProjections.Shell.Revision.ToString("N0")</td></tr>
+                    <tr><td>Active plan</td><td>@AppState.CurrentPlan.Name</td></tr>
+                    <tr><td>Target items</td><td>@FormatItemCount(AppState.CurrentPlan.RootItems.Count)</td></tr>
                 }
                 @if (AppState.LastAutoSave.HasValue)
                 {

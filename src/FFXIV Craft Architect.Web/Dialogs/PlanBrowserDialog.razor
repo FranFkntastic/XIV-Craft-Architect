@@ -1,8 +1,7 @@
 @using FFXIV_Craft_Architect.Web.Services
 @using FFXIV_Craft_Architect.Core.Models
+@inject AppState AppState
 @inject WebPlanPersistenceService PlanPersistence
-@inject WorkerSessionCoordinator WorkerSession
-@inject WorkerProjectionStore WorkerProjections
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
@@ -36,7 +35,7 @@
                                         <MudText Typo="Typo.body1" 
                                                  Style="@GetNameStyle(isSelected)">
                                             @plan.Name
-                                            @if (plan.Id == CurrentPlanId)
+                                            @if (plan.Id == AppState.CurrentPlanId)
                                             {
                                                 <span style="color: #4caf50; font-size: 11px; margin-left: 8px;">(current)</span>
                                             }
@@ -63,10 +62,10 @@
                        Color="Color.Primary"
                        Variant="Variant.Outlined"
                        Size="Size.Small"
-                       Disabled="@(WorkerProjections.Shell.ProjectItemCount == 0)"
+                       Disabled="@(!AppState.HasProjectItems)"
                        StartIcon="@Icons.Material.Filled.Save"
                        title="Save current plan">
-                @(CurrentPlanId != null ? "Save" : "Save As")
+                @(AppState.CurrentPlanId != null ? "Save" : "Save As")
             </MudButton>
             <!-- Rename/Delete: Enabled when a plan is selected -->
             <MudButton OnClick="OnRenamePlan"
@@ -109,7 +108,6 @@
     
     private List<StoredPlanSummary> _savedPlans = new();
     private StoredPlanSummary? _selectedPlan;
-    private string? CurrentPlanId => WorkerProjections.Recipe?.PlanId;
 
     private static string FormatPlanItemCount(int count)
     {
@@ -163,7 +161,7 @@
 
     private async Task OnSaveCurrentPlan()
     {
-        if (WorkerProjections.Shell.ProjectItemCount == 0)
+        if (!AppState.HasProjectItems)
         {
             Snackbar.Add("No items to save", Severity.Warning);
             return;
@@ -173,14 +171,14 @@
         {
             // Check if there's a current plan to potentially overwrite
             StoredPlanSummary? currentPlan = null;
-            if (CurrentPlanId != null)
+            if (AppState.CurrentPlanId != null)
             {
-                currentPlan = _savedPlans.FirstOrDefault(p => p.Id == CurrentPlanId);
+                currentPlan = _savedPlans.FirstOrDefault(p => p.Id == AppState.CurrentPlanId);
             }
 
             // If there's a selected plan that's not the current one, ask if user wants to overwrite it
             // or save as current/new
-            if (_selectedPlan != null && _selectedPlan.Id != CurrentPlanId)
+            if (_selectedPlan != null && _selectedPlan.Id != AppState.CurrentPlanId)
             {
                 var confirm = await DialogService.ShowMessageBox(
                     "Save Plan",
@@ -229,25 +227,18 @@
     {
         try
         {
-            var snapshot = await WorkerSession.ExportStoredPlanAsync(
+            var existingSummary = _savedPlans.FirstOrDefault(plan => plan.Id == planId);
+            var success = await PlanPersistence.SaveCurrentPlanAsync(
                 planId,
                 planName,
-                includeSourcePlanIdentity: true);
-            if (snapshot is null)
-            {
-                return;
-            }
-            snapshot.SourcePlanId = planId;
-            snapshot.SourcePlanName = planName;
-            var success = await PlanPersistence.SaveSnapshotAsync(snapshot);
+                existingSummary?.SavedAt);
             if (success)
             {
-                var action = CurrentPlanId == planId ? "Updated" : "Saved";
+                var action = AppState.CurrentPlanId == planId ? "Updated" : "Saved";
                 Snackbar.Add($"{action} '{planName}'", Severity.Success);
 
-                await WorkerSession.ReplaceStoredPlanAsync(
-                    snapshot,
-                    trackStoredPlanIdentity: true);
+                // Update current plan tracking
+                AppState.TrackCurrentPlanIdentity(planId, planName);
 
                 await RefreshSavedPlansListAsync();
 
@@ -291,16 +282,7 @@
                 Snackbar.Add($"Renamed '{renameResult.OldName}' to '{renameResult.NewName}'", Severity.Success);
 
                 // Update current plan name if this is the current plan
-                if (_selectedPlan.Id == CurrentPlanId)
-                {
-                    var renamed = await PlanPersistence.LoadPlanPayloadAsync(_selectedPlan.Id);
-                    if (renamed is not null)
-                    {
-                        await WorkerSession.ReplaceStoredPlanAsync(
-                            renamed,
-                            trackStoredPlanIdentity: true);
-                    }
-                }
+                AppState.RenameCurrentPlanIdentity(_selectedPlan.Id, newName);
 
                 await RefreshSavedPlansListAsync();
 
@@ -319,7 +301,7 @@
         if (_selectedPlan == null) return;
         
         // Check if deleting current plan
-        var isCurrentPlan = _selectedPlan.Id == CurrentPlanId;
+        var isCurrentPlan = _selectedPlan.Id == AppState.CurrentPlanId;
         var message = isCurrentPlan 
             ? $"'{_selectedPlan.Name}' is your current plan. Deleting it will not affect your current work, but you won't be able to overwrite it anymore. Continue?"
             : $"Are you sure you want to delete '{_selectedPlan.Name}'?";
@@ -338,6 +320,12 @@
                 if (success)
                 {
                     Snackbar.Add($"Deleted '{_selectedPlan.Name}'", Severity.Success);
+                    
+                    // If we deleted the current plan, clear the tracking
+                    if (isCurrentPlan)
+                    {
+                        AppState.ClearCurrentPlanId();
+                    }
                     
                     _selectedPlan = null;
                     await RefreshSavedPlansListAsync();
@@ -360,16 +348,18 @@
         
         try
         {
-            var stored = await PlanPersistence.LoadPlanPayloadAsync(_selectedPlan.Id);
-            if (stored == null)
+            var result = await PlanPersistence.LoadPlanIntoSessionAsync(_selectedPlan.Id);
+            if (result == null)
             {
                 Snackbar.Add("Plan not found", Severity.Error);
                 return;
             }
-            await WorkerSession.ReplaceStoredPlanAsync(
-                stored,
-                trackStoredPlanIdentity: true);
-            Snackbar.Add($"Loaded '{stored.Name}'", Severity.Success);
+            if (!string.IsNullOrWhiteSpace(result.Warning))
+            {
+                Snackbar.Add($"Warning: {result.Warning}", Severity.Warning);
+            }
+
+            Snackbar.Add($"Loaded '{result.StoredPlan.Name}'", Severity.Success);
             MudDialog.Close(DialogResult.Ok(true));
         }
         catch (Exception ex)

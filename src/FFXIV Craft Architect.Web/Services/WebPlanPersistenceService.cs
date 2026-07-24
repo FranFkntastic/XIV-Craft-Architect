@@ -9,17 +9,20 @@ public sealed class WebPlanPersistenceService
     private readonly IndexedDbService _indexedDb;
     private readonly StoredPlanSnapshotBuilder _snapshotBuilder;
     private readonly PlanSessionLoadService _sessionLoadService;
+    private readonly MarketEvidenceHydrationService? _marketEvidenceHydration;
 
     public WebPlanPersistenceService(
         AppState appState,
         IndexedDbService indexedDb,
         StoredPlanSnapshotBuilder snapshotBuilder,
-        PlanSessionLoadService sessionLoadService)
+        PlanSessionLoadService sessionLoadService,
+        MarketEvidenceHydrationService? marketEvidenceHydration = null)
     {
         _appState = appState;
         _indexedDb = indexedDb;
         _snapshotBuilder = snapshotBuilder;
         _sessionLoadService = sessionLoadService;
+        _marketEvidenceHydration = marketEvidenceHydration;
     }
 
     public async Task<IReadOnlyList<StoredPlanSummary>> LoadPlanSummariesAsync()
@@ -42,7 +45,9 @@ public sealed class WebPlanPersistenceService
             return null;
         }
 
-        return _sessionLoadService.Load(storedPlan, trackStoredPlanIdentity);
+        var result = _sessionLoadService.Load(storedPlan, trackStoredPlanIdentity);
+        _marketEvidenceHydration?.ScheduleAfterPlanLoad(result);
+        return result;
     }
 
     public async Task<PlanSessionLoadResult?> LoadAutoSaveIntoSessionAsync()
@@ -58,6 +63,7 @@ public sealed class WebPlanPersistenceService
             trackStoredPlanIdentity: false,
             markRestoredStatePersisted: true);
         _indexedDb.RememberRestoredMarketEvidence(_appState, storedPlan);
+        _marketEvidenceHydration?.ScheduleAfterPlanLoad(result);
         return result;
     }
 

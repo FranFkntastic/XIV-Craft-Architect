@@ -1,6 +1,5 @@
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
-@inject WorkerProjectionStore WorkerProjections
 
 <MudDialog>
     <DialogContent>
@@ -12,7 +11,7 @@
                       AutoFocus="true"
                       @onkeyup="OnKeyUp" />
         <MudText Typo="Typo.caption" Class="mt-2 d-block">
-            Saving @FormatProjectItemCount() for @SelectedDataCenter
+            Saving @FormatProjectItemCount() for @AppState.SelectedDataCenter
         </MudText>
     </DialogContent>
     <DialogActions>
@@ -28,28 +27,16 @@
 
     private string FormatProjectItemCount()
     {
-        var count = WorkerProjections.Shell.HasSession
-            ? WorkerProjections.Shell.ProjectItemCount
-            : AppState.ProjectItemCount;
-        return count == 1
+        return AppState.ProjectItemCount == 1
             ? "1 target item"
-            : $"{count:N0} target items";
+            : $"{AppState.ProjectItemCount:N0} target items";
     }
-
-    private string SelectedDataCenter =>
-        WorkerProjections.Shell.HasSession
-            ? WorkerProjections.Shell.SelectedDataCenter
-            : AppState.SelectedDataCenter;
     
     protected override void OnInitialized()
     {
         // Default name based on date
         _planName = $"Plan_{DateTime.Now:yyyyMMdd_HHmm}";
-        if (!string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanName))
-        {
-            _planName = WorkerProjections.Shell.PlanName;
-        }
-        else if (AppState.CurrentPlan?.Name != null)
+        if (AppState.CurrentPlan?.Name != null)
         {
             _planName = AppState.CurrentPlan.Name;
         }
