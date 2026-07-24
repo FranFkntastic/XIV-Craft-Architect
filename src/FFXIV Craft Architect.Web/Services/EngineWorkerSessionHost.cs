@@ -716,6 +716,21 @@ public static partial class ManagedHost
                 dataCenter => dataCenter,
                 dataCenter => (IReadOnlyList<string>)worldData.DataCenterToWorlds[dataCenter],
                 StringComparer.OrdinalIgnoreCase);
+        var preparationCompletedAt = 0L;
+        var reconciliationCompletedAt = 0L;
+        var workflowProgress = new ImmediateProgress<string>(message =>
+        {
+            if (preparationCompletedAt == 0 &&
+                message.StartsWith("Reconciling ", StringComparison.Ordinal))
+            {
+                preparationCompletedAt = timing.ElapsedMilliseconds;
+            }
+            else if (reconciliationCompletedAt == 0 &&
+                     message.StartsWith("Optimizing ", StringComparison.Ordinal))
+            {
+                reconciliationCompletedAt = timing.ElapsedMilliseconds;
+            }
+        });
         var result = await workflow.RunAnalysisAsync(
             new CoreProcurementWorkflowRequest(
                 request.Scope,
@@ -735,7 +750,8 @@ public static partial class ManagedHost
                 request.ExcludedWorlds?.ToHashSet() ?? new HashSet<MarketWorldKey>(),
                 request.ExcludedItemWorlds?.ToHashSet() ?? new HashSet<MarketItemWorldKey>(),
                 expectedWorlds,
-                ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous));
+                ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous),
+            workflowProgress);
         var workflowMilliseconds = timing.ElapsedMilliseconds - worldDataMilliseconds;
         if (result.Status != CoreProcurementWorkflowStatus.Published)
         {
@@ -747,12 +763,19 @@ public static partial class ManagedHost
         _canonicalSession.InvalidateLegacyProcurementRoute();
         _sessionRevision++;
         var projectionStarted = timing.ElapsedMilliseconds;
+        var diagnostics = new WorkerProcurementDiagnostics(
+            worldDataMilliseconds,
+            Math.Max(0, preparationCompletedAt - worldDataMilliseconds),
+            Math.Max(0, reconciliationCompletedAt - preparationCompletedAt),
+            Math.Max(0, timing.ElapsedMilliseconds - reconciliationCompletedAt),
+            workflowMilliseconds);
         var mutation = CreateMutationResult(
             command.CommandKind,
             new WorkerProcurementOutcome(
                 result.Status,
                 result.ShoppingPlanCount,
-                CaptureProcurementProjection()),
+                CaptureProcurementProjection(),
+                diagnostics),
             new WorkerSessionDurablePatch(
                 _canonicalSession.ExportProcurementRoute()));
         Console.WriteLine(
@@ -760,6 +783,11 @@ public static partial class ManagedHost
             $"workflow={workflowMilliseconds}ms projection-and-patch=" +
             $"{timing.ElapsedMilliseconds - projectionStarted}ms total={timing.ElapsedMilliseconds}ms");
         return mutation;
+    }
+
+    private sealed class ImmediateProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 
     private static WorkerSessionResultEnvelope MutateProcurementTolerance(

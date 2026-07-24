@@ -326,7 +326,15 @@ public sealed record WorkerProcurementToleranceMutation(int TravelTolerance);
 public sealed record WorkerProcurementOutcome(
     CoreProcurementWorkflowStatus Status,
     int ShoppingPlanCount,
-    WorkerProcurementProjection Procurement);
+    WorkerProcurementProjection Procurement,
+    WorkerProcurementDiagnostics Diagnostics);
+
+public sealed record WorkerProcurementDiagnostics(
+    long WorldDataMilliseconds,
+    long PreparationMilliseconds,
+    long ReconciliationMilliseconds,
+    long OptimizationAndPublicationMilliseconds,
+    long TotalWorkflowMilliseconds);
 
 public sealed record WorkerProcurementProjection(
     long Revision,

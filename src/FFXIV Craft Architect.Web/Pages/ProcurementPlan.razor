@@ -1,4 +1,5 @@
 @page "/procurement"
+@using System.Text.Json
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Dialogs
@@ -17,6 +18,12 @@
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 pp-page-container">
+    @if (_lastRunDiagnostics is not null)
+    {
+        <span hidden
+              data-procurement-timing="@JsonSerializer.Serialize(_lastRunDiagnostics)">
+        </span>
+    }
     <div class="pp-grid-layout">
         <ProcurementControlsPanel
             SearchEntireRegion="_searchEntireRegion"
@@ -85,7 +92,9 @@
         MarketTravelPriority.DataCenterTransfersFirst;
     private int _travelTolerance;
     private int _worldExclusionDurationMinutes = 60;
+    private bool _isLoading = true;
     private bool _isAnalyzing;
+    private WorkerProcurementDiagnostics? _lastRunDiagnostics;
     private string? _routeFailure;
     private string? _exclusionOutcome;
     private MarketItemWorldKey? _reconcilingItemWorld;
@@ -137,15 +146,22 @@
             _travelPriority = MarketTravelPriority.DataCenterTransfersFirst;
         }
 
-        _route = await WorkerSession.GetProcurementProjectionAsync();
-        ApplyRouteSettings();
-
-        _marketMafiosoEnabled = await Settings.GetAsync("marketmafioso.enabled", false);
-        MarketMafiosoIntegrationState.SetEnabled(_marketMafiosoEnabled);
-        MarketMafiosoIntegrationState.Changed += OnMarketMafiosoIntegrationChanged;
-        if (_marketMafiosoEnabled)
+        try
         {
-            await LoadActiveMarketMafiosoRequestAsync();
+            _route = await WorkerSession.GetProcurementProjectionAsync();
+            ApplyRouteSettings();
+
+            _marketMafiosoEnabled = await Settings.GetAsync("marketmafioso.enabled", false);
+            MarketMafiosoIntegrationState.SetEnabled(_marketMafiosoEnabled);
+            MarketMafiosoIntegrationState.Changed += OnMarketMafiosoIntegrationChanged;
+            if (_marketMafiosoEnabled)
+            {
+                await LoadActiveMarketMafiosoRequestAsync();
+            }
+        }
+        finally
+        {
+            _isLoading = false;
         }
     }
 
@@ -209,6 +225,7 @@
             var outcome = await WorkerSession.RunProcurementAsync(
                 BuildRequest());
             _route = outcome.Procurement;
+            _lastRunDiagnostics = outcome.Diagnostics;
             _travelTolerance = _route.TravelTolerance;
             await PersistControlsAsync();
             Snackbar.Add(
@@ -338,10 +355,16 @@
     }
 
     private string GetEmptyTitle() =>
-        _route?.HasPlan == true ? "Route ready to generate" : "No plan loaded";
+        _isLoading
+            ? "Restoring procurement plan"
+            : _route?.HasPlan == true
+                ? "Route ready to generate"
+                : "No plan loaded";
 
     private string GetEmptyMessage() =>
-        _route?.HasMarketEvidence == true
+        _isLoading
+            ? "Restoring the saved route and procurement evidence."
+            : _route?.HasMarketEvidence == true
             ? "Choose route settings and generate a route."
             : "Run Market Analysis before generating a procurement route.";
 
