@@ -16,8 +16,6 @@
 @inject ProfileSyncService ProfileSync
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
-@inject AcquisitionEvaluationItemDiagnosticDumpService AcquisitionItemDiagnosticDumpService
-@inject AcquisitionDiagnosticSelectionService AcquisitionDiagnosticSelection
 @inject BrowserFileExportService BrowserFileExportService
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
@@ -802,22 +800,6 @@
                             </span>
                         </button>
                     </div>
-                    <div class="diagnostics-action-row diagnostics-context-row">
-                        <div>
-                            <strong>Selected acquisition item</strong>
-                            <span>@(_acquisitionItemDiagnosticDescription ?? "Select an item in Acquisition Evaluation to make a contextual snapshot available here.")</span>
-                        </div>
-                        <button type="button"
-                                class="mud-button-root mud-button mud-button-outlined mud-button-outlined-secondary mud-button-outlined-size-small mud-ripple"
-                                disabled="@(!_acquisitionItemDiagnosticReady || _diagnosticsBusy)"
-                                onclick="window.CraftArchitectFileExport?.downloadPreparedFile('@AcquisitionItemDiagnosticSaveKey')">
-                            <span class="mud-button-label">
-                                <MudIcon Icon="@Icons.Material.Filled.Download"
-                                         Class="mud-button-icon-start mud-button-icon-size-small" />
-                                Download item snapshot
-                            </span>
-                        </button>
-                    </div>
                     <div class="diagnostics-action-row diagnostics-report-row">
                         <div>
                             <strong>Report a problem</strong>
@@ -1133,15 +1115,12 @@
     private Color _profileHostStatusColor = Color.Secondary;
     private bool _diagnosticsBusy;
     private bool _diagnosticSnapshotReady;
-    private bool _acquisitionItemDiagnosticReady;
     private bool _prepareDiagnosticAttachment;
     private string? _diagnosticSnapshotFileName;
-    private string? _acquisitionItemDiagnosticDescription;
     private TradeIndexedDbDiagnostics? _tradeStorageDiagnostics;
     private CacheStats? _marketCacheStats;
     private string? _diagnosticStorageError;
     private const string DiagnosticSnapshotSaveKey = "options-diagnostic-snapshot";
-    private const string AcquisitionItemDiagnosticSaveKey = "acquisition-item-diagnostic";
 
     private static readonly JsonSerializerOptions CompanyPackageJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -1977,7 +1956,6 @@
         }
 
         await PrepareDiagnosticSnapshotAsync();
-        await PrepareSelectedAcquisitionItemDiagnosticAsync();
     }
 
     private async Task PrepareDiagnosticSnapshotAsync()
@@ -2041,50 +2019,6 @@
         }
     }
 
-    private async Task PrepareSelectedAcquisitionItemDiagnosticAsync()
-    {
-        _acquisitionItemDiagnosticReady = false;
-        _acquisitionItemDiagnosticDescription = null;
-
-        if (!AcquisitionDiagnosticSelection.TryGetCurrent(
-                AppState.PlanSessionVersion,
-                out var selection))
-        {
-            return;
-        }
-
-        try
-        {
-            var exportedAtUtc = DateTime.UtcNow;
-            var row = selection.Row;
-            var dump = AcquisitionItemDiagnosticDumpService.BuildDump(
-                AppState,
-                row,
-                selection.ResolvedMarketPlan,
-                MarketEvidenceHydrationRunSnapshot.None,
-                (MarketCache as IMarketCacheDiagnosticsProvider)?.LastDecisionSnapshot,
-                exportedAtUtc);
-            var fileName = AcquisitionEvaluationItemDiagnosticDumpService.CreateFileName(
-                row.ItemName,
-                row.ItemId,
-                exportedAtUtc);
-            await BrowserFileExportService.PrepareTextFileSaveAsync(
-                AcquisitionItemDiagnosticSaveKey,
-                fileName,
-                AcquisitionItemDiagnosticDumpService.Serialize(dump),
-                "application/json");
-
-            var quantity = AcquisitionEvaluationCostCalculator.GetCostQuantity(row);
-            _acquisitionItemDiagnosticDescription =
-                $"{row.ItemName} · {quantity:N0} needed · {row.MarketEvidence}";
-            _acquisitionItemDiagnosticReady = true;
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Could not prepare acquisition diagnostics: {ex.Message}", Severity.Error);
-        }
-    }
-
     private async Task RunBrowserStorageChecksAsync()
     {
         _diagnosticsBusy = true;
@@ -2134,7 +2068,7 @@
             scope,
             WorkerProjections.Shell.ShoppingPlanCount,
             WorkerProjections.Shell.MarketAnalysisCount,
-            MarketEvidenceHydrationStatus.NotNeeded,
+            "Worker-owned",
             _prepareDiagnosticAttachment,
             _prepareDiagnosticAttachment ? _diagnosticSnapshotFileName : null));
     }

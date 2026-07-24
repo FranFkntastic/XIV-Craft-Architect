@@ -2,7 +2,6 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
@@ -24,27 +23,6 @@ public sealed class ProcurementSafetyContractTests
         Assert.Equal(versions, state.CurrentVersions);
         Assert.Equal("Siren", Assert.Single(state.ProcurementShoppingPlans).RecommendedWorld?.WorldName);
         Assert.Equal(0, execution.Calls);
-    }
-
-    [Fact]
-    public void ExplicitFalseAvailability_DoesNotScheduleHiddenReconciliation()
-    {
-        var state = CreateState(100);
-        state.ReplaceMarketAnalysis([], [RoutePlan(100, "Siren")]);
-        var workflow = new FakeWorkflow();
-        using var service = new ProcurementRouteReconciliationService(
-            state,
-            workflow,
-            new CancellableOperationService(state),
-            NullLogger<ProcurementRouteReconciliationService>.Instance,
-            new ProcurementRouteAvailability(false),
-            TimeSpan.Zero);
-
-        service.Start();
-
-        Assert.False(service.IsScheduled);
-        Assert.False(state.IsProcurementRouteReconciling);
-        Assert.Equal(0, workflow.Calls);
     }
 
     [Fact]
@@ -119,16 +97,6 @@ public sealed class ProcurementSafetyContractTests
         state.ReplaceProcurementOverlay([RoutePlan(100, "Siren")], decision);
         state.MarkPersisted(PersistedStateBucket.ProcurementRoute, state.CurrentVersions);
         var storedAtPositionZero = state.CreateStoredPlanSnapshot("autosave", "Autosave");
-        var workflow = new FakeWorkflow();
-        using var reconciliation = new ProcurementRouteReconciliationService(
-            state,
-            workflow,
-            new CancellableOperationService(state),
-            NullLogger<ProcurementRouteReconciliationService>.Instance,
-            new ProcurementRouteAvailability(true),
-            TimeSpan.Zero);
-        reconciliation.Start();
-
         var selected = state.TrySelectProcurementTravelTolerance(11);
 
         Assert.True(selected);
@@ -137,8 +105,6 @@ public sealed class ProcurementSafetyContractTests
         Assert.Equal("Faerie", Assert.Single(state.ProcurementShoppingPlans).RecommendedWorld?.WorldName);
         Assert.Equal(400, state.ProcurementRouteDecision?.SelectedGilCost);
         Assert.False(state.IsPersistedBucketDirty(PersistedStateBucket.ProcurementRoute));
-        Assert.False(reconciliation.IsScheduled);
-        Assert.Equal(0, workflow.Calls);
 
         var restored = new AppState();
         restored.SetProcurementSettings(
@@ -328,17 +294,4 @@ public sealed class ProcurementSafetyContractTests
             Task.FromResult<IReadOnlyList<MaterialAggregate>?>(ActiveItems);
     }
 
-    private sealed class FakeWorkflow : IProcurementWorkflowService
-    {
-        public int Calls { get; private set; }
-
-        public Task<ProcurementWorkflowResult> RunAnalysisAsync(
-            ProcurementWorkflowRequest request,
-            IProgress<string>? progress = null,
-            CancellationToken ct = default)
-        {
-            Calls++;
-            return Task.FromResult(new ProcurementWorkflowResult(ProcurementWorkflowStatus.Published, 1));
-        }
-    }
 }

@@ -20,7 +20,6 @@
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
 @inject NativePlanImportClassifier NativePlanImportClassifier
-@inject RecipePlanDiagnosticDumpService RecipePlanDiagnosticDumpService
 @inject ILogger<MainLayout> Logger
 @implements IDisposable
 
@@ -695,7 +694,7 @@
             var bytes = System.Text.Encoding.UTF8.GetBytes(json);
             using var stream = new MemoryStream(bytes);
             using var streamRef = new DotNetStreamReference(stream);
-            var fileName = RecipePlanDiagnosticDumpService.CreateFileName(
+            var fileName = RecipePlanDiagnosticFileName.Create(
                 WorkerProjections.Recipe?.PlanName,
                 exportedAt);
             await JSRuntime.InvokeVoidAsync("downloadFileFromStream", fileName, streamRef);

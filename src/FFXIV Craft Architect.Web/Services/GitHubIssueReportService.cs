@@ -56,6 +56,6 @@ public sealed record GitHubIssueReportContext(
     string MarketScope,
     int ShoppingPlanCount,
     int MarketAnalysisCount,
-    MarketEvidenceHydrationStatus AutomaticRefreshStatus,
+    string AutomaticRefreshStatus,
     bool PrepareDiagnosticAttachment = false,
     string? DiagnosticFileName = null);

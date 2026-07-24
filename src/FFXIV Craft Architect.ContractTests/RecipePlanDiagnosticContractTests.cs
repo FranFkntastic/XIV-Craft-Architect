@@ -1,4 +1,3 @@
-using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Web.Services;
 
 namespace FFXIV_Craft_Architect.ContractTests;
@@ -6,87 +5,82 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class RecipePlanDiagnosticContractTests
 {
     [Fact]
-    public void Dump_IsObservationalAndKeepsAcquisitionPricingAuthoritative()
+    public void Dump_IsAWorkerSnapshotWithoutAnalysisOrProcurementCommands()
     {
-        var state = new AppState();
-        state.ApplyBuiltRecipePlan(
-            new CraftingPlan
-            {
-                DataCenter = "Aether",
-                RootItems =
-                [
-                    new PlanNode
-                    {
-                        NodeId = "clear-glass-lens",
-                        ItemId = 5512,
-                        Name = "Clear Glass Lens",
-                        Quantity = 5,
-                        Source = AcquisitionSource.MarketBuyNq,
-                        SourceReason = AcquisitionSourceReason.UserSelected,
-                        CanBuyFromMarket = true
-                    }
-                ]
-            },
-            []);
-        state.ReplaceMarketAnalysis(
-            [new MarketItemAnalysis { ItemId = 5512, Name = "Clear Glass Lens", QuantityNeeded = 5 }],
-            [ShoppingPlan(5512, "Exodus", unitPrice: 100)]);
-        state.ReplaceProcurementOverlay(
-            [ShoppingPlan(5512, "Siren", unitPrice: 250)]);
-        var versions = state.CurrentVersions;
-        var routeValidity = state.ProcurementRouteValidity;
+        var root = LocateRepositoryRoot();
+        var layout = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Shared",
+            "MainLayout.razor"));
+        var start = layout.IndexOf(
+            "private async Task OnDumpRecipePlanDiagnostics()",
+            StringComparison.Ordinal);
+        var end = layout.IndexOf(
+            "private async Task LoadNativePlanAsync(",
+            start,
+            StringComparison.Ordinal);
+        var dumpHandler = layout[start..end];
 
-        var dump = new RecipePlanDiagnosticDumpService(state).BuildDump();
-        var json = RecipePlanDiagnosticDumpService.Serialize(dump);
-
-        Assert.Equal(versions, state.CurrentVersions);
-        Assert.Equal(routeValidity, state.ProcurementRouteValidity);
-        Assert.Contains("\"tool\": \"recipe-plan-diagnostic-dump\"", json);
-        Assert.DoesNotContain("auto-market-analysis", json);
-        Assert.DoesNotContain("\"worldOptions\"", json);
-        Assert.DoesNotContain("\"marketAnalyses\"", json);
-        Assert.DoesNotContain("\"toleranceSelections\"", json);
-        Assert.Equal(RecipePlanAcquisitionQuoteBasis.MarketAnalysis, dump.Context.DisplayedPriceBasis);
-        Assert.Equal(500, Assert.Single(dump.DisplayedQuotes).TotalCost);
-        Assert.Equal(RecipePlanAcquisitionQuoteBasis.MarketAnalysis, Assert.Single(dump.DisplayedQuotes).Basis);
-        Assert.Equal(1_250, Assert.Single(dump.ProcurementComparisonQuotes).TotalCost);
+        Assert.Contains("WorkerSession.ExportStoredPlanAsync(", dumpHandler, StringComparison.Ordinal);
+        Assert.Contains("Session = stored", dumpHandler, StringComparison.Ordinal);
+        Assert.Contains("Recipe = WorkerProjections.Recipe", dumpHandler, StringComparison.Ordinal);
+        Assert.Contains("Market = WorkerProjections.Market", dumpHandler, StringComparison.Ordinal);
+        Assert.Contains("Procurement = WorkerProjections.Procurement", dumpHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("RunMarketAnalysis", dumpHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("RunProcurement", dumpHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReplaceStoredPlan", dumpHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("AppState.CurrentPlan", dumpHandler, StringComparison.Ordinal);
         Assert.Equal(
-            RecipePlanAcquisitionQuoteBasis.ProcurementRoute,
-            Assert.Single(dump.ProcurementComparisonQuotes).Basis);
+            "recipe-plan-Crasher_Plan-20260724-123456.json",
+            RecipePlanDiagnosticFileName.Create(
+                "Crasher/Plan",
+                new DateTime(2026, 7, 24, 12, 34, 56, DateTimeKind.Utc)));
     }
 
-    private static DetailedShoppingPlan ShoppingPlan(int itemId, string world, long unitPrice)
+    [Fact]
+    public void Composition_DoesNotRegisterRetiredMainThreadPlannerPipelines()
     {
-        var listing = new ShoppingListingEntry
+        var root = LocateRepositoryRoot();
+        var program = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Program.cs"));
+        var options = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Dialogs",
+            "OptionsDialog.razor"));
+        var retiredTypes = new[]
         {
-            Quantity = 5,
-            NeededFromStack = 5,
-            PricePerUnit = unitPrice
+            "RecipePlannerCommandService",
+            "MarketAnalysisAutoRunner",
+            "MarketEvidenceHydrationService",
+            "ProcurementRouteReconciliationService",
+            "RecipePlanDiagnosticDumpService",
+            "AcquisitionEvaluationItemDiagnosticDumpService"
         };
-        return new DetailedShoppingPlan
+
+        foreach (var retiredType in retiredTypes)
         {
-            ItemId = itemId,
-            Name = "Clear Glass Lens",
-            QuantityNeeded = 5,
-            RecommendedWorld = new WorldShoppingSummary
-            {
-                DataCenter = "Aether",
-                WorldName = world,
-                TotalCost = unitPrice * 5,
-                TotalQuantityPurchased = 5,
-                Listings = [listing]
-            },
-            WorldOptions =
-            [
-                new WorldShoppingSummary
-                {
-                    DataCenter = "Aether",
-                    WorldName = world,
-                    TotalCost = unitPrice * 5,
-                    TotalQuantityPurchased = 5,
-                    Listings = [listing]
-                }
-            ]
-        };
+            Assert.DoesNotContain(retiredType, program, StringComparison.Ordinal);
+            Assert.DoesNotContain(retiredType, options, StringComparison.Ordinal);
+        }
+    }
+
+    private static string LocateRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null &&
+               !File.Exists(Path.Combine(directory.FullName, "FFXIV Craft Architect.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ??
+            throw new DirectoryNotFoundException("Could not locate the repository root.");
     }
 }
