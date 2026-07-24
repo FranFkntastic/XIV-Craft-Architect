@@ -3,17 +3,17 @@
 <div class="ma-controls-column">
     <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-4">Market Analysis</MudText>
 
-    @if (!string.IsNullOrWhiteSpace(AppState.MarketAnalysisScopeWarning))
+    @if (!string.IsNullOrWhiteSpace(ScopeWarning))
     {
         <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
-            @AppState.MarketAnalysisScopeWarning
+            @ScopeWarning
         </MudAlert>
     }
 
     <div class="ma-field-block">
         <CompactSelectField Id="market-buying-strategy"
                             Label="Buying strategy"
-                            Value="@AppState.MarketAnalysisLens.ToString()"
+                            Value="@Lens.ToString()"
                             ValueChanged="OnLensValueChanged"
                             Options="LensOptions"
                             Tooltip="@LensSelectorTooltip"
@@ -23,7 +23,7 @@
     <div class="ma-field-block">
         <CompactSelectField Id="market-listing-colors"
                             Label="Listing colors"
-                            Value="@AppState.MarketAnalysisEvidenceOverlay.ToString()"
+                            Value="@EvidenceOverlay.ToString()"
                             ValueChanged="OnEvidenceOverlayValueChanged"
                             Options="EvidenceOverlayOptions"
                             Class="ma-full-width" />
@@ -31,7 +31,7 @@
 
     <div class="ma-region-toggle-block">
         <MudCheckBox T="bool"
-                     Value="AppState.SearchEntireRegion"
+                     Value="SearchEntireRegion"
                      ValueChanged="OnSearchEntireRegionChanged"
                      Dense="true"
                      Color="Color.Primary"
@@ -39,7 +39,7 @@
             <MudText Typo="Typo.body2" Class="ma-region-toggle-text">Search entire region</MudText>
         </MudCheckBox>
         <MudText Typo="Typo.caption" Class="ma-region-toggle-caption">
-            Slower, but finds the best prices across all data centers in @AppState.SelectedRegion.
+            Slower, but finds the best prices across all data centers in @SelectedRegion.
         </MudText>
     </div>
 
@@ -83,7 +83,7 @@
         }
     </MudButton>
 
-    @if (AppState.ShoppingPlans.Any())
+    @if (HasShoppingPlans)
     {
         <MudButton OnClick="OnGoToProcurementRequested"
                    Color="Color.Success"
@@ -96,13 +96,22 @@
 </div>
 
 @code {
-    [Parameter, EditorRequired] public AppState AppState { get; set; } = default!;
+    [Parameter] public MarketAcquisitionLens Lens { get; set; }
+    [Parameter] public MarketAnalysisEvidenceOverlay EvidenceOverlay { get; set; } =
+        MarketAnalysisEvidenceOverlay.CompetitivenessOverlay;
+    [Parameter] public bool SearchEntireRegion { get; set; }
+    [Parameter] public string SelectedRegion { get; set; } = "North America";
+    [Parameter] public string? ScopeWarning { get; set; }
+    [Parameter] public bool HasShoppingPlans { get; set; }
+    [Parameter] public bool SecretDebugToolsEnabled { get; set; }
     [Parameter] public bool IsAnalyzing { get; set; }
     [Parameter] public bool IsRefreshingPrices { get; set; }
     [Parameter] public bool CanAnalyze { get; set; }
     [Parameter] public bool CanRefreshPrices { get; set; }
 
     [Parameter] public EventCallback<MarketAcquisitionLens> OnLensChangedRequested { get; set; }
+    [Parameter] public EventCallback<MarketAnalysisEvidenceOverlay> OnEvidenceOverlayChangedRequested { get; set; }
+    [Parameter] public EventCallback<bool> OnSearchEntireRegionChangedRequested { get; set; }
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
     [Parameter] public EventCallback OnRefreshPricesRequested { get; set; }
     [Parameter] public EventCallback OnGoToProcurementRequested { get; set; }
@@ -119,14 +128,8 @@
         new(nameof(MarketAnalysisEvidenceOverlay.PriceBandOverlay), "Price bands")
     ];
 
-    private void OnSearchEntireRegionChanged(bool searchEntireRegion)
-    {
-        AppState.SetMarketEvidenceSettings(
-            AppState.SelectedDataCenter,
-            AppState.SelectedRegion,
-            AppState.DefaultMarketFetchScope,
-            searchEntireRegion);
-    }
+    private Task OnSearchEntireRegionChanged(bool searchEntireRegion) =>
+        OnSearchEntireRegionChangedRequested.InvokeAsync(searchEntireRegion);
 
     private async Task OnLensValueChanged(string value)
     {
@@ -136,13 +139,15 @@
         }
     }
 
-    private void OnEvidenceOverlayValueChanged(string value)
+    private Task OnEvidenceOverlayValueChanged(string value)
     {
         if (Enum.TryParse<MarketAnalysisEvidenceOverlay>(value, out var overlay))
         {
-            AppState.SetMarketAnalysisEvidenceOverlay(overlay);
+            return OnEvidenceOverlayChangedRequested.InvokeAsync(overlay);
         }
+
+        return Task.CompletedTask;
     }
 
-    private string? BenchmarkHook(string id) => AppState.SecretDebugToolsEnabled ? id : null;
+    private string? BenchmarkHook(string id) => SecretDebugToolsEnabled ? id : null;
 }

@@ -1,12 +1,14 @@
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
+@inject WorkerProjectionStore WorkerProjections
+@inject CraftArchitectEngineHost EngineHost
 @inject NavigationManager NavigationManager
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @implements IDisposable
 
 <div class="status-bar">
     <div class="status-left">
-        @if (AppState.IsBusy)
+        @if (IsBusy)
         {
             <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" Class="status-spinner" />
         }
@@ -17,7 +19,7 @@
                      Color="Color.Success" 
                      Class="status-icon" />
         }
-        <span class="status-text @(AppState.IsBusy ? "busy" : "ready")">@AppState.StatusMessage</span>
+        <span class="status-text @(IsBusy ? "busy" : "ready")">@StatusMessage</span>
     </div>
     
     <div class="status-center">
@@ -28,38 +30,38 @@
                 @_tradeCompanyName
             </span>
         }
-        @if (!string.IsNullOrEmpty(AppState.SelectedRegion))
+        @if (!string.IsNullOrEmpty(SelectedRegion))
         {
             <span class="status-badge region-badge">
                 <MudIcon Icon="@Icons.Material.Filled.Public" Size="Size.Small" />
-                @AppState.SelectedRegion
+                @SelectedRegion
             </span>
         }
-        @if (!string.IsNullOrEmpty(AppState.SelectedDataCenter))
+        @if (!string.IsNullOrEmpty(SelectedDataCenter))
         {
             <span class="status-badge dc-badge">
                 <MudIcon Icon="@Icons.Material.Filled.DataUsage" Size="Size.Small" />
-                @AppState.SelectedDataCenter
+                @SelectedDataCenter
             </span>
         }
-        @if (AppState.ShoppingItems.Any())
+        @if (MaterialCount > 0)
         {
             <span class="status-badge">
                 <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Size="Size.Small" />
-                @FormatCount(AppState.ShoppingItems.Count, "material")
+                @FormatCount(MaterialCount, "material")
             </span>
         }
-        @if (AppState.HasProjectItems)
+        @if (TargetCount > 0)
         {
             <span class="status-badge">
                 <MudIcon Icon="@Icons.Material.Filled.ListAlt" Size="Size.Small" />
-                @FormatCount(AppState.ProjectItemCount, "target")
+                @FormatCount(TargetCount, "target")
             </span>
         }
     </div>
     
     <div class="status-right">
-        @if (AppState.IsBusy && AppState.ProgressPercent > 0)
+        @if (IsTradeRoute && AppState.IsBusy && AppState.ProgressPercent > 0)
         {
             <span class="progress-text">@AppState.ProgressPercent.ToString("F0")%</span>
         }
@@ -162,6 +164,24 @@
 
 @code {
     private string? _tradeCompanyName;
+    private bool IsBusy => IsTradeRoute ? AppState.IsBusy : EngineHost.Health.IsExecuting;
+    private string StatusMessage => IsTradeRoute
+        ? AppState.StatusMessage
+        : IsBusy ? "Working" : "Ready";
+    private string SelectedRegion => IsTradeRoute
+        ? AppState.SelectedRegion
+        : WorkerProjections.Shell.SelectedRegion;
+    private string SelectedDataCenter => IsTradeRoute
+        ? AppState.SelectedDataCenter
+        : WorkerProjections.Shell.SelectedDataCenter;
+    private int MaterialCount => IsTradeRoute
+        ? AppState.ShoppingItems.Count
+        : WorkerProjections.Procurement?.ActiveItemCount
+          ?? WorkerProjections.Acquisition?.ActiveProcurementCount
+          ?? 0;
+    private int TargetCount => IsTradeRoute
+        ? AppState.ProjectItemCount
+        : WorkerProjections.Shell.ProjectItemCount;
     private static string FormatCount(int count, string noun) =>
         $"{count:N0} {noun}{(count == 1 ? string.Empty : "s")}";
 
@@ -175,6 +195,7 @@
         AppState.OnStatusChanged += OnStatusChanged;
         AppState.OnShoppingListChanged += OnStatusChanged;
         AppState.OnPlanChanged += OnStatusChanged;
+        WorkerProjections.Changed += OnStatusChanged;
         NavigationManager.LocationChanged += OnLocationChanged;
     }
 
@@ -221,6 +242,7 @@
         AppState.OnStatusChanged -= OnStatusChanged;
         AppState.OnShoppingListChanged -= OnStatusChanged;
         AppState.OnPlanChanged -= OnStatusChanged;
+        WorkerProjections.Changed -= OnStatusChanged;
         NavigationManager.LocationChanged -= OnLocationChanged;
     }
 }

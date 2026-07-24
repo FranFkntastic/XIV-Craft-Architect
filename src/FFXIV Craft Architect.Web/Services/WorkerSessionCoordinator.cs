@@ -300,6 +300,26 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         return market;
     }
 
+    public async Task<WorkerMarketItemRefreshOutcome> RefreshMarketItemAsync(
+        WorkerMarketItemRefreshRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _engineHost.RefreshMarketItemAsync(
+            _projections.Shell.Revision,
+            request,
+            cancellationToken);
+        if (!_projections.TryPublishMutation<WorkerMarketItemRefreshOutcome>(
+                result,
+                out var outcome) ||
+            outcome is null)
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
+        }
+
+        return outcome;
+    }
+
     public async Task<WorkerProcurementOutcome> RunProcurementAsync(
         WorkerProcurementRequest request,
         CancellationToken cancellationToken = default)

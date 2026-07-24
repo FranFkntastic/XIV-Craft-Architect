@@ -16,11 +16,11 @@
 @inject ProfileSyncService ProfileSync
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
-@inject DiagnosticSnapshotBundleService DiagnosticSnapshotBundleService
 @inject AcquisitionEvaluationItemDiagnosticDumpService AcquisitionItemDiagnosticDumpService
 @inject AcquisitionDiagnosticSelectionService AcquisitionDiagnosticSelection
 @inject BrowserFileExportService BrowserFileExportService
-@inject MarketEvidenceHydrationService MarketEvidenceHydration
+@inject WorkerSessionCoordinator WorkerSession
+@inject WorkerProjectionStore WorkerProjections
 @inject IMarketCacheService MarketCache
 @inject GitHubIssueReportService GitHubIssueReportService
 @inject IJSRuntime JSRuntime
@@ -747,39 +747,39 @@
                         <div class="diagnostics-card-title">Current session</div>
                         <div class="diagnostics-row">
                             <span>Plan</span>
-                            <strong>@(AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? "No plan loaded")</strong>
+                            <strong>@(WorkerProjections.Shell.PlanName ?? "No plan loaded")</strong>
                         </div>
                         <div class="diagnostics-row">
                             <span>Market evidence</span>
-                            <strong>@AppState.ShoppingPlans.Count.ToString("N0") plans · @AppState.MarketItemAnalyses.Count.ToString("N0") analyses</strong>
+                            <strong>@WorkerProjections.Shell.ShoppingPlanCount.ToString("N0") plans · @WorkerProjections.Shell.MarketAnalysisCount.ToString("N0") analyses</strong>
                         </div>
                         <div class="diagnostics-row">
-                            <span>Published</span>
-                            <strong>@FormatPublishedEvidenceAge()</strong>
+                            <span>Worker revision</span>
+                            <strong>@WorkerProjections.Shell.Revision.ToString("N0")</strong>
                         </div>
                         <div class="diagnostics-row">
                             <span>Scope</span>
-                            <strong>@(AppState.SearchEntireRegion ? AppState.SelectedRegion : AppState.SelectedDataCenter)</strong>
+                            <strong>@FormatWorkerScope()</strong>
                         </div>
                     </section>
 
                     <section class="diagnostics-card">
                         <div class="diagnostics-card-heading">
-                            <div class="diagnostics-card-title">Automatic market refresh</div>
-                            <span class="diagnostics-status @GetHydrationStatusClass()">@GetHydrationStatusLabel()</span>
+                            <div class="diagnostics-card-title">Engine Worker</div>
+                            <span class="diagnostics-status is-good">Authoritative</span>
                         </div>
-                        <div class="diagnostics-message">@MarketEvidenceHydration.LastRun.Message</div>
+                        <div class="diagnostics-message">The Worker owns the active plan and every accepted analysis revision.</div>
                         <div class="diagnostics-row">
-                            <span>Attempts</span>
-                            <strong>@MarketEvidenceHydration.LastRun.AttemptCount.ToString("N0")</strong>
-                        </div>
-                        <div class="diagnostics-row">
-                            <span>Result</span>
-                            <strong>@FormatHydrationResult()</strong>
+                            <span>Plan nodes</span>
+                            <strong>@WorkerProjections.Shell.PlanNodeCount.ToString("N0")</strong>
                         </div>
                         <div class="diagnostics-row">
-                            <span>Timing</span>
-                            <strong>@FormatHydrationTiming()</strong>
+                            <span>Procurement route</span>
+                            <strong>@(WorkerProjections.Shell.HasProcurementRoute ? "Ready" : "Not generated")</strong>
+                        </div>
+                        <div class="diagnostics-row">
+                            <span>Restored session</span>
+                            <strong>@(WorkerProjections.Shell.MigratedFromLegacy ? "Migrated" : "Native")</strong>
                         </div>
                     </section>
                 </div>
@@ -789,7 +789,7 @@
                     <div class="diagnostics-action-row">
                         <div>
                             <strong>Application snapshot</strong>
-                            <span>Active plan, acquisition decisions, market evidence, procurement routes, refresh outcome, and cache decision.</span>
+                            <span>The exact accepted Worker revision, including plan, acquisition decisions, market evidence, and procurement route.</span>
                         </div>
                         <button type="button"
                                 class="mud-button-root mud-button mud-button-filled mud-button-filled-primary mud-button-filled-size-small mud-ripple"
@@ -1982,7 +1982,7 @@
 
     private async Task PrepareDiagnosticSnapshotAsync()
     {
-        if (_diagnosticSnapshotReady || !AppState.HasPlanOrProjectItems)
+        if (_diagnosticSnapshotReady || !WorkerProjections.Shell.HasSession)
         {
             return;
         }
@@ -1991,12 +1991,43 @@
         try
         {
             var exportedAtUtc = DateTime.UtcNow;
-            var bundle = DiagnosticSnapshotBundleService.BuildBundle(exportedAtUtc);
+            var shell = WorkerProjections.Shell;
+            var planName = shell.PlanName ?? "Unsaved Diagnostic Plan";
+            var planId = shell.PlanId ??
+                $"diagnostic-{exportedAtUtc:yyyyMMddHHmmss}";
+            var storedPlan = await WorkerSession.ExportStoredPlanAsync(
+                planId,
+                planName,
+                includeSourcePlanIdentity: true);
+            var recipe = await WorkerSession.GetRecipeProjectionAsync();
+            var acquisition = await WorkerSession.GetAcquisitionProjectionAsync("All");
+            var market = await WorkerSession.GetMarketProjectionAsync();
+            var procurement = await WorkerSession.GetProcurementProjectionAsync();
+            var bundle = new
+            {
+                schemaVersion = 2,
+                tool = "craft-architect-worker-diagnostic-snapshot",
+                exportedAtUtc,
+                build = new
+                {
+                    version = WebBuildInfo.BuildVersion,
+                    branch = WebBuildInfo.BranchName,
+                    commit = WebBuildInfo.CommitSha,
+                    dirty = WebBuildInfo.IsDirty
+                },
+                revision = WorkerProjections.Shell.Revision,
+                shell = WorkerProjections.Shell,
+                storedPlan,
+                recipe,
+                acquisition,
+                market,
+                procurement
+            };
             _diagnosticSnapshotFileName = CreateDiagnosticSnapshotFileName(exportedAtUtc);
             await BrowserFileExportService.PrepareTextFileSaveAsync(
                 DiagnosticSnapshotSaveKey,
                 _diagnosticSnapshotFileName,
-                DiagnosticSnapshotBundleService.Serialize(bundle),
+                JsonSerializer.Serialize(bundle, CompanyPackageJsonOptions),
                 "application/json");
             _diagnosticSnapshotReady = true;
         }
@@ -2030,7 +2061,7 @@
                 AppState,
                 row,
                 selection.ResolvedMarketPlan,
-                MarketEvidenceHydration.LastRun,
+                MarketEvidenceHydrationRunSnapshot.None,
                 (MarketCache as IMarketCacheDiagnosticsProvider)?.LastDecisionSnapshot,
                 exportedAtUtc);
             var fileName = AcquisitionEvaluationItemDiagnosticDumpService.CreateFileName(
@@ -2078,64 +2109,9 @@
         }
     }
 
-    private string FormatPublishedEvidenceAge()
-    {
-        var publishedAtUtc = AppState.PublishedMarketAnalysisScope?.PublishedAtUtc;
-        if (!publishedAtUtc.HasValue)
-        {
-            return "Not published";
-        }
-
-        var age = DateTime.UtcNow - publishedAtUtc.Value;
-        return age.TotalMinutes < 1
-            ? "Just now"
-            : age.TotalHours < 1
-                ? $"{Math.Floor(age.TotalMinutes):N0}m ago"
-                : $"{age.TotalHours:F1}h ago";
-    }
-
-    private string GetHydrationStatusLabel() => MarketEvidenceHydration.LastRun.Status switch
-    {
-        MarketEvidenceHydrationStatus.NotNeeded => "Reusable",
-        MarketEvidenceHydrationStatus.Running => "Running",
-        MarketEvidenceHydrationStatus.Published => "Published",
-        MarketEvidenceHydrationStatus.NotPublished => "No publication",
-        MarketEvidenceHydrationStatus.Failed => "Failed",
-        MarketEvidenceHydrationStatus.Canceled => "Canceled",
-        MarketEvidenceHydrationStatus.Superseded => "Superseded",
-        _ => "Not run"
-    };
-
-    private string GetHydrationStatusClass() => MarketEvidenceHydration.LastRun.Status switch
-    {
-        MarketEvidenceHydrationStatus.NotNeeded or MarketEvidenceHydrationStatus.Published => "is-good",
-        MarketEvidenceHydrationStatus.Running => "is-running",
-        MarketEvidenceHydrationStatus.NotPublished or MarketEvidenceHydrationStatus.Failed => "is-bad",
-        _ => "is-neutral"
-    };
-
-    private string FormatHydrationResult()
-    {
-        var result = MarketEvidenceHydration.LastRun.Result;
-        return result == null
-            ? "No result"
-            : $"{result.AnalyzedCount:N0} analyzed · {result.FetchedCount:N0} fetched";
-    }
-
-    private string FormatHydrationTiming()
-    {
-        var run = MarketEvidenceHydration.LastRun;
-        if (run.Status == MarketEvidenceHydrationStatus.Running && run.StartedAtUtc.HasValue)
-        {
-            return $"Running {(DateTime.UtcNow - run.StartedAtUtc.Value).TotalSeconds:F1}s";
-        }
-
-        return run.Duration.HasValue ? $"{run.Duration.Value.TotalSeconds:F1}s" : "—";
-    }
-
     private string CreateDiagnosticSnapshotFileName(DateTime exportedAtUtc)
     {
-        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? "plan";
+        var planName = WorkerProjections.Shell.PlanName ?? "plan";
         var safePlanName = string.Join("_", planName.Split(Path.GetInvalidFileNameChars()));
         if (safePlanName.Length > 60)
         {
@@ -2147,16 +2123,28 @@
 
     private string CreateGitHubIssueUrl()
     {
+        var market = WorkerProjections.Market;
+        var scope = market?.Scope == MarketFetchScope.EntireRegion
+            ? market.SelectedRegion
+            : market?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter;
         return GitHubIssueReportService.CreateIssueUrl(new GitHubIssueReportContext(
             WebBuildInfo.BuildVersion,
             WebBuildInfo.BranchName,
             WebBuildInfo.CommitSha,
-            AppState.SearchEntireRegion ? AppState.SelectedRegion : AppState.SelectedDataCenter,
-            AppState.ShoppingPlans.Count,
-            AppState.MarketItemAnalyses.Count,
-            MarketEvidenceHydration.LastRun.Status,
+            scope,
+            WorkerProjections.Shell.ShoppingPlanCount,
+            WorkerProjections.Shell.MarketAnalysisCount,
+            MarketEvidenceHydrationStatus.NotNeeded,
             _prepareDiagnosticAttachment,
             _prepareDiagnosticAttachment ? _diagnosticSnapshotFileName : null));
+    }
+
+    private string FormatWorkerScope()
+    {
+        var market = WorkerProjections.Market;
+        return market?.Scope == MarketFetchScope.EntireRegion
+            ? market.SelectedRegion
+            : market?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter;
     }
 
     private string? GetGitHubIssueClickScript()

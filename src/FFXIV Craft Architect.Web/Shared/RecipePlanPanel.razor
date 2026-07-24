@@ -1,12 +1,10 @@
 @using FFXIV_Craft_Architect.Web.Services
-@inject AppState AppState
-
 <div class="mp-column" id="recipe-tree-container">
     <div class="mp-header-row">
         <div class="mp-title">Recipe Plan</div>
     </div>
 
-    @if (CurrentPlan != null)
+    @if (Recipe?.Roots.Count > 0)
     {
         <div class="mp-control-bar">
             @if (ShowPlanEditor)
@@ -27,7 +25,7 @@
         </div>
     }
 
-    @if (CurrentPlan == null)
+    @if (Recipe?.Roots.Count is not > 0)
     {
         <div class="mp-empty-state">
             <div class="mp-empty-card">
@@ -69,14 +67,14 @@
     else
     {
         <div class="mp-tree-panel">
-            @foreach (var rootItem in CurrentPlan.RootItems)
+            @foreach (var rootItem in Recipe.Roots)
             {
                 <RecipeNodeView Node="rootItem"
                                 Depth="0"
                                 IsSelected="@(SelectedNode?.NodeId == rootItem.NodeId)"
                                 SelectedNodeId="@SelectedNode?.NodeId"
-                                DisplayStates="_displayStates"
-                                ProcurementRoutes="_procurementRoutes"
+                                ExpandVersion="ExpandVersion"
+                                ExpandAll="ExpandAll"
                                 OnNodeSelected="OnNodeSelected"
                                 OnHqChanged="OnNodeHqChanged" />
             }
@@ -86,8 +84,7 @@
 </div>
 
 @code {
-    [Parameter] public CraftingPlan? CurrentPlan { get; set; }
-    [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
+    [Parameter] public WorkerRecipePlannerProjection? Recipe { get; set; }
     [Parameter] public IReadOnlyList<StoredPlanSummary> SavedPlans { get; set; } = Array.Empty<StoredPlanSummary>();
 
     [Parameter] public EventCallback OnExpandAllRequested { get; set; }
@@ -96,53 +93,18 @@
     [Parameter] public bool ShowPlanEditor { get; set; } = true;
     [Parameter] public EventCallback<string> OnLoadPlanRequested { get; set; }
     [Parameter] public EventCallback<string> OnDeletePlanRequested { get; set; }
-    [Parameter] public PlanNode? SelectedNode { get; set; }
-    [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
-    [Parameter] public EventCallback<PlanNodeHqChangeRequest> OnNodeHqChanged { get; set; }
+    [Parameter] public WorkerRecipeNodeProjection? SelectedNode { get; set; }
+    [Parameter] public EventCallback<WorkerRecipeNodeProjection> OnNodeSelected { get; set; }
+    [Parameter] public EventCallback<WorkerRecipeNodeHqChangeRequest> OnNodeHqChanged { get; set; }
+    [Parameter] public int ExpandVersion { get; set; }
+    [Parameter] public bool ExpandAll { get; set; } = true;
 
     private static string FormatItemCount(int count) => $"{count:N0} item{(count == 1 ? string.Empty : "s")}";
 
     private string GetPriceBasisText()
     {
-        return AppState.IsMarketEvidenceHydrating
-            ? "Building actionable prices"
-            : "Current acquisition prices";
-    }
-
-    private readonly RecipePlanTreeDisplayCache _displayCache = new();
-    private IReadOnlyDictionary<string, RecipeNodeDisplayState> _displayStates =
-        new Dictionary<string, RecipeNodeDisplayState>();
-    private IReadOnlyDictionary<int, RecipePlanProcurementRouteSummary> _procurementRoutes =
-        new Dictionary<int, RecipePlanProcurementRouteSummary>();
-
-    protected override void OnParametersSet()
-    {
-        var useProcurementRoute = AppState.ProcurementRouteValidity == ProcurementRoutePublicationValidity.Current &&
-                                  AppState.ProcurementShoppingPlans.Count > 0;
-        _procurementRoutes = useProcurementRoute
-            ? RecipePlanProcurementRouteSummaryBuilder.Build(
-                AppState.ProcurementShoppingPlans,
-                AppState.SelectedDataCenter)
-            : new Dictionary<int, RecipePlanProcurementRouteSummary>();
-        _displayStates = _displayCache.GetOrBuild(
-            CreateDisplayKey(),
-            () => RecipePlanTreeDisplayBuilder.Build(
-                CurrentPlan,
-                ShoppingPlans,
-                RecipePlanAcquisitionQuoteBasis.MarketAnalysis,
-                AppState.IsMarketEvidenceHydrating,
-                AppState.PublishedMarketAnalysisScope?.PublishedAtUtc));
-    }
-
-    private RecipePlanTreeDisplayKey CreateDisplayKey()
-    {
-        var versions = AppState.CurrentVersions;
-        return new RecipePlanTreeDisplayKey(
-            versions.PlanStructureVersion,
-            versions.PlanDecisionVersion,
-            versions.PlanPriceVersion,
-            versions.MarketAnalysisVersion,
-            versions.ProcurementOverlayVersion,
-            AppState.IsMarketEvidenceHydrating);
+        return Recipe?.HasMarketEvidence == true
+            ? "Current acquisition prices"
+            : "Building actionable prices";
     }
 }

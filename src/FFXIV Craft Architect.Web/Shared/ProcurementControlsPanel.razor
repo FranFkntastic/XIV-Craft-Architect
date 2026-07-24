@@ -2,8 +2,6 @@
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
-@inject ISettingsService Settings
-
 <aside class="pp-controls-column" aria-labelledby="procurement-page-title">
     <h1 id="procurement-page-title" class="pp-page-title">Procurement Plan</h1>
 
@@ -13,31 +11,31 @@
         <div class="pp-setting-grid">
             <div class="pp-field-block">
                 <MudCheckBox T="bool"
-                             Value="AppState.ProcurementSearchEntireRegion"
+                             Value="SearchEntireRegion"
                              ValueChanged="OnProcurementSearchEntireRegionChanged"
                              Dense="true"
                              Disabled="@(!RouteGenerationEnabled)"
                              Color="Color.Primary">
                     <span>Search the whole region</span>
                 </MudCheckBox>
-                <p>Uses listings from every data center in @AppState.SelectedRegion, which can lower cost but add transfers.</p>
+                <p>Uses listings from every data center in @SelectedRegion, which can lower cost but add transfers.</p>
             </div>
 
             <div class="pp-field-block pp-travel-field">
-                <ProcurementTravelTradeoff TravelTolerance="AppState.ProcurementTravelTolerance"
-                                            RouteDecision="AppState.ProcurementRouteDecision"
-                                            RouteValidity="AppState.ProcurementRouteValidity"
-                                            IsReconciling="AppState.IsProcurementRouteReconciling"
-                                            RouteFailure="AppState.ProcurementRouteFailure"
+                <ProcurementTravelTradeoff TravelTolerance="TravelTolerance"
+                                            RouteDecision="RouteDecision"
+                                            RouteValidity="RouteValidity"
+                                            IsReconciling="IsReconciling"
+                                            RouteFailure="RouteFailure"
                                             Disabled="@(!RouteGenerationEnabled)"
-                                            TravelPriority="AppState.ProcurementTravelPriority"
+                                            TravelPriority="TravelPriority"
                                             TravelToleranceChanged="OnProcurementTravelToleranceChanged"
                                             TravelToleranceCommitted="OnProcurementTravelToleranceCommitted" />
                 <p id="procurement-travel-help">@GetTravelPreferenceHelp()</p>
                 <div class="pp-route-policies" aria-label="Route policies">
                     <p class="pp-route-policy-note">
-                        <MudIcon Icon="@(AppState.ProcurementEnableSplitWorldPurchases ? Icons.Material.Filled.CallSplit : Icons.Material.Filled.HorizontalRule)" Size="Size.Small" />
-                        <span>@(AppState.ProcurementEnableSplitWorldPurchases ? "Split purchases allowed" : "Single-world purchases only")</span>
+                        <MudIcon Icon="@(EnableSplitWorldPurchases ? Icons.Material.Filled.CallSplit : Icons.Material.Filled.HorizontalRule)" Size="Size.Small" />
+                        <span>@(EnableSplitWorldPurchases ? "Split purchases allowed" : "Single-world purchases only")</span>
                         <small>Set in Options</small>
                     </p>
                     <p class="pp-route-policy-note">
@@ -45,9 +43,9 @@
                         <span>@GetTravelPriorityLabel()</span>
                         <small>Set in Options</small>
                     </p>
-                    @if (AppState.ProcurementSearchEntireRegion && AppState.ProcurementStartFromHomeDataCenter)
+                    @if (SearchEntireRegion && StartFromHomeDataCenter)
                     {
-                        <p class="pp-origin-note"><MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" /> <span>Starts from @AppState.SelectedDataCenter</span></p>
+                        <p class="pp-origin-note"><MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" /> <span>Starts from @SelectedDataCenter</span></p>
                     }
                 </div>
             </div>
@@ -55,7 +53,7 @@
             <div class="pp-field-block pp-duration-field">
                 <CompactSelectField Id="procurement-world-exclusion-duration"
                                     Label="World exclusion duration"
-                                    Value="@AppState.TemporaryWorldBlacklistDurationMinutes.ToString()"
+                                    Value="@TemporaryWorldBlacklistDurationMinutes.ToString()"
                                     ValueChanged="OnTemporaryWorldBlacklistDurationValueChanged"
                                     Options="WorldExclusionDurationOptions"
                                     Disabled="@(!RouteGenerationEnabled)"
@@ -64,7 +62,7 @@
         </div>
     </section>
 
-    @if (AppState.ActiveTemporaryExclusionCount > 0)
+    @if (ActiveTemporaryExclusionCount > 0)
     {
         <div class="pp-exclusion-summary" role="status">
             <span>@FormatExclusionCount()</span>
@@ -119,7 +117,19 @@
 </aside>
 
 @code {
-    [Parameter, EditorRequired] public AppState AppState { get; set; } = default!;
+    [Parameter] public bool SearchEntireRegion { get; set; }
+    [Parameter] public string SelectedRegion { get; set; } = "North America";
+    [Parameter] public string SelectedDataCenter { get; set; } = "Aether";
+    [Parameter] public int TravelTolerance { get; set; }
+    [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
+    [Parameter] public ProcurementRoutePublicationValidity RouteValidity { get; set; }
+    [Parameter] public bool IsReconciling { get; set; }
+    [Parameter] public string? RouteFailure { get; set; }
+    [Parameter] public MarketTravelPriority TravelPriority { get; set; }
+    [Parameter] public bool EnableSplitWorldPurchases { get; set; }
+    [Parameter] public bool StartFromHomeDataCenter { get; set; }
+    [Parameter] public int TemporaryWorldBlacklistDurationMinutes { get; set; } = 60;
+    [Parameter] public int ActiveTemporaryExclusionCount { get; set; }
     [Parameter] public bool IsAnalyzing { get; set; }
     [Parameter] public bool RouteGenerationEnabled { get; set; } = true;
     [Parameter] public bool CanAnalyze { get; set; }
@@ -129,6 +139,10 @@
     [Parameter] public string NoticeMessage { get; set; } = string.Empty;
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
     [Parameter] public EventCallback OnClearExclusionsRequested { get; set; }
+    [Parameter] public EventCallback<bool> SearchEntireRegionChanged { get; set; }
+    [Parameter] public EventCallback<int> TravelToleranceChanged { get; set; }
+    [Parameter] public EventCallback<int> TravelToleranceCommitted { get; set; }
+    [Parameter] public EventCallback<int> TemporaryWorldBlacklistDurationChanged { get; set; }
     [Parameter] public bool CanExportCraftQuote { get; set; }
     [Parameter] public EventCallback OnExportCraftQuoteRequested { get; set; }
     [Parameter] public EventCallback OnGoToMarketAnalysisRequested { get; set; }
@@ -142,32 +156,28 @@
 
     private string FormatExclusionCount()
     {
-        var count = AppState.ActiveTemporaryExclusionCount;
+        var count = ActiveTemporaryExclusionCount;
         return $"{count} temporary exclusion{(count == 1 ? string.Empty : "s")} active";
     }
 
     private Task OnProcurementSearchEntireRegionChanged(bool value) =>
-        ApplyProcurementSettingsAsync(searchEntireRegion: value);
+        SearchEntireRegionChanged.InvokeAsync(value);
 
-    private async Task OnProcurementTravelToleranceChanged(int value)
-    {
-        if (AppState.TrySelectProcurementTravelTolerance(value))
-            return;
-
-        await ApplyProcurementSettingsAsync(travelTolerance: value);
-    }
+    private Task OnProcurementTravelToleranceChanged(int value) =>
+        TravelToleranceChanged.InvokeAsync(value);
 
     private async Task OnProcurementTravelToleranceCommitted(int value)
     {
-        if (AppState.ProcurementTravelTolerance != value)
+        if (TravelTolerance != value)
+        {
             await OnProcurementTravelToleranceChanged(value);
-
-        await Settings.SetAsync("procurement.travel_tolerance", AppState.ProcurementTravelTolerance);
+        }
+        await TravelToleranceCommitted.InvokeAsync(value);
     }
 
     private string GetTravelPreferenceHelp()
     {
-        var tolerance = AppState.ProcurementTravelTolerance;
+        var tolerance = TravelTolerance;
         var premium = MarketRouteScoring.GetMaximumPremiumRate(tolerance);
         return tolerance switch
         {
@@ -177,13 +187,13 @@
         };
     }
 
-    private string GetTravelPriorityAction() => AppState.ProcurementTravelPriority switch
+    private string GetTravelPriorityAction() => TravelPriority switch
     {
         MarketTravelPriority.WorldVisitsFirst => "minimize world visits, then data-center transfers",
         _ => "minimize data-center transfers, then world visits"
     };
 
-    private string GetTravelPriorityLabel() => AppState.ProcurementTravelPriority switch
+    private string GetTravelPriorityLabel() => TravelPriority switch
     {
         MarketTravelPriority.WorldVisitsFirst => "World visits ranked before transfers",
         _ => "Data-center transfers ranked before world visits"
@@ -191,24 +201,6 @@
 
     private Task OnTemporaryWorldBlacklistDurationValueChanged(string value) =>
         int.TryParse(value, out var minutes)
-            ? ApplyProcurementSettingsAsync(temporaryWorldBlacklistDurationMinutes: minutes)
+            ? TemporaryWorldBlacklistDurationChanged.InvokeAsync(minutes)
             : Task.CompletedTask;
-
-    private async Task ApplyProcurementSettingsAsync(
-        bool? searchEntireRegion = null,
-        bool? enableSplitWorldPurchases = null,
-        int? travelTolerance = null,
-        int? temporaryWorldBlacklistDurationMinutes = null)
-    {
-        AppState.SetProcurementSettings(
-            searchEntireRegion ?? AppState.ProcurementSearchEntireRegion,
-            enableSplitWorldPurchases ?? AppState.ProcurementEnableSplitWorldPurchases,
-            travelTolerance ?? AppState.ProcurementTravelTolerance,
-            temporaryWorldBlacklistDurationMinutes ?? AppState.TemporaryWorldBlacklistDurationMinutes);
-
-        await Settings.SetAsync("procurement.search_entire_region", AppState.ProcurementSearchEntireRegion);
-        await Settings.SetAsync("procurement.enable_split_world_purchases", AppState.ProcurementEnableSplitWorldPurchases);
-        await Settings.SetAsync("procurement.travel_tolerance", AppState.ProcurementTravelTolerance);
-        await Settings.SetAsync("procurement.world_exclusion_duration_minutes", AppState.TemporaryWorldBlacklistDurationMinutes);
-    }
 }

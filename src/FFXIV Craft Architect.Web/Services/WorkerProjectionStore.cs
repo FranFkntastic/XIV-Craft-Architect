@@ -190,6 +190,10 @@ public sealed class WorkerProjectionStore
         {
             Market = analysis.Market;
         }
+        else if (projection is WorkerMarketItemRefreshOutcome itemRefresh)
+        {
+            Market = itemRefresh.Market;
+        }
         else if (projection is WorkerProcurementProjection procurement)
         {
             Procurement = procurement;

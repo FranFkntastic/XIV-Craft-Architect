@@ -45,7 +45,10 @@ public sealed record CoreProcurementItemRefreshWorkflowRequest(
     MarketAcquisitionLens Lens,
     IReadOnlyDictionary<string, IReadOnlyList<string>> ExpectedWorldsByDataCenter,
     Func<bool>? IsCurrentOperation = null,
-    MarketAnalysisExecutionOptions? ExecutionOptions = null);
+    MarketAnalysisExecutionOptions? ExecutionOptions = null,
+    string? TargetDataCenter = null,
+    string? TargetWorldName = null,
+    MarketWorldEvidenceSnapshot? ObservedEvidence = null);
 
 public sealed record CoreProcurementItemRefreshWorkflowResult(
     CoreProcurementItemRefreshStatus Status,
@@ -293,27 +296,57 @@ public sealed class CoreProcurementWorkflowService
                 });
 
             var existingEvidence = _session.MarketEvidence;
-            var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
-                new MarketEvidenceReconciliationRequest
-                {
-                    Items = [candidate],
-                    PublishedAnalyses = existingEvidence.ItemAnalyses
-                        .Where(analysis => analysis.ItemId == candidate.ItemId)
-                        .ToList(),
-                    PublishedShoppingPlans = (existingEvidence.ShoppingPlans ?? [])
-                        .Where(shoppingPlan => shoppingPlan.ItemId == candidate.ItemId)
-                        .ToList(),
-                    Scope = request.Scope,
-                    SelectedDataCenter = request.SelectedDataCenter,
-                    SelectedRegion = request.SelectedRegion,
-                    RecommendationMode = RecommendationMode.MinimizeTotalCost,
-                    Lens = request.Lens,
-                    ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,
-                    Policy = MarketEvidenceReconciliationPolicy.ForcedRefresh()
-                },
-                guardedProgress,
-                linkedCancellation.Token,
-                executionOptions: request.ExecutionOptions);
+            MarketItemAnalysis? refreshedAnalysis;
+            IReadOnlyList<DetailedShoppingPlan> refreshedPlans;
+            if (!string.IsNullOrWhiteSpace(request.TargetDataCenter) &&
+                !string.IsNullOrWhiteSpace(request.TargetWorldName))
+            {
+                var worldResult = await _marketEvidenceReconciliation.ReconcileWorldAsync(
+                    new MarketWorldEvidenceReconciliationRequest
+                    {
+                        Item = candidate,
+                        DataCenter = request.TargetDataCenter,
+                        WorldName = request.TargetWorldName,
+                        ObservedEvidence = request.ObservedEvidence,
+                        Scope = request.Scope,
+                        SelectedDataCenter = request.SelectedDataCenter,
+                        SelectedRegion = request.SelectedRegion,
+                        RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                        Lens = request.Lens,
+                        ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter
+                    },
+                    guardedProgress,
+                    linkedCancellation.Token,
+                    executionOptions: request.ExecutionOptions);
+                refreshedAnalysis = worldResult.Analysis;
+                refreshedPlans = [worldResult.ShoppingPlan];
+            }
+            else
+            {
+                var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+                    new MarketEvidenceReconciliationRequest
+                    {
+                        Items = [candidate],
+                        PublishedAnalyses = existingEvidence.ItemAnalyses
+                            .Where(analysis => analysis.ItemId == candidate.ItemId)
+                            .ToList(),
+                        PublishedShoppingPlans = (existingEvidence.ShoppingPlans ?? [])
+                            .Where(shoppingPlan => shoppingPlan.ItemId == candidate.ItemId)
+                            .ToList(),
+                        Scope = request.Scope,
+                        SelectedDataCenter = request.SelectedDataCenter,
+                        SelectedRegion = request.SelectedRegion,
+                        RecommendationMode = RecommendationMode.MinimizeTotalCost,
+                        Lens = request.Lens,
+                        ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,
+                        Policy = MarketEvidenceReconciliationPolicy.ForcedRefresh()
+                    },
+                    guardedProgress,
+                    linkedCancellation.Token,
+                    executionOptions: request.ExecutionOptions);
+                refreshedAnalysis = reconciliation.Analyses.SingleOrDefault();
+                refreshedPlans = reconciliation.ShoppingPlans;
+            }
             linkedCancellation.Token.ThrowIfCancellationRequested();
 
             var staleStatus = GetStaleRefreshStatus(planSessionVersion, capturedVersions, request.IsCurrentOperation);
@@ -323,14 +356,12 @@ public sealed class CoreProcurementWorkflowService
                 return CoreProcurementItemRefreshWorkflowResult.Noop(staleStatus.Value);
             }
 
-            var refreshedAnalysis = reconciliation.Analyses.SingleOrDefault();
-            if (refreshedAnalysis == null || reconciliation.ShoppingPlans.Count == 0)
+            if (refreshedAnalysis == null || refreshedPlans.Count == 0)
             {
                 operation.Cancel();
                 return CoreProcurementItemRefreshWorkflowResult.Noop(CoreProcurementItemRefreshStatus.NoData);
             }
 
-            var refreshedPlans = new List<DetailedShoppingPlan> { reconciliation.ShoppingPlans.Single() };
             staleStatus = GetStaleRefreshStatus(planSessionVersion, capturedVersions, request.IsCurrentOperation);
             if (staleStatus != null)
             {

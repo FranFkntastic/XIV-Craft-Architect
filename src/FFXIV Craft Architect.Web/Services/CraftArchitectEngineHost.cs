@@ -289,6 +289,17 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             EngineCommandPriority.UserRequestedDerivation,
             cancellationToken);
 
+    public Task<WorkerSessionResultEnvelope> RefreshMarketItemAsync(
+        long expectedRevision,
+        WorkerMarketItemRefreshRequest request,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.MarketItemRefresh,
+            expectedRevision,
+            request,
+            EngineCommandPriority.UserRequestedDerivation,
+            cancellationToken);
+
     public Task<WorkerSessionResultEnvelope> GetProcurementProjectionAsync(
         long expectedRevision,
         CancellationToken cancellationToken = default) =>

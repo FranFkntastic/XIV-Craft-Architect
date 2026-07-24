@@ -1,11 +1,10 @@
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
-@inject AppState AppState
 @inject RecipeCalculationService RecipeService
 @inject IArtisanService ArtisanService
-@inject DiagnosticSnapshotBundleService DiagnosticSnapshotBundleService
 @inject BrowserFileExportService BrowserFileExportService
+@inject WorkerProjectionStore WorkerProjections
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
@@ -159,6 +158,8 @@
 
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
     [Parameter] public int ActiveTab { get; set; } = 0;
+    [Parameter] public StoredPlan? SessionSnapshot { get; set; }
+    [Parameter] public WorkerRecipePlannerProjection? Recipe { get; set; }
     
     private int _activeTab = 0;
     private string? _nativeJson = null;
@@ -172,25 +173,24 @@
         _activeTab = ActiveTab;
     }
     
-    private bool CanExport => AppState.HasPlanOrProjectItems;
+    private bool CanExport => SessionSnapshot?.PlanJson is { Length: > 0 } ||
+                              Recipe?.ProjectItems.Count > 0;
 
     private void GenerateNativeJson()
     {
         try
         {
-            // Use the plan if available, otherwise build from project items
-            if (AppState.CurrentPlan != null)
+            if (SessionSnapshot?.PlanJson is { Length: > 0 } planJson)
             {
-                _nativeJson = RecipeService.SerializePlan(AppState.CurrentPlan);
+                _nativeJson = planJson;
             }
-            else if (AppState.HasProjectItems)
+            else if (Recipe?.ProjectItems.Count > 0)
             {
-                // Create a minimal plan from project items
                 var plan = new CraftingPlan
                 {
                     Name = $"Imported Plan {DateTime.Now:yyyy-MM-dd HH:mm}",
-                    DataCenter = AppState.SelectedDataCenter,
-                    RootItems = AppState.ProjectItems.Select(p => new PlanNode
+                    DataCenter = Recipe.SelectedDataCenter,
+                    RootItems = Recipe.ProjectItems.Select(p => new PlanNode
                     {
                         ItemId = p.Id,
                         Name = p.Name,
@@ -219,7 +219,7 @@
             using var streamRef = new DotNetStreamReference(stream);
             
             // Use .craftplan extension to identify native format
-            var fileName = $"{AppState.CurrentPlan?.Name ?? "plan"}.craftplan";
+            var fileName = $"{Recipe?.PlanName ?? SessionSnapshot?.Name ?? "plan"}.craftplan";
             fileName = string.Join("_", fileName.Split(Path.GetInvalidFileNameChars()));
             if (fileName.Length > 100) fileName = fileName[..100];
             
@@ -235,7 +235,9 @@
     private void GenerateTeamcraftUrl()
     {
         // Teamcraft URL format: https://ffxivteamcraft.com/import/{base64_json}
-        var items = AppState.ProjectItems.Select(p => new { itemId = p.Id, amount = p.Quantity }).ToList();
+        var items = (Recipe?.ProjectItems ?? Array.Empty<ProjectItem>())
+            .Select(p => new { itemId = p.Id, amount = p.Quantity })
+            .ToList();
         var json = System.Text.Json.JsonSerializer.Serialize(items);
         var base64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
         _teamcraftUrl = $"https://ffxivteamcraft.com/import/{base64}";
@@ -245,13 +247,9 @@
     {
         try
         {
-            // Build a plan if needed
-            CraftingPlan? plan = AppState.CurrentPlan;
-            if (plan == null && AppState.HasProjectItems)
-            {
-                var targetItems = AppState.ProjectItems.Select(p => (p.Id, p.Name, p.Quantity, p.MustBeHq)).ToList();
-                plan = await RecipeService.BuildPlanAsync(targetItems, AppState.SelectedDataCenter, string.Empty);
-            }
+            var plan = SessionSnapshot?.PlanJson is { Length: > 0 } planJson
+                ? RecipeService.DeserializePlan(planJson)
+                : null;
             
             if (plan != null)
             {
@@ -305,8 +303,23 @@
     {
         try
         {
-            var bundle = DiagnosticSnapshotBundleService.BuildBundle(DateTime.UtcNow);
-            _diagnosticSnapshotJson = DiagnosticSnapshotBundleService.Serialize(bundle);
+            _diagnosticSnapshotJson = System.Text.Json.JsonSerializer.Serialize(
+                new
+                {
+                    SchemaVersion = 2,
+                    ExportedAtUtc = DateTime.UtcNow,
+                    Revision = WorkerProjections.Shell.Revision,
+                    Session = SessionSnapshot,
+                    Recipe = WorkerProjections.Recipe,
+                    Acquisition = WorkerProjections.Acquisition,
+                    Market = WorkerProjections.Market,
+                    Procurement = WorkerProjections.Procurement
+                },
+                new System.Text.Json.JsonSerializerOptions(
+                    System.Text.Json.JsonSerializerDefaults.Web)
+                {
+                    WriteIndented = true
+                });
             await BrowserFileExportService.PrepareTextFileSaveAsync(
                 DiagnosticSnapshotSaveKey,
                 CreateDiagnosticSnapshotFileName(),
@@ -322,7 +335,7 @@
     private string CreateDiagnosticSnapshotFileName()
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-        var planName = AppState.CurrentPlanName ?? AppState.CurrentPlan?.Name ?? "plan";
+        var planName = Recipe?.PlanName ?? SessionSnapshot?.Name ?? "plan";
         var safePlanName = string.Join("_", planName.Split(Path.GetInvalidFileNameChars()));
         if (safePlanName.Length > 60)
         {

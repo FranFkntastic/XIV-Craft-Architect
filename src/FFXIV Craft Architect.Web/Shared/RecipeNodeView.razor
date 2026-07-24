@@ -1,12 +1,10 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Web.Services
-@inject AppState AppState
 @inject NavigationManager Navigation
-@implements IDisposable
 
 @if (Node != null)
 {
-    var display = GetDisplayState();
+    var display = Node.Display;
     <div class="rp-node-branch @(Depth == 0 ? "rp-node-root" : null)">
         <div class="rp-node-row @(IsSelected ? "selected" : null)"
              style="--rp-node-depth: @Depth"
@@ -70,7 +68,7 @@
                    aria-label="@GetQuoteAriaLabel(display)">
                     @display.PriceText
                 </a>
-                @if (GetProcurementRoute() is { } route)
+                @if (Node.ProcurementRoute is { } route)
                 {
                     <a href="@GetProcurementUrl(route)"
                        class="rp-node-quote-route"
@@ -117,8 +115,8 @@
                                     Depth="Depth + 1"
                                     IsSelected="@(SelectedNodeId == child.NodeId)"
                                     SelectedNodeId="@SelectedNodeId"
-                                    DisplayStates="DisplayStates"
-                                    ProcurementRoutes="ProcurementRoutes"
+                                    ExpandVersion="ExpandVersion"
+                                    ExpandAll="ExpandAll"
                                     OnNodeSelected="OnNodeSelected"
                                     OnHqChanged="OnHqChanged" />
                 }
@@ -128,53 +126,27 @@
 }
 
 @code {
-    [Parameter] public PlanNode? Node { get; set; }
+    [Parameter] public WorkerRecipeNodeProjection? Node { get; set; }
     [Parameter] public int Depth { get; set; }
     [Parameter] public bool IsSelected { get; set; }
     [Parameter] public string? SelectedNodeId { get; set; }
-    [Parameter] public IReadOnlyDictionary<string, RecipeNodeDisplayState> DisplayStates { get; set; } =
-        new Dictionary<string, RecipeNodeDisplayState>();
-    [Parameter] public IReadOnlyDictionary<int, RecipePlanProcurementRouteSummary> ProcurementRoutes { get; set; } =
-        new Dictionary<int, RecipePlanProcurementRouteSummary>();
-    [Parameter] public EventCallback<PlanNode> OnNodeSelected { get; set; }
-    [Parameter] public EventCallback<PlanNodeHqChangeRequest> OnHqChanged { get; set; }
+    [Parameter] public int ExpandVersion { get; set; }
+    [Parameter] public bool ExpandAll { get; set; } = true;
+    [Parameter] public EventCallback<WorkerRecipeNodeProjection> OnNodeSelected { get; set; }
+    [Parameter] public EventCallback<WorkerRecipeNodeHqChangeRequest> OnHqChanged { get; set; }
 
     private bool _isExpanded = true;
     private int _lastExpandVersion = -1;
-    private bool _isDisposed;
 
-    private bool HasChildren => Node?.Children.Any() == true;
-
-    protected override void OnInitialized()
-    {
-        AppState.OnRecipeTreeExpandChanged += OnRecipeTreeExpandChanged;
-    }
+    private bool HasChildren => Node?.Children.Count > 0;
 
     protected override void OnParametersSet()
     {
-        if (_lastExpandVersion != AppState.RecipeTreeExpandVersion)
+        if (_lastExpandVersion != ExpandVersion)
         {
-            _isExpanded = AppState.RecipeTreeAllExpanded;
-            _lastExpandVersion = AppState.RecipeTreeExpandVersion;
+            _isExpanded = ExpandAll;
+            _lastExpandVersion = ExpandVersion;
         }
-    }
-
-    public void Dispose()
-    {
-        _isDisposed = true;
-        AppState.OnRecipeTreeExpandChanged -= OnRecipeTreeExpandChanged;
-    }
-
-    private void OnRecipeTreeExpandChanged()
-    {
-        if (_isDisposed || _lastExpandVersion == AppState.RecipeTreeExpandVersion)
-        {
-            return;
-        }
-
-        _isExpanded = AppState.RecipeTreeAllExpanded;
-        _lastExpandVersion = AppState.RecipeTreeExpandVersion;
-        InvokeAsync(StateHasChanged);
     }
 
     private void ToggleExpanded()
@@ -191,16 +163,8 @@
     {
         if (Node != null)
         {
-            AppState.RequestMarketItemAutoExpand(Node.ItemId);
-            Navigation.NavigateTo("/market");
+            Navigation.NavigateTo($"/market?itemId={Node.ItemId}");
         }
-    }
-
-    private RecipePlanProcurementRouteSummary? GetProcurementRoute()
-    {
-        return Node != null && ProcurementRoutes.TryGetValue(Node.ItemId, out var route)
-            ? route
-            : null;
     }
 
     private string GetAcquisitionEvaluationUrl()
@@ -220,68 +184,34 @@
     {
         if (Node?.CanBeHq == true)
         {
-            await OnHqChanged.InvokeAsync(new PlanNodeHqChangeRequest(Node, !Node.MustBeHq));
+            await OnHqChanged.InvokeAsync(
+                new WorkerRecipeNodeHqChangeRequest(Node, !Node.MustBeHq));
         }
     }
 
-    private string GetMethodClass()
+    private string GetMethodClass() => Node?.Source switch
     {
-        return Node?.Source switch
-        {
-            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq => "market",
-            AcquisitionSource.VendorBuy => "vendor",
-            _ => "craft"
-        };
-    }
+        AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq => "market",
+        AcquisitionSource.VendorBuy => "vendor",
+        _ => "craft"
+    };
 
-    private string GetQuoteAriaLabel(RecipeNodeDisplayState display)
+    private string GetQuoteAriaLabel(RecipeNodeDisplayState display) =>
+        $"{display.QuoteMethodText} {Node?.Name}: {display.PriceText}. Open in Market Analysis";
+
+    private string GetQuoteHeading(RecipeNodeDisplayState display) => display.QuoteStatusClass switch
     {
-        return $"{display.QuoteMethodText} {Node?.Name}: {display.PriceText}. Open in Market Analysis";
-    }
+        "refreshing" => $"Pricing {Node?.Name}",
+        "unavailable" => "No actionable quote",
+        _ => $"{GetMethodHeading()} {Node?.Quantity:N0}"
+    };
 
-    private string GetQuoteHeading(RecipeNodeDisplayState display)
+    private string GetMethodHeading() => Node?.Source switch
     {
-        return display.QuoteStatusClass switch
-        {
-            "refreshing" => $"Pricing {Node?.Name}",
-            "unavailable" => "No actionable quote",
-            _ => $"{GetMethodHeading()} {Node?.Quantity:N0}"
-        };
-    }
-
-    private string GetMethodHeading()
-    {
-        return Node?.Source switch
-        {
-            AcquisitionSource.Craft => "Craft",
-            AcquisitionSource.MarketBuyNq => "Buy",
-            AcquisitionSource.MarketBuyHq => "Buy HQ",
-            AcquisitionSource.VendorBuy => "Vendor buy",
-            _ => "Acquire"
-        };
-    }
-
-    private RecipeNodeDisplayState GetDisplayState()
-    {
-        if (Node != null && DisplayStates.TryGetValue(Node.NodeId, out var display))
-        {
-            return display;
-        }
-
-        return Node != null
-            ? RecipePlanTreeDisplayBuilder.BuildWithoutCost(Node)
-            : new RecipeNodeDisplayState(
-                string.Empty,
-                "#ccc",
-                "Unavailable",
-                "—",
-                "unavailable",
-                "Acquisition quote",
-                string.Empty,
-                "No acquisition quote is available.",
-                string.Empty,
-                string.Empty,
-                string.Empty,
-                null);
-    }
+        AcquisitionSource.Craft => "Craft",
+        AcquisitionSource.MarketBuyNq => "Buy",
+        AcquisitionSource.MarketBuyHq => "Buy HQ",
+        AcquisitionSource.VendorBuy => "Vendor buy",
+        _ => "Acquire"
+    };
 }

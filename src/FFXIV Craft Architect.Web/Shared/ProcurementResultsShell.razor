@@ -40,6 +40,7 @@
 
     <ProcurementRouteTreePanel ShoppingPlans="ShoppingPlans"
                                RouteDecision="RouteDecision"
+                               SelectedDataCenter="SelectedDataCenter"
                                EmptyTitle="@EmptyTitle"
                                EmptyMessage="@EmptyMessage"
                                ReconcilingItemWorld="ReconcilingItemWorld"
@@ -59,6 +60,7 @@
 
     [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
+    [Parameter] public string SelectedDataCenter { get; set; } = "Aether";
     [Parameter] public bool IsStale { get; set; }
     [Parameter] public bool IsAnalyzing { get; set; }
     [Parameter] public string? FailureMessage { get; set; }

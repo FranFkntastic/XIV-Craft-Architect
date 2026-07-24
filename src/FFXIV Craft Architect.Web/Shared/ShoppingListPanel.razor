@@ -3,7 +3,7 @@
 <div class="rp-column">
     <div class="rp-title">Procurement Details</div>
 
-    @if (CurrentPlan == null)
+    @if (!HasPlan)
     {
         <div class="rp-empty-state">
             Build a recipe plan to view procurement guidance.
@@ -30,7 +30,7 @@
             <div class="rp-details-wrap">
                 <div class="rp-detail-row">
                     <span class="rp-detail-label">Target items</span>
-                    <span class="rp-detail-value">@CurrentPlan.RootItems.Count</span>
+                    <span class="rp-detail-value">@TargetCount</span>
                 </div>
                 <div class="rp-detail-row">
                     <span class="rp-detail-label">Material entries</span>
@@ -91,7 +91,8 @@
 </div>
 
 @code {
-    [Parameter] public CraftingPlan? CurrentPlan { get; set; }
+    [Parameter] public bool HasPlan { get; set; }
+    [Parameter] public int TargetCount { get; set; }
     [Parameter] public IReadOnlyList<MaterialAggregate>? Materials { get; set; }
     [Parameter] public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; set; } = Array.Empty<CoreMarketDataUnavailableItem>();
 }

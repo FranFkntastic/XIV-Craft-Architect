@@ -1,7 +1,6 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
-@inject AppState AppState
 @inject IJSRuntime JSRuntime
 @inject NavigationManager NavigationManager
 
@@ -137,6 +136,7 @@
 @code {
     [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     [Parameter] public MarketRouteDecision? RouteDecision { get; set; }
+    [Parameter] public string SelectedDataCenter { get; set; } = "Aether";
     [Parameter] public string EmptyTitle { get; set; } = "Route ready to generate";
     [Parameter] public string EmptyMessage { get; set; } = "Choose route settings and generate a route.";
     [Parameter] public MarketItemWorldKey? ReconcilingItemWorld { get; set; }
@@ -159,7 +159,7 @@
     {
         _routeCards = ShoppingPlans.Count == 0
             ? Array.Empty<WorldProcurementCardModel>()
-            : ProcurementWorldCardBuilder.BuildWorldCards(ShoppingPlans, AppState.SelectedDataCenter);
+            : ProcurementWorldCardBuilder.BuildWorldCards(ShoppingPlans, SelectedDataCenter);
 
         var activeKeys = _routeCards.Select(GetWorldKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
         _expandedWorlds.RemoveWhere(key => !activeKeys.Contains(key));
@@ -413,8 +413,7 @@
 
     private void GoToMarketAnalysis(WorldItemPurchase item)
     {
-        AppState.RequestMarketItemAutoExpand(item.ItemId);
-        NavigationManager.NavigateTo("market");
+        NavigationManager.NavigateTo($"market?itemId={item.ItemId}");
     }
 
     private decimal GetTotalCost() => ShoppingPlans.Sum(PurchaseRecommendationCost.GetRecommendedCost);

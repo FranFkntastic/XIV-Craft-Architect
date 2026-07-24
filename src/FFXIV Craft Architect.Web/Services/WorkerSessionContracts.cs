@@ -72,6 +72,7 @@ public static class WorkerSessionCommandKinds
     public const string AcquisitionMutation = "mutate-acquisition";
     public const string AcquisitionProjection = "acquisition-projection";
     public const string MarketAnalysisRun = "mutate-market-analysis";
+    public const string MarketItemRefresh = "mutate-market-item-refresh";
     public const string MarketLensMutation = "mutate-market-lens";
     public const string MarketProjection = "market-projection";
     public const string ProcurementRun = "mutate-procurement";
@@ -156,7 +157,9 @@ public sealed record WorkerAcquisitionProjection(
     IReadOnlyList<WorkerAcquisitionRowProjection> Rows,
     int MarketCandidateCount,
     int ActiveProcurementCount,
-    bool HasProcurementRoute);
+    bool HasProcurementRoute,
+    IReadOnlyList<MaterialAggregate> ActiveProcurementItems,
+    IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems);
 
 public sealed record WorkerAcquisitionRowProjection(
     string NodeId,
@@ -183,6 +186,7 @@ public sealed record WorkerAcquisitionRowProjection(
     string MarketEvidence,
     string EstimatedCost,
     bool IsMarketUnavailable,
+    decimal UnitPrice,
     IReadOnlyList<AcquisitionSource> AvailableSources,
     IReadOnlyList<WorkerAcquisitionOptionProjection> Options);
 
@@ -210,6 +214,22 @@ public sealed record WorkerMarketAnalysisOutcome(
     int FetchedCount,
     WorkerMarketProjection Market);
 
+public sealed record WorkerMarketItemRefreshRequest(
+    int ItemId,
+    string ItemName,
+    MarketFetchScope Scope,
+    string SelectedDataCenter,
+    string SelectedRegion,
+    MarketAcquisitionLens Lens,
+    string? TargetDataCenter = null,
+    string? TargetWorldName = null,
+    MarketWorldEvidenceSnapshot? ObservedEvidence = null);
+
+public sealed record WorkerMarketItemRefreshOutcome(
+    CoreProcurementItemRefreshStatus Status,
+    string? ItemName,
+    WorkerMarketProjection Market);
+
 public sealed record WorkerMarketProjection(
     long Revision,
     bool HasPlan,
@@ -222,7 +242,10 @@ public sealed record WorkerMarketProjection(
     int AvailableCount,
     int UnavailableCount,
     long EstimatedTotalCost,
-    IReadOnlyList<WorkerMarketItemProjection> Items);
+    IReadOnlyList<WorkerMarketItemProjection> Items,
+    IReadOnlyList<MaterialAggregate> CandidateItems,
+    IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
+    IReadOnlyList<MarketItemAnalysis> ItemAnalyses);
 
 public sealed record WorkerMarketItemProjection(
     int ItemId,
@@ -258,7 +281,9 @@ public sealed record WorkerProcurementRequest(
     int TravelTolerance,
     bool IncludeSplitPurchases,
     bool StartFromHomeDataCenter,
-    MarketTravelPriority TravelPriority);
+    MarketTravelPriority TravelPriority,
+    IReadOnlySet<MarketWorldKey>? ExcludedWorlds = null,
+    IReadOnlySet<MarketItemWorldKey>? ExcludedItemWorlds = null);
 
 public sealed record WorkerProcurementToleranceMutation(int TravelTolerance);
 
@@ -285,7 +310,9 @@ public sealed record WorkerProcurementProjection(
     int DataCenterTransfers,
     bool RouteSearchWasTruncated,
     IReadOnlyList<WorkerProcurementToleranceProjection> ToleranceOptions,
-    IReadOnlyList<WorkerProcurementWorldProjection> Worlds);
+    IReadOnlyList<WorkerProcurementWorldProjection> Worlds,
+    IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
+    MarketRouteDecision? RouteDecision);
 
 public sealed record WorkerProcurementToleranceProjection(
     int MinimumTolerance,

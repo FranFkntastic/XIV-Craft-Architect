@@ -144,6 +144,8 @@ public static partial class ManagedHost
                     await BuildRecipeAsync(command),
                 WorkerSessionCommandKinds.MarketAnalysisRun =>
                     await RunMarketAnalysisAsync(command),
+                WorkerSessionCommandKinds.MarketItemRefresh =>
+                    await RefreshMarketItemAsync(command),
                 WorkerSessionCommandKinds.MarketLensMutation =>
                     await ApplyMarketLensAsync(command),
                 WorkerSessionCommandKinds.ProcurementRun =>
@@ -435,6 +437,77 @@ public static partial class ManagedHost
         return CreateMutationResult(command.CommandKind, CaptureMarketProjection());
     }
 
+    private static async Task<WorkerSessionResultEnvelope> RefreshMarketItemAsync(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request = command.Payload.Deserialize<WorkerMarketItemRefreshRequest>(
+                WireJsonOptions)
+            ?? throw new InvalidOperationException("Market-item refresh request is empty.");
+        var session = _canonicalSession.Session;
+        if (session.ActivePlan is null)
+        {
+            throw new InvalidOperationException(
+                "Build a recipe plan before refreshing market evidence.");
+        }
+
+        var execution = new MarketAnalysisExecutionService(
+            SessionMarketCache,
+            SessionMarketLadder);
+        var reconciliation = new MarketEvidenceReconciliationService(
+            execution,
+            SessionMarketCache,
+            SessionUniversalis,
+            SessionMarketLadder);
+        var shopping = new MarketShoppingService(SessionMarketCache);
+        var worldData = await SessionUniversalis.GetWorldDataAsync();
+        shopping.SetWorldNameToIdMapping(
+            worldData.WorldIdToName.ToDictionary(pair => pair.Value, pair => pair.Key));
+        var workflow = new CoreProcurementWorkflowService(
+            session,
+            new ProcurementRouteExecutionService(reconciliation, shopping),
+            reconciliation,
+            new WorkerRecipeLayerWorkflow(session),
+            new CraftOperationCoordinator(session, new CraftOperationState()));
+        var expectedWorlds = MarketFetchScopeResolver
+            .GetDataCenters(
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion)
+            .Where(dataCenter => worldData.DataCenterToWorlds.ContainsKey(dataCenter))
+            .ToDictionary(
+                dataCenter => dataCenter,
+                dataCenter => (IReadOnlyList<string>)worldData.DataCenterToWorlds[dataCenter],
+                StringComparer.OrdinalIgnoreCase);
+        var result = await workflow.RefreshItemMarketDataAsync(
+            new CoreProcurementItemRefreshWorkflowRequest(
+                request.ItemId,
+                request.ItemName,
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion,
+                request.Lens,
+                expectedWorlds,
+                ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous,
+                TargetDataCenter: request.TargetDataCenter,
+                TargetWorldName: request.TargetWorldName,
+                ObservedEvidence: request.ObservedEvidence));
+        if (result.Status != CoreProcurementItemRefreshStatus.Refreshed)
+        {
+            throw new InvalidOperationException(
+                $"Market evidence for {request.ItemName} was not refreshed ({result.Status}).");
+        }
+
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        SessionMarketCache.Clear();
+        _sessionRevision++;
+        return CreateMutationResult(
+            command.CommandKind,
+            new WorkerMarketItemRefreshOutcome(
+                result.Status,
+                result.ItemName,
+                CaptureMarketProjection()));
+    }
+
     private static async Task<WorkerSessionResultEnvelope> RunProcurementAsync(
         WorkerSessionCommandEnvelope command)
     {
@@ -492,8 +565,8 @@ public static partial class ManagedHost
                 },
                 request.IncludeSplitPurchases,
                 sourcePlans,
-                new HashSet<MarketWorldKey>(),
-                new HashSet<MarketItemWorldKey>(),
+                request.ExcludedWorlds?.ToHashSet() ?? new HashSet<MarketWorldKey>(),
+                request.ExcludedItemWorlds?.ToHashSet() ?? new HashSet<MarketItemWorldKey>(),
                 expectedWorlds,
                 ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous));
         if (result.Status != CoreProcurementWorkflowStatus.Published)
@@ -663,9 +736,10 @@ public static partial class ManagedHost
             .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var context = session.ActiveContext;
-        var candidateCount = new WorkerRecipeLayerWorkflow(session)
+        var candidateItems = new WorkerRecipeLayerWorkflow(session)
             .BuildMarketAnalysisCandidates(session.ActivePlan)
-            .Count;
+            .ToArray();
+        var candidateCount = candidateItems.Length;
         return new WorkerMarketProjection(
             _sessionRevision,
             session.ActivePlan is not null,
@@ -678,7 +752,10 @@ public static partial class ManagedHost
             items.Count(item => item.IsAvailable),
             Math.Max(0, candidateCount - items.Count(item => item.IsAvailable)),
             items.Sum(item => item.EstimatedTotalCost),
-            items);
+            items,
+            candidateItems,
+            evidence.ShoppingPlans?.ToArray() ?? Array.Empty<DetailedShoppingPlan>(),
+            evidence.ItemAnalyses.ToArray());
     }
 
     private static WorkerProcurementProjection CaptureProcurementProjection()
@@ -736,7 +813,9 @@ public static partial class ManagedHost
                     selection.WorldStops,
                     selection.DataCenterTransfers)).ToArray()
                 ?? Array.Empty<WorkerProcurementToleranceProjection>(),
-            worlds);
+            worlds,
+            overlay?.ShoppingPlans?.ToArray() ?? Array.Empty<DetailedShoppingPlan>(),
+            decision);
     }
 
     private static WorkerAcquisitionProjection CaptureAcquisitionProjection(
@@ -763,7 +842,9 @@ public static partial class ManagedHost
                 Rows: Array.Empty<WorkerAcquisitionRowProjection>(),
                 MarketCandidateCount: 0,
                 ActiveProcurementCount: 0,
-                HasProcurementRoute: false);
+                HasProcurementRoute: false,
+                ActiveProcurementItems: Array.Empty<MaterialAggregate>(),
+                UnavailableMarketItems: Array.Empty<CoreMarketDataUnavailableItem>());
         }
 
         var evidence = session.MarketEvidence;
@@ -777,6 +858,15 @@ public static partial class ManagedHost
         var rows = snapshot.VisibleRows
             .Select(row => ProjectAcquisitionRow(row, snapshot.CostContext, evidence))
             .ToArray();
+        var unavailableItems = evidence.UnavailableMarketItemIds
+            .Select(itemId =>
+            {
+                var name = snapshot.Rows
+                    .FirstOrDefault(row => row.ItemId == itemId)
+                    ?.ItemName ?? $"Item {itemId}";
+                return new CoreMarketDataUnavailableItem(itemId, name);
+            })
+            .ToArray();
         return new WorkerAcquisitionProjection(
             _sessionRevision,
             HasPlan: true,
@@ -786,7 +876,9 @@ public static partial class ManagedHost
             Rows: rows,
             MarketCandidateCount: snapshot.MarketAnalysisCandidates.Count,
             ActiveProcurementCount: snapshot.ActiveProcurementItems.Count,
-            HasProcurementRoute: session.ProcurementOverlay?.RouteDecision is not null);
+            HasProcurementRoute: session.ProcurementOverlay?.RouteDecision is not null,
+            ActiveProcurementItems: snapshot.ActiveProcurementItems,
+            UnavailableMarketItems: unavailableItems);
     }
 
     private static WorkerAcquisitionRowProjection ProjectAcquisitionRow(
@@ -825,6 +917,7 @@ public static partial class ManagedHost
             row.MarketEvidence,
             row.EstimatedCost,
             evidence.UnavailableMarketItemIds.Contains(row.ItemId),
+            row.UnitPrice,
             availableSources,
             BuildAcquisitionOptions(row, costContext));
     }
