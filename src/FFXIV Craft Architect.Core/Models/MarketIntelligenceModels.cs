@@ -166,6 +166,19 @@ public sealed record MarketIntelligence(
     {
         ArgumentNullException.ThrowIfNull(evidence);
 
+        if (evidence.PublicationContext is not null)
+        {
+            return new MarketIntelligence(
+                evidence.MarketIntelligenceId,
+                evidence.ItemAnalyses,
+                evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>(),
+                evidence.UnavailableMarketItemIds
+                    .Select(itemId => new CoreMarketDataUnavailableItem(itemId, string.Empty))
+                    .ToArray(),
+                evidence.PublicationContext,
+                evidence.RecipeBasis);
+        }
+
         return FromLegacy(
             evidence.ItemAnalyses,
             evidence.ShoppingPlans,

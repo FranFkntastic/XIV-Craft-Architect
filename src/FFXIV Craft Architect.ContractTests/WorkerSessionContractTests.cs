@@ -413,6 +413,42 @@ public sealed class WorkerSessionContractTests
         Assert.Equal(2, reloadedMarketProjection.Items.Count);
         Assert.Single(reloadedMarketProjection.ItemAnalyses);
         Assert.Equal(2, reloadedMarketProjection.ShoppingPlans.Count);
+
+        var reexported = await SendAsync(
+            "export",
+            expectedRevision: 7,
+            new WorkerSessionExportRequest(
+                "autosave",
+                "Autosave",
+                IncludeSourcePlanIdentity: true));
+        var reexport = reexported.Projection.Deserialize<WorkerSessionExportProjection>(WireOptions);
+        Assert.NotNull(reexport?.StoredPlan);
+        Assert.Equal(
+            JsonSerializer.Serialize(export.StoredPlan.ProjectItems, WireOptions),
+            JsonSerializer.Serialize(reexport.StoredPlan.ProjectItems, WireOptions));
+        Assert.Equal(export.StoredPlan.PlanJson, reexport.StoredPlan.PlanJson);
+        Assert.Equal(export.StoredPlan.PlanStateJson, reexport.StoredPlan.PlanStateJson);
+        Assert.Equal(
+            JsonSerializer.Serialize(
+                MarketIntelligencePayloadCodec.Deserialize(
+                    export.StoredPlan.MarketIntelligenceJson!),
+                WireOptions),
+            JsonSerializer.Serialize(
+                MarketIntelligencePayloadCodec.Deserialize(
+                    reexport.StoredPlan.MarketIntelligenceJson!),
+                WireOptions));
+        Assert.Equal(
+            export.StoredPlan.MarketAnalysisRecipeBasisJson,
+            reexport.StoredPlan.MarketAnalysisRecipeBasisJson);
+        Assert.Equal(
+            export.StoredPlan.ProcurementRouteJson,
+            reexport.StoredPlan.ProcurementRouteJson);
+        Assert.Equal(
+            export.StoredPlan.ProcurementTravelTolerance,
+            reexport.StoredPlan.ProcurementTravelTolerance);
+        Assert.Equal(export.StoredPlan.SourcePlanId, reexport.StoredPlan.SourcePlanId);
+        Assert.Equal(export.StoredPlan.SourcePlanName, reexport.StoredPlan.SourcePlanName);
+        Assert.Equal(export.StoredPlan.DataCenter, reexport.StoredPlan.DataCenter);
     }
 
     private static async Task<WorkerSessionResultEnvelope> SendAsync<TPayload>(

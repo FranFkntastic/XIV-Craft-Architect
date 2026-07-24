@@ -59,7 +59,9 @@ public sealed class CorePlanSessionLoadService
                 result.UnavailableMarketItemIds,
                 result.MarketIntelligence?.RecommendationMode ?? storedPlan.SavedRecommendationMode,
                 result.MarketIntelligence?.Lens ?? storedPlan.SavedMarketAnalysisLens,
-                result.MarketAnalysisRecipeBasis);
+                result.MarketAnalysisRecipeBasis,
+                result.MarketIntelligence?.MarketIntelligenceId,
+                result.MarketIntelligence?.PublicationContext);
         }
 
         return result;

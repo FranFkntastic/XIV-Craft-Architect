@@ -468,7 +468,9 @@ public sealed class CraftSessionState
                 _marketEvidence.PublishedAgainstVersion,
                 _marketEvidence.RecommendationMode,
                 _marketEvidence.Lens,
-                CloneRecipeBasis(_marketEvidence.RecipeBasis));
+                CloneRecipeBasis(_marketEvidence.RecipeBasis),
+                _marketEvidence.MarketIntelligenceId,
+                _marketEvidence.PublicationContext);
             MarkPlanPriceChanged(reason);
             MarkMarketEvidenceChanged("unavailable market items updated");
             RegisterPlanInstance(plan, _planSessionVersion);
@@ -538,6 +540,8 @@ public sealed class CraftSessionState
         MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost,
         StoredRecipeOperationSnapshot? recipeBasis = null)
     {
+        var analyses = itemAnalyses.Select(CloneMarketItemAnalysis).ToArray();
+        var unavailableIds = unavailableMarketItemIds.ToHashSet();
         return ApplyChange(
             CraftSessionChangeScope.MarketAnalysis,
             new HashSet<CraftSessionDirtyBucket> { CraftSessionDirtyBucket.MarketAnalysis },
@@ -549,14 +553,25 @@ public sealed class CraftSessionState
             },
             () =>
             {
-                _marketEvidence = new CraftSessionMarketEvidence(
-                    itemAnalyses.Select(CloneMarketItemAnalysis).ToArray(),
-                    unavailableMarketItemIds.ToHashSet(),
+                var publishedAgainstVersion = _versions.Capture(_planSessionVersion);
+                var intelligence = MarketIntelligence.FromLegacy(
+                    analyses,
                     Array.Empty<DetailedShoppingPlan>(),
-                    _versions.Capture(_planSessionVersion),
+                    unavailableIds,
+                    publishedAgainstVersion,
                     recommendationMode,
                     lens,
-                    CloneRecipeBasis(recipeBasis));
+                    recipeBasis);
+                _marketEvidence = new CraftSessionMarketEvidence(
+                    analyses,
+                    unavailableIds,
+                    Array.Empty<DetailedShoppingPlan>(),
+                    publishedAgainstVersion,
+                    recommendationMode,
+                    lens,
+                    CloneRecipeBasis(recipeBasis),
+                    intelligence.MarketIntelligenceId,
+                    intelligence.PublicationContext);
             });
     }
 
@@ -588,7 +603,9 @@ public sealed class CraftSessionState
         IEnumerable<int>? unavailableMarketItemIds = null,
         RecommendationMode recommendationMode = RecommendationMode.MinimizeTotalCost,
         MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost,
-        StoredRecipeOperationSnapshot? recipeBasis = null)
+        StoredRecipeOperationSnapshot? recipeBasis = null,
+        Guid? marketIntelligenceId = null,
+        MarketIntelligencePublicationContext? publicationContext = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(itemAnalyses);
@@ -608,7 +625,9 @@ public sealed class CraftSessionState
             reason,
             recommendationMode,
             lens,
-            CloneRecipeBasis(recipeBasis));
+            CloneRecipeBasis(recipeBasis),
+            marketIntelligenceId,
+            publicationContext);
     }
 
     /// <summary>
@@ -626,7 +645,9 @@ public sealed class CraftSessionState
         IReadOnlySet<int>? unavailableMarketItemIds = null,
         RecommendationMode recommendationMode = RecommendationMode.MinimizeTotalCost,
         MarketAcquisitionLens lens = MarketAcquisitionLens.MinimumUpfrontCost,
-        StoredRecipeOperationSnapshot? recipeBasis = null)
+        StoredRecipeOperationSnapshot? recipeBasis = null,
+        Guid? marketIntelligenceId = null,
+        MarketIntelligencePublicationContext? publicationContext = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(itemAnalyses);
@@ -643,7 +664,9 @@ public sealed class CraftSessionState
             reason,
             recommendationMode,
             lens,
-            CloneRecipeBasis(recipeBasis));
+            CloneRecipeBasis(recipeBasis),
+            marketIntelligenceId,
+            publicationContext);
     }
 
     private bool TryPublishMarketAnalysisCore(
@@ -657,7 +680,9 @@ public sealed class CraftSessionState
         string reason,
         RecommendationMode recommendationMode,
         MarketAcquisitionLens lens,
-        StoredRecipeOperationSnapshot? recipeBasis)
+        StoredRecipeOperationSnapshot? recipeBasis,
+        Guid? marketIntelligenceId,
+        MarketIntelligencePublicationContext? publicationContext)
     {
         var published = false;
         var completed = TryPublishFrom(expectedStamp, () =>
@@ -667,6 +692,7 @@ public sealed class CraftSessionState
                 return;
             }
 
+            StoredMarketIntelligenceRestorer.EnsureCurrentCoverageState(shoppingPlans);
             if (!ReferenceEquals(_activePlan, plan))
             {
                 _activePlan = ClonePlan(plan);
@@ -677,14 +703,29 @@ public sealed class CraftSessionState
                 MarkPlanDecisionChanged("market analysis reconciled acquisition decisions");
             }
 
+            var publishedAgainstVersion = _versions.Capture(_planSessionVersion);
+            var intelligence = publicationContext is null
+                ? MarketIntelligence.FromLegacy(
+                    itemAnalyses,
+                    shoppingPlans,
+                    unavailableMarketItemIds,
+                    publishedAgainstVersion,
+                    recommendationMode,
+                    lens,
+                    recipeBasis)
+                : null;
             _marketEvidence = new CraftSessionMarketEvidence(
                 itemAnalyses,
                 unavailableMarketItemIds,
                 shoppingPlans,
-                _versions.Capture(_planSessionVersion),
+                publishedAgainstVersion,
                 recommendationMode,
                 lens,
-                recipeBasis);
+                recipeBasis,
+                marketIntelligenceId ??
+                    intelligence?.MarketIntelligenceId ??
+                    Guid.Empty,
+                publicationContext ?? intelligence?.PublicationContext);
 
             RegisterPlanInstance(plan, _planSessionVersion);
             RegisterPlanInstance(_activePlan, _planSessionVersion);
@@ -1154,7 +1195,9 @@ public sealed class CraftSessionState
             evidence.PublishedAgainstVersion,
             evidence.RecommendationMode,
             evidence.Lens,
-            CloneRecipeBasis(evidence.RecipeBasis));
+            CloneRecipeBasis(evidence.RecipeBasis),
+            evidence.MarketIntelligenceId,
+            evidence.PublicationContext);
 
     private static MarketItemAnalysis CloneMarketItemAnalysis(MarketItemAnalysis analysis) =>
         JsonSerializer.Deserialize<MarketItemAnalysis>(JsonSerializer.Serialize(analysis)) ?? new MarketItemAnalysis();

@@ -14,11 +14,14 @@ const url = process.argv[3] ?? 'http://127.0.0.1:5083';
 const plan = process.argv[4] ?? 'C:/Users/gianf/Downloads/crasher.craftplan';
 const output = process.argv[5] ?? `crasher-${browserName}.json`;
 const evidenceMode = process.argv[6] ?? 'seeded';
-const executionMode = process.argv[7] ?? 'legacy';
+const requestedExecutionMode = process.argv[7] ?? 'legacy';
+const executionMode = requestedExecutionMode === 'workflow-engine'
+  ? 'engine'
+  : requestedExecutionMode;
 const browserType = { chromium, firefox }[browserName];
 if (!browserType) throw new Error(`Unsupported browser ${browserName}`);
 if (!['seeded', 'live'].includes(evidenceMode)) throw new Error(`Unsupported evidence mode ${evidenceMode}`);
-if (!['legacy', 'engine', 'workflow-engine'].includes(executionMode)) throw new Error(`Unsupported execution mode ${executionMode}`);
+if (!['legacy', 'engine', 'workflow-engine'].includes(requestedExecutionMode)) throw new Error(`Unsupported execution mode ${requestedExecutionMode}`);
 if (executionMode === 'engine' && evidenceMode === 'live') {
   throw new Error('The standalone engine acceptance probe requires seeded evidence.');
 }
@@ -40,12 +43,6 @@ const expectedShape = isSimpleCrasher
     };
 
 const budgets = loadOracleBudgets(evidenceMode);
-if (executionMode === 'workflow-engine') {
-  if (!process.env.CA_ORACLE_GLOBAL_TIMEOUT_MS) budgets.globalMs = 600_000;
-  if (!process.env.CA_ORACLE_ROUTE_RETURN_TIMEOUT_MS) budgets.routeReturnMs = 420_000;
-  if (!process.env.CA_ORACLE_STALL_TIMEOUT_MS) budgets.stallMs = 240_000;
-  if (!process.env.CA_ORACLE_BROWSER_OPERATION_TIMEOUT_MS) budgets.operationMs = 60_000;
-}
 if (browserName === 'firefox' && evidenceMode === 'seeded' && !process.env.CA_ORACLE_BROWSER_OPERATION_TIMEOUT_MS) {
   // Firefox can keep its content thread inside a large IndexedDB structured-clone
   // commit for longer than Chromium while still making forward progress.
@@ -510,9 +507,7 @@ workflow: try {
         Enabled: true,
         UseDeterministicEvidence: true
       };
-      if (executionMode === 'workflow-engine') {
-        settings.ProcurementRoutes = { GenerationEnabled: true };
-      }
+      settings.ProcurementRoutes = { GenerationEnabled: true };
       await route.fulfill({ response, json: settings });
     });
   }
@@ -549,34 +544,35 @@ workflow: try {
       Number(data.planRootCount) === expectedShape.rootCount &&
       Number(data.planNodeCount) === expectedShape.nodeCount &&
       Number(data.planEdgeCount) === expectedShape.edgeCount &&
-      Number(data.marketCandidateCount) === expectedShape.candidateCount &&
       data.planLeafItemIds === expectedShape.leafItemIds;
   });
+  await withDeadline('open on-demand market projection', () =>
+    page.locator('[data-benchmark-id="main-nav-market-analysis"]').click());
+  const marketProjectionLifecycle = await waitForLifecycle(
+    'market-candidate-projection',
+    budgets.importMs,
+    snapshot =>
+      Number(snapshot?.data?.marketCandidateCount) === expectedShape.candidateCount);
   stage('plan-imported-and-recipe-graph-expanded', {
     rootCount: Number(importedLifecycle.data.planRootCount),
     nodeCount: Number(importedLifecycle.data.planNodeCount),
     edgeCount: Number(importedLifecycle.data.planEdgeCount),
-    candidateCount: Number(importedLifecycle.data.marketCandidateCount),
+    candidateCount: Number(marketProjectionLifecycle.data.marketCandidateCount),
     leafItemIds: importedLifecycle.data.planLeafItemIds,
     marketAnalysisCount: Number(importedLifecycle.data.marketAnalysisCount)
   });
   const importSettled = await waitForLifecycle('import-activation-settle', budgets.importMs, snapshot => {
     const data = snapshot?.data;
-    const marketWorkSettledDurably =
-      Number(data?.marketAnalysisCount) > 0 &&
-      data?.publicationKind === 'Known' &&
-      snapshot.autosave?.hasMarketIntelligence;
     return data &&
       data.isBusy === 'false' &&
       !data.currentOperation &&
       !data.activeWorkflows &&
-      (Number(data.cacheFetchedPairs) > 0 || marketWorkSettledDurably);
+      Number(data.marketCandidateCount) === expectedShape.candidateCount;
   });
   stage('plan-import-activation-settled', { lifecycle: importSettled });
   await writeReport(true);
 
   if (executionMode === 'legacy' || evidenceMode === 'live') {
-  await withDeadline('open market analysis', () => page.getByRole('button', { name: 'Market Analysis', exact: true }).click());
   const analysisButton = page.locator('[data-benchmark-id="market-analysis-run"]');
   await withDeadline('wait for market analysis button', () => analysisButton.waitFor({ state: 'visible' }));
   await withDeadline('wait for enabled market analysis button', () => page.waitForFunction(() => {
@@ -633,16 +629,6 @@ workflow: try {
   }
   } else {
     stage('test-only-deterministic-engine-evidence-selected');
-  }
-
-  if (executionMode === 'workflow-engine' && evidenceMode === 'seeded') {
-    await withDeadline('seed deterministic workflow evidence', () =>
-      page.locator('[data-benchmark-id="engine-acceptance-seed-evidence"]').click());
-    await waitForLifecycle('workflow-engine-evidence-publication', budgets.analysisMs, snapshot => {
-      const data = snapshot?.data;
-      return data && Number(data.marketAnalysisCount) > 0 && snapshot.autosave?.hasMarketIntelligence;
-    });
-    stage('workflow-engine-evidence-published');
   }
 
   if (evidenceMode === 'seeded' && executionMode === 'legacy') {
@@ -755,24 +741,7 @@ workflow: try {
     await withDeadline('start route generation', () => routeButton.click());
     stage('explicit-route-generation-started');
     await writeReport(true);
-    if (executionMode === 'workflow-engine') {
-      const settled = await waitForLifecycle('workflow-engine-route-settlement', budgets.routeReturnMs, snapshot => {
-        const data = snapshot?.data || {};
-        return routeResult?.workflowStatus === 'Published' &&
-          data.routeValidity === 'Current' &&
-          data.routeHasDecision === 'true' &&
-          data.isBusy === 'false' &&
-          !data.activeWorkflows &&
-          data.dirtyPersistedBuckets === 'None' &&
-          snapshot.autosave?.hasMarketIntelligence;
-      });
-      stage('full-operation-settled', { lifecycle: settled });
-      report.completed = true;
-      report.lifecycle = settled;
-      await writeReport(true);
-    } else {
-      await waitForFullSettlement();
-    }
+    await waitForFullSettlement();
   }
 
   setPhase('post-completion-navigation');

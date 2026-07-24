@@ -156,7 +156,9 @@ public sealed record CraftSessionMarketEvidence(
     CraftSessionVersionStamp? PublishedAgainstVersion = null,
     RecommendationMode RecommendationMode = RecommendationMode.MinimizeTotalCost,
     MarketAcquisitionLens Lens = MarketAcquisitionLens.MinimumUpfrontCost,
-    StoredRecipeOperationSnapshot? RecipeBasis = null)
+    StoredRecipeOperationSnapshot? RecipeBasis = null,
+    Guid MarketIntelligenceId = default,
+    MarketIntelligencePublicationContext? PublicationContext = null)
 {
     public static CraftSessionMarketEvidence Empty { get; } =
         new(Array.Empty<MarketItemAnalysis>(), new HashSet<int>(), Array.Empty<DetailedShoppingPlan>(), null);

@@ -178,7 +178,8 @@
         new(
             plan?.ProjectItems ?? [],
             plan?.PlanJson,
-            plan?.MarketIntelligenceJson,
+            plan?.PlanStateJson,
+            DeserializeMarketIntelligence(plan?.MarketIntelligenceJson),
             plan?.MarketAnalysisRecipeBasisJson,
             plan?.ProcurementRouteJson,
             plan?.ProcurementTravelTolerance,
@@ -188,10 +189,16 @@
             plan?.SourcePlanName,
             plan?.DataCenter);
 
+    private static StoredMarketIntelligence? DeserializeMarketIntelligence(string? payload) =>
+        string.IsNullOrWhiteSpace(payload)
+            ? null
+            : MarketIntelligencePayloadCodec.Deserialize(payload);
+
     private sealed record DurableSessionFingerprint(
         IReadOnlyList<StoredProjectItem> ProjectItems,
         string? PlanJson,
-        string? MarketIntelligenceJson,
+        string? PlanStateJson,
+        StoredMarketIntelligence? MarketIntelligence,
         string? MarketAnalysisRecipeBasisJson,
         string? ProcurementRouteJson,
         int? ProcurementTravelTolerance,

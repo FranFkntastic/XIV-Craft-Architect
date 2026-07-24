@@ -163,6 +163,12 @@ public static class StoredMarketIntelligenceRestorer
         }
     }
 
+    public static void EnsureCurrentCoverageState(IReadOnlyList<DetailedShoppingPlan> plans)
+    {
+        ArgumentNullException.ThrowIfNull(plans);
+        EnsureCoverageState(plans, legacyCoverage: false);
+    }
+
     private static MarketCoverageSet CreateLegacyDegradedCoverage(DetailedShoppingPlan plan)
     {
         var projectedCost = plan.RecommendedWorld?.TotalCost ??
