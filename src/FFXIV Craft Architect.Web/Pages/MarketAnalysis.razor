@@ -7,187 +7,252 @@
 @inject ISnackbar Snackbar
 @implements IDisposable
 
-<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-4">
-    <MudPaper Class="pa-4 mb-3" Elevation="0" Outlined="true">
-        <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
-            <div style="min-width:230px; flex:1;">
-                <MudText Typo="Typo.h5">Market Analysis</MudText>
-                <MudText Typo="Typo.body2" Color="Color.Secondary">
-                    @ScopeSummary
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 ma-page-container">
+    <div class="ma-grid-layout">
+        <aside class="ma-controls-column">
+            <MudText Typo="Typo.h6" Color="Color.Primary" Class="mb-1">Market Analysis</MudText>
+            <MudText Typo="Typo.caption" Class="ma-context mb-4">@ScopeSummary</MudText>
+
+            <div class="ma-field-block">
+                <MudSelect T="MarketAcquisitionLens"
+                           Value="_lens"
+                           ValueChanged="SetLensAsync"
+                           Label="Buying strategy"
+                           Dense="true"
+                           Variant="Variant.Outlined"
+                           Disabled="@(_isAnalyzing || _market?.HasAnalysis != true)"
+                           Class="ma-full-width">
+                    <MudSelectItem Value="MarketAcquisitionLens.MinimumUpfrontCost">
+                        Lowest checkout cost
+                    </MudSelectItem>
+                    <MudSelectItem Value="MarketAcquisitionLens.BulkValue">
+                        Best bulk value
+                    </MudSelectItem>
+                </MudSelect>
+            </div>
+
+            <div class="ma-region-toggle-block">
+                <MudCheckBox T="bool"
+                             Value="@(_scope == MarketFetchScope.EntireRegion)"
+                             ValueChanged="SetRegionalScope"
+                             Dense="true"
+                             Color="Color.Primary"
+                             Class="ma-region-toggle"
+                             Disabled="_isAnalyzing">
+                    <MudText Typo="Typo.body2" Class="ma-region-toggle-text">
+                        Search the whole region
+                    </MudText>
+                </MudCheckBox>
+                <MudText Typo="Typo.caption" Class="ma-region-toggle-caption">
+                    Uses listings from every data center in @(_market?.SelectedRegion ?? "North America").
                 </MudText>
             </div>
 
-            <MudSwitch T="bool"
-                       Value="@(_scope == MarketFetchScope.EntireRegion)"
-                       ValueChanged="SetRegionalScope"
-                       Color="Color.Primary"
-                       Dense="true"
-                       Label="Search the whole region"
-                       Disabled="_isAnalyzing" />
-
-            <MudSelect T="MarketAcquisitionLens"
-                       Value="_lens"
-                       ValueChanged="SetLensAsync"
-                       Label="Buying strategy"
-                       Dense="true"
-                       Variant="Variant.Outlined"
-                       Disabled="@(_isAnalyzing || _market?.HasAnalysis != true)"
-                       Style="min-width:190px;">
-                <MudSelectItem Value="MarketAcquisitionLens.MinimumUpfrontCost">
-                    Lowest checkout cost
-                </MudSelectItem>
-                <MudSelectItem Value="MarketAcquisitionLens.BulkValue">
-                    Best bulk value
-                </MudSelectItem>
-            </MudSelect>
-
             <MudButton Variant="Variant.Filled"
                        Color="Color.Primary"
+                       FullWidth="true"
+                       Class="mb-3"
+                       StartIcon="@(_isAnalyzing ? string.Empty : Icons.Material.Filled.Analytics)"
                        Disabled="@(!CanAnalyze)"
                        data-benchmark-id="market-analysis-run"
                        data-can-analyze="@CanAnalyze.ToString().ToLowerInvariant()"
                        data-is-analyzing="@_isAnalyzing.ToString().ToLowerInvariant()"
                        OnClick="@(() => RunAsync(forceRefresh: false))">
-                @(_market?.HasAnalysis == true ? "Reconcile" : "Analyze market")
+                @if (_isAnalyzing)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span>Analyzing...</span>
+                }
+                else
+                {
+                    <span>@(_market?.HasAnalysis == true ? "Reconcile" : "Run Analysis")</span>
+                }
             </MudButton>
+
             <MudButton Variant="Variant.Outlined"
-                       Color="Color.Primary"
+                       Color="Color.Secondary"
+                       FullWidth="true"
+                       Class="mb-3"
+                       StartIcon="@Icons.Material.Filled.Refresh"
                        Disabled="@(!CanAnalyze)"
                        OnClick="@(() => RunAsync(forceRefresh: true))">
-                Refresh prices
+                Refresh Prices
             </MudButton>
-        </div>
-    </MudPaper>
 
-    @if (_isAnalyzing)
-    {
-        <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mb-3" />
-    }
+            @if (_market?.HasAnalysis == true)
+            {
+                <div class="ma-summary-grid">
+                    <div><strong>@_market.CandidateCount</strong><span>candidates</span></div>
+                    <div><strong>@_market.AvailableCount</strong><span>priced</span></div>
+                    <div><strong>@_market.UnavailableCount</strong><span>unavailable</span></div>
+                    <div><strong>@($"{_market.EstimatedTotalCost:N0}g")</strong><span>checkout</span></div>
+                </div>
 
-    @if (_market?.HasAnalysis == true)
-    {
-        <div style="display:grid; grid-template-columns:repeat(4, minmax(130px, 1fr)); gap:8px; margin-bottom:12px;">
-            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
-                <MudText Typo="Typo.caption">Market candidates</MudText>
-                <MudText Typo="Typo.h6">@_market.CandidateCount</MudText>
-            </MudPaper>
-            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
-                <MudText Typo="Typo.caption">Priced</MudText>
-                <MudText Typo="Typo.h6">@_market.AvailableCount</MudText>
-            </MudPaper>
-            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
-                <MudText Typo="Typo.caption">Unavailable</MudText>
-                <MudText Typo="Typo.h6">@_market.UnavailableCount</MudText>
-            </MudPaper>
-            <MudPaper Class="pa-3" Elevation="0" Outlined="true">
-                <MudText Typo="Typo.caption">Estimated checkout</MudText>
-                <MudText Typo="Typo.h6">@($"{_market.EstimatedTotalCost:N0}g")</MudText>
-            </MudPaper>
-        </div>
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Success"
+                           FullWidth="true"
+                           EndIcon="@Icons.Material.Filled.ArrowForward"
+                           OnClick="@(() => Navigation.NavigateTo("/acquisition"))">
+                    Acquisition Evaluation
+                </MudButton>
+            }
+        </aside>
 
-        <MudPaper Elevation="0" Outlined="true">
-            <MudTable Items="_market.Items" Dense="true" Hover="true" Elevation="0">
-                <HeaderContent>
-                    <MudTh>Item</MudTh>
-                    <MudTh Align="Right">Needed</MudTh>
-                    <MudTh>Recommendation</MudTh>
-                    <MudTh Align="Right">Unit</MudTh>
-                    <MudTh Align="Right">Total</MudTh>
-                    <MudTh>Evidence</MudTh>
-                </HeaderContent>
-                <RowTemplate Context="item">
-                    <MudTd DataLabel="Item">
-                        <MudButton Variant="Variant.Text"
-                                   Size="Size.Small"
-                                   OnClick="@(() => ToggleItem(item.ItemId))">
-                            @item.Name
-                        </MudButton>
-                    </MudTd>
-                    <MudTd DataLabel="Needed" Align="Right">@item.QuantityNeeded</MudTd>
-                    <MudTd DataLabel="Recommendation">
-                        @if (item.IsAvailable)
-                        {
-                            <span>@item.RecommendedWorld</span>
-                            @if (!item.HasSufficientStock)
+        <main class="ma-results-column">
+            @if (_market?.HasAnalysis == true)
+            {
+                var selected = GetSelectedItem();
+                <div class="ma-ledger-shell">
+                    <div class="ma-ledger-workspace">
+                        <div class="ma-ledger-list">
+                            <div class="ma-table-scroll">
+                                <table class="ma-ledger-table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:32%;">Item</th>
+                                            <th style="width:13%;">Qty</th>
+                                            <th style="width:29%;">Coverage</th>
+                                            <th style="width:11%;">Worlds</th>
+                                            <th style="width:15%;">Cash Out</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var item in _market.Items)
+                                        {
+                                            <tr class="@GetItemRowClass(item)"
+                                                @onclick="@(() => SelectItem(item.ItemId))">
+                                                <td>
+                                                    <span class="ma-item-cell">
+                                                        <span class="ma-item-name">@item.Name</span>
+                                                        <span class="ma-item-kind">@FormatQuality(item.DataQuality)</span>
+                                                    </span>
+                                                </td>
+                                                <td class="ma-number-column">@($"{item.QuantityNeeded:N0}")</td>
+                                                <td class="ma-recommendation-column">
+                                                    <span>@FormatCoverage(item)</span>
+                                                </td>
+                                                <td class="ma-number-column">@item.WorldCount</td>
+                                                <td class="ma-total-column">
+                                                    @(item.IsAvailable ? $"{item.EstimatedTotalCost:N0}g" : "Unavailable")
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <aside class="ma-detail-pane">
+                            @if (selected is null)
                             {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Warning">
-                                    @($"{item.AvailableQuantity}/{item.QuantityNeeded}")
-                                </MudChip>
-                            }
-                        }
-                        else
-                        {
-                            <span>Unavailable in this scope</span>
-                        }
-                    </MudTd>
-                    <MudTd DataLabel="Unit" Align="Right">
-                        @(item.IsAvailable ? $"{item.EstimatedUnitPrice:N0}g" : "-")
-                    </MudTd>
-                    <MudTd DataLabel="Total" Align="Right">
-                        @(item.IsAvailable ? $"{item.EstimatedTotalCost:N0}g" : "-")
-                    </MudTd>
-                    <MudTd DataLabel="Evidence">@FormatQuality(item.DataQuality)</MudTd>
-                </RowTemplate>
-                <ChildRowContent Context="item">
-                    @if (_expandedItemId == item.ItemId)
-                    {
-                        <MudTr>
-                            <MudTd ColSpan="6">
-                                @if (!string.IsNullOrWhiteSpace(item.Warning))
-                                {
-                                    <MudText Typo="Typo.body2" Color="Color.Warning">
-                                        @item.Warning
+                                <div class="ma-detail-empty">
+                                    <MudIcon Icon="@Icons.Material.Filled.TableRows" Size="Size.Large" />
+                                    <MudText Typo="Typo.body2">
+                                        Select an item to inspect its market detail.
                                     </MudText>
-                                }
-                                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:6px; padding:8px 0;">
-                                    @foreach (var world in item.Worlds)
-                                    {
-                                        <MudPaper Class="pa-2" Elevation="0" Outlined="true">
-                                            <MudText Typo="Typo.subtitle2">@world.WorldName</MudText>
-                                            <MudText Typo="Typo.caption">@world.DataCenter · @world.Quantity available</MudText>
-                                            <MudText Typo="Typo.body2">
-                                                @($"{world.AverageUnitPrice:N0}g each · {world.TotalCost:N0}g")
-                                            </MudText>
-                                        </MudPaper>
-                                    }
                                 </div>
-                            </MudTd>
-                        </MudTr>
-                    }
-                </ChildRowContent>
-            </MudTable>
-        </MudPaper>
+                            }
+                            else
+                            {
+                                <div class="ma-detail-header">
+                                    <div class="ma-detail-title-block">
+                                        <div class="ma-detail-title-row">
+                                            <span class="ma-detail-title">@selected.Name</span>
+                                        </div>
+                                        <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
+                                            @($"{selected.QuantityNeeded:N0} needed · {selected.AvailableQuantity:N0} listed")
+                                        </MudText>
+                                    </div>
+                                    <MudText Typo="Typo.subtitle1" Class="ma-detail-total">
+                                        @(selected.IsAvailable ? $"{selected.EstimatedTotalCost:N0}g" : "Unavailable")
+                                    </MudText>
+                                </div>
 
-        <div style="display:flex; justify-content:flex-end; margin-top:12px;">
-            <MudButton Variant="Variant.Filled"
-                       Color="Color.Primary"
-                       OnClick="@(() => Navigation.NavigateTo("/procurement"))">
-                Build procurement route
-            </MudButton>
-        </div>
-    }
-    else if (_market?.HasPlan == true)
-    {
-        <MudPaper Class="pa-6" Elevation="0" Outlined="true">
-            <MudText Typo="Typo.h6">Ready to price @_market.CandidateCount items</MudText>
-            <MudText Typo="Typo.body2">
-                Market Analysis evaluates every valid acquisition candidate. Procurement routing comes afterward and cannot change whether an item should be crafted, bought, or vendor-purchased.
-            </MudText>
-        </MudPaper>
-    }
-    else
-    {
-        <MudPaper Class="pa-6" Elevation="0" Outlined="true">
-            <MudText Typo="Typo.h6">Build a recipe plan first</MudText>
-        </MudPaper>
-    }
+                                @if (!string.IsNullOrWhiteSpace(selected.Warning))
+                                {
+                                    <div class="ma-inline-warning">@selected.Warning</div>
+                                }
+
+                                <div class="ma-detail-scroll">
+                                    <table class="ma-ledger-table">
+                                        <thead>
+                                            <tr>
+                                                <th>World</th>
+                                                <th>DC</th>
+                                                <th>Stock</th>
+                                                <th>Unit</th>
+                                                <th>Total</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (var world in selected.Worlds)
+                                            {
+                                                <tr>
+                                                    <td>@world.WorldName</td>
+                                                    <td>@world.DataCenter</td>
+                                                    <td class="ma-number-column">@($"{world.Quantity:N0}")</td>
+                                                    <td class="ma-number-column">@($"{world.AverageUnitPrice:N0}g")</td>
+                                                    <td class="ma-total-column">@($"{world.TotalCost:N0}g")</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </aside>
+                    </div>
+                </div>
+            }
+            else if (_market?.HasPlan == true)
+            {
+                <MudPaper Elevation="2" Class="pa-4 ma-state-paper">
+                    <div class="ma-state-inner">
+                        <MudIcon Icon="@Icons.Material.Filled.Analytics"
+                                 Size="Size.Large"
+                                 Class="ma-state-icon" />
+                        <MudText Typo="Typo.h6" Class="ma-state-title">Ready to Analyze</MudText>
+                        <MudText Typo="Typo.body2" Class="ma-state-body">
+                            @_market.CandidateCount items are ready for regional pricing.
+                        </MudText>
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Analytics"
+                                   Disabled="@(!CanAnalyze)"
+                                   OnClick="@(() => RunAsync(forceRefresh: false))">
+                            Run Analysis
+                        </MudButton>
+                    </div>
+                </MudPaper>
+            }
+            else
+            {
+                <MudPaper Elevation="2" Class="pa-4 ma-state-paper">
+                    <div class="ma-state-inner">
+                        <MudIcon Icon="@Icons.Material.Filled.ShoppingCart"
+                                 Size="Size.Large"
+                                 Class="ma-state-icon" />
+                        <MudText Typo="Typo.h6" Class="ma-state-title">No Items to Analyze</MudText>
+                        <MudText Typo="Typo.body2" Class="ma-state-body">
+                            Build a recipe plan first, then return here to price its acquisition candidates.
+                        </MudText>
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.ArrowBack"
+                                   OnClick="@(() => Navigation.NavigateTo("/"))">
+                            Recipe Planner
+                        </MudButton>
+                    </div>
+                </MudPaper>
+            }
+        </main>
+    </div>
 </MudContainer>
 
 @code {
     private WorkerMarketProjection? _market;
     private MarketFetchScope _scope = MarketFetchScope.EntireRegion;
     private MarketAcquisitionLens _lens = MarketAcquisitionLens.MinimumUpfrontCost;
-    private int? _expandedItemId;
+    private int? _selectedItemId;
     private bool _isAnalyzing;
 
     [SupplyParameterFromQuery(Name = "itemId")]
@@ -208,21 +273,25 @@
     {
         WorkerProjections.Changed += ProjectionChanged;
         _market = await WorkerSession.GetMarketProjectionAsync();
-        if (_market is not null)
+        if (_market is null)
         {
-            _scope = _market.Scope;
-            _lens = _market.Lens;
-            if (RequestedItemId.HasValue &&
-                _market.Items.Any(item => item.ItemId == RequestedItemId.Value))
-            {
-                _expandedItemId = RequestedItemId.Value;
-            }
+            return;
         }
+
+        _scope = _market.Scope;
+        _lens = _market.Lens;
+        if (RequestedItemId.HasValue &&
+            _market.Items.Any(item => item.ItemId == RequestedItemId.Value))
+        {
+            _selectedItemId = RequestedItemId.Value;
+        }
+        EnsureSelectedItem();
     }
 
     private void ProjectionChanged()
     {
         _market = WorkerProjections.Market ?? _market;
+        EnsureSelectedItem();
         _ = InvokeAsync(StateHasChanged);
     }
 
@@ -273,6 +342,7 @@
                     _market.SelectedRegion,
                     _lens));
             _market = outcome.Market;
+            EnsureSelectedItem();
             if (_market.UnavailableCount > 0)
             {
                 Snackbar.Add(
@@ -296,8 +366,41 @@
         }
     }
 
-    private void ToggleItem(int itemId) =>
-        _expandedItemId = _expandedItemId == itemId ? null : itemId;
+    private void SelectItem(int itemId) =>
+        _selectedItemId = itemId;
+
+    private WorkerMarketItemProjection? GetSelectedItem() =>
+        _market?.Items.FirstOrDefault(item => item.ItemId == _selectedItemId)
+        ?? _market?.Items.FirstOrDefault();
+
+    private void EnsureSelectedItem()
+    {
+        if (_market?.Items.Any(item => item.ItemId == _selectedItemId) != true)
+        {
+            _selectedItemId = _market?.Items.FirstOrDefault()?.ItemId;
+        }
+    }
+
+    private string GetItemRowClass(WorkerMarketItemProjection item)
+    {
+        var classes = new List<string>();
+        if (_selectedItemId == item.ItemId)
+        {
+            classes.Add("is-selected");
+        }
+        if (!string.IsNullOrWhiteSpace(item.Warning))
+        {
+            classes.Add("has-warning");
+        }
+        return string.Join(" ", classes);
+    }
+
+    private static string FormatCoverage(WorkerMarketItemProjection item) =>
+        item.IsAvailable
+            ? item.HasSufficientStock
+                ? item.RecommendedWorld
+                : $"{item.AvailableQuantity:N0}/{item.QuantityNeeded:N0} available · {item.RecommendedWorld}"
+            : "Unavailable in this scope";
 
     private static string FormatQuality(MarketDataQualityBucket quality) =>
         quality switch
