@@ -127,6 +127,14 @@ public sealed class CraftSessionState
         }
     }
 
+    internal CraftSessionProcurementOverlay? BorrowProcurementOverlay()
+    {
+        lock (_gate)
+        {
+            return _procurementOverlay;
+        }
+    }
+
     public CraftSessionViewState ViewState
     {
         get

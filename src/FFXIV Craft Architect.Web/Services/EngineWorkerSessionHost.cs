@@ -892,7 +892,7 @@ public static partial class ManagedHost
             RecipePlanAcquisitionQuoteBasis.MarketAnalysis,
             isRefreshing: false,
             evidencePublishedAtUtc: null);
-        var route = session.ProcurementOverlay;
+        var route = session.BorrowProcurementOverlay();
         var routeSummaries = route?.ShoppingPlans?.Count > 0
             ? RecipePlanProcurementRouteSummaryBuilder.Build(
                 route.ShoppingPlans,
@@ -989,7 +989,7 @@ public static partial class ManagedHost
     private static WorkerProcurementProjection CaptureProcurementProjection()
     {
         var session = _canonicalSession.Session;
-        var overlay = session.ProcurementOverlay;
+        var overlay = session.BorrowProcurementOverlay();
         var decision = overlay?.RouteDecision;
         var activeItems = new WorkerRecipeLayerWorkflow(_canonicalSession)
             .BuildActiveProcurementItems(session.ActivePlan);
@@ -1141,7 +1141,7 @@ public static partial class ManagedHost
             Rows: rows,
             MarketCandidateCount: snapshot.MarketAnalysisCandidates.Count,
             ActiveProcurementCount: snapshot.ActiveProcurementItems.Count,
-            HasProcurementRoute: session.ProcurementOverlay?.RouteDecision is not null,
+            HasProcurementRoute: session.BorrowProcurementOverlay()?.RouteDecision is not null,
             ActiveProcurementItems: snapshot.ActiveProcurementItems,
             UnavailableMarketItems: unavailableItems);
     }
@@ -1356,7 +1356,7 @@ public static partial class ManagedHost
             CountPlanNodes(plan),
             evidence.ItemAnalyses.Count,
             evidence.ShoppingPlans?.Count ?? 0,
-            session.ProcurementOverlay?.RouteDecision is not null,
+            session.BorrowProcurementOverlay()?.RouteDecision is not null,
             session.PlanSessionVersion,
             new AppStateVersionSnapshot(
                 versions.PlanCore,

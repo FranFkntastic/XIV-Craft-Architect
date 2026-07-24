@@ -107,7 +107,7 @@ internal sealed class WorkerCanonicalSession
             MarketAnalysisRecipeBasisJson = snapshot.MarketAnalysisRecipeBasisJson,
             MarketAnalysisScopeSnapshotJson = _legacyMarketAnalysisScopeSnapshotJson,
             ProcurementRouteJson = BuildProcurementRouteJson() ?? _legacyProcurementRouteJson,
-            ProcurementTravelTolerance = _session.ProcurementOverlay?
+            ProcurementTravelTolerance = _session.BorrowProcurementOverlay()?
                 .RouteDecision?
                 .TravelTolerance,
             SavedRecommendationMode = snapshot.SavedRecommendationMode,
@@ -146,7 +146,7 @@ internal sealed class WorkerCanonicalSession
 
     private string? BuildProcurementRouteJson()
     {
-        var overlay = _session.ProcurementOverlay;
+        var overlay = _session.BorrowProcurementOverlay();
         if (overlay?.ShoppingPlans is not { Count: > 0 } shoppingPlans ||
             overlay.RouteDecision is null)
         {
