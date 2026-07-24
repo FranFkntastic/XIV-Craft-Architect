@@ -78,6 +78,7 @@
 
     private WorkerMarketProjection? _market;
     private WorkerProcurementProjection? _route;
+    private long _projectionRefreshRevision = -1;
     private bool _searchEntireRegion = true;
     private bool _includeSplitPurchases = true;
     private bool _startFromHomeDataCenter;
@@ -153,10 +154,45 @@
 
     private void ProjectionChanged()
     {
+        var revision = WorkerProjections.Shell.Revision;
+        if (revision > 0 &&
+            (_market?.Revision != revision || _route?.Revision != revision))
+        {
+            if (_projectionRefreshRevision != revision)
+            {
+                _projectionRefreshRevision = revision;
+                _ = InvokeAsync(() => RefreshProjectionsAsync(revision));
+            }
+            return;
+        }
+
         _market = WorkerProjections.Market ?? _market;
         _route = WorkerProjections.Procurement ?? _route;
         ApplyRouteSettings();
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RefreshProjectionsAsync(long revision)
+    {
+        try
+        {
+            _market = await WorkerSession.GetMarketProjectionAsync();
+            if (WorkerProjections.Shell.Revision != revision)
+            {
+                return;
+            }
+
+            _route = await WorkerSession.GetProcurementProjectionAsync();
+            ApplyRouteSettings();
+        }
+        finally
+        {
+            if (_projectionRefreshRevision == revision)
+            {
+                _projectionRefreshRevision = -1;
+            }
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private void ApplyRouteSettings()
