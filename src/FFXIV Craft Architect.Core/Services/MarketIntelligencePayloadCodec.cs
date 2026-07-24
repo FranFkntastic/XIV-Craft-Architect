@@ -6,10 +6,10 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public static class MarketIntelligencePayloadCodec
 {
-    private const string BrotliBase64Prefix = "br64:";
+    private const string GZipBase64Prefix = "gz64:";
 
     public static bool IsCompressed(string? payload) =>
-        payload?.StartsWith(BrotliBase64Prefix, StringComparison.Ordinal) == true;
+        payload?.StartsWith(GZipBase64Prefix, StringComparison.Ordinal) == true;
 
     public static string Serialize(
         StoredMarketIntelligence intelligence,
@@ -22,15 +22,15 @@ public static class MarketIntelligencePayloadCodec
         }
 
         using var compressed = new MemoryStream();
-        using (var brotli = new BrotliStream(
+        using (var gzip = new GZipStream(
                    compressed,
                    CompressionLevel.Fastest,
                    leaveOpen: true))
         {
-            JsonSerializer.Serialize(brotli, intelligence);
+            JsonSerializer.Serialize(gzip, intelligence);
         }
 
-        return BrotliBase64Prefix +
+        return GZipBase64Prefix +
                Convert.ToBase64String(
                    compressed.GetBuffer(),
                    0,
@@ -46,12 +46,12 @@ public static class MarketIntelligencePayloadCodec
         }
 
         var compressedBytes = Convert.FromBase64String(
-            payload[BrotliBase64Prefix.Length..]);
+            payload[GZipBase64Prefix.Length..]);
         using var compressed = new MemoryStream(compressedBytes, writable: false);
-        using var brotli = new BrotliStream(
+        using var gzip = new GZipStream(
             compressed,
             CompressionMode.Decompress,
             leaveOpen: false);
-        return JsonSerializer.Deserialize<StoredMarketIntelligence>(brotli);
+        return JsonSerializer.Deserialize<StoredMarketIntelligence>(gzip);
     }
 }
