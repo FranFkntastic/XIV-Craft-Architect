@@ -521,6 +521,43 @@ public sealed class PersistenceContractTests
     }
 
     [Fact]
+    public void ActivePlanClone_NormalizesSerializedParentIdentity()
+    {
+        var root = new PlanNode
+        {
+            NodeId = "root",
+            ParentNodeId = "stale-root-parent",
+            ItemId = 100,
+            Name = "Root"
+        };
+        root.Children.Add(new PlanNode
+        {
+            NodeId = "child",
+            ParentNodeId = null,
+            ItemId = 101,
+            Name = "Child"
+        });
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+
+        session.ActivatePlan(
+            new CraftingPlan { RootItems = [root] },
+            [new ProjectItem { Id = 100, Name = "Root", Quantity = 1 }],
+            new CraftSessionActiveContext(
+                "North America",
+                "Aether",
+                "Siren",
+                MarketFetchScope.SelectedDataCenter),
+            "parent identity fixture");
+
+        var activeRoot = Assert.Single(session.ActivePlan!.RootItems);
+        var activeChild = Assert.Single(activeRoot.Children);
+        Assert.Null(activeRoot.Parent);
+        Assert.Null(activeRoot.ParentNodeId);
+        Assert.Same(activeRoot, activeChild.Parent);
+        Assert.Equal(activeRoot.NodeId, activeChild.ParentNodeId);
+    }
+
+    [Fact]
     public async Task FileStore_ReloadsCanonicalEconomicEvidenceAfterAdapterRestart()
     {
         var root = Path.Combine(Path.GetTempPath(), $"ca-persistence-contract-{Guid.NewGuid():N}");

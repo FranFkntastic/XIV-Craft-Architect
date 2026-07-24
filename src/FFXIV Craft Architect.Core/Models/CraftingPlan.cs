@@ -709,6 +709,7 @@ public class PlanNode
         {
             var childClone = child.Clone();
             childClone.Parent = clone;
+            childClone.ParentNodeId = clone.NodeId;
             clone.Children.Add(childClone);
         }
 

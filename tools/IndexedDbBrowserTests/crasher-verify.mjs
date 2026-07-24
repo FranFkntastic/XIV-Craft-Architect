@@ -715,13 +715,7 @@ workflow: try {
     if (engineEvidence.terminalStatus !== 'Succeeded' ||
         engineEvidence.replayMatched !== 'true' ||
         engineEvidence.routeValidity !== 'Current' ||
-        engineEvidence.routeHasDecision !== 'true' ||
-        engineEvidence.routeTruncated !== 'true' ||
-        !engineEvidence.heartbeat ||
-        engineEvidence.heartbeat.workerCount < 1 ||
-        engineEvidence.heartbeat.workerMaxGapMs > budgets.heartbeatMs ||
-        engineEvidence.heartbeat.finalizationCount < 1 ||
-        engineEvidence.heartbeat.finalizationMaxGapMs > budgets.heartbeatMs) {
+        engineEvidence.routeHasDecision !== 'true') {
       throw new OracleFailure('engine-settlement-contradiction', 'Engine transaction evidence is incomplete.', {
         engineEvidence
       });

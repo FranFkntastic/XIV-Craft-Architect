@@ -1,6 +1,7 @@
 @using FFXIV_Craft_Architect.Core.Engine
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Web.Services
+@using System.Text.Json
 @inject IConfiguration Configuration
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
@@ -120,8 +121,9 @@
             var before = await WorkerSession.ExportStoredPlanAsync(
                 "acceptance",
                 "Worker acceptance");
+            var beforeFingerprint = CreateDurableFingerprint(before);
             _finalTransactionHash = EngineCanonicalHash.Compute(
-                CreateDurableFingerprint(before),
+                beforeFingerprint,
                 EngineJsonSerializerOptions.CreateWire());
 
             Report("Replacing Worker and restoring durable revision");
@@ -130,8 +132,9 @@
             var after = await WorkerSession.ExportStoredPlanAsync(
                 "acceptance",
                 "Worker acceptance");
+            var afterFingerprint = CreateDurableFingerprint(after);
             _replayHash = EngineCanonicalHash.Compute(
-                CreateDurableFingerprint(after),
+                afterFingerprint,
                 EngineJsonSerializerOptions.CreateWire());
             _replayMatched = string.Equals(
                 _finalTransactionHash,
@@ -140,6 +143,9 @@
             _replayStatus = _replayMatched ? "Succeeded" : "Mismatch";
             if (!_replayMatched)
             {
+                _evidenceIssues = string.Join(
+                    ",",
+                    FindDurableDifferences(beforeFingerprint, afterFingerprint));
                 throw new InvalidOperationException(
                     "The restarted Worker did not restore the accepted durable session.");
             }
@@ -177,11 +183,11 @@
     private static DurableSessionFingerprint CreateDurableFingerprint(StoredPlan? plan) =>
         new(
             plan?.ProjectItems ?? [],
-            plan?.PlanJson,
-            plan?.PlanStateJson,
+            DeserializeJson(plan?.PlanJson),
+            DeserializeJson(plan?.PlanStateJson),
             DeserializeMarketIntelligence(plan?.MarketIntelligenceJson),
-            plan?.MarketAnalysisRecipeBasisJson,
-            plan?.ProcurementRouteJson,
+            DeserializeJson(plan?.MarketAnalysisRecipeBasisJson),
+            DeserializeJson(plan?.ProcurementRouteJson),
             plan?.ProcurementTravelTolerance,
             plan?.SavedRecommendationMode,
             plan?.SavedMarketAnalysisLens,
@@ -194,13 +200,60 @@
             ? null
             : MarketIntelligencePayloadCodec.Deserialize(payload);
 
+    private static JsonElement? DeserializeJson(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return null;
+        }
+
+        using var document = JsonDocument.Parse(payload);
+        return document.RootElement.Clone();
+    }
+
+    private static IEnumerable<string> FindDurableDifferences(
+        DurableSessionFingerprint before,
+        DurableSessionFingerprint after)
+    {
+        var options = EngineJsonSerializerOptions.CreateWire();
+        var components = new (string Name, object? Before, object? After)[]
+        {
+            ("project-items", before.ProjectItems, after.ProjectItems),
+            ("plan", before.Plan, after.Plan),
+            ("plan-state", before.PlanState, after.PlanState),
+            ("market-intelligence", before.MarketIntelligence, after.MarketIntelligence),
+            ("market-basis", before.MarketAnalysisRecipeBasis, after.MarketAnalysisRecipeBasis),
+            ("procurement-route", before.ProcurementRoute, after.ProcurementRoute),
+            ("travel-tolerance", before.ProcurementTravelTolerance, after.ProcurementTravelTolerance),
+            ("recommendation-mode", before.RecommendationMode, after.RecommendationMode),
+            ("market-lens", before.MarketLens, after.MarketLens),
+            ("source-plan-id", before.SourcePlanId, after.SourcePlanId),
+            ("source-plan-name", before.SourcePlanName, after.SourcePlanName),
+            ("data-center", before.DataCenter, after.DataCenter)
+        };
+
+        var differences = new List<string>();
+        foreach (var component in components)
+        {
+            if (!string.Equals(
+                EngineCanonicalHash.Compute(component.Before, options),
+                EngineCanonicalHash.Compute(component.After, options),
+                StringComparison.Ordinal))
+            {
+                differences.Add(component.Name);
+            }
+        }
+
+        return differences;
+    }
+
     private sealed record DurableSessionFingerprint(
         IReadOnlyList<StoredProjectItem> ProjectItems,
-        string? PlanJson,
-        string? PlanStateJson,
+        JsonElement? Plan,
+        JsonElement? PlanState,
         StoredMarketIntelligence? MarketIntelligence,
-        string? MarketAnalysisRecipeBasisJson,
-        string? ProcurementRouteJson,
+        JsonElement? MarketAnalysisRecipeBasis,
+        JsonElement? ProcurementRoute,
         int? ProcurementTravelTolerance,
         RecommendationMode? RecommendationMode,
         MarketAcquisitionLens? MarketLens,

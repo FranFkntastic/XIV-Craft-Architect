@@ -1179,6 +1179,7 @@ public sealed class CraftSessionState
             {
                 var nodeClone = node.Clone();
                 nodeClone.Parent = null;
+                nodeClone.ParentNodeId = null;
                 return nodeClone;
             }).ToList(),
             SavedMarketPlans = plan.SavedMarketPlans.Select(CloneDetailedShoppingPlan).ToList()
