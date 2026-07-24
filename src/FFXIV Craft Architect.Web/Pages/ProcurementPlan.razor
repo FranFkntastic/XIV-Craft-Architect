@@ -3,385 +3,942 @@
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services
-@inject WorkerSessionCoordinator WorkerSession
-@inject WorkerProjectionStore WorkerProjections
-@inject ISettingsService Settings
-@inject NavigationManager Navigation
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AppState AppState
+@inject NavigationManager NavigationManager
+@inject CancellableOperationService CancellableOperations
+@inject ProcurementWorkflowService ProcurementWorkflow
+@inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
+@inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
+@inject ISettingsService Settings
+@inject IJSRuntime JSRuntime
+@inject IRecipeLayerWorkflowService RecipeLayerWorkflowService
+@inject BrowserFileExportService FileExportService
+@inject CraftAppraisalQuoteExportService CraftAppraisalQuoteExportService
+@inject ProcurementRouteAvailability RouteAvailability
+@inject ILogger<ProcurementPlan> Logger
+@inject IndexedDbService IndexedDb
 @implements IDisposable
 
-<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0" Style="height:calc(100vh - 64px);">
-    <div style="display:grid; grid-template-columns:320px minmax(0, 1fr); height:100%;">
-        <aside style="padding:16px; border-right:1px solid var(--mud-palette-divider); display:flex; flex-direction:column; gap:16px;">
-            <div>
-                <MudText Typo="Typo.h5">Procurement Plan</MudText>
-                <MudText Typo="Typo.body2" Color="Color.Secondary">
-                    Route the purchases Acquisition Evaluation already chose.
-                </MudText>
-            </div>
+<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 pp-page-container">
+    <div class="pp-grid-layout">
+        <ProcurementControlsPanel
+            AppState="AppState"
+            RouteGenerationEnabled="RouteAvailability.IsGenerationEnabled"
+            IsAnalyzing="IsRouteAnalyzing"
+            CanAnalyze="CanAnalyze()"
+            PrimaryActionLabel="@GetPrimaryActionLabel()"
+            ShowNotice="@ShouldShowControlNotice()"
+            NoticeSeverity="@GetNoticeSeverity()"
+            NoticeMessage="@GetNoticeMessage()"
+            OnRunAnalysisRequested="RunAnalysisAsync"
+            OnClearExclusionsRequested="ClearExclusionsAsync"
+            CanExportCraftQuote="CanExportCraftQuote()"
+            OnExportCraftQuoteRequested="ExportCraftQuoteAsync"
+            OnGoToMarketAnalysisRequested="GoToMarketAnalysis" />
 
-            <MudSwitch T="bool"
-                       Value="_regional"
-                       ValueChanged="SetRegionalAsync"
-                       Color="Color.Primary"
-                       Dense="true"
-                       Label="Search the whole region"
-                       Disabled="_isAnalyzing" />
-
-            <MudSwitch T="bool"
-                       Value="_includeSplitPurchases"
-                       ValueChanged="SetSplitPurchasesAsync"
-                       Color="Color.Primary"
-                       Dense="true"
-                       Label="Allow split purchases"
-                       Disabled="_isAnalyzing" />
-
-            <MudSwitch T="bool"
-                       Value="_startFromHomeDataCenter"
-                       ValueChanged="SetStartFromHomeAsync"
-                       Color="Color.Primary"
-                       Dense="true"
-                       Label="Start from home data center"
-                       Disabled="@(_isAnalyzing || !_regional)" />
-
-            <MudSelect T="MarketTravelPriority"
-                       Value="_travelPriority"
-                       ValueChanged="SetTravelPriorityAsync"
-                       Label="Optimize travel by"
-                       Dense="true"
-                       Variant="Variant.Outlined"
-                       Disabled="_isAnalyzing">
-                <MudSelectItem Value="MarketTravelPriority.DataCenterTransfersFirst">
-                    Data-center transfers first
-                </MudSelectItem>
-                <MudSelectItem Value="MarketTravelPriority.WorldVisitsFirst">
-                    World visits first
-                </MudSelectItem>
-            </MudSelect>
-
-            <div>
-                <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                    <MudText Typo="Typo.subtitle2">Travel tolerance</MudText>
-                    <MudText Typo="Typo.caption">@_travelTolerance / 11</MudText>
-                </div>
-                <input type="range"
-                       min="0"
-                       max="11"
-                       value="@_travelTolerance"
-                       disabled="@(_isAnalyzing || _route?.HasRoute != true)"
-                       @oninput="PreviewTolerance"
-                       @onchange="CommitToleranceAsync"
-                       style="width:100%;" />
-                <MudText Typo="Typo.caption">@ToleranceLabel</MudText>
-            </div>
-
-            <MudButton Variant="Variant.Filled"
-                       Color="Color.Primary"
-                       FullWidth="true"
-                       Class="pp-primary-action"
-                       Disabled="@(!CanGenerate)"
-                       OnClick="GenerateAsync">
-                @if (_isAnalyzing)
-                {
-                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                    <span>Building route</span>
-                }
-                else
-                {
-                    <span>@(_route?.HasRoute == true ? "Regenerate route" : "Generate route")</span>
-                }
-            </MudButton>
-
-            <MudButton Variant="Variant.Text"
-                       OnClick="@(() => Navigation.NavigateTo("/market"))">
-                Market Analysis
-            </MudButton>
-        </aside>
-
-        <main style="min-width:0; overflow:auto; padding:20px;">
-            @if (_route?.HasRoute == true)
-            {
-                <MudPaper Class="pa-4 mb-3" Elevation="0" Outlined="true">
-                    <div style="display:flex; justify-content:space-between; gap:20px; align-items:center; flex-wrap:wrap;">
-                        <div>
-                            <MudText Typo="Typo.h6">Procurement route</MudText>
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                @_route.WorldStops world stops · @_route.DataCenterTransfers data-center transfers
-                            </MudText>
-                        </div>
-                        <div style="text-align:right;">
-                            <MudText Typo="Typo.h5">@($"{_route.SelectedGilCost:N0}g")</MudText>
-                            @if (_route.PremiumGil > 0)
-                            {
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                    @($"{_route.PremiumGil:N0}g over the cheapest route")
-                                </MudText>
-                            }
-                        </div>
-                    </div>
-                    @if (_route.RouteSearchWasTruncated)
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-2">
-                            This is the best complete route found within the bounded search.
-                        </MudText>
-                    }
-                </MudPaper>
-
-                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(330px, 1fr)); gap:10px;">
-                    @foreach (var world in _route.Worlds)
-                    {
-                        <MudPaper Elevation="0" Outlined="true">
-                            <div style="display:flex; justify-content:space-between; padding:12px 14px; border-bottom:1px solid var(--mud-palette-divider);">
-                                <div>
-                                    <MudText Typo="Typo.subtitle1">@world.WorldName</MudText>
-                                    <MudText Typo="Typo.caption">
-                                        @(world.IsVendor ? "Vendor purchases" : world.DataCenter)
-                                    </MudText>
-                                </div>
-                                <div style="text-align:right;">
-                                    <MudText Typo="Typo.subtitle1">@($"{world.TotalCost:N0}g")</MudText>
-                                    <MudText Typo="Typo.caption">@world.ItemCount items</MudText>
-                                </div>
-                            </div>
-                            <MudTable Items="world.Items" Dense="true" Elevation="0">
-                                <HeaderContent>
-                                    <MudTh>Item</MudTh>
-                                    <MudTh Align="Right">Qty</MudTh>
-                                    <MudTh Align="Right">Unit</MudTh>
-                                    <MudTh Align="Right">Total</MudTh>
-                                </HeaderContent>
-                                <RowTemplate Context="item">
-                                    <MudTd DataLabel="Item">@item.Name</MudTd>
-                                    <MudTd DataLabel="Qty" Align="Right">
-                                        @item.Quantity
-                                        @if (item.IsSplitPurchase)
-                                        {
-                                            <span> / @item.TotalQuantityNeeded</span>
-                                        }
-                                    </MudTd>
-                                    <MudTd DataLabel="Unit" Align="Right">@($"{item.UnitPrice:N0}g")</MudTd>
-                                    <MudTd DataLabel="Total" Align="Right">@($"{item.TotalCost:N0}g")</MudTd>
-                                </RowTemplate>
-                            </MudTable>
-                        </MudPaper>
-                    }
-                </div>
-            }
-            else if (_route?.HasMarketEvidence == true)
-            {
-                <MudPaper Class="pa-6" Elevation="0" Outlined="true">
-                    <MudText Typo="Typo.h6">Ready to route @_route.ActiveItemCount purchases</MudText>
-                    <MudText Typo="Typo.body2">
-                        The route generator will reuse Market Analysis evidence and compute every travel-tolerance position in one pass.
-                    </MudText>
-                </MudPaper>
-            }
-            else if (_route?.HasPlan == true)
-            {
-                <MudPaper Class="pa-6" Elevation="0" Outlined="true">
-                    <MudText Typo="Typo.h6">Market evidence required</MudText>
-                    <MudText Typo="Typo.body2">
-                        Run Market Analysis first. Procurement organizes accepted purchases; it does not decide what should be bought.
-                    </MudText>
-                    <MudButton Class="mt-3"
-                               Variant="Variant.Filled"
-                               Color="Color.Primary"
-                               OnClick="@(() => Navigation.NavigateTo("/market"))">
-                        Open Market Analysis
-                    </MudButton>
-                </MudPaper>
-            }
-            else
-            {
-                <MudPaper Class="pa-6" Elevation="0" Outlined="true">
-                    <MudText Typo="Typo.h6">Build a recipe plan first</MudText>
-                </MudPaper>
-            }
-        </main>
+        <ProcurementResultsShell
+            ShoppingPlans="VisibleRoutePlans"
+            RouteDecision="VisibleRouteDecision"
+            IsStale="@(RouteAvailability.IsGenerationEnabled && AppState.IsProcurementRouteStale)"
+            IsAnalyzing="@(RouteAvailability.IsGenerationEnabled && IsRouteAnalyzing)"
+            FailureMessage="@(RouteAvailability.IsGenerationEnabled ? AppState.ProcurementRouteFailure : null)"
+            ExclusionOutcome="@(RouteAvailability.IsGenerationEnabled ? _exclusionOutcome : null)"
+            ReconcilingItemWorld="@_reconcilingItemWorld"
+            MarketMafiosoEnabled="@(RouteAvailability.IsGenerationEnabled && _marketMafiosoEnabled)"
+            MarketMafiosoActiveItemWorld="@_marketMafiosoActiveItemWorld"
+            MarketMafiosoBusyItemWorld="@_marketMafiosoBusyItemWorld"
+            FocusItemId="RequestedItemId"
+            OnUndoExclusionRequested="UndoLastExclusionAsync"
+            EmptyTitle="@GetEmptyTitle()"
+            EmptyMessage="@GetEmptyMessage()"
+            OnReanalyzeWithoutWorldRequested="ReanalyzeWithoutWorldAsync"
+            OnExcludeWorldForItemRequested="ExcludeWorldForItemAsync"
+            OnRefreshItemRequested="RefreshItemMarketDataAsync"
+            OnMarketMafiosoRequested="HandleMarketMafiosoAsync" />
     </div>
 </MudContainer>
 
 @code {
-    private WorkerProcurementProjection? _route;
-    private WorkerMarketProjection? _market;
-    private bool _regional = true;
-    private bool _includeSplitPurchases = true;
-    private bool _startFromHomeDataCenter;
-    private MarketTravelPriority _travelPriority =
-        MarketTravelPriority.DataCenterTransfersFirst;
-    private int _travelTolerance;
+    [SupplyParameterFromQuery(Name = "itemId")]
+    public int? RequestedItemId { get; set; }
+
     private bool _isAnalyzing;
+    private bool IsRouteAnalyzing => _isAnalyzing || AppState.IsProcurementRouteReconciling;
+    private CancellableOperationLease? _procurementAnalysisOperation;
+    private PendingExclusion? _lastExclusion;
+    private string? _exclusionOutcome;
+    private MarketItemWorldKey? _reconcilingItemWorld;
+    private MarketItemWorldKey? _marketMafiosoActiveItemWorld;
+    private MarketItemWorldKey? _marketMafiosoBusyItemWorld;
+    private string? _marketMafiosoActiveRequestId;
+    private CancellationTokenSource? _marketMafiosoMonitorCancellation;
+    private bool _marketMafiosoEnabled;
+    private bool _revealRouteAfterRender;
+    private IReadOnlyList<DetailedShoppingPlan> VisibleRoutePlans =>
+        RouteAvailability.IsGenerationEnabled ? AppState.ProcurementShoppingPlans : [];
+    private MarketRouteDecision? VisibleRouteDecision =>
+        RouteAvailability.IsGenerationEnabled ? AppState.ProcurementRouteDecision : null;
 
-    private bool CanGenerate =>
-        !_isAnalyzing &&
-        _route?.HasMarketEvidence == true &&
-        _route.ActiveItemCount > 0 &&
-        _market is not null;
-
-    private string ToleranceLabel =>
-        _route?.HasRoute == true && _route.TravelTolerance == _travelTolerance
-            ? _route.TravelToleranceLabel
-            : MarketRouteScoring.GetToleranceLabel(_travelTolerance);
+    protected override void OnInitialized()
+    {
+        AppState.PruneExpiredTemporaryMarketWorldBlacklists();
+        AppState.OnPlanChanged += OnStateChanged;
+        AppState.OnShoppingListChanged += OnStateChanged;
+    }
 
     protected override async Task OnInitializedAsync()
     {
-        WorkerProjections.Changed += ProjectionChanged;
-        _regional = await Settings.GetAsync(
-            "procurement.search_entire_region",
-            true);
-        _includeSplitPurchases = await Settings.GetAsync(
-            "procurement.enable_split_world_purchases",
-            true);
-        _travelTolerance = Math.Clamp(
-            await Settings.GetAsync("procurement.travel_tolerance", 0),
-            0,
-            11);
-        _startFromHomeDataCenter = await Settings.GetAsync(
-            "procurement.start_from_home_data_center",
-            false);
-        var storedPriority = await Settings.GetAsync(
-            "procurement.travel_priority",
-            nameof(MarketTravelPriority.DataCenterTransfersFirst));
-        if (!Enum.TryParse(storedPriority, ignoreCase: true, out _travelPriority))
-        {
-            _travelPriority = MarketTravelPriority.DataCenterTransfersFirst;
-        }
+        _marketMafiosoEnabled = await Settings.GetAsync("marketmafioso.enabled", false);
+        MarketMafiosoIntegrationState.SetEnabled(_marketMafiosoEnabled);
+        MarketMafiosoIntegrationState.Changed += OnMarketMafiosoIntegrationChanged;
+        if (!_marketMafiosoEnabled)
+            return;
 
-        _market = await WorkerSession.GetMarketProjectionAsync();
-        _route = await WorkerSession.GetProcurementProjectionAsync();
-        if (_route?.HasRoute == true)
-        {
-            _regional = _route.SearchesEntireRegion;
-            _travelPriority = _route.TravelPriority;
-            _travelTolerance = _route.TravelTolerance;
-            _includeSplitPurchases = _route.IncludeSplitPurchases;
-        }
+        await LoadActiveMarketMafiosoRequestAsync();
     }
 
-    private void ProjectionChanged()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        _route = WorkerProjections.Procurement ?? _route;
-        _market = WorkerProjections.Market ?? _market;
-        _ = InvokeAsync(StateHasChanged);
-    }
-
-    private async Task GenerateAsync()
-    {
-        if (!CanGenerate || _market is null)
+        if (!_revealRouteAfterRender)
         {
             return;
         }
 
+        _revealRouteAfterRender = false;
+        await JSRuntime.InvokeVoidAsync(
+            "mudScrollManager.scrollTo",
+            ".ca-main-content",
+            0,
+            0,
+            "auto");
+    }
+
+    private async Task LoadActiveMarketMafiosoRequestAsync()
+    {
+        var active = await Settings.GetAsync(
+            "marketmafioso.active_handoff",
+            new MarketMafiosoActiveHandoffState()) ?? new MarketMafiosoActiveHandoffState();
+        if (active.StateVersion == 0)
+        {
+            active = new MarketMafiosoActiveHandoffState
+            {
+                StateVersion = 1,
+                RequestId = await Settings.GetAsync("marketmafioso.active_request_id", string.Empty) ?? string.Empty,
+                ItemId = await Settings.GetAsync("marketmafioso.active_item_id", 0),
+                DataCenter = await Settings.GetAsync("marketmafioso.active_data_center", string.Empty) ?? string.Empty,
+                PurchaseWorld = await Settings.GetAsync("marketmafioso.active_purchase_world", string.Empty) ?? string.Empty,
+            };
+            await Settings.SetAsync("marketmafioso.active_handoff", active);
+        }
+
+        if (active.IsActive)
+        {
+            _marketMafiosoActiveRequestId = active.RequestId;
+            _marketMafiosoActiveItemWorld = new MarketItemWorldKey(
+                active.ItemId,
+                new MarketWorldKey(active.DataCenter, active.PurchaseWorld));
+            if (await Settings.GetAsync("marketmafioso.auto_sync_evidence", true))
+            {
+                StartMarketMafiosoMonitor(_marketMafiosoActiveRequestId, _marketMafiosoActiveItemWorld.Value);
+            }
+        }
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        CancellableOperations.Cancel(CancellableOperationWorkflow.ProcurementAnalysis);
+        CancellableOperations.Cancel(CancellableOperationWorkflow.ItemMarketRefresh);
+        _procurementAnalysisOperation = null;
+        _marketMafiosoMonitorCancellation?.Cancel();
+        _marketMafiosoMonitorCancellation?.Dispose();
+        MarketMafiosoIntegrationState.Changed -= OnMarketMafiosoIntegrationChanged;
+        AppState.OnPlanChanged -= OnStateChanged;
+        AppState.OnShoppingListChanged -= OnStateChanged;
+    }
+
+    private bool CanAnalyze() =>
+        RouteAvailability.IsGenerationEnabled &&
+        AppState.CurrentPlan != null &&
+        GetBuyItems().Any() &&
+        !string.IsNullOrWhiteSpace(AppState.SelectedDataCenter);
+
+    private bool CanExportCraftQuote() =>
+        AppState.CurrentPlan?.RootItems.Count == 1 && !AppState.IsBusy;
+
+    private List<MaterialAggregate> GetBuyItems() =>
+        RecipeLayerWorkflowService
+            .BuildActiveProcurementItems(AppState.CurrentPlan)
+            .Where(item => item.TotalQuantity > 0)
+            .ToList();
+
+    private string GetPrimaryActionLabel() =>
+        !RouteAvailability.IsGenerationEnabled
+            ? "Route Unavailable"
+            : AppState.IsProcurementRouteReconciling
+            ? "Updating Route"
+            : AppState.ProcurementShoppingPlans.Count > 0 ? "Regenerate Route" : "Generate Route";
+
+    private bool ShouldShowControlNotice() =>
+        !RouteAvailability.IsGenerationEnabled || AppState.ProcurementShoppingPlans.Count == 0;
+
+    private Severity GetNoticeSeverity()
+    {
+        if (!RouteAvailability.IsGenerationEnabled)
+        {
+            return Severity.Warning;
+        }
+
+        if (!CanAnalyze())
+        {
+            return Severity.Warning;
+        }
+
+        if (!string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
+        {
+            return Severity.Error;
+        }
+
+        return AppState.IsProcurementRouteStale ? Severity.Warning : Severity.Info;
+    }
+
+    private string GetNoticeMessage()
+    {
+        if (!RouteAvailability.IsGenerationEnabled)
+        {
+            return ProcurementRouteAvailability.DisabledMessage;
+        }
+
+        if (AppState.CurrentPlan == null)
+        {
+            return "Build a recipe plan before generating a procurement route.";
+        }
+
+        if (!GetBuyItems().Any())
+        {
+            return "Mark at least one active item for purchase before generating a route.";
+        }
+
+        if (string.IsNullOrWhiteSpace(AppState.SelectedDataCenter))
+        {
+            return "Select a data center before generating a route.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
+        {
+            return $"The latest regeneration failed. The previous route remains visible: {AppState.ProcurementRouteFailure}";
+        }
+
+        if (IsRouteAnalyzing)
+        {
+            return AppState.ProcurementShoppingPlans.Count > 0
+                ? "Generating a new route. The previous route remains visible until the replacement is ready."
+                : "Fetching prices and comparing complete routes.";
+        }
+
+        if (AppState.ProcurementShoppingPlans.Count > 0)
+        {
+            return "This route matches the current settings and temporary exclusions.";
+        }
+
+        return AppState.ShoppingPlans.Count > 0
+            ? "Market evidence is ready. Generate a route with the settings above."
+            : "Generate a route to fetch prices for the active purchase items.";
+    }
+
+    private string GetEmptyTitle()
+    {
+        if (!RouteAvailability.IsGenerationEnabled)
+        {
+            return "Route generation temporarily unavailable";
+        }
+
+        if (AppState.CurrentPlan == null)
+        {
+            return "No recipe plan yet";
+        }
+
+        return GetBuyItems().Any() ? "Route ready to generate" : "No purchase items";
+    }
+
+    private string GetEmptyMessage()
+    {
+        if (!RouteAvailability.IsGenerationEnabled)
+        {
+            return "Use Market Analysis for current prices and Acquisition Evaluation for manual source choices.";
+        }
+
+        if (AppState.CurrentPlan == null)
+        {
+            return "Build a plan, then return here to organize its market purchases.";
+        }
+
+        return GetBuyItems().Any()
+            ? "Choose the route settings and generate the first route."
+            : "Change at least one active material to Buy before generating a route.";
+    }
+
+    private async Task RunAnalysisAsync()
+    {
+        if (!CanAnalyze())
+        {
+            return;
+        }
+
+        AppState.PruneExpiredTemporaryMarketWorldBlacklists();
         _isAnalyzing = true;
+        using var operation = CancellableOperations.Start(
+            CancellableOperationWorkflow.ProcurementAnalysis,
+            "Procurement Analysis",
+            "Generating procurement route...");
+        _procurementAnalysisOperation = operation;
+        Logger.LogInformation("[stage] explicit route generation starting");
+
         try
         {
-            var outcome = await WorkerSession.RunProcurementAsync(
-                new WorkerProcurementRequest(
-                    _regional
-                        ? MarketFetchScope.EntireRegion
-                        : MarketFetchScope.SelectedDataCenter,
-                    _market.SelectedDataCenter,
-                    _market.SelectedRegion,
-                    _market.Lens,
-                    _travelTolerance,
-                    _includeSplitPurchases,
-                    _startFromHomeDataCenter,
-                    _travelPriority));
-            _route = outcome.Procurement;
-            _travelTolerance = _route.TravelTolerance;
-            await PersistControlsAsync();
+            var progress = new Progress<string>(message => operation.ReportStatus(message));
+            var result = await ProcurementWorkflow.RunAnalysisAsync(
+                new ProcurementWorkflowRequest(
+                    IsCurrentOperation: () => operation.IsCurrent,
+                    ExecutionOptions: MarketAnalysisExecutionOptions.Interactive),
+                progress,
+                operation.Token);
+            Logger.LogInformation(
+                "[stage] explicit route workflow returned (status={Status}, plans={Count})",
+                result.Status,
+                result.ShoppingPlanCount);
+
+            if (!operation.IsCurrent)
+            {
+                operation.Cancel();
+                return;
+            }
+
+            if (result.Status == ProcurementWorkflowStatus.StaleDecision)
+            {
+                FinishStaleProcurementAnalysis(operation.Operation);
+                Snackbar.Add("Acquisition choices changed, so the unfinished route was discarded.", Severity.Info);
+                return;
+            }
+
+            if (result.Status == ProcurementWorkflowStatus.NoCompleteRoute)
+            {
+                var message = result.Message ?? "No complete procurement route is available with the current market evidence.";
+                AppState.MarkProcurementRouteFailed(message);
+                operation.Complete(message);
+                Snackbar.Add(message, Severity.Warning);
+                return;
+            }
+
+            if (result.Status == ProcurementWorkflowStatus.Indeterminate)
+            {
+                var message = result.Message ??
+                    "Procurement route outcome is uncertain. Reload before retrying.";
+                operation.Complete(message);
+                Snackbar.Add(message, Severity.Warning);
+                return;
+            }
+
+            if (result.Status == ProcurementWorkflowStatus.Failed)
+            {
+                var message = result.Message ?? "Procurement route generation failed.";
+                AppState.MarkProcurementRouteFailed(message);
+                operation.Complete(message);
+                Snackbar.Add(message, Severity.Error);
+                return;
+            }
+
+            if (result.Status != ProcurementWorkflowStatus.Published)
+            {
+                operation.Cancel();
+                return;
+            }
+
+            operation.Complete("Procurement route generated.");
+            Logger.LogInformation("[stage] route overlay autosave starting");
+            var routeSaved = await IndexedDb.AutoSaveStateAsync(AppState, skipIfInFlight: false);
+            if (routeSaved)
+            {
+                AppState.RecordAutoSaveCompleted(DateTime.Now);
+            }
+            Logger.LogInformation(
+                "[stage] route overlay autosave complete (success={Success}, dirty={DirtyBuckets})",
+                routeSaved,
+                AppState.GetDirtyPersistedBuckets());
+            Snackbar.Add("Procurement route generated.", Severity.Success);
+            _revealRouteAfterRender = true;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
+        {
+            operation.Cancel();
+        }
+        catch (Exception ex)
+        {
+            if (operation.ShouldReportError(ex))
+            {
+                AppState.MarkProcurementRouteFailed(ex.Message);
+                operation.Complete($"Route generation failed: {ex.Message}");
+                Snackbar.Add($"Route generation failed: {ex.Message}", Severity.Error);
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_procurementAnalysisOperation, operation))
+            {
+                _procurementAnalysisOperation = null;
+                _isAnalyzing = false;
+            }
+        }
+    }
+
+    private void FinishStaleProcurementAnalysis(AppStateOperation operation)
+    {
+        const string message = "Acquisition choices changed; updating the route automatically.";
+        if (!AppState.EndOperation(operation, message) && !AppState.IsBusy)
+        {
+            AppState.SetStatus(message, busy: false);
+        }
+    }
+
+    private void GoToMarketAnalysis() => NavigationManager.NavigateTo("market");
+
+    private async Task ExportCraftQuoteAsync()
+    {
+        try
+        {
+            var result = await CraftAppraisalQuoteExportService.CreateExportAsync(
+                AppState.CurrentPlan,
+                AppState.SelectedRegion,
+                AppState.SelectedDataCenter);
+            if (!result.IsAvailable)
+            {
+                Snackbar.Add(result.UnavailableReason ?? "Craft quote export is not available.", Severity.Warning);
+                return;
+            }
+
+            await FileExportService.SaveTextFileAsync(
+                "craft-appraisal-quote",
+                result.FileName,
+                result.Json,
+                "application/json");
+            Snackbar.Add($"Craft quote prepared: {result.FileName}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Craft quote export failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ReanalyzeWithoutWorldAsync(WorldProcurementCardModel world)
+    {
+        var confirmed = await DialogService.ShowMessageBox(
+            $"Skip travel to {world.WorldName}?",
+            $"Remove {world.WorldName} as a route stop for {AppState.TemporaryWorldBlacklistDurationMinutes} minutes and generate a replacement route? Use the item Recheck action when the market board is stale.",
+            yesText: "Skip and Regenerate",
+            cancelText: "Cancel");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        var before = AppState.ProcurementRouteDecision;
+        var key = new MarketWorldKey(world.DataCenter, world.WorldName);
+        AppState.BlacklistMarketWorldTemporarily(key);
+        _lastExclusion = new PendingExclusion(ExclusionKind.World, key, 0, world.WorldName, before);
+        await RunAnalysisAsync();
+        SetExclusionOutcome(world.WorldName, before, AppState.ProcurementRouteDecision);
+    }
+
+    private async Task ExcludeWorldForItemAsync(WorldItemProcurementAction action)
+    {
+        var world = action.World;
+        var item = action.Item;
+        var confirmed = await DialogService.ShowMessageBox(
+            $"Exclude {world.WorldName} for {item.ItemName}?",
+            $"Ignore {world.WorldName} listings for {item.ItemName} during this session and generate a replacement route?",
+            yesText: "Exclude and Regenerate",
+            cancelText: "Cancel");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        var before = AppState.ProcurementRouteDecision;
+        var key = new MarketWorldKey(world.DataCenter, world.WorldName);
+        AppState.ExcludeItemWorldTemporarily(item.ItemId, key);
+        _lastExclusion = new PendingExclusion(ExclusionKind.ItemWorld, key, item.ItemId, $"{world.WorldName} for {item.ItemName}", before);
+        await RunAnalysisAsync();
+        SetExclusionOutcome($"{world.WorldName} for {item.ItemName}", before, AppState.ProcurementRouteDecision);
+    }
+
+    private async Task UndoLastExclusionAsync()
+    {
+        if (_lastExclusion == null)
+        {
+            return;
+        }
+
+        var exclusion = _lastExclusion;
+        var removed = exclusion.Kind == ExclusionKind.World
+            ? AppState.RemoveTemporaryMarketWorldBlacklist(exclusion.World)
+            : AppState.RemoveTemporaryItemWorldExclusion(exclusion.ItemId, exclusion.World);
+        if (!removed)
+        {
+            _lastExclusion = null;
+            _exclusionOutcome = null;
+            return;
+        }
+
+        _lastExclusion = null;
+        _exclusionOutcome = null;
+        await RunAnalysisAsync();
+        Snackbar.Add($"Restored {exclusion.Label} to route selection.", Severity.Success);
+    }
+
+    private async Task ClearExclusionsAsync()
+    {
+        var count = AppState.ActiveTemporaryExclusionCount;
+        if (count == 0)
+        {
+            return;
+        }
+
+        var confirmed = await DialogService.ShowMessageBox(
+            "Clear temporary exclusions?",
+            $"Restore all {count} temporary exclusion{(count == 1 ? string.Empty : "s")} and regenerate the route?",
+            yesText: "Clear and Regenerate",
+            cancelText: "Cancel");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        AppState.ClearTemporaryMarketWorldBlacklists();
+        _lastExclusion = null;
+        _exclusionOutcome = null;
+        await RunAnalysisAsync();
+    }
+
+    private void SetExclusionOutcome(
+        string label,
+        MarketRouteDecision? before,
+        MarketRouteDecision? after)
+    {
+        if (after == null)
+        {
+            _exclusionOutcome = $"Excluded {label}. No complete replacement route was available.";
+            return;
+        }
+
+        var costDelta = after.SelectedGilCost - (before?.SelectedGilCost ?? after.SelectedGilCost);
+        var stopDelta = after.SelectedWorldStops - (before?.SelectedWorldStops ?? after.SelectedWorldStops);
+        _exclusionOutcome = $"Excluded {label}. Route cost {FormatSignedGil(costDelta)}; world stops {FormatSignedNumber(stopDelta)}.";
+    }
+
+    private static string FormatSignedGil(long value) => value switch
+    {
+        > 0 => $"increased {value:N0}g",
+        < 0 => $"decreased {Math.Abs(value):N0}g",
+        _ => "didn't change"
+    };
+
+    private static string FormatSignedNumber(int value) => value switch
+    {
+        > 0 => $"increased by {value}",
+        < 0 => $"decreased by {Math.Abs(value)}",
+        _ => "didn't change"
+    };
+
+    private Task RefreshItemMarketDataAsync(WorldItemProcurementAction action) =>
+        RefreshItemMarketDataAsync(action, observedEvidence: null);
+
+    private async Task<bool> RefreshItemMarketDataAsync(
+        WorldItemProcurementAction action,
+        MarketWorldEvidenceSnapshot? observedEvidence)
+    {
+        var target = new MarketItemWorldKey(
+            action.Item.ItemId,
+            new MarketWorldKey(action.World.DataCenter, action.World.WorldName));
+        _reconcilingItemWorld = target;
+        await InvokeAsync(StateHasChanged);
+        using var operation = CancellableOperations.Start(
+            CancellableOperationWorkflow.ItemMarketRefresh,
+            "Market Recheck",
+            $"Checking {action.Item.ItemName} on {action.World.WorldName}...");
+        try
+        {
+            var result = await ProcurementWorkflow.RefreshItemMarketDataAsync(
+                new ProcurementItemRefreshWorkflowRequest(
+                    action.Item.ItemId,
+                    action.Item.ItemName,
+                    () => operation.IsCurrent,
+                    MarketAnalysisExecutionOptions.Interactive)
+                {
+                    TargetDataCenter = action.World.DataCenter,
+                    TargetWorldName = action.World.WorldName,
+                    ObservedEvidence = observedEvidence,
+                },
+                new Progress<string>(message => operation.ReportStatus(message)),
+                operation.Token);
+
+            if (result.Status != ProcurementItemRefreshStatus.Refreshed)
+            {
+                operation.Cancel();
+                Snackbar.Add(
+                    $"Couldn't update {action.Item.ItemName} on {action.World.WorldName}.",
+                    Severity.Info);
+                return false;
+            }
+
+            operation.Complete($"{action.Item.ItemName} rechecked on {action.World.WorldName}.");
+            await RunAnalysisAsync();
+            if (!AppState.IsProcurementRouteStale && string.IsNullOrWhiteSpace(AppState.ProcurementRouteFailure))
+            {
+                Snackbar.Add(
+                    $"Rechecked {action.Item.ItemName} on {action.World.WorldName} and updated the route.",
+                    Severity.Success);
+            }
+            else
+            {
+                Snackbar.Add(
+                    $"Updated {action.Item.ItemName} on {action.World.WorldName}; CA is applying the latest acquisition choices.",
+                    Severity.Info);
+            }
+        }
+        catch (OperationCanceledException ex) when (!operation.ShouldReportError(ex))
+        {
+            operation.Cancel();
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (operation.ShouldReportError(ex))
+            {
+                operation.Complete($"Item refresh failed: {ex.Message}");
+                Snackbar.Add($"Failed to refresh {action.Item.ItemName}: {ex.Message}", Severity.Error);
+            }
+            return false;
+        }
+        finally
+        {
+            if (_reconcilingItemWorld == target)
+            {
+                _reconcilingItemWorld = null;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+
+        return true;
+    }
+
+    private async Task HandleMarketMafiosoAsync(WorldItemProcurementAction action)
+    {
+        if (!_marketMafiosoEnabled)
+            return;
+
+        var key = new MarketItemWorldKey(
+            action.Item.ItemId,
+            new MarketWorldKey(action.World.DataCenter, action.World.WorldName));
+        if (_marketMafiosoActiveItemWorld != null &&
+            _marketMafiosoActiveItemWorld != key &&
+            !string.IsNullOrWhiteSpace(_marketMafiosoActiveRequestId))
+        {
+            try
+            {
+                if (await ReleaseTerminalMarketMafiosoRequestAsync())
+                {
+                    Snackbar.Add("Cleared the finished MarketMafioso handoff. You can send this item now.", Severity.Info);
+                }
+                else
+                {
+                    Snackbar.Add("Finish or cancel the active MarketMafioso handoff before sending another item.", Severity.Warning);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Couldn't check the active MarketMafioso handoff: {ex.Message}", Severity.Error);
+                return;
+            }
+        }
+
+        if (_marketMafiosoActiveItemWorld != key && !await EnsureMarketMafiosoConfiguredAsync())
+            return;
+
+        _marketMafiosoBusyItemWorld = key;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            if (_marketMafiosoActiveItemWorld == key && !string.IsNullOrWhiteSpace(_marketMafiosoActiveRequestId))
+            {
+                await SyncMarketMafiosoAsync(action, _marketMafiosoActiveRequestId);
+                return;
+            }
+
+            var quantity = checked((uint)Math.Max(1, action.Item.QuantityOnThisWorld));
+            var maxUnitPrice = checked((uint)Math.Clamp(
+                decimal.Ceiling(action.Item.PricePerUnit),
+                1m,
+                uint.MaxValue));
+            var gilCap = checked((uint)Math.Clamp(action.Item.TotalCost, 1L, (long)uint.MaxValue));
+            var draft = new MarketMafiosoSingleWorldHandoff(
+                action.Item.ItemId,
+                action.Item.ItemName,
+                AppState.SelectedRegion,
+                action.World.DataCenter,
+                action.World.WorldName,
+                quantity,
+                maxUnitPrice,
+                gilCap);
+            var parameters = new DialogParameters { [nameof(MarketMafiosoHandoffDialog.Draft)] = draft };
+            var dialog = DialogService.Show<MarketMafiosoHandoffDialog>(
+                "MarketMafioso handoff",
+                parameters,
+                new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true });
+            var result = await dialog.Result;
+            if (result?.Canceled != false || result.Data is not MarketMafiosoSingleWorldHandoff approved)
+                return;
+
+            var request = await MarketMafiosoAcquisitionWorkflow.CreateSingleWorldHandoffAsync(approved);
+            _marketMafiosoActiveRequestId = request.Id;
+            _marketMafiosoActiveItemWorld = key;
+            await PersistActiveMarketMafiosoRequestAsync(key, request.Id);
+            if (await Settings.GetAsync("marketmafioso.auto_sync_evidence", true))
+            {
+                StartMarketMafiosoMonitor(request.Id, key);
+            }
             Snackbar.Add(
-                $"Route ready: {_route.WorldStops} worlds, {_route.SelectedGilCost:N0}g.",
+                $"Sent {approved.Quantity:N0} {approved.ItemName} on {approved.PurchaseWorld} to MarketMafioso. Claim and accept it, then choose Refresh Evidence. CA will import the observation automatically while this page is open.",
                 Severity.Success);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Route generation failed: {ex.Message}", Severity.Error);
+            Snackbar.Add(ex.Message, Severity.Error);
         }
         finally
         {
-            _isAnalyzing = false;
+            _marketMafiosoBusyItemWorld = null;
+            await InvokeAsync(StateHasChanged);
         }
     }
 
-    private void PreviewTolerance(ChangeEventArgs args)
+    private async Task SyncMarketMafiosoAsync(WorldItemProcurementAction action, string requestId)
     {
-        if (int.TryParse(args.Value?.ToString(), out var value))
+        var timeline = await MarketMafiosoAcquisitionWorkflow.GetTimelineAsync(requestId);
+        var observation = timeline.MarketObservations
+            .Where(candidate =>
+                candidate.ItemId == action.Item.ItemId &&
+                candidate.WorldName.Equals(action.World.WorldName, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(candidate => candidate.ObservedAtUtc)
+            .FirstOrDefault();
+        if (observation == null)
         {
-            _travelTolerance = Math.Clamp(value, 0, 11);
-        }
-    }
+            var status = string.IsNullOrWhiteSpace(timeline.Request.Status) ? "pending" : timeline.Request.Status;
+            if (MarketMafiosoAcquisitionWorkflowService.IsTerminalStatus(status))
+            {
+                await ClearActiveMarketMafiosoRequestAsync(requestId);
+                Snackbar.Add(
+                    $"MarketMafioso request ended as {status} without a usable {action.World.WorldName} observation. The handoff has been cleared.",
+                    Severity.Warning);
+                return;
+            }
 
-    private async Task CommitToleranceAsync(ChangeEventArgs args)
-    {
-        PreviewTolerance(args);
-        if (_route?.HasRoute != true || _travelTolerance == _route.TravelTolerance)
-        {
+            Snackbar.Add(
+                $"MarketMafioso request is {status}. {MarketMafiosoAcquisitionWorkflowService.DescribeNextEvidenceStep(status, action.World.WorldName)}",
+                Severity.Info);
             return;
         }
 
+        if (await RefreshItemMarketDataAsync(action, observation.ToMarketEvidenceSnapshot()))
+            await ClearActiveMarketMafiosoRequestAsync(requestId);
+    }
+
+    private async Task PersistActiveMarketMafiosoRequestAsync(MarketItemWorldKey key, string requestId)
+    {
+        await Settings.SetAsync("marketmafioso.active_handoff", new MarketMafiosoActiveHandoffState
+        {
+            StateVersion = 1,
+            RequestId = requestId,
+            ItemId = key.ItemId,
+            DataCenter = key.World.DataCenter,
+            PurchaseWorld = key.World.WorldName,
+        });
+    }
+
+    private async Task<bool> EnsureMarketMafiosoConfiguredAsync()
+    {
+        if ((await MarketMafiosoAcquisitionWorkflow.GetConfigurationAsync()).IsComplete)
+            return true;
+
+        Snackbar.Add("Configure the MarketMafioso connection before sending this item.", Severity.Info);
+        var parameters = new DialogParameters { [nameof(OptionsDialog.InitialPanelIndex)] = 2 };
+        var dialog = DialogService.Show<OptionsDialog>(
+            "Options",
+            parameters,
+            new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true });
+        var result = await dialog.Result;
+        return result?.Canceled == false &&
+               (await MarketMafiosoAcquisitionWorkflow.GetConfigurationAsync()).IsComplete;
+    }
+
+    private void StartMarketMafiosoMonitor(string requestId, MarketItemWorldKey key)
+    {
+        _marketMafiosoMonitorCancellation?.Cancel();
+        _marketMafiosoMonitorCancellation?.Dispose();
+        _marketMafiosoMonitorCancellation = new CancellationTokenSource();
+        _ = MonitorMarketMafiosoEvidenceAsync(requestId, key, _marketMafiosoMonitorCancellation.Token);
+    }
+
+    private async Task MonitorMarketMafiosoEvidenceAsync(
+        string requestId,
+        MarketItemWorldKey key,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            _route = await WorkerSession.SelectProcurementToleranceAsync(
-                _travelTolerance);
-            await Settings.SetAsync(
-                "procurement.travel_tolerance",
-                _travelTolerance);
+            var result = await MarketMafiosoAcquisitionWorkflow.WaitForEvidenceAsync(
+                requestId,
+                key.ItemId,
+                key.World.WorldName,
+                TimeSpan.FromSeconds(10),
+                cancellationToken);
+            if (!string.Equals(_marketMafiosoActiveRequestId, requestId, StringComparison.Ordinal))
+                return;
+
+            if (result.Observation == null)
+            {
+                await InvokeAsync(async () =>
+                {
+                    await ClearActiveMarketMafiosoRequestAsync(requestId);
+                    Snackbar.Add(
+                        $"MarketMafioso request ended as {result.Status} without usable evidence. The handoff has been cleared.",
+                        Severity.Warning);
+                    StateHasChanged();
+                });
+                return;
+            }
+
+            var action = FindMarketMafiosoAction(key);
+            if (action == null)
+            {
+                await InvokeAsync(() => Snackbar.Add(
+                    $"MarketMafioso evidence for {key.World.WorldName} is ready, but the item is no longer in this route. Regenerate the route and use Sync MM to import it.",
+                    Severity.Info));
+                return;
+            }
+
+            await InvokeAsync(async () =>
+            {
+                _marketMafiosoBusyItemWorld = key;
+                StateHasChanged();
+                try
+                {
+                    if (await RefreshItemMarketDataAsync(action, result.Observation.ToMarketEvidenceSnapshot()))
+                        await ClearActiveMarketMafiosoRequestAsync(requestId);
+                }
+                finally
+                {
+                    _marketMafiosoBusyItemWorld = null;
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            Snackbar.Add(ex.Message, Severity.Error);
-            _travelTolerance = _route.TravelTolerance;
+            await InvokeAsync(() => Snackbar.Add(
+                $"Automatic MarketMafioso sync stopped: {ex.Message} Use Sync MM to retry.",
+                Severity.Warning));
         }
     }
 
-    private async Task SetRegionalAsync(bool value)
+    private WorldItemProcurementAction? FindMarketMafiosoAction(MarketItemWorldKey key)
     {
-        _regional = value;
-        await Settings.SetAsync("procurement.search_entire_region", value);
+        var world = ProcurementWorldCardBuilder
+            .BuildWorldCards(AppState.ProcurementShoppingPlans, AppState.SelectedDataCenter)
+            .FirstOrDefault(candidate =>
+                candidate.DataCenter.Equals(key.World.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                candidate.WorldName.Equals(key.World.WorldName, StringComparison.OrdinalIgnoreCase));
+        var item = world?.Items.FirstOrDefault(candidate => candidate.ItemId == key.ItemId);
+        return world == null || item == null
+            ? null
+            : new WorldItemProcurementAction { World = world, Item = item };
     }
 
-    private async Task SetSplitPurchasesAsync(bool value)
+    private async Task ClearActiveMarketMafiosoRequestAsync(string requestId)
     {
-        _includeSplitPurchases = value;
-        await Settings.SetAsync(
-            "procurement.enable_split_world_purchases",
-            value);
+        if (!string.Equals(_marketMafiosoActiveRequestId, requestId, StringComparison.Ordinal))
+            return;
+
+        _marketMafiosoActiveRequestId = null;
+        _marketMafiosoActiveItemWorld = null;
+        _marketMafiosoMonitorCancellation?.Cancel();
+        await Settings.SetAsync("marketmafioso.active_handoff", new MarketMafiosoActiveHandoffState
+        {
+            StateVersion = 1,
+        });
     }
 
-    private async Task SetStartFromHomeAsync(bool value)
+    private async Task<bool> ReleaseTerminalMarketMafiosoRequestAsync()
     {
-        _startFromHomeDataCenter = value;
-        await Settings.SetAsync(
-            "procurement.start_from_home_data_center",
-            value);
+        var requestId = _marketMafiosoActiveRequestId;
+        if (string.IsNullOrWhiteSpace(requestId))
+            return true;
+
+        try
+        {
+            var timeline = await MarketMafiosoAcquisitionWorkflow.GetTimelineAsync(requestId);
+            if (!MarketMafiosoAcquisitionWorkflowService.IsTerminalStatus(timeline.Request.Status))
+                return false;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+        }
+
+        await ClearActiveMarketMafiosoRequestAsync(requestId);
+        return true;
     }
 
-    private async Task SetTravelPriorityAsync(MarketTravelPriority value)
+    private void OnMarketMafiosoIntegrationChanged() => _ = InvokeAsync(async () =>
     {
-        _travelPriority = value;
-        await Settings.SetAsync("procurement.travel_priority", value.ToString());
+        var enabled = MarketMafiosoIntegrationState.Enabled;
+        if (_marketMafiosoEnabled == enabled)
+            return;
+
+        _marketMafiosoEnabled = enabled;
+        if (enabled)
+        {
+            await LoadActiveMarketMafiosoRequestAsync();
+        }
+        else
+        {
+            _marketMafiosoMonitorCancellation?.Cancel();
+            _marketMafiosoMonitorCancellation?.Dispose();
+            _marketMafiosoMonitorCancellation = null;
+            _marketMafiosoActiveRequestId = null;
+            _marketMafiosoActiveItemWorld = null;
+            _marketMafiosoBusyItemWorld = null;
+        }
+
+        StateHasChanged();
+    });
+
+    private enum ExclusionKind
+    {
+        World,
+        ItemWorld
     }
 
-    private async Task PersistControlsAsync()
-    {
-        await Settings.SetAsync("procurement.search_entire_region", _regional);
-        await Settings.SetAsync(
-            "procurement.enable_split_world_purchases",
-            _includeSplitPurchases);
-        await Settings.SetAsync(
-            "procurement.start_from_home_data_center",
-            _startFromHomeDataCenter);
-        await Settings.SetAsync(
-            "procurement.travel_priority",
-            _travelPriority.ToString());
-        await Settings.SetAsync(
-            "procurement.travel_tolerance",
-            _travelTolerance);
-    }
-
-    public void Dispose()
-    {
-        WorkerProjections.Changed -= ProjectionChanged;
-    }
+    private sealed record PendingExclusion(
+        ExclusionKind Kind,
+        MarketWorldKey World,
+        int ItemId,
+        string Label,
+        MarketRouteDecision? PreviousDecision);
 }
