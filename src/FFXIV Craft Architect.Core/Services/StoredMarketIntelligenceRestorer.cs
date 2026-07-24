@@ -91,10 +91,11 @@ public static class StoredMarketIntelligenceRestorer
 
         var restoredRecommendations = marketIntelligence?.Recommendations.ToList()
             ?? DeserializeOrEmpty<DetailedShoppingPlan>(input.LegacyMarketPlansJson);
-        var recommendations = marketAnalyses.Count > 0 &&
-                              RestoredShoppingPlansMatchMarketAnalysis(restoredRecommendations, marketAnalyses)
-            ? restoredRecommendations
-            : new List<DetailedShoppingPlan>();
+        var recommendations = RestoreShoppingPlansMatchingMarketAnalysis(
+            restoredRecommendations,
+            marketAnalyses,
+            unavailableMarketItemIds,
+            recipeBasis);
         EnsureCoverageState(
             recommendations,
             legacyCoverage: marketIntelligence == null || hasLegacyCoverageCostSemantics);
@@ -396,19 +397,32 @@ public static class StoredMarketIntelligenceRestorer
                    recipeBasis.UnavailableMarketItemIds.Contains(itemId));
     }
 
-    private static bool RestoredShoppingPlansMatchMarketAnalysis(
+    private static List<DetailedShoppingPlan> RestoreShoppingPlansMatchingMarketAnalysis(
         IReadOnlyList<DetailedShoppingPlan> shoppingPlans,
-        IReadOnlyList<MarketItemAnalysis> analyses)
+        IReadOnlyList<MarketItemAnalysis> analyses,
+        IReadOnlySet<int> unavailableItemIds,
+        StoredRecipeOperationSnapshot? recipeBasis)
     {
-        if (shoppingPlans.Count == 0)
+        if (shoppingPlans.Count == 0 || analyses.Count == 0)
         {
-            return false;
+            return [];
         }
 
-        var expected = analyses.ToDictionary(analysis => analysis.ItemId, analysis => analysis.QuantityNeeded);
-        return expected.Count == shoppingPlans.Count &&
-               shoppingPlans.All(plan =>
-                   expected.TryGetValue(plan.ItemId, out var quantityNeeded) &&
-                   quantityNeeded == plan.QuantityNeeded);
+        var analyzedQuantities = analyses
+            .ToDictionary(analysis => analysis.ItemId, analysis => analysis.QuantityNeeded);
+        var demandedQuantities = recipeBasis?.MarketAnalysisDemandItems
+            .ToDictionary(item => item.ItemId, item => item.TotalQuantity)
+            ?? new Dictionary<int, int>();
+
+        return shoppingPlans
+            .Where(plan =>
+                analyzedQuantities.TryGetValue(plan.ItemId, out var analyzedQuantity)
+                    ? analyzedQuantity == plan.QuantityNeeded
+                    : unavailableItemIds.Contains(plan.ItemId) &&
+                      demandedQuantities.TryGetValue(plan.ItemId, out var demandedQuantity) &&
+                      demandedQuantity == plan.QuantityNeeded)
+            .GroupBy(plan => plan.ItemId)
+            .Select(group => group.First())
+            .ToList();
     }
 }

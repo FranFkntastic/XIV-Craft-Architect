@@ -28,7 +28,6 @@ public sealed class WorkerSessionContractTests
                     ItemId = 42,
                     Name = "Root",
                     Quantity = 2,
-                    CanBuyFromMarket = false,
                     Children =
                     [
                         new PlanNode
@@ -153,6 +152,16 @@ public sealed class WorkerSessionContractTests
                 }
             ]
         };
+        var unavailableWorld = new WorldShoppingSummary
+        {
+            DataCenter = "Aether",
+            WorldName = "Sargatanas",
+            TotalCost = 0,
+            AveragePricePerUnit = 0,
+            TotalQuantityPurchased = 0,
+            HasSufficientStock = false,
+            Listings = []
+        };
         var staged = await SendAsync(
             WorkerSessionCommandKinds.MarketEvidencePublicationStage,
             expectedRevision: 2,
@@ -178,9 +187,18 @@ public sealed class WorkerSessionContractTests
                         QuantityNeeded = 4,
                         WorldOptions = [world],
                         RecommendedWorld = world
+                    },
+                    new DetailedShoppingPlan
+                    {
+                        ItemId = 42,
+                        Name = "Root",
+                        QuantityNeeded = 2,
+                        WorldOptions = [unavailableWorld],
+                        RecommendedWorld = unavailableWorld,
+                        Error = "Unavailable in the selected scope."
                     }
                 ],
-                new HashSet<int> { 43 },
+                new HashSet<int> { 42 },
                 FetchedCount: 1,
                 ResetStaging: true,
                 CompleteStaging: false));
@@ -206,12 +224,12 @@ public sealed class WorkerSessionContractTests
             completed.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
         Assert.NotNull(accepted);
         Assert.Equal(1, accepted.Shell.MarketAnalysisCount);
-        Assert.Equal(1, accepted.Shell.ShoppingPlanCount);
+        Assert.Equal(2, accepted.Shell.ShoppingPlanCount);
         var published =
             accepted.PublicProjection.Deserialize<WorkerMarketEvidenceCommitProjection>(
                 WireOptions);
         Assert.NotNull(published);
-        Assert.Equal(1, published.AnalyzedCount);
+        Assert.Equal(2, published.AnalyzedCount);
 
         var projectionStore = new WorkerProjectionStore();
         Assert.True(projectionStore.TryPublish(staged));
@@ -228,7 +246,7 @@ public sealed class WorkerSessionContractTests
                 browserResult,
                 out var browserOutcome));
         Assert.NotNull(browserOutcome);
-        Assert.Equal(1, browserOutcome.AnalyzedCount);
+        Assert.Equal(2, browserOutcome.AnalyzedCount);
 
         var compactMarket = await SendAsync(
             WorkerSessionCommandKinds.MarketProjection,
@@ -275,9 +293,9 @@ public sealed class WorkerSessionContractTests
             export.StoredPlan.MarketIntelligenceJson);
         Assert.NotNull(storedMarket);
         Assert.Single(storedMarket.ItemAnalyses);
-        Assert.Single(storedMarket.Recommendations);
+        Assert.Equal(2, storedMarket.Recommendations.Count);
         Assert.NotNull(storedMarket.RecipeBasis);
-        Assert.Single(storedMarket.RecipeBasis.MarketAnalysisDemandItems);
+        Assert.Equal(2, storedMarket.RecipeBasis.MarketAnalysisDemandItems.Count);
 
         var reloaded = await SendAsync(
             "restore",
@@ -300,9 +318,9 @@ public sealed class WorkerSessionContractTests
         Assert.True(
             reloadedMarketProjection.HasAnalysis,
             reloaded.Message ?? "Reloaded market projection did not contain analysis.");
-        Assert.Single(reloadedMarketProjection.Items);
+        Assert.Equal(2, reloadedMarketProjection.Items.Count);
         Assert.Single(reloadedMarketProjection.ItemAnalyses);
-        Assert.Single(reloadedMarketProjection.ShoppingPlans);
+        Assert.Equal(2, reloadedMarketProjection.ShoppingPlans.Count);
     }
 
     private static async Task<WorkerSessionResultEnvelope> SendAsync<TPayload>(
