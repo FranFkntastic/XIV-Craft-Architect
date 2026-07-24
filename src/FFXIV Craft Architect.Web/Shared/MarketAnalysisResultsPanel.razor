@@ -40,6 +40,108 @@
                                  OnSortChanged="OnSortChanged"
                                  OnWorldSortChanged="OnWorldSortChanged" />
     }
+    else if (ProjectedItems.Any())
+    {
+        <div class="ma-restored-shell">
+            <div class="ma-restored-list">
+                <table class="ma-restored-table">
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th class="ma-restored-number">Qty</th>
+                            <th>Coverage</th>
+                            @if (ShowWorldsColumn)
+                            {
+                                <th class="ma-restored-number">Worlds</th>
+                            }
+                            <th class="ma-restored-number">Cash Out</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in GetProjectedItems())
+                        {
+                            <tr class="@GetProjectedRowClass(item)"
+                                @onclick="() => SelectProjectedItem(item)">
+                                <td>
+                                    <a href="@GetUniversalisUrl(item.ItemId)"
+                                       target="_blank"
+                                       rel="noopener noreferrer"
+                                       @onclick:stopPropagation>
+                                        @item.Name
+                                    </a>
+                                </td>
+                                <td class="ma-restored-number">@FormatQuantity(item.QuantityNeeded)</td>
+                                <td>@FormatCoverage(item)</td>
+                                @if (ShowWorldsColumn)
+                                {
+                                    <td class="ma-restored-number">@item.WorldCount</td>
+                                }
+                                <td class="ma-restored-number">@FormatGil(item.EstimatedTotalCost)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <aside class="ma-restored-detail">
+                @if (_selectedProjectedItem is null)
+                {
+                    <div class="ma-restored-empty">Select an item to inspect its route.</div>
+                }
+                else
+                {
+                    <div class="ma-restored-detail-header">
+                        <div>
+                            <a href="@GetUniversalisUrl(_selectedProjectedItem.ItemId)"
+                               target="_blank"
+                               rel="noopener noreferrer">
+                                @_selectedProjectedItem.Name
+                            </a>
+                            <small>@FormatQuantity(_selectedProjectedItem.QuantityNeeded) needed</small>
+                        </div>
+                        <div class="ma-restored-actions">
+                            <strong>@FormatGil(_selectedProjectedItem.EstimatedTotalCost)</strong>
+                            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                           Size="Size.Small"
+                                           Disabled="IsRefreshingItem"
+                                           OnClick="() => RefreshProjectedItemAsync(_selectedProjectedItem)"
+                                           Title="Refresh market data for this item"
+                                           AriaLabel="Refresh market data for this item" />
+                        </div>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_selectedProjectedItem.Warning))
+                    {
+                        <div class="ma-restored-warning">@_selectedProjectedItem.Warning</div>
+                    }
+                    <div class="ma-restored-worlds">
+                        <table class="ma-restored-table">
+                            <thead>
+                                <tr>
+                                    <th>Data Center</th>
+                                    <th>World</th>
+                                    <th class="ma-restored-number">Stock</th>
+                                    <th class="ma-restored-number">Unit</th>
+                                    <th class="ma-restored-number">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var world in _selectedProjectedItem.Worlds)
+                                {
+                                    <tr>
+                                        <td>@world.DataCenter</td>
+                                        <td>@world.WorldName</td>
+                                        <td class="ma-restored-number">@FormatQuantity(world.Quantity)</td>
+                                        <td class="ma-restored-number">@FormatGil(world.AverageUnitPrice)</td>
+                                        <td class="ma-restored-number">@FormatGil(world.TotalCost)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </aside>
+        </div>
+    }
     else
     {
         <MudPaper Elevation="2" Class="pa-4 ma-state-paper">
@@ -56,6 +158,7 @@
 
 @code {
     [Parameter] public List<MaterialAggregate> BuyItems { get; set; } = new();
+    [Parameter] public IReadOnlyList<WorkerMarketItemProjection> ProjectedItems { get; set; } = Array.Empty<WorkerMarketItemProjection>();
     [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
     [Parameter] public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses { get; set; } = Array.Empty<MarketItemAnalysis>();
     [Parameter] public MarketAcquisitionLens CurrentLens { get; set; }
@@ -73,9 +176,66 @@
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback<int?> OnSelectedItemChanged { get; set; }
     [Parameter] public EventCallback<DetailedShoppingPlan> OnRefreshItemRequested { get; set; }
+    [Parameter] public EventCallback<WorkerMarketItemProjection> OnRefreshProjectedItemRequested { get; set; }
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
     [Parameter] public EventCallback<MarketAnalysisGridSortState> OnSortChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnWorldSortChanged { get; set; }
+
+    private WorkerMarketItemProjection? _selectedProjectedItem;
+
+    protected override void OnParametersSet()
+    {
+        _selectedProjectedItem = ProjectedItems.FirstOrDefault(item => item.ItemId == SelectedItemId)
+            ?? ProjectedItems.FirstOrDefault();
+    }
+
+    private IEnumerable<WorkerMarketItemProjection> GetProjectedItems()
+    {
+        var items = ProjectedItems.AsEnumerable();
+        IOrderedEnumerable<WorkerMarketItemProjection> ordered = SortColumn switch
+        {
+            MarketAnalysisGridSortColumn.Quantity => SortDescending
+                ? items.OrderByDescending(item => item.QuantityNeeded)
+                : items.OrderBy(item => item.QuantityNeeded),
+            MarketAnalysisGridSortColumn.Coverage => SortDescending
+                ? items.OrderByDescending(item => item.AvailableQuantity)
+                : items.OrderBy(item => item.AvailableQuantity),
+            MarketAnalysisGridSortColumn.Worlds => SortDescending
+                ? items.OrderByDescending(item => item.WorldCount)
+                : items.OrderBy(item => item.WorldCount),
+            MarketAnalysisGridSortColumn.Total => SortDescending
+                ? items.OrderByDescending(item => item.EstimatedTotalCost)
+                : items.OrderBy(item => item.EstimatedTotalCost),
+            _ => SortDescending
+                ? items.OrderByDescending(item => item.Name, StringComparer.OrdinalIgnoreCase)
+                : items.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
+        };
+        return ordered.ThenBy(item => item.ItemId);
+    }
+
+    private async Task SelectProjectedItem(WorkerMarketItemProjection item)
+    {
+        _selectedProjectedItem = item;
+        await OnSelectedItemChanged.InvokeAsync(item.ItemId);
+    }
+
+    private Task RefreshProjectedItemAsync(WorkerMarketItemProjection item) =>
+        OnRefreshProjectedItemRequested.InvokeAsync(item);
+
+    private string GetProjectedRowClass(WorkerMarketItemProjection item) =>
+        item.ItemId == _selectedProjectedItem?.ItemId ? "is-selected" : string.Empty;
+
+    private static string FormatCoverage(WorkerMarketItemProjection item) =>
+        item.IsAvailable
+            ? $"{FormatQuantity(item.AvailableQuantity)} / {FormatQuantity(item.QuantityNeeded)}"
+            : "Unavailable";
+
+    private static string FormatQuantity(int value) => value.ToString("N0");
+
+    private static string FormatGil(decimal value) => $"{value:N0}g";
+
+    private static string GetUniversalisUrl(int itemId) =>
+        $"https://universalis.app/market/{itemId}";
 
     private static string FormatItemCount(int count) => $"{count:N0} item{(count == 1 ? string.Empty : "s")}";
 }

@@ -33,3 +33,137 @@
     color: #666;
     margin-bottom: 24px;
 }
+
+.ma-restored-shell {
+    display: grid;
+    grid-template-columns: minmax(360px, .9fr) minmax(440px, 1.1fr);
+    gap: 8px;
+    height: 100%;
+    min-height: 0;
+}
+
+.ma-restored-list,
+.ma-restored-detail {
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    background: #1f2225;
+    border: 1px solid #343a40;
+    border-radius: 6px;
+}
+
+.ma-restored-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.ma-restored-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #252a2e;
+}
+
+.ma-restored-table th,
+.ma-restored-table td {
+    padding: 5px 7px;
+    border-bottom: 1px solid #2c3135;
+    color: #d7d7d7;
+    text-align: left;
+    vertical-align: middle;
+}
+
+.ma-restored-table th {
+    color: var(--ca-text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.ma-restored-table tbody tr {
+    cursor: pointer;
+}
+
+.ma-restored-table tbody tr:hover,
+.ma-restored-table tbody tr.is-selected {
+    background: #28323a;
+}
+
+.ma-restored-table tbody tr.is-selected {
+    box-shadow: inset 3px 0 0 #90caf9;
+}
+
+.ma-restored-table a,
+.ma-restored-detail-header a {
+    color: #f0f0f0;
+    text-decoration: none;
+}
+
+.ma-restored-table a:hover,
+.ma-restored-detail-header a:hover {
+    color: #90caf9;
+    text-decoration: underline;
+}
+
+.ma-restored-number {
+    text-align: right !important;
+    white-space: nowrap;
+}
+
+.ma-restored-detail {
+    display: flex;
+    flex-direction: column;
+}
+
+.ma-restored-empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: var(--ca-text-muted);
+}
+
+.ma-restored-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #343a40;
+}
+
+.ma-restored-detail-header > div:first-child {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ma-restored-detail-header small,
+.ma-restored-warning {
+    color: var(--ca-text-muted);
+}
+
+.ma-restored-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ma-restored-warning {
+    padding: 7px 12px;
+    border-bottom: 1px solid #343a40;
+    color: #efb64d;
+    font-size: 12px;
+}
+
+.ma-restored-worlds {
+    overflow: auto;
+    min-height: 0;
+}
+
+@media (max-width: 980px) {
+    .ma-restored-shell {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(260px, 1fr) minmax(220px, .8fr);
+    }
+}

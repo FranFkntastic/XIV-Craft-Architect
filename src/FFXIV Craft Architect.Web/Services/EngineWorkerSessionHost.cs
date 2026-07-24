@@ -596,7 +596,9 @@ public static partial class ManagedHost
 
         _canonicalSession.InvalidateLegacyProcurementRoute();
         _sessionRevision++;
-        return CreateMutationResult(command.CommandKind, CaptureMarketProjection());
+        return CreateMutationResult(
+            command.CommandKind,
+            CaptureMarketProjection(includeDetails: false));
     }
 
     private static async Task<WorkerSessionResultEnvelope> RefreshMarketItemAsync(
@@ -667,7 +669,7 @@ public static partial class ManagedHost
             new WorkerMarketItemRefreshOutcome(
                 result.Status,
                 result.ItemName,
-                CaptureMarketProjection()));
+                CaptureMarketProjection(includeDetails: false)));
     }
 
     private static async Task<WorkerSessionResultEnvelope> RunProcurementAsync(

@@ -115,6 +115,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         _projections.TryPublishRecipe(recipe);
         var market = await _engineHost.GetMarketProjectionAsync(
             result.Revision,
+            includeDetails: false,
             cancellationToken: cancellationToken);
         _projections.TryPublishMarket(market);
         var procurement = await _engineHost.GetProcurementProjectionAsync(
@@ -164,7 +165,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     }
 
     public async Task<WorkerMarketProjection?> GetMarketProjectionAsync(
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool includeDetails = false)
     {
         if (!IsEnabled)
         {
@@ -173,6 +175,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
         var result = await _engineHost.GetMarketProjectionAsync(
             _projections.Shell.Revision,
+            includeDetails,
             cancellationToken: cancellationToken);
         if (!_projections.TryPublishMarket(result))
         {

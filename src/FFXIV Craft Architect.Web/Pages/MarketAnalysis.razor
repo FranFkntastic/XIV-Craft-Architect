@@ -15,7 +15,7 @@
             EvidenceOverlay="_evidenceOverlay"
             SearchEntireRegion="_searchEntireRegion"
             SelectedRegion="@(_market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion)"
-            HasShoppingPlans="@(_market?.ShoppingPlans.Count > 0)"
+            HasShoppingPlans="@(_market?.HasAnalysis == true)"
             SecretDebugToolsEnabled="_secretDebugToolsEnabled"
             IsAnalyzing="_isAnalyzing"
             IsRefreshingPrices="_isRefreshingPrices"
@@ -30,6 +30,7 @@
 
         <MarketAnalysisResultsPanel
             BuyItems="@(_market?.CandidateItems.ToList() ?? new List<MaterialAggregate>())"
+            ProjectedItems="@(_market?.Items ?? Array.Empty<WorkerMarketItemProjection>())"
             ShoppingPlans="@(_market?.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>())"
             MarketItemAnalyses="@(_market?.ItemAnalyses ?? Array.Empty<MarketItemAnalysis>())"
             CurrentLens="@(_market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost)"
@@ -45,6 +46,7 @@
             IsRefreshingItem="@(_isRefreshingSelectedItem || _isAnalyzing || _isRefreshingPrices)"
             OnSelectedItemChanged="SelectMarketAnalysisItem"
             OnRefreshItemRequested="RefreshSelectedMarketItemAsync"
+            OnRefreshProjectedItemRequested="RefreshSelectedMarketItemAsync"
             OnWorldExpansionToggled="ToggleMarketAnalysisWorld"
             OnSortChanged="SetMarketAnalysisSort"
             OnWorldSortChanged="SetMarketAnalysisWorldSort"
@@ -114,7 +116,8 @@
     private void ApplyRequestedItem()
     {
         if (RequestedItemId.HasValue &&
-            _market?.ShoppingPlans.Any(plan => plan.ItemId == RequestedItemId.Value) == true)
+            (_market?.ShoppingPlans.Any(plan => plan.ItemId == RequestedItemId.Value) == true ||
+             _market?.Items.Any(item => item.ItemId == RequestedItemId.Value) == true))
         {
             _selectedItemId = RequestedItemId;
         }
@@ -199,14 +202,24 @@
 
     private async Task RefreshSelectedMarketItemAsync(DetailedShoppingPlan plan)
     {
-        _selectedItemId = plan.ItemId;
+        await RefreshSelectedMarketItemAsync(plan.ItemId, plan.Name);
+    }
+
+    private async Task RefreshSelectedMarketItemAsync(WorkerMarketItemProjection item)
+    {
+        await RefreshSelectedMarketItemAsync(item.ItemId, item.Name);
+    }
+
+    private async Task RefreshSelectedMarketItemAsync(int itemId, string itemName)
+    {
+        _selectedItemId = itemId;
         _isRefreshingSelectedItem = true;
         try
         {
             var outcome = await WorkerSession.RefreshMarketItemAsync(
                 new WorkerMarketItemRefreshRequest(
-                    plan.ItemId,
-                    plan.Name,
+                    itemId,
+                    itemName,
                     _searchEntireRegion
                         ? MarketFetchScope.EntireRegion
                         : MarketFetchScope.SelectedDataCenter,
@@ -214,7 +227,7 @@
                     _market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion,
                     _market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost));
             _market = outcome.Market;
-            Snackbar.Add($"Refreshed {plan.Name}", Severity.Success);
+            Snackbar.Add($"Refreshed {itemName}", Severity.Success);
         }
         finally
         {
