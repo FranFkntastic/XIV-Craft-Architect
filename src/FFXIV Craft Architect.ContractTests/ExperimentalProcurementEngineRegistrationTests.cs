@@ -103,6 +103,7 @@ public sealed class ExperimentalProcurementEngineRegistrationTests
         services.AddSingleton(new AppState());
         services.AddSingleton(provider => new IndexedDbService(provider.GetRequiredService<IJSRuntime>()));
         services.AddSingleton<IMarketEvidenceReconciliationService, NoopMarketEvidenceReconciliationService>();
+        services.AddSingleton<IMarketCacheService, WebMarketCacheService>();
         services.AddSingleton<IUniversalisService>(
             new UniversalisService(new HttpClient()));
         services.AddExperimentalProcurementEngine(configuration);

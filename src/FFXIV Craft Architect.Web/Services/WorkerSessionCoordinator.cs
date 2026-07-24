@@ -15,6 +15,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     private readonly WorkerProjectionStore _projections;
     private readonly ExperimentalProcurementEngineCapability _capability;
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
+    private readonly IMarketCacheService _marketCache;
     private readonly IUniversalisService _universalis;
 
     public WorkerSessionCoordinator(
@@ -22,12 +23,14 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         WorkerProjectionStore projections,
         ExperimentalProcurementEngineCapability capability,
         IMarketEvidenceReconciliationService marketEvidenceReconciliation,
+        IMarketCacheService marketCache,
         IUniversalisService universalis)
     {
         _engineHost = engineHost;
         _projections = projections;
         _capability = capability;
         _marketEvidenceReconciliation = marketEvidenceReconciliation;
+        _marketCache = marketCache;
         _universalis = universalis;
     }
 
@@ -287,24 +290,59 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             request.SelectedDataCenter,
             request.SelectedRegion,
             cancellationToken);
-        var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
-            new MarketEvidenceReconciliationRequest
-            {
-                Items = market.CandidateItems,
-                PublishedAnalyses = market.ItemAnalyses,
-                PublishedShoppingPlans = market.ShoppingPlans,
-                Scope = request.Scope,
-                SelectedDataCenter = request.SelectedDataCenter,
-                SelectedRegion = request.SelectedRegion,
-                Lens = request.Lens,
-                ExpectedWorldsByDataCenter = expectedWorlds,
-                Policy = request.ForceRefreshData
-                    ? MarketEvidenceReconciliationPolicy.ForcedRefresh()
-                    : new MarketEvidenceReconciliationPolicy()
-            },
-            ct: cancellationToken,
-            executionOptions: MarketAnalysisExecutionOptions.Interactive);
-        if (reconciliation.ShoppingPlans.Count == 0)
+
+        var dataCenters = MarketFetchScopeResolver.GetDataCenters(
+            request.Scope,
+            request.SelectedDataCenter,
+            request.SelectedRegion);
+        var evidenceRequests = market.CandidateItems
+            .SelectMany(item => dataCenters.Select(dataCenter => (item.ItemId, dataCenter)))
+            .ToList();
+        var fetchedCount = request.ForceRefreshData
+            ? await _marketCache.RefreshRequestedAsync(
+                evidenceRequests,
+                ct: cancellationToken)
+            : await _marketCache.EnsurePopulatedAsync(
+                evidenceRequests,
+                ct: cancellationToken);
+
+        // Raw listings are intentionally read and released one item at a time.
+        // A regional Crasher plan spans hundreds of item/data-center pairs; loading
+        // all of those payloads into WASM at once can exhaust the browser heap.
+        var analyses = new List<MarketItemAnalysis>(market.CandidateItems.Count);
+        var shoppingPlans = new List<DetailedShoppingPlan>(market.CandidateItems.Count);
+        var unavailableItemIds = new HashSet<int>();
+        foreach (var item in market.CandidateItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+                new MarketEvidenceReconciliationRequest
+                {
+                    Items = [item],
+                    PublishedAnalyses = request.ForceRefreshData
+                        ? []
+                        : market.ItemAnalyses
+                            .Where(candidate => candidate.ItemId == item.ItemId)
+                            .ToArray(),
+                    PublishedShoppingPlans = request.ForceRefreshData
+                        ? []
+                        : market.ShoppingPlans
+                            .Where(candidate => candidate.ItemId == item.ItemId)
+                            .ToArray(),
+                    Scope = request.Scope,
+                    SelectedDataCenter = request.SelectedDataCenter,
+                    SelectedRegion = request.SelectedRegion,
+                    Lens = request.Lens,
+                    ExpectedWorldsByDataCenter = expectedWorlds
+                },
+                ct: cancellationToken,
+                executionOptions: MarketAnalysisExecutionOptions.Interactive);
+            analyses.AddRange(reconciliation.Analyses);
+            shoppingPlans.AddRange(reconciliation.ShoppingPlans);
+            unavailableItemIds.UnionWith(reconciliation.UnavailableItemIds);
+        }
+
+        if (shoppingPlans.Count == 0)
         {
             throw new InvalidOperationException(
                 $"The market source returned no usable evidence for {market.CandidateItems.Count:N0} items.");
@@ -317,10 +355,10 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 request.SelectedDataCenter,
                 request.SelectedRegion,
                 request.Lens,
-                reconciliation.Analyses,
-                reconciliation.ShoppingPlans,
-                reconciliation.UnavailableItemIds,
-                reconciliation.FetchedCount),
+                analyses,
+                shoppingPlans,
+                unavailableItemIds,
+                fetchedCount),
             cancellationToken);
         if (!_projections.TryPublishMutation<WorkerMarketAnalysisOutcome>(
                 result,
