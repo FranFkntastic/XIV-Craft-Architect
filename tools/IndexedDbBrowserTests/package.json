@@ -4,9 +4,11 @@
   "scripts": {
     "test": "node truth-suite.mjs",
     "test:engine": "node --test engine-worker.test.mjs",
-    "test:syntax": "node --check truth-suite.mjs"
+    "test:stock-firefox": "node stock-firefox-verify.mjs",
+    "test:syntax": "node --check truth-suite.mjs && node --check stock-firefox-verify.mjs"
   },
   "devDependencies": {
-    "playwright": "1.61.1"
+    "playwright": "1.61.1",
+    "selenium-webdriver": "4.46.0"
   }
 }
