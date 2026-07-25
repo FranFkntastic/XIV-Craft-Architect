@@ -317,6 +317,9 @@
 
         _isBuildingPlan = true;
         PlanLifecycle.Cancel();
+        var operation = AppState.BeginOperation(
+            "Recipe plan",
+            "Building your recipe plan...");
         StateHasChanged();
 
         try
@@ -346,6 +349,7 @@
         finally
         {
             _isBuildingPlan = false;
+            AppState.EndOperation(operation);
         }
     }
 

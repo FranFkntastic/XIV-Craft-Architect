@@ -7,6 +7,9 @@
         @if (_isLoading)
         {
             <MudProgressLinear Indeterminate="true" Class="my-4" />
+            <MudText Typo="Typo.caption" Align="Align.Center" Class="d-block">
+                Loading saved plans...
+            </MudText>
         }
         else if (_plans.Count == 0)
         {

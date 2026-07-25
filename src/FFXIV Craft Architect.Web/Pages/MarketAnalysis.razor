@@ -297,7 +297,9 @@
         _isAnalyzing = true;
         var operation = AppState.BeginOperation(
             "Market analysis",
-            forceRefreshData ? "Refreshing market prices..." : "Analyzing market prices...");
+            forceRefreshData
+                ? "Fetching current market listings..."
+                : "Checking saved market prices...");
         try
         {
             var outcome = await WorkerSession.RunMarketAnalysisAsync(
@@ -308,7 +310,12 @@
                         : MarketFetchScope.SelectedDataCenter,
                     _market.SelectedDataCenter,
                     _market.SelectedRegion,
-                    _market.Lens));
+                    _market.Lens),
+                reportStatus: (message, progress) =>
+                    AppState.SetStatusForOperation(
+                        operation,
+                        message,
+                        progress: progress));
             _market = outcome.Market;
             if (showCompletionSnackbar)
             {

@@ -53,7 +53,7 @@
          data-is-busy="@BoolText(workerBusy)"
          data-progress-percent="@(workerBusy ? 1 : 0)"
          data-current-operation="@(workerBusy ? "Worker command" : null)"
-         data-status-message="@(workerBusy ? "Working" : "Ready")"
+         data-status-message="@(workerBusy ? "Updating your plan..." : "Ready")"
          data-active-workflows="@(workerBusy ? "Worker" : null)"
          data-dirty-persisted-buckets="">
     </div>
@@ -632,7 +632,7 @@
         var devPlanPath = NormalizeDevPlanPath(input);
         try
         {
-            AppState.SetStatus($"Loading {devPlanPath}...", busy: true);
+            AppState.SetStatus("Opening the development plan...", busy: true);
             var json = await Http.GetStringAsync(devPlanPath);
             var plan = RecipeService.DeserializePlan(json)
                 ?? throw new InvalidOperationException("Could not parse the craftplan JSON.");

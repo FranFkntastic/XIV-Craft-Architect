@@ -126,6 +126,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         }
 
         var warnings = new List<string>();
+        reportStatus?.Invoke("Checking what the plan needs to buy...", 10);
         var hadMarketCandidates = acquisition.MarketCandidateCount > 0;
         var marketPublished = !hadMarketCandidates;
         var analyzedCount = 0;
@@ -135,9 +136,9 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
 
         if (hadMarketCandidates)
         {
-            reportStatus?.Invoke("Analyzing market prices...", 45);
             if (request.SkipMarketRefresh)
             {
+                reportStatus?.Invoke("Using the current purchase choices...", 60);
                 marketPublished = market?.HasAnalysis == true;
                 analyzedCount = market?.AvailableCount ?? 0;
                 if (!marketPublished)
@@ -151,8 +152,12 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                 var candidates = acquisition.Rows
                     .Where(row => row.IsMarketCandidate)
                     .ToDictionary(row => row.ItemId);
-                foreach (var itemId in request.MarketItemIdsToRefresh.Distinct())
+                var requestedItemIds = request.MarketItemIdsToRefresh
+                    .Distinct()
+                    .ToArray();
+                for (var itemIndex = 0; itemIndex < requestedItemIds.Length; itemIndex++)
                 {
+                    var itemId = requestedItemIds[itemIndex];
                     if (!candidates.TryGetValue(itemId, out var item))
                     {
                         continue;
@@ -160,6 +165,9 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
 
                     try
                     {
+                        reportStatus?.Invoke(
+                            $"Refreshing {item.ItemName} ({itemIndex + 1:N0} of {requestedItemIds.Length:N0})...",
+                            20 + (45d * (itemIndex + 1) / requestedItemIds.Length));
                         await _worker.RefreshMarketItemAsync(
                             new WorkerMarketItemRefreshRequest(
                                 item.ItemId,
@@ -192,7 +200,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                         market?.SelectedDataCenter ?? _settings.SelectedDataCenter,
                         market?.SelectedRegion ?? _settings.SelectedRegion,
                         market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost),
-                    cancellationToken);
+                    cancellationToken,
+                    reportStatus);
                 market = outcome.Market;
                 marketPublished = outcome.Published;
                 analyzedCount = outcome.AnalyzedCount;
@@ -201,6 +210,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             }
             else
             {
+                reportStatus?.Invoke("Using current market prices...", 65);
                 marketPublished = true;
                 analyzedCount = market.AvailableCount;
             }
@@ -246,7 +256,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             }
             else
             {
-                reportStatus?.Invoke("Building procurement route...", 75);
+                reportStatus?.Invoke("Gathering available purchase options...", 65);
                 try
                 {
                     var outcome = await _worker.RunProcurementAsync(
@@ -259,7 +269,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                             _settings.ProcurementEnableSplitWorldPurchases,
                             _settings.ProcurementStartFromHomeDataCenter,
                             _settings.ProcurementTravelPriority),
-                        cancellationToken);
+                        cancellationToken,
+                        reportStatus);
                     procurementPublished = outcome.Procurement.HasRoute;
                 }
                 catch (InvalidOperationException ex)
@@ -284,7 +295,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         using (var operation = _operations.Start(
             CancellableOperationWorkflow.PlanDerivation,
             "Plan pricing",
-            "Analyzing market prices...",
+            "Checking what the plan needs to buy...",
             run.Token))
         {
             try

@@ -83,7 +83,7 @@ public sealed class TradeOrderPricingWorkflowService
         using var operation = _operations.Start(
             CancellableOperationWorkflow.TradeOrderPricing,
             "Trade Order Pricing",
-            "Building order craft plan...",
+            "Building the order's craft plan...",
             ct);
         try
         {
@@ -180,7 +180,7 @@ public sealed class TradeOrderPricingWorkflowService
         using var operation = _operations.Start(
             CancellableOperationWorkflow.TradeOrderPricing,
             "Trade Order Pricing",
-            "Loading linked order plan...",
+            "Opening the order's craft plan...",
             ct);
         try
         {
@@ -236,7 +236,7 @@ public sealed class TradeOrderPricingWorkflowService
         using var operation = _operations.Start(
             CancellableOperationWorkflow.TradeOrderPricing,
             "Trade Order Pricing",
-            "Repricing changed acquisition source...",
+            "Repricing the changed material...",
             ct);
         try
         {
@@ -295,7 +295,7 @@ public sealed class TradeOrderPricingWorkflowService
             return CanceledResult();
         }
 
-        operation.ReportStatus("Updating order payment evidence...", progress: 90);
+        operation.ReportStatus("Calculating the order payment...", progress: 90);
         source = await _worker.GetTradeProjectionAsync(
             includeCraftLabor: true,
             cancellationToken: operation.Token)

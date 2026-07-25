@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
@@ -357,8 +358,14 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public async Task<WorkerMarketAnalysisOutcome> RunMarketAnalysisAsync(
         WorkerMarketAnalysisRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, double?>? reportStatus = null)
     {
+        reportStatus?.Invoke(
+            request.ForceRefreshData
+                ? "Fetching current market listings..."
+                : "Checking saved market prices...",
+            10);
         var market = _projections.Market ??
             await GetMarketProjectionAsync(cancellationToken) ??
             throw new InvalidOperationException(
@@ -382,12 +389,18 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         var evidenceRequests = market.CandidateItems
             .SelectMany(item => dataCenters.Select(dataCenter => (item.ItemId, dataCenter)))
             .ToList();
+        var cacheProgress = reportStatus is null
+            ? null
+            : new ImmediateProgress<string>(message =>
+                ReportMarketCacheProgress(message, reportStatus));
         var fetchedCount = request.ForceRefreshData
             ? await _marketCache.RefreshRequestedAsync(
                 evidenceRequests,
+                progress: cacheProgress,
                 ct: cancellationToken)
             : await _marketCache.EnsurePopulatedAsync(
                 evidenceRequests,
+                progress: cacheProgress,
                 ct: cancellationToken);
 
         // Raw listings are intentionally read and released one item at a time.
@@ -396,9 +409,13 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         var analyses = new List<MarketItemAnalysis>(market.CandidateItems.Count);
         var shoppingPlans = new List<DetailedShoppingPlan>(market.CandidateItems.Count);
         var unavailableItemIds = new HashSet<int>();
-        foreach (var item in market.CandidateItems)
+        for (var itemIndex = 0; itemIndex < market.CandidateItems.Count; itemIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var item = market.CandidateItems[itemIndex];
+            reportStatus?.Invoke(
+                $"Comparing prices and availability ({itemIndex + 1:N0} of {market.CandidateItems.Count:N0} materials)...",
+                50 + (30d * (itemIndex + 1) / market.CandidateItems.Count));
             var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
                 new MarketEvidenceReconciliationRequest
                 {
@@ -452,6 +469,12 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 .ToHashSet();
             var isFirst = offset == 0;
             var isFinal = offset + publicationBatchSize >= publicationItemIds.Length;
+            var publishedCount = Math.Min(
+                offset + publicationBatchSize,
+                publicationItemIds.Length);
+            reportStatus?.Invoke(
+                $"Applying the best purchase options ({publishedCount:N0} of {publicationItemIds.Length:N0} materials)...",
+                80 + (15d * publishedCount / publicationItemIds.Length));
             var publicationRequest = new WorkerMarketEvidencePublicationRequest(
                     request.Scope,
                     request.SelectedDataCenter,
@@ -507,6 +530,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         var marketWithDetails = _projections.AttachMarketDetails(
             shoppingPlans,
             analyses);
+        reportStatus?.Invoke("Updating your plan with the new prices...", 98);
         await RefreshRecipeProjectionAsync(cancellationToken);
         return new WorkerMarketAnalysisOutcome(
             Published: true,
@@ -695,12 +719,17 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public async Task<WorkerProcurementOutcome> RunProcurementAsync(
         WorkerProcurementRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, double?>? reportStatus = null)
     {
+        reportStatus?.Invoke(
+            "Comparing travel and price tradeoffs...",
+            70);
         var result = await _engineHost.RunProcurementAsync(
             _projections.Shell.Revision,
             request,
             cancellationToken);
+        reportStatus?.Invoke("Preparing your shopping route...", 95);
         if (!_projections.TryPublishMutation<WorkerProcurementOutcome>(
                 result,
                 out var outcome) ||
@@ -712,6 +741,62 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
         await RefreshRecipeProjectionAsync(cancellationToken);
         return outcome;
+    }
+
+    private static void ReportMarketCacheProgress(
+        string message,
+        Action<string, double?> reportStatus)
+    {
+        var fetchProgress = Regex.Match(
+            message,
+            @"^Fetching (?<current>\d+)/(?<total>\d+) market entries");
+        if (fetchProgress.Success &&
+            int.TryParse(fetchProgress.Groups["current"].Value, out var current) &&
+            int.TryParse(fetchProgress.Groups["total"].Value, out var total) &&
+            total > 0)
+        {
+            reportStatus(
+                $"Fetching current market listings ({current:N0} of {total:N0})...",
+                20 + (30d * current / total));
+            return;
+        }
+
+        var dataCenterFetch = Regex.Match(
+            message,
+            @"^Loading (?<count>\d+) market items from (?<dataCenter>.+)\.\.\.$");
+        if (dataCenterFetch.Success)
+        {
+            reportStatus(
+                $"Fetching current listings from {dataCenterFetch.Groups["dataCenter"].Value}...",
+                25);
+            return;
+        }
+
+        if (message.StartsWith("Fetching market data", StringComparison.Ordinal))
+        {
+            reportStatus("Fetching current market listings...", 20);
+            return;
+        }
+
+        if (message.StartsWith("Local market cache is ready", StringComparison.Ordinal))
+        {
+            reportStatus("Using saved market prices...", 40);
+            return;
+        }
+
+        if (message.StartsWith("Removing stale", StringComparison.Ordinal) ||
+            message.StartsWith("Reducing local", StringComparison.Ordinal))
+        {
+            reportStatus("Tidying saved market prices...", 15);
+            return;
+        }
+
+        reportStatus("Checking saved market prices...", 10);
+    }
+
+    private sealed class ImmediateProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 
     public async Task<WorkerProcurementProjection> SelectProcurementToleranceAsync(

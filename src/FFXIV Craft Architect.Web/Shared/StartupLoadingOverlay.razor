@@ -21,12 +21,19 @@
             {
                 <MudProgressCircular Indeterminate="true" Size="Size.Large" Color="Color.Primary" />
                 <MudText Typo="Typo.h6" Class="startup-overlay__title">@Status.StepText</MudText>
+                @if (Status.CurrentStep > 0 && Status.TotalSteps > 0)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                        Step @Status.CurrentStep of @Status.TotalSteps
+                    </MudText>
+                }
             }
         </div>
     </div>
 }
 
 @code {
-    [Parameter, EditorRequired] public StartupStatus Status { get; set; } = StartupStatus.InProgress("Starting...");
+    [Parameter, EditorRequired] public StartupStatus Status { get; set; } =
+        StartupStatus.InProgress("Preparing Craft Architect...");
     [Parameter] public EventCallback OnContinue { get; set; }
 }

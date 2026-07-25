@@ -191,7 +191,7 @@
         
         try
         {
-            _processingMessage = "Parsing native plan format...";
+            _processingMessage = "Reading Craft Architect plan...";
             StateHasChanged();
             
             plan = RecipeService.DeserializePlan(_nativeJson);
@@ -256,7 +256,7 @@
                 // Search for item
                 try
                 {
-                    _processingMessage = $"Searching: {name}...";
+                    _processingMessage = $"Finding {name}...";
                     StateHasChanged();
                      
                     var results = await GarlandService.SearchAsync(name);
@@ -335,7 +335,7 @@
         
         try
         {
-            _processingMessage = "Importing Artisan recipe list...";
+            _processingMessage = "Reading Artisan recipe list...";
             StateHasChanged();
 
             var artisanPlan = await ArtisanService.ImportFromArtisanAsync(_artisanJson, "Aether", string.Empty);
@@ -364,8 +364,11 @@
 
             if (root.TryGetProperty("items", out var itemsArray))
             {
+                var itemNumber = 0;
+                var totalItems = itemsArray.GetArrayLength();
                 foreach (var item in itemsArray.EnumerateArray())
                 {
+                    itemNumber++;
                     if (!item.TryGetProperty("itemId", out var itemIdElement))
                     {
                         continue;
@@ -376,7 +379,8 @@
                         ? qtyElement.GetInt32()
                         : 1;
 
-                    _processingMessage = $"Resolving item {itemId}...";
+                    _processingMessage =
+                        $"Finding item names ({itemNumber:N0} of {totalItems:N0})...";
                     StateHasChanged();
 
                     try

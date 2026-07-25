@@ -224,11 +224,16 @@
         _routeFailure = null;
         var operation = AppState.BeginOperation(
             "Procurement route",
-            "Generating procurement route...");
+            "Gathering available purchase options...");
         try
         {
             var outcome = await WorkerSession.RunProcurementAsync(
-                BuildRequest());
+                BuildRequest(),
+                reportStatus: (message, progress) =>
+                    AppState.SetStatusForOperation(
+                        operation,
+                        message,
+                        progress: progress));
             _route = outcome.Procurement;
             _lastRunDiagnostics = outcome.Diagnostics;
             _travelTolerance = _route.TravelTolerance;
@@ -362,16 +367,16 @@
 
     private string GetEmptyTitle() =>
         _isLoading
-            ? "Restoring procurement plan"
+            ? "Loading your procurement plan"
             : _isAnalyzing
-                ? "Generating procurement route"
+                ? "Choosing your shopping route"
             : _route?.HasPlan == true
                 ? "Route ready to generate"
                 : "No plan loaded";
 
     private string GetEmptyMessage() =>
         _isLoading
-            ? "Restoring the saved route and procurement evidence."
+            ? "Loading saved prices, purchase choices, and route."
             : _isAnalyzing
                 ? "Comparing eligible purchases and travel tradeoffs."
             : _route?.HasMarketEvidence == true

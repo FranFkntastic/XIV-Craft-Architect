@@ -153,7 +153,7 @@ public sealed class AppState
         var operation = new AppStateOperation(++_nextOperationId, operationName);
         _currentOperationId = operation.Id;
         CurrentOperation = operationName;
-        SetStatus(message ?? $"{operationName}...", busy: true);
+        SetStatus(message ?? $"{operationName}...", busy: true, progress: 0);
         return operation;
     }
 

@@ -277,6 +277,9 @@
                 else if (_companyProfile == null)
                 {
                     <MudProgressLinear Indeterminate="true" Class="my-4" />
+                    <MudText Typo="Typo.caption" Align="Align.Center" Class="d-block">
+                        Loading company profile...
+                    </MudText>
                 }
                 else
                 {
@@ -360,7 +363,9 @@
                             {
                                 <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
                             }
-                            @(_showLaborBenchmarkPlanPreview ? "Hide Plan" : "View Plan")
+                            @(_laborBenchmarkPlanPreviewIsLoading
+                                ? "Loading Plan"
+                                : _showLaborBenchmarkPlanPreview ? "Hide Plan" : "View Plan")
                         </MudButton>
                     }
                     @if (!string.IsNullOrWhiteSpace(_laborBenchmarkStatus))
@@ -548,6 +553,9 @@
                     @if (_companyIsBusy)
                     {
                         <MudProgressLinear Indeterminate="true" Class="mt-4" />
+                        <MudText Typo="Typo.caption" Align="Align.Center" Class="mt-2 d-block">
+                            Updating company profile...
+                        </MudText>
                     }
                 }
             }
@@ -624,6 +632,9 @@
                 @if (_profileHostIsBusy)
                 {
                     <MudProgressLinear Indeterminate="true" Class="my-3" />
+                    <MudText Typo="Typo.caption" Align="Align.Center" Class="d-block">
+                        Updating hosted profile...
+                    </MudText>
                 }
 
                 <MudPaper Variant="Variant.Outlined" Class="pa-3 my-3">
