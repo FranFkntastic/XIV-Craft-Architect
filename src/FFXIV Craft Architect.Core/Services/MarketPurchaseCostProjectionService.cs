@@ -25,7 +25,7 @@ public static class MarketPurchaseCostProjectionService
             return new MarketPurchaseCostEstimate(vendorCost, MarketPurchaseCostEstimateKind.SupportedEvidence);
         }
 
-        if (TryGetCoverageEstimate(shoppingPlan, hqOnly, out var coverageEstimate))
+        if (TryGetCoverageEstimate(shoppingPlan, quantity, hqOnly, out var coverageEstimate))
         {
             return coverageEstimate;
         }
@@ -55,6 +55,7 @@ public static class MarketPurchaseCostProjectionService
 
     private static bool TryGetCoverageEstimate(
         DetailedShoppingPlan shoppingPlan,
+        int quantity,
         bool hqOnly,
         out MarketPurchaseCostEstimate estimate)
     {
@@ -81,6 +82,10 @@ public static class MarketPurchaseCostProjectionService
             return false;
         }
 
+        var allocatedCost = ScaleCost(
+            candidate.ExactNeededCost,
+            quantity,
+            shoppingPlan.QuantityNeeded);
         var world = candidate.Worlds.Count == 1
             ? new WorldShoppingSummary
             {
@@ -93,7 +98,7 @@ public static class MarketPurchaseCostProjectionService
             : null;
 
         estimate = new MarketPurchaseCostEstimate(
-            candidate.ExactNeededCost,
+            allocatedCost,
             MarketPurchaseCostEstimateKind.SupportedEvidence,
             world,
             candidate);
@@ -254,7 +259,7 @@ public static class MarketPurchaseCostProjectionService
             .Where(listing => !hqOnly || listing.IsHq);
     }
 
-    private static decimal ScaleCost(long totalCost, int quantity, int quantityNeeded)
+    private static decimal ScaleCost(decimal totalCost, int quantity, int quantityNeeded)
     {
         return quantity == quantityNeeded
             ? totalCost

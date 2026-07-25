@@ -55,6 +55,31 @@ public sealed class ProcurementSpecificationTests
         Assert.Equal(7m, quotes[first.NodeId].TotalCost);
         Assert.Equal(14m, quotes[second.NodeId].TotalCost);
         Assert.Equal(acquisitionCost, quotes.Values.Sum(quote => quote.TotalCost));
+
+        var firstCraft = SpecificationFixtures.MakeOrBuyNode(101, "First craft", first);
+        var secondCraft = SpecificationFixtures.MakeOrBuyNode(102, "Second craft", second);
+        var craftPlan = new CraftingPlan { RootItems = [firstCraft, secondCraft] };
+        var craftQuotes = RecipePlanAcquisitionQuoteBuilder.Build(
+            craftPlan,
+            [evidence],
+            RecipePlanAcquisitionQuoteBasis.MarketAnalysis,
+            isRefreshing: false,
+            evidencePublishedAtUtc: null);
+        var craftContext = AcquisitionPlanningService.CreateCostContext([evidence]);
+
+        Assert.True(AcquisitionPlanningService.TryGetAcquisitionCost(
+            firstCraft,
+            AcquisitionSource.Craft,
+            craftContext,
+            out var firstCraftCost));
+        Assert.True(AcquisitionPlanningService.TryGetAcquisitionCost(
+            secondCraft,
+            AcquisitionSource.Craft,
+            craftContext,
+            out var secondCraftCost));
+        Assert.Equal(craftQuotes[firstCraft.NodeId].TotalCost, firstCraftCost);
+        Assert.Equal(craftQuotes[secondCraft.NodeId].TotalCost, secondCraftCost);
+        Assert.Equal(acquisitionCost, firstCraftCost + secondCraftCost);
     }
 
     [Fact]
