@@ -6,30 +6,6 @@ import { verifyArtifact } from './truthful-artifact.mjs';
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
-const SCENARIO_ASSERTIONS = {
-  'indexeddb-empty-current': [
-    'production-module-loaded', 'empty-database-created-at-current-schema',
-    'current-store-contract-present', 'market-timestamp-index-present',
-    'setting-sentinel-durable-after-current-reopen', 'plan-sentinel-durable-after-current-reopen',
-    'current-schema-stable-after-reload', 'browser-diagnostics-clean'
-  ],
-  'indexeddb-v3-upgrade': [
-    'historical-v3-fixture-seeded', 'production-module-upgraded-historical-schema',
-    'historical-plan-sentinel-survived', 'historical-setting-sentinel-survived',
-    'historical-market-record-survived', 'historical-plan-summary-rebuilt',
-    'upgraded-market-timestamp-index-present', 'browser-diagnostics-clean'
-  ],
-  'production-procurement-kill-switch': [
-    'production-kill-switch-config-loaded', 'native-plan-imported-through-visible-flow',
-    'explicit-market-analysis-published', 'market-analysis-durable-in-autosave',
-    'acquisition-evaluation-available-with-kill-switch', 'procurement-route-control-visibly-disabled',
-    'disabled-route-action-does-not-execute', 'name-first-item-search-returned-product-result',
-    'name-first-item-selection-updated-project', 'ordinary-navigation-remained-usable',
-    'reload-restored-imported-plan', 'reload-restored-market-analysis',
-    'manual-acquisition-choice-remained-usable', 'no-route-execution-observed-through-final-interaction',
-    'no-worker-request-observed', 'no-unexpected-external-request-observed', 'browser-diagnostics-clean'
-  ]
-};
 const REQUIRED_COMMANDS = {
   'suite-structure': {
     executable: 'pwsh', cwd: '.', timeoutSeconds: 120,
@@ -68,11 +44,6 @@ const REQUIRED_COMMANDS = {
     arguments: buildManifest => ['tools/TruthfulSuite/check-product.mjs',
       'dist/subject/src/FFXIV Craft Architect.Web/wwwroot', buildManifest.target.domain,
       buildManifest.target.slot]
-  },
-  'deterministic-browser-tests': {
-    executable: 'npm', cwd: 'dist/subject/tools/IndexedDbBrowserTests', timeoutSeconds: 600,
-    arguments: ['test', '--', '--web-root', '../../src/FFXIV Craft Architect.Web/wwwroot',
-      '--output', '../../../evidence/browser-truth-report.json']
   },
   'engine-browser-tests': {
     executable: 'npm', cwd: 'dist/subject/tools/IndexedDbBrowserTests', timeoutSeconds: 600,
@@ -133,77 +104,6 @@ function validateOutcome(outcome, expected, buildManifest) {
       JSON.stringify(outcome?.command?.arguments) !== JSON.stringify(requiredArguments)) {
     throw new Error(`Required outcome has wrong command identity: ${expected.id}`);
   }
-}
-
-async function validateBrowserReport(reportPath, fileManifestPath, buildManifest) {
-  const reportBytes = await readFile(reportPath);
-  const report = JSON.parse(reportBytes.toString('utf8'));
-  if (report?.suite !== 'craft-architect-browser-truth' || report?.version !== 1 || report?.status !== 'passed') {
-    throw new Error('Browser terminal report is missing, malformed, or non-passing.');
-  }
-  if (!Array.isArray(report.scenarios) || report.scenarios.length !== 6 ||
-      report.scenarios.some(scenario => scenario?.status !== 'passed') ||
-      !Array.isArray(report.blockers) || report.blockers.length !== 0 ||
-      !Array.isArray(report.cleanupFailures) || report.cleanupFailures.length !== 0 ||
-      report?.summary?.scenarioCount !== 6 || report?.summary?.passedScenarioCount !== 6 ||
-      report?.summary?.failedScenarioCount !== 0 || report?.summary?.assertionCount !== 66 ||
-      report?.summary?.passedAssertionCount !== 66) {
-    throw new Error('Browser terminal report does not contain six clean passing scenarios.');
-  }
-  const expectedScenarios = [
-    'chromium:indexeddb-empty-current',
-    'chromium:indexeddb-v3-upgrade',
-    'chromium:production-procurement-kill-switch',
-    'firefox:indexeddb-empty-current',
-    'firefox:indexeddb-v3-upgrade',
-    'firefox:production-procurement-kill-switch'
-  ];
-  const actualScenarios = report.scenarios.map(scenario => `${scenario.browser}:${scenario.name}`);
-  if (JSON.stringify(actualScenarios) !== JSON.stringify(expectedScenarios)) {
-    throw new Error('Browser terminal report scenario inventory is incomplete or reordered.');
-  }
-  for (const scenario of report.scenarios) {
-    const requiredAssertions = SCENARIO_ASSERTIONS[scenario.name];
-    const actualAssertions = scenario.assertions?.map(assertion => assertion?.name);
-    if (!requiredAssertions || JSON.stringify(scenario.requiredAssertions) !== JSON.stringify(requiredAssertions) ||
-        JSON.stringify(actualAssertions) !== JSON.stringify(requiredAssertions) ||
-        scenario.assertions.some(assertion => assertion?.passed !== true) ||
-        scenario.assertionCount !== requiredAssertions.length ||
-        scenario.passedAssertionCount !== requiredAssertions.length) {
-      throw new Error(`Browser scenario assertion inventory is incomplete: ${scenario.browser}:${scenario.name}`);
-    }
-  }
-  if (report?.identity?.runId !== buildManifest.run.id ||
-      report?.identity?.runAttempt !== buildManifest.run.attempt ||
-      report?.identity?.sourceCommitSha !== buildManifest.source.commitSha ||
-      report?.identity?.archiveSha256 !== buildManifest.artifact.archiveSha256 ||
-      report?.identity?.harnessTreeSha256 !== buildManifest.acceptance.harnessTreeSha256 ||
-      report?.identity?.fixtureTreeSha256 !== buildManifest.acceptance.fixtureTreeSha256) {
-    throw new Error('Browser terminal report identity is stale or foreign.');
-  }
-  const expectedRuntime = {
-    node: buildManifest.runtime.node,
-    playwright: buildManifest.runtime.playwright,
-    browsers: buildManifest.runtime.browsers.map(browser => ({
-      name: browser.name, revision: browser.revision, version: browser.version
-    }))
-  };
-  if (JSON.stringify(report.runtime) !== JSON.stringify(expectedRuntime)) {
-    throw new Error('Browser terminal report runtime identity is stale or foreign.');
-  }
-  if (report?.publish?.appSettings?.ProcurementRoutes?.GenerationEnabled !== false ||
-      report?.publish?.appSettings?.EngineRewrite?.ExecutionEnabled !== false ||
-      report?.publish?.appSettings?.EngineAcceptance?.Enabled !== false ||
-      report?.publish?.appSettings?.EngineAcceptance?.UseDeterministicEvidence !== false ||
-      report?.publish?.appSettings?.LodestoneLookup?.BaseAddress !== `https://${buildManifest.target.domain}/api/`) {
-    throw new Error('Browser terminal report did not observe exact effective configuration.');
-  }
-  const fileManifest = JSON.parse(await readFile(fileManifestPath, 'utf8'));
-  const indexedDb = fileManifest.files.find(file => file.path === 'indexedDB.js');
-  if (!indexedDb || report?.publish?.indexedDbSha256 !== indexedDb.sha256) {
-    throw new Error('Browser terminal report did not consume manifested indexedDB.js bytes.');
-  }
-  return { bytes: reportBytes, sha256: sha256(reportBytes) };
 }
 
 async function validateTrx(reportPath, label, expectedTotal) {
@@ -276,29 +176,17 @@ export async function verifyOutcomes(options) {
     outcomes.push({ id: expected.id, sha256: sha256(outcomeBytes), subjectKind: expected.subjectKind });
   }
 
-  const localDev = buildManifest.target.slot === 'local-dev';
-  const expectedWorker = localDev
-    ? {
-        required: true,
-        status: 'required-enabled-browser-worker',
-        outcomeId: 'engine-browser-tests',
-        protocolVersion: '4',
-        schemaVersion: '1'
-      }
-    : {
-        required: false,
-        status: 'production-disabled',
-        outcomeId: null,
-        protocolVersion: null,
-        schemaVersion: null
-      };
+  const expectedWorker = {
+    required: true,
+    status: 'required-enabled-browser-worker',
+    outcomeId: 'engine-browser-tests',
+    protocolVersion: '4',
+    schemaVersion: '1'
+  };
   if (JSON.stringify(buildManifest.acceptance.worker) !== JSON.stringify(expectedWorker)) {
     throw new Error('Worker acceptance boundary does not match the deployment slot.');
   }
-  const browserEvidence = localDev
-    ? outcomes.find(outcome => outcome.id === 'engine-browser-tests')
-    : await validateBrowserReport(
-        path.join(evidenceDir, 'browser-truth-report.json'), fileManifestPath, buildManifest);
+  const browserEvidence = outcomes.find(outcome => outcome.id === 'engine-browser-tests');
   if (!browserEvidence) throw new Error('Required browser evidence is missing.');
 
   const transactionInput = canonicalJson({

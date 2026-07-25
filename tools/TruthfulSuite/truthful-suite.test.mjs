@@ -77,12 +77,14 @@ test('archive creation is deterministic and exact-byte extraction verifies confi
   });
   const config = JSON.parse(await readFile(path.join(extracted, 'appsettings.json'), 'utf8'));
   const release = JSON.parse(await readFile(path.join(extracted, 'release.json'), 'utf8'));
-  assert.equal(config.ProcurementRoutes.GenerationEnabled, false);
-  assert.equal(config.EngineRewrite.ExecutionEnabled, false);
+  assert.equal(config.ProcurementRoutes.GenerationEnabled, true);
+  assert.equal(config.EngineRewrite.ExecutionEnabled, true);
   assert.equal(config.EngineAcceptance.Enabled, false);
   assert.equal(config.LodestoneLookup.BaseAddress, 'https://example.com/api/');
   assert.equal(release.sourceDirty, false);
   assert.equal(firstResult.buildManifest.source.dirty, false);
+  assert.equal(firstResult.buildManifest.acceptance.worker.required, true);
+  assert.equal(firstResult.buildManifest.acceptance.worker.outcomeId, 'engine-browser-tests');
 
   const localDev = await fixture();
   const localDevOptions = options(
@@ -144,7 +146,7 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
     'contract-tests': ['dotnet', '.', ['test', 'src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj', '--configuration', 'Release', '--no-build', '--no-restore', '--blame-hang', '--blame-hang-timeout', '5m', '--blame-hang-dump-type', 'mini', '--logger', 'trx;LogFileName=contract-tests.trx', '--logger', 'console;verbosity=normal'], 600],
     'web-publish': ['dotnet', '.', ['publish', 'src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj', '--configuration', 'Release', '--output', 'dist/publish', '--no-restore', '-p:BuildInfoBranchName=main'], 600],
     'product-configuration': ['node', '.', ['tools/TruthfulSuite/check-product.mjs', 'dist/subject/src/FFXIV Craft Architect.Web/wwwroot', 'example.com', 'main'], 60],
-    'deterministic-browser-tests': ['npm', 'dist/subject/tools/IndexedDbBrowserTests', ['test', '--', '--web-root', '../../src/FFXIV Craft Architect.Web/wwwroot', '--output', '../../../evidence/browser-truth-report.json'], 600]
+    'engine-browser-tests': ['npm', 'dist/subject/tools/IndexedDbBrowserTests', ['run', 'test:engine'], 600]
   };
   for (const expected of result.buildManifest.acceptance.requiredOutcomes) {
     const identity = expected.subjectKind === 'source'
@@ -165,72 +167,10 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
     };
     await writeFile(path.join(evidenceDir, `${expected.id}.json`), `${JSON.stringify(outcome, null, 2)}\n`);
   }
-  const fileManifest = JSON.parse(await readFile(result.fileManifestPath, 'utf8'));
-  const indexedDbSha256 = fileManifest.files.find(file => file.path === 'indexedDB.js').sha256;
-  const scenarioAssertions = {
-    'indexeddb-empty-current': ['production-module-loaded', 'empty-database-created-at-current-schema', 'current-store-contract-present', 'market-timestamp-index-present', 'setting-sentinel-durable-after-current-reopen', 'plan-sentinel-durable-after-current-reopen', 'current-schema-stable-after-reload', 'browser-diagnostics-clean'],
-    'indexeddb-v3-upgrade': ['historical-v3-fixture-seeded', 'production-module-upgraded-historical-schema', 'historical-plan-sentinel-survived', 'historical-setting-sentinel-survived', 'historical-market-record-survived', 'historical-plan-summary-rebuilt', 'upgraded-market-timestamp-index-present', 'browser-diagnostics-clean'],
-    'production-procurement-kill-switch': ['production-kill-switch-config-loaded', 'native-plan-imported-through-visible-flow', 'explicit-market-analysis-published', 'market-analysis-durable-in-autosave', 'acquisition-evaluation-available-with-kill-switch', 'procurement-route-control-visibly-disabled', 'disabled-route-action-does-not-execute', 'name-first-item-search-returned-product-result', 'name-first-item-selection-updated-project', 'ordinary-navigation-remained-usable', 'reload-restored-imported-plan', 'reload-restored-market-analysis', 'manual-acquisition-choice-remained-usable', 'no-route-execution-observed-through-final-interaction', 'no-worker-request-observed', 'no-unexpected-external-request-observed', 'browser-diagnostics-clean']
-  };
-  const browserReport = {
-    suite: 'craft-architect-browser-truth',
-    version: 1,
-    status: 'passed',
-    identity: {
-      runId: result.buildManifest.run.id,
-      runAttempt: result.buildManifest.run.attempt,
-      sourceCommitSha: result.buildManifest.source.commitSha,
-      archiveSha256: result.buildManifest.artifact.archiveSha256,
-      harnessTreeSha256: result.buildManifest.acceptance.harnessTreeSha256,
-      fixtureTreeSha256: result.buildManifest.acceptance.fixtureTreeSha256
-    },
-    runtime: {
-      node: result.buildManifest.runtime.node,
-      playwright: result.buildManifest.runtime.playwright,
-      browsers: result.buildManifest.runtime.browsers.map(browser => ({
-        name: browser.name, revision: browser.revision, version: browser.version
-      }))
-    },
-    publish: {
-      appSettings: {
-        LodestoneLookup: { BaseAddress: 'https://example.com/api/' },
-        ProcurementRoutes: { GenerationEnabled: false },
-        EngineRewrite: { ExecutionEnabled: false },
-        EngineAcceptance: { Enabled: false, UseDeterministicEvidence: false }
-      },
-      indexedDbSha256
-    },
-    scenarios: [
-      ['chromium', 'indexeddb-empty-current'],
-      ['chromium', 'indexeddb-v3-upgrade'],
-      ['chromium', 'production-procurement-kill-switch'],
-      ['firefox', 'indexeddb-empty-current'],
-      ['firefox', 'indexeddb-v3-upgrade'],
-      ['firefox', 'production-procurement-kill-switch']
-    ].map(([browser, name]) => ({
-      browser,
-      name,
-      status: 'passed',
-      requiredAssertions: scenarioAssertions[name],
-      assertions: scenarioAssertions[name].map(assertion => ({ name: assertion, passed: true })),
-      assertionCount: scenarioAssertions[name].length,
-      passedAssertionCount: scenarioAssertions[name].length
-    })),
-    blockers: [],
-    cleanupFailures: [],
-    summary: {
-      scenarioCount: 6,
-      passedScenarioCount: 6,
-      failedScenarioCount: 0,
-      assertionCount: 66,
-      passedAssertionCount: 66
-    }
-  };
-  await writeFile(path.join(evidenceDir, 'browser-truth-report.json'), `${JSON.stringify(browserReport, null, 2)}\n`);
   const passingTrx = total => `<TestRun><Results>${Array.from({ length: total }, (_, index) => `<UnitTestResult executionId="execution-${index}" testId="test-${index}" testName="Test ${index}" outcome="Passed" />`).join('')}</Results><ResultSummary outcome="Completed"><Counters total="${total}" executed="${total}" passed="${total}" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="${total}" inProgress="0" pending="0" /></ResultSummary></TestRun>`;
   const specTrx = path.join(value.temporaryRoot, 'spec-tests.trx');
   const contractTrx = path.join(value.temporaryRoot, 'contract-tests.trx');
-  await writeFile(specTrx, passingTrx(56));
+  await writeFile(specTrx, passingTrx(57));
   await writeFile(contractTrx, passingTrx(89));
 
   const acceptanceManifest = path.join(outDir, 'acceptance-manifest.json');
@@ -257,14 +197,6 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
 
   failed.status = 'passed';
   await writeFile(failedPath, `${JSON.stringify(failed, null, 2)}\n`);
-  const browserReportPath = path.join(evidenceDir, 'browser-truth-report.json');
-  const incompleteBrowserReport = structuredClone(browserReport);
-  incompleteBrowserReport.scenarios[0].assertions = [];
-  incompleteBrowserReport.scenarios[0].assertionCount = 0;
-  incompleteBrowserReport.scenarios[0].passedAssertionCount = 0;
-  await writeFile(browserReportPath, `${JSON.stringify(incompleteBrowserReport, null, 2)}\n`);
-  await assert.rejects(() => verifyOutcomes(verifyOptions), /assertion inventory is incomplete/);
-  await writeFile(browserReportPath, `${JSON.stringify(browserReport, null, 2)}\n`);
   const productPath = path.join(evidenceDir, 'product-configuration.json');
   const wrongCommand = JSON.parse(await readFile(productPath, 'utf8'));
   wrongCommand.command.executable = 'true';

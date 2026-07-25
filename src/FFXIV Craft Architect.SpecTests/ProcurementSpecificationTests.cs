@@ -25,6 +25,39 @@ public sealed class ProcurementSpecificationTests
     }
 
     [Fact]
+    public void RecipePricesAllocateAcquisitionExactNeededCost()
+    {
+        var first = SpecificationFixtures.MarketNode(100, "Whole stack", quantity: 1, nodeId: "first");
+        var second = SpecificationFixtures.MarketNode(100, "Whole stack", quantity: 2, nodeId: "second");
+        var plan = new CraftingPlan { RootItems = [first, second] };
+        var evidence = SpecificationFixtures.Evidence(
+            100,
+            "Whole stack",
+            3,
+            SpecificationFixtures.World("Aether", "Siren", 10, 7));
+        evidence.CoverageSet = MarketCoverageBuilder.Build(evidence);
+
+        var quotes = RecipePlanAcquisitionQuoteBuilder.Build(
+            plan,
+            [evidence],
+            RecipePlanAcquisitionQuoteBasis.MarketAnalysis,
+            isRefreshing: false,
+            evidencePublishedAtUtc: null);
+        var context = AcquisitionPlanningService.CreateCostContext([evidence]);
+
+        Assert.True(AcquisitionPlanningService.TryGetAcquisitionCost(
+            first,
+            AcquisitionSource.MarketBuyNq,
+            context,
+            quantity: 3,
+            out var acquisitionCost));
+        Assert.Equal(21m, acquisitionCost);
+        Assert.Equal(7m, quotes[first.NodeId].TotalCost);
+        Assert.Equal(14m, quotes[second.NodeId].TotalCost);
+        Assert.Equal(acquisitionCost, quotes.Values.Sum(quote => quote.TotalCost));
+    }
+
+    [Fact]
     public void PartialStockCannotProduceCoverageCandidate()
     {
         var plan = SpecificationFixtures.Evidence(

@@ -95,7 +95,8 @@ public static class MarketPurchaseCostProjectionService
         estimate = new MarketPurchaseCostEstimate(
             candidate.ExactNeededCost,
             MarketPurchaseCostEstimateKind.SupportedEvidence,
-            world);
+            world,
+            candidate);
         return true;
     }
 
@@ -284,7 +285,8 @@ public static class MarketPurchaseCostProjectionService
 public sealed record MarketPurchaseCostEstimate(
     decimal Cost,
     MarketPurchaseCostEstimateKind Kind,
-    WorldShoppingSummary? World = null)
+    WorldShoppingSummary? World = null,
+    MarketCoverageOption? Coverage = null)
 {
     public static MarketPurchaseCostEstimate Unavailable { get; } =
         new(0, MarketPurchaseCostEstimateKind.Unavailable);

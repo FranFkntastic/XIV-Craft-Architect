@@ -232,26 +232,7 @@ jobs:
           timeout --signal=KILL 2m npm --prefix "dist/subject/tools/IndexedDbBrowserTests" ci
           timeout --signal=KILL 10m npm --prefix "dist/subject/tools/IndexedDbBrowserTests" exec -- playwright install --with-deps chromium firefox
 
-      - name: Run deterministic browser tests against extracted bytes
-        if: steps.target.outputs.slot == 'main'
-        env:
-          TRUTHFUL_ARTIFACT_SHA: ${{ steps.artifact.outputs.archive_sha256 }}
-          TRUTHFUL_HARNESS_SHA: ${{ steps.artifact.outputs.acceptance_harness_sha256 }}
-          TRUTHFUL_FIXTURE_SHA: ${{ steps.artifact.outputs.acceptance_fixture_sha256 }}
-        run: >
-          node tools/TruthfulSuite/run-command.mjs
-          --id deterministic-browser-tests
-          --out dist/evidence/deterministic-browser-tests.json
-          --timeout-seconds 600
-          --subject archive
-          --cwd "dist/subject/tools/IndexedDbBrowserTests"
-          --
-          npm test --
-          --web-root "../../src/FFXIV Craft Architect.Web/wwwroot"
-          --output "../../../evidence/browser-truth-report.json"
-
-      - name: Run guarded engine browser tests against extracted bytes
-        if: steps.target.outputs.slot == 'local-dev'
+      - name: Run required engine browser tests against extracted bytes
         env:
           TRUTHFUL_ARTIFACT_SHA: ${{ steps.artifact.outputs.archive_sha256 }}
           TRUTHFUL_HARNESS_SHA: ${{ steps.artifact.outputs.acceptance_harness_sha256 }}

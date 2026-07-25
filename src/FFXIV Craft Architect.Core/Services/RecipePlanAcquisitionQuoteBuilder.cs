@@ -166,59 +166,37 @@ public static class RecipePlanAcquisitionQuoteBuilder
             return false;
         }
 
-        var qualityPolicy = hqOnly
-            ? MarketCoverageQualityPolicy.HqOnly
-            : MarketCoverageQualityPolicy.NqOrHq;
-        var coverage = PurchaseRecommendationCost.GetDefaultCoverageOption(plan);
-        if (coverage != null &&
-            coverage.Kind == MarketCoverageKind.SupportedListings &&
-            coverage.IsDefaultEligible &&
-            coverage.QualityPolicy == qualityPolicy &&
-            coverage.QuantityCovered >= plan.QuantityNeeded &&
-            coverage.CashOutCost > 0)
+        var estimate = MarketPurchaseCostProjectionService.Estimate(
+            plan,
+            plan.QuantityNeeded,
+            hqOnly,
+            includeVendor: false);
+        if (!estimate.HasCost || estimate.IsUnsupportedProjection)
         {
-            cost = AllocateAggregateCost(coverage.CashOutCost, occurrenceQuantity, plan.QuantityNeeded);
+            return false;
+        }
+
+        cost = AllocateAggregateCost(estimate.Cost, occurrenceQuantity, plan.QuantityNeeded);
+        if (estimate.Coverage is { } coverage)
+        {
             locations = coverage.Worlds
                 .Select(world => FormatLocation(world.WorldName, world.DataCenter))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            return cost > 0;
         }
-
-        if (plan.RecommendedSplit?.Any() == true &&
-            HasSelectedListingCoverage(plan.RecommendedSplit.SelectMany(split => split.Listings), plan.QuantityNeeded, hqOnly))
+        else if (estimate.World is { } world)
         {
-            var splitCost = plan.RecommendedSplit.Sum(split => split.TotalCost);
-            cost = AllocateAggregateCost(splitCost, occurrenceQuantity, plan.QuantityNeeded);
+            locations = new[] { FormatLocation(world.WorldName, world.DataCenter) };
+        }
+        else if (plan.RecommendedSplit?.Any() == true)
+        {
             locations = plan.RecommendedSplit
                 .Select(split => FormatLocation(split.WorldName, split.DataCenter))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
-            return cost > 0;
         }
 
-        if (plan.RecommendedWorld is { } world &&
-            !string.Equals(world.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase) &&
-            world.TotalCost > 0 &&
-            HasSelectedListingCoverage(world.Listings, plan.QuantityNeeded, hqOnly))
-        {
-            cost = AllocateAggregateCost(world.TotalCost, occurrenceQuantity, plan.QuantityNeeded);
-            locations = new[] { FormatLocation(world.WorldName, world.DataCenter) };
-            return cost > 0;
-        }
-
-        return false;
-    }
-
-    private static bool HasSelectedListingCoverage(
-        IEnumerable<ShoppingListingEntry> listings,
-        int quantityNeeded,
-        bool hqOnly)
-    {
-        return listings
-            .Where(listing => listing.Quantity > 0 && listing.PricePerUnit > 0)
-            .Where(listing => !hqOnly || listing.IsHq)
-            .Sum(listing => listing.Quantity) >= quantityNeeded;
+        return cost > 0;
     }
 
     private static decimal AllocateAggregateCost(decimal aggregateCost, int occurrenceQuantity, int aggregateQuantity)

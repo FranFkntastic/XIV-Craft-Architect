@@ -23,40 +23,28 @@ const COMMON_OUTCOMES = [
 ];
 
 function targetConfiguration(slot) {
-  if (slot === 'local-dev') {
-    return {
-      procurementRoutesGenerationEnabled: true,
-      engineRewriteExecutionEnabled: true,
-      worker: {
-        required: true,
-        status: 'required-enabled-browser-worker',
-        outcomeId: 'engine-browser-tests',
-        protocolVersion: '4',
-        schemaVersion: '1'
-      }
-    };
+  if (slot !== 'main' && slot !== 'local-dev') {
+    throw new Error(`Unsupported deployment slot: ${slot}`);
   }
-  if (slot === 'main') {
-    return {
-      procurementRoutesGenerationEnabled: false,
-      engineRewriteExecutionEnabled: false,
-      worker: {
-        required: false,
-        status: 'production-disabled',
-        outcomeId: null,
-        protocolVersion: null,
-        schemaVersion: null
-      }
-    };
-  }
-  throw new Error(`Unsupported deployment slot: ${slot}`);
+
+  return {
+    procurementRoutesGenerationEnabled: true,
+    engineRewriteExecutionEnabled: true,
+    worker: {
+      required: true,
+      status: 'required-enabled-browser-worker',
+      outcomeId: 'engine-browser-tests',
+      protocolVersion: '4',
+      schemaVersion: '1'
+    }
+  };
 }
 
 function requiredOutcomes(slot) {
   return [
     ...COMMON_OUTCOMES,
     {
-      id: slot === 'local-dev' ? 'engine-browser-tests' : 'deterministic-browser-tests',
+      id: 'engine-browser-tests',
       subjectKind: 'archive'
     }
   ];
@@ -382,7 +370,7 @@ function validateBuildManifest(manifest) {
       JSON.stringify(requiredOutcomes(manifest.target.slot))) {
     throw new Error('Build manifest required outcomes are incomplete or reordered.');
   }
-  if (manifest?.acceptance?.dotnet?.specTestCases !== 56 ||
+  if (manifest?.acceptance?.dotnet?.specTestCases !== 57 ||
       manifest?.acceptance?.dotnet?.contractTestCases !== 89) {
     throw new Error('Build manifest .NET test inventory is incomplete.');
   }
@@ -581,7 +569,7 @@ export async function createArtifact(options, behavior = {}) {
       harnessTreeSha256: harnessTreeSha,
       fixtureTreeSha256: fixtureTreeSha,
       requiredOutcomes: requiredOutcomes(slot),
-      dotnet: { specTestCases: 56, contractTestCases: 89 },
+      dotnet: { specTestCases: 57, contractTestCases: 89 },
       worker: target.worker
     }
   };
