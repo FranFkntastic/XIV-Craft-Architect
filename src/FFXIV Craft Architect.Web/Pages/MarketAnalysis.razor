@@ -74,6 +74,7 @@
     private MarketAnalysisWorldGridSortColumn? _worldSortColumn;
     private bool _worldSortDescending;
     private int? _selectedItemId;
+    private long _projectionRefreshRevision = -1;
     private readonly HashSet<MarketAnalysisExpandedWorldKey> _expandedWorldKeys = [];
 
     private bool CanAnalyze =>
@@ -113,9 +114,38 @@
 
     private void ProjectionChanged()
     {
+        var revision = WorkerProjections.Shell.Revision;
+        if (revision > 0 &&
+            _market?.Revision != revision)
+        {
+            if (_projectionRefreshRevision != revision)
+            {
+                _projectionRefreshRevision = revision;
+                _ = InvokeAsync(() => RefreshProjectionAsync(revision));
+            }
+            return;
+        }
+
         _market = WorkerProjections.Market ?? _market;
         ApplyRequestedItem();
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task RefreshProjectionAsync(long revision)
+    {
+        try
+        {
+            _market = await WorkerSession.GetMarketProjectionAsync();
+            ApplyRequestedItem();
+        }
+        finally
+        {
+            if (_projectionRefreshRevision == revision)
+            {
+                _projectionRefreshRevision = -1;
+            }
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private void ApplyRequestedItem()

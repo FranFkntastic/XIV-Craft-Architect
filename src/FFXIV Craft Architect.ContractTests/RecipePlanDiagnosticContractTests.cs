@@ -52,6 +52,10 @@ public sealed class RecipePlanDiagnosticContractTests
             "Dialogs",
             "OptionsDialog.razor"));
         var planner = File.ReadAllText(Path.Combine(web, "Pages", "Index.razor"));
+        var marketPage = File.ReadAllText(Path.Combine(
+            web,
+            "Pages",
+            "MarketAnalysis.razor"));
         var workflow = File.ReadAllText(Path.Combine(
             web,
             "Services",
@@ -117,6 +121,14 @@ public sealed class RecipePlanDiagnosticContractTests
         Assert.DoesNotContain("_worker.BuildRecipeAsync(", tradePricing, StringComparison.Ordinal);
         Assert.DoesNotContain("_worker.ReplaceStoredPlanAsync(", tradePricing, StringComparison.Ordinal);
         Assert.DoesNotContain("RefreshMarketEvidenceAsync(", tradePricing, StringComparison.Ordinal);
+        Assert.Contains(
+            "_market?.Revision != revision",
+            marketPage,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RefreshProjectionAsync(revision)",
+            marketPage,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("OnStateChanged +=", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("WorkerProjections.Changed +=", workflow, StringComparison.Ordinal);
     }
