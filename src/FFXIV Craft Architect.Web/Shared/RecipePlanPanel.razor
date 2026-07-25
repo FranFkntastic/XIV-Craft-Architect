@@ -71,6 +71,7 @@
             {
                 <RecipeNodeView Node="rootItem"
                                 Depth="0"
+                                HasMarketEvidence="Recipe.HasMarketEvidence"
                                 IsSelected="@(SelectedNode?.NodeId == rootItem.NodeId)"
                                 SelectedNodeId="@SelectedNode?.NodeId"
                                 ExpandVersion="ExpandVersion"
@@ -105,6 +106,6 @@
     {
         return Recipe?.HasMarketEvidence == true
             ? "Current acquisition prices"
-            : "Building actionable prices";
+            : "Prices not analyzed";
     }
 }

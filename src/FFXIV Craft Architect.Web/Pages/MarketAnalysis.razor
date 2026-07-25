@@ -6,6 +6,7 @@
 @inject ISettingsService Settings
 @inject ISnackbar Snackbar
 @inject NavigationManager NavigationManager
+@inject AppState AppState
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 ma-page-container">
@@ -44,6 +45,7 @@
             ExpandedWorldKeys="_expandedWorldKeys"
             ShowWorldsColumn="_searchEntireRegion"
             IsRefreshingItem="@(_isRefreshingSelectedItem || _isAnalyzing || _isRefreshingPrices)"
+            IsAnalyzing="_isAnalyzing"
             OnSelectedItemChanged="SelectMarketAnalysisItem"
             OnRefreshItemRequested="RefreshSelectedMarketItemAsync"
             OnRefreshProjectedItemRequested="RefreshSelectedMarketItemAsync"
@@ -82,7 +84,8 @@
     private bool CanRefreshPrices =>
         !_isAnalyzing &&
         !_isRefreshingPrices &&
-        WorkerProjections.Shell.HasSession;
+        WorkerProjections.Shell.HasSession &&
+        _market?.HasAnalysis == true;
 
     protected override async Task OnInitializedAsync()
     {
@@ -261,6 +264,9 @@
         }
 
         _isAnalyzing = true;
+        var operation = AppState.BeginOperation(
+            "Market analysis",
+            forceRefreshData ? "Refreshing market prices..." : "Analyzing market prices...");
         try
         {
             var outcome = await WorkerSession.RunMarketAnalysisAsync(
@@ -287,6 +293,7 @@
         finally
         {
             _isAnalyzing = false;
+            AppState.EndOperation(operation);
         }
     }
 

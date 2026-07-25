@@ -185,6 +185,11 @@
     font-weight: 600;
 }
 
+.rp-node-quote.pending .rp-node-quote-amount {
+    color: #90979c;
+    font-weight: 600;
+}
+
 .rp-node-quote-card {
     position: absolute;
     z-index: 50;

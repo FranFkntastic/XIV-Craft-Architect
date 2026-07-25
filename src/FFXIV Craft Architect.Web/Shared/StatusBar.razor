@@ -164,10 +164,14 @@
 
 @code {
     private string? _tradeCompanyName;
-    private bool IsBusy => IsTradeRoute ? AppState.IsBusy : EngineHost.Health.IsExecuting;
+    private bool IsBusy => IsTradeRoute
+        ? AppState.IsBusy
+        : AppState.IsBusy || EngineHost.Health.IsExecuting;
     private string StatusMessage => IsTradeRoute
         ? AppState.StatusMessage
-        : IsBusy ? "Working" : "Ready";
+        : AppState.IsBusy
+            ? AppState.StatusMessage
+            : IsBusy ? "Working" : "Ready";
     private string SelectedRegion => WorkerProjections.Shell.SelectedRegion;
     private string SelectedDataCenter => WorkerProjections.Shell.SelectedDataCenter;
     private int MaterialCount =>

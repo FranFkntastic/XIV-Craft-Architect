@@ -72,21 +72,11 @@
             </div>
         </div>
 
-        <ShoppingListPanel
-            HasPlan="HasPlan"
-            TargetCount="TargetCount"
-            Materials="ActiveProcurementItems"
-            UnavailableMarketItems="UnavailableMarketItems" />
     }
 </div>
 
 @code {
     [Parameter] public WorkerAcquisitionRowProjection? Row { get; set; }
-    [Parameter] public bool HasPlan { get; set; }
-    [Parameter] public int TargetCount { get; set; }
-    [Parameter] public IReadOnlyList<MaterialAggregate>? ActiveProcurementItems { get; set; }
-    [Parameter] public IReadOnlyList<CoreMarketDataUnavailableItem> UnavailableMarketItems { get; set; } =
-        Array.Empty<CoreMarketDataUnavailableItem>();
     [Parameter] public EventCallback<AcquisitionSource> OnSourceChanged { get; set; }
 
     private const string ProjectedUnsupportedOptionTooltip =

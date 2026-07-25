@@ -34,6 +34,19 @@
     margin-bottom: 24px;
 }
 
+.ma-analysis-state {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    padding: 9px 12px;
+    border: 1px solid rgba(212, 167, 58, .35);
+    border-radius: 6px;
+    background: rgba(212, 167, 58, .08);
+    color: #c7c7c7;
+    font-size: 12px;
+}
+
 .ma-restored-shell {
     display: grid;
     grid-template-columns: minmax(360px, .9fr) minmax(440px, 1.1fr);

@@ -12,7 +12,7 @@
                 <h2 id="procurement-route-title" class="pp-route-title">Procurement Route</h2>
                 @if (_routeCards.Count > 0)
                 {
-                    <p class="pp-route-subtitle">@FormatCount(_routeCards.Count, "world stop") · @FormatCount(GetItemCount(), "item")</p>
+                    <p class="pp-route-subtitle">@FormatCount(_routeCards.Count(card => !card.IsVendor), "world stop") · @FormatCount(GetItemCount(), "item")</p>
                 }
             </div>
         </div>

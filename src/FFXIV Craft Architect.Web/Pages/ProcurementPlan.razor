@@ -15,6 +15,7 @@
 @inject CraftAppraisalQuoteExportService CraftAppraisalQuoteExportService
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
+@inject AppState AppState
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 pp-page-container">
@@ -221,6 +222,9 @@
 
         _isAnalyzing = true;
         _routeFailure = null;
+        var operation = AppState.BeginOperation(
+            "Procurement route",
+            "Generating procurement route...");
         try
         {
             var outcome = await WorkerSession.RunProcurementAsync(
@@ -241,6 +245,7 @@
         finally
         {
             _isAnalyzing = false;
+            AppState.EndOperation(operation);
         }
     }
 
@@ -358,6 +363,8 @@
     private string GetEmptyTitle() =>
         _isLoading
             ? "Restoring procurement plan"
+            : _isAnalyzing
+                ? "Generating procurement route"
             : _route?.HasPlan == true
                 ? "Route ready to generate"
                 : "No plan loaded";
@@ -365,6 +372,8 @@
     private string GetEmptyMessage() =>
         _isLoading
             ? "Restoring the saved route and procurement evidence."
+            : _isAnalyzing
+                ? "Comparing eligible purchases and travel tradeoffs."
             : _route?.HasMarketEvidence == true
             ? "Choose route settings and generate a route."
             : "Run Market Analysis before generating a procurement route.";

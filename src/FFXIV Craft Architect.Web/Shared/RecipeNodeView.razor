@@ -5,6 +5,7 @@
 @if (Node != null)
 {
     var display = Node.Display;
+    var quoteStatusClass = GetQuoteStatusClass(display);
     <div class="rp-node-branch @(Depth == 0 ? "rp-node-root" : null)">
         <div class="rp-node-row @(IsSelected ? "selected" : null)"
              style="--rp-node-depth: @Depth"
@@ -53,7 +54,7 @@
 
             <span class="rp-node-recipe">@display.RecipeInfo</span>
 
-            <div class="rp-node-quote @display.QuoteStatusClass @GetMethodClass()">
+            <div class="rp-node-quote @quoteStatusClass @GetMethodClass()">
                 <a href="@GetAcquisitionEvaluationUrl()"
                    class="rp-node-quote-method"
                    @onclick:stopPropagation
@@ -66,7 +67,7 @@
                    @onclick:preventDefault
                    @onclick:stopPropagation
                    aria-label="@GetQuoteAriaLabel(display)">
-                    @display.PriceText
+                    @GetPriceText(display)
                 </a>
                 @if (Node.ProcurementRoute is { } route)
                 {
@@ -85,23 +86,32 @@
                 <span class="rp-node-quote-card" role="tooltip">
                     <span class="rp-node-quote-card-header">
                         <strong>@GetQuoteHeading(display)</strong>
-                        @if (display.QuoteStatusClass == "actionable")
+                        @if (quoteStatusClass == "actionable")
                         {
-                            <b>@display.PriceText</b>
+                            <b>@GetPriceText(display)</b>
                         }
                     </span>
-                    @if (!string.IsNullOrWhiteSpace(display.QuoteUnitText))
+                    @if (!HasMarketEvidence)
                     {
-                        <span class="rp-node-quote-card-line"><em>Unit cost</em><span>@display.QuoteUnitText</span></span>
+                        <span class="rp-node-quote-card-footer">
+                            Run Market Analysis to compare current prices and choose acquisition sources.
+                        </span>
                     }
-                    <span class="rp-node-quote-card-line"><em>Coverage</em><span>@display.QuoteCoverageText</span></span>
-                    @if (!string.IsNullOrWhiteSpace(display.QuoteLocationText))
+                    else
                     {
-                        <span class="rp-node-quote-card-line"><em>Route</em><span>@display.QuoteLocationText</span></span>
+                        @if (!string.IsNullOrWhiteSpace(display.QuoteUnitText))
+                        {
+                            <span class="rp-node-quote-card-line"><em>Unit cost</em><span>@display.QuoteUnitText</span></span>
+                        }
+                        <span class="rp-node-quote-card-line"><em>Coverage</em><span>@display.QuoteCoverageText</span></span>
+                        @if (!string.IsNullOrWhiteSpace(display.QuoteLocationText))
+                        {
+                            <span class="rp-node-quote-card-line"><em>Route</em><span>@display.QuoteLocationText</span></span>
+                        }
+                        <span class="rp-node-quote-card-footer">
+                            @display.QuoteBasisText@if (!string.IsNullOrWhiteSpace(display.QuoteEvidenceText)){<text> · @display.QuoteEvidenceText</text>}
+                        </span>
                     }
-                    <span class="rp-node-quote-card-footer">
-                        @display.QuoteBasisText@if (!string.IsNullOrWhiteSpace(display.QuoteEvidenceText)){<text> · @display.QuoteEvidenceText</text>}
-                    </span>
                 </span>
             </div>
         </div>
@@ -113,6 +123,7 @@
                 {
                     <RecipeNodeView Node="child"
                                     Depth="Depth + 1"
+                                    HasMarketEvidence="HasMarketEvidence"
                                     IsSelected="@(SelectedNodeId == child.NodeId)"
                                     SelectedNodeId="@SelectedNodeId"
                                     ExpandVersion="ExpandVersion"
@@ -128,6 +139,7 @@
 @code {
     [Parameter] public WorkerRecipeNodeProjection? Node { get; set; }
     [Parameter] public int Depth { get; set; }
+    [Parameter] public bool HasMarketEvidence { get; set; }
     [Parameter] public bool IsSelected { get; set; }
     [Parameter] public string? SelectedNodeId { get; set; }
     [Parameter] public int ExpandVersion { get; set; }
@@ -197,14 +209,23 @@
     };
 
     private string GetQuoteAriaLabel(RecipeNodeDisplayState display) =>
-        $"{display.QuoteMethodText} {Node?.Name}: {display.PriceText}. Open in Market Analysis";
+        $"{display.QuoteMethodText} {Node?.Name}: {GetPriceText(display)}. Open in Market Analysis";
 
-    private string GetQuoteHeading(RecipeNodeDisplayState display) => display.QuoteStatusClass switch
+    private string GetQuoteHeading(RecipeNodeDisplayState display) =>
+        !HasMarketEvidence
+            ? "Market analysis needed"
+            : display.QuoteStatusClass switch
     {
         "refreshing" => $"Pricing {Node?.Name}",
         "unavailable" => "No actionable quote",
         _ => $"{GetMethodHeading()} {Node?.Quantity:N0}"
     };
+
+    private string GetQuoteStatusClass(RecipeNodeDisplayState display) =>
+        HasMarketEvidence ? display.QuoteStatusClass : "pending";
+
+    private string GetPriceText(RecipeNodeDisplayState display) =>
+        HasMarketEvidence ? display.PriceText : "Not analyzed";
 
     private string GetMethodHeading() => Node?.Source switch
     {

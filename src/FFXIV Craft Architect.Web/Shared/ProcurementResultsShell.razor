@@ -1,6 +1,8 @@
 @using FFXIV_Craft_Architect.Core.Models
 
-<main class="pp-results-column" aria-label="Procurement route results">
+<main class="pp-results-column"
+      aria-label="Procurement route results"
+      aria-busy="@IsAnalyzing.ToString().ToLowerInvariant()">
     @if (Worlds.Count > 0 && (IsStale || IsAnalyzing || !string.IsNullOrWhiteSpace(FailureMessage)))
     {
         <div class="pp-route-state @(FailureMessage != null ? "is-error" : "is-stale")" role="status">

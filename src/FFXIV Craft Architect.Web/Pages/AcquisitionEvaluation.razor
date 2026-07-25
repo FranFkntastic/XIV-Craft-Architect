@@ -102,10 +102,6 @@
 
     <AcquisitionDetailsPanel
         Row="@GetSelectedRow()"
-        HasPlan="@(_projection?.HasPlan == true)"
-        TargetCount="@(_projection?.RootItemCount ?? 0)"
-        ActiveProcurementItems="@(_projection?.ActiveProcurementItems ?? Array.Empty<MaterialAggregate>())"
-        UnavailableMarketItems="@(_projection?.UnavailableMarketItems ?? Array.Empty<CoreMarketDataUnavailableItem>())"
         OnSourceChanged="OnSelectedSourceChanged" />
 </div>
 
