@@ -116,7 +116,8 @@
     {
         var revision = WorkerProjections.Shell.Revision;
         if (revision > 0 &&
-            _market?.Revision != revision)
+            _market?.Revision != revision &&
+            WorkerProjections.Shell.MarketAnalysisCount == 0)
         {
             if (_projectionRefreshRevision != revision)
             {

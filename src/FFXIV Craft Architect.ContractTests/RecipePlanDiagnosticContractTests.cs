@@ -122,7 +122,11 @@ public sealed class RecipePlanDiagnosticContractTests
         Assert.DoesNotContain("_worker.ReplaceStoredPlanAsync(", tradePricing, StringComparison.Ordinal);
         Assert.DoesNotContain("RefreshMarketEvidenceAsync(", tradePricing, StringComparison.Ordinal);
         Assert.Contains(
-            "_market?.Revision != revision",
+            "_market?.Revision != revision &&",
+            marketPage,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "WorkerProjections.Shell.MarketAnalysisCount == 0",
             marketPage,
             StringComparison.Ordinal);
         Assert.Contains(
