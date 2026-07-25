@@ -80,6 +80,35 @@ public sealed class ProcurementSpecificationTests
         Assert.Equal(craftQuotes[firstCraft.NodeId].TotalCost, firstCraftCost);
         Assert.Equal(craftQuotes[secondCraft.NodeId].TotalCost, secondCraftCost);
         Assert.Equal(acquisitionCost, firstCraftCost + secondCraftCost);
+
+        var yieldingChild = SpecificationFixtures.MarketNode(
+            100,
+            "Whole stack",
+            quantity: 2,
+            nodeId: "yielding-child");
+        var yieldingCraft = SpecificationFixtures.MakeOrBuyNode(
+            103,
+            "Yielding craft",
+            yieldingChild,
+            nodeId: "yielding-craft");
+        yieldingCraft.Quantity = 6;
+        yieldingCraft.Yield = 3;
+        var yieldingPlan = new CraftingPlan { RootItems = [yieldingCraft] };
+        var yieldingQuotes = RecipePlanAcquisitionQuoteBuilder.Build(
+            yieldingPlan,
+            [evidence],
+            RecipePlanAcquisitionQuoteBasis.MarketAnalysis,
+            isRefreshing: false,
+            evidencePublishedAtUtc: null);
+        var yieldingContext = AcquisitionPlanningService.CreateCostContext([evidence]);
+
+        Assert.True(AcquisitionPlanningService.TryGetAcquisitionCost(
+            yieldingCraft,
+            AcquisitionSource.Craft,
+            yieldingContext,
+            out var yieldingCraftCost));
+        Assert.Equal(14m, yieldingCraftCost);
+        Assert.Equal(yieldingQuotes[yieldingCraft.NodeId].TotalCost, yieldingCraftCost);
     }
 
     [Fact]

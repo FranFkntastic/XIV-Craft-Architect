@@ -843,9 +843,8 @@ public static class AcquisitionPlanningService
             }
         }
 
-        var result = node.Yield > 1 ? cost / node.Yield : cost;
-        context.SetCachedCost(node, AcquisitionSource.Craft, result);
-        return result;
+        context.SetCachedCost(node, AcquisitionSource.Craft, cost);
+        return cost;
     }
 
     private static decimal CalculateCraftCost(
