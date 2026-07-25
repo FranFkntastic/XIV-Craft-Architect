@@ -496,7 +496,9 @@ public partial class TradeOrders
             return false;
         }
 
-        await WorkerSession.ReplaceStoredPlanAsync(stored, trackStoredPlanIdentity: true);
+        await PlanLifecycle.ReplaceStoredPlanAsync(
+            stored,
+            trackStoredPlanIdentity: true);
         return true;
     }
 

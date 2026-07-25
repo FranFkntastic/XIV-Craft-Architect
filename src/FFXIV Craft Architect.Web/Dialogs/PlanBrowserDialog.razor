@@ -3,6 +3,7 @@
 @inject WebPlanPersistenceService PlanPersistence
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
+@inject PlanLifecycleWorkflowService PlanLifecycle
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
@@ -245,9 +246,7 @@
                 var action = CurrentPlanId == planId ? "Updated" : "Saved";
                 Snackbar.Add($"{action} '{planName}'", Severity.Success);
 
-                await WorkerSession.ReplaceStoredPlanAsync(
-                    snapshot,
-                    trackStoredPlanIdentity: true);
+                await WorkerSession.MutatePlanIdentityAsync(planId, planName);
 
                 await RefreshSavedPlansListAsync();
 
@@ -293,13 +292,9 @@
                 // Update current plan name if this is the current plan
                 if (_selectedPlan.Id == CurrentPlanId)
                 {
-                    var renamed = await PlanPersistence.LoadPlanPayloadAsync(_selectedPlan.Id);
-                    if (renamed is not null)
-                    {
-                        await WorkerSession.ReplaceStoredPlanAsync(
-                            renamed,
-                            trackStoredPlanIdentity: true);
-                    }
+                    await WorkerSession.MutatePlanIdentityAsync(
+                        _selectedPlan.Id,
+                        newName);
                 }
 
                 await RefreshSavedPlansListAsync();
@@ -366,7 +361,7 @@
                 Snackbar.Add("Plan not found", Severity.Error);
                 return;
             }
-            await WorkerSession.ReplaceStoredPlanAsync(
+            await PlanLifecycle.ReplaceStoredPlanAsync(
                 stored,
                 trackStoredPlanIdentity: true);
             Snackbar.Add($"Loaded '{stored.Name}'", Severity.Success);

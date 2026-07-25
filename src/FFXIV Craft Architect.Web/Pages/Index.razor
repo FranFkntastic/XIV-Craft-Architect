@@ -10,7 +10,7 @@
 @inject AppState AppState
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
-@inject AutomaticPlanDerivationService AutomaticPlanDerivation
+@inject PlanLifecycleWorkflowService PlanLifecycle
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -301,7 +301,7 @@
         stored.MarketIntelligenceJson = null;
         stored.MarketItemAnalysesJson = null;
         stored.ProcurementRouteJson = null;
-        await WorkerSession.ReplaceStoredPlanAsync(
+        await PlanLifecycle.ReplaceStoredPlanAsync(
             stored,
             trackStoredPlanIdentity: false);
         _recipe = await WorkerSession.GetRecipeProjectionAsync();
@@ -316,12 +316,12 @@
             return;
 
         _isBuildingPlan = true;
-        AutomaticPlanDerivation.Cancel();
+        PlanLifecycle.Cancel();
         StateHasChanged();
 
         try
         {
-            var result = await WorkerSession.BuildRecipeAsync(
+            var result = await PlanLifecycle.BuildRecipeAsync(
                 new WorkerRecipeBuildRequest(
                     _recipe.ProjectItems,
                     AppState.SelectedDataCenter,
@@ -329,10 +329,6 @@
                     AppState.DefaultMarketFetchScope));
             _recipe = result.Recipe;
             _selectedNode = result.Recipe.Roots.FirstOrDefault();
-            if (result.Built)
-            {
-                AutomaticPlanDerivation.Schedule();
-            }
             Snackbar.Add(
                 result.Message,
                 result.MessageLevel switch
@@ -437,9 +433,7 @@
             {
                 if (isNewSave)
                 {
-                    await WorkerSession.ReplaceStoredPlanAsync(
-                        snapshot,
-                        trackStoredPlanIdentity: true);
+                    await WorkerSession.MutatePlanIdentityAsync(planId, planName);
                     _recipe = await WorkerSession.GetRecipeProjectionAsync();
                 }
                 var action = isNewSave ? "Saved" : "Updated";
@@ -467,7 +461,7 @@
                 Snackbar.Add("Plan not found", Severity.Error);
                 return;
             }
-            await WorkerSession.ReplaceStoredPlanAsync(
+            await PlanLifecycle.ReplaceStoredPlanAsync(
                 stored,
                 trackStoredPlanIdentity: true);
             _recipe = await WorkerSession.GetRecipeProjectionAsync();

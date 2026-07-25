@@ -301,6 +301,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
+        await RefreshRecipeProjectionAsync(cancellationToken);
         return shell;
     }
 

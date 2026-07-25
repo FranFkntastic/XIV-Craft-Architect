@@ -55,7 +55,23 @@ public sealed class RecipePlanDiagnosticContractTests
         var workflow = File.ReadAllText(Path.Combine(
             web,
             "Services",
-            "AutomaticPlanDerivationService.cs"));
+            "PlanLifecycleWorkflowService.cs"));
+        var tradePricing = File.ReadAllText(Path.Combine(
+            web,
+            "Services",
+            "TradeOrderPricingWorkflowService.cs"));
+        var layout = File.ReadAllText(Path.Combine(
+            web,
+            "Shared",
+            "MainLayout.razor"));
+        var planBrowser = File.ReadAllText(Path.Combine(
+            web,
+            "Dialogs",
+            "PlanBrowserDialog.razor"));
+        var tradeOrders = File.ReadAllText(Path.Combine(
+            web,
+            "Pages",
+            "TradeOrders.CraftPlan.cs"));
         var retiredTypes = new[]
         {
             "RecipePlannerCommandService",
@@ -73,14 +89,34 @@ public sealed class RecipePlanDiagnosticContractTests
         }
 
         Assert.Contains(
-            "AddScoped<AutomaticPlanDerivationService>()",
+            "AddScoped<PlanLifecycleWorkflowService>()",
             program,
             StringComparison.Ordinal);
-        Assert.Contains("if (result.Built)", planner, StringComparison.Ordinal);
-        Assert.Contains("AutomaticPlanDerivation.Schedule();", planner, StringComparison.Ordinal);
+        Assert.Contains("PlanLifecycle.BuildRecipeAsync(", planner, StringComparison.Ordinal);
+        Assert.Contains("PlanLifecycle.ReplaceStoredPlanAsync(", planner, StringComparison.Ordinal);
+        Assert.Contains("_planLifecycle.EnsureDerivedAsync(", tradePricing, StringComparison.Ordinal);
+        Assert.Contains(
+            "if (WorkerProjections.Shell.HasSession)",
+            layout,
+            StringComparison.Ordinal);
+        Assert.Contains("PlanLifecycle.Schedule();", layout, StringComparison.Ordinal);
         Assert.True(
             workflow.IndexOf("_worker.RunProcurementAsync(", StringComparison.Ordinal) >
             workflow.IndexOf("_worker.RunMarketAnalysisAsync(", StringComparison.Ordinal));
+        foreach (var entryPoint in new[] { planner, layout, planBrowser, tradeOrders })
+        {
+            Assert.DoesNotContain(
+                "WorkerSession.BuildRecipeAsync(",
+                entryPoint,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "WorkerSession.ReplaceStoredPlanAsync(",
+                entryPoint,
+                StringComparison.Ordinal);
+        }
+        Assert.DoesNotContain("_worker.BuildRecipeAsync(", tradePricing, StringComparison.Ordinal);
+        Assert.DoesNotContain("_worker.ReplaceStoredPlanAsync(", tradePricing, StringComparison.Ordinal);
+        Assert.DoesNotContain("RefreshMarketEvidenceAsync(", tradePricing, StringComparison.Ordinal);
         Assert.DoesNotContain("OnStateChanged +=", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("WorkerProjections.Changed +=", workflow, StringComparison.Ordinal);
     }

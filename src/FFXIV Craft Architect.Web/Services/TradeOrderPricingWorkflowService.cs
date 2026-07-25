@@ -44,6 +44,7 @@ public enum TradeOrderPricingWorkflowStatus
 public sealed class TradeOrderPricingWorkflowService
 {
     private readonly WorkerSessionCoordinator _worker;
+    private readonly PlanLifecycleWorkflowService _planLifecycle;
     private readonly WorkerProjectionStore _projections;
     private readonly WebPlanPersistenceService _planPersistence;
     private readonly AppState _viewSettings;
@@ -51,12 +52,14 @@ public sealed class TradeOrderPricingWorkflowService
 
     public TradeOrderPricingWorkflowService(
         WorkerSessionCoordinator worker,
+        PlanLifecycleWorkflowService planLifecycle,
         WorkerProjectionStore projections,
         WebPlanPersistenceService planPersistence,
         AppState viewSettings,
         CancellableOperationService operations)
     {
         _worker = worker;
+        _planLifecycle = planLifecycle;
         _projections = projections;
         _planPersistence = planPersistence;
         _viewSettings = viewSettings;
@@ -96,12 +99,13 @@ public sealed class TradeOrderPricingWorkflowService
                     "The order has no requested outputs to build.");
             }
 
-            var build = await _worker.BuildRecipeAsync(
+            var build = await _planLifecycle.BuildRecipeAsync(
                 new WorkerRecipeBuildRequest(
                     projectItems,
                     options.DataCenter,
                     _projections.Shell.SelectedRegion,
                     _viewSettings.DefaultMarketFetchScope),
+                PlanDerivationDispatch.Deferred,
                 operation.Token);
             if (!operation.IsCurrent || !build.Built)
             {
@@ -188,10 +192,11 @@ public sealed class TradeOrderPricingWorkflowService
                     "Linked Craft Architect plan could not be loaded.");
             }
 
-            await _worker.ReplaceStoredPlanAsync(
+            await _planLifecycle.ReplaceStoredPlanAsync(
                 stored,
                 trackStoredPlanIdentity: true,
-                operation.Token);
+                derivation: PlanDerivationDispatch.Deferred,
+                cancellationToken: operation.Token);
             return await PriceAndPersistAsync(
                 TradeOrderWorkflow.CopyOrder(order),
                 new MarketRefreshRequest(options.ForceRefreshMarketData),
@@ -274,39 +279,17 @@ public sealed class TradeOrderPricingWorkflowService
         }
 
         var warnings = new List<string>(initialWarnings ?? []);
-        operation.ReportStatus("Analyzing market prices...", progress: 45);
-        var market = await RefreshMarketEvidenceAsync(
-            source,
-            refresh,
-            operation);
-        warnings.AddRange(market.Warnings);
-        if (!operation.IsCurrent)
-        {
-            return CanceledResult();
-        }
-
-        operation.ReportStatus("Resolving procurement route...", progress: 70);
-        try
-        {
-            if (market.HasMarketCandidates && market.Published)
-            {
-                await _worker.RunProcurementAsync(
-                    new WorkerProcurementRequest(
-                        source.MarketFetchScope,
-                        source.SelectedDataCenter,
-                        source.SelectedRegion,
-                        source.MarketLens,
-                        _viewSettings.ProcurementTravelTolerance,
-                        _viewSettings.ProcurementEnableSplitWorldPurchases,
-                        _viewSettings.ProcurementStartFromHomeDataCenter,
-                        _viewSettings.ProcurementTravelPriority),
-                    operation.Token);
-            }
-        }
-        catch (InvalidOperationException ex)
-        {
-            warnings.Add($"Procurement route was not published: {ex.Message}");
-        }
+        var derivation = await _planLifecycle.EnsureDerivedAsync(
+            new PlanDerivationRequest(
+                refresh.ForceRefresh,
+                refresh.ItemIds,
+                refresh.SkipRefresh),
+            operation.Token,
+            (message, progress) => operation.ReportStatus(
+                message,
+                progress: progress),
+            () => operation.IsCurrent);
+        warnings.AddRange(derivation.Warnings);
         if (!operation.IsCurrent)
         {
             return CanceledResult();
@@ -347,7 +330,7 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrderWorkflow.AppendPricingEvidenceHistory(
             order,
             materials.Count,
-            market.FetchedCount,
+            derivation.MarketEntriesFetched,
             refreshedAt);
 
         if (!string.IsNullOrWhiteSpace(order.CraftPlanId))
@@ -367,7 +350,8 @@ public sealed class TradeOrderPricingWorkflowService
         }
 
         var complete = pricedCount == source.ActiveProcurementItems.Count &&
-            market.Published;
+            derivation.MarketPublished &&
+            derivation.ProcurementPublished;
         var message = complete
             ? "Order pricing ready"
             : "Order pricing updated with incomplete evidence.";
@@ -381,101 +365,10 @@ public sealed class TradeOrderPricingWorkflowService
             complete
                 ? RecipePlannerCommandMessageLevel.Success
                 : RecipePlannerCommandMessageLevel.Warning,
-            market.AnalyzedCount,
-            market.FetchedCount,
+            derivation.MarketItemsAnalyzed,
+            derivation.MarketEntriesFetched,
             pricedCount,
             source.ActiveProcurementItems.Count);
-    }
-
-    private async Task<MarketRefreshResult> RefreshMarketEvidenceAsync(
-        WorkerTradeProjection source,
-        MarketRefreshRequest refresh,
-        CancellableOperationLease operation)
-    {
-        var acquisition = await _worker.GetAcquisitionProjectionAsync(
-            "All",
-            operation.Token);
-        var candidates = acquisition?.Rows
-            .Where(row => row.IsMarketCandidate)
-            .ToArray() ?? [];
-        if (candidates.Length == 0)
-        {
-            return new MarketRefreshResult(
-                Published: true,
-                HasMarketCandidates: false,
-                AnalyzedCount: 0,
-                FetchedCount: 0,
-                Warnings: []);
-        }
-
-        if (refresh.SkipRefresh)
-        {
-            var current = await _worker.GetMarketProjectionAsync(operation.Token);
-            var published = current?.HasAnalysis == true;
-            return new MarketRefreshResult(
-                Published: published,
-                HasMarketCandidates: true,
-                AnalyzedCount: current?.AvailableCount ?? 0,
-                FetchedCount: 0,
-                Warnings: published
-                    ? []
-                    : ["Market evidence is not available. Run Market Analysis before using payment totals."]);
-        }
-
-        if (refresh.ItemIds.Count > 0)
-        {
-            var refreshed = 0;
-            var warnings = new List<string>();
-            foreach (var itemId in refresh.ItemIds.Distinct())
-            {
-                var item = candidates.FirstOrDefault(candidate =>
-                    candidate.ItemId == itemId);
-                if (item == null)
-                {
-                    continue;
-                }
-
-                try
-                {
-                    await _worker.RefreshMarketItemAsync(
-                        new WorkerMarketItemRefreshRequest(
-                            item.ItemId,
-                            item.ItemName,
-                            source.MarketFetchScope,
-                            source.SelectedDataCenter,
-                            source.SelectedRegion,
-                            source.MarketLens),
-                        operation.Token);
-                    refreshed++;
-                }
-                catch (InvalidOperationException ex)
-                {
-                    warnings.Add(
-                        $"Market refresh for {item.ItemName} did not publish: {ex.Message}");
-                }
-            }
-            return new MarketRefreshResult(
-                Published: warnings.Count == 0,
-                HasMarketCandidates: true,
-                AnalyzedCount: refreshed,
-                FetchedCount: refreshed,
-                Warnings: warnings);
-        }
-
-        var result = await _worker.RunMarketAnalysisAsync(
-            new WorkerMarketAnalysisRequest(
-                refresh.ForceRefresh,
-                source.MarketFetchScope,
-                source.SelectedDataCenter,
-                source.SelectedRegion,
-                source.MarketLens),
-            operation.Token);
-        return new MarketRefreshResult(
-            result.Published,
-            HasMarketCandidates: true,
-            result.AnalyzedCount,
-            result.FetchedCount,
-            Warnings: []);
     }
 
     private static ProjectItem ToProjectItem(TradeOrderRootItemSnapshot item) =>
@@ -534,11 +427,4 @@ public sealed class TradeOrderPricingWorkflowService
         public IReadOnlyCollection<int> ItemIds { get; }
         public bool SkipRefresh { get; }
     }
-
-    private sealed record MarketRefreshResult(
-        bool Published,
-        bool HasMarketCandidates,
-        int AnalyzedCount,
-        int FetchedCount,
-        IReadOnlyList<string> Warnings);
 }

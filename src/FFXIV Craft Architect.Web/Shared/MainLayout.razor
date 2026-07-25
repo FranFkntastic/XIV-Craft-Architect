@@ -13,7 +13,7 @@
 @inject CraftArchitectEngineHost EngineHost
 @inject WorkerProjectionStore WorkerProjections
 @inject WorkerSessionCoordinator WorkerSession
-@inject AutomaticPlanDerivationService AutomaticPlanDerivation
+@inject PlanLifecycleWorkflowService PlanLifecycle
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
 @inject ISnackbar Snackbar
@@ -318,6 +318,10 @@
                 InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(
                     PackagedWorldDirectory,
                     UniversalisService)));
+            if (WorkerProjections.Shell.HasSession)
+            {
+                PlanLifecycle.Schedule();
+            }
         }
     }
 
@@ -504,7 +508,7 @@
                 Snackbar.Add("Plan not found", Severity.Error);
                 return;
             }
-            await WorkerSession.ReplaceStoredPlanAsync(
+            await PlanLifecycle.ReplaceStoredPlanAsync(
                 stored,
                 trackStoredPlanIdentity: true);
             Snackbar.Add($"Loaded '{stored.Name}'", Severity.Success);
@@ -579,16 +583,12 @@
                 WorkerRecipeBuildOutcome? importCommandResult = null;
                 if (projectItems.Count > 0)
                 {
-                    importCommandResult = await WorkerSession.BuildRecipeAsync(
+                    importCommandResult = await PlanLifecycle.BuildRecipeAsync(
                         new WorkerRecipeBuildRequest(
                             projectItems,
                             WorkerProjections.Shell.SelectedDataCenter,
                             WorkerProjections.Shell.SelectedRegion,
                             MarketFetchScope.EntireRegion));
-                    if (importCommandResult.Built)
-                    {
-                        AutomaticPlanDerivation.Schedule();
-                    }
                 }
 
                 Snackbar.Add($"Imported {items.Count} {(items.Count == 1 ? "item" : "items")}", Severity.Success);
@@ -728,13 +728,12 @@
                 SavedAt = DateTime.UtcNow,
                 ModifiedAt = DateTime.UtcNow
             };
-            await WorkerSession.ReplaceStoredPlanAsync(
+            await PlanLifecycle.ReplaceStoredPlanAsync(
                 stored,
-                trackStoredPlanIdentity: !clearCurrentPlanId);
-            if (refreshPrices)
-            {
-                AutomaticPlanDerivation.Schedule();
-            }
+                trackStoredPlanIdentity: !clearCurrentPlanId,
+                derivation: refreshPrices
+                    ? PlanDerivationDispatch.Background
+                    : PlanDerivationDispatch.Deferred);
 
             Snackbar.Add(successMessage, Severity.Success);
         }
