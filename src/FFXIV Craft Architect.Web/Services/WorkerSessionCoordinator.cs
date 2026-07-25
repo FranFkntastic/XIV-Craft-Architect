@@ -506,6 +506,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         var marketWithDetails = _projections.AttachMarketDetails(
             shoppingPlans,
             analyses);
+        await RefreshRecipeProjectionAsync(cancellationToken);
         return new WorkerMarketAnalysisOutcome(
             Published: true,
             commit.AnalyzedCount,
@@ -575,6 +576,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
+        await RefreshRecipeProjectionAsync(cancellationToken);
         return market;
     }
 
@@ -668,6 +670,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
+        await RefreshRecipeProjectionAsync(cancellationToken);
         return outcome;
     }
 
@@ -706,6 +709,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
+        await RefreshRecipeProjectionAsync(cancellationToken);
         return outcome;
     }
 
@@ -742,6 +746,19 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             result.Revision,
             cancellationToken);
         _projections.TryPublish(shell);
+    }
+
+    private async Task RefreshRecipeProjectionAsync(
+        CancellationToken cancellationToken)
+    {
+        var recipe = await _engineHost.GetRecipeProjectionAsync(
+            _projections.Shell.Revision,
+            cancellationToken);
+        if (!_projections.TryPublishRecipe(recipe))
+        {
+            await RefreshAfterConflictAsync(recipe, cancellationToken);
+            throw CreateConflict(recipe);
+        }
     }
 
     private static InvalidOperationException CreateConflict(

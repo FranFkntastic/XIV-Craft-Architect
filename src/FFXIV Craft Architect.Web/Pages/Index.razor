@@ -77,13 +77,11 @@
         // Navigation must not blank an already-published plan while the page
         // repeats storage and Worker reads. Paint the current immutable
         // projection immediately, then refresh only what is actually missing.
-        _recipe = WorkerProjections.Recipe?.Revision == WorkerProjections.Shell.Revision
-            ? WorkerProjections.Recipe
-            : null;
+        _recipe = WorkerProjections.Recipe;
         EnsureSelectedNode();
 
         var savedPlansTask = RefreshSavedPlansListAsync();
-        if (_recipe is null)
+        if (_recipe?.Revision != WorkerProjections.Shell.Revision)
         {
             _recipe = await WorkerSession.GetRecipeProjectionAsync();
             EnsureSelectedNode();

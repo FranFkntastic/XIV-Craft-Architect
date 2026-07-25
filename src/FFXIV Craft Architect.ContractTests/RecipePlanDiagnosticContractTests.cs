@@ -97,6 +97,10 @@ public sealed class RecipePlanDiagnosticContractTests
             web,
             "Services",
             "WorkerEngineServiceCollectionExtensions.cs"));
+        var workerCoordinator = File.ReadAllText(Path.Combine(
+            web,
+            "Services",
+            "WorkerSessionCoordinator.cs"));
         var planner = File.ReadAllText(Path.Combine(web, "Pages", "Index.razor"));
         var marketResults = File.ReadAllText(Path.Combine(
             web,
@@ -151,7 +155,18 @@ public sealed class RecipePlanDiagnosticContractTests
         Assert.True(
             initialization.IndexOf("WorkerProjections.Recipe", StringComparison.Ordinal) <
             initialization.IndexOf("RefreshSavedPlansListAsync()", StringComparison.Ordinal));
-        Assert.Contains("if (_recipe is null)", initialization, StringComparison.Ordinal);
+        Assert.Contains(
+            "if (_recipe?.Revision != WorkerProjections.Shell.Revision)",
+            initialization,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "_recipe = WorkerProjections.Recipe;",
+            initialization,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "await RefreshRecipeProjectionAsync(cancellationToken);",
+            workerCoordinator,
+            StringComparison.Ordinal);
 
         Assert.Contains(
             "ProjectedItems=\"ProjectedItems\"",
