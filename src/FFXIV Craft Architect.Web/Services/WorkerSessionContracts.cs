@@ -199,6 +199,7 @@ public sealed record WorkerAcquisitionProjectionRequest(string Filter);
 
 public sealed record WorkerAcquisitionProjection(
     long Revision,
+    string Filter,
     bool HasPlan,
     int RootItemCount,
     int PricedItemCount,

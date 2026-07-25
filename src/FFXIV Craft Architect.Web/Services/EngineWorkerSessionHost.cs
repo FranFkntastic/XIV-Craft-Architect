@@ -1338,6 +1338,7 @@ public static partial class ManagedHost
         {
             return new WorkerAcquisitionProjection(
                 _sessionRevision,
+                filter.ToString(),
                 HasPlan: false,
                 RootItemCount: 0,
                 PricedItemCount: 0,
@@ -1372,6 +1373,7 @@ public static partial class ManagedHost
             .ToArray();
         return new WorkerAcquisitionProjection(
             _sessionRevision,
+            filter.ToString(),
             HasPlan: true,
             RootItemCount: plan.RootItems.Count,
             PricedItemCount: evidence.ShoppingPlans?.Count ?? 0,

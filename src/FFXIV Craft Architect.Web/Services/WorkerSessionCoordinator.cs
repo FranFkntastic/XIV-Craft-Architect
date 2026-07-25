@@ -113,6 +113,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             result.Revision,
             cancellationToken);
         _projections.TryPublishRecipe(recipe);
+        await RefreshAcquisitionProjectionAsync("All", cancellationToken);
         var market = await _engineHost.GetMarketProjectionAsync(
             result.Revision,
             includeDetails: false,
@@ -159,6 +160,13 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         if (!IsEnabled)
         {
             return null;
+        }
+
+        var cached = _projections.Acquisition;
+        if (cached?.Revision == _projections.Shell.Revision &&
+            string.Equals(cached.Filter, filter, StringComparison.OrdinalIgnoreCase))
+        {
+            return cached;
         }
 
         var result = await _engineHost.GetAcquisitionProjectionAsync(
@@ -223,6 +231,12 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         if (!IsEnabled)
         {
             return null;
+        }
+
+        var cached = _projections.Procurement;
+        if (cached?.Revision == _projections.Shell.Revision)
+        {
+            return cached;
         }
 
         var result = await _engineHost.GetProcurementProjectionAsync(
@@ -323,6 +337,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
+        await RefreshAcquisitionProjectionAsync("All", cancellationToken);
         return outcome;
     }
 
@@ -532,6 +547,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             analyses);
         reportStatus?.Invoke("Updating your plan with the new prices...", 98);
         await RefreshRecipeProjectionAsync(cancellationToken);
+        await RefreshAcquisitionProjectionAsync("All", cancellationToken);
         return new WorkerMarketAnalysisOutcome(
             Published: true,
             commit.AnalyzedCount,
@@ -602,6 +618,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
 
         await RefreshRecipeProjectionAsync(cancellationToken);
+        await RefreshAcquisitionProjectionAsync("All", cancellationToken);
         return market;
     }
 
@@ -696,6 +713,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
 
         await RefreshRecipeProjectionAsync(cancellationToken);
+        await RefreshAcquisitionProjectionAsync("All", cancellationToken);
         return outcome;
     }
 
@@ -740,6 +758,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
 
         await RefreshRecipeProjectionAsync(cancellationToken);
+        await RefreshAcquisitionProjectionAsync("All", cancellationToken);
         return outcome;
     }
 
@@ -844,6 +863,21 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         {
             await RefreshAfterConflictAsync(recipe, cancellationToken);
             throw CreateConflict(recipe);
+        }
+    }
+
+    private async Task RefreshAcquisitionProjectionAsync(
+        string filter,
+        CancellationToken cancellationToken)
+    {
+        var acquisition = await _engineHost.GetAcquisitionProjectionAsync(
+            _projections.Shell.Revision,
+            filter,
+            cancellationToken);
+        if (!_projections.TryPublishAcquisition(acquisition))
+        {
+            await RefreshAfterConflictAsync(acquisition, cancellationToken);
+            throw CreateConflict(acquisition);
         }
     }
 

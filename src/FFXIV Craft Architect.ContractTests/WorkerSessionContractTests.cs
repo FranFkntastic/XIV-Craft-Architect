@@ -100,6 +100,7 @@ public sealed class WorkerSessionContractTests
         var acquisitionProjection =
             acquisition.Projection.Deserialize<WorkerAcquisitionProjection>(WireOptions);
         Assert.NotNull(acquisitionProjection);
+        Assert.Equal("All", acquisitionProjection.Filter);
         Assert.NotEmpty(acquisitionProjection.Rows);
         Assert.DoesNotContain("\"node\":", acquisition.Projection.GetRawText());
 

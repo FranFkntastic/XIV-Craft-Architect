@@ -91,6 +91,14 @@
     protected override async Task OnInitializedAsync()
     {
         WorkerProjections.Changed += ProjectionChanged;
+        if (WorkerProjections.Market is { } retained &&
+            retained.Revision == WorkerProjections.Shell.Revision)
+        {
+            _market = retained;
+            ApplyRequestedItem();
+            _selectedItemId ??= _market.Items.FirstOrDefault()?.ItemId;
+        }
+
         _searchEntireRegion = await Settings.GetAsync("market.search_entire_region", true);
         _secretDebugToolsEnabled = await Settings.GetAsync("debug.secret_tools_enabled", false);
         var overlay = await Settings.GetAsync(
@@ -101,7 +109,7 @@
             _evidenceOverlay = parsedOverlay;
         }
 
-        _market = await WorkerSession.GetMarketProjectionAsync();
+        _market ??= await WorkerSession.GetMarketProjectionAsync();
         ApplyRequestedItem();
         _selectedItemId ??= _market?.Items.FirstOrDefault()?.ItemId;
         await EnsureSelectedWorldDetailsAsync();

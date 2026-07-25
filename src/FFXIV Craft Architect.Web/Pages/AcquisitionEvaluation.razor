@@ -55,7 +55,16 @@
     </aside>
 
     <main class="ae-ledger">
-        @if (_projection?.HasPlan != true)
+        @if (_isLoadingProjection && _projection is null)
+        {
+            <div class="ae-empty">
+                <MudProgressCircular Indeterminate="true"
+                                     Size="Size.Medium"
+                                     Class="ae-empty-icon" />
+                <div class="ae-empty-title">Loading acquisition decisions</div>
+            </div>
+        }
+        else if (_projection?.HasPlan != true)
         {
             <div class="ae-empty">
                 <MudIcon Icon="@Icons.Material.Filled.FactCheck" Size="Size.Large" Class="ae-empty-icon" />
@@ -113,6 +122,7 @@
     public int? RequestedItemId { get; set; }
 
     private WorkerAcquisitionProjection? _projection;
+    private bool _isLoadingProjection = true;
     private string? _selectedNodeId;
     private AcquisitionFilter _filter = AcquisitionFilter.All;
     private WebTableSortState<AcquisitionDecisionLedgerSortColumn> _sortState =
@@ -123,6 +133,11 @@
     protected override async Task OnInitializedAsync()
     {
         WorkerProjections.Changed += ProjectionChanged;
+        if (TryAdoptProjection(WorkerProjections.Acquisition))
+        {
+            return;
+        }
+
         await RefreshProjectionAsync();
     }
 
@@ -133,20 +148,42 @@
 
     private void ProjectionChanged()
     {
-        if (WorkerProjections.Acquisition is { } projection &&
-            projection.Revision == WorkerProjections.Shell.Revision)
+        if (TryAdoptProjection(WorkerProjections.Acquisition))
         {
-            _projection = projection;
-            EnsureSelection();
             _ = InvokeAsync(StateHasChanged);
         }
     }
 
     private async Task RefreshProjectionAsync()
     {
-        _projection = await WorkerSession.GetAcquisitionProjectionAsync(
-            _filter.ToString());
+        try
+        {
+            var projection = await WorkerSession.GetAcquisitionProjectionAsync(
+                _filter.ToString());
+            TryAdoptProjection(projection);
+        }
+        finally
+        {
+            _isLoadingProjection = false;
+        }
+    }
+
+    private bool TryAdoptProjection(WorkerAcquisitionProjection? projection)
+    {
+        if (projection is null ||
+            projection.Revision != WorkerProjections.Shell.Revision ||
+            !string.Equals(
+                projection.Filter,
+                _filter.ToString(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        _projection = projection;
+        _isLoadingProjection = false;
         EnsureSelection();
+        return true;
     }
 
     private async Task SetFilterAsync(AcquisitionFilter filter)

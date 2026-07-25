@@ -124,6 +124,14 @@
     protected override async Task OnInitializedAsync()
     {
         WorkerProjections.Changed += ProjectionChanged;
+        if (WorkerProjections.Procurement is { } retained &&
+            retained.Revision == WorkerProjections.Shell.Revision)
+        {
+            _route = retained;
+            ApplyRouteSettings();
+            _isLoading = false;
+        }
+
         _searchEntireRegion = await Settings.GetAsync(
             "procurement.search_entire_region",
             true);
