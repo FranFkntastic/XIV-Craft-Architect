@@ -13,6 +13,7 @@
 @inject CraftArchitectEngineHost EngineHost
 @inject WorkerProjectionStore WorkerProjections
 @inject WorkerSessionCoordinator WorkerSession
+@inject AutomaticPlanDerivationService AutomaticPlanDerivation
 @inject IJSRuntime JSRuntime
 @inject HttpClient Http
 @inject ISnackbar Snackbar
@@ -584,6 +585,10 @@
                             WorkerProjections.Shell.SelectedDataCenter,
                             WorkerProjections.Shell.SelectedRegion,
                             MarketFetchScope.EntireRegion));
+                    if (importCommandResult.Built)
+                    {
+                        AutomaticPlanDerivation.Schedule();
+                    }
                 }
 
                 Snackbar.Add($"Imported {items.Count} {(items.Count == 1 ? "item" : "items")}", Severity.Success);
@@ -726,6 +731,10 @@
             await WorkerSession.ReplaceStoredPlanAsync(
                 stored,
                 trackStoredPlanIdentity: !clearCurrentPlanId);
+            if (refreshPrices)
+            {
+                AutomaticPlanDerivation.Schedule();
+            }
 
             Snackbar.Add(successMessage, Severity.Success);
         }

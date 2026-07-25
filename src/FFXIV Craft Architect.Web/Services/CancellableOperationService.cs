@@ -84,6 +84,7 @@ public sealed class CancellableOperationService : IDisposable
         Cancel(CancellableOperationWorkflow.ProcurementAnalysis, message);
         Cancel(CancellableOperationWorkflow.ItemMarketRefresh, message);
         Cancel(CancellableOperationWorkflow.TradeOrderPricing, message);
+        Cancel(CancellableOperationWorkflow.PlanDerivation, message);
     }
 
     public void Dispose()
@@ -235,5 +236,6 @@ public enum CancellableOperationWorkflow
     ProcurementAnalysis,
     ItemMarketRefresh,
     PlanActivation,
-    TradeOrderPricing
+    TradeOrderPricing,
+    PlanDerivation
 }

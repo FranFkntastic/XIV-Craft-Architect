@@ -131,6 +131,12 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             return null;
         }
 
+        var cached = _projections.Recipe;
+        if (cached?.Revision == _projections.Shell.Revision)
+        {
+            return cached;
+        }
+
         var result = await _engineHost.GetRecipeProjectionAsync(
             _projections.Shell.Revision,
             cancellationToken);

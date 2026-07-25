@@ -43,17 +43,19 @@ public sealed class RecipePlanDiagnosticContractTests
     public void Composition_DoesNotRegisterRetiredMainThreadPlannerPipelines()
     {
         var root = LocateRepositoryRoot();
+        var web = Path.Combine(root, "src", "FFXIV Craft Architect.Web");
         var program = File.ReadAllText(Path.Combine(
-            root,
-            "src",
-            "FFXIV Craft Architect.Web",
+            web,
             "Program.cs"));
         var options = File.ReadAllText(Path.Combine(
-            root,
-            "src",
-            "FFXIV Craft Architect.Web",
+            web,
             "Dialogs",
             "OptionsDialog.razor"));
+        var planner = File.ReadAllText(Path.Combine(web, "Pages", "Index.razor"));
+        var workflow = File.ReadAllText(Path.Combine(
+            web,
+            "Services",
+            "AutomaticPlanDerivationService.cs"));
         var retiredTypes = new[]
         {
             "RecipePlannerCommandService",
@@ -69,6 +71,18 @@ public sealed class RecipePlanDiagnosticContractTests
             Assert.DoesNotContain(retiredType, program, StringComparison.Ordinal);
             Assert.DoesNotContain(retiredType, options, StringComparison.Ordinal);
         }
+
+        Assert.Contains(
+            "AddScoped<AutomaticPlanDerivationService>()",
+            program,
+            StringComparison.Ordinal);
+        Assert.Contains("if (result.Built)", planner, StringComparison.Ordinal);
+        Assert.Contains("AutomaticPlanDerivation.Schedule();", planner, StringComparison.Ordinal);
+        Assert.True(
+            workflow.IndexOf("_worker.RunProcurementAsync(", StringComparison.Ordinal) >
+            workflow.IndexOf("_worker.RunMarketAnalysisAsync(", StringComparison.Ordinal));
+        Assert.DoesNotContain("OnStateChanged +=", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("WorkerProjections.Changed +=", workflow, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -83,6 +97,15 @@ public sealed class RecipePlanDiagnosticContractTests
             web,
             "Services",
             "WorkerEngineServiceCollectionExtensions.cs"));
+        var planner = File.ReadAllText(Path.Combine(web, "Pages", "Index.razor"));
+        var marketResults = File.ReadAllText(Path.Combine(
+            web,
+            "Shared",
+            "MarketAnalysisResultsPanel.razor"));
+        var marketResultsCss = File.ReadAllText(Path.Combine(
+            web,
+            "Shared",
+            "MarketAnalysisResultsPanel.razor.css"));
         var retiredAuthority = new[]
         {
             "CurrentPlan",
@@ -116,6 +139,26 @@ public sealed class RecipePlanDiagnosticContractTests
         Assert.DoesNotContain("AppState", engineHost, StringComparison.Ordinal);
         Assert.Contains("AddWorkerEngine", program, StringComparison.Ordinal);
         Assert.Contains("WorkerSessionCoordinator", engineComposition, StringComparison.Ordinal);
+
+        var initializationStart = planner.IndexOf(
+            "protected override async Task OnInitializedAsync()",
+            StringComparison.Ordinal);
+        var initializationEnd = planner.IndexOf(
+            "public void Dispose()",
+            initializationStart,
+            StringComparison.Ordinal);
+        var initialization = planner[initializationStart..initializationEnd];
+        Assert.True(
+            initialization.IndexOf("WorkerProjections.Recipe", StringComparison.Ordinal) <
+            initialization.IndexOf("RefreshSavedPlansListAsync()", StringComparison.Ordinal));
+        Assert.Contains("if (_recipe is null)", initialization, StringComparison.Ordinal);
+
+        Assert.Contains(
+            "ProjectedItems=\"ProjectedItems\"",
+            marketResults,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("ma-restored-", marketResults, StringComparison.Ordinal);
+        Assert.DoesNotContain("ma-restored-", marketResultsCss, StringComparison.Ordinal);
     }
 
     private static string LocateRepositoryRoot()

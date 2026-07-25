@@ -10,6 +10,7 @@
 @inject AppState AppState
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
+@inject AutomaticPlanDerivationService AutomaticPlanDerivation
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -73,10 +74,21 @@
     {
         WorkerProjections.Changed += OnWorkerProjectionChanged;
 
-        // Load saved plans list
-        await RefreshSavedPlansListAsync();
-        _recipe = await WorkerSession.GetRecipeProjectionAsync();
+        // Navigation must not blank an already-published plan while the page
+        // repeats storage and Worker reads. Paint the current immutable
+        // projection immediately, then refresh only what is actually missing.
+        _recipe = WorkerProjections.Recipe?.Revision == WorkerProjections.Shell.Revision
+            ? WorkerProjections.Recipe
+            : null;
         EnsureSelectedNode();
+
+        var savedPlansTask = RefreshSavedPlansListAsync();
+        if (_recipe is null)
+        {
+            _recipe = await WorkerSession.GetRecipeProjectionAsync();
+            EnsureSelectedNode();
+        }
+        await savedPlansTask;
 
         // Note: WorldData, auto-save restoration, and auto-save timer are now
         // all handled centrally in MainLayout.razor
@@ -306,6 +318,7 @@
             return;
 
         _isBuildingPlan = true;
+        AutomaticPlanDerivation.Cancel();
         StateHasChanged();
 
         try
@@ -318,6 +331,10 @@
                     AppState.DefaultMarketFetchScope));
             _recipe = result.Recipe;
             _selectedNode = result.Recipe.Roots.FirstOrDefault();
+            if (result.Built)
+            {
+                AutomaticPlanDerivation.Schedule();
+            }
             Snackbar.Add(
                 result.Message,
                 result.MessageLevel switch

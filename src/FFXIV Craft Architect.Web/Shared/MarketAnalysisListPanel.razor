@@ -69,20 +69,58 @@
                                 </td>
                             </tr>
                         }
+                        @foreach (var item in _orderedProjectedItems)
+                        {
+                            <tr @key="item.ItemId"
+                                class="@GetProjectedRowClass(item)"
+                                @onclick="() => SelectProjectedItem(item)">
+                                <td style="@ItemColumnStyle" class="ma-item-column">
+                                    <span class="ma-item-cell">
+                                        <a class="ma-item-name"
+                                           href="@GetUniversalisUrl(item.ItemId)"
+                                           target="_blank"
+                                           rel="noopener noreferrer"
+                                           title="Open @item.Name on Universalis"
+                                           @onclick:stopPropagation>
+                                            @item.Name
+                                        </a>
+                                        <span class="ma-item-kind">Market</span>
+                                    </span>
+                                </td>
+                                <td style="@QuantityColumnStyle" class="ma-number-column">
+                                    <span class="@GetProjectedStockClass(item)">@FormatQuantity(item.QuantityNeeded)</span>
+                                </td>
+                                <td style="@CoverageColumnStyle" class="ma-recommendation-column">
+                                    <span title="@FormatProjectedCoverage(item)">@FormatProjectedCoverage(item)</span>
+                                </td>
+                                @if (ShowWorldsColumn)
+                                {
+                                    <td style="width: 7%;" class="ma-number-column">
+                                        @item.WorldCount
+                                    </td>
+                                }
+                                <td style="@TotalColumnStyle" class="ma-total-column">
+                                    <span class="@GetProjectedTotalClass(item)"
+                                          title="@GetProjectedTotalTooltip(item)">
+                                        @FormatProjectedTotal(item)
+                                    </span>
+                                </td>
+                            </tr>
+                        }
                     </tbody>
                 </table>
             </div>
         </div>
 
         <aside class="ma-detail-pane">
-            @if (_selectedPlan == null)
+            @if (_selectedPlan == null && _selectedProjectedItem == null)
             {
                 <div class="ma-detail-empty">
                     <MudIcon Icon="@Icons.Material.Filled.TableRows" Size="Size.Large" />
                     <MudText Typo="Typo.body2">Select an item to inspect its market detail.</MudText>
                 </div>
             }
-            else
+            else if (_selectedPlan is not null)
             {
                 <div class="ma-detail-header">
                     <div class="ma-detail-title-block">
@@ -193,12 +231,110 @@
                     </div>
                 }
             }
+            else if (_selectedProjectedItem is { } projectedItem)
+            {
+                <div class="ma-detail-header">
+                    <div class="ma-detail-title-block">
+                        <div class="ma-detail-title-row">
+                            <a class="ma-detail-title"
+                               href="@GetUniversalisUrl(projectedItem.ItemId)"
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               title="Open @projectedItem.Name on Universalis">
+                                @projectedItem.Name
+                            </a>
+                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                           Size="Size.Small"
+                                           Class="ma-detail-copy-button"
+                                           OnClick="() => CopySelectedItemNameAsync(projectedItem.Name)"
+                                           OnClick:StopPropagation="true"
+                                           Title="Copy item name"
+                                           AriaLabel="Copy item name" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                           Size="Size.Small"
+                                           Class="ma-detail-refresh-button"
+                                           Disabled="IsRefreshingItem"
+                                           OnClick="() => RefreshProjectedItemAsync(projectedItem)"
+                                           OnClick:StopPropagation="true"
+                                           Title="Refresh market data for this item"
+                                           AriaLabel="Refresh market data for this item" />
+                        </div>
+                        <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
+                            @FormatQuantity(projectedItem.QuantityNeeded) needed
+                        </MudText>
+                    </div>
+                    <MudText Typo="Typo.subtitle1" Class="ma-detail-total">
+                        <span class="@GetProjectedTotalClass(projectedItem)"
+                              title="@GetProjectedTotalTooltip(projectedItem)">
+                            @FormatProjectedTotal(projectedItem)
+                        </span>
+                    </MudText>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(projectedItem.Warning))
+                {
+                    <div class="ma-projected-warning">
+                        <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" />
+                        <span>@projectedItem.Warning</span>
+                    </div>
+                }
+
+                <div class="ma-detail-tabs" role="tablist" aria-label="Market detail views">
+                    <button type="button"
+                            class="ma-detail-tab is-active"
+                            role="tab"
+                            aria-selected="true">
+                        Worlds
+                    </button>
+                </div>
+
+                <div class="ma-detail-scroll">
+                    @if (projectedItem.Worlds.Count == 0)
+                    {
+                        <div class="ma-analysis-missing">
+                            <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
+                            <MudText Typo="Typo.body2">
+                                World detail is not loaded for this item. Refresh it to load the current listings.
+                            </MudText>
+                        </div>
+                    }
+                    else
+                    {
+                        <table class="ma-projected-world-table">
+                            <thead>
+                                <tr>
+                                    <th>@ProjectedWorldSortHeader("World", MarketAnalysisWorldGridSortColumn.World)</th>
+                                    <th>Data Center</th>
+                                    <th class="ma-number-column">@ProjectedWorldSortHeader("Stock", MarketAnalysisWorldGridSortColumn.StockDepth)</th>
+                                    <th class="ma-number-column">@ProjectedWorldSortHeader("Unit", MarketAnalysisWorldGridSortColumn.PriceValue)</th>
+                                    <th class="ma-number-column">@ProjectedWorldSortHeader("Total", MarketAnalysisWorldGridSortColumn.Value)</th>
+                                    <th>@ProjectedWorldSortHeader("Age", MarketAnalysisWorldGridSortColumn.Data)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var world in GetProjectedWorlds(projectedItem))
+                                {
+                                    <tr>
+                                        <td class="ma-projected-world-name">@world.WorldName</td>
+                                        <td>@world.DataCenter</td>
+                                        <td class="ma-number-column">@world.Quantity.ToString("N0")</td>
+                                        <td class="ma-number-column">@FormatGil(world.AverageUnitPrice)</td>
+                                        <td class="ma-number-column">@FormatGil(world.TotalCost)</td>
+                                        <td>@FormatWorldAge(world.DataAge)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            }
         </aside>
     </div>
 </div>
 
 @code {
     [Parameter] public IReadOnlyList<DetailedShoppingPlan> ShoppingPlans { get; set; } = Array.Empty<DetailedShoppingPlan>();
+    [Parameter] public IReadOnlyList<WorkerMarketItemProjection> ProjectedItems { get; set; } = Array.Empty<WorkerMarketItemProjection>();
     [Parameter] public IReadOnlyList<MarketItemAnalysis> MarketItemAnalyses { get; set; } = Array.Empty<MarketItemAnalysis>();
     [Parameter] public MarketAcquisitionLens CurrentLens { get; set; } = MarketAcquisitionLens.MinimumUpfrontCost;
     [Parameter] public MarketSortOption CurrentSort { get; set; } = MarketSortOption.ByRecommended;
@@ -213,12 +349,15 @@
     [Parameter] public bool IsRefreshingItem { get; set; }
     [Parameter] public EventCallback<int?> OnSelectedItemChanged { get; set; }
     [Parameter] public EventCallback<DetailedShoppingPlan> OnRefreshItemRequested { get; set; }
+    [Parameter] public EventCallback<WorkerMarketItemProjection> OnRefreshProjectedItemRequested { get; set; }
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
     [Parameter] public EventCallback<MarketAnalysisGridSortState> OnSortChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnWorldSortChanged { get; set; }
 
     private DetailedShoppingPlan? _selectedPlan;
+    private WorkerMarketItemProjection? _selectedProjectedItem;
     private IReadOnlyList<DetailedShoppingPlan> _orderedPlans = Array.Empty<DetailedShoppingPlan>();
+    private IReadOnlyList<WorkerMarketItemProjection> _orderedProjectedItems = Array.Empty<WorkerMarketItemProjection>();
     private IReadOnlyDictionary<int, MarketItemAnalysis> _analysisByItemId = new Dictionary<int, MarketItemAnalysis>();
     private MarketAnalysisDetailTab _selectedDetailTab = MarketAnalysisDetailTab.Worlds;
     private int? _lastSelectedItemId;
@@ -238,12 +377,20 @@
     {
         _analysisByItemId = MarketItemAnalyses.ToDictionary(analysis => analysis.ItemId);
         _orderedPlans = GetGridPlans();
+        _orderedProjectedItems = ShoppingPlans.Count == 0
+            ? GetProjectedItems()
+            : Array.Empty<WorkerMarketItemProjection>();
         _selectedPlan = MarketAnalysisGridViewService.ResolveSelectedPlan(_orderedPlans, SelectedItemId);
-        if (_lastSelectedItemId != _selectedPlan?.ItemId)
+        _selectedProjectedItem = _selectedPlan is null
+            ? _orderedProjectedItems.FirstOrDefault(item => item.ItemId == SelectedItemId)
+                ?? _orderedProjectedItems.FirstOrDefault()
+            : null;
+        var selectedItemId = _selectedPlan?.ItemId ?? _selectedProjectedItem?.ItemId;
+        if (_lastSelectedItemId != selectedItemId)
         {
             _selectedDetailTab = MarketAnalysisDetailTab.Worlds;
             _expandedPriceBandKeys.Clear();
-            _lastSelectedItemId = _selectedPlan?.ItemId;
+            _lastSelectedItemId = selectedItemId;
         }
     }
 
@@ -253,10 +400,19 @@
         await OnSelectedItemChanged.InvokeAsync(plan.ItemId);
     }
 
+    private async Task SelectProjectedItem(WorkerMarketItemProjection item)
+    {
+        _selectedProjectedItem = item;
+        await OnSelectedItemChanged.InvokeAsync(item.ItemId);
+    }
+
     private async Task RefreshSelectedItemAsync(DetailedShoppingPlan plan)
     {
         await OnRefreshItemRequested.InvokeAsync(plan);
     }
+
+    private Task RefreshProjectedItemAsync(WorkerMarketItemProjection item) =>
+        OnRefreshProjectedItemRequested.InvokeAsync(item);
 
     private RenderFragment SortHeader(string label, MarketAnalysisGridSortColumn column, string? title = null) => builder =>
     {
@@ -292,6 +448,45 @@
     {
         var next = MarketAnalysisGridViewService.ToggleSort(SortColumn, SortDescending, column);
         await OnSortChanged.InvokeAsync(next);
+    }
+
+    private RenderFragment ProjectedWorldSortHeader(
+        string label,
+        MarketAnalysisWorldGridSortColumn column) => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "type", "button");
+        builder.AddAttribute(
+            sequence++,
+            "class",
+            WorldSortColumn == column
+                ? "ma-sort-header is-active"
+                : "ma-sort-header");
+        builder.AddAttribute(
+            sequence++,
+            "onclick",
+            EventCallback.Factory.Create(this, () => ToggleProjectedWorldSort(column)));
+        builder.AddContent(sequence++, label);
+        if (WorldSortColumn == column)
+        {
+            builder.OpenElement(sequence++, "span");
+            builder.AddAttribute(sequence++, "class", "ma-sort-direction");
+            builder.AddContent(sequence++, WorldSortDescending ? "↓" : "↑");
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+
+    private Task ToggleProjectedWorldSort(MarketAnalysisWorldGridSortColumn column)
+    {
+        var descending = WorldSortColumn == column
+            ? !WorldSortDescending
+            : column is MarketAnalysisWorldGridSortColumn.StockDepth
+                or MarketAnalysisWorldGridSortColumn.PriceValue
+                or MarketAnalysisWorldGridSortColumn.Value;
+        return OnWorldSortChanged.InvokeAsync(
+            new MarketAnalysisWorldGridSortState(column, descending));
     }
 
     private MarketItemAnalysis? GetSelectedAnalysis()
@@ -588,6 +783,153 @@
             CurrentSort,
             SortColumn,
             SortDescending);
+    }
+
+    private IReadOnlyList<WorkerMarketItemProjection> GetProjectedItems()
+    {
+        var items = ProjectedItems.AsEnumerable();
+        IOrderedEnumerable<WorkerMarketItemProjection> ordered = SortColumn switch
+        {
+            MarketAnalysisGridSortColumn.Quantity => OrderProjectedItems(
+                items,
+                item => item.QuantityNeeded,
+                SortDescending),
+            MarketAnalysisGridSortColumn.Coverage => OrderProjectedItems(
+                items,
+                item => item.AvailableQuantity,
+                SortDescending),
+            MarketAnalysisGridSortColumn.Worlds => OrderProjectedItems(
+                items,
+                item => item.WorldCount,
+                SortDescending),
+            MarketAnalysisGridSortColumn.Total => OrderProjectedItems(
+                items,
+                item => item.EstimatedTotalCost,
+                SortDescending),
+            _ => OrderProjectedItems(
+                items,
+                item => item.Name,
+                SortDescending,
+                StringComparer.OrdinalIgnoreCase)
+        };
+
+        return ordered.ThenBy(item => item.ItemId).ToArray();
+    }
+
+    private static IOrderedEnumerable<WorkerMarketItemProjection> OrderProjectedItems<TKey>(
+        IEnumerable<WorkerMarketItemProjection> items,
+        Func<WorkerMarketItemProjection, TKey> selector,
+        bool descending,
+        IComparer<TKey>? comparer = null) =>
+        descending
+            ? items.OrderByDescending(selector, comparer)
+            : items.OrderBy(selector, comparer);
+
+    private IReadOnlyList<WorkerMarketWorldProjection> GetProjectedWorlds(
+        WorkerMarketItemProjection item)
+    {
+        var worlds = item.Worlds.AsEnumerable();
+        IOrderedEnumerable<WorkerMarketWorldProjection> ordered = WorldSortColumn switch
+        {
+            MarketAnalysisWorldGridSortColumn.StockDepth => OrderProjectedWorlds(
+                worlds,
+                world => world.Quantity,
+                WorldSortDescending),
+            MarketAnalysisWorldGridSortColumn.Coverage => OrderProjectedWorlds(
+                worlds,
+                world => world.HasSufficientStock,
+                WorldSortDescending),
+            MarketAnalysisWorldGridSortColumn.PriceValue => OrderProjectedWorlds(
+                worlds,
+                world => world.AverageUnitPrice,
+                WorldSortDescending),
+            MarketAnalysisWorldGridSortColumn.Value => OrderProjectedWorlds(
+                worlds,
+                world => world.TotalCost,
+                WorldSortDescending),
+            MarketAnalysisWorldGridSortColumn.Data => OrderProjectedWorlds(
+                worlds,
+                world => world.DataAge ?? TimeSpan.MaxValue,
+                WorldSortDescending),
+            _ => OrderProjectedWorlds(
+                worlds,
+                world => world.WorldName,
+                WorldSortDescending,
+                StringComparer.OrdinalIgnoreCase)
+        };
+
+        return ordered
+            .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static IOrderedEnumerable<WorkerMarketWorldProjection> OrderProjectedWorlds<TKey>(
+        IEnumerable<WorkerMarketWorldProjection> worlds,
+        Func<WorkerMarketWorldProjection, TKey> selector,
+        bool descending,
+        IComparer<TKey>? comparer = null) =>
+        descending
+            ? worlds.OrderByDescending(selector, comparer)
+            : worlds.OrderBy(selector, comparer);
+
+    private string GetProjectedRowClass(WorkerMarketItemProjection item)
+    {
+        var classes = new List<string>();
+        if (_selectedProjectedItem?.ItemId == item.ItemId)
+        {
+            classes.Add("is-selected");
+        }
+        if (!item.HasSufficientStock || !string.IsNullOrWhiteSpace(item.Warning))
+        {
+            classes.Add("has-warning");
+        }
+        return string.Join(" ", classes);
+    }
+
+    private static string GetProjectedStockClass(WorkerMarketItemProjection item) =>
+        item.HasSufficientStock ? "ma-stock-ok" : "ma-stock-warning";
+
+    private static string FormatProjectedCoverage(WorkerMarketItemProjection item) =>
+        item.IsAvailable
+            ? $"{item.AvailableQuantity:N0} / {item.QuantityNeeded:N0}"
+            : "Unavailable";
+
+    private static string GetProjectedTotalClass(WorkerMarketItemProjection item) =>
+        item.IsAvailable
+            ? "ma-total-value"
+            : "ma-total-value is-unavailable";
+
+    private static string GetProjectedTotalTooltip(WorkerMarketItemProjection item) =>
+        item.IsAvailable
+            ? $"Calculated cost across {item.WorldCount:N0} world{(item.WorldCount == 1 ? string.Empty : "s")}."
+            : item.Warning ?? "No eligible market listings are available.";
+
+    private static string FormatProjectedTotal(WorkerMarketItemProjection item) =>
+        item.IsAvailable ? FormatGil(item.EstimatedTotalCost) : "Unavailable";
+
+    private static string GetUniversalisUrl(int itemId) =>
+        $"https://universalis.app/market/{itemId}";
+
+    private static string FormatWorldAge(TimeSpan? age)
+    {
+        if (!age.HasValue)
+        {
+            return "-";
+        }
+
+        var value = age.Value < TimeSpan.Zero ? TimeSpan.Zero : age.Value;
+        if (value < TimeSpan.FromMinutes(1))
+        {
+            return "<1m";
+        }
+        if (value < TimeSpan.FromHours(1))
+        {
+            return $"{Math.Floor(value.TotalMinutes):N0}m";
+        }
+        return value < TimeSpan.FromDays(1)
+            ? $"{Math.Floor(value.TotalHours):N0}h"
+            : $"{Math.Floor(value.TotalDays):N0}d";
     }
 
     private static bool HasWarning(DetailedShoppingPlan plan)

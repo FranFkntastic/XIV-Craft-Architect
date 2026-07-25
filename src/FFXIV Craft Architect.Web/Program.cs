@@ -63,6 +63,7 @@ builder.Services.AddScoped<WebPlanPersistenceService>();
 builder.Services.AddScoped<PackagedWorldDirectoryService>();
 builder.Services.AddScoped<StartupInitializationService>();
 builder.Services.AddScoped<CancellableOperationService>();
+builder.Services.AddScoped<AutomaticPlanDerivationService>();
 builder.Services.AddScoped<NativePlanImportClassifier>();
 builder.Services.AddScoped<GitHubIssueReportService>();
 builder.Services.AddScoped<BrowserFileExportService>();
