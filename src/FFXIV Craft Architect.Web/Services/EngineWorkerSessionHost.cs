@@ -203,19 +203,21 @@ public static partial class ManagedHost
         }
 
         var replacement = new WorkerCanonicalSession();
-        var warning = replacement.Restore(
+        var restoreResult = replacement.Restore(
             restore.StoredPlan,
             restore.TrackStoredPlanIdentity);
         _canonicalSession = replacement;
-        _sessionRevision = restore.Revision;
-        _sessionRestoreWarning = warning;
+        _sessionRevision = restore.Revision +
+                           (restoreResult.DurableRepairPatch is null ? 0 : 1);
+        _sessionRestoreWarning = restoreResult.Warning;
         _sessionMigratedFromLegacy = restore.MigratedFromLegacy;
         return CreateSessionResult(
             command.CommandKind,
             accepted: true,
             null,
-            warning,
-            CaptureShellProjection());
+            restoreResult.Warning,
+            CaptureShellProjection(),
+            restoreResult.DurableRepairPatch);
     }
 
     private static WorkerSessionResultEnvelope ExportSession(
@@ -1567,7 +1569,8 @@ public static partial class ManagedHost
         bool accepted,
         string? rejectionCode,
         string? message,
-        object projection) =>
+        object projection,
+        WorkerSessionDurablePatch? durableRepairPatch = null) =>
         new(
             WorkerSessionProtocol.ContractVersion,
             commandKind,
@@ -1575,7 +1578,8 @@ public static partial class ManagedHost
             accepted,
             rejectionCode,
             message,
-            JsonSerializer.SerializeToElement(projection, WireJsonOptions));
+            JsonSerializer.SerializeToElement(projection, WireJsonOptions),
+            durableRepairPatch);
 
     private static WorkerSessionShellProjection CaptureShellProjection()
     {

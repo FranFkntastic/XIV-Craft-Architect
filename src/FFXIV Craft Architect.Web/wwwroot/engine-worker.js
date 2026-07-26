@@ -276,7 +276,16 @@ async function bootstrapSession(host, requestMessage) {
         return resultJson;
     }
 
-    if (durable.migratedFromLegacy && durable.storedPlan) {
+    const repairPatch = result.payload?.durableRepairPatch ?? null;
+    if (repairPatch && durable.storedPlan) {
+        const repairedState = applyDurablePatch(durable.storedPlan, repairPatch);
+        await commitDurableSession(
+            durable.revision,
+            result.payload.revision,
+            repairedState,
+            repairPatch,
+            durable.trackStoredPlanIdentity);
+    } else if (durable.migratedFromLegacy && durable.storedPlan) {
         await commitDurableSession(
             0,
             durable.revision,
@@ -320,11 +329,15 @@ async function replaceDurableSession(host, requestMessage) {
     }
 
     try {
+        const repairPatch = result.payload?.durableRepairPatch ?? null;
+        const durableState = repairPatch
+            ? applyDurablePatch(command.payload?.storedPlan ?? null, repairPatch)
+            : command.payload?.storedPlan ?? null;
         await commitDurableSession(
             current.revision,
-            targetRevision,
-            command.payload?.storedPlan ?? null,
-            null,
+            result.payload.revision,
+            durableState,
+            repairPatch,
             command.payload?.trackStoredPlanIdentity !== false);
         return resultJson;
     } catch (error) {

@@ -491,6 +491,66 @@ public sealed class PersistenceContractTests
     }
 
     [Fact]
+    public void StoredAutomaticAcquisitionDecision_ReconcilesAgainstRestoredEvidence()
+    {
+        var ingredient = new PlanNode
+        {
+            NodeId = "ingredient",
+            ItemId = 101,
+            Name = "Ingredient",
+            Quantity = 2,
+            Source = AcquisitionSource.VendorBuy,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanBuyFromVendor = true,
+            VendorPrice = 10
+        };
+        var root = new PlanNode
+        {
+            NodeId = "root",
+            ItemId = 100,
+            Name = "Varnish",
+            Quantity = 2,
+            Source = AcquisitionSource.MarketBuyNq,
+            SourceReason = AcquisitionSourceReason.SystemDefault,
+            CanCraft = true,
+            CanBuyFromMarket = true,
+            Children = [ingredient]
+        };
+        var plan = new CraftingPlan
+        {
+            Name = "Stored automatic decision",
+            DataCenter = "Aether",
+            World = "Siren",
+            RootItems = [root]
+        };
+        var stored = new CoreStoredPlanSnapshot
+        {
+            Id = "stored-automatic-decision",
+            Name = plan.Name,
+            DataCenter = plan.DataCenter,
+            ProjectItems =
+            [
+                new CoreStoredProjectItem
+                {
+                    Id = root.ItemId,
+                    Name = root.Name,
+                    Quantity = root.Quantity
+                }
+            ],
+            PlanJson = JsonSerializer.Serialize(plan),
+            PlanStateJson = StoredPlanRuntimeState.Capture(plan),
+            MarketIntelligenceJson = CurrentMarketIntelligenceJson
+        };
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+
+        var result = new CorePlanSessionLoadService(session).Load(stored);
+
+        Assert.Equal(1, result.ReconciledAcquisitionDecisionCount);
+        Assert.Equal(AcquisitionSource.Craft, Assert.Single(result.Plan!.RootItems).Source);
+        Assert.Equal(AcquisitionSource.Craft, Assert.Single(session.ActivePlan!.RootItems).Source);
+    }
+
+    [Fact]
     public void RuntimeState_OverlaysMutableDecisionsAndPricesWithoutRewritingGraph()
     {
         var baseline = Plan(100, "Varnish");

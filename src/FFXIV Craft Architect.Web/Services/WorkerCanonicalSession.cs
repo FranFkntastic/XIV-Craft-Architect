@@ -24,7 +24,9 @@ internal sealed class WorkerCanonicalSession
 
     public CraftSessionState Session => _session;
 
-    public string? Restore(StoredPlan? storedPlan, bool trackStoredPlanIdentity)
+    public WorkerCanonicalSessionRestoreResult Restore(
+        StoredPlan? storedPlan,
+        bool trackStoredPlanIdentity)
     {
         var timing = Stopwatch.StartNew();
         _session = CreateSession();
@@ -34,7 +36,7 @@ internal sealed class WorkerCanonicalSession
         _legacyProcurementRouteJson = storedPlan?.ProcurementRouteJson;
         if (storedPlan is null)
         {
-            return null;
+            return new WorkerCanonicalSessionRestoreResult(null, null);
         }
 
         var loader = new CorePlanSessionLoadService(_session);
@@ -46,8 +48,18 @@ internal sealed class WorkerCanonicalSession
                 result.Warning ?? $"Stored plan '{storedPlan.Name}' could not be restored.");
         }
 
-        RestoreLegacyProcurementOverlay(storedPlan.ProcurementRouteJson);
-        if (storedPlan.ProcurementTravelTolerance is { } tolerance)
+        var repairedAcquisitionDecisions =
+            result.ReconciledAcquisitionDecisionCount > 0;
+        if (repairedAcquisitionDecisions)
+        {
+            _legacyProcurementRouteJson = null;
+        }
+        else
+        {
+            RestoreLegacyProcurementOverlay(storedPlan.ProcurementRouteJson);
+        }
+        if (!repairedAcquisitionDecisions &&
+            storedPlan.ProcurementTravelTolerance is { } tolerance)
         {
             _session.TrySelectProcurementTravelTolerance(tolerance);
         }
@@ -60,7 +72,14 @@ internal sealed class WorkerCanonicalSession
         Console.WriteLine(
             $"[EngineSession] restore core={coreRestoreMilliseconds}ms " +
             $"route={routeRestoreMilliseconds}ms total={timing.ElapsedMilliseconds}ms");
-        return result.Warning;
+        var repairPatch = repairedAcquisitionDecisions
+            ? CreateDurablePatch(
+                replacePlanStateJson: true,
+                replaceProcurementRoute: true)
+            : null;
+        return new WorkerCanonicalSessionRestoreResult(
+            result.Warning,
+            repairPatch);
     }
 
     public StoredPlan? Export(
@@ -300,3 +319,7 @@ internal sealed class WorkerCanonicalSession
     private static CraftSessionState CreateSession() =>
         new(new ImmediateCraftSessionDispatcher());
 }
+
+internal sealed record WorkerCanonicalSessionRestoreResult(
+    string? Warning,
+    WorkerSessionDurablePatch? DurableRepairPatch);

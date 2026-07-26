@@ -34,6 +34,17 @@ public sealed class CorePlanSessionLoadService
                 storedPlan.SourcePlanId,
                 storedPlan.SourcePlanName);
 
+        var reconciledAcquisitionDecisionCount = result.Plan is not null &&
+                                                 result.ShoppingPlans.Count > 0
+            ? AcquisitionPlanningService.ReconcileAcquisitionDecisions(
+                result.Plan,
+                result.ShoppingPlans)
+            : 0;
+        result = result with
+        {
+            ReconciledAcquisitionDecisionCount = reconciledAcquisitionDecisionCount
+        };
+
         _session.ActivatePlan(
             result.Plan,
             result.ProjectItems,
@@ -54,7 +65,7 @@ public sealed class CorePlanSessionLoadService
                 _session.PlanSessionVersion,
                 result.MarketItemAnalyses,
                 result.ShoppingPlans,
-                acquisitionDecisionsChanged: false,
+                acquisitionDecisionsChanged: reconciledAcquisitionDecisionCount > 0,
                 "stored market analysis restored",
                 result.UnavailableMarketItemIds,
                 result.MarketIntelligence?.RecommendationMode ?? storedPlan.SavedRecommendationMode,

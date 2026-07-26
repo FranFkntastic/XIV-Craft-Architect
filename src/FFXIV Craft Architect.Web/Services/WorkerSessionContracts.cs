@@ -24,7 +24,8 @@ public sealed record WorkerSessionResultEnvelope(
     bool Accepted,
     string? RejectionCode,
     string? Message,
-    JsonElement Projection);
+    JsonElement Projection,
+    WorkerSessionDurablePatch? DurableRepairPatch = null);
 
 public sealed record WorkerSessionRestorePayload(
     long Revision,

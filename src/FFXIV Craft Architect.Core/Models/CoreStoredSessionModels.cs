@@ -54,4 +54,5 @@ public sealed record CorePlanSessionLoadResult(
     MarketIntelligence? MarketIntelligence,
     StoredRecipeOperationSnapshot? MarketAnalysisRecipeBasis,
     bool CanLoad,
-    string? Warning);
+    string? Warning,
+    int ReconciledAcquisitionDecisionCount = 0);
