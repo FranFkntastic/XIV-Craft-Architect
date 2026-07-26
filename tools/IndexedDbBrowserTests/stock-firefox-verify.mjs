@@ -19,6 +19,8 @@ const firefoxBinary = path.resolve(
     'C:/Program Files/Mozilla Firefox/firefox.exe');
 const headless = process.env.CA_STOCK_FIREFOX_HEADLESS === '1';
 const bidi = process.env.CA_STOCK_FIREFOX_BIDI === '1';
+const autoAnalysisOnly =
+  process.env.CA_STOCK_FIREFOX_AUTO_ANALYSIS_ONLY === '1';
 const startedAt = performance.now();
 const elapsed = () => Math.round(performance.now() - startedAt);
 const report = {
@@ -28,6 +30,7 @@ const report = {
   plan: planPath,
   headless,
   bidi,
+  autoAnalysisOnly,
   startedAt: new Date().toISOString(),
   stages: [],
   console: [],
@@ -375,24 +378,26 @@ async function importCrasher() {
 
 async function runMarketAnalysis() {
   const marketStarted = performance.now();
-  await clickCss('[data-benchmark-id="main-nav-market-analysis"]');
   const candidates = await waitForLifecycle(
     'market candidate projection',
     snapshot => Number(snapshot.marketCandidateCount) === 53,
     120_000);
-  const analysisButton = await waitFor(
-    'enabled market analysis action',
-    async () => {
-      const buttons = await driver.findElements(By.css(
-        '[data-benchmark-id="market-analysis-run"]'));
-      if (buttons.length === 0) {
-        return null;
-      }
-      const button = buttons[0];
-      return await button.isEnabled() ? button : null;
-    },
-    120_000);
-  if (Number(candidates.marketAnalysisCount) < 53) {
+  if (!autoAnalysisOnly) {
+    await clickCss('[data-benchmark-id="main-nav-market-analysis"]');
+  }
+  if (!autoAnalysisOnly && Number(candidates.marketAnalysisCount) < 53) {
+    const analysisButton = await waitFor(
+      'enabled market analysis action',
+      async () => {
+        const buttons = await driver.findElements(By.css(
+          '[data-benchmark-id="market-analysis-run"]'));
+        if (buttons.length === 0) {
+          return null;
+        }
+        const button = buttons[0];
+        return await button.isEnabled() ? button : null;
+      },
+      120_000);
     await analysisButton.click();
   }
   const analyzed = await waitForLifecycle(
@@ -401,7 +406,10 @@ async function runMarketAnalysis() {
       Number(snapshot.marketAnalysisCount) === 53 &&
       snapshot.isBusy === 'false' &&
       !snapshot.activeWorkflows,
-    240_000);
+    autoAnalysisOnly ? 600_000 : 240_000);
+  if (autoAnalysisOnly) {
+    await clickCss('[data-benchmark-id="main-nav-market-analysis"]');
+  }
   const lensRow = await findRowContaining('Clear Glass Lens', 60_000);
   report.clearGlassLensMarketRow = await lensRow.getText();
   stage('market-analysis-ready', {

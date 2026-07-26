@@ -67,7 +67,7 @@
                 <!-- Region Selection -->
                 <CompactSelectField Id="options-region"
                                     Label="Region"
-                                    Value="_selectedRegion"
+                                    Value="@_selectedRegion"
                                     ValueChanged="OnRegionChanged"
                                     Options="RegionOptions"
                                     Class="options-select my-3" />
@@ -75,7 +75,7 @@
                 <!-- Data Center Selection -->
                 <CompactSelectField Id="options-data-center"
                                     Label="Default data center"
-                                    Value="_defaultDataCenter"
+                                    Value="@_defaultDataCenter"
                                     ValueChanged="OnDefaultDataCenterChanged"
                                     Options="GetAvailableDataCenters().Select(ToSelectOption).ToList()"
                                     Class="options-select my-3" />

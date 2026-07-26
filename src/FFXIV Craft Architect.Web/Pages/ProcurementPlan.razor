@@ -28,9 +28,9 @@
     <div class="pp-grid-layout">
         <ProcurementControlsPanel
             SearchEntireRegion="_searchEntireRegion"
-            SelectedRegion="_procurementRegion"
+            SelectedRegion="@_procurementRegion"
             AvailableRegions="AvailableProcurementRegions"
-            SelectedDataCenter="SelectedProcurementDataCenter"
+            SelectedDataCenter="@SelectedProcurementDataCenter"
             TravelTolerance="_travelTolerance"
             RouteDecision="_route?.RouteDecision"
             RouteValidity="@(_route?.HasRoute == true ? ProcurementRoutePublicationValidity.Current : ProcurementRoutePublicationValidity.None)"

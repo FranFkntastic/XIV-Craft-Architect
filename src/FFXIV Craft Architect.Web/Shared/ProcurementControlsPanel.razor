@@ -14,7 +14,7 @@
                 <div class="pp-field-block">
                     <CompactSelectField Id="procurement-region"
                                         Label="Purchase region"
-                                        Value="SelectedRegion"
+                                        Value="@SelectedRegion"
                                         ValueChanged="OnSelectedRegionChanged"
                                         Options="AvailableRegions.Select(region => new CompactSelectOption(region, region)).ToArray()"
                                         Disabled="@(!RouteGenerationEnabled)"
