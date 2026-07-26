@@ -244,7 +244,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                 } &&
                 procurement.Scope == requestedScope &&
                 procurement.TravelTolerance == _settings.ProcurementTravelTolerance &&
-                procurement.IncludeSplitPurchases == _settings.ProcurementEnableSplitWorldPurchases &&
+                (procurement.IncludeSplitPurchases is null ||
+                 procurement.IncludeSplitPurchases == _settings.ProcurementEnableSplitWorldPurchases) &&
                 procurement.TravelPriority == _settings.ProcurementTravelPriority &&
                 procurement.RouteDecision?.StartsFromHomeDataCenter ==
                     _settings.ProcurementStartFromHomeDataCenter;

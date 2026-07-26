@@ -395,7 +395,7 @@ public sealed record WorkerProcurementProjection(
     string TravelToleranceLabel,
     MarketTravelPriority TravelPriority,
     bool SearchesEntireRegion,
-    bool IncludeSplitPurchases,
+    bool? IncludeSplitPurchases,
     long SelectedGilCost,
     long CheapestGilCost,
     long PremiumGil,

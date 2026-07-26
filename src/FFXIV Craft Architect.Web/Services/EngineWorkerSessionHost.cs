@@ -1142,8 +1142,7 @@ public static partial class ManagedHost
             MarketRouteScoring.GetToleranceLabel(tolerance),
             decision?.TravelPriority ?? MarketTravelPriority.DataCenterTransfersFirst,
             session.ActiveContext.MarketFetchScope == MarketFetchScope.EntireRegion,
-            decision?.IncludeSplitPurchases ??
-                overlay?.ShoppingPlans?.Any(plan => plan.RequiresSplitPurchase) == true,
+            decision?.IncludeSplitPurchases,
             (decision?.SelectedGilCost ?? 0) + fixedCost,
             (decision?.CheapestGilCost ?? 0) + fixedCost,
             decision?.PremiumGil ?? 0,
