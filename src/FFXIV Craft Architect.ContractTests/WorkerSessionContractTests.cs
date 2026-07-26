@@ -293,6 +293,37 @@ public sealed class WorkerSessionContractTests
             targetedMarketProjection.Items.Take(targetedMarketProjection.Items.Count - 1),
             item => Assert.Empty(item.Worlds));
 
+        var fullDetailMarket = await SendAsync(
+            WorkerSessionCommandKinds.MarketProjection,
+            expectedRevision: 3,
+            new WorkerMarketProjectionRequest(IncludeDetails: true));
+        var fullDetailProjection =
+            fullDetailMarket.Projection.Deserialize<WorkerMarketProjection>(WireOptions);
+        Assert.NotNull(fullDetailProjection);
+        var selectedItemId = Assert.Single(fullDetailProjection.ItemAnalyses).ItemId;
+        var selectedDetailMarket = await SendAsync(
+            WorkerSessionCommandKinds.MarketProjection,
+            expectedRevision: 3,
+            new WorkerMarketProjectionRequest(
+                IncludeDetails: true,
+                WorldDetailItemId: selectedItemId));
+        var selectedDetailProjection =
+            selectedDetailMarket.Projection.Deserialize<WorkerMarketProjection>(WireOptions);
+        Assert.NotNull(selectedDetailProjection);
+        Assert.Equal(
+            selectedItemId,
+            Assert.Single(selectedDetailProjection.ShoppingPlans).ItemId);
+        Assert.Equal(
+            selectedItemId,
+            Assert.Single(selectedDetailProjection.ItemAnalyses).ItemId);
+        Assert.NotEmpty(
+            Assert.Single(
+                selectedDetailProjection.Items,
+                item => item.ItemId == selectedItemId).Worlds);
+        Assert.All(
+            selectedDetailProjection.Items.Where(item => item.ItemId != selectedItemId),
+            item => Assert.Empty(item.Worlds));
+
         var procurement = await SendAsync(
             WorkerSessionCommandKinds.ProcurementProjection,
             expectedRevision: 3,

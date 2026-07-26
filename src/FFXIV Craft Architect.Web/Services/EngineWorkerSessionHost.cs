@@ -1026,7 +1026,7 @@ public static partial class ManagedHost
                     ? $"{plan.RecommendedSplit!.Count} world split"
                     : plan.RecommendedWorld?.WorldName ?? "Unavailable";
                 var includeWorlds =
-                    includeDetails ||
+                    (includeDetails && !worldDetailItemId.HasValue) ||
                     plan.ItemId == worldDetailItemId;
                 var worlds = includeWorlds
                     ? plan.WorldOptions
@@ -1081,10 +1081,18 @@ public static partial class ManagedHost
             items,
             candidateItems,
             includeDetails
-                ? evidence.ShoppingPlans?.ToArray() ?? Array.Empty<DetailedShoppingPlan>()
+                ? (evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>())
+                    .Where(plan =>
+                        !worldDetailItemId.HasValue ||
+                        plan.ItemId == worldDetailItemId.Value)
+                    .ToArray()
                 : Array.Empty<DetailedShoppingPlan>(),
             includeDetails
-                ? evidence.ItemAnalyses.ToArray()
+                ? evidence.ItemAnalyses
+                    .Where(analysis =>
+                        !worldDetailItemId.HasValue ||
+                        analysis.ItemId == worldDetailItemId.Value)
+                    .ToArray()
                 : Array.Empty<MarketItemAnalysis>());
     }
 

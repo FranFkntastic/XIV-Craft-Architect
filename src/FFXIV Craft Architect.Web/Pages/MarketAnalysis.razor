@@ -112,7 +112,7 @@
         _market ??= await WorkerSession.GetMarketProjectionAsync();
         ApplyRequestedItem();
         _selectedItemId ??= _market?.Items.FirstOrDefault()?.ItemId;
-        await EnsureSelectedWorldDetailsAsync();
+        await EnsureSelectedMarketDetailsAsync();
     }
 
     protected override void OnParametersSet()
@@ -170,20 +170,20 @@
     private async Task SelectMarketAnalysisItem(int? itemId)
     {
         _selectedItemId = itemId;
-        await EnsureSelectedWorldDetailsAsync();
+        await EnsureSelectedMarketDetailsAsync();
     }
 
-    private async Task EnsureSelectedWorldDetailsAsync()
+    private async Task EnsureSelectedMarketDetailsAsync()
     {
         if (!_selectedItemId.HasValue ||
-            _market?.ShoppingPlans.Count > 0 ||
-            _market?.Items.FirstOrDefault(item => item.ItemId == _selectedItemId.Value) is not
-                { WorldCount: > 0, Worlds.Count: 0 })
+            (_market?.ShoppingPlans.Any(plan => plan.ItemId == _selectedItemId.Value) == true &&
+             _market.ItemAnalyses.Any(analysis => analysis.ItemId == _selectedItemId.Value)))
         {
             return;
         }
 
         _market = await WorkerSession.GetMarketProjectionAsync(
+            includeDetails: true,
             worldDetailItemId: _selectedItemId.Value);
     }
 

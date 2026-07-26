@@ -198,7 +198,10 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         var cached = _projections.Market;
         if (cached?.Revision == _projections.Shell.Revision &&
             (!includeDetails ||
-             cached.ShoppingPlans.Count > 0) &&
+             (worldDetailItemId.HasValue
+                 ? cached.ShoppingPlans.Any(plan => plan.ItemId == worldDetailItemId.Value) &&
+                   cached.ItemAnalyses.Any(analysis => analysis.ItemId == worldDetailItemId.Value)
+                 : cached.ShoppingPlans.Count > 0)) &&
             (!worldDetailItemId.HasValue ||
              cached.Items.Any(item =>
                  item.ItemId == worldDetailItemId.Value &&

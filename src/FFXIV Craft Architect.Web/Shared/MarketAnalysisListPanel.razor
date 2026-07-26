@@ -376,11 +376,17 @@
     protected override void OnParametersSet()
     {
         _analysisByItemId = MarketItemAnalyses.ToDictionary(analysis => analysis.ItemId);
-        _orderedPlans = GetGridPlans();
-        _orderedProjectedItems = ShoppingPlans.Count == 0
-            ? GetProjectedItems()
-            : Array.Empty<WorkerMarketItemProjection>();
-        _selectedPlan = MarketAnalysisGridViewService.ResolveSelectedPlan(_orderedPlans, SelectedItemId);
+        var hasCompleteDetails =
+            ShoppingPlans.Count > 0 &&
+            ShoppingPlans.Count == ProjectedItems.Count &&
+            ShoppingPlans.All(plan => ProjectedItems.Any(item => item.ItemId == plan.ItemId));
+        _orderedPlans = hasCompleteDetails
+            ? GetGridPlans()
+            : Array.Empty<DetailedShoppingPlan>();
+        _orderedProjectedItems = hasCompleteDetails
+            ? Array.Empty<WorkerMarketItemProjection>()
+            : GetProjectedItems();
+        _selectedPlan = ShoppingPlans.FirstOrDefault(plan => plan.ItemId == SelectedItemId);
         _selectedProjectedItem = _selectedPlan is null
             ? _orderedProjectedItems.FirstOrDefault(item => item.ItemId == SelectedItemId)
                 ?? _orderedProjectedItems.FirstOrDefault()
