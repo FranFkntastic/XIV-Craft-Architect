@@ -37,7 +37,9 @@
 .ma-expanded-item {
     flex-shrink: 0;
     min-width: 0;
-    overflow: hidden;
+    max-height: min(52vh, 680px);
+    overflow-x: hidden;
+    overflow-y: auto;
     border: 1px solid #49606d;
     border-radius: 7px;
     background: #1f2225;
