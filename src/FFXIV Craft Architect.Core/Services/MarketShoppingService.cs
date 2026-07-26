@@ -391,6 +391,7 @@ public class MarketShoppingService
             {
                 FixedAcquisitionGilCost = fixedVendorGilCost,
                 RouteSearchWasTruncated = routeSearchWasTruncated,
+                IncludeSplitPurchases = config.EnableSplitWorld,
                 ToleranceSelections = toleranceSelections
             };
 

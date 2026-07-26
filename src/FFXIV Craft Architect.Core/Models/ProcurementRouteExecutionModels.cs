@@ -75,6 +75,8 @@ public sealed record MarketRouteDecision(
 
     public bool RouteSearchWasTruncated { get; init; }
 
+    public bool? IncludeSplitPurchases { get; init; }
+
     public long PremiumGil => Math.Max(0, SelectedGilCost - CheapestGilCost);
 
     public decimal PremiumRate => CheapestGilCost > 0

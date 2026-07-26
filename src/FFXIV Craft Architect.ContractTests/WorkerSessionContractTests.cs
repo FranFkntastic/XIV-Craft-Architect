@@ -324,6 +324,10 @@ public sealed class WorkerSessionContractTests
         Assert.True(generatedMutation.DurablePatch?.ReplaceProcurementRoute);
         Assert.NotNull(generatedMutation.DurablePatch?.ProcurementRouteJson);
         Assert.Equal(0, generatedMutation.DurablePatch.ProcurementTravelTolerance);
+        var generatedOutcome =
+            generatedMutation.PublicProjection.Deserialize<WorkerProcurementOutcome>(WireOptions);
+        Assert.NotNull(generatedOutcome);
+        Assert.True(generatedOutcome.Procurement.IncludeSplitPurchases);
 
         var selectedTolerance = await SendAsync(
             WorkerSessionCommandKinds.ProcurementToleranceMutation,

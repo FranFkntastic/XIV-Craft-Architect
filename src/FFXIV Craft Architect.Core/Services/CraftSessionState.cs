@@ -827,6 +827,7 @@ public sealed class CraftSessionState
         {
             FixedAcquisitionGilCost = selection.FixedAcquisitionGilCost,
             RouteSearchWasTruncated = currentDecision.RouteSearchWasTruncated,
+            IncludeSplitPurchases = currentDecision.IncludeSplitPurchases,
             ToleranceSelections = currentDecision.ToleranceSelections
         };
         MarkProcurementOverlayPublished(

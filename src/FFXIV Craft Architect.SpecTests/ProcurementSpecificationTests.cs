@@ -216,10 +216,12 @@ public sealed class ProcurementSpecificationTests
         var route = await new MarketShoppingService(null!)
             .OptimizeProcurementRouteWithDecisionAsync(
                 [shopping],
-                SpecificationFixtures.Config(tolerance: 0));
+                SpecificationFixtures.Config(tolerance: 0, enableSplitWorld: true));
 
         Assert.True(route.IsComplete);
         Assert.Equal("Siren", Assert.Single(route.ShoppingPlans).RecommendedWorld?.WorldName);
+        Assert.False(Assert.Single(route.ShoppingPlans).RequiresSplitPurchase);
+        Assert.True(route.Decision?.IncludeSplitPurchases);
     }
 
     [Fact]
