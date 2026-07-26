@@ -126,7 +126,6 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         }
 
         var warnings = new List<string>();
-        reportStatus?.Invoke("Checking what the plan needs to buy...", 10);
         var hadMarketCandidates = acquisition.MarketCandidateCount > 0;
         var marketPublished = !hadMarketCandidates;
         var analyzedCount = 0;
@@ -138,7 +137,6 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         {
             if (request.SkipMarketRefresh)
             {
-                reportStatus?.Invoke("Using the current purchase choices...", 60);
                 marketPublished = market?.HasAnalysis == true;
                 analyzedCount = market?.AvailableCount ?? 0;
                 if (!marketPublished)
@@ -210,7 +208,6 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             }
             else
             {
-                reportStatus?.Invoke("Using current market prices...", 65);
                 marketPublished = true;
                 analyzedCount = market.AvailableCount;
             }
@@ -298,7 +295,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             CancellableOperationWorkflow.PlanDerivation,
             "Plan pricing",
             "Checking what the plan needs to buy...",
-            run.Token))
+            run.Token,
+            announceImmediately: false))
         {
             try
             {

@@ -1,7 +1,6 @@
 @using FFXIV_Craft_Architect.Web.Services
 @inject AppState AppState
 @inject WorkerProjectionStore WorkerProjections
-@inject CraftArchitectEngineHost EngineHost
 @inject NavigationManager NavigationManager
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @implements IDisposable
@@ -164,14 +163,8 @@
 
 @code {
     private string? _tradeCompanyName;
-    private bool IsBusy => IsTradeRoute
-        ? AppState.IsBusy
-        : AppState.IsBusy || EngineHost.Health.IsExecuting;
-    private string StatusMessage => IsTradeRoute
-        ? AppState.StatusMessage
-        : AppState.IsBusy
-            ? AppState.StatusMessage
-            : IsBusy ? "Updating your plan..." : "Ready";
+    private bool IsBusy => AppState.IsBusy;
+    private string StatusMessage => IsBusy ? AppState.StatusMessage : "Ready";
     private string SelectedRegion => WorkerProjections.Shell.SelectedRegion;
     private string SelectedDataCenter => WorkerProjections.Shell.SelectedDataCenter;
     private int MaterialCount =>

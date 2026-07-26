@@ -148,12 +148,16 @@ public sealed class AppState
 
     public AppStateOperation BeginOperation(
         string operationName,
-        string? message = null)
+        string? message = null,
+        bool announceImmediately = true)
     {
         var operation = new AppStateOperation(++_nextOperationId, operationName);
         _currentOperationId = operation.Id;
         CurrentOperation = operationName;
-        SetStatus(message ?? $"{operationName}...", busy: true, progress: 0);
+        if (announceImmediately)
+        {
+            SetStatus(message ?? $"{operationName}...", busy: true, progress: 0);
+        }
         return operation;
     }
 

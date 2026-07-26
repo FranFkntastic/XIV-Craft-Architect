@@ -29,7 +29,8 @@ public sealed class CancellableOperationService : IDisposable
         CancellableOperationWorkflow workflow,
         string operationName,
         string startMessage,
-        CancellationToken externalToken = default)
+        CancellationToken externalToken = default,
+        bool announceImmediately = true)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -38,7 +39,10 @@ public sealed class CancellableOperationService : IDisposable
         lock (_sync)
         {
             _activeLeases.TryGetValue(workflow, out previous);
-            var operation = _appState.BeginOperation(operationName, startMessage);
+            var operation = _appState.BeginOperation(
+                operationName,
+                startMessage,
+                announceImmediately);
             var cts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
             lease = new CancellableOperationLease(this, workflow, operation, cts);
             _activeLeases[workflow] = lease;
