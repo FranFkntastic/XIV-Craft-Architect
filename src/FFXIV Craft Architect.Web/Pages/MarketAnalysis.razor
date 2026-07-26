@@ -96,6 +96,7 @@
         {
             _market = retained;
             ApplyRequestedItem();
+            _selectedItemId ??= _market.Items.FirstOrDefault()?.ItemId;
         }
 
         _searchEntireRegion = await Settings.GetAsync("market.search_entire_region", true);
@@ -110,6 +111,7 @@
 
         _market ??= await WorkerSession.GetMarketProjectionAsync();
         ApplyRequestedItem();
+        _selectedItemId ??= _market?.Items.FirstOrDefault()?.ItemId;
         await EnsureSelectedWorldDetailsAsync();
     }
 
