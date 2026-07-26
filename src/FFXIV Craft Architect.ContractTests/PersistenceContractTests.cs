@@ -548,6 +548,7 @@ public sealed class PersistenceContractTests
         Assert.Equal(1, result.ReconciledAcquisitionDecisionCount);
         Assert.Equal(AcquisitionSource.Craft, Assert.Single(result.Plan!.RootItems).Source);
         Assert.Equal(AcquisitionSource.Craft, Assert.Single(session.ActivePlan!.RootItems).Source);
+        Assert.Equal(MarketFetchScope.EntireRegion, session.ActiveContext.MarketFetchScope);
     }
 
     [Fact]

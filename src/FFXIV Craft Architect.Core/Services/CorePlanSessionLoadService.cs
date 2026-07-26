@@ -52,7 +52,7 @@ public sealed class CorePlanSessionLoadService
                 MarketFetchScopeResolver.ResolveRegionForDataCenter(storedPlan.DataCenter, "North America"),
                 storedPlan.DataCenter,
                 result.Plan?.World,
-                MarketFetchScope.SelectedDataCenter),
+                ResolveRestoredMarketFetchScope(result)),
             "stored session loaded",
             identity);
 
@@ -194,5 +194,25 @@ public sealed class CorePlanSessionLoadService
         return new RecipeDemandProjectionService()
             .Build(plan, snapshot: null)
             .ToMarketAnalysisMaterialAggregates();
+    }
+
+    private static MarketFetchScope ResolveRestoredMarketFetchScope(
+        CorePlanSessionLoadResult result)
+    {
+        if (result.MarketIntelligence?.PublicationContext is
+            {
+                Kind: MarketIntelligencePublicationContextKind.Known
+            } publicationContext)
+        {
+            return publicationContext.Scope;
+        }
+
+        var analyzedScopes = result.MarketItemAnalyses
+            .Select(analysis => analysis.Scope)
+            .Distinct()
+            .ToArray();
+        return analyzedScopes.Length == 1
+            ? analyzedScopes[0]
+            : MarketFetchScope.SelectedDataCenter;
     }
 }
