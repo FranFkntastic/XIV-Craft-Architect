@@ -20,6 +20,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly IMarketCacheService _marketCache;
     private readonly IUniversalisService _universalis;
+    private readonly SemaphoreSlim _crossTabProjectionGate = new(1, 1);
+    private bool _disposed;
 
     public WorkerSessionCoordinator(
         CraftArchitectEngineHost engineHost,
@@ -35,6 +37,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         _marketEvidenceReconciliation = marketEvidenceReconciliation;
         _marketCache = marketCache;
         _universalis = universalis;
+        _engineHost.CrossTabSessionProjectionReceived += OnCrossTabSessionProjectionReceived;
     }
 
     public bool IsEnabled => _capability.IsExecutionEnabled;
@@ -1065,8 +1068,69 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             result.Message ??
             "The plan changed before this edit was accepted. The current Worker projection has been restored.");
 
+    private void OnCrossTabSessionProjectionReceived(
+        object? sender,
+        WorkerSessionShellProjection shell)
+    {
+        if (_disposed || !_projections.TryPublishCrossTabShell(shell))
+        {
+            return;
+        }
+
+        _ = ReconcileCrossTabProjectionsAsync(shell.Revision);
+    }
+
+    private async Task ReconcileCrossTabProjectionsAsync(long revision)
+    {
+        await _crossTabProjectionGate.WaitAsync();
+        try
+        {
+            if (_disposed || _projections.Shell.Revision != revision)
+            {
+                return;
+            }
+
+            var recipe = await _engineHost.GetRecipeProjectionAsync(revision);
+            if (!_projections.TryPublishRecipe(recipe))
+            {
+                return;
+            }
+            var acquisition = await _engineHost.GetAcquisitionProjectionAsync(
+                revision,
+                "All");
+            if (!_projections.TryPublishAcquisition(acquisition))
+            {
+                return;
+            }
+            var market = await _engineHost.GetMarketProjectionAsync(
+                revision,
+                includeDetails: false);
+            if (!_projections.TryPublishMarket(market))
+            {
+                return;
+            }
+            var procurement = await _engineHost.GetProcurementProjectionAsync(revision);
+            _projections.TryPublishProcurement(procurement);
+        }
+        catch (Exception ex) when (!_disposed)
+        {
+            Console.Error.WriteLine(
+                $"Cross-tab Worker projection reconciliation failed: {ex.Message}");
+        }
+        finally
+        {
+            _crossTabProjectionGate.Release();
+        }
+    }
+
     public ValueTask DisposeAsync()
     {
+        if (_disposed)
+        {
+            return ValueTask.CompletedTask;
+        }
+        _disposed = true;
+        _engineHost.CrossTabSessionProjectionReceived -= OnCrossTabSessionProjectionReceived;
         return ValueTask.CompletedTask;
     }
 }

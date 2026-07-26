@@ -195,6 +195,49 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Contains("`${activeSessionManifestId}:${revision}:${field}`", worker, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void CrossTabShell_AdvancesAuthorityAndInvalidatesStaleViewProjections()
+    {
+        var store = new WorkerProjectionStore();
+        var recipe = new WorkerRecipePlannerProjection(
+            Revision: 0,
+            PlanId: null,
+            PlanName: null,
+            SelectedDataCenter: "Aether",
+            SelectedRegion: "North America",
+            ProjectItems: [],
+            Roots: [],
+            HasMarketEvidence: false,
+            HasProcurementRoute: false);
+        var recipeResult = new WorkerSessionResultEnvelope(
+            WorkerSessionProtocol.ContractVersion,
+            WorkerSessionCommandKinds.RecipeProjection,
+            Revision: 0,
+            Accepted: true,
+            RejectionCode: null,
+            Message: null,
+            JsonSerializer.SerializeToElement(
+                recipe,
+                EngineJsonSerializerOptions.CreateWire()));
+        Assert.True(store.TryPublishRecipe(recipeResult));
+
+        var successor = store.Shell with
+        {
+            Revision = 1,
+            HasSession = true,
+            PlanId = "plan-1",
+            PlanName = "Plan 1"
+        };
+
+        Assert.True(store.TryPublishCrossTabShell(successor));
+        Assert.Equal(1, store.Shell.Revision);
+        Assert.Null(store.Recipe);
+        Assert.Null(store.Acquisition);
+        Assert.Null(store.Market);
+        Assert.Null(store.Procurement);
+        Assert.False(store.TryPublishCrossTabShell(successor));
+    }
+
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

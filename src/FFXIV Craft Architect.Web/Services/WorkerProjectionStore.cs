@@ -35,6 +35,23 @@ public sealed class WorkerProjectionStore
 
     public event Action? Changed;
 
+    public bool TryPublishCrossTabShell(WorkerSessionShellProjection shell)
+    {
+        ArgumentNullException.ThrowIfNull(shell);
+        if (shell.Revision <= Shell.Revision)
+        {
+            return false;
+        }
+
+        Shell = shell;
+        Recipe = null;
+        Acquisition = null;
+        Market = null;
+        Procurement = null;
+        Changed?.Invoke();
+        return true;
+    }
+
     public bool TryPublish(WorkerSessionResultEnvelope result)
     {
         ArgumentNullException.ThrowIfNull(result);

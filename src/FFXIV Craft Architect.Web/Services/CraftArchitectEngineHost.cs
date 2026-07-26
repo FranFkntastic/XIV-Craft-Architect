@@ -63,6 +63,8 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
 
     internal EngineWorkerResultTiming? WorkerResultTiming => _client.LastResultTiming;
 
+    public event EventHandler<WorkerSessionShellProjection>? CrossTabSessionProjectionReceived;
+
     public CraftArchitectEngineHostHealth Health
     {
         get
@@ -432,6 +434,21 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
 
     private void OnWorkerMessageReceived(object? sender, EngineWorkerMessage message)
     {
+        if (string.Equals(
+                message.Kind,
+                "cross-tab-session-projection",
+                StringComparison.Ordinal))
+        {
+            if (message.Payload is { ValueKind: JsonValueKind.Object } payload &&
+                payload.TryGetProperty("shell", out var shellJson) &&
+                shellJson.Deserialize<WorkerSessionShellProjection>(
+                    EngineJsonSerializerOptions.CreateWire()) is { } shell)
+            {
+                CrossTabSessionProjectionReceived?.Invoke(this, shell);
+            }
+            return;
+        }
+
         if (message.ExecutionId is not { } commandId ||
             message.TransactionId != commandId ||
             message.Kind is not (WorkerSessionProtocol.ResultMessageKind or "protocol-error"))
