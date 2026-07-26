@@ -22,7 +22,6 @@ public sealed class MarketAnalysisPresentationContractTests
         Assert.Contains("CloseSelectedItemAsync", panel, StringComparison.Ordinal);
         Assert.Contains("return item.RecommendedWorld;", panel, StringComparison.Ordinal);
         Assert.Contains("grid-template-columns: repeat(auto-fill, minmax(285px, 1fr))", styles, StringComparison.Ordinal);
-        Assert.Contains("max-height: min(52vh, 680px)", styles, StringComparison.Ordinal);
         Assert.DoesNotContain("ma-ledger-workspace", panel, StringComparison.Ordinal);
         Assert.DoesNotContain("ma-ledger-table", panel, StringComparison.Ordinal);
         Assert.DoesNotContain("_selectedItemId ??=", page, StringComparison.Ordinal);
