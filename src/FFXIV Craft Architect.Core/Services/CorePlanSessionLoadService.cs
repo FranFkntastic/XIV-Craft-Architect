@@ -207,6 +207,20 @@ public sealed class CorePlanSessionLoadService
             return publicationContext.Scope;
         }
 
+        var coveredDataCenters = result.MarketItemAnalyses
+            .SelectMany(analysis =>
+                analysis.RequestedDataCenters
+                    .Concat(analysis.PresentDataCenters)
+                    .Concat(analysis.Worlds.Select(world => world.DataCenter)))
+            .Where(dataCenter => !string.IsNullOrWhiteSpace(dataCenter))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2)
+            .Count();
+        if (coveredDataCenters > 1)
+        {
+            return MarketFetchScope.EntireRegion;
+        }
+
         var analyzedScopes = result.MarketItemAnalyses
             .Select(analysis => analysis.Scope)
             .Distinct()

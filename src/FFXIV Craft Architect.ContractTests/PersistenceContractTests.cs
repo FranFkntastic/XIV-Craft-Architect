@@ -582,6 +582,58 @@ public sealed class PersistenceContractTests
     }
 
     [Fact]
+    public void SessionLoad_InfersRegionalScopeFromLegacyMultiDataCenterEvidence()
+    {
+        var plan = Plan(100, "Varnish");
+        var intelligence = new StoredMarketIntelligence
+        {
+            MarketIntelligenceId = Guid.NewGuid(),
+            ItemAnalyses =
+            [
+                new MarketItemAnalysis
+                {
+                    ItemId = 100,
+                    Name = "Varnish",
+                    QuantityNeeded = 2,
+                    Scope = MarketFetchScope.SelectedDataCenter,
+                    RequestedDataCenters = ["Aether", "Primal"],
+                    PresentDataCenters = ["Aether", "Primal"],
+                    Worlds =
+                    [
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Aether",
+                            WorldName = "Siren"
+                        },
+                        new WorldMarketAnalysis
+                        {
+                            DataCenter = "Primal",
+                            WorldName = "Exodus"
+                        }
+                    ]
+                }
+            ],
+            PublicationContext = MarketIntelligencePublicationContext.UnknownLegacy(
+                RecommendationMode.MinimizeTotalCost,
+                MarketAcquisitionLens.MinimumUpfrontCost)
+        };
+        var stored = new CoreStoredPlanSnapshot
+        {
+            Id = "legacy-regional-evidence",
+            Name = plan.Name,
+            DataCenter = plan.DataCenter,
+            PlanJson = JsonSerializer.Serialize(plan),
+            MarketIntelligenceJson = JsonSerializer.Serialize(intelligence)
+        };
+        var session = new CraftSessionState(new ImmediateCraftSessionDispatcher());
+
+        var result = new CorePlanSessionLoadService(session).Load(stored);
+
+        Assert.True(result.CanLoad);
+        Assert.Equal(MarketFetchScope.EntireRegion, session.ActiveContext.MarketFetchScope);
+    }
+
+    [Fact]
     public void ActivePlanClone_NormalizesSerializedParentIdentity()
     {
         var root = new PlanNode
