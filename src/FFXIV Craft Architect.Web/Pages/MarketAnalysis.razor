@@ -66,6 +66,7 @@
     private bool _isRefreshingSelectedItem;
     private bool _searchEntireRegion = true;
     private bool _secretDebugToolsEnabled;
+    private bool _suppressProjectionRefresh;
     private MarketSortOption _marketSort = MarketSortOption.ByRecommended;
     private MarketAnalysisEvidenceOverlay _evidenceOverlay =
         MarketAnalysisEvidenceOverlay.CompetitivenessOverlay;
@@ -122,6 +123,11 @@
 
     private void ProjectionChanged()
     {
+        if (_suppressProjectionRefresh)
+        {
+            return;
+        }
+
         var revision = WorkerProjections.Shell.Revision;
         if (revision > 0 &&
             _market?.Revision != revision &&
@@ -169,8 +175,24 @@
 
     private async Task SelectMarketAnalysisItem(int? itemId)
     {
-        _selectedItemId = itemId;
-        await EnsureSelectedMarketDetailsAsync();
+        if (!itemId.HasValue)
+        {
+            _selectedItemId = null;
+            return;
+        }
+
+        _suppressProjectionRefresh = true;
+        try
+        {
+            _market = await WorkerSession.GetMarketProjectionAsync(
+                includeDetails: true,
+                worldDetailItemId: itemId.Value);
+            _selectedItemId = itemId;
+        }
+        finally
+        {
+            _suppressProjectionRefresh = false;
+        }
     }
 
     private async Task EnsureSelectedMarketDetailsAsync()
@@ -231,12 +253,17 @@
 
         try
         {
+            _suppressProjectionRefresh = true;
             _market = await WorkerSession.ApplyMarketLensAsync(lens);
             await EnsureSelectedMarketDetailsAsync();
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Buying strategy could not be applied: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _suppressProjectionRefresh = false;
         }
     }
 
@@ -273,6 +300,7 @@
     {
         _selectedItemId = itemId;
         _isRefreshingSelectedItem = true;
+        _suppressProjectionRefresh = true;
         try
         {
             var outcome = await WorkerSession.RefreshMarketItemAsync(
@@ -292,6 +320,7 @@
         finally
         {
             _isRefreshingSelectedItem = false;
+            _suppressProjectionRefresh = false;
         }
     }
 
@@ -305,6 +334,7 @@
         }
 
         _isAnalyzing = true;
+        _suppressProjectionRefresh = true;
         var operation = AppState.BeginOperation(
             "Market analysis",
             forceRefreshData
@@ -342,6 +372,7 @@
         finally
         {
             _isAnalyzing = false;
+            _suppressProjectionRefresh = false;
             AppState.EndOperation(operation);
         }
     }
