@@ -408,7 +408,6 @@
 
     private async Task SelectProjectedItem(WorkerMarketItemProjection item)
     {
-        _selectedProjectedItem = item;
         await OnSelectedItemChanged.InvokeAsync(item.ItemId);
     }
 
