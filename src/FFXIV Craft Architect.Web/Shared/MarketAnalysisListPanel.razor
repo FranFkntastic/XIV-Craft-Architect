@@ -890,18 +890,7 @@
         return string.Join(" ", classes);
     }
 
-    private static string GetProjectedCardDestination(WorkerMarketItemProjection item)
-    {
-        if (!string.IsNullOrWhiteSpace(item.RecommendedWorld) &&
-            !string.Equals(item.RecommendedWorld, "Unavailable", StringComparison.OrdinalIgnoreCase))
-        {
-            return item.RecommendedWorld;
-        }
-
-        return GetProjectedFallbackDestination(item);
-    }
-
-    private static string GetProjectedFallbackDestination(WorkerMarketItemProjection item) =>
+    private static string GetProjectedCardDestination(WorkerMarketItemProjection item) =>
         item.WorldCount switch
         {
             <= 0 => "No eligible worlds",
