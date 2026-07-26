@@ -20,6 +20,7 @@ public sealed class MarketAnalysisPresentationContractTests
         Assert.Contains("class=\"ma-market-card-grid\"", panel, StringComparison.Ordinal);
         Assert.Contains("class=\"ma-expanded-item\"", panel, StringComparison.Ordinal);
         Assert.Contains("CloseSelectedItemAsync", panel, StringComparison.Ordinal);
+        Assert.Contains("return item.RecommendedWorld;", panel, StringComparison.Ordinal);
         Assert.Contains("grid-template-columns: repeat(auto-fill, minmax(285px, 1fr))", styles, StringComparison.Ordinal);
         Assert.DoesNotContain("ma-ledger-workspace", panel, StringComparison.Ordinal);
         Assert.DoesNotContain("ma-ledger-table", panel, StringComparison.Ordinal);
