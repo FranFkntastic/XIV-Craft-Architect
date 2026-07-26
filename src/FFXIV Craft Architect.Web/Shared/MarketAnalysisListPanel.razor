@@ -2,334 +2,320 @@
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
-<div class="ma-ledger-shell">
-    <div class="ma-ledger-workspace">
-        <div class="ma-ledger-list">
-            <div class="ma-table-scroll">
-                <table class="ma-ledger-table">
-                    <thead>
-                        <tr>
-                            <th style="@ItemColumnStyle" class="ma-item-column">
-                                @SortHeader("Item", MarketAnalysisGridSortColumn.Item)
-                            </th>
-                            <th style="@QuantityColumnStyle" class="ma-number-column">
-                                @SortHeader("Qty", MarketAnalysisGridSortColumn.Quantity)
-                            </th>
-                            <th style="@CoverageColumnStyle" class="ma-recommendation-column">
-                                @SortHeader("Coverage", MarketAnalysisGridSortColumn.Coverage)
-                            </th>
-                            @if (ShowWorldsColumn)
-                            {
-                                <th style="width: 7%;" class="ma-number-column">
-                                    @SortHeader("Worlds", MarketAnalysisGridSortColumn.Worlds)
-                                </th>
-                            }
-                            <th style="@TotalColumnStyle" class="ma-total-column">
-                                @SortHeader("Cash Out", MarketAnalysisGridSortColumn.Total, MarketAnalysisGridViewService.CalculatedTotalHeaderTooltip)
-                            </th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var plan in _orderedPlans)
-                        {
-                            var coverageLabel = MarketAnalysisGridViewService.FormatCoverageLabel(plan, _analysisByItemId);
-                            <tr @key="plan.ItemId"
-                                class="@GetRowClass(plan)"
-                                @onclick="() => SelectPlan(plan)">
-                                <td style="@ItemColumnStyle" class="ma-item-column">
-                                    <span class="ma-item-cell">
-                                        <a class="ma-item-name"
-                                           href="@plan.UniversalisUrl"
-                                           target="_blank"
-                                           rel="noopener noreferrer"
-                                           title="Open @plan.Name on Universalis"
-                                           @onclick:stopPropagation>
-                                            @plan.Name
-                                        </a>
-                                        <span class="ma-item-kind">@GetSourceLabel(plan)</span>
-                                    </span>
-                                </td>
-                                <td style="@QuantityColumnStyle" class="ma-number-column">
-                                    <span class="@GetStockClass(plan)">@GetQuantityLabel(plan)</span>
-                                </td>
-                                <td style="@CoverageColumnStyle" class="ma-recommendation-column">
-                                    <span title="@coverageLabel">@coverageLabel</span>
-                                </td>
-                                @if (ShowWorldsColumn)
-                                {
-                                    <td style="width: 7%;" class="ma-number-column">
-                                        @MarketAnalysisGridViewService.GetWorldCount(plan)
-                                    </td>
-                                }
-                                <td style="@TotalColumnStyle" class="ma-total-column">
-                                    <span class="@MarketAnalysisGridViewService.GetTotalCostClass(plan)"
-                                          title="@MarketAnalysisGridViewService.GetTotalCostTooltip(plan)">
-                                        @MarketAnalysisGridViewService.FormatTotalCost(plan)
-                                    </span>
-                                </td>
-                            </tr>
-                        }
-                        @foreach (var item in _orderedProjectedItems)
-                        {
-                            <tr @key="item.ItemId"
-                                class="@GetProjectedRowClass(item)"
-                                @onclick="() => SelectProjectedItem(item)">
-                                <td style="@ItemColumnStyle" class="ma-item-column">
-                                    <span class="ma-item-cell">
-                                        <a class="ma-item-name"
-                                           href="@GetUniversalisUrl(item.ItemId)"
-                                           target="_blank"
-                                           rel="noopener noreferrer"
-                                           title="Open @item.Name on Universalis"
-                                           @onclick:stopPropagation>
-                                            @item.Name
-                                        </a>
-                                        <span class="ma-item-kind">Market</span>
-                                    </span>
-                                </td>
-                                <td style="@QuantityColumnStyle" class="ma-number-column">
-                                    <span class="@GetProjectedStockClass(item)">@FormatQuantity(item.QuantityNeeded)</span>
-                                </td>
-                                <td style="@CoverageColumnStyle" class="ma-recommendation-column">
-                                    <span title="@FormatProjectedCoverage(item)">@FormatProjectedCoverage(item)</span>
-                                </td>
-                                @if (ShowWorldsColumn)
-                                {
-                                    <td style="width: 7%;" class="ma-number-column">
-                                        @item.WorldCount
-                                    </td>
-                                }
-                                <td style="@TotalColumnStyle" class="ma-total-column">
-                                    <span class="@GetProjectedTotalClass(item)"
-                                          title="@GetProjectedTotalTooltip(item)">
-                                        @FormatProjectedTotal(item)
-                                    </span>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
+<div class="ma-market-workbench">
+    <div class="ma-market-summary">
+        <strong>@FormatItemCount(GetDisplayedItemCount())</strong>
+        <div class="ma-market-summary-meta">
+            <span>@FormatScopeSummary()</span>
+            <span>@FormatDisplayedTotal()</span>
+            <span>@FormatCoverageSummary()</span>
         </div>
+    </div>
 
-        <aside class="ma-detail-pane">
-            @if (_selectedPlan == null && _selectedProjectedItem == null)
-            {
-                <div class="ma-detail-empty">
-                    <MudIcon Icon="@Icons.Material.Filled.TableRows" Size="Size.Large" />
-                    <MudText Typo="Typo.body2">Select an item to inspect its market detail.</MudText>
-                </div>
-            }
-            else if (_selectedPlan is not null)
-            {
-                <div class="ma-detail-header">
-                    <div class="ma-detail-title-block">
-                        <div class="ma-detail-title-row">
-                            <a class="ma-detail-title"
-                               href="@_selectedPlan.UniversalisUrl"
-                               target="_blank"
-                               rel="noopener noreferrer"
-                               title="Open @_selectedPlan.Name on Universalis">
-                                @_selectedPlan.Name
-                            </a>
-                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
-                                           Size="Size.Small"
-                                           Class="ma-detail-copy-button"
-                                           OnClick="() => CopySelectedItemNameAsync(_selectedPlan.Name)"
-                                           OnClick:StopPropagation="true"
-                                           Title="Copy item name"
-                                           AriaLabel="Copy item name" />
-                            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
-                                           Size="Size.Small"
-                                           Class="ma-detail-refresh-button"
-                                           Disabled="IsRefreshingItem"
-                                           OnClick="() => RefreshSelectedItemAsync(_selectedPlan)"
-                                           OnClick:StopPropagation="true"
-                                           Title="Refresh market data for this item"
-                                           AriaLabel="Refresh market data for this item" />
-                        </div>
-                        <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
-                            @FormatQuantity(_selectedPlan.QuantityNeeded) needed
-                        </MudText>
+    @if (_selectedPlan is not null)
+    {
+        <section class="ma-expanded-item" aria-label="@($"{_selectedPlan.Name} market details")">
+            <div class="ma-detail-header">
+                <div class="ma-detail-title-block">
+                    <div class="ma-detail-title-row">
+                        <a class="ma-detail-title"
+                           href="@_selectedPlan.UniversalisUrl"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           title="Open @_selectedPlan.Name on Universalis">
+                            @_selectedPlan.Name
+                        </a>
+                        <span class="ma-recommendation-badge">Recommended purchase</span>
+                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                       Size="Size.Small"
+                                       Class="ma-detail-copy-button"
+                                       OnClick="() => CopySelectedItemNameAsync(_selectedPlan.Name)"
+                                       OnClick:StopPropagation="true"
+                                       Title="Copy item name"
+                                       AriaLabel="Copy item name" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                       Size="Size.Small"
+                                       Class="ma-detail-refresh-button"
+                                       Disabled="IsRefreshingItem"
+                                       OnClick="() => RefreshSelectedItemAsync(_selectedPlan)"
+                                       OnClick:StopPropagation="true"
+                                       Title="Refresh market data for this item"
+                                       AriaLabel="Refresh market data for this item" />
                     </div>
+                    <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
+                        @FormatQuantity(_selectedPlan.QuantityNeeded) needed
+                    </MudText>
+                </div>
+                <div class="ma-detail-header-actions">
                     <MudText Typo="Typo.subtitle1" Class="ma-detail-total">
                         <span class="@MarketAnalysisGridViewService.GetTotalCostClass(_selectedPlan)"
                               title="@MarketAnalysisGridViewService.GetTotalCostTooltip(_selectedPlan)">
                             @MarketAnalysisGridViewService.FormatTotalCost(_selectedPlan)
                         </span>
                     </MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Size="Size.Small"
+                                   Class="ma-detail-close-button"
+                                   OnClick="CloseSelectedItemAsync"
+                                   Title="Close market detail"
+                                   AriaLabel="Close market detail" />
+                </div>
+            </div>
+
+            <div class="@GetRecommendationClass(_selectedPlan)">
+                <strong>@GetRecommendationTitle(_selectedPlan)</strong>
+                <span>@GetRecommendationDetail(_selectedPlan)</span>
+            </div>
+
+            @if (GetPlanWarning(_selectedPlan) is { } warning)
+            {
+                <div class="ma-projected-warning">
+                    <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" />
+                    <span>@warning</span>
+                </div>
+            }
+
+            @if (GetSelectedAnalysis() is { } analysis)
+            {
+                <div class="ma-detail-tabs" role="tablist" aria-label="Market detail views">
+                    <button type="button"
+                            class="@GetDetailTabClass(MarketAnalysisDetailTab.Worlds)"
+                            role="tab"
+                            aria-selected="@IsDetailTabSelected(MarketAnalysisDetailTab.Worlds)"
+                            @onclick="() => SelectDetailTab(MarketAnalysisDetailTab.Worlds)">
+                        Worlds
+                    </button>
+                    <button type="button"
+                            class="@GetDetailTabClass(MarketAnalysisDetailTab.PriceBands)"
+                            role="tab"
+                            aria-selected="@IsDetailTabSelected(MarketAnalysisDetailTab.PriceBands)"
+                            @onclick="() => SelectDetailTab(MarketAnalysisDetailTab.PriceBands)">
+                        Price Bands
+                    </button>
                 </div>
 
-                @if (GetSelectedAnalysis() is { } analysis)
-                {
-                    <div class="ma-detail-tabs" role="tablist" aria-label="Market detail views">
-                        <button type="button"
-                                class="@GetDetailTabClass(MarketAnalysisDetailTab.Worlds)"
-                                role="tab"
-                                aria-selected="@IsDetailTabSelected(MarketAnalysisDetailTab.Worlds)"
-                                @onclick="() => SelectDetailTab(MarketAnalysisDetailTab.Worlds)">
-                            Worlds
-                        </button>
-                        <button type="button"
-                                class="@GetDetailTabClass(MarketAnalysisDetailTab.PriceBands)"
-                                role="tab"
-                                aria-selected="@IsDetailTabSelected(MarketAnalysisDetailTab.PriceBands)"
-                                @onclick="() => SelectDetailTab(MarketAnalysisDetailTab.PriceBands)">
-                            Price Bands
-                        </button>
-                    </div>
-
-                    <div class="ma-detail-scroll">
-                        @if (_selectedDetailTab == MarketAnalysisDetailTab.Worlds)
-                        {
-                            <MarketAnalysisWorldGrid Analysis="analysis"
-                                                     Lens="CurrentLens"
-                                                     ItemId="_selectedPlan.ItemId"
-                                                     EvidenceOverlay="EvidenceOverlay"
-                                                     SortColumn="WorldSortColumn"
-                                                     SortDescending="WorldSortDescending"
-                                                     ExpandedWorldKeys="ExpandedWorldKeys"
-                                                     OnWorldExpansionToggled="OnWorldExpansionToggled"
-                                                     OnSortChanged="OnWorldSortChanged" />
-                        }
-                        else
-                        {
-                            <div class="ma-price-band-view">
-                                @if (analysis.ScopePriceBands.Count > 0)
-                                {
-                                    <WebDataTable TItem="PriceBandRow"
-                                                  TColumnId="PriceBandColumn"
-                                                  CssClass="ma-price-band-grid"
-                                                  Items="@GetPriceBandRows(analysis)"
-                                                  Columns="@GetPriceBandColumns()"
-                                                  GetRowKey="row => row.Key"
-                                                  IsRowExpanded="row => _expandedPriceBandKeys.Contains(row.Key)"
-                                                  ExpandedContent="RenderExpandedPriceBand"
-                                                  SortState="_priceBandSortState"
-                                                  SortChanged="OnPriceBandSortChanged" />
-                                }
-                                else
-                                {
-                                    <div class="ma-analysis-missing">
-                                        <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
-                                        <MudText Typo="Typo.body2">Price band data is not available for this item.</MudText>
-                                    </div>
-                                }
-                            </div>
-                        }
-                    </div>
-                }
-                else
-                {
-                    <div class="ma-detail-scroll">
-                        <div class="ma-analysis-missing">
-                            <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
-                            <MudText Typo="Typo.body2">
-                                Analytics for this item are not available in the current session. Run Market Analysis again to rebuild the source data.
-                            </MudText>
+                <div class="ma-detail-content">
+                    @if (_selectedDetailTab == MarketAnalysisDetailTab.Worlds)
+                    {
+                        <MarketAnalysisWorldGrid Analysis="analysis"
+                                                 Lens="CurrentLens"
+                                                 ItemId="_selectedPlan.ItemId"
+                                                 EvidenceOverlay="EvidenceOverlay"
+                                                 SortColumn="WorldSortColumn"
+                                                 SortDescending="WorldSortDescending"
+                                                 ExpandedWorldKeys="ExpandedWorldKeys"
+                                                 OnWorldExpansionToggled="OnWorldExpansionToggled"
+                                                 OnSortChanged="OnWorldSortChanged" />
+                    }
+                    else
+                    {
+                        <div class="ma-price-band-view">
+                            @if (analysis.ScopePriceBands.Count > 0)
+                            {
+                                <WebDataTable TItem="PriceBandRow"
+                                              TColumnId="PriceBandColumn"
+                                              CssClass="ma-price-band-grid"
+                                              Items="@GetPriceBandRows(analysis)"
+                                              Columns="@GetPriceBandColumns()"
+                                              GetRowKey="row => row.Key"
+                                              IsRowExpanded="row => _expandedPriceBandKeys.Contains(row.Key)"
+                                              ExpandedContent="RenderExpandedPriceBand"
+                                              SortState="_priceBandSortState"
+                                              SortChanged="OnPriceBandSortChanged" />
+                            }
+                            else
+                            {
+                                <div class="ma-analysis-missing">
+                                    <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
+                                    <MudText Typo="Typo.body2">Price band data is not available for this item.</MudText>
+                                </div>
+                            }
                         </div>
-                    </div>
-                }
+                    }
+                </div>
             }
-            else if (_selectedProjectedItem is { } projectedItem)
+            else
             {
-                <div class="ma-detail-header">
-                    <div class="ma-detail-title-block">
-                        <div class="ma-detail-title-row">
-                            <a class="ma-detail-title"
-                               href="@GetUniversalisUrl(projectedItem.ItemId)"
-                               target="_blank"
-                               rel="noopener noreferrer"
-                               title="Open @projectedItem.Name on Universalis">
-                                @projectedItem.Name
-                            </a>
-                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
-                                           Size="Size.Small"
-                                           Class="ma-detail-copy-button"
-                                           OnClick="() => CopySelectedItemNameAsync(projectedItem.Name)"
-                                           OnClick:StopPropagation="true"
-                                           Title="Copy item name"
-                                           AriaLabel="Copy item name" />
-                            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
-                                           Size="Size.Small"
-                                           Class="ma-detail-refresh-button"
-                                           Disabled="IsRefreshingItem"
-                                           OnClick="() => RefreshProjectedItemAsync(projectedItem)"
-                                           OnClick:StopPropagation="true"
-                                           Title="Refresh market data for this item"
-                                           AriaLabel="Refresh market data for this item" />
-                        </div>
-                        <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
-                            @FormatQuantity(projectedItem.QuantityNeeded) needed
+                <div class="ma-detail-content">
+                    <div class="ma-analysis-missing">
+                        <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
+                        <MudText Typo="Typo.body2">
+                            Analytics for this item are not available in the current session. Run Market Analysis again to rebuild the source data.
                         </MudText>
                     </div>
+                </div>
+            }
+        </section>
+    }
+    else if (_selectedProjectedItem is { } projectedItem)
+    {
+        <section class="ma-expanded-item" aria-label="@($"{projectedItem.Name} market details")">
+            <div class="ma-detail-header">
+                <div class="ma-detail-title-block">
+                    <div class="ma-detail-title-row">
+                        <a class="ma-detail-title"
+                           href="@GetUniversalisUrl(projectedItem.ItemId)"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           title="Open @projectedItem.Name on Universalis">
+                            @projectedItem.Name
+                        </a>
+                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                                       Size="Size.Small"
+                                       Class="ma-detail-copy-button"
+                                       OnClick="() => CopySelectedItemNameAsync(projectedItem.Name)"
+                                       OnClick:StopPropagation="true"
+                                       Title="Copy item name"
+                                       AriaLabel="Copy item name" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                       Size="Size.Small"
+                                       Class="ma-detail-refresh-button"
+                                       Disabled="IsRefreshingItem"
+                                       OnClick="() => RefreshProjectedItemAsync(projectedItem)"
+                                       OnClick:StopPropagation="true"
+                                       Title="Refresh market data for this item"
+                                       AriaLabel="Refresh market data for this item" />
+                    </div>
+                    <MudText Typo="Typo.caption" Class="ma-detail-subtitle">
+                        @FormatQuantity(projectedItem.QuantityNeeded) needed
+                    </MudText>
+                </div>
+                <div class="ma-detail-header-actions">
                     <MudText Typo="Typo.subtitle1" Class="ma-detail-total">
                         <span class="@GetProjectedTotalClass(projectedItem)"
                               title="@GetProjectedTotalTooltip(projectedItem)">
                             @FormatProjectedTotal(projectedItem)
                         </span>
                     </MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Size="Size.Small"
+                                   Class="ma-detail-close-button"
+                                   OnClick="CloseSelectedItemAsync"
+                                   Title="Close market detail"
+                                   AriaLabel="Close market detail" />
                 </div>
+            </div>
 
-                @if (!string.IsNullOrWhiteSpace(projectedItem.Warning))
-                {
-                    <div class="ma-projected-warning">
-                        <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" />
-                        <span>@projectedItem.Warning</span>
-                    </div>
-                }
-
-                <div class="ma-detail-tabs" role="tablist" aria-label="Market detail views">
-                    <button type="button"
-                            class="ma-detail-tab is-active"
-                            role="tab"
-                            aria-selected="true">
-                        Worlds
-                    </button>
-                </div>
-
-                <div class="ma-detail-scroll">
-                    @if (projectedItem.Worlds.Count == 0)
-                    {
-                        <div class="ma-analysis-missing">
-                            <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
-                            <MudText Typo="Typo.body2">
-                                World detail is not loaded for this item. Refresh it to load the current listings.
-                            </MudText>
-                        </div>
-                    }
-                    else
-                    {
-                        <table class="ma-projected-world-table">
-                            <thead>
-                                <tr>
-                                    <th>@ProjectedWorldSortHeader("World", MarketAnalysisWorldGridSortColumn.World)</th>
-                                    <th>Data Center</th>
-                                    <th class="ma-number-column">@ProjectedWorldSortHeader("Stock", MarketAnalysisWorldGridSortColumn.StockDepth)</th>
-                                    <th class="ma-number-column">@ProjectedWorldSortHeader("Unit", MarketAnalysisWorldGridSortColumn.PriceValue)</th>
-                                    <th class="ma-number-column">@ProjectedWorldSortHeader("Total", MarketAnalysisWorldGridSortColumn.Value)</th>
-                                    <th>@ProjectedWorldSortHeader("Age", MarketAnalysisWorldGridSortColumn.Data)</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                @foreach (var world in GetProjectedWorlds(projectedItem))
-                                {
-                                    <tr>
-                                        <td class="ma-projected-world-name">@world.WorldName</td>
-                                        <td>@world.DataCenter</td>
-                                        <td class="ma-number-column">@world.Quantity.ToString("N0")</td>
-                                        <td class="ma-number-column">@FormatGil(world.AverageUnitPrice)</td>
-                                        <td class="ma-number-column">@FormatGil(world.TotalCost)</td>
-                                        <td>@FormatWorldAge(world.DataAge)</td>
-                                    </tr>
-                                }
-                            </tbody>
-                        </table>
-                    }
+            @if (!string.IsNullOrWhiteSpace(projectedItem.Warning))
+            {
+                <div class="ma-projected-warning">
+                    <MudIcon Icon="@Icons.Material.Filled.Warning" Size="Size.Small" />
+                    <span>@projectedItem.Warning</span>
                 </div>
             }
-        </aside>
-    </div>
+
+            <div class="ma-detail-tabs" role="tablist" aria-label="Market detail views">
+                <button type="button"
+                        class="ma-detail-tab is-active"
+                        role="tab"
+                        aria-selected="true">
+                    Worlds
+                </button>
+            </div>
+
+            <div class="ma-detail-content">
+                @if (projectedItem.Worlds.Count == 0)
+                {
+                    <div class="ma-analysis-missing">
+                        <MudIcon Icon="@Icons.Material.Filled.SyncProblem" Size="Size.Large" />
+                        <MudText Typo="Typo.body2">
+                            World detail is not loaded for this item. Refresh it to load the current listings.
+                        </MudText>
+                    </div>
+                }
+                else
+                {
+                    <table class="ma-projected-world-table">
+                        <thead>
+                            <tr>
+                                <th>@ProjectedWorldSortHeader("World", MarketAnalysisWorldGridSortColumn.World)</th>
+                                <th>Data Center</th>
+                                <th class="ma-number-column">@ProjectedWorldSortHeader("Stock", MarketAnalysisWorldGridSortColumn.StockDepth)</th>
+                                <th class="ma-number-column">@ProjectedWorldSortHeader("Unit", MarketAnalysisWorldGridSortColumn.PriceValue)</th>
+                                <th class="ma-number-column">@ProjectedWorldSortHeader("Total", MarketAnalysisWorldGridSortColumn.Value)</th>
+                                <th>@ProjectedWorldSortHeader("Age", MarketAnalysisWorldGridSortColumn.Data)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var world in GetProjectedWorlds(projectedItem))
+                            {
+                                <tr>
+                                    <td class="ma-projected-world-name">@world.WorldName</td>
+                                    <td>@world.DataCenter</td>
+                                    <td class="ma-number-column">@world.Quantity.ToString("N0")</td>
+                                    <td class="ma-number-column">@FormatGil(world.AverageUnitPrice)</td>
+                                    <td class="ma-number-column">@FormatGil(world.TotalCost)</td>
+                                    <td>@FormatWorldAge(world.DataAge)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+        </section>
+    }
+
+    <section class="ma-card-section" aria-label="Market items">
+        <div class="ma-card-section-header">
+            <strong>Market items · @GetDisplayedItemCount().ToString("N0")</strong>
+            <div class="ma-card-sort-controls" aria-label="Sort market items">
+                @SortHeader("Name", MarketAnalysisGridSortColumn.Item)
+                @SortHeader("Quantity", MarketAnalysisGridSortColumn.Quantity)
+                @SortHeader("Coverage", MarketAnalysisGridSortColumn.Coverage)
+                @if (ShowWorldsColumn)
+                {
+                    @SortHeader("Worlds", MarketAnalysisGridSortColumn.Worlds)
+                }
+                @SortHeader("Cost", MarketAnalysisGridSortColumn.Total, MarketAnalysisGridViewService.CalculatedTotalHeaderTooltip)
+            </div>
+        </div>
+
+        <div class="ma-market-card-grid">
+            @foreach (var plan in _orderedPlans)
+            {
+                var coverageLabel = MarketAnalysisGridViewService.FormatCoverageLabel(plan, _analysisByItemId);
+                <button @key="plan.ItemId"
+                        type="button"
+                        class="@GetPlanCardClass(plan)"
+                        aria-pressed="@(_selectedPlan?.ItemId == plan.ItemId)"
+                        @onclick="() => SelectPlan(plan)">
+                    <span class="ma-card-heading">
+                        <strong>@plan.Name</strong>
+                        <span class="@GetStockClass(plan)">@GetQuantityLabel(plan)</span>
+                    </span>
+                    <span class="ma-card-coverage" title="@coverageLabel">@coverageLabel</span>
+                    <span class="ma-card-footer">
+                        <span>@GetCardDestination(plan)</span>
+                        <span class="@MarketAnalysisGridViewService.GetTotalCostClass(plan)"
+                              title="@MarketAnalysisGridViewService.GetTotalCostTooltip(plan)">
+                            @MarketAnalysisGridViewService.FormatTotalCost(plan)
+                        </span>
+                    </span>
+                </button>
+            }
+            @foreach (var item in _orderedProjectedItems)
+            {
+                <button @key="item.ItemId"
+                        type="button"
+                        class="@GetProjectedCardClass(item)"
+                        aria-pressed="@(_selectedProjectedItem?.ItemId == item.ItemId)"
+                        @onclick="() => SelectProjectedItem(item)">
+                    <span class="ma-card-heading">
+                        <strong>@item.Name</strong>
+                        <span class="@GetProjectedStockClass(item)">@FormatQuantity(item.QuantityNeeded)</span>
+                    </span>
+                    <span class="ma-card-coverage" title="@FormatProjectedCoverage(item)">@FormatProjectedCoverage(item)</span>
+                    <span class="ma-card-footer">
+                        <span>@GetProjectedCardDestination(item)</span>
+                        <span class="@GetProjectedTotalClass(item)"
+                              title="@GetProjectedTotalTooltip(item)">
+                            @FormatProjectedTotal(item)
+                        </span>
+                    </span>
+                </button>
+            }
+        </div>
+    </section>
 </div>
 
 @code {
@@ -365,14 +351,6 @@
     private WebTableSortState<PriceBandColumn> _priceBandSortState = WebTableSortState<PriceBandColumn>.Unsorted;
     private WebTableSortState<PriceBandListingColumn> _priceBandListingSortState = new(PriceBandListingColumn.Unit, false);
 
-    private string ItemColumnStyle => ShowWorldsColumn ? "width: 27%;" : "width: 29%;";
-
-    private string QuantityColumnStyle => ShowWorldsColumn ? "width: 12%;" : "width: 13%;";
-
-    private string CoverageColumnStyle => ShowWorldsColumn ? "width: 36%;" : "width: 39%;";
-
-    private string TotalColumnStyle => ShowWorldsColumn ? "width: 18%;" : "width: 19%;";
-
     protected override void OnParametersSet()
     {
         _analysisByItemId = MarketItemAnalyses.ToDictionary(analysis => analysis.ItemId);
@@ -380,10 +358,11 @@
         _orderedProjectedItems = ShoppingPlans.Count == 0
             ? GetProjectedItems()
             : Array.Empty<WorkerMarketItemProjection>();
-        _selectedPlan = MarketAnalysisGridViewService.ResolveSelectedPlan(_orderedPlans, SelectedItemId);
-        _selectedProjectedItem = _selectedPlan is null
-            ? _orderedProjectedItems.FirstOrDefault(item => item.ItemId == SelectedItemId)
-                ?? _orderedProjectedItems.FirstOrDefault()
+        _selectedPlan = SelectedItemId.HasValue
+            ? _orderedPlans.FirstOrDefault(plan => plan.ItemId == SelectedItemId.Value)
+            : null;
+        _selectedProjectedItem = _selectedPlan is null && SelectedItemId.HasValue
+            ? _orderedProjectedItems.FirstOrDefault(item => item.ItemId == SelectedItemId.Value)
             : null;
         var selectedItemId = _selectedPlan?.ItemId ?? _selectedProjectedItem?.ItemId;
         if (_lastSelectedItemId != selectedItemId)
@@ -396,14 +375,38 @@
 
     private async Task SelectPlan(DetailedShoppingPlan plan)
     {
+        if (_selectedPlan?.ItemId == plan.ItemId)
+        {
+            await CloseSelectedItemAsync();
+            return;
+        }
+
         _selectedPlan = plan;
+        _selectedProjectedItem = null;
         await OnSelectedItemChanged.InvokeAsync(plan.ItemId);
     }
 
     private async Task SelectProjectedItem(WorkerMarketItemProjection item)
     {
+        if (_selectedProjectedItem?.ItemId == item.ItemId)
+        {
+            await CloseSelectedItemAsync();
+            return;
+        }
+
+        _selectedPlan = null;
         _selectedProjectedItem = item;
         await OnSelectedItemChanged.InvokeAsync(item.ItemId);
+    }
+
+    private async Task CloseSelectedItemAsync()
+    {
+        _selectedPlan = null;
+        _selectedProjectedItem = null;
+        _lastSelectedItemId = null;
+        _selectedDetailTab = MarketAnalysisDetailTab.Worlds;
+        _expandedPriceBandKeys.Clear();
+        await OnSelectedItemChanged.InvokeAsync(null);
     }
 
     private async Task RefreshSelectedItemAsync(DetailedShoppingPlan plan)
@@ -461,8 +464,8 @@
             sequence++,
             "class",
             WorldSortColumn == column
-                ? "ma-sort-header is-active"
-                : "ma-sort-header");
+                ? "ma-table-sort-header is-active"
+                : "ma-table-sort-header");
         builder.AddAttribute(
             sequence++,
             "onclick",
@@ -873,9 +876,9 @@
             ? worlds.OrderByDescending(selector, comparer)
             : worlds.OrderBy(selector, comparer);
 
-    private string GetProjectedRowClass(WorkerMarketItemProjection item)
+    private string GetProjectedCardClass(WorkerMarketItemProjection item)
     {
-        var classes = new List<string>();
+        var classes = new List<string> { "ma-market-card" };
         if (_selectedProjectedItem?.ItemId == item.ItemId)
         {
             classes.Add("is-selected");
@@ -886,6 +889,15 @@
         }
         return string.Join(" ", classes);
     }
+
+    private static string GetProjectedCardDestination(WorkerMarketItemProjection item) =>
+        item.WorldCount switch
+        {
+            <= 0 => "No eligible worlds",
+            1 when item.Worlds.FirstOrDefault() is { } world => $"{world.WorldName} · {world.DataCenter}",
+            1 => "1 world compared",
+            _ => $"{item.WorldCount:N0} worlds compared"
+        };
 
     private static string GetProjectedStockClass(WorkerMarketItemProjection item) =>
         item.HasSufficientStock ? "ma-stock-ok" : "ma-stock-warning";
@@ -937,15 +949,6 @@
         return !string.IsNullOrWhiteSpace(plan.Error) ||
             !string.IsNullOrWhiteSpace(plan.MarketDataWarning) ||
             !plan.HasSufficientStock;
-    }
-
-    private static string GetSourceLabel(DetailedShoppingPlan plan)
-    {
-        if (!string.IsNullOrWhiteSpace(plan.Error))
-            return "Error";
-        if (plan.RequiresSplitPurchase)
-            return "Split";
-        return "Market";
     }
 
     private static string GetQuantityLabel(DetailedShoppingPlan plan)
@@ -1093,9 +1096,9 @@
         return string.Empty;
     }
 
-    private string GetRowClass(DetailedShoppingPlan plan)
+    private string GetPlanCardClass(DetailedShoppingPlan plan)
     {
-        var classes = new List<string>();
+        var classes = new List<string> { "ma-market-card" };
         if (_selectedPlan?.ItemId == plan.ItemId)
         {
             classes.Add("is-selected");
@@ -1108,6 +1111,150 @@
 
         return string.Join(" ", classes);
     }
+
+    private static string GetCardDestination(DetailedShoppingPlan plan)
+    {
+        if (!string.IsNullOrWhiteSpace(plan.Error))
+        {
+            return "Needs attention";
+        }
+
+        if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
+        {
+            var worldCount = plan.RecommendedSplit
+                .Select(split => split.WorldName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            return $"{worldCount:N0}-world split";
+        }
+
+        return plan.RecommendedWorld is { } world
+            ? string.Equals(world.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase)
+                ? "Vendor"
+                : string.IsNullOrWhiteSpace(world.DataCenter)
+                    ? world.WorldName
+                    : $"{world.WorldName} · {world.DataCenter}"
+            : "No eligible purchase";
+    }
+
+    private static string GetRecommendationClass(DetailedShoppingPlan plan) =>
+        !string.IsNullOrWhiteSpace(plan.Error) ||
+        plan.RecommendedWorld is null && plan.RecommendedSplit?.Any() != true
+            ? "ma-recommendation-strip is-warning"
+            : "ma-recommendation-strip";
+
+    private static string GetRecommendationTitle(DetailedShoppingPlan plan)
+    {
+        if (!string.IsNullOrWhiteSpace(plan.Error))
+        {
+            return "Purchase needs attention";
+        }
+
+        if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
+        {
+            var worldCount = plan.RecommendedSplit
+                .Select(split => split.WorldName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            return $"Buy across {worldCount:N0} worlds";
+        }
+
+        return plan.RecommendedWorld is { } world
+            ? string.Equals(world.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase)
+                ? "Buy from vendor"
+                : $"Buy on {world.WorldName}"
+            : "No eligible purchase";
+    }
+
+    private static string GetRecommendationDetail(DetailedShoppingPlan plan)
+    {
+        if (!string.IsNullOrWhiteSpace(plan.Error))
+        {
+            return plan.Error;
+        }
+
+        if (plan.RequiresSplitPurchase && plan.RecommendedSplit?.Any() == true)
+        {
+            var quantity = plan.RecommendedSplit.Sum(split => split.QuantityToBuy);
+            return $"{quantity:N0}/{plan.QuantityNeeded:N0} covered for {MarketAnalysisGridViewService.FormatTotalCost(plan)}.";
+        }
+
+        if (plan.RecommendedWorld is { } world)
+        {
+            if (string.Equals(world.WorldName, MarketShoppingConstants.VendorWorldName, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"{plan.QuantityNeeded:N0} items for {MarketAnalysisGridViewService.FormatTotalCost(plan)}.";
+            }
+
+            var dataCenter = string.IsNullOrWhiteSpace(world.DataCenter)
+                ? string.Empty
+                : $"{world.DataCenter} · ";
+            return $"{dataCenter}{world.TotalQuantityPurchased:N0}/{plan.QuantityNeeded:N0} covered at ~{world.AveragePricePerUnit:N0}g each.";
+        }
+
+        return "The current evidence does not contain a complete eligible purchase.";
+    }
+
+    private static string? GetPlanWarning(DetailedShoppingPlan plan)
+    {
+        if (!string.IsNullOrWhiteSpace(plan.MarketDataWarning))
+        {
+            return plan.MarketDataWarning;
+        }
+
+        if (!plan.HasSufficientStock)
+        {
+            return $"Only {plan.TotalAvailableQuantity:N0} of {plan.QuantityNeeded:N0} required items are covered.";
+        }
+
+        return null;
+    }
+
+    private int GetDisplayedItemCount() => _orderedPlans.Count + _orderedProjectedItems.Count;
+
+    private string FormatScopeSummary()
+    {
+        var analyzedWorldCount = _analysisByItemId.Values
+            .Select(analysis => analysis.Worlds.Count)
+            .DefaultIfEmpty(0)
+            .Max();
+        var projectedWorldCount = _orderedProjectedItems
+            .Select(item => item.WorldCount)
+            .DefaultIfEmpty(0)
+            .Max();
+        var worldCount = Math.Max(analyzedWorldCount, projectedWorldCount);
+        if (worldCount > 0)
+        {
+            return $"{worldCount:N0} world{(worldCount == 1 ? string.Empty : "s")} searched";
+        }
+
+        return ShowWorldsColumn ? "Regional search" : "Data-center search";
+    }
+
+    private string FormatDisplayedTotal()
+    {
+        var total = _orderedPlans.Sum(plan => (decimal)MarketAnalysisGridViewService.GetTotalCost(plan)) +
+            _orderedProjectedItems.Where(item => item.IsAvailable).Sum(item => item.EstimatedTotalCost);
+        return total > 0 ? $"{total:N0}g total" : "No purchase total";
+    }
+
+    private string FormatCoverageSummary()
+    {
+        var itemCount = GetDisplayedItemCount();
+        if (itemCount == 0)
+        {
+            return "No purchases";
+        }
+
+        var coveredCount = _orderedPlans.Count(plan => plan.HasSufficientStock) +
+            _orderedProjectedItems.Count(item => item.HasSufficientStock);
+        return coveredCount == itemCount
+            ? "All requirements covered"
+            : $"{coveredCount:N0}/{itemCount:N0} requirements covered";
+    }
+
+    private static string FormatItemCount(int count) =>
+        $"{count:N0} market purchase{(count == 1 ? string.Empty : "s")}";
 
     private static string GetStockClass(DetailedShoppingPlan plan)
     {
