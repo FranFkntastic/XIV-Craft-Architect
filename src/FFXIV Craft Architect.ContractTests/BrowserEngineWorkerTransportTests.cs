@@ -13,7 +13,10 @@ public sealed class BrowserEngineWorkerTransportTests
         var controller = new RecordingController();
         var module = new RecordingModule(controller);
         var runtime = new RecordingRuntime(module);
-        var transport = new BrowserEngineWorkerTransport(runtime, "engine-worker.js?acceptance=true");
+        var transport = new BrowserEngineWorkerTransport(
+            runtime,
+            "engine-worker.js?acceptance=true",
+            "Company.Alpha");
         EngineWorkerMessage? received = null;
         transport.MessageReceived += (_, message) => received = message;
 
@@ -43,6 +46,8 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Equal(progress.TransactionId, controller.Sent?.TransactionId);
         Assert.Equal(progress.Payload?.GetRawText(), controller.Sent?.Payload?.GetRawText());
         Assert.Equal("engine-worker.js?acceptance=true", module.WorkerUrl);
+        Assert.Equal("company.alpha", module.WorkspaceId);
+        Assert.False(module.RequestFreshAuthority);
         Assert.True(controller.Terminated);
         Assert.True(controller.Disposed);
         Assert.True(module.Disposed);
@@ -62,6 +67,22 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Equal(2, controller.TerminationAttempts);
         Assert.True(controller.Terminated);
         Assert.True(controller.Disposed);
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Transport_RestartRequestsFreshWorkspaceAuthority()
+    {
+        var controller = new RecordingController();
+        var module = new RecordingModule(controller);
+        var transport = new BrowserEngineWorkerTransport(new RecordingRuntime(module));
+
+        await transport.StartAsync(1, CancellationToken.None);
+        Assert.False(module.RequestFreshAuthority);
+        await transport.TerminateAsync(CancellationToken.None);
+        await transport.StartAsync(2, CancellationToken.None);
+
+        Assert.True(module.RequestFreshAuthority);
         await transport.DisposeAsync();
     }
 
@@ -119,6 +140,73 @@ public sealed class BrowserEngineWorkerTransportTests
         await transport.DisposeAsync();
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("has spaces")]
+    [InlineData("/absolute")]
+    [InlineData("workspace:colon")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void Transport_RejectsUnsafeWorkspaceIds(string workspaceId)
+    {
+        var runtime = new RecordingRuntime(new RecordingModule(new RecordingController()));
+
+        Assert.Throws<ArgumentException>(() =>
+            new BrowserEngineWorkerTransport(runtime, workspaceId: workspaceId));
+    }
+
+    [Fact]
+    public void BrowserBootstrap_EnforcesSingleWriterAndBoundedFollowerCoordination()
+    {
+        var repositoryRoot = LocateRepositoryRoot();
+        var bootstrap = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "wwwroot",
+            "engine-worker-bootstrap.js"));
+
+        Assert.Contains("navigator.locks.request(", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("new BroadcastChannel(channelName)", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("ifAvailable: true", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("type: \"command-accepted\"", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("type: \"authority-restart-request\"", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("type: \"session-projection\"", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("kind: \"cross-tab-session-projection\"", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("result?.commandKind?.startsWith(\"mutate-\")", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("typeof shell.hasSession !== \"boolean\"", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("requestLease();", bootstrap, StringComparison.Ordinal);
+        Assert.DoesNotContain("new SharedWorker", bootstrap, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BrowserWorker_NamespacesDurableStateWithoutOrphaningLegacyActiveSession()
+    {
+        var repositoryRoot = LocateRepositoryRoot();
+        var worker = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "wwwroot",
+            "engine-worker.js"));
+
+        Assert.Contains("workspaceId === \"active\"", worker, StringComparison.Ordinal);
+        Assert.Contains("`workspace:${workspaceId}:active`", worker, StringComparison.Ordinal);
+        Assert.Contains("`${activeSessionManifestId}:${revision}`", worker, StringComparison.Ordinal);
+        Assert.Contains("`${activeSessionManifestId}:${revision}:${field}`", worker, StringComparison.Ordinal);
+    }
+
+    private static string LocateRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null &&
+               !File.Exists(Path.Combine(directory.FullName, "FFXIV Craft Architect.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ??
+            throw new DirectoryNotFoundException("Could not locate the repository root.");
+    }
 
     private sealed class RecordingRuntime(RecordingModule module) : IJSRuntime
     {
@@ -140,6 +228,10 @@ public sealed class BrowserEngineWorkerTransportTests
     {
         public string? WorkerUrl { get; private set; }
 
+        public string? WorkspaceId { get; private set; }
+
+        public bool RequestFreshAuthority { get; private set; }
+
         public bool Disposed { get; private set; }
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
@@ -153,6 +245,8 @@ public sealed class BrowserEngineWorkerTransportTests
             Assert.Equal("createEngineWorkerController", identifier);
             controller.Callback = Assert.IsType<DotNetObjectReference<BrowserEngineWorkerTransport>>(args![0]);
             WorkerUrl = Assert.IsType<string>(args[1]);
+            WorkspaceId = Assert.IsType<string>(args[2]);
+            RequestFreshAuthority = Assert.IsType<bool>(args[3]);
             return ValueTask.FromResult((TValue)(object)controller);
         }
 

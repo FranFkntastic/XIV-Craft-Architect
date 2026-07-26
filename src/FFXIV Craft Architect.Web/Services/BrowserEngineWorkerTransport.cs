@@ -7,9 +7,11 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
 {
     private const string ModulePath = "./engine-worker-bootstrap.js";
+    private const string DefaultWorkspaceId = "active";
     private const int MaximumWorkerMessageCharacters = 16 * 1024 * 1024;
     private readonly IJSRuntime _jsRuntime;
     private readonly string _workerUrl;
+    private readonly string _workspaceId;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly object _sync = new();
     private IJSObjectReference? _module;
@@ -17,14 +19,19 @@ public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
     private DotNetObjectReference<BrowserEngineWorkerTransport>? _callback;
     private TaskCompletionSource<EngineWorkerCapability>? _startup;
     private EngineWorkerMessage? _activeExecution;
+    private bool _requestFreshAuthorityOnNextStart;
     private bool _disposed;
 
-    public BrowserEngineWorkerTransport(IJSRuntime jsRuntime, string workerUrl = "engine-worker.js")
+    public BrowserEngineWorkerTransport(
+        IJSRuntime jsRuntime,
+        string workerUrl = "engine-worker.js",
+        string workspaceId = DefaultWorkspaceId)
     {
         _jsRuntime = jsRuntime ?? throw new ArgumentNullException(nameof(jsRuntime));
         _workerUrl = string.IsNullOrWhiteSpace(workerUrl)
             ? throw new ArgumentException("A Worker URL is required.", nameof(workerUrl))
             : workerUrl;
+        _workspaceId = NormalizeWorkspaceId(workspaceId);
     }
 
     public event EventHandler<EngineWorkerMessage>? MessageReceived;
@@ -57,7 +64,10 @@ public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
                 "createEngineWorkerController",
                 cancellationToken,
                 _callback,
-                _workerUrl);
+                _workerUrl,
+                _workspaceId,
+                _requestFreshAuthorityOnNextStart);
+            _requestFreshAuthorityOnNextStart = false;
             startupTask = _startup.Task;
             await _controller.InvokeVoidAsync("ping", cancellationToken, generation);
         }
@@ -124,6 +134,7 @@ public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
             await controller.InvokeVoidAsync("terminate", cancellationToken);
             await controller.DisposeAsync();
             _controller = null;
+            _requestFreshAuthorityOnNextStart = true;
             lock (_sync)
             {
                 _activeExecution = null;
@@ -234,6 +245,28 @@ public sealed class BrowserEngineWorkerTransport : IEngineWorkerTransport
                         new { code, message = failure.Message },
                         EngineJsonSerializerOptions.CreateWire())));
         }
+    }
+
+    private static string NormalizeWorkspaceId(string workspaceId)
+    {
+        if (string.IsNullOrWhiteSpace(workspaceId))
+        {
+            throw new ArgumentException("A Worker workspace id is required.", nameof(workspaceId));
+        }
+
+        var normalized = workspaceId.Trim().ToLowerInvariant();
+        if (normalized.Length > 64 ||
+            !char.IsAsciiLetterOrDigit(normalized[0]) ||
+            normalized.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) &&
+                character is not ('.' or '_' or '-')))
+        {
+            throw new ArgumentException(
+                "A Worker workspace id must contain 1-64 letters, numbers, dots, underscores, or hyphens.",
+                nameof(workspaceId));
+        }
+
+        return normalized;
     }
 
     public async ValueTask DisposeAsync()

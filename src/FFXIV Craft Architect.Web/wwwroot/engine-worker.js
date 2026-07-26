@@ -2,7 +2,10 @@ const protocolVersion = "4";
 const computationResultKind = "computation-result";
 const runtimeProofChallenge = "craft-architect-engine-worker-v1";
 const workerInstanceId = crypto.randomUUID();
-const acceptanceMode = new URL(import.meta.url).searchParams.get("acceptance") === "true";
+const workerModuleUrl = new URL(import.meta.url);
+const acceptanceMode = workerModuleUrl.searchParams.get("acceptance") === "true";
+const workspaceId = normalizeWorkspaceId(
+    workerModuleUrl.searchParams.get("workspace") ?? "active");
 let workerGeneration = null;
 let sessionBootstrapPromise = null;
 
@@ -206,7 +209,9 @@ const sessionRevisionStore = "engineSessionRevisions";
 const sessionComponentStore = "engineSessionComponents";
 const legacyPlanStore = "plans";
 const savedPlanComponentStore = "planComponents";
-const activeSessionManifestId = "active";
+const activeSessionManifestId = workspaceId === "active"
+    ? "active"
+    : `workspace:${workspaceId}:active`;
 const sessionRevisionSchemaVersion = 2;
 const sessionComponentFields = Object.freeze([
     "revisionMarkerJson",
@@ -513,7 +518,9 @@ async function loadDurableSession() {
                     : "The Worker session manifest does not reference a recoverable revision.");
         }
 
-        const legacyRecord = await readStoreValue(database, legacyPlanStore, "autosave");
+        const legacyRecord = workspaceId === "active"
+            ? await readStoreValue(database, legacyPlanStore, "autosave")
+            : null;
         if (legacyRecord) {
             const legacy = await materializeSavedPlan(database, legacyRecord);
             return {
@@ -874,11 +881,19 @@ function repairManifestToPrevious(database, previousRevision) {
 }
 
 function revisionRecordId(revision) {
-    return `active:${revision}`;
+    return `${activeSessionManifestId}:${revision}`;
 }
 
 function componentRecordId(revision, field) {
-    return `active:${revision}:${field}`;
+    return `${activeSessionManifestId}:${revision}:${field}`;
+}
+
+function normalizeWorkspaceId(value) {
+    const normalized = String(value ?? "").trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(normalized)) {
+        throw new Error("The Worker workspace id is invalid.");
+    }
+    return normalized;
 }
 
 function postProtocolError(message, code, errorMessage) {
