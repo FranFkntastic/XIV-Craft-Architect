@@ -365,13 +365,15 @@
         {
             var defaultDc = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
             var region = await Settings.GetAsync("market.region", "North America") ?? "North America";
+            var comparisonRegion =
+                await Settings.GetAsync("market.comparison_region", string.Empty);
             var secretDebugToolsEnabled = await Settings.GetAsync("debug.secret_tools_enabled", false);
             var deferAutomaticRoute = await Settings.GetAsync("debug.defer_automatic_route_reconciliation", false);
             var defaultScope = ParseMarketFetchScope(
                 await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
-            var selectedDataCenter = string.IsNullOrEmpty(AppState.SelectedDataCenter)
-                ? defaultDc
-                : AppState.SelectedDataCenter;
+            var selectedDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
+                region,
+                defaultDc);
             var procurementSearchEntireRegion = await Settings.GetAsync("procurement.search_entire_region", true);
             var procurementEnableSplits = await Settings.GetAsync("procurement.enable_split_world_purchases", true);
             var procurementTravelTolerance = await Settings.GetAsync("procurement.travel_tolerance", 0);
@@ -389,7 +391,8 @@
                 selectedDataCenter,
                 region,
                 defaultScope,
-                defaultScope == MarketFetchScope.EntireRegion);
+                defaultScope == MarketFetchScope.EntireRegion,
+                comparisonRegion);
             AppState.SetProcurementSettings(
                 procurementSearchEntireRegion,
                 procurementEnableSplits,

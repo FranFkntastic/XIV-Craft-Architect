@@ -346,6 +346,28 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         return shell;
     }
 
+    public async Task<WorkerSessionShellProjection> MutateActiveContextAsync(
+        WorkerActiveContextMutation mutation,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _engineHost.MutateActiveContextAsync(
+            _projections.Shell.Revision,
+            mutation,
+            cancellationToken);
+        if (!_projections.TryPublishMutation<WorkerSessionShellProjection>(
+                result,
+                out var shell) ||
+            shell is null)
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
+        }
+
+        await RefreshRecipeProjectionAsync(cancellationToken);
+        await RefreshAcquisitionProjectionAsync("All", cancellationToken);
+        return shell;
+    }
+
     public async Task<WorkerRecipeBuildOutcome> BuildRecipeAsync(
         WorkerRecipeBuildRequest request,
         CancellationToken cancellationToken = default)
@@ -417,16 +439,14 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 "The active plan does not contain any market-analysis candidates.");
         }
 
-        var expectedWorlds = await GetExpectedWorldsAsync(
-            request.Scope,
-            request.SelectedDataCenter,
-            request.SelectedRegion,
-            cancellationToken);
-
         var dataCenters = MarketFetchScopeResolver.GetDataCenters(
             request.Scope,
             request.SelectedDataCenter,
-            request.SelectedRegion);
+            request.SelectedRegion,
+            request.SelectedRegions);
+        var expectedWorlds = await GetExpectedWorldsAsync(
+            dataCenters,
+            cancellationToken);
         var evidenceRequests = market.CandidateItems
             .SelectMany(item => dataCenters.Select(dataCenter => (item.ItemId, dataCenter)))
             .ToList();
@@ -474,6 +494,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
+                    RequestedDataCenters = dataCenters,
                     Lens = request.Lens,
                     CacheAlreadyPopulated = true,
                     ExpectedWorldsByDataCenter = expectedWorlds
@@ -526,7 +547,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                     isFinal ? unavailableItemIds : new HashSet<int>(),
                     isFinal ? fetchedCount : 0,
                     ResetStaging: isFirst,
-                    CompleteStaging: isFinal);
+                    CompleteStaging: isFinal,
+                    RequestedDataCenters: dataCenters);
             result = isFinal
                 ? await _engineHost.PublishMarketEvidenceAsync(
                     _projections.Shell.Revision,
@@ -658,9 +680,12 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             ?? throw new InvalidOperationException(
                 $"{request.ItemName} is no longer part of the active market analysis.");
         var expectedWorlds = await GetExpectedWorldsAsync(
-            request.Scope,
-            request.SelectedDataCenter,
-            request.SelectedRegion,
+            request.RequestedDataCenters is { Count: > 0 }
+                ? request.RequestedDataCenters
+                : MarketFetchScopeResolver.GetDataCenters(
+                    request.Scope,
+                    request.SelectedDataCenter,
+                    request.SelectedRegion),
             cancellationToken);
 
         MarketItemAnalysis analysis;
@@ -678,6 +703,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
+                    RequestedDataCenters = request.RequestedDataCenters ??
+                        Array.Empty<string>(),
                     Lens = request.Lens,
                     ExpectedWorldsByDataCenter = expectedWorlds
                 },
@@ -701,6 +728,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
+                    RequestedDataCenters = request.RequestedDataCenters ??
+                        Array.Empty<string>(),
                     Lens = request.Lens,
                     ExpectedWorldsByDataCenter = expectedWorlds,
                     Policy = MarketEvidenceReconciliationPolicy.ForcedRefresh()
@@ -724,7 +753,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 request.SelectedRegion,
                 request.Lens,
                 CloneAndCompactMarketAnalysisForPublication(analysis),
-                shoppingPlan),
+                shoppingPlan,
+                request.RequestedDataCenters),
             cancellationToken);
         if (!_projections.TryPublishMutation<WorkerMarketItemRefreshOutcome>(
                 result,
@@ -781,9 +811,12 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
 
         var expectedWorlds = await GetExpectedWorldsAsync(
-            market.Scope,
-            market.SelectedDataCenter,
-            market.SelectedRegion,
+            market.RequestedDataCenters is { Count: > 0 }
+                ? market.RequestedDataCenters
+                : MarketFetchScopeResolver.GetDataCenters(
+                    market.Scope,
+                    market.SelectedDataCenter,
+                    market.SelectedRegion),
             cancellationToken);
         var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
             new MarketEvidenceReconciliationRequest
@@ -794,6 +827,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 Scope = market.Scope,
                 SelectedDataCenter = market.SelectedDataCenter,
                 SelectedRegion = market.SelectedRegion,
+                RequestedDataCenters = market.RequestedDataCenters ??
+                    Array.Empty<string>(),
                 Lens = market.Lens,
                 CacheAlreadyPopulated = true,
                 // This is display hydration for already-published evidence, not a
@@ -865,14 +900,11 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>>
         GetExpectedWorldsAsync(
-            MarketFetchScope scope,
-            string selectedDataCenter,
-            string selectedRegion,
+            IReadOnlyList<string> dataCenters,
             CancellationToken cancellationToken)
     {
         var worldData = await _universalis.GetWorldDataAsync(cancellationToken);
-        return MarketFetchScopeResolver
-            .GetDataCenters(scope, selectedDataCenter, selectedRegion)
+        return dataCenters
             .Where(dataCenter => worldData.DataCenterToWorlds.ContainsKey(dataCenter))
             .ToDictionary(
                 dataCenter => dataCenter,

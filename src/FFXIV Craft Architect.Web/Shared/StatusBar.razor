@@ -165,8 +165,12 @@
     private string? _tradeCompanyName;
     private bool IsBusy => AppState.IsBusy;
     private string StatusMessage => IsBusy ? AppState.StatusMessage : "Ready";
-    private string SelectedRegion => WorkerProjections.Shell.SelectedRegion;
-    private string SelectedDataCenter => WorkerProjections.Shell.SelectedDataCenter;
+    private string SelectedRegion => WorkerProjections.Shell.HasSession
+        ? WorkerProjections.Shell.SelectedRegion
+        : AppState.SelectedRegion;
+    private string SelectedDataCenter => WorkerProjections.Shell.HasSession
+        ? WorkerProjections.Shell.SelectedDataCenter
+        : AppState.SelectedDataCenter;
     private int MaterialCount =>
         WorkerProjections.Procurement?.ActiveItemCount
           ?? WorkerProjections.Acquisition?.ActiveProcurementCount

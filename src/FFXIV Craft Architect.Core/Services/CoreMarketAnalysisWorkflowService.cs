@@ -11,7 +11,8 @@ public sealed record CoreMarketAnalysisWorkflowRequest(
     MarketAcquisitionLens Lens,
     IReadOnlyDictionary<string, IReadOnlyList<string>> ExpectedWorldsByDataCenter,
     MarketAnalysisExecutionOptions? ExecutionOptions = null,
-    RecommendationMode RecommendationMode = RecommendationMode.MinimizeTotalCost);
+    RecommendationMode RecommendationMode = RecommendationMode.MinimizeTotalCost,
+    IReadOnlyList<string>? RequestedDataCenters = null);
 
 public sealed record CoreApplyMarketAnalysisLensRequest(MarketAcquisitionLens Lens);
 
@@ -87,6 +88,8 @@ public sealed class CoreMarketAnalysisWorkflowService
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
+                    RequestedDataCenters = request.RequestedDataCenters ??
+                        request.ExpectedWorldsByDataCenter.Keys.ToArray(),
                     RecommendationMode = request.RecommendationMode,
                     Lens = request.Lens,
                     ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,
@@ -114,7 +117,23 @@ public sealed class CoreMarketAnalysisWorkflowService
                 reconciliation.ShoppingPlans.ToList(),
                 request.RecommendationMode,
                 request.Lens,
-                recipeBasis);
+                recipeBasis,
+                new MarketIntelligencePublicationContext(
+                    MarketIntelligencePublicationContextKind.Known,
+                    request.Scope,
+                    request.SelectedDataCenter,
+                    request.SelectedRegion,
+                    request.RequestedDataCenters ??
+                        request.ExpectedWorldsByDataCenter.Keys.ToArray(),
+                    request.ExpectedWorldsByDataCenter,
+                    MaxAge: null,
+                    request.ForceRefreshData,
+                    request.RecommendationMode,
+                    request.Lens,
+                    capturedVersions,
+                    planSessionVersion,
+                    capturedVersions.MarketAnalysis,
+                    DateTime.UtcNow));
             if (published == null)
             {
                 return new CoreMarketAnalysisWorkflowResult(false, 0, 0, reconciliation.FetchedCount);
@@ -177,7 +196,8 @@ public sealed class CoreMarketAnalysisWorkflowService
                 shoppingPlans,
                 evidence.RecommendationMode,
                 request.Lens,
-                evidence.RecipeBasis);
+                evidence.RecipeBasis,
+                evidence.PublicationContext);
             if (published == null)
             {
                 return new CoreMarketAnalysisWorkflowResult(false, 0, 0, 0);
@@ -216,7 +236,8 @@ public sealed class CoreMarketAnalysisWorkflowService
         List<DetailedShoppingPlan> shoppingPlans,
         RecommendationMode recommendationMode,
         MarketAcquisitionLens lens,
-        StoredRecipeOperationSnapshot? recipeBasis)
+        StoredRecipeOperationSnapshot? recipeBasis,
+        MarketIntelligencePublicationContext? publicationContext)
     {
         var currentVersions = _session.CaptureVersionStamp();
         if (currentVersions.PlanSession != capturedVersions.PlanSession)
@@ -254,7 +275,8 @@ public sealed class CoreMarketAnalysisWorkflowService
                     "market analysis published",
                     recommendationMode: recommendationMode,
                     lens: lens,
-                    recipeBasis: recipeBasis);
+                    recipeBasis: recipeBasis,
+                    publicationContext: publicationContext);
             },
             "Market analysis published.");
         if (!completed || !published)

@@ -312,7 +312,8 @@
                         : MarketFetchScope.SelectedDataCenter,
                     _market?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter,
                     _market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion,
-                    _market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost));
+                    _market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
+                    RequestedDataCenters: _market?.RequestedDataCenters));
             _market = outcome.Market;
             await EnsureSelectedMarketDetailsAsync();
             Snackbar.Add($"Refreshed {itemName}", Severity.Success);
@@ -350,7 +351,8 @@
                         : MarketFetchScope.SelectedDataCenter,
                     _market.SelectedDataCenter,
                     _market.SelectedRegion,
-                    _market.Lens),
+                    _market.Lens,
+                    SelectedRegions: GetSelectedAnalysisRegions()),
                 reportStatus: (message, progress) =>
                     AppState.SetStatusForOperation(
                         operation,
@@ -376,6 +378,13 @@
             AppState.EndOperation(operation);
         }
     }
+
+    private IReadOnlyList<string> GetSelectedAnalysisRegions() =>
+        _market?.RequestedDataCenters is { Count: > 0 } dataCenters
+            ? MarketFetchScopeResolver.ResolveRegionsForDataCenters(
+                dataCenters,
+                _market.SelectedRegion)
+            : AppState.AnalysisRegions;
 
     private void GoToPlanner() => NavigationManager.NavigateTo("");
     private void GoToProcurement() => NavigationManager.NavigateTo("acquisition");

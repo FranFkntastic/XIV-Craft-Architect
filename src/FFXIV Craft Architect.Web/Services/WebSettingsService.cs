@@ -21,11 +21,13 @@ public class WebSettingsService : ISettingsService
     {
         ["market.default_datacenter"] = "Aether",
         ["market.region"] = "North America",
+        ["market.comparison_region"] = "",
         ["market.home_world"] = "",
         ["market.default_search_scope"] = "EntireRegion",
         ["market.include_cross_world"] = true,
         ["market.exclude_congested_worlds"] = true,
         ["procurement.search_entire_region"] = true,
+        ["procurement.region"] = "North America",
         ["procurement.enable_split_world_purchases"] = true,
         ["procurement.travel_tolerance"] = 0,
         ["procurement.world_exclusion_duration_minutes"] = 60,

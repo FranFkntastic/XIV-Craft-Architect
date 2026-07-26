@@ -112,6 +112,9 @@ public sealed class MarketWorldEvidenceReconciliationRequest
 
     public string SelectedRegion { get; init; } = string.Empty;
 
+    public IReadOnlyList<string> RequestedDataCenters { get; init; } =
+        Array.Empty<string>();
+
     public RecommendationMode RecommendationMode { get; init; } = RecommendationMode.MinimizeTotalCost;
 
     public MarketAcquisitionLens Lens { get; init; } = MarketAcquisitionLens.MinimumUpfrontCost;
@@ -149,6 +152,9 @@ public sealed class MarketEvidenceReconciliationRequest
     public string SelectedDataCenter { get; init; } = string.Empty;
 
     public string SelectedRegion { get; init; } = string.Empty;
+
+    public IReadOnlyList<string> RequestedDataCenters { get; init; } =
+        Array.Empty<string>();
 
     public RecommendationMode RecommendationMode { get; init; } = RecommendationMode.MinimizeTotalCost;
 

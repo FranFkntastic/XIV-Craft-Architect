@@ -69,6 +69,7 @@ public static class WorkerSessionCommandKinds
     public const string RecipeProjection = "recipe-projection";
     public const string ProjectItemsMutation = "mutate-project-items";
     public const string PlanIdentityMutation = "mutate-plan-identity";
+    public const string ActiveContextMutation = "mutate-active-context";
     public const string RecipeBuild = "mutate-recipe-build";
     public const string AcquisitionMutation = "mutate-acquisition";
     public const string AcquisitionProjection = "acquisition-projection";
@@ -149,6 +150,11 @@ public sealed record WorkerProjectItemsMutation(
     IReadOnlyList<ProjectItem>? Items = null);
 
 public sealed record WorkerPlanIdentityMutation(string PlanId, string PlanName);
+
+public sealed record WorkerActiveContextMutation(
+    string SelectedDataCenter,
+    string SelectedRegion,
+    MarketFetchScope Scope);
 
 public sealed record WorkerRecipeBuildRequest(
     IReadOnlyList<ProjectItem> ProjectItems,
@@ -254,7 +260,8 @@ public sealed record WorkerMarketAnalysisRequest(
     MarketFetchScope Scope,
     string SelectedDataCenter,
     string SelectedRegion,
-    MarketAcquisitionLens Lens);
+    MarketAcquisitionLens Lens,
+    IReadOnlyList<string>? SelectedRegions = null);
 
 public sealed record WorkerMarketLensMutation(MarketAcquisitionLens Lens);
 
@@ -284,7 +291,8 @@ public sealed record WorkerMarketEvidencePublicationRequest(
     IReadOnlySet<int> UnavailableItemIds,
     int FetchedCount,
     bool ResetStaging = false,
-    bool CompleteStaging = true);
+    bool CompleteStaging = true,
+    IReadOnlyList<string>? RequestedDataCenters = null);
 
 public sealed record WorkerMarketItemEvidencePublicationRequest(
     int ItemId,
@@ -293,7 +301,8 @@ public sealed record WorkerMarketItemEvidencePublicationRequest(
     string SelectedRegion,
     MarketAcquisitionLens Lens,
     MarketItemAnalysis ItemAnalysis,
-    DetailedShoppingPlan ShoppingPlan);
+    DetailedShoppingPlan ShoppingPlan,
+    IReadOnlyList<string>? RequestedDataCenters = null);
 
 public sealed record WorkerMarketItemRefreshRequest(
     int ItemId,
@@ -304,7 +313,8 @@ public sealed record WorkerMarketItemRefreshRequest(
     MarketAcquisitionLens Lens,
     string? TargetDataCenter = null,
     string? TargetWorldName = null,
-    MarketWorldEvidenceSnapshot? ObservedEvidence = null);
+    MarketWorldEvidenceSnapshot? ObservedEvidence = null,
+    IReadOnlyList<string>? RequestedDataCenters = null);
 
 public sealed record WorkerMarketItemRefreshOutcome(
     CoreProcurementItemRefreshStatus Status,
@@ -326,7 +336,8 @@ public sealed record WorkerMarketProjection(
     IReadOnlyList<WorkerMarketItemProjection> Items,
     IReadOnlyList<MaterialAggregate> CandidateItems,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
-    IReadOnlyList<MarketItemAnalysis> ItemAnalyses);
+    IReadOnlyList<MarketItemAnalysis> ItemAnalyses,
+    IReadOnlyList<string>? RequestedDataCenters = null);
 
 public sealed record WorkerMarketItemProjection(
     int ItemId,

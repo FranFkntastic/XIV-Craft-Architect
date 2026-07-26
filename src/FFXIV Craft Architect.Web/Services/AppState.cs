@@ -17,6 +17,13 @@ public sealed class AppState
 
     public string SelectedDataCenter { get; private set; } = "Aether";
     public string SelectedRegion { get; private set; } = "North America";
+    public string? ComparisonRegion { get; private set; }
+    public IReadOnlyList<string> AnalysisRegions =>
+        MarketFetchScopeResolver.NormalizeSelectedRegions(
+            SelectedRegion,
+            string.IsNullOrWhiteSpace(ComparisonRegion)
+                ? null
+                : [ComparisonRegion]);
     public MarketFetchScope DefaultMarketFetchScope { get; private set; } =
         MarketFetchScope.EntireRegion;
     public bool SearchEntireRegion { get; private set; } = true;
@@ -71,10 +78,23 @@ public sealed class AppState
         string dataCenter,
         string region,
         MarketFetchScope defaultFetchScope,
-        bool searchEntireRegion)
+        bool searchEntireRegion,
+        string? comparisonRegion = null)
     {
-        SelectedDataCenter = dataCenter;
-        SelectedRegion = region;
+        SelectedRegion = MarketFetchScopeResolver
+            .NormalizeSelectedRegions(region, null)
+            .Single();
+        SelectedDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
+            SelectedRegion,
+            dataCenter);
+        ComparisonRegion = MarketFetchScopeResolver
+            .NormalizeSelectedRegions(
+                SelectedRegion,
+                string.IsNullOrWhiteSpace(comparisonRegion)
+                    ? null
+                    : [comparisonRegion])
+            .Skip(1)
+            .FirstOrDefault();
         DefaultMarketFetchScope = defaultFetchScope;
         SearchEntireRegion = searchEntireRegion;
         NotifySettingsChanged();

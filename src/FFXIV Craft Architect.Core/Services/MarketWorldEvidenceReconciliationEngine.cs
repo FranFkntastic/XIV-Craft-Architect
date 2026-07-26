@@ -44,10 +44,12 @@ internal sealed class MarketWorldEvidenceReconciliationEngine
             await _marketCache.SetAsync(request.Item.ItemId, request.DataCenter, patched);
         }
 
-        var dataCenters = MarketFetchScopeResolver.GetDataCenters(
-            request.Scope,
-            request.SelectedDataCenter,
-            request.SelectedRegion);
+        var dataCenters = request.RequestedDataCenters is { Count: > 0 }
+            ? request.RequestedDataCenters
+            : MarketFetchScopeResolver.GetDataCenters(
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion);
         var requestedPairs = dataCenters
             .Select(dataCenter => (request.Item.ItemId, dataCenter))
             .ToList();
@@ -376,10 +378,12 @@ internal sealed class MarketWorldEvidenceReconciliationEngine
             throw new ArgumentException("A target world is required.", nameof(request));
         }
 
-        var dataCenters = MarketFetchScopeResolver.GetDataCenters(
-            request.Scope,
-            request.SelectedDataCenter,
-            request.SelectedRegion);
+        var dataCenters = request.RequestedDataCenters is { Count: > 0 }
+            ? request.RequestedDataCenters
+            : MarketFetchScopeResolver.GetDataCenters(
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion);
         if (!dataCenters.Contains(request.DataCenter, StringComparer.OrdinalIgnoreCase))
         {
             throw new ArgumentException("The target world is outside the active market scope.", nameof(request));

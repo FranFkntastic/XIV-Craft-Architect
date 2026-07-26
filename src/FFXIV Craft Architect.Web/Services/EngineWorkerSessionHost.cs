@@ -151,6 +151,8 @@ public static partial class ManagedHost
                     MutateProjectItems(command),
                 WorkerSessionCommandKinds.PlanIdentityMutation =>
                     MutatePlanIdentity(command),
+                WorkerSessionCommandKinds.ActiveContextMutation =>
+                    MutateActiveContext(command),
                 WorkerSessionCommandKinds.AcquisitionMutation =>
                     MutateAcquisition(command),
                 WorkerSessionCommandKinds.RecipeBuild =>
@@ -333,6 +335,47 @@ public static partial class ManagedHost
             _canonicalSession.CreateDurablePatch(replaceSourceIdentity: true));
     }
 
+    private static WorkerSessionResultEnvelope MutateActiveContext(
+        WorkerSessionCommandEnvelope command)
+    {
+        var mutation = command.Payload.Deserialize<WorkerActiveContextMutation>(
+                WireJsonOptions)
+            ?? throw new InvalidOperationException(
+                "Active-context mutation payload is empty.");
+        var session = _canonicalSession.Session;
+        if (session.BorrowActivePlan() is null)
+        {
+            throw new InvalidOperationException(
+                "Build a recipe plan before changing its market context.");
+        }
+        if (session.BorrowMarketEvidence().ItemAnalyses.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "Published market evidence must be repriced into the new context atomically.");
+        }
+
+        var selectedRegion = MarketFetchScopeResolver
+            .NormalizeSelectedRegions(mutation.SelectedRegion, null)
+            .Single();
+        var selectedDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
+            selectedRegion,
+            mutation.SelectedDataCenter);
+        session.ReplaceActiveContext(
+            new CraftSessionActiveContext(
+                selectedRegion,
+                selectedDataCenter,
+                session.ActiveContext.World,
+                mutation.Scope),
+            "active market context changed");
+        _canonicalSession.InvalidateLegacyProcurementRoute();
+        return CompleteMutation(
+            command.CommandKind,
+            CaptureShellProjection,
+            _canonicalSession.CreateDurablePatch(
+                replaceProcurementRoute: true,
+                replaceContext: true));
+    }
+
     private static WorkerSessionResultEnvelope MutateAcquisition(
         WorkerSessionCommandEnvelope command)
     {
@@ -443,8 +486,12 @@ public static partial class ManagedHost
 
         var workflow = CreateMarketWorkflow(session);
         var worldData = await SessionUniversalis.GetWorldDataAsync();
-        var expectedWorlds = MarketFetchScopeResolver
-            .GetDataCenters(request.Scope, request.SelectedDataCenter, request.SelectedRegion)
+        var requestedDataCenters = MarketFetchScopeResolver.GetDataCenters(
+            request.Scope,
+            request.SelectedDataCenter,
+            request.SelectedRegion,
+            request.SelectedRegions);
+        var expectedWorlds = requestedDataCenters
             .Where(dataCenter => worldData.DataCenterToWorlds.ContainsKey(dataCenter))
             .ToDictionary(
                 dataCenter => dataCenter,
@@ -458,7 +505,8 @@ public static partial class ManagedHost
                 request.SelectedRegion,
                 request.Lens,
                 expectedWorlds,
-                MarketAnalysisExecutionOptions.Synchronous));
+                MarketAnalysisExecutionOptions.Synchronous,
+                RequestedDataCenters: requestedDataCenters));
         if (!result.Published)
         {
             throw new InvalidOperationException(
@@ -506,7 +554,8 @@ public static partial class ManagedHost
                 request.Scope,
                 request.SelectedDataCenter,
                 request.SelectedRegion,
-                request.Lens);
+                request.Lens,
+                request.RequestedDataCenters ?? Array.Empty<string>());
         }
 
         var staging = _pendingMarketEvidencePublication
@@ -537,7 +586,8 @@ public static partial class ManagedHost
             staging.UnavailableItemIds,
             staging.FetchedCount,
             ResetStaging: true,
-            CompleteStaging: true);
+            CompleteStaging: true,
+            RequestedDataCenters: staging.RequestedDataCenters);
         _pendingMarketEvidencePublication = null;
         var session = _canonicalSession.Session;
         var plan = session.BorrowActivePlan()
@@ -566,7 +616,23 @@ public static partial class ManagedHost
                 "main-thread market evidence accepted by Worker",
                 request.UnavailableItemIds,
                 lens: request.Lens,
-                recipeBasis: recipeBasis))
+                recipeBasis: recipeBasis,
+                publicationContext: new MarketIntelligencePublicationContext(
+                    MarketIntelligencePublicationContextKind.Known,
+                    request.Scope,
+                    request.SelectedDataCenter,
+                    request.SelectedRegion,
+                    request.RequestedDataCenters ?? Array.Empty<string>(),
+                    new Dictionary<string, IReadOnlyList<string>>(
+                        StringComparer.OrdinalIgnoreCase),
+                    MaxAge: null,
+                    ForceRefreshData: false,
+                    RecommendationMode.MinimizeTotalCost,
+                    request.Lens,
+                    stamp,
+                    planSessionVersion,
+                    stamp.MarketAnalysis,
+                    DateTime.UtcNow)))
         {
             throw new InvalidOperationException(
                 "Market evidence became stale before the Worker could publish it.");
@@ -633,7 +699,8 @@ public static partial class ManagedHost
                 unavailableItemIds,
                 evidence.RecommendationMode,
                 request.Lens,
-                evidence.RecipeBasis))
+                evidence.RecipeBasis,
+                publicationContext: evidence.PublicationContext))
         {
             throw new InvalidOperationException(
                 "Market evidence became stale before the Worker could publish it.");
@@ -719,11 +786,13 @@ public static partial class ManagedHost
             reconciliation,
             new WorkerRecipeLayerWorkflow(_canonicalSession),
             new CraftOperationCoordinator(session, new CraftOperationState()));
-        var expectedWorlds = MarketFetchScopeResolver
-            .GetDataCenters(
+        var requestedDataCenters = request.RequestedDataCenters is { Count: > 0 }
+            ? request.RequestedDataCenters
+            : MarketFetchScopeResolver.GetDataCenters(
                 request.Scope,
                 request.SelectedDataCenter,
-                request.SelectedRegion)
+                request.SelectedRegion);
+        var expectedWorlds = requestedDataCenters
             .Where(dataCenter => worldData.DataCenterToWorlds.ContainsKey(dataCenter))
             .ToDictionary(
                 dataCenter => dataCenter,
@@ -741,7 +810,8 @@ public static partial class ManagedHost
                 ExecutionOptions: MarketAnalysisExecutionOptions.Synchronous,
                 TargetDataCenter: request.TargetDataCenter,
                 TargetWorldName: request.TargetWorldName,
-                ObservedEvidence: request.ObservedEvidence));
+                ObservedEvidence: request.ObservedEvidence,
+                RequestedDataCenters: requestedDataCenters));
         if (result.Status != CoreProcurementItemRefreshStatus.Refreshed)
         {
             throw new InvalidOperationException(
@@ -1130,7 +1200,8 @@ public static partial class ManagedHost
                         !worldDetailItemId.HasValue ||
                         analysis.ItemId == worldDetailItemId.Value)
                     .ToArray()
-                : Array.Empty<MarketItemAnalysis>());
+                : Array.Empty<MarketItemAnalysis>(),
+            evidence.PublicationContext?.RequestedDataCenters);
     }
 
     private static WorkerProcurementProjection CaptureProcurementProjection()
@@ -1697,18 +1768,21 @@ public static partial class ManagedHost
             MarketFetchScope scope,
             string selectedDataCenter,
             string selectedRegion,
-            MarketAcquisitionLens lens)
+            MarketAcquisitionLens lens,
+            IReadOnlyList<string> requestedDataCenters)
         {
             Scope = scope;
             SelectedDataCenter = selectedDataCenter;
             SelectedRegion = selectedRegion;
             Lens = lens;
+            RequestedDataCenters = requestedDataCenters;
         }
 
         public MarketFetchScope Scope { get; }
         public string SelectedDataCenter { get; }
         public string SelectedRegion { get; }
         public MarketAcquisitionLens Lens { get; }
+        public IReadOnlyList<string> RequestedDataCenters { get; }
         public List<MarketItemAnalysis> ItemAnalyses { get; } = [];
         public List<DetailedShoppingPlan> ShoppingPlans { get; } = [];
         public HashSet<int> UnavailableItemIds { get; } = [];
@@ -1718,6 +1792,10 @@ public static partial class ManagedHost
         {
             if (request.Scope != Scope ||
                 request.Lens != Lens ||
+                !(request.RequestedDataCenters ?? Array.Empty<string>())
+                    .SequenceEqual(
+                        RequestedDataCenters,
+                        StringComparer.OrdinalIgnoreCase) ||
                 !string.Equals(
                     request.SelectedDataCenter,
                     SelectedDataCenter,

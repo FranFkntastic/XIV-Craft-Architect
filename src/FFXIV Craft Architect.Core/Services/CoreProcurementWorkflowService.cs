@@ -48,7 +48,8 @@ public sealed record CoreProcurementItemRefreshWorkflowRequest(
     MarketAnalysisExecutionOptions? ExecutionOptions = null,
     string? TargetDataCenter = null,
     string? TargetWorldName = null,
-    MarketWorldEvidenceSnapshot? ObservedEvidence = null);
+    MarketWorldEvidenceSnapshot? ObservedEvidence = null,
+    IReadOnlyList<string>? RequestedDataCenters = null);
 
 public sealed record CoreProcurementItemRefreshWorkflowResult(
     CoreProcurementItemRefreshStatus Status,
@@ -313,6 +314,8 @@ public sealed class CoreProcurementWorkflowService
                         Scope = request.Scope,
                         SelectedDataCenter = request.SelectedDataCenter,
                         SelectedRegion = request.SelectedRegion,
+                        RequestedDataCenters = request.RequestedDataCenters ??
+                            Array.Empty<string>(),
                         RecommendationMode = RecommendationMode.MinimizeTotalCost,
                         Lens = request.Lens,
                         ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter
@@ -338,6 +341,8 @@ public sealed class CoreProcurementWorkflowService
                         Scope = request.Scope,
                         SelectedDataCenter = request.SelectedDataCenter,
                         SelectedRegion = request.SelectedRegion,
+                        RequestedDataCenters = request.RequestedDataCenters ??
+                            Array.Empty<string>(),
                         RecommendationMode = RecommendationMode.MinimizeTotalCost,
                         Lens = request.Lens,
                         ExpectedWorldsByDataCenter = request.ExpectedWorldsByDataCenter,

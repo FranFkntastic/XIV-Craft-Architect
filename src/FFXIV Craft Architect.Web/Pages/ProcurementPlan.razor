@@ -28,8 +28,9 @@
     <div class="pp-grid-layout">
         <ProcurementControlsPanel
             SearchEntireRegion="_searchEntireRegion"
-            SelectedRegion="@(_route?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion)"
-            SelectedDataCenter="@(_route?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter)"
+            SelectedRegion="_procurementRegion"
+            AvailableRegions="AvailableProcurementRegions"
+            SelectedDataCenter="SelectedProcurementDataCenter"
             TravelTolerance="_travelTolerance"
             RouteDecision="_route?.RouteDecision"
             RouteValidity="@(_route?.HasRoute == true ? ProcurementRoutePublicationValidity.Current : ProcurementRoutePublicationValidity.None)"
@@ -48,6 +49,7 @@
             NoticeSeverity="@GetNoticeSeverity()"
             NoticeMessage="@GetNoticeMessage()"
             SearchEntireRegionChanged="SetSearchEntireRegion"
+            SelectedRegionChanged="SetProcurementRegion"
             TravelToleranceChanged="PreviewTolerance"
             TravelToleranceCommitted="CommitToleranceAsync"
             TemporaryWorldBlacklistDurationChanged="SetWorldExclusionDuration"
@@ -88,6 +90,7 @@
     private WorkerProcurementProjection? _route;
     private long _projectionRefreshRevision = -1;
     private bool _searchEntireRegion = true;
+    private string _procurementRegion = "North America";
     private bool _includeSplitPurchases = true;
     private bool _startFromHomeDataCenter;
     private MarketTravelPriority _travelPriority =
@@ -111,6 +114,16 @@
 
     private int ActiveTemporaryExclusionCount =>
         _excludedWorlds.Count + _excludedItemWorlds.Count;
+    private IReadOnlyList<string> AvailableProcurementRegions =>
+        WorkerProjections.Market?.RequestedDataCenters is { Count: > 0 } dataCenters
+            ? MarketFetchScopeResolver.ResolveRegionsForDataCenters(
+                dataCenters,
+                WorkerProjections.Shell.SelectedRegion)
+            : [WorkerProjections.Shell.SelectedRegion];
+    private string SelectedProcurementDataCenter =>
+        MarketFetchScopeResolver.ResolveValidDataCenter(
+            _procurementRegion,
+            _route?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter);
 
     private bool CanAnalyze =>
         !_isAnalyzing &&
@@ -135,6 +148,10 @@
         _searchEntireRegion = await Settings.GetAsync(
             "procurement.search_entire_region",
             true);
+        _procurementRegion = await Settings.GetAsync(
+            "procurement.region",
+            WorkerProjections.Shell.SelectedRegion) ??
+            WorkerProjections.Shell.SelectedRegion;
         _includeSplitPurchases = await Settings.GetAsync(
             "procurement.enable_split_world_purchases",
             true);
@@ -159,6 +176,7 @@
         try
         {
             _route = await WorkerSession.GetProcurementProjectionAsync();
+            NormalizeProcurementRegion();
             ApplyRouteSettings();
 
             _marketMafiosoEnabled = await Settings.GetAsync("marketmafioso.enabled", false);
@@ -190,6 +208,7 @@
         }
 
         _route = WorkerProjections.Procurement ?? _route;
+        NormalizeProcurementRegion();
         ApplyRouteSettings();
         _ = InvokeAsync(StateHasChanged);
     }
@@ -199,6 +218,7 @@
         try
         {
             _route = await WorkerSession.GetProcurementProjectionAsync();
+            NormalizeProcurementRegion();
             ApplyRouteSettings();
         }
         finally
@@ -273,8 +293,8 @@
             _searchEntireRegion
                 ? MarketFetchScope.EntireRegion
                 : MarketFetchScope.SelectedDataCenter,
-            _route.SelectedDataCenter,
-            _route.SelectedRegion,
+            SelectedProcurementDataCenter,
+            _procurementRegion,
             _route.Lens,
             _travelTolerance,
             _includeSplitPurchases,
@@ -282,6 +302,26 @@
             _travelPriority,
             _excludedWorlds,
             _excludedItemWorlds);
+    }
+
+    private async Task SetProcurementRegion(string region)
+    {
+        _procurementRegion = MarketFetchScopeResolver
+            .NormalizeSelectedRegions(region, null)
+            .Single();
+        await Settings.SetAsync("procurement.region", _procurementRegion);
+        StateHasChanged();
+    }
+
+    private void NormalizeProcurementRegion()
+    {
+        var available = AvailableProcurementRegions;
+        if (!available.Contains(
+                _procurementRegion,
+                StringComparer.OrdinalIgnoreCase))
+        {
+            _procurementRegion = available[0];
+        }
     }
 
     private void PreviewTolerance(int value)
@@ -330,6 +370,7 @@
         await Settings.SetAsync(
             "procurement.search_entire_region",
             _searchEntireRegion);
+        await Settings.SetAsync("procurement.region", _procurementRegion);
         await Settings.SetAsync(
             "procurement.enable_split_world_purchases",
             _includeSplitPurchases);

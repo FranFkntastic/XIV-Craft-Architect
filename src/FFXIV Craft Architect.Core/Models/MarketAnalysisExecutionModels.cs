@@ -12,6 +12,9 @@ public sealed class MarketAnalysisExecutionRequest
 
     public string SelectedRegion { get; init; } = string.Empty;
 
+    public IReadOnlyList<string> RequestedDataCenters { get; init; } =
+        Array.Empty<string>();
+
     /// <summary>
     /// Maximum reusable-cache age. Null uses the cache default. Must be greater than zero.
     /// </summary>

@@ -92,6 +92,7 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             executionOptions,
             progress,
             ct);
+        EnsureRouteUsesOnlySelectedRegion(optimization.ShoppingPlans, request);
 
         return new ProcurementRouteExecutionResult(
             request.IncludeReconciliationEvidenceInResult
@@ -243,7 +244,7 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             : AcquisitionPlanningService.GetMarketAnalysisCandidates(request.Plan);
     }
 
-    private static List<DetailedShoppingPlan> PrepareProcurementEvidenceForScope(
+    internal static List<DetailedShoppingPlan> PrepareProcurementEvidenceForScope(
         IEnumerable<DetailedShoppingPlan> sourcePlans,
         ProcurementRouteExecutionRequest request)
     {
@@ -259,19 +260,20 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         activePlans = MarketAnalysisPlanAdjuster.ExcludeItemWorlds(
             activePlans,
             request.ExcludedItemWorlds);
-        if (request.Scope == MarketFetchScope.EntireRegion)
-        {
-            return activePlans;
-        }
-
+        var allowedDataCenters = request.Scope == MarketFetchScope.SelectedDataCenter
+            ? [request.SelectedDataCenter]
+            : MarketFetchScopeResolver.GetDataCenters(
+                MarketFetchScope.EntireRegion,
+                request.SelectedDataCenter,
+                request.SelectedRegion);
         return activePlans
-            .Select(plan => FilterPlanToSelectedDataCenter(plan, request.SelectedDataCenter))
+            .Select(plan => FilterPlanToDataCenters(plan, allowedDataCenters))
             .ToList();
     }
 
-    private static DetailedShoppingPlan FilterPlanToSelectedDataCenter(
+    private static DetailedShoppingPlan FilterPlanToDataCenters(
         DetailedShoppingPlan plan,
-        string selectedDataCenter)
+        IReadOnlyCollection<string> allowedDataCenters)
     {
         if (IsVendorPlan(plan))
         {
@@ -279,13 +281,15 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
         }
 
         var worldOptions = plan.WorldOptions
-            .Where(world => IsSelectedDataCenter(world.DataCenter, selectedDataCenter))
+            .Where(world => IsAllowedDataCenter(world.DataCenter, allowedDataCenters))
             .ToList();
-        var recommendedWorld = IsSelectedDataCenter(plan.RecommendedWorld?.DataCenter, selectedDataCenter)
+        var recommendedWorld = IsAllowedDataCenter(
+                plan.RecommendedWorld?.DataCenter,
+                allowedDataCenters)
             ? plan.RecommendedWorld
             : null;
         var recommendedSplit = plan.RecommendedSplit?
-            .Where(split => IsSelectedDataCenter(split.DataCenter, selectedDataCenter))
+            .Where(split => IsAllowedDataCenter(split.DataCenter, allowedDataCenters))
             .ToList();
 
         return new DetailedShoppingPlan
@@ -294,15 +298,53 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             Name = plan.Name,
             IconId = plan.IconId,
             QuantityNeeded = plan.QuantityNeeded,
+            HqQuantityNeeded = plan.HqQuantityNeeded,
             DCAveragePrice = plan.DCAveragePrice,
             WorldOptions = worldOptions,
             RecommendedWorld = recommendedWorld,
             RecommendedSplit = recommendedSplit?.Count > 0 ? recommendedSplit : null,
+            CoverageSet = FilterCoverageSetToDataCenters(plan.CoverageSet, allowedDataCenters),
             Error = plan.Error,
             MarketDataWarning = plan.MarketDataWarning,
             HQAveragePrice = plan.HQAveragePrice,
             Vendors = plan.Vendors.ToList()
         };
+    }
+
+    private static MarketCoverageSet? FilterCoverageSetToDataCenters(
+        MarketCoverageSet? source,
+        IReadOnlyCollection<string> allowedDataCenters)
+    {
+        if (source is null)
+        {
+            return null;
+        }
+
+        var candidates = source.AllCandidates
+            .Where(candidate =>
+                candidate.Worlds.All(world =>
+                    IsAllowedDataCenter(world.DataCenter, allowedDataCenters)) &&
+                candidate.Listings.All(listing =>
+                    IsAllowedDataCenter(listing.DataCenter, allowedDataCenters)))
+            .ToArray();
+        MarketCoverageOption? Keep(MarketCoverageOption? candidate) =>
+            candidate is not null &&
+            candidates.Any(allowed => string.Equals(
+                allowed.CandidateId,
+                candidate.CandidateId,
+                StringComparison.Ordinal))
+                ? candidate
+                : null;
+
+        return new MarketCoverageSet(
+            source.ItemId,
+            source.ItemName,
+            source.QuantityNeeded,
+            Keep(source.SingleWorld),
+            Keep(source.CompactSplit),
+            Keep(source.WideSplit),
+            Keep(source.CheapestObserved),
+            candidates);
     }
 
     private static bool IsVendorPlan(DetailedShoppingPlan plan)
@@ -313,9 +355,40 @@ public sealed class ProcurementRouteExecutionService : IProcurementRouteExecutio
             StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsSelectedDataCenter(string? dataCenter, string selectedDataCenter)
+    private static bool IsAllowedDataCenter(
+        string? dataCenter,
+        IReadOnlyCollection<string> allowedDataCenters)
     {
         return !string.IsNullOrWhiteSpace(dataCenter) &&
-               string.Equals(dataCenter, selectedDataCenter, StringComparison.OrdinalIgnoreCase);
+               allowedDataCenters.Contains(dataCenter, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void EnsureRouteUsesOnlySelectedRegion(
+        IEnumerable<DetailedShoppingPlan> plans,
+        ProcurementRouteExecutionRequest request)
+    {
+        var allowedDataCenters = request.Scope == MarketFetchScope.SelectedDataCenter
+            ? [request.SelectedDataCenter]
+            : MarketFetchScopeResolver.GetDataCenters(
+                MarketFetchScope.EntireRegion,
+                request.SelectedDataCenter,
+                request.SelectedRegion);
+        var foreignDataCenter = plans
+            .SelectMany(plan => plan.WorldOptions
+                .Select(world => world.DataCenter)
+                .Concat(plan.RecommendedSplit?
+                    .Select(split => split.DataCenter) ??
+                    Array.Empty<string>())
+                .Append(plan.RecommendedWorld?.DataCenter ?? string.Empty))
+            .FirstOrDefault(dataCenter =>
+                !string.IsNullOrWhiteSpace(dataCenter) &&
+                !allowedDataCenters.Contains(
+                    dataCenter,
+                    StringComparer.OrdinalIgnoreCase));
+        if (foreignDataCenter is not null)
+        {
+            throw new InvalidOperationException(
+                $"Procurement attempted to combine {request.SelectedRegion} with {foreignDataCenter}.");
+        }
     }
 }

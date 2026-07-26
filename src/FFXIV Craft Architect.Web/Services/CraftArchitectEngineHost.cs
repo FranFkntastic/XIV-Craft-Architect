@@ -184,6 +184,17 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             EngineCommandPriority.Persistence,
             cancellationToken);
 
+    public Task<WorkerSessionResultEnvelope> MutateActiveContextAsync(
+        long expectedRevision,
+        WorkerActiveContextMutation mutation,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.ActiveContextMutation,
+            expectedRevision,
+            mutation,
+            EngineCommandPriority.UserRequestedDerivation,
+            cancellationToken);
+
     public Task<WorkerSessionResultEnvelope> BuildRecipeAsync(
         long expectedRevision,
         WorkerRecipeBuildRequest request,

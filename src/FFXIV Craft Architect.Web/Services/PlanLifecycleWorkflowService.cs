@@ -13,7 +13,8 @@ public enum PlanDerivationDispatch
 public sealed record PlanDerivationRequest(
     bool ForceRefreshMarketData = false,
     IReadOnlyCollection<int>? MarketItemIdsToRefresh = null,
-    bool SkipMarketRefresh = false);
+    bool SkipMarketRefresh = false,
+    bool UseCurrentSettingsContext = false);
 
 public sealed record PlanDerivationResult(
     bool MarketPublished,
@@ -62,7 +63,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         var result = await _worker.BuildRecipeAsync(request, cancellationToken);
         if (result.Built && derivation == PlanDerivationDispatch.Background)
         {
-            Schedule();
+            Schedule(new PlanDerivationRequest(
+                UseCurrentSettingsContext: true));
         }
 
         return result;
@@ -85,7 +87,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         }
     }
 
-    public void Schedule()
+    public void Schedule(PlanDerivationRequest? request = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -97,7 +99,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             _currentRun = run;
         }
 
-        _ = RunInBackgroundAsync(run);
+        _ = RunInBackgroundAsync(run, request ?? new PlanDerivationRequest());
     }
 
     public void Cancel()
@@ -132,6 +134,52 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         var fetchedCount = 0;
         var marketChanged = false;
         var market = await _worker.GetMarketProjectionAsync(cancellationToken);
+        var marketScope = request.UseCurrentSettingsContext
+            ? _settings.DefaultMarketFetchScope
+            : market?.Scope ?? _settings.DefaultMarketFetchScope;
+        var selectedDataCenter = request.UseCurrentSettingsContext
+            ? _settings.SelectedDataCenter
+            : market?.SelectedDataCenter ?? _settings.SelectedDataCenter;
+        var selectedRegion = request.UseCurrentSettingsContext
+            ? _settings.SelectedRegion
+            : market?.SelectedRegion ?? _settings.SelectedRegion;
+        var selectedRegions = request.UseCurrentSettingsContext
+            ? _settings.AnalysisRegions
+            : MarketFetchScopeResolver.ResolveRegionsForDataCenters(
+                market?.RequestedDataCenters ?? Array.Empty<string>(),
+                selectedRegion);
+        var requestedDataCenters = MarketFetchScopeResolver.GetDataCenters(
+            marketScope,
+            selectedDataCenter,
+            selectedRegion,
+            selectedRegions);
+        var marketContextChanged = market is not null &&
+            (market.Scope != marketScope ||
+             !string.Equals(
+                 market.SelectedDataCenter,
+                 selectedDataCenter,
+                 StringComparison.OrdinalIgnoreCase) ||
+             !string.Equals(
+                 market.SelectedRegion,
+                 selectedRegion,
+                 StringComparison.OrdinalIgnoreCase) ||
+             !(market.RequestedDataCenters ?? Array.Empty<string>())
+                 .ToHashSet(StringComparer.OrdinalIgnoreCase)
+                 .SetEquals(requestedDataCenters));
+
+        if (!hadMarketCandidates &&
+            request.UseCurrentSettingsContext &&
+            marketContextChanged)
+        {
+            await _worker.MutateActiveContextAsync(
+                new WorkerActiveContextMutation(
+                    selectedDataCenter,
+                    selectedRegion,
+                    marketScope),
+                cancellationToken);
+            market = await _worker.GetMarketProjectionAsync(cancellationToken);
+            marketContextChanged = false;
+        }
 
         if (hadMarketCandidates)
         {
@@ -170,10 +218,11 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                             new WorkerMarketItemRefreshRequest(
                                 item.ItemId,
                                 item.ItemName,
-                                market?.Scope ?? _settings.DefaultMarketFetchScope,
-                                market?.SelectedDataCenter ?? _settings.SelectedDataCenter,
-                                market?.SelectedRegion ?? _settings.SelectedRegion,
-                                market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost),
+                                marketScope,
+                                selectedDataCenter,
+                                selectedRegion,
+                                market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
+                                RequestedDataCenters: requestedDataCenters),
                             cancellationToken);
                         analyzedCount++;
                         fetchedCount++;
@@ -189,15 +238,18 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                 market = await _worker.GetMarketProjectionAsync(cancellationToken);
                 marketPublished = market?.HasAnalysis == true;
             }
-            else if (request.ForceRefreshMarketData || market?.HasAnalysis != true)
+            else if (request.ForceRefreshMarketData ||
+                     market?.HasAnalysis != true ||
+                     marketContextChanged)
             {
                 var outcome = await _worker.RunMarketAnalysisAsync(
                     new WorkerMarketAnalysisRequest(
                         request.ForceRefreshMarketData,
-                        market?.Scope ?? _settings.DefaultMarketFetchScope,
-                        market?.SelectedDataCenter ?? _settings.SelectedDataCenter,
-                        market?.SelectedRegion ?? _settings.SelectedRegion,
-                        market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost),
+                        marketScope,
+                        selectedDataCenter,
+                        selectedRegion,
+                        market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
+                        SelectedRegions: selectedRegions),
                     cancellationToken,
                     reportStatus);
                 market = outcome.Market;
@@ -289,7 +341,9 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             warnings);
     }
 
-    private async Task RunInBackgroundAsync(CancellationTokenSource run)
+    private async Task RunInBackgroundAsync(
+        CancellationTokenSource run,
+        PlanDerivationRequest request)
     {
         using (run)
         using (var operation = _operations.Start(
@@ -308,7 +362,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                 }
 
                 await EnsureDerivedAsync(
-                    new PlanDerivationRequest(),
+                    request,
                     operation.Token,
                     (message, progress) => operation.ReportStatus(
                         message,

@@ -47,7 +47,8 @@ public sealed class MarketAnalysisExecutionService : IMarketAnalysisExecutionSer
             request.ForceRefreshData,
             progress,
             ct,
-            request.SkipCachePopulation);
+            request.SkipCachePopulation,
+            request.RequestedDataCenters);
         fetchStopwatch.Stop();
         var fetchedItemIds = evidence.Entries
             .Where(entry => CacheTimeHelper.NormalizeToUtc(entry.Value.FetchedAt) >= evidenceLoadStartedAtUtc)

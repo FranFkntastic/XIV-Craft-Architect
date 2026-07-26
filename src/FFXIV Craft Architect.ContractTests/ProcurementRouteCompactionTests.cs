@@ -95,13 +95,94 @@ public sealed class ProcurementRouteCompactionTests
         Assert.Single(compact.Vendors);
     }
 
-    private static WorldShoppingSummary World(string name) => new()
+    [Fact]
+    public void PrepareProcurementEvidenceForScope_KeepsOnlyTheChosenRegionWithoutLosingItemMeaning()
     {
-        DataCenter = "Aether",
+        var northAmerica = World("Alpha");
+        var europe = World("Omega", "Chaos");
+        var northAmericaCoverage = Coverage("na", "Aether", "Alpha");
+        var crossRegionCoverage = Coverage(
+            "cross-region",
+            "Aether",
+            "Alpha",
+            new MarketCoverageWorld("Chaos", "Omega", 1, 1, 40, 40));
+        var source = new DetailedShoppingPlan
+        {
+            ItemId = 102,
+            Name = "Regional Item",
+            QuantityNeeded = 2,
+            HqQuantityNeeded = 2,
+            WorldOptions = [northAmerica, europe],
+            RecommendedWorld = europe,
+            RecommendedSplit =
+            [
+                new SplitWorldPurchase { DataCenter = "Aether", WorldName = "Alpha", QuantityToBuy = 1 },
+                new SplitWorldPurchase { DataCenter = "Chaos", WorldName = "Omega", QuantityToBuy = 1 }
+            ],
+            CoverageSet = new MarketCoverageSet(
+                102,
+                "Regional Item",
+                2,
+                northAmericaCoverage,
+                crossRegionCoverage,
+                null,
+                null,
+                [northAmericaCoverage, crossRegionCoverage])
+        };
+        var request = new ProcurementRouteExecutionRequest
+        {
+            ActiveProcurementItems =
+            [
+                new MaterialAggregate { ItemId = 102, Name = "Regional Item", TotalQuantity = 2, RequiresHq = true }
+            ],
+            Scope = MarketFetchScope.EntireRegion,
+            SelectedRegion = "North America",
+            SelectedDataCenter = "Aether"
+        };
+
+        var filtered = Assert.Single(
+            ProcurementRouteExecutionService.PrepareProcurementEvidenceForScope([source], request));
+
+        Assert.Equal(2, filtered.HqQuantityNeeded);
+        Assert.Null(filtered.RecommendedWorld);
+        Assert.Equal("Aether", Assert.Single(filtered.WorldOptions).DataCenter);
+        Assert.Equal("Aether", Assert.Single(filtered.RecommendedSplit!).DataCenter);
+        var coverage = Assert.Single(filtered.CoverageSet!.AllCandidates);
+        Assert.Equal("na", coverage.CandidateId);
+        Assert.Equal("Aether", Assert.Single(coverage.Worlds).DataCenter);
+    }
+
+    private static WorldShoppingSummary World(string name, string dataCenter = "Aether") => new()
+    {
+        DataCenter = dataCenter,
         WorldName = name,
         TotalQuantityPurchased = 2,
         HasSufficientStock = true,
         Listings = [new ShoppingListingEntry { Quantity = 2, NeededFromStack = 2, PricePerUnit = 50 }],
         ExcludedListings = [new ShoppingListingEntry { Quantity = 99, PricePerUnit = 999_999 }]
     };
+
+    private static MarketCoverageOption Coverage(
+        string candidateId,
+        string dataCenter,
+        string worldName,
+        params MarketCoverageWorld[] additionalWorlds) =>
+        new(
+            candidateId,
+            MarketCoverageTier.SingleWorld,
+            MarketCoverageKind.SupportedListings,
+            MarketCoverageQualityPolicy.HqOnly,
+            2,
+            2,
+            0,
+            100,
+            100,
+            50,
+            MarketCoveragePriceBand.Competitive,
+            [new MarketCoverageWorld(dataCenter, worldName, 2, 2, 100, 100), .. additionalWorlds],
+            [new MarketCoverageListing(dataCenter, worldName, 2, 2, 2, 50, true)],
+            new MarketCoverageFriction(1, 1, 0, 0, 0),
+            MarketCoverageSavings.None,
+            true,
+            null);
 }

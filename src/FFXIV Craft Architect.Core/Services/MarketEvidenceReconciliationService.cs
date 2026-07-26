@@ -38,10 +38,12 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
         var items = request.Items.ToList();
         var publishedAnalyses = request.PublishedAnalyses.ToDictionary(analysis => analysis.ItemId);
         var publishedPlans = request.PublishedShoppingPlans.ToDictionary(plan => plan.ItemId);
-        var requiredDataCenters = MarketFetchScopeResolver.GetDataCenters(
-            request.Scope,
-            request.SelectedDataCenter,
-            request.SelectedRegion);
+        var requiredDataCenters = request.RequestedDataCenters is { Count: > 0 }
+            ? request.RequestedDataCenters
+            : MarketFetchScopeResolver.GetDataCenters(
+                request.Scope,
+                request.SelectedDataCenter,
+                request.SelectedRegion);
         var evaluatedAtUtc = CacheTimeHelper.NormalizeToUtc(request.EvaluatedAtUtc ?? DateTime.UtcNow);
         var decisions = items.ToDictionary(
             item => item.ItemId,
@@ -84,6 +86,7 @@ public sealed class MarketEvidenceReconciliationService : IMarketEvidenceReconci
                     Scope = request.Scope,
                     SelectedDataCenter = request.SelectedDataCenter,
                     SelectedRegion = request.SelectedRegion,
+                    RequestedDataCenters = requiredDataCenters,
                     MaxAge = request.Policy.RefreshMode == MarketEvidenceRefreshMode.ForceRefresh
                         ? null
                         : request.Policy.ReusableCacheMaxAge,

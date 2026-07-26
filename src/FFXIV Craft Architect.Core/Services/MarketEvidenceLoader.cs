@@ -14,7 +14,8 @@ public static class MarketEvidenceLoader
         bool forceRefreshData = false,
         IProgress<string>? progress = null,
         CancellationToken ct = default,
-        bool skipCachePopulation = false)
+        bool skipCachePopulation = false,
+        IReadOnlyList<string>? requestedDataCenters = null)
     {
         ArgumentNullException.ThrowIfNull(marketCache);
         if (forceRefreshData && skipCachePopulation)
@@ -32,7 +33,14 @@ public static class MarketEvidenceLoader
         }
 
         var distinctItemIds = itemIds.Distinct().ToList();
-        var dataCenters = MarketFetchScopeResolver.GetDataCenters(scope, selectedDataCenter, selectedRegion);
+        var dataCenters = requestedDataCenters is { Count: > 0 }
+            ? requestedDataCenters
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+            : MarketFetchScopeResolver.GetDataCenters(
+                scope,
+                selectedDataCenter,
+                selectedRegion);
         var requests = distinctItemIds
             .SelectMany(itemId => dataCenters.Select(dataCenter => (itemId, dataCenter)))
             .ToList();
