@@ -232,6 +232,7 @@
         try
         {
             _market = await WorkerSession.ApplyMarketLensAsync(lens);
+            await EnsureSelectedMarketDetailsAsync();
         }
         catch (Exception ex)
         {
@@ -285,6 +286,7 @@
                     _market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion,
                     _market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost));
             _market = outcome.Market;
+            await EnsureSelectedMarketDetailsAsync();
             Snackbar.Add($"Refreshed {itemName}", Severity.Success);
         }
         finally
@@ -325,6 +327,7 @@
                         message,
                         progress: progress));
             _market = outcome.Market;
+            await EnsureSelectedMarketDetailsAsync();
             if (showCompletionSnackbar)
             {
                 Snackbar.Add(

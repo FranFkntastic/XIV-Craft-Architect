@@ -14,6 +14,16 @@ public sealed class WorkerMarketEvidenceCompactionTests
             ItemId = 1,
             Name = "Crasher Material",
             QuantityNeeded = 10,
+            ScopePriceBands =
+            [
+                new MarketScopePriceBand
+                {
+                    MinUnitPrice = 10,
+                    MaxUnitPrice = 999_999,
+                    ListingCount = 5,
+                    TotalQuantity = 1_025
+                }
+            ],
             Worlds =
             [
                 new WorldMarketAnalysis
@@ -41,17 +51,22 @@ public sealed class WorkerMarketEvidenceCompactionTests
         var before = ladder.ProjectToShoppingPlan(
             analysis,
             MarketAcquisitionLens.MinimumUpfrontCost);
+        Assert.True(WorkerSessionCoordinator.HasCompleteMarketDetail(analysis));
 
-        WorkerSessionCoordinator.CompactMarketAnalysisForPublication(analysis);
+        var compact =
+            WorkerSessionCoordinator.CloneAndCompactMarketAnalysisForPublication(analysis);
 
         var after = ladder.ProjectToShoppingPlan(
-            analysis,
+            compact,
             MarketAcquisitionLens.MinimumUpfrontCost);
         Assert.Equal(before.RecommendedWorld?.TotalCost, after.RecommendedWorld?.TotalCost);
-        Assert.Equal([0, 1, 2, 3], analysis.Worlds[0].Listings.Select(listing => listing.SortIndex));
-        Assert.True(analysis.Worlds[0].Listings
+        Assert.Equal([0, 1, 2, 3], compact.Worlds[0].Listings.Select(listing => listing.SortIndex));
+        Assert.True(compact.Worlds[0].Listings
             .Where(listing => listing.IsHq)
             .Sum(listing => listing.Quantity) >= analysis.QuantityNeeded);
+        Assert.Equal(5, analysis.Worlds[0].Listings.Count);
+        Assert.True(WorkerSessionCoordinator.HasCompleteMarketDetail(analysis));
+        Assert.False(WorkerSessionCoordinator.HasCompleteMarketDetail(compact));
     }
 
     private static AnalyzedMarketListing Listing(

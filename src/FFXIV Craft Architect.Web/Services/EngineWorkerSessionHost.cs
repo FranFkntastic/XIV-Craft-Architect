@@ -472,6 +472,10 @@ public static partial class ManagedHost
                 session.ActiveContext.World,
                 request.Scope),
             "market analysis context published");
+        foreach (var analysis in session.BorrowMarketEvidence().ItemAnalyses)
+        {
+            WorkerSessionCoordinator.CompactMarketAnalysisForPublication(analysis);
+        }
         _canonicalSession.InvalidateLegacyProcurementRoute();
         SessionMarketCache.Clear();
         _sessionRevision++;
@@ -482,7 +486,7 @@ public static partial class ManagedHost
                 result.AnalyzedCount,
                 result.ChangedDecisionCount,
                 result.FetchedCount,
-                CaptureMarketProjection()),
+                CaptureMarketProjection(includeDetails: false)),
             _canonicalSession.CreateDurablePatch(
                 replacePlanStateJson: true,
                 replaceMarketEvidence: true,
@@ -545,6 +549,10 @@ public static partial class ManagedHost
         var recipeBasis = recipeLayer.BuildMarketAnalysisRecipeBasis(
             plan,
             request.UnavailableItemIds);
+        foreach (var analysis in request.ItemAnalyses)
+        {
+            WorkerSessionCoordinator.CompactMarketAnalysisForPublication(analysis);
+        }
         var changedDecisions = AcquisitionPlanningService.ReconcileAcquisitionDecisions(
             plan,
             request.ShoppingPlans);
@@ -597,9 +605,12 @@ public static partial class ManagedHost
             ?? throw new InvalidOperationException(
                 "Build a recipe plan before publishing market evidence.");
         var evidence = session.BorrowMarketEvidence();
+        var compactAnalysis =
+            WorkerSessionCoordinator.CloneAndCompactMarketAnalysisForPublication(
+                request.ItemAnalysis);
         var analyses = MarketEvidenceCollectionMerger.MergeAnalyses(
             evidence.ItemAnalyses,
-            [request.ItemAnalysis]);
+            [compactAnalysis]);
         var shoppingPlans = MarketEvidenceCollectionMerger.MergeShoppingPlans(
             evidence.ShoppingPlans ?? [],
             [request.ShoppingPlan]);
@@ -642,7 +653,9 @@ public static partial class ManagedHost
             new WorkerMarketItemRefreshOutcome(
                 CoreProcurementItemRefreshStatus.Refreshed,
                 request.ShoppingPlan.Name,
-                CaptureMarketProjection()),
+                CaptureMarketProjection(
+                    includeDetails: true,
+                    worldDetailItemId: request.ItemId)),
             _canonicalSession.CreateDurablePatch(
                 replacePlanStateJson: true,
                 replaceMarketEvidence: true,
@@ -735,15 +748,39 @@ public static partial class ManagedHost
                 $"Market evidence for {request.ItemName} was not refreshed ({result.Status}).");
         }
 
+        var refreshedEvidence = session.BorrowMarketEvidence();
+        var detailedAnalysis = refreshedEvidence.ItemAnalyses
+            .FirstOrDefault(analysis => analysis.ItemId == request.ItemId);
+        var detailedShoppingPlan = refreshedEvidence.ShoppingPlans?
+            .FirstOrDefault(plan => plan.ItemId == request.ItemId);
+        var detachedDetailedAnalysis = detailedAnalysis is null
+            ? null
+            : JsonSerializer.SerializeToElement(detailedAnalysis, WireJsonOptions)
+                .Deserialize<MarketItemAnalysis>(WireJsonOptions);
+        foreach (var analysis in refreshedEvidence.ItemAnalyses)
+        {
+            WorkerSessionCoordinator.CompactMarketAnalysisForPublication(analysis);
+        }
         _canonicalSession.InvalidateLegacyProcurementRoute();
         SessionMarketCache.Clear();
         _sessionRevision++;
+        var market = CaptureMarketProjection(
+            includeDetails: true,
+            worldDetailItemId: request.ItemId);
+        if (detachedDetailedAnalysis is not null && detailedShoppingPlan is not null)
+        {
+            market = market with
+            {
+                ShoppingPlans = [detailedShoppingPlan],
+                ItemAnalyses = [detachedDetailedAnalysis]
+            };
+        }
         return CreateMutationResult(
             command.CommandKind,
             new WorkerMarketItemRefreshOutcome(
                 result.Status,
                 result.ItemName,
-                CaptureMarketProjection(includeDetails: false)),
+                market),
             _canonicalSession.CreateDurablePatch(
                 replacePlanStateJson: true,
                 replaceMarketEvidence: true,

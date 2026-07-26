@@ -113,7 +113,15 @@ public sealed class WorkerProjectionStore
 
         var market = result.Projection.Deserialize<WorkerMarketProjection>(
             EngineJsonSerializerOptions.CreateWire());
-        if (market is null || market.Revision != result.Revision)
+        return market is not null &&
+               market.Revision == result.Revision &&
+               TryPublishMarket(market);
+    }
+
+    public bool TryPublishMarket(WorkerMarketProjection market)
+    {
+        ArgumentNullException.ThrowIfNull(market);
+        if (market.Revision != Shell.Revision)
         {
             return false;
         }

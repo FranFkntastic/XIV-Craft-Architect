@@ -200,7 +200,9 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             (!includeDetails ||
              (worldDetailItemId.HasValue
                  ? cached.ShoppingPlans.Any(plan => plan.ItemId == worldDetailItemId.Value) &&
-                   cached.ItemAnalyses.Any(analysis => analysis.ItemId == worldDetailItemId.Value)
+                   cached.ItemAnalyses.Any(analysis =>
+                       analysis.ItemId == worldDetailItemId.Value &&
+                       HasCompleteMarketDetail(analysis))
                  : cached.ShoppingPlans.Count > 0)) &&
             (!worldDetailItemId.HasValue ||
              cached.Items.Any(item =>
@@ -215,7 +217,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             includeDetails,
             worldDetailItemId,
             cancellationToken: cancellationToken);
-        if (!_projections.TryPublishMarket(result))
+        var market = DeserializeMarketProjection(result);
+        if (market is null)
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
             result = await _engineHost.GetMarketProjectionAsync(
@@ -223,7 +226,25 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 includeDetails,
                 worldDetailItemId,
                 cancellationToken: cancellationToken);
-            _projections.TryPublishMarket(result);
+            market = DeserializeMarketProjection(result);
+        }
+
+        if (market is null)
+        {
+            throw CreateConflict(result);
+        }
+
+        if (includeDetails && worldDetailItemId.HasValue)
+        {
+            market = await HydrateSelectedMarketDetailsAsync(
+                market,
+                worldDetailItemId.Value,
+                cancellationToken);
+        }
+
+        if (!_projections.TryPublishMarket(market))
+        {
+            throw CreateConflict(result);
         }
         return _projections.Market;
     }
@@ -545,9 +566,6 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(marketResult);
         }
 
-        var marketWithDetails = _projections.AttachMarketDetails(
-            shoppingPlans,
-            analyses);
         reportStatus?.Invoke("Updating your plan with the new prices...", 98);
         await RefreshRecipeProjectionAsync(cancellationToken);
         await RefreshAcquisitionProjectionAsync("All", cancellationToken);
@@ -556,7 +574,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             commit.AnalyzedCount,
             commit.ChangedDecisionCount,
             commit.FetchedCount,
-            marketWithDetails);
+            _projections.Market);
     }
 
     public static void CompactMarketAnalysisForPublication(MarketItemAnalysis analysis)
@@ -703,7 +721,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 request.SelectedDataCenter,
                 request.SelectedRegion,
                 request.Lens,
-                analysis,
+                CloneAndCompactMarketAnalysisForPublication(analysis),
                 shoppingPlan),
             cancellationToken);
         if (!_projections.TryPublishMutation<WorkerMarketItemRefreshOutcome>(
@@ -715,9 +733,118 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             throw CreateConflict(result);
         }
 
+        var marketWithDetails = _projections.AttachMarketDetails(
+            [shoppingPlan],
+            [analysis]);
         await RefreshRecipeProjectionAsync(cancellationToken);
         await RefreshAcquisitionProjectionAsync("All", cancellationToken);
-        return outcome;
+        return outcome with { Market = marketWithDetails };
+    }
+
+    private async Task<WorkerMarketProjection> HydrateSelectedMarketDetailsAsync(
+        WorkerMarketProjection market,
+        int itemId,
+        CancellationToken cancellationToken)
+    {
+        var selectedPlan = market.ShoppingPlans
+            .FirstOrDefault(plan => plan.ItemId == itemId);
+        var selectedAnalysis = market.ItemAnalyses
+            .FirstOrDefault(analysis => analysis.ItemId == itemId);
+        if (selectedPlan is null)
+        {
+            return market with
+            {
+                ShoppingPlans = Array.Empty<DetailedShoppingPlan>(),
+                ItemAnalyses = Array.Empty<MarketItemAnalysis>()
+            };
+        }
+
+        if (selectedAnalysis is not null && HasCompleteMarketDetail(selectedAnalysis))
+        {
+            return market with
+            {
+                ShoppingPlans = [selectedPlan],
+                ItemAnalyses = [selectedAnalysis]
+            };
+        }
+
+        var item = market.CandidateItems.FirstOrDefault(candidate => candidate.ItemId == itemId);
+        if (item is null)
+        {
+            return market with
+            {
+                ShoppingPlans = [selectedPlan],
+                ItemAnalyses = Array.Empty<MarketItemAnalysis>()
+            };
+        }
+
+        var expectedWorlds = await GetExpectedWorldsAsync(
+            market.Scope,
+            market.SelectedDataCenter,
+            market.SelectedRegion,
+            cancellationToken);
+        var reconciliation = await _marketEvidenceReconciliation.ReconcileAsync(
+            new MarketEvidenceReconciliationRequest
+            {
+                Items = [item],
+                PublishedAnalyses = [],
+                PublishedShoppingPlans = [],
+                Scope = market.Scope,
+                SelectedDataCenter = market.SelectedDataCenter,
+                SelectedRegion = market.SelectedRegion,
+                Lens = market.Lens,
+                CacheAlreadyPopulated = true,
+                ExpectedWorldsByDataCenter = expectedWorlds
+            },
+            ct: cancellationToken,
+            executionOptions: MarketAnalysisExecutionOptions.Interactive);
+        var hydratedAnalysis = reconciliation.Analyses
+            .FirstOrDefault(analysis => analysis.ItemId == itemId);
+        return market with
+        {
+            ShoppingPlans = [selectedPlan],
+            ItemAnalyses = hydratedAnalysis is not null &&
+                           HasCompleteMarketDetail(hydratedAnalysis)
+                ? [hydratedAnalysis]
+                : Array.Empty<MarketItemAnalysis>()
+        };
+    }
+
+    private static WorkerMarketProjection? DeserializeMarketProjection(
+        WorkerSessionResultEnvelope result)
+    {
+        if (!result.Accepted ||
+            result.Projection.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+
+        var market = result.Projection.Deserialize<WorkerMarketProjection>(
+            EngineJsonSerializerOptions.CreateWire());
+        return market?.Revision == result.Revision ? market : null;
+    }
+
+    public static bool HasCompleteMarketDetail(MarketItemAnalysis analysis)
+    {
+        var summarizedListings = analysis.ScopePriceBands.Sum(band => band.ListingCount);
+        var retainedListings = analysis.Worlds.Sum(world =>
+            world.Listings.Count(listing =>
+                listing.Quantity > 0 &&
+                listing.PricePerUnit > 0));
+        return summarizedListings == retainedListings;
+    }
+
+    public static MarketItemAnalysis CloneAndCompactMarketAnalysisForPublication(
+        MarketItemAnalysis analysis)
+    {
+        var clone = JsonSerializer.SerializeToElement(
+                analysis,
+                EngineJsonSerializerOptions.CreateWire())
+            .Deserialize<MarketItemAnalysis>(EngineJsonSerializerOptions.CreateWire())
+            ?? throw new InvalidOperationException(
+                $"Market analysis for item {analysis.ItemId} could not be copied for publication.");
+        CompactMarketAnalysisForPublication(clone);
+        return clone;
     }
 
     private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>>

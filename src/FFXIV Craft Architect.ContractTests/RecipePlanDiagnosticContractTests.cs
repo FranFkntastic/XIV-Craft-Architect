@@ -133,6 +133,10 @@ public sealed class RecipePlanDiagnosticContractTests
             "RefreshProjectionAsync(revision)",
             marketPage,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "await EnsureSelectedMarketDetailsAsync();",
+            marketPage,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("OnStateChanged +=", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("WorkerProjections.Changed +=", workflow, StringComparison.Ordinal);
     }
@@ -217,6 +221,18 @@ public sealed class RecipePlanDiagnosticContractTests
             StringComparison.Ordinal);
         Assert.Contains(
             "await RefreshRecipeProjectionAsync(cancellationToken);",
+            workerCoordinator,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "HydrateSelectedMarketDetailsAsync(",
+            workerCoordinator,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CacheAlreadyPopulated = true",
+            workerCoordinator,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "AttachMarketDetails(\r\n            shoppingPlans,\r\n            analyses)",
             workerCoordinator,
             StringComparison.Ordinal);
 
