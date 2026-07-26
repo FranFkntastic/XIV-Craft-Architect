@@ -12,6 +12,8 @@ namespace FFXIV_Craft_Architect.Web.Services;
 /// </summary>
 public sealed class WorkerSessionCoordinator : IAsyncDisposable
 {
+    private static readonly TimeSpan HistoricalDetailCacheMaxAge =
+        TimeSpan.FromDays(3650);
     private readonly CraftArchitectEngineHost _engineHost;
     private readonly WorkerProjectionStore _projections;
     private readonly CraftArchitectEngineCapability _capability;
@@ -794,6 +796,14 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 SelectedRegion = market.SelectedRegion,
                 Lens = market.Lens,
                 CacheAlreadyPopulated = true,
+                // This is display hydration for already-published evidence, not a
+                // pricing decision. Read the retained raw snapshot even after it
+                // ages out of recommendation reuse so its bands and rows continue
+                // to describe the canonical market summary without refetching.
+                Policy = new MarketEvidenceReconciliationPolicy
+                {
+                    ReusableCacheMaxAge = HistoricalDetailCacheMaxAge
+                },
                 ExpectedWorldsByDataCenter = expectedWorlds
             },
             ct: cancellationToken,
@@ -826,6 +836,12 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public static bool HasCompleteMarketDetail(MarketItemAnalysis analysis)
     {
+        if (analysis.RequestedDataCenters.Count > 0 &&
+            analysis.PresentDataCenters.Count == 0)
+        {
+            return false;
+        }
+
         var summarizedListings = analysis.ScopePriceBands.Sum(band => band.ListingCount);
         var retainedListings = analysis.Worlds.Sum(world =>
             world.Listings.Count(listing =>

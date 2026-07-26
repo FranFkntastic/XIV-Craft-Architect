@@ -67,6 +67,12 @@ public sealed class WorkerMarketEvidenceCompactionTests
         Assert.Equal(5, analysis.Worlds[0].Listings.Count);
         Assert.True(WorkerSessionCoordinator.HasCompleteMarketDetail(analysis));
         Assert.False(WorkerSessionCoordinator.HasCompleteMarketDetail(compact));
+        Assert.False(WorkerSessionCoordinator.HasCompleteMarketDetail(
+            new MarketItemAnalysis
+            {
+                RequestedDataCenters = ["Aether"],
+                MissingDataCenters = ["Aether"]
+            }));
     }
 
     private static AnalyzedMarketListing Listing(
