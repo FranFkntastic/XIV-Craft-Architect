@@ -238,7 +238,14 @@
             return;
         }
 
+        _procurementRegion = _route.SelectedRegion;
+        _searchEntireRegion = _route.SearchesEntireRegion;
         _travelTolerance = _route.TravelTolerance;
+        _travelPriority = _route.TravelPriority;
+        if (_route.IncludeSplitPurchases.HasValue)
+        {
+            _includeSplitPurchases = _route.IncludeSplitPurchases.Value;
+        }
     }
 
     private async Task RunAnalysisAsync()
