@@ -1,4 +1,5 @@
-const tenancyProtocolVersion = "1";
+const tenancyProtocolVersion = "2";
+const retiredTenancyProtocolVersions = ["1"];
 const defaultWorkspaceId = "active";
 const leaderHeartbeatMilliseconds = 750;
 const leaderStaleMilliseconds = 3000;
@@ -7,7 +8,7 @@ const relayAcknowledgementTimeoutMilliseconds = 2000;
 const completedRequestRetentionMilliseconds = 30000;
 const maximumRememberedRequests = 128;
 
-export function createEngineWorker(workerUrl = "engine-worker.js", workspaceId = defaultWorkspaceId) {
+export function createEngineWorker(workerUrl = "engine-worker.js?v=2", workspaceId = defaultWorkspaceId) {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
     const resolvedWorkerUrl = new URL(workerUrl, document.baseURI);
     resolvedWorkerUrl.searchParams.set("workspace", normalizedWorkspaceId);
@@ -49,7 +50,7 @@ export function createEngineWorker(workerUrl = "engine-worker.js", workspaceId =
 
 export function createEngineWorkerController(
     callback,
-    workerUrl = "engine-worker.js",
+    workerUrl = "engine-worker.js?v=2",
     workspaceId = defaultWorkspaceId,
     requestFreshAuthority = false)
 {
@@ -91,6 +92,7 @@ export function createEngineWorkerController(
     window.addEventListener("pagehide", disposeForPageExit);
     window.addEventListener("pageshow", resumeFromPageCache);
     retryTimer = window.setInterval(runFollowerMaintenance, relayRetryMilliseconds);
+    retireLegacyAuthorities(normalizedWorkspaceId, clientId);
     if (requestFreshAuthority === true) {
         postCoordination({ type: "authority-restart-request" });
     }
@@ -672,6 +674,20 @@ export function createEngineWorkerController(
         terminate,
         dispose: terminate
     };
+}
+
+function retireLegacyAuthorities(workspaceId, clientId) {
+    for (const version of retiredTenancyProtocolVersions) {
+        const legacyChannel = new BroadcastChannel(
+            `craft-architect-engine:${workspaceId}:coordination-v${version}`);
+        legacyChannel.postMessage({
+            tenancyProtocolVersion: version,
+            workspaceId,
+            fromClientId: clientId,
+            type: "authority-restart-request"
+        });
+        window.setTimeout(() => legacyChannel.close(), 0);
+    }
 }
 
 function normalizeWorkspaceId(workspaceId) {

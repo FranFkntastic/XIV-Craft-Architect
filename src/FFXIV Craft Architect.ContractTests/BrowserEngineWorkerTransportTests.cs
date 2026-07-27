@@ -278,7 +278,7 @@ public sealed class BrowserEngineWorkerTransportTests
             object?[]? args)
         {
             Assert.Equal("import", identifier);
-            Assert.Equal("./engine-worker-bootstrap.js", Assert.Single(args!));
+            Assert.Equal("./engine-worker-bootstrap.js?v=2", Assert.Single(args!));
             return ValueTask.FromResult((TValue)(object)module);
         }
     }

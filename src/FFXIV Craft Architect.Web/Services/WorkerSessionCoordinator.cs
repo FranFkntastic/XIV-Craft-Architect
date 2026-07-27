@@ -225,10 +225,25 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
 
         var result = await _engineHost.BootstrapSessionAsync(cancellationToken);
-        if (!result.Accepted || !_projections.TryPublish(result))
+        if (!result.Accepted)
         {
             throw new InvalidOperationException(
                 result.Message ?? "The Worker did not publish a valid startup projection.");
+        }
+
+        var publishedShell = result.Projection.Deserialize<WorkerSessionShellProjection>(
+            EngineJsonSerializerOptions.CreateWire());
+        if (publishedShell is null || publishedShell.Revision != result.Revision)
+        {
+            throw new InvalidOperationException(
+                "The Worker did not publish a valid startup projection.");
+        }
+
+        if (!_projections.TryPublish(result) &&
+            _projections.Shell.Revision < publishedShell.Revision)
+        {
+            throw new InvalidOperationException(
+                "The Worker startup projection could not be reconciled.");
         }
         return _projections.Shell;
     }
