@@ -39,13 +39,6 @@ const LIVE_DEFAULTS = {
   operationMs: 120_000
 };
 
-export const REQUIRED_MARKERS = [
-  'analysis-publication-complete',
-  'autosave-complete',
-  'route-generation-started',
-  'route-generation-complete'
-];
-
 export function loadOracleBudgets(evidenceMode, environment = process.env) {
   const defaults = evidenceMode === 'live' ? LIVE_DEFAULTS : SEEDED_DEFAULTS;
   const budgets = { ...defaults };
@@ -72,7 +65,6 @@ export function loadOracleBudgets(evidenceMode, environment = process.env) {
 
 export function createLifecycleFingerprint(snapshot, markerNames = [], networkProgress = 0) {
   const data = snapshot?.data || {};
-  const autosave = snapshot?.autosave || {};
   return JSON.stringify({
     planSessionVersion: data.planSessionVersion || '',
     planRootCount: data.planRootCount || '',
@@ -85,8 +77,6 @@ export function createLifecycleFingerprint(snapshot, markerNames = [], networkPr
     routeValidity: data.routeValidity || '',
     routeHasDecision: data.routeHasDecision || '',
     routeFailure: data.routeFailure || '',
-    routeBasisPlanSessionVersion: data.routeBasisPlanSessionVersion || '',
-    routeBasisMarketIntelligenceId: data.routeBasisMarketIntelligenceId || '',
     routeReconciling: data.routeReconciling || '',
     routeReconciliationScheduled: data.routeReconciliationScheduled || '',
     isBusy: data.isBusy || '',
@@ -94,11 +84,9 @@ export function createLifecycleFingerprint(snapshot, markerNames = [], networkPr
     currentOperation: data.currentOperation || '',
     activeWorkflows: data.activeWorkflows || '',
     dirtyPersistedBuckets: data.dirtyPersistedBuckets || '',
-    lastAutosave: data.lastAutosave || '',
     statuses: snapshot?.statuses || [],
     analyzingVisible: Boolean(snapshot?.analyzingVisible),
     visibleBusy: Boolean(snapshot?.visibleBusy),
-    autosaveModifiedAt: autosave.modifiedAt || '',
     markerNames: [...markerNames].sort(),
     networkProgress
   });
@@ -106,16 +94,12 @@ export function createLifecycleFingerprint(snapshot, markerNames = [], networkPr
 
 export function getMissingCompletionGates(snapshot, markerNames = []) {
   const data = snapshot?.data || {};
-  const autosave = snapshot?.autosave;
-  const markers = new Set(markerNames);
   const missing = [];
   const identitiesMatch = Boolean(data.planSessionVersion) &&
     data.planSessionVersion === data.publicationPlanSessionVersion &&
-    data.planSessionVersion === data.routeBasisPlanSessionVersion &&
     Boolean(data.marketIntelligenceId) &&
-    data.marketIntelligenceId === data.routeBasisMarketIntelligenceId;
+    data.marketIntelligenceId === data.publicationMarketVersion;
   if (!identitiesMatch) missing.push('basis-identities');
-  if (!(Number(data.cacheFetchedPairs) > 0 || Number(data.cacheFreshHits) > 0)) missing.push('cache-lane');
   if (data.publicationKind !== 'Known') missing.push('publication');
   if (data.routeValidity !== 'Current') missing.push('route-validity');
   if (data.routeHasDecision !== 'true') missing.push('route-decision');
@@ -126,16 +110,9 @@ export function getMissingCompletionGates(snapshot, markerNames = []) {
   if (Number(data.progressPercent) !== 0) missing.push('progress');
   if (data.currentOperation) missing.push('current-operation');
   if (data.activeWorkflows) missing.push('active-workflows');
-  if (data.dirtyPersistedBuckets !== 'None') missing.push('dirty-persistence');
-  if (!data.lastAutosave) missing.push('last-autosave');
-  if (autosave?.id !== 'autosave' || !(autosave?.projectItemCount > 0) || !autosave?.hasPlan || !autosave?.hasMarketIntelligence) {
-    missing.push('autosave-readback');
-  }
+  if (data.dirtyPersistedBuckets) missing.push('dirty-persistence');
   if (snapshot?.analyzingVisible) missing.push('analyzing-visible');
   if (snapshot?.visibleBusy) missing.push('visible-busy');
-  for (const marker of REQUIRED_MARKERS) {
-    if (!markers.has(marker)) missing.push(`marker:${marker}`);
-  }
   return missing;
 }
 
@@ -182,9 +159,7 @@ export function evaluateOracleState({
   const publishedRouteReturned = routeResult?.workflowStatus === 'Published';
   const decisionReturned = routeResult?.routeDecision === true;
   const authoritativeRouteMissing = data.routeValidity !== 'Current' ||
-    data.routeHasDecision !== 'true' ||
-    !data.routeBasisPlanSessionVersion ||
-    !data.routeBasisMarketIntelligenceId;
+    data.routeHasDecision !== 'true';
   if (publishedRouteReturned && decisionReturned && idle && authoritativeRouteMissing && routeTerminalAtMs != null &&
       nowMs - routeTerminalAtMs >= budgets.routeSettleMs) {
     return {

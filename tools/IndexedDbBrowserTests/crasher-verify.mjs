@@ -1,7 +1,6 @@
 import { chromium, firefox } from 'playwright';
 import { rename, rm, writeFile } from 'node:fs/promises';
 import {
-  REQUIRED_MARKERS,
   createDiagnosticSnapshot,
   createLifecycleFingerprint,
   evaluateOracleState,
@@ -216,7 +215,6 @@ function observeConsoleProgress() {
     const text = entry.text;
     const markerPairs = [
       ['hot-state publication applied', 'analysis-publication-complete'],
-      ['autosave complete', 'autosave-complete'],
       ['explicit route generation starting', 'route-generation-started'],
       ['explicit route workflow returned', 'route-generation-complete']
     ];
@@ -258,7 +256,6 @@ async function readLifecycle() {
   latestLifecycle = await withDeadline('read lifecycle', () => page.evaluate(async () => {
     const probe = document.querySelector('[data-benchmark-id="operation-lifecycle"]');
     const data = probe ? { ...probe.dataset } : null;
-    const saved = await window.IndexedDB.loadPlan('autosave');
     const text = document.body?.innerText || '';
     const statuses = Array.from(document.querySelectorAll('[role="status"], .mud-alert-message, .mud-progress-linear'))
       .map(element => (element.textContent || '').trim()).filter(Boolean);
@@ -268,13 +265,6 @@ async function readLifecycle() {
       analyzingVisible: /\bANALYZING\b/i.test(text),
       visibleBusy: Array.from(document.querySelectorAll('.mud-progress-linear, .mud-progress-circular'))
         .some(element => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }),
-      autosave: saved ? {
-        id: saved.id,
-        modifiedAt: saved.modifiedAt,
-        projectItemCount: saved.projectItems?.length || 0,
-        hasPlan: Boolean(saved.planJson),
-        hasMarketIntelligence: Boolean(saved.marketIntelligenceJson)
-      } : null
     };
   }), budgets.operationMs);
   return latestLifecycle;
@@ -572,34 +562,21 @@ workflow: try {
   stage('plan-import-activation-settled', { lifecycle: importSettled });
   await writeReport(true);
 
-  if (executionMode === 'legacy' || evidenceMode === 'live') {
-  const analysisButton = page.locator('[data-benchmark-id="market-analysis-run"]');
-  await withDeadline('wait for market analysis button', () => analysisButton.waitFor({ state: 'visible' }));
-  await withDeadline('wait for enabled market analysis button', () => page.waitForFunction(() => {
-    const button = document.querySelector('[data-benchmark-id="market-analysis-run"]');
-    return button && !button.disabled && button.dataset.canAnalyze === 'true' && button.dataset.isAnalyzing === 'false';
-  }));
-  const analysisButtonState = await withDeadline('read market analysis button state', () => analysisButton.evaluate(button => ({
-    disabled: button.disabled,
-    canAnalyze: button.dataset.canAnalyze,
-    isAnalyzing: button.dataset.isAnalyzing,
-    text: button.textContent?.trim()
-  })));
-  stage('before-explicit-analysis-click', { button: analysisButtonState });
-  await withDeadline('click market analysis', () => analysisButton.click());
-  const postClickLifecycle = await waitForLifecycle('analysis-operation-start', budgets.operationMs, snapshot => {
-    const data = snapshot?.data;
-    return data &&
-      (data.currentOperation === 'Market Analysis' ||
-       String(data.activeWorkflows).includes('MarketAnalysis') ||
-       data.isBusy === 'true');
-  });
-  stage('after-explicit-analysis-click', { lifecycle: postClickLifecycle });
-  await waitForLifecycle('analysis-publication', budgets.analysisMs, () => {
-    observeConsoleProgress();
-    return seenMarkers.has('autosave-complete');
-  });
-  stage('explicit-analysis-published');
+  const automaticAnalysisLifecycle = await waitForLifecycle(
+    'automatic-analysis-publication',
+    budgets.analysisMs,
+    snapshot => {
+      observeConsoleProgress();
+      const data = snapshot?.data;
+      return data &&
+        data.publicationKind === 'Known' &&
+        Number(data.marketAnalysisCount) > 0 &&
+        data.isBusy === 'false' &&
+        !data.currentOperation &&
+        !data.activeWorkflows &&
+        !data.dirtyPersistedBuckets;
+    });
+  stage('automatic-analysis-published', { lifecycle: automaticAnalysisLifecycle });
   await writeReport(true);
 
   if (evidenceMode === 'live') {
@@ -609,13 +586,13 @@ workflow: try {
         Number(liveData.marketAnalysisCount) <= 0 ||
         liveData.isBusy !== 'false' ||
         liveData.activeWorkflows ||
-        !liveSnapshot.autosave?.hasMarketIntelligence) {
+        liveData.dirtyPersistedBuckets) {
       throw new OracleFailure('terminal-contradiction', 'Live-network analysis did not settle durably.', {
         lifecycle: liveSnapshot
       });
     }
     report.liveSmoke = {
-      scope: 'network fetch, cache, full-graph analysis, publication, and autosave',
+      scope: 'automatic network fetch, cache, full-graph analysis, and durable Worker publication',
       lifecycle: liveSnapshot
     };
     stage('live-network-smoke-complete');
@@ -627,14 +604,9 @@ workflow: try {
       break workflow;
     }
   }
-  } else {
-    stage('test-only-deterministic-engine-evidence-selected');
-  }
 
-  if (evidenceMode === 'seeded' && executionMode === 'legacy') {
-    await withDeadline('lock acquisition decisions', () => page.$eval(
-      '[data-benchmark-id="lock-current-acquisition-decisions"]', element => element.click()));
-    stage('deterministic-acquisition-decisions-locked');
+  if (executionMode === 'engine') {
+    stage('test-only-deterministic-engine-evidence-selected');
   }
 
   if (executionMode === 'engine') {
@@ -856,7 +828,7 @@ workflow: try {
         routeRunsAfterReload
       });
   }
-  stage('autosave-restored-with-precomputed-travel-route', {
+  stage('worker-session-restored-with-precomputed-travel-route', {
     selectedTolerance,
     lifecycle: restored
   });

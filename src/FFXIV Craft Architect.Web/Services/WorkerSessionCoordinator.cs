@@ -20,6 +20,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly IMarketCacheService _marketCache;
     private readonly IUniversalisService _universalis;
+    private readonly SemaphoreSlim _marketAnalysisGate = new(1, 1);
     private readonly SemaphoreSlim _crossTabProjectionGate = new(1, 1);
     private bool _disposed;
 
@@ -426,6 +427,25 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         WorkerMarketAnalysisRequest request,
         CancellationToken cancellationToken = default,
         Action<string, double?>? reportStatus = null)
+    {
+        await _marketAnalysisGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await RunMarketAnalysisCoreAsync(
+                request,
+                cancellationToken,
+                reportStatus);
+        }
+        finally
+        {
+            _marketAnalysisGate.Release();
+        }
+    }
+
+    private async Task<WorkerMarketAnalysisOutcome> RunMarketAnalysisCoreAsync(
+        WorkerMarketAnalysisRequest request,
+        CancellationToken cancellationToken,
+        Action<string, double?>? reportStatus)
     {
         reportStatus?.Invoke(
             request.ForceRefreshData

@@ -275,9 +275,9 @@
     {
         Console.WriteLine("[DIAG] MainLayout.OnInitialized()");
         
-        // Benchmark runs may defer automatic reconciliation so they can lock a
-        // deterministic acquisition fixture before explicitly exercising the route.
-        AppState.SetBenchmarkWorkflowDeferral(IsLocalBenchmarkWorkflowRequest());
+        // Benchmark runs defer automatic route reconciliation so they can
+        // explicitly exercise route generation after automatic market analysis.
+        AppState.SetBenchmarkRouteDeferral(IsLocalBenchmarkWorkflowRequest());
 
         // Set initial active tab based on current URL
         UpdateActiveTab(NavigationManager.Uri);
@@ -385,7 +385,7 @@
                     nameof(MarketTravelPriority.DataCenterTransfersFirst)));
 
             AppState.SetSecretDebugToolsEnabled(secretDebugToolsEnabled);
-            AppState.SetBenchmarkWorkflowDeferral(
+            AppState.SetBenchmarkRouteDeferral(
                 secretDebugToolsEnabled && deferAutomaticRoute || IsLocalBenchmarkWorkflowRequest());
             AppState.SetMarketEvidenceSettings(
                 selectedDataCenter,

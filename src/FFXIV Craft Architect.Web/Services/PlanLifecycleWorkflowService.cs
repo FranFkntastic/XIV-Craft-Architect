@@ -355,12 +355,6 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         {
             try
             {
-                if (_settings.DeferAutomaticMarketAnalysisForBenchmark)
-                {
-                    operation.Cancel();
-                    return;
-                }
-
                 await EnsureDerivedAsync(
                     request,
                     operation.Token,

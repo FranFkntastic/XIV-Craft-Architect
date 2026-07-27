@@ -36,7 +36,6 @@ public sealed class AppState
     public int TemporaryWorldBlacklistDurationMinutes { get; private set; } = 60;
     public bool SecretDebugToolsEnabled { get; private set; }
     public bool DeferAutomaticProcurementReconciliationForBenchmark { get; private set; }
-    public bool DeferAutomaticMarketAnalysisForBenchmark { get; private set; }
     public IReadOnlyList<StoredPlanSummary> SavedPlans { get; private set; } =
         Array.AsReadOnly(Array.Empty<StoredPlanSummary>());
     public Guid? SelectedTradeOrderId { get; private set; }
@@ -147,10 +146,9 @@ public sealed class AppState
         return true;
     }
 
-    public void SetBenchmarkWorkflowDeferral(bool enabled)
+    public void SetBenchmarkRouteDeferral(bool enabled)
     {
         DeferAutomaticProcurementReconciliationForBenchmark = enabled;
-        DeferAutomaticMarketAnalysisForBenchmark = enabled;
     }
 
     public void SelectTradeOrder(Guid? orderId)
