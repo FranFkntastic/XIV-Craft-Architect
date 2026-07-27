@@ -16,6 +16,7 @@
             EvidenceOverlay="_evidenceOverlay"
             SearchEntireRegion="_searchEntireRegion"
             SelectedRegion="@(_market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion)"
+            AnalysisRegions="@GetSelectedAnalysisRegions()"
             HasShoppingPlans="@(_market?.HasAnalysis == true)"
             SecretDebugToolsEnabled="_secretDebugToolsEnabled"
             IsAnalyzing="_isAnalyzing"

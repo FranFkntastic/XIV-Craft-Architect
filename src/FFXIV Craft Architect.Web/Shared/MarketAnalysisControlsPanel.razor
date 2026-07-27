@@ -39,7 +39,7 @@
             <MudText Typo="Typo.body2" Class="ma-region-toggle-text">Search entire region</MudText>
         </MudCheckBox>
         <MudText Typo="Typo.caption" Class="ma-region-toggle-caption">
-            Slower, but finds the best prices across all data centers in @SelectedRegion.
+            Slower, but finds the best prices across all data centers in @FormatAnalysisRegions().
         </MudText>
     </div>
 
@@ -101,6 +101,7 @@
         MarketAnalysisEvidenceOverlay.CompetitivenessOverlay;
     [Parameter] public bool SearchEntireRegion { get; set; }
     [Parameter] public string SelectedRegion { get; set; } = "North America";
+    [Parameter] public IReadOnlyList<string> AnalysisRegions { get; set; } = [];
     [Parameter] public string? ScopeWarning { get; set; }
     [Parameter] public bool HasShoppingPlans { get; set; }
     [Parameter] public bool SecretDebugToolsEnabled { get; set; }
@@ -117,6 +118,18 @@
     [Parameter] public EventCallback OnGoToProcurementRequested { get; set; }
 
     private const string LensSelectorTooltip = "Buying strategy changes how worlds are ranked without changing the listings CA found.";
+
+    private string FormatAnalysisRegions()
+    {
+        var regions = AnalysisRegions
+            .Where(region => !string.IsNullOrWhiteSpace(region))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return regions.Length == 0
+            ? SelectedRegion
+            : string.Join(" and ", regions);
+    }
+
     private static readonly IReadOnlyList<CompactSelectOption> LensOptions =
     [
         new(nameof(MarketAcquisitionLens.MinimumUpfrontCost), "Lowest upfront cost"),
