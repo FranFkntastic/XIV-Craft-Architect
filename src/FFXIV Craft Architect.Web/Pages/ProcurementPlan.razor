@@ -16,6 +16,7 @@
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
 @inject AppState AppState
+@inject CancellableOperationService Operations
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 pp-page-container">
@@ -127,6 +128,8 @@
 
     private bool CanAnalyze =>
         !_isAnalyzing &&
+        !Operations.ActiveWorkflows.Contains(
+            CancellableOperationWorkflow.PlanDerivation) &&
         _route?.HasMarketEvidence == true &&
         _route.ActiveItemCount > 0;
 
@@ -137,6 +140,7 @@
     protected override async Task OnInitializedAsync()
     {
         WorkerProjections.Changed += ProjectionChanged;
+        AppState.OnStatusChanged += OperationStatusChanged;
         if (WorkerProjections.Procurement is { } retained &&
             retained.Revision == WorkerProjections.Shell.Revision)
         {
@@ -212,6 +216,9 @@
         ApplyRouteSettings();
         _ = InvokeAsync(StateHasChanged);
     }
+
+    private void OperationStatusChanged() =>
+        _ = InvokeAsync(StateHasChanged);
 
     private async Task RefreshProjectionsAsync(long revision)
     {
@@ -1086,6 +1093,7 @@
     public void Dispose()
     {
         WorkerProjections.Changed -= ProjectionChanged;
+        AppState.OnStatusChanged -= OperationStatusChanged;
         MarketMafiosoIntegrationState.Changed -= OnMarketMafiosoIntegrationChanged;
         _marketMafiosoMonitorCancellation?.Cancel();
         _marketMafiosoMonitorCancellation?.Dispose();

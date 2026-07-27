@@ -21,6 +21,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     private readonly IMarketCacheService _marketCache;
     private readonly IUniversalisService _universalis;
     private readonly SemaphoreSlim _marketAnalysisGate = new(1, 1);
+    private readonly SemaphoreSlim _procurementGate = new(1, 1);
     private readonly SemaphoreSlim _crossTabProjectionGate = new(1, 1);
     private bool _disposed;
 
@@ -941,6 +942,25 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         CancellationToken cancellationToken = default,
         Action<string, double?>? reportStatus = null)
     {
+        await _procurementGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await RunProcurementCoreAsync(
+                request,
+                cancellationToken,
+                reportStatus);
+        }
+        finally
+        {
+            _procurementGate.Release();
+        }
+    }
+
+    private async Task<WorkerProcurementOutcome> RunProcurementCoreAsync(
+        WorkerProcurementRequest request,
+        CancellationToken cancellationToken,
+        Action<string, double?>? reportStatus)
+    {
         reportStatus?.Invoke(
             "Comparing travel and price tradeoffs...",
             70);
@@ -1023,20 +1043,28 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         int travelTolerance,
         CancellationToken cancellationToken = default)
     {
-        var result = await _engineHost.SelectProcurementToleranceAsync(
-            _projections.Shell.Revision,
-            travelTolerance,
-            cancellationToken);
-        if (!_projections.TryPublishMutation<WorkerProcurementProjection>(
-                result,
-                out var procurement) ||
-            procurement is null)
+        await _procurementGate.WaitAsync(cancellationToken);
+        try
         {
-            await RefreshAfterConflictAsync(result, cancellationToken);
-            throw CreateConflict(result);
-        }
+            var result = await _engineHost.SelectProcurementToleranceAsync(
+                _projections.Shell.Revision,
+                travelTolerance,
+                cancellationToken);
+            if (!_projections.TryPublishMutation<WorkerProcurementProjection>(
+                    result,
+                    out var procurement) ||
+                procurement is null)
+            {
+                await RefreshAfterConflictAsync(result, cancellationToken);
+                throw CreateConflict(result);
+            }
 
-        return procurement;
+            return procurement;
+        }
+        finally
+        {
+            _procurementGate.Release();
+        }
     }
 
     private async Task RefreshAfterConflictAsync(

@@ -503,12 +503,12 @@ workflow: try {
   }
 
   setPhase('application-startup');
-  await withDeadline('navigate to application', () => page.goto(`${url}?benchmark-defer-route=1`, { waitUntil: 'networkidle' }), budgets.importMs);
+  await withDeadline('navigate to application', () => page.goto(url, { waitUntil: 'networkidle' }), budgets.importMs);
   await withDeadline('wait for IndexedDB module', () => page.waitForFunction(() => window.IndexedDB?.moduleRevision === 19), budgets.importMs);
   stage('app-ready', { moduleRevision: await withDeadline('read IndexedDB module revision', () => page.evaluate(() => window.IndexedDB.moduleRevision)) });
   await withDeadline('enable benchmark settings', () => page.evaluate(async () => {
     await window.IndexedDB.saveSetting('debug.secret_tools_enabled', 'true');
-    await window.IndexedDB.saveSetting('debug.defer_automatic_route_reconciliation', 'true');
+    await window.IndexedDB.saveSetting('debug.defer_automatic_route_reconciliation', 'false');
   }));
   await withDeadline('reload benchmark settings', () => page.reload({ waitUntil: 'networkidle' }), budgets.importMs);
   await withDeadline('clear market cache', () => page.evaluate(() => window.IndexedDB.clearMarketCache()));
@@ -609,6 +609,26 @@ workflow: try {
     stage('test-only-deterministic-engine-evidence-selected');
   }
 
+  if (evidenceMode === 'seeded') {
+    const automaticProcurementLifecycle = await waitForLifecycle(
+      'automatic-procurement-publication',
+      budgets.routeReturnMs,
+      snapshot => {
+        const data = snapshot?.data;
+        return data &&
+          data.routeValidity === 'Current' &&
+          data.routeHasDecision === 'true' &&
+          data.isBusy === 'false' &&
+          !data.currentOperation &&
+          !data.activeWorkflows &&
+          !data.dirtyPersistedBuckets;
+      });
+    stage('automatic-procurement-published', {
+      lifecycle: automaticProcurementLifecycle
+    });
+    await writeReport(true);
+  }
+
   if (executionMode === 'engine') {
     setPhase('engine-worker-transaction');
     const probe = page.locator('[data-benchmark-id="engine-transaction-acceptance"]');
@@ -701,12 +721,6 @@ workflow: try {
     stage('engine-worker-transaction-settled', { engineEvidence });
     await writeReport(true);
   } else {
-    await withDeadline('open procurement plan', () => page.getByRole('button', { name: 'Procurement Plan', exact: true }).click());
-    const routeButton = page.locator('.pp-primary-action');
-    await withDeadline('wait for route button', () => routeButton.waitFor({ state: 'visible' }));
-    await withDeadline('start route generation', () => routeButton.click());
-    stage('explicit-route-generation-started');
-    await writeReport(true);
     await waitForFullSettlement();
   }
 
@@ -792,10 +806,6 @@ workflow: try {
   await writeReport(true);
 
   setPhase('reload-restoration');
-  if (executionMode === 'legacy') {
-    await withDeadline('reenable automatic route reconciliation', () => page.evaluate(
-      () => window.IndexedDB.saveSetting('debug.defer_automatic_route_reconciliation', 'false')));
-  }
   await withDeadline('reload application', () => page.goto(url, { waitUntil: 'networkidle' }), budgets.reloadMs);
   await withDeadline('wait for startup restoration', () => page.locator('.startup-overlay').waitFor({
     state: 'detached',
