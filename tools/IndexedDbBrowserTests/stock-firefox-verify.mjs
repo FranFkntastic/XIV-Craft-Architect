@@ -283,6 +283,13 @@ async function openApplication() {
     () => driver.executeScript(
       () => window.IndexedDB?.moduleRevision === 19),
     120_000);
+  await waitFor(
+    'initial startup overlay completion',
+    async () => {
+      const overlays = await driver.findElements(By.css('.startup-overlay'));
+      return overlays.length === 0 || !await overlays[0].isDisplayed();
+    },
+    120_000);
   stage('application-ready', {
     durationMs: Math.round(performance.now() - startupStarted)
   });
