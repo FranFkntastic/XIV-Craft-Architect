@@ -41,7 +41,7 @@
             StartFromHomeDataCenter="_startFromHomeDataCenter"
             TemporaryWorldBlacklistDurationMinutes="_worldExclusionDurationMinutes"
             ActiveTemporaryExclusionCount="@ActiveTemporaryExclusionCount"
-            RouteGenerationEnabled="true"
+            RouteGenerationEnabled="@(!HasActiveWorkerOperation)"
             IsAnalyzing="_isAnalyzing"
             CanAnalyze="CanAnalyze"
             PrimaryActionLabel="@GetPrimaryActionLabel()"
@@ -127,13 +127,12 @@
 
     private bool CanAnalyze =>
         !_isAnalyzing &&
-        WorkerProjections.Operation is not
-        {
-            IsActive: true,
-            Kind: WorkerSessionOperationKind.PlanDerivation
-        } &&
+        !HasActiveWorkerOperation &&
         _route?.HasMarketEvidence == true &&
         _route.ActiveItemCount > 0;
+
+    private bool HasActiveWorkerOperation =>
+        WorkerProjections.Operation?.IsActive == true;
 
     private bool CanExportCraftQuote =>
         !_isAnalyzing &&
@@ -487,6 +486,11 @@
 
     private async Task ReanalyzeWithoutWorldAsync(WorldProcurementCardModel world)
     {
+        if (HasActiveWorkerOperation)
+        {
+            return;
+        }
+
         var confirmed = await DialogService.ShowMessageBox(
             $"Skip travel to {world.WorldName}?",
             $"Remove {world.WorldName} as a route stop and generate a replacement route?",
@@ -511,6 +515,11 @@
 
     private async Task ExcludeWorldForItemAsync(WorldItemProcurementAction action)
     {
+        if (HasActiveWorkerOperation)
+        {
+            return;
+        }
+
         var world = action.World;
         var item = action.Item;
         var confirmed = await DialogService.ShowMessageBox(
@@ -538,6 +547,11 @@
 
     private async Task UndoLastExclusionAsync()
     {
+        if (HasActiveWorkerOperation)
+        {
+            return;
+        }
+
         if (_lastExclusion is not { } exclusion)
         {
             return;
@@ -560,7 +574,7 @@
 
     private async Task ClearExclusionsAsync()
     {
-        if (ActiveTemporaryExclusionCount == 0)
+        if (HasActiveWorkerOperation || ActiveTemporaryExclusionCount == 0)
         {
             return;
         }
@@ -589,7 +603,7 @@
         WorldItemProcurementAction action,
         MarketWorldEvidenceSnapshot? observedEvidence)
     {
-        if (_route is null)
+        if (HasActiveWorkerOperation || _route is null)
         {
             return false;
         }

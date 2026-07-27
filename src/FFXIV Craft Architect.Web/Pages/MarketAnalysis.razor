@@ -21,6 +21,7 @@
             SecretDebugToolsEnabled="_secretDebugToolsEnabled"
             IsAnalyzing="_isAnalyzing"
             IsRefreshingPrices="_isRefreshingPrices"
+            DerivedOperationActive="HasActiveWorkerOperation"
             CanAnalyze="CanAnalyze"
             CanRefreshPrices="CanRefreshPrices"
             OnLensChangedRequested="OnLensChanged"
@@ -45,7 +46,7 @@
             SelectedItemId="_selectedItemId"
             ExpandedWorldKeys="_expandedWorldKeys"
             ShowWorldsColumn="_searchEntireRegion"
-            IsRefreshingItem="@(_isRefreshingSelectedItem || _isAnalyzing || _isRefreshingPrices)"
+            IsRefreshingItem="@(_isRefreshingSelectedItem || _isAnalyzing || _isRefreshingPrices || HasActiveWorkerOperation)"
             IsAnalyzing="_isAnalyzing"
             OnSelectedItemChanged="SelectMarketAnalysisItem"
             OnRefreshItemRequested="RefreshSelectedMarketItemAsync"
@@ -79,14 +80,19 @@
     private long _projectionRefreshRevision = -1;
     private readonly HashSet<MarketAnalysisExpandedWorldKey> _expandedWorldKeys = [];
 
+    private bool HasActiveWorkerOperation =>
+        WorkerProjections.Operation?.IsActive == true;
+
     private bool CanAnalyze =>
         !_isAnalyzing &&
+        !HasActiveWorkerOperation &&
         WorkerProjections.Shell.HasSession &&
         (_market?.CandidateCount ?? 0) > 0;
 
     private bool CanRefreshPrices =>
         !_isAnalyzing &&
         !_isRefreshingPrices &&
+        !HasActiveWorkerOperation &&
         WorkerProjections.Shell.HasSession &&
         _market?.HasAnalysis == true;
 
@@ -247,7 +253,7 @@
 
     private async Task OnLensChanged(MarketAcquisitionLens lens)
     {
-        if (_market?.HasAnalysis != true)
+        if (HasActiveWorkerOperation || _market?.HasAnalysis != true)
         {
             return;
         }

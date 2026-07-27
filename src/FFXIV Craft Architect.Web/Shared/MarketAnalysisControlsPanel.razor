@@ -16,6 +16,7 @@
                             Value="@Lens.ToString()"
                             ValueChanged="OnLensValueChanged"
                             Options="LensOptions"
+                            Disabled="DerivedOperationActive"
                             Tooltip="@LensSelectorTooltip"
                             Class="ma-full-width" />
     </div>
@@ -107,6 +108,7 @@
     [Parameter] public bool SecretDebugToolsEnabled { get; set; }
     [Parameter] public bool IsAnalyzing { get; set; }
     [Parameter] public bool IsRefreshingPrices { get; set; }
+    [Parameter] public bool DerivedOperationActive { get; set; }
     [Parameter] public bool CanAnalyze { get; set; }
     [Parameter] public bool CanRefreshPrices { get; set; }
 
