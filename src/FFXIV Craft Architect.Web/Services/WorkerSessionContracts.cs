@@ -15,7 +15,8 @@ public sealed record WorkerSessionCommandEnvelope(
     string ContractVersion,
     string CommandKind,
     long ExpectedRevision,
-    JsonElement Payload);
+    JsonElement Payload,
+    Guid? OperationId = null);
 
 public sealed record WorkerSessionResultEnvelope(
     string ContractVersion,
@@ -53,7 +54,8 @@ public sealed record WorkerSessionShellProjection(
     long PlanSessionVersion,
     AppStateVersionSnapshot Versions,
     string? RestoreWarning,
-    bool MigratedFromLegacy);
+    bool MigratedFromLegacy,
+    WorkerSessionOperationProjection? Operation = null);
 
 public sealed record WorkerSessionExportRequest(
     string PlanId,
@@ -66,6 +68,10 @@ public sealed record WorkerSessionExportProjection(
 
 public static class WorkerSessionCommandKinds
 {
+    public const string OperationBegin = "operation-begin";
+    public const string OperationRenew = "operation-renew";
+    public const string OperationComplete = "operation-complete";
+    public const string OperationAbort = "operation-abort";
     public const string RecipeProjection = "recipe-projection";
     public const string ProjectItemsMutation = "mutate-project-items";
     public const string PlanIdentityMutation = "mutate-plan-identity";
@@ -88,6 +94,41 @@ public static class WorkerSessionCommandKinds
     public static bool IsMutation(string commandKind) =>
         commandKind.StartsWith("mutate-", StringComparison.Ordinal);
 }
+
+public enum WorkerSessionOperationKind
+{
+    PlanDerivation,
+    MarketAnalysis,
+    ItemMarketRefresh,
+    ProcurementAnalysis,
+    TradeOrderPricing
+}
+
+public enum WorkerSessionOperationDisposition
+{
+    Acquired,
+    Current,
+    Busy,
+    Completed,
+    Aborted
+}
+
+public sealed record WorkerSessionOperationBeginRequest(
+    Guid OperationId,
+    WorkerSessionOperationKind Kind,
+    string IntentKey,
+    string StatusMessage);
+
+public sealed record WorkerSessionOperationControlRequest(Guid OperationId);
+
+public sealed record WorkerSessionOperationProjection(
+    Guid? OperationId,
+    WorkerSessionOperationKind? Kind,
+    string IntentKey,
+    long BaseRevision,
+    WorkerSessionOperationDisposition Disposition,
+    bool IsActive,
+    string StatusMessage);
 
 public sealed record WorkerTradeProjectionRequest(bool IncludeCraftLabor = false);
 

@@ -57,10 +57,14 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
     public async Task<WorkerRecipeBuildOutcome> BuildRecipeAsync(
         WorkerRecipeBuildRequest request,
         PlanDerivationDispatch derivation = PlanDerivationDispatch.Background,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null)
     {
         Cancel();
-        var result = await _worker.BuildRecipeAsync(request, cancellationToken);
+        var result = await _worker.BuildRecipeAsync(
+            request,
+            cancellationToken,
+            operationId);
         if (result.Built && derivation == PlanDerivationDispatch.Background)
         {
             Schedule(new PlanDerivationRequest(
@@ -74,13 +78,15 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         StoredPlan storedPlan,
         bool trackStoredPlanIdentity,
         PlanDerivationDispatch derivation = PlanDerivationDispatch.Background,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null)
     {
         Cancel();
         await _worker.ReplaceStoredPlanAsync(
             storedPlan,
             trackStoredPlanIdentity,
-            cancellationToken);
+            cancellationToken,
+            operationId);
         if (derivation == PlanDerivationDispatch.Background)
         {
             Schedule();
@@ -114,7 +120,59 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         PlanDerivationRequest request,
         CancellationToken cancellationToken = default,
         Action<string, double?>? reportStatus = null,
-        Func<bool>? isCurrent = null)
+        Func<bool>? isCurrent = null,
+        Guid? operationId = null)
+    {
+        WorkerSessionOperationLease? ownedOperation = null;
+        try
+        {
+            if (operationId is null)
+            {
+                ownedOperation = await _worker.BeginOperationAsync(
+                    WorkerSessionOperationKind.PlanDerivation,
+                    $"plan-derivation:{_worker.CurrentRevision}",
+                    "Updating plan prices and route...",
+                    cancellationToken);
+                operationId = ownedOperation.OperationId;
+            }
+
+            var result = await EnsureDerivedCoreAsync(
+                request,
+                operationId.Value,
+                cancellationToken,
+                reportStatus,
+                () =>
+                    (isCurrent?.Invoke() ?? true) &&
+                    (ownedOperation?.IsCurrent ?? true));
+            if (ownedOperation is not null)
+            {
+                await ownedOperation.CompleteAsync(cancellationToken);
+            }
+            return result;
+        }
+        catch
+        {
+            if (ownedOperation is not null)
+            {
+                await ownedOperation.AbortAsync(CancellationToken.None);
+            }
+            throw;
+        }
+        finally
+        {
+            if (ownedOperation is not null)
+            {
+                await ownedOperation.DisposeAsync();
+            }
+        }
+    }
+
+    private async Task<PlanDerivationResult> EnsureDerivedCoreAsync(
+        PlanDerivationRequest request,
+        Guid operationId,
+        CancellationToken cancellationToken,
+        Action<string, double?>? reportStatus,
+        Func<bool>? isCurrent)
     {
         ArgumentNullException.ThrowIfNull(request);
         isCurrent ??= static () => true;
@@ -176,7 +234,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                     selectedDataCenter,
                     selectedRegion,
                     marketScope),
-                cancellationToken);
+                cancellationToken,
+                operationId);
             market = await _worker.GetMarketProjectionAsync(cancellationToken);
             marketContextChanged = false;
         }
@@ -223,7 +282,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                                 selectedRegion,
                                 market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
                                 RequestedDataCenters: requestedDataCenters),
-                            cancellationToken);
+                            cancellationToken,
+                            operationId);
                         analyzedCount++;
                         fetchedCount++;
                         marketChanged = true;
@@ -251,7 +311,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                         market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
                         SelectedRegions: selectedRegions),
                     cancellationToken,
-                    reportStatus);
+                    reportStatus,
+                    operationId);
                 market = outcome.Market;
                 marketPublished = outcome.Published;
                 analyzedCount = outcome.AnalyzedCount;
@@ -322,7 +383,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                             _settings.ProcurementStartFromHomeDataCenter,
                             _settings.ProcurementTravelPriority),
                         cancellationToken,
-                        reportStatus);
+                        reportStatus,
+                        operationId);
                     procurementPublished = outcome.Procurement.HasRoute;
                 }
                 catch (InvalidOperationException ex)
@@ -365,6 +427,10 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                 operation.Complete("Ready");
             }
             catch (OperationCanceledException) when (run.IsCancellationRequested)
+            {
+                operation.Cancel();
+            }
+            catch (WorkerSessionOperationBusyException)
             {
                 operation.Cancel();
             }

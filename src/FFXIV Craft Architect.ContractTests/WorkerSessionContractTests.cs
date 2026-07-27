@@ -141,6 +141,36 @@ public sealed class WorkerSessionContractTests
         Assert.True(marketProjection.HasPlan);
         Assert.False(marketProjection.HasAnalysis);
 
+        var marketOperationId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var marketOperation = await SendAsync(
+            WorkerSessionCommandKinds.OperationBegin,
+            expectedRevision: 2,
+            new WorkerSessionOperationBeginRequest(
+                marketOperationId,
+                WorkerSessionOperationKind.MarketAnalysis,
+                "market:2",
+                "Analyzing market prices..."),
+            marketOperationId);
+        Assert.True(marketOperation.Accepted);
+        Assert.Equal(
+            marketOperationId,
+            marketOperation.Projection
+                .Deserialize<WorkerSessionShellProjection>(WireOptions)?
+                .Operation?
+                .OperationId);
+        var blockedOperation = await SendAsync(
+            WorkerSessionCommandKinds.OperationBegin,
+            expectedRevision: 2,
+            new WorkerSessionOperationBeginRequest(
+                Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+                WorkerSessionOperationKind.ProcurementAnalysis,
+                "procurement:2",
+                "Building your procurement route..."));
+        var blockedShell = blockedOperation.Projection
+            .Deserialize<WorkerSessionShellProjection>(WireOptions);
+        Assert.Equal(WorkerSessionOperationDisposition.Busy, blockedShell?.Operation?.Disposition);
+        Assert.Equal(marketOperationId, blockedShell?.Operation?.OperationId);
+
         var world = new WorldShoppingSummary
         {
             DataCenter = "Aether",
@@ -210,7 +240,8 @@ public sealed class WorkerSessionContractTests
                 new HashSet<int> { 42 },
                 FetchedCount: 1,
                 ResetStaging: true,
-                CompleteStaging: false));
+                CompleteStaging: false),
+            marketOperationId);
         Assert.True(staged.Accepted);
         Assert.Equal(2, staged.Revision);
 
@@ -229,7 +260,8 @@ public sealed class WorkerSessionContractTests
                 new HashSet<int>(),
                 FetchedCount: 0,
                 ResetStaging: true,
-                CompleteStaging: false));
+                CompleteStaging: false),
+            marketOperationId);
         Assert.True(interleaved.Accepted);
 
         var completed = await SendAsync(
@@ -246,7 +278,8 @@ public sealed class WorkerSessionContractTests
                 [],
                 new HashSet<int>(),
                 FetchedCount: 0,
-                CompleteStaging: true));
+                CompleteStaging: true),
+            marketOperationId);
         Assert.True(completed.Accepted, completed.Message);
         Assert.Equal(3, completed.Revision);
         var accepted =
@@ -262,6 +295,13 @@ public sealed class WorkerSessionContractTests
                 WireOptions);
         Assert.NotNull(published);
         Assert.Equal(2, published.AnalyzedCount);
+
+        var marketOperationCompleted = await SendAsync(
+            WorkerSessionCommandKinds.OperationComplete,
+            expectedRevision: 3,
+            new WorkerSessionOperationControlRequest(marketOperationId),
+            marketOperationId);
+        Assert.True(marketOperationCompleted.Accepted);
 
         var projectionStore = new WorkerProjectionStore();
         Assert.True(projectionStore.TryPublish(staged));
@@ -357,6 +397,19 @@ public sealed class WorkerSessionContractTests
         Assert.True(procurementProjection.HasPlan);
         Assert.False(procurementProjection.HasRoute);
 
+        var procurementOperationId =
+            Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var procurementOperation = await SendAsync(
+            WorkerSessionCommandKinds.OperationBegin,
+            expectedRevision: 3,
+            new WorkerSessionOperationBeginRequest(
+                procurementOperationId,
+                WorkerSessionOperationKind.ProcurementAnalysis,
+                "procurement:3",
+                "Building your procurement route..."),
+            procurementOperationId);
+        Assert.True(procurementOperation.Accepted);
+
         var generatedRoute = await SendAsync(
             WorkerSessionCommandKinds.ProcurementRun,
             expectedRevision: 3,
@@ -368,7 +421,8 @@ public sealed class WorkerSessionContractTests
                 TravelTolerance: 0,
                 IncludeSplitPurchases: true,
                 StartFromHomeDataCenter: false,
-                MarketTravelPriority.DataCenterTransfersFirst));
+                MarketTravelPriority.DataCenterTransfersFirst),
+            procurementOperationId);
         Assert.True(generatedRoute.Accepted, generatedRoute.Message);
         Assert.Equal(4, generatedRoute.Revision);
         var generatedMutation =
@@ -385,7 +439,8 @@ public sealed class WorkerSessionContractTests
         var selectedTolerance = await SendAsync(
             WorkerSessionCommandKinds.ProcurementToleranceMutation,
             expectedRevision: 4,
-            new WorkerProcurementToleranceMutation(11));
+            new WorkerProcurementToleranceMutation(11),
+            procurementOperationId);
         Assert.True(selectedTolerance.Accepted, selectedTolerance.Message);
         Assert.Equal(5, selectedTolerance.Revision);
         var toleranceMutation =
@@ -394,6 +449,13 @@ public sealed class WorkerSessionContractTests
         Assert.False(toleranceMutation.DurablePatch?.ReplaceProcurementRoute);
         Assert.Null(toleranceMutation.DurablePatch?.ProcurementRouteJson);
         Assert.Equal(11, toleranceMutation.DurablePatch?.ProcurementTravelTolerance);
+
+        var procurementOperationCompleted = await SendAsync(
+            WorkerSessionCommandKinds.OperationComplete,
+            expectedRevision: 5,
+            new WorkerSessionOperationControlRequest(procurementOperationId),
+            procurementOperationId);
+        Assert.True(procurementOperationCompleted.Accepted);
 
         var identified = await SendAsync(
             WorkerSessionCommandKinds.PlanIdentityMutation,
@@ -512,14 +574,16 @@ public sealed class WorkerSessionContractTests
     private static async Task<WorkerSessionResultEnvelope> SendAsync<TPayload>(
         string commandKind,
         long expectedRevision,
-        TPayload payload)
+        TPayload payload,
+        Guid? operationId = null)
     {
         var commandId = Guid.NewGuid();
         var command = new WorkerSessionCommandEnvelope(
             WorkerSessionProtocol.ContractVersion,
             commandKind,
             expectedRevision,
-            JsonSerializer.SerializeToElement(payload, WireOptions));
+            JsonSerializer.SerializeToElement(payload, WireOptions),
+            operationId);
         var message = new EngineWorkerMessage(
             EngineWorkerClient.ProtocolVersion,
             WorkerSessionProtocol.CommandMessageKind,

@@ -27,9 +27,12 @@ public static partial class ManagedHost
     private static WorkerCanonicalSession _canonicalSession = new();
     private static readonly Dictionary<Guid, PendingMarketEvidencePublication>
         PendingMarketEvidencePublications = [];
+    private static readonly TimeSpan OperationLeaseDuration = TimeSpan.FromMinutes(2);
     private static long _sessionRevision;
     private static string? _sessionRestoreWarning;
     private static bool _sessionMigratedFromLegacy;
+    private static ActiveWorkerSessionOperation? _activeOperation;
+    private static WorkerSessionOperationProjection? _operationProjection;
 
     [JSExport]
     [SupportedOSPlatform("browser")]
@@ -107,8 +110,21 @@ public static partial class ManagedHost
     {
         try
         {
+            if (PrepareOperationCommand(command) is { } operationRejection)
+            {
+                return operationRejection;
+            }
+
             return command.CommandKind switch
             {
+                WorkerSessionCommandKinds.OperationBegin =>
+                    BeginOperation(command),
+                WorkerSessionCommandKinds.OperationRenew =>
+                    RenewOperation(command),
+                WorkerSessionCommandKinds.OperationComplete =>
+                    CompleteOperation(command),
+                WorkerSessionCommandKinds.OperationAbort =>
+                    AbortOperation(command),
                 "restore" => RestoreSession(command),
                 "shell" => CreateSessionResult(
                     command.CommandKind,
@@ -192,6 +208,251 @@ public static partial class ManagedHost
                 CaptureShellProjection());
         }
     }
+
+    private static WorkerSessionResultEnvelope? PrepareOperationCommand(
+        WorkerSessionCommandEnvelope command)
+    {
+        ExpireOperationLease();
+        if (IsOperationCommand(command.CommandKind))
+        {
+            return null;
+        }
+
+        if (RequiresOperationAuthority(command.CommandKind))
+        {
+            if (_activeOperation is null)
+            {
+                return CreateSessionResult(
+                    command.CommandKind,
+                    accepted: false,
+                    "operation-required",
+                    "This work no longer owns the active plan operation.",
+                    CaptureShellProjection());
+            }
+            if (command.OperationId != _activeOperation.OperationId)
+            {
+                return CreateSessionResult(
+                    command.CommandKind,
+                    accepted: false,
+                    "operation-busy",
+                    _activeOperation.StatusMessage,
+                    CaptureShellProjection());
+            }
+
+            _activeOperation.LastRenewedUtc = DateTime.UtcNow;
+            _operationProjection = _operationProjection! with
+            {
+                Disposition = WorkerSessionOperationDisposition.Current,
+                IsActive = true
+            };
+            return null;
+        }
+
+        if (SupersedesDerivedOperation(command.CommandKind) &&
+            _activeOperation is not null &&
+            command.OperationId != _activeOperation.OperationId)
+        {
+            EndActiveOperation(
+                WorkerSessionOperationDisposition.Aborted,
+                "The plan changed before the previous update finished.");
+        }
+
+        return null;
+    }
+
+    private static WorkerSessionResultEnvelope BeginOperation(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request = command.Payload.Deserialize<WorkerSessionOperationBeginRequest>(
+            WireJsonOptions)
+            ?? throw new InvalidOperationException("Worker operation request is empty.");
+        if (request.OperationId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(request.IntentKey) ||
+            string.IsNullOrWhiteSpace(request.StatusMessage))
+        {
+            throw new InvalidOperationException(
+                "Worker operation identity and status are required.");
+        }
+
+        ExpireOperationLease();
+        if (_activeOperation is not null)
+        {
+            if (_activeOperation.OperationId == request.OperationId)
+            {
+                _activeOperation.LastRenewedUtc = DateTime.UtcNow;
+                _operationProjection = _operationProjection! with
+                {
+                    Disposition = WorkerSessionOperationDisposition.Current,
+                    IsActive = true
+                };
+            }
+            else
+            {
+                _operationProjection = new WorkerSessionOperationProjection(
+                    _activeOperation.OperationId,
+                    _activeOperation.Kind,
+                    _activeOperation.IntentKey,
+                    _activeOperation.BaseRevision,
+                    WorkerSessionOperationDisposition.Busy,
+                    IsActive: true,
+                    _activeOperation.StatusMessage);
+            }
+
+            return CreateSessionResult(
+                command.CommandKind,
+                accepted: true,
+                null,
+                null,
+                CaptureShellProjection());
+        }
+
+        _activeOperation = new ActiveWorkerSessionOperation(
+            request.OperationId,
+            request.Kind,
+            request.IntentKey.Trim(),
+            _sessionRevision,
+            request.StatusMessage.Trim(),
+            DateTime.UtcNow);
+        _operationProjection = new WorkerSessionOperationProjection(
+            request.OperationId,
+            request.Kind,
+            request.IntentKey.Trim(),
+            _sessionRevision,
+            WorkerSessionOperationDisposition.Acquired,
+            IsActive: true,
+            request.StatusMessage.Trim());
+        return CreateSessionResult(
+            command.CommandKind,
+            accepted: true,
+            null,
+            null,
+            CaptureShellProjection());
+    }
+
+    private static WorkerSessionResultEnvelope RenewOperation(
+        WorkerSessionCommandEnvelope command)
+    {
+        var request = command.Payload.Deserialize<WorkerSessionOperationControlRequest>(
+            WireJsonOptions)
+            ?? throw new InvalidOperationException("Worker operation renewal is empty.");
+        ExpireOperationLease();
+        if (_activeOperation?.OperationId != request.OperationId)
+        {
+            return CreateSessionResult(
+                command.CommandKind,
+                accepted: false,
+                "operation-superseded",
+                "This operation no longer owns the active plan.",
+                CaptureShellProjection());
+        }
+
+        _activeOperation.LastRenewedUtc = DateTime.UtcNow;
+        _operationProjection = _operationProjection! with
+        {
+            Disposition = WorkerSessionOperationDisposition.Current,
+            IsActive = true
+        };
+        return CreateSessionResult(
+            command.CommandKind,
+            accepted: true,
+            null,
+            null,
+            CaptureShellProjection());
+    }
+
+    private static WorkerSessionResultEnvelope CompleteOperation(
+        WorkerSessionCommandEnvelope command) =>
+        EndOperation(command, WorkerSessionOperationDisposition.Completed, "Ready");
+
+    private static WorkerSessionResultEnvelope AbortOperation(
+        WorkerSessionCommandEnvelope command) =>
+        EndOperation(command, WorkerSessionOperationDisposition.Aborted, "Ready");
+
+    private static WorkerSessionResultEnvelope EndOperation(
+        WorkerSessionCommandEnvelope command,
+        WorkerSessionOperationDisposition disposition,
+        string statusMessage)
+    {
+        var request = command.Payload.Deserialize<WorkerSessionOperationControlRequest>(
+            WireJsonOptions)
+            ?? throw new InvalidOperationException("Worker operation completion is empty.");
+        ExpireOperationLease();
+        if (_activeOperation?.OperationId != request.OperationId)
+        {
+            return CreateSessionResult(
+                command.CommandKind,
+                accepted: false,
+                "operation-superseded",
+                "This operation no longer owns the active plan.",
+                CaptureShellProjection());
+        }
+
+        EndActiveOperation(disposition, statusMessage);
+        return CreateSessionResult(
+            command.CommandKind,
+            accepted: true,
+            null,
+            null,
+            CaptureShellProjection());
+    }
+
+    private static void EndActiveOperation(
+        WorkerSessionOperationDisposition disposition,
+        string statusMessage)
+    {
+        if (_activeOperation is null)
+        {
+            return;
+        }
+
+        _operationProjection = new WorkerSessionOperationProjection(
+            _activeOperation.OperationId,
+            _activeOperation.Kind,
+            _activeOperation.IntentKey,
+            _activeOperation.BaseRevision,
+            disposition,
+            IsActive: false,
+            statusMessage);
+        _activeOperation = null;
+    }
+
+    private static void ExpireOperationLease()
+    {
+        if (_activeOperation is not null &&
+            DateTime.UtcNow - _activeOperation.LastRenewedUtc > OperationLeaseDuration)
+        {
+            EndActiveOperation(
+                WorkerSessionOperationDisposition.Aborted,
+                "The previous update expired before it finished.");
+        }
+    }
+
+    private static bool IsOperationCommand(string commandKind) =>
+        commandKind is
+            WorkerSessionCommandKinds.OperationBegin or
+            WorkerSessionCommandKinds.OperationRenew or
+            WorkerSessionCommandKinds.OperationComplete or
+            WorkerSessionCommandKinds.OperationAbort;
+
+    private static bool RequiresOperationAuthority(string commandKind) =>
+        commandKind is
+            WorkerSessionCommandKinds.MarketAnalysisRun or
+            WorkerSessionCommandKinds.MarketEvidencePublicationStage or
+            WorkerSessionCommandKinds.MarketEvidencePublication or
+            WorkerSessionCommandKinds.MarketItemEvidencePublication or
+            WorkerSessionCommandKinds.MarketItemRefresh or
+            WorkerSessionCommandKinds.MarketLensMutation or
+            WorkerSessionCommandKinds.ProcurementRun or
+            WorkerSessionCommandKinds.ProcurementToleranceMutation;
+
+    private static bool SupersedesDerivedOperation(string commandKind) =>
+        commandKind is
+            "restore" or
+            WorkerSessionCommandKinds.ProjectItemsMutation or
+            WorkerSessionCommandKinds.PlanIdentityMutation or
+            WorkerSessionCommandKinds.ActiveContextMutation or
+            WorkerSessionCommandKinds.RecipeBuild or
+            WorkerSessionCommandKinds.AcquisitionMutation;
 
     private static WorkerSessionResultEnvelope RestoreSession(
         WorkerSessionCommandEnvelope command)
@@ -1764,7 +2025,14 @@ public static partial class ManagedHost
                 versions.SettingsContext,
                 versions.ViewState),
             _sessionRestoreWarning,
-            _sessionMigratedFromLegacy);
+            _sessionMigratedFromLegacy,
+            CaptureOperationProjection());
+    }
+
+    private static WorkerSessionOperationProjection? CaptureOperationProjection()
+    {
+        ExpireOperationLease();
+        return _operationProjection;
     }
 
     private static int CountPlanNodes(CraftingPlan? plan)
@@ -1855,6 +2123,22 @@ public static partial class ManagedHost
                     "Market-evidence publication staging context changed before completion.");
             }
         }
+    }
+
+    private sealed class ActiveWorkerSessionOperation(
+        Guid operationId,
+        WorkerSessionOperationKind kind,
+        string intentKey,
+        long baseRevision,
+        string statusMessage,
+        DateTime lastRenewedUtc)
+    {
+        public Guid OperationId { get; } = operationId;
+        public WorkerSessionOperationKind Kind { get; } = kind;
+        public string IntentKey { get; } = intentKey;
+        public long BaseRevision { get; } = baseRevision;
+        public string StatusMessage { get; } = statusMessage;
+        public DateTime LastRenewedUtc { get; set; } = lastRenewedUtc;
     }
 
     private sealed class WorkerRecipeLayerWorkflow : ICoreRecipeLayerWorkflowService

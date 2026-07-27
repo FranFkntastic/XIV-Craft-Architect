@@ -14,13 +14,6 @@ public enum EngineCommandPriority
     Maintenance = 3
 }
 
-public sealed record CraftArchitectEngineHostHealth(
-    EngineWorkerLifecycleState State,
-    long Generation,
-    string? WorkerInstanceId,
-    int PendingCommandCount,
-    bool IsExecuting);
-
 /// <summary>
 /// Application-scoped owner of the managed browser Worker.
 ///
@@ -42,9 +35,7 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             .Select(_ => new Queue<QueuedCommand>())
             .ToArray();
     private bool _queuePumpActive;
-    private bool _isExecuting;
     private bool _disposed;
-    private long _commandSequence;
 
     public CraftArchitectEngineHost(
         CraftArchitectEngineCapability capability,
@@ -64,32 +55,6 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
     internal EngineWorkerResultTiming? WorkerResultTiming => _client.LastResultTiming;
 
     public event EventHandler<WorkerSessionShellProjection>? CrossTabSessionProjectionReceived;
-
-    public CraftArchitectEngineHostHealth Health
-    {
-        get
-        {
-            lock (_queueSync)
-            {
-                return new CraftArchitectEngineHostHealth(
-                    _client.State,
-                    _client.Capability?.Generation ?? 0,
-                    _client.Capability?.WorkerInstanceId,
-                    _queues.Sum(queue => queue.Count),
-                    _isExecuting);
-            }
-        }
-    }
-
-    public Task CancelAsync(
-        string reason = "The active engine command was cancelled.",
-        CancellationToken cancellationToken = default)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        return _client.State is EngineWorkerLifecycleState.Running or EngineWorkerLifecycleState.Cancelling
-            ? _client.CancelAsync(reason, cancellationToken)
-            : Task.CompletedTask;
-    }
 
     public Task RestartAsync(CancellationToken cancellationToken = default) =>
         EnqueueAsync(
@@ -120,17 +85,67 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             EngineCommandPriority.Interactive,
             cancellationToken);
 
+    public Task<WorkerSessionResultEnvelope> BeginOperationAsync(
+        long expectedRevision,
+        WorkerSessionOperationBeginRequest request,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.OperationBegin,
+            expectedRevision,
+            request,
+            EngineCommandPriority.Interactive,
+            cancellationToken,
+            request.OperationId);
+
+    public Task<WorkerSessionResultEnvelope> RenewOperationAsync(
+        long expectedRevision,
+        Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.OperationRenew,
+            expectedRevision,
+            new WorkerSessionOperationControlRequest(operationId),
+            EngineCommandPriority.Interactive,
+            cancellationToken,
+            operationId);
+
+    public Task<WorkerSessionResultEnvelope> CompleteOperationAsync(
+        long expectedRevision,
+        Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.OperationComplete,
+            expectedRevision,
+            new WorkerSessionOperationControlRequest(operationId),
+            EngineCommandPriority.Interactive,
+            cancellationToken,
+            operationId);
+
+    public Task<WorkerSessionResultEnvelope> AbortOperationAsync(
+        long expectedRevision,
+        Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        EnqueueSessionCommandAsync(
+            WorkerSessionCommandKinds.OperationAbort,
+            expectedRevision,
+            new WorkerSessionOperationControlRequest(operationId),
+            EngineCommandPriority.Interactive,
+            cancellationToken,
+            operationId);
+
     public Task<WorkerSessionResultEnvelope> ReplaceSessionAsync(
         long expectedRevision,
         StoredPlan? storedPlan,
         bool trackStoredPlanIdentity,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             "replace",
             expectedRevision,
             new WorkerSessionReplacePayload(storedPlan, trackStoredPlanIdentity),
             EngineCommandPriority.Persistence,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> ExportSessionAsync(
         long expectedRevision,
@@ -178,35 +193,41 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
     public Task<WorkerSessionResultEnvelope> MutatePlanIdentityAsync(
         long expectedRevision,
         WorkerPlanIdentityMutation mutation,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.PlanIdentityMutation,
             expectedRevision,
             mutation,
             EngineCommandPriority.Persistence,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> MutateActiveContextAsync(
         long expectedRevision,
         WorkerActiveContextMutation mutation,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.ActiveContextMutation,
             expectedRevision,
             mutation,
             EngineCommandPriority.UserRequestedDerivation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> BuildRecipeAsync(
         long expectedRevision,
         WorkerRecipeBuildRequest request,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.RecipeBuild,
             expectedRevision,
             request,
             EngineCommandPriority.UserRequestedDerivation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> MutateAcquisitionAsync(
         long expectedRevision,
@@ -234,68 +255,80 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
     public Task<WorkerSessionResultEnvelope> RunMarketAnalysisAsync(
         long expectedRevision,
         WorkerMarketAnalysisRequest request,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.MarketAnalysisRun,
             expectedRevision,
             request,
             EngineCommandPriority.UserRequestedDerivation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> PublishMarketEvidenceAsync(
         long expectedRevision,
         WorkerMarketEvidencePublicationRequest request,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.MarketEvidencePublication,
             expectedRevision,
             request,
             EngineCommandPriority.UserRequestedDerivation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> StageMarketEvidenceAsync(
         long expectedRevision,
         WorkerMarketEvidencePublicationRequest request,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.MarketEvidencePublicationStage,
             expectedRevision,
             request,
             EngineCommandPriority.UserRequestedDerivation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> ApplyMarketLensAsync(
         long expectedRevision,
         WorkerMarketLensMutation mutation,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.MarketLensMutation,
             expectedRevision,
             mutation,
             EngineCommandPriority.UserRequestedDerivation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> RefreshMarketItemAsync(
         long expectedRevision,
         WorkerMarketItemRefreshRequest request,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.MarketItemRefresh,
             expectedRevision,
             request,
             EngineCommandPriority.UserRequestedDerivation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> PublishMarketItemEvidenceAsync(
         long expectedRevision,
         WorkerMarketItemEvidencePublicationRequest request,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.MarketItemEvidencePublication,
             expectedRevision,
             request,
             EngineCommandPriority.UserRequestedDerivation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> GetProcurementProjectionAsync(
         long expectedRevision,
@@ -323,31 +356,36 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
     public Task<WorkerSessionResultEnvelope> RunProcurementAsync(
         long expectedRevision,
         WorkerProcurementRequest request,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.ProcurementRun,
             expectedRevision,
             request,
             EngineCommandPriority.UserRequestedDerivation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> SelectProcurementToleranceAsync(
         long expectedRevision,
         int travelTolerance,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.ProcurementToleranceMutation,
             expectedRevision,
             new WorkerProcurementToleranceMutation(travelTolerance),
             EngineCommandPriority.Interactive,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     private Task<WorkerSessionResultEnvelope> EnqueueSessionCommandAsync<TPayload>(
         string commandKind,
         long expectedRevision,
         TPayload payload,
         EngineCommandPriority priority,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? operationId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_capability.IsExecutionEnabled)
@@ -360,7 +398,8 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
                 commandKind,
                 expectedRevision,
                 payload,
-                token),
+                token,
+                operationId),
             cancellationToken);
     }
 
@@ -368,7 +407,8 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
         string commandKind,
         long expectedRevision,
         TPayload payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? operationId)
     {
         var capability = await _client.StartAsync(cancellationToken);
         if (!capability.ExecutionSupported)
@@ -388,7 +428,8 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             WorkerSessionProtocol.ContractVersion,
             commandKind,
             expectedRevision,
-            JsonSerializer.SerializeToElement(payload, EngineJsonSerializerOptions.CreateWire()));
+            JsonSerializer.SerializeToElement(payload, EngineJsonSerializerOptions.CreateWire()),
+            operationId);
         var message = new EngineWorkerMessage(
             EngineWorkerClient.ProtocolVersion,
             WorkerSessionProtocol.CommandMessageKind,
@@ -497,8 +538,6 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
         var completion = new TaskCompletionSource<object?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var queued = new QueuedCommand(
-            Interlocked.Increment(ref _commandSequence),
-            priority,
             async token => await action(token),
             completion,
             cancellationToken);
@@ -532,10 +571,8 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
                 if (command is null)
                 {
                     _queuePumpActive = false;
-                    _isExecuting = false;
                     return;
                 }
-                _isExecuting = true;
             }
 
             if (command.Completion.Task.IsCompleted)
@@ -560,10 +597,6 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
             finally
             {
                 command.Dispose();
-                lock (_queueSync)
-                {
-                    _isExecuting = false;
-                }
             }
         }
     }
@@ -623,16 +656,12 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
     }
 
     private sealed class QueuedCommand(
-        long sequence,
-        EngineCommandPriority priority,
         Func<CancellationToken, Task<object?>> action,
         TaskCompletionSource<object?> completion,
         CancellationToken cancellationToken) : IDisposable
     {
         private CancellationTokenRegistration _registration;
 
-        public long Sequence { get; } = sequence;
-        public EngineCommandPriority Priority { get; } = priority;
         public Func<CancellationToken, Task<object?>> Action { get; } = action;
         public TaskCompletionSource<object?> Completion { get; } = completion;
         public CancellationToken CancellationToken { get; } = cancellationToken;

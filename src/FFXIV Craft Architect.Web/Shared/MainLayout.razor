@@ -10,7 +10,6 @@
 @inject WebPlanPersistenceService PlanPersistence
 @inject PackagedWorldDirectoryService PackagedWorldDirectory
 @inject StartupInitializationService StartupInitialization
-@inject CraftArchitectEngineHost EngineHost
 @inject WorkerProjectionStore WorkerProjections
 @inject WorkerSessionCoordinator WorkerSession
 @inject PlanLifecycleWorkflowService PlanLifecycle
@@ -30,7 +29,8 @@
     var recipeProbe = WorkerProjections.Recipe;
     var marketProbe = WorkerProjections.Market;
     var routeProbe = WorkerProjections.Procurement;
-    var workerBusy = EngineHost.Health.IsExecuting;
+    var activeOperation = WorkerProjections.Operation;
+    var workerBusy = activeOperation?.IsActive == true;
     <div data-benchmark-id="operation-lifecycle"
          hidden
          data-session-revision="@WorkerProjections.Shell.Revision"
@@ -51,10 +51,10 @@
          data-route-reconciling="@BoolText(false)"
          data-route-reconciliation-scheduled="@BoolText(false)"
          data-is-busy="@BoolText(workerBusy)"
-         data-progress-percent="@(workerBusy ? 1 : 0)"
-         data-current-operation="@(workerBusy ? "Worker command" : null)"
-         data-status-message="@(workerBusy ? "Updating your plan..." : "Ready")"
-         data-active-workflows="@(workerBusy ? "Worker" : null)"
+         data-progress-percent="@(workerBusy ? AppState.ProgressPercent : 0)"
+         data-current-operation="@(workerBusy ? activeOperation?.Kind.ToString() : null)"
+         data-status-message="@(workerBusy ? activeOperation?.StatusMessage : "Ready")"
+         data-active-workflows="@(workerBusy ? activeOperation?.Kind.ToString() : null)"
          data-dirty-persisted-buckets="">
     </div>
 }

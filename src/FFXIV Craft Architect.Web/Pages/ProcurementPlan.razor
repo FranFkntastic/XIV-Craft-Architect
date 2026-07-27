@@ -16,7 +16,6 @@
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
 @inject AppState AppState
-@inject CancellableOperationService Operations
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 pp-page-container">
@@ -128,8 +127,11 @@
 
     private bool CanAnalyze =>
         !_isAnalyzing &&
-        !Operations.ActiveWorkflows.Contains(
-            CancellableOperationWorkflow.PlanDerivation) &&
+        WorkerProjections.Operation is not
+        {
+            IsActive: true,
+            Kind: WorkerSessionOperationKind.PlanDerivation
+        } &&
         _route?.HasMarketEvidence == true &&
         _route.ActiveItemCount > 0;
 

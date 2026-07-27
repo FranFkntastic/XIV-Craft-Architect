@@ -474,7 +474,8 @@ function createManagedSessionMessage(requestMessage, commandKind, expectedRevisi
             contractVersion: "1",
             commandKind,
             expectedRevision,
-            payload
+            payload,
+            operationId: requestMessage.payload?.operationId ?? null
         }
     };
 }

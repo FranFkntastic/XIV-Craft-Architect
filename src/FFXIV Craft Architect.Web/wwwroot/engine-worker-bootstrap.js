@@ -557,6 +557,7 @@ export function createEngineWorkerController(
             result?.commandKind === "bootstrap" ||
             result?.commandKind === "replace" ||
             result?.commandKind === "shell" ||
+            result?.commandKind?.startsWith("operation-") === true ||
             result?.commandKind?.startsWith("mutate-") === true;
         if (!publishesShell) return;
         const shell = result?.projection?.shell ?? result?.projection ?? null;

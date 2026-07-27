@@ -32,15 +32,27 @@ public sealed class WorkerProjectionStore
     public WorkerAcquisitionProjection? Acquisition { get; private set; }
     public WorkerMarketProjection? Market { get; private set; }
     public WorkerProcurementProjection? Procurement { get; private set; }
+    public WorkerSessionOperationProjection? Operation => Shell.Operation;
 
     public event Action? Changed;
 
     public bool TryPublishCrossTabShell(WorkerSessionShellProjection shell)
     {
         ArgumentNullException.ThrowIfNull(shell);
-        if (shell.Revision <= Shell.Revision)
+        if (shell.Revision < Shell.Revision)
         {
             return false;
+        }
+        if (shell.Revision == Shell.Revision)
+        {
+            if (Equals(shell.Operation, Shell.Operation))
+            {
+                return false;
+            }
+
+            Shell = Shell with { Operation = shell.Operation };
+            Changed?.Invoke();
+            return true;
         }
 
         Shell = shell;

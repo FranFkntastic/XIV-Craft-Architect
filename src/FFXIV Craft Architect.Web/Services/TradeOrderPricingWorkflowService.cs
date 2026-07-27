@@ -85,8 +85,14 @@ public sealed class TradeOrderPricingWorkflowService
             "Trade Order Pricing",
             "Building the order's craft plan...",
             ct);
+        WorkerSessionOperationLease? workerOperation = null;
         try
         {
+            workerOperation = await _worker.BeginOperationAsync(
+                WorkerSessionOperationKind.TradeOrderPricing,
+                $"trade-pricing:{order.Id}",
+                "Pricing the Trade order...",
+                operation.Token);
             var roots = GetOrderRootItems(order);
             var projectItems = roots
                 .Where(item => item.Quantity > 0)
@@ -108,7 +114,8 @@ public sealed class TradeOrderPricingWorkflowService
                         _viewSettings.SelectedRegion),
                     _viewSettings.DefaultMarketFetchScope),
                 PlanDerivationDispatch.Deferred,
-                operation.Token);
+                operation.Token,
+                workerOperation.OperationId);
             if (!operation.IsCurrent || !build.Built)
             {
                 return CanceledResult();
@@ -122,7 +129,8 @@ public sealed class TradeOrderPricingWorkflowService
             await _worker.MutatePlanIdentityAsync(
                 link.PlanId,
                 link.PlanName,
-                operation.Token);
+                operation.Token,
+                workerOperation.OperationId);
             var source = await _worker.GetTradeProjectionAsync(
                 cancellationToken: operation.Token)
                 ?? throw new InvalidOperationException(
@@ -143,10 +151,15 @@ public sealed class TradeOrderPricingWorkflowService
                 orderToSave,
                 new MarketRefreshRequest(options.ForceRefreshMarketData),
                 operation,
+                workerOperation,
                 savedAt);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
+            if (workerOperation is not null)
+            {
+                await workerOperation.AbortAsync(CancellationToken.None);
+            }
             operation.Complete("Trade order pricing failed.");
             return TradeOrderPricingWorkflowResult.Noop(
                 TradeOrderPricingWorkflowStatus.Failed,
@@ -155,7 +168,18 @@ public sealed class TradeOrderPricingWorkflowService
         }
         catch (OperationCanceledException)
         {
+            if (workerOperation is not null)
+            {
+                await workerOperation.AbortAsync(CancellationToken.None);
+            }
             return CanceledResult();
+        }
+        finally
+        {
+            if (workerOperation is not null)
+            {
+                await workerOperation.DisposeAsync();
+            }
         }
     }
 
@@ -184,8 +208,14 @@ public sealed class TradeOrderPricingWorkflowService
             "Trade Order Pricing",
             "Opening the order's craft plan...",
             ct);
+        WorkerSessionOperationLease? workerOperation = null;
         try
         {
+            workerOperation = await _worker.BeginOperationAsync(
+                WorkerSessionOperationKind.TradeOrderPricing,
+                $"trade-pricing:{order.Id}",
+                "Pricing the Trade order...",
+                operation.Token);
             var stored = await _planPersistence.LoadPlanPayloadAsync(order.CraftPlanId);
             if (stored == null)
             {
@@ -198,11 +228,13 @@ public sealed class TradeOrderPricingWorkflowService
                 stored,
                 trackStoredPlanIdentity: true,
                 derivation: PlanDerivationDispatch.Deferred,
-                cancellationToken: operation.Token);
+                cancellationToken: operation.Token,
+                operationId: workerOperation.OperationId);
             return await PriceAndPersistAsync(
                 TradeOrderWorkflow.CopyOrder(order),
                 new MarketRefreshRequest(options.ForceRefreshMarketData),
                 operation,
+                workerOperation,
                 DateTime.UtcNow,
                 string.IsNullOrWhiteSpace(_projections.Shell.RestoreWarning)
                     ? []
@@ -210,6 +242,10 @@ public sealed class TradeOrderPricingWorkflowService
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
+            if (workerOperation is not null)
+            {
+                await workerOperation.AbortAsync(CancellationToken.None);
+            }
             operation.Complete("Trade order pricing failed.");
             return TradeOrderPricingWorkflowResult.Noop(
                 TradeOrderPricingWorkflowStatus.Failed,
@@ -218,7 +254,18 @@ public sealed class TradeOrderPricingWorkflowService
         }
         catch (OperationCanceledException)
         {
+            if (workerOperation is not null)
+            {
+                await workerOperation.AbortAsync(CancellationToken.None);
+            }
             return CanceledResult();
+        }
+        finally
+        {
+            if (workerOperation is not null)
+            {
+                await workerOperation.DisposeAsync();
+            }
         }
     }
 
@@ -240,18 +287,29 @@ public sealed class TradeOrderPricingWorkflowService
             "Trade Order Pricing",
             "Repricing the changed material...",
             ct);
+        WorkerSessionOperationLease? workerOperation = null;
         try
         {
+            workerOperation = await _worker.BeginOperationAsync(
+                WorkerSessionOperationKind.TradeOrderPricing,
+                $"trade-pricing:{order.Id}",
+                "Pricing the Trade order...",
+                operation.Token);
             return await PriceAndPersistAsync(
                 TradeOrderWorkflow.CopyOrder(order),
                 marketItemIdsToRefresh is null
                     ? MarketRefreshRequest.Skip
                     : new MarketRefreshRequest(marketItemIdsToRefresh),
                 operation,
+                workerOperation,
                 DateTime.UtcNow);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
+            if (workerOperation is not null)
+            {
+                await workerOperation.AbortAsync(CancellationToken.None);
+            }
             operation.Complete("Trade order pricing failed.");
             return TradeOrderPricingWorkflowResult.Noop(
                 TradeOrderPricingWorkflowStatus.Failed,
@@ -260,7 +318,18 @@ public sealed class TradeOrderPricingWorkflowService
         }
         catch (OperationCanceledException)
         {
+            if (workerOperation is not null)
+            {
+                await workerOperation.AbortAsync(CancellationToken.None);
+            }
             return CanceledResult();
+        }
+        finally
+        {
+            if (workerOperation is not null)
+            {
+                await workerOperation.DisposeAsync();
+            }
         }
     }
 
@@ -268,6 +337,7 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrder order,
         MarketRefreshRequest refresh,
         CancellableOperationLease operation,
+        WorkerSessionOperationLease workerOperation,
         DateTime refreshedAt,
         IReadOnlyList<string>? initialWarnings = null)
     {
@@ -290,7 +360,8 @@ public sealed class TradeOrderPricingWorkflowService
             (message, progress) => operation.ReportStatus(
                 message,
                 progress: progress),
-            () => operation.IsCurrent);
+            () => operation.IsCurrent && workerOperation.IsCurrent,
+            workerOperation.OperationId);
         warnings.AddRange(derivation.Warnings);
         if (!operation.IsCurrent)
         {
@@ -357,6 +428,7 @@ public sealed class TradeOrderPricingWorkflowService
         var message = complete
             ? "Order pricing ready"
             : "Order pricing updated with incomplete evidence.";
+        await workerOperation.CompleteAsync(operation.Token);
         operation.Complete(message);
         return new TradeOrderPricingWorkflowResult(
             complete

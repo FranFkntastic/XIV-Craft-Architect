@@ -20,8 +20,6 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     private readonly IMarketEvidenceReconciliationService _marketEvidenceReconciliation;
     private readonly IMarketCacheService _marketCache;
     private readonly IUniversalisService _universalis;
-    private readonly SemaphoreSlim _marketAnalysisGate = new(1, 1);
-    private readonly SemaphoreSlim _procurementGate = new(1, 1);
     private readonly SemaphoreSlim _crossTabProjectionGate = new(1, 1);
     private bool _disposed;
 
@@ -43,6 +41,180 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     }
 
     public bool IsEnabled => _capability.IsExecutionEnabled;
+    public long CurrentRevision => _projections.Shell.Revision;
+    internal bool IsOperationCurrent(Guid operationId) =>
+        _projections.Operation is
+        {
+            IsActive: true,
+            OperationId: var activeOperationId
+        } &&
+        activeOperationId == operationId;
+
+    public async Task<WorkerSessionOperationLease> BeginOperationAsync(
+        WorkerSessionOperationKind kind,
+        string intentKey,
+        string statusMessage,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(intentKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(statusMessage);
+        var operationId = Guid.NewGuid();
+        WorkerSessionResultEnvelope result = null!;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            result = await _engineHost.BeginOperationAsync(
+                _projections.Shell.Revision,
+                new WorkerSessionOperationBeginRequest(
+                    operationId,
+                    kind,
+                    intentKey,
+                    statusMessage),
+                cancellationToken);
+            if (!string.Equals(
+                    result.RejectionCode,
+                    "stale-revision",
+                    StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            await RefreshAfterConflictAsync(result, cancellationToken);
+        }
+
+        if (!result.Accepted || !_projections.TryPublish(result))
+        {
+            throw CreateConflict(result);
+        }
+
+        var operation = _projections.Operation;
+        if (operation is not
+            {
+                IsActive: true,
+                Disposition: WorkerSessionOperationDisposition.Acquired
+                    or WorkerSessionOperationDisposition.Current
+            } ||
+            operation.OperationId != operationId)
+        {
+            throw new WorkerSessionOperationBusyException(
+                operation?.StatusMessage ?? "Another plan update is already running.");
+        }
+
+        return new WorkerSessionOperationLease(this, operationId, kind, intentKey);
+    }
+
+    internal async Task<bool> RenewOperationAsync(
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        var result = await _engineHost.RenewOperationAsync(
+            _projections.Shell.Revision,
+            operationId,
+            cancellationToken);
+        if (string.Equals(result.RejectionCode, "stale-revision", StringComparison.Ordinal))
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            result = await _engineHost.RenewOperationAsync(
+                _projections.Shell.Revision,
+                operationId,
+                cancellationToken);
+        }
+
+        return result.Accepted &&
+               _projections.TryPublish(result) &&
+               _projections.Operation is
+               {
+                   IsActive: true,
+                   OperationId: var activeOperationId
+               } &&
+               activeOperationId == operationId;
+    }
+
+    internal Task CompleteOperationAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) =>
+        EndOperationAsync(operationId, complete: true, cancellationToken);
+
+    internal Task AbortOperationAsync(
+        Guid operationId,
+        CancellationToken cancellationToken) =>
+        EndOperationAsync(operationId, complete: false, cancellationToken);
+
+    private async Task EndOperationAsync(
+        Guid operationId,
+        bool complete,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = complete
+                ? await _engineHost.CompleteOperationAsync(
+                    _projections.Shell.Revision,
+                    operationId,
+                    cancellationToken)
+                : await _engineHost.AbortOperationAsync(
+                    _projections.Shell.Revision,
+                    operationId,
+                    cancellationToken);
+            if (string.Equals(
+                    result.RejectionCode,
+                    "stale-revision",
+                    StringComparison.Ordinal))
+            {
+                await RefreshAfterConflictAsync(result, cancellationToken);
+                result = complete
+                    ? await _engineHost.CompleteOperationAsync(
+                        _projections.Shell.Revision,
+                        operationId,
+                        cancellationToken)
+                    : await _engineHost.AbortOperationAsync(
+                        _projections.Shell.Revision,
+                        operationId,
+                        cancellationToken);
+            }
+
+            if (result.Accepted)
+            {
+                _projections.TryPublish(result);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private async Task<TResult> RunWithOperationAsync<TResult>(
+        WorkerSessionOperationKind kind,
+        string intentKey,
+        string statusMessage,
+        Guid? operationId,
+        CancellationToken cancellationToken,
+        Func<Guid, Task<TResult>> run)
+    {
+        if (operationId is { } existingOperationId)
+        {
+            return await run(existingOperationId);
+        }
+
+        await using var operation = await BeginOperationAsync(
+            kind,
+            intentKey,
+            statusMessage,
+            cancellationToken);
+        try
+        {
+            var result = await run(operation.OperationId);
+            await operation.CompleteAsync(cancellationToken);
+            return result;
+        }
+        catch
+        {
+            await operation.AbortAsync(CancellationToken.None);
+            throw;
+        }
+    }
 
     public async Task<WorkerSessionShellProjection?> BootstrapAsync(
         CancellationToken cancellationToken = default)
@@ -87,29 +259,34 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     public async Task ReplaceStoredPlanAsync(
         StoredPlan storedPlan,
         bool trackStoredPlanIdentity,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         await ReplaceStoredPlanCoreAsync(
             storedPlan,
             trackStoredPlanIdentity,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public async Task ClearSessionAsync(
         CancellationToken cancellationToken = default) =>
         await ReplaceStoredPlanCoreAsync(
             storedPlan: null,
             trackStoredPlanIdentity: false,
-            cancellationToken);
+            cancellationToken,
+            operationId: null);
 
     private async Task ReplaceStoredPlanCoreAsync(
         StoredPlan? storedPlan,
         bool trackStoredPlanIdentity,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? operationId)
     {
         var result = await _engineHost.ReplaceSessionAsync(
             _projections.Shell.Revision,
             storedPlan,
             trackStoredPlanIdentity,
-            cancellationToken);
+            cancellationToken,
+            operationId);
         if (!result.Accepted || !_projections.TryPublish(result))
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
@@ -332,12 +509,14 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     public async Task<WorkerSessionShellProjection> MutatePlanIdentityAsync(
         string planId,
         string planName,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null)
     {
         var result = await _engineHost.MutatePlanIdentityAsync(
             _projections.Shell.Revision,
             new WorkerPlanIdentityMutation(planId, planName),
-            cancellationToken);
+            cancellationToken,
+            operationId);
         if (!_projections.TryPublishMutation<WorkerSessionShellProjection>(
                 result,
                 out var shell) ||
@@ -353,12 +532,14 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public async Task<WorkerSessionShellProjection> MutateActiveContextAsync(
         WorkerActiveContextMutation mutation,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null)
     {
         var result = await _engineHost.MutateActiveContextAsync(
             _projections.Shell.Revision,
             mutation,
-            cancellationToken);
+            cancellationToken,
+            operationId);
         if (!_projections.TryPublishMutation<WorkerSessionShellProjection>(
                 result,
                 out var shell) ||
@@ -375,12 +556,14 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public async Task<WorkerRecipeBuildOutcome> BuildRecipeAsync(
         WorkerRecipeBuildRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null)
     {
         var result = await _engineHost.BuildRecipeAsync(
             _projections.Shell.Revision,
             request,
-            cancellationToken);
+            cancellationToken,
+            operationId);
         if (!_projections.TryPublishMutation<WorkerRecipeBuildOutcome>(
                 result,
                 out var outcome) ||
@@ -427,24 +610,25 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     public async Task<WorkerMarketAnalysisOutcome> RunMarketAnalysisAsync(
         WorkerMarketAnalysisRequest request,
         CancellationToken cancellationToken = default,
-        Action<string, double?>? reportStatus = null)
-    {
-        await _marketAnalysisGate.WaitAsync(cancellationToken);
-        try
-        {
-            return await RunMarketAnalysisCoreAsync(
+        Action<string, double?>? reportStatus = null,
+        Guid? operationId = null)
+        => await RunWithOperationAsync(
+            WorkerSessionOperationKind.MarketAnalysis,
+            $"market:{_projections.Shell.Revision}:{request.Scope}:{request.SelectedRegion}",
+            request.ForceRefreshData
+                ? "Refreshing market prices..."
+                : "Analyzing market prices...",
+            operationId,
+            cancellationToken,
+            activeOperationId => RunMarketAnalysisCoreAsync(
                 request,
+                activeOperationId,
                 cancellationToken,
-                reportStatus);
-        }
-        finally
-        {
-            _marketAnalysisGate.Release();
-        }
-    }
+                reportStatus));
 
     private async Task<WorkerMarketAnalysisOutcome> RunMarketAnalysisCoreAsync(
         WorkerMarketAnalysisRequest request,
+        Guid operationId,
         CancellationToken cancellationToken,
         Action<string, double?>? reportStatus)
     {
@@ -581,11 +765,13 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 ? await _engineHost.PublishMarketEvidenceAsync(
                     publicationBaseRevision,
                     publicationRequest,
-                    cancellationToken)
+                    cancellationToken,
+                    operationId)
                 : await _engineHost.StageMarketEvidenceAsync(
                     publicationBaseRevision,
                     publicationRequest,
-                    cancellationToken);
+                    cancellationToken,
+                    operationId);
             if (!result.Accepted)
             {
                 await RefreshAfterConflictAsync(result, cancellationToken);
@@ -675,12 +861,29 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public async Task<WorkerMarketProjection> ApplyMarketLensAsync(
         MarketAcquisitionLens lens,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null)
+        => await RunWithOperationAsync(
+            WorkerSessionOperationKind.MarketAnalysis,
+            $"market-lens:{_projections.Shell.Revision}:{lens}",
+            "Updating market recommendations...",
+            operationId,
+            cancellationToken,
+            activeOperationId => ApplyMarketLensCoreAsync(
+                lens,
+                activeOperationId,
+                cancellationToken));
+
+    private async Task<WorkerMarketProjection> ApplyMarketLensCoreAsync(
+        MarketAcquisitionLens lens,
+        Guid operationId,
+        CancellationToken cancellationToken)
     {
         var result = await _engineHost.ApplyMarketLensAsync(
             _projections.Shell.Revision,
             new WorkerMarketLensMutation(lens),
-            cancellationToken);
+            cancellationToken,
+            operationId);
         if (!_projections.TryPublishMutation<WorkerMarketProjection>(
                 result,
                 out var market) ||
@@ -697,7 +900,23 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public async Task<WorkerMarketItemRefreshOutcome> RefreshMarketItemAsync(
         WorkerMarketItemRefreshRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null)
+        => await RunWithOperationAsync(
+            WorkerSessionOperationKind.ItemMarketRefresh,
+            $"market-item:{_projections.Shell.Revision}:{request.ItemId}",
+            $"Refreshing {request.ItemName}...",
+            operationId,
+            cancellationToken,
+            activeOperationId => RefreshMarketItemCoreAsync(
+                request,
+                activeOperationId,
+                cancellationToken));
+
+    private async Task<WorkerMarketItemRefreshOutcome> RefreshMarketItemCoreAsync(
+        WorkerMarketItemRefreshRequest request,
+        Guid operationId,
+        CancellationToken cancellationToken)
     {
         var market = _projections.Market ??
             await GetMarketProjectionAsync(cancellationToken) ??
@@ -783,7 +1002,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 CloneAndCompactMarketAnalysisForPublication(analysis),
                 shoppingPlan,
                 request.RequestedDataCenters),
-            cancellationToken);
+            cancellationToken,
+            operationId);
         if (!_projections.TryPublishMutation<WorkerMarketItemRefreshOutcome>(
                 result,
                 out var outcome) ||
@@ -944,24 +1164,23 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     public async Task<WorkerProcurementOutcome> RunProcurementAsync(
         WorkerProcurementRequest request,
         CancellationToken cancellationToken = default,
-        Action<string, double?>? reportStatus = null)
-    {
-        await _procurementGate.WaitAsync(cancellationToken);
-        try
-        {
-            return await RunProcurementCoreAsync(
+        Action<string, double?>? reportStatus = null,
+        Guid? operationId = null)
+        => await RunWithOperationAsync(
+            WorkerSessionOperationKind.ProcurementAnalysis,
+            $"procurement:{_projections.Shell.Revision}",
+            "Building your procurement route...",
+            operationId,
+            cancellationToken,
+            activeOperationId => RunProcurementCoreAsync(
                 request,
+                activeOperationId,
                 cancellationToken,
-                reportStatus);
-        }
-        finally
-        {
-            _procurementGate.Release();
-        }
-    }
+                reportStatus));
 
     private async Task<WorkerProcurementOutcome> RunProcurementCoreAsync(
         WorkerProcurementRequest request,
+        Guid operationId,
         CancellationToken cancellationToken,
         Action<string, double?>? reportStatus)
     {
@@ -971,7 +1190,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         var result = await _engineHost.RunProcurementAsync(
             _projections.Shell.Revision,
             request,
-            cancellationToken);
+            cancellationToken,
+            operationId);
         reportStatus?.Invoke("Preparing your shopping route...", 95);
         if (!_projections.TryPublishMutation<WorkerProcurementOutcome>(
                 result,
@@ -1046,29 +1266,37 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
     public async Task<WorkerProcurementProjection> SelectProcurementToleranceAsync(
         int travelTolerance,
         CancellationToken cancellationToken = default)
-    {
-        await _procurementGate.WaitAsync(cancellationToken);
-        try
-        {
-            var result = await _engineHost.SelectProcurementToleranceAsync(
-                _projections.Shell.Revision,
+        => await RunWithOperationAsync(
+            WorkerSessionOperationKind.ProcurementAnalysis,
+            $"procurement-tolerance:{_projections.Shell.Revision}:{travelTolerance}",
+            "Updating the procurement route...",
+            operationId: null,
+            cancellationToken,
+            operationId => SelectProcurementToleranceCoreAsync(
                 travelTolerance,
-                cancellationToken);
-            if (!_projections.TryPublishMutation<WorkerProcurementProjection>(
-                    result,
-                    out var procurement) ||
-                procurement is null)
-            {
-                await RefreshAfterConflictAsync(result, cancellationToken);
-                throw CreateConflict(result);
-            }
+                operationId,
+                cancellationToken));
 
-            return procurement;
-        }
-        finally
+    private async Task<WorkerProcurementProjection> SelectProcurementToleranceCoreAsync(
+        int travelTolerance,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        var result = await _engineHost.SelectProcurementToleranceAsync(
+            _projections.Shell.Revision,
+            travelTolerance,
+            cancellationToken,
+            operationId);
+        if (!_projections.TryPublishMutation<WorkerProcurementProjection>(
+                result,
+                out var procurement) ||
+            procurement is null)
         {
-            _procurementGate.Release();
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            throw CreateConflict(result);
         }
+
+        return procurement;
     }
 
     private async Task RefreshAfterConflictAsync(

@@ -173,6 +173,7 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Contains("type: \"session-projection\"", bootstrap, StringComparison.Ordinal);
         Assert.Contains("kind: \"cross-tab-session-projection\"", bootstrap, StringComparison.Ordinal);
         Assert.Contains("result?.commandKind?.startsWith(\"mutate-\")", bootstrap, StringComparison.Ordinal);
+        Assert.Contains("result?.commandKind?.startsWith(\"operation-\")", bootstrap, StringComparison.Ordinal);
         Assert.Contains("typeof shell.hasSession !== \"boolean\"", bootstrap, StringComparison.Ordinal);
         Assert.Contains("requestLease();", bootstrap, StringComparison.Ordinal);
         Assert.DoesNotContain("new SharedWorker", bootstrap, StringComparison.Ordinal);
@@ -236,6 +237,21 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Null(store.Market);
         Assert.Null(store.Procurement);
         Assert.False(store.TryPublishCrossTabShell(successor));
+
+        var operationId = Guid.NewGuid();
+        var operationShell = successor with
+        {
+            Operation = new WorkerSessionOperationProjection(
+                operationId,
+                WorkerSessionOperationKind.PlanDerivation,
+                "plan-derivation:1",
+                BaseRevision: 1,
+                WorkerSessionOperationDisposition.Acquired,
+                IsActive: true,
+                "Updating plan prices and route...")
+        };
+        Assert.True(store.TryPublishCrossTabShell(operationShell));
+        Assert.Equal(operationId, store.Operation?.OperationId);
     }
 
     private static string LocateRepositoryRoot()

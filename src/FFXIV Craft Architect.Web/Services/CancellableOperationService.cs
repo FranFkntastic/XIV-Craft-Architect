@@ -14,17 +14,6 @@ public sealed class CancellableOperationService : IDisposable
 
     internal AppState AppState => _appState;
 
-    public IReadOnlyList<CancellableOperationWorkflow> ActiveWorkflows
-    {
-        get
-        {
-            lock (_sync)
-            {
-                return _activeLeases.Keys.OrderBy(workflow => workflow).ToArray();
-            }
-        }
-    }
-
     public CancellableOperationLease Start(
         CancellableOperationWorkflow workflow,
         string operationName,
@@ -52,21 +41,7 @@ public sealed class CancellableOperationService : IDisposable
         return lease;
     }
 
-    public void Cancel(CancellableOperationWorkflow workflow, string? message = null)
-    {
-        CancellableOperationLease? lease;
-        lock (_sync)
-        {
-            if (!_activeLeases.Remove(workflow, out lease))
-            {
-                return;
-            }
-        }
-
-        lease.CancelFromOwner(message);
-    }
-
-    public void CancelAll(string? message = null)
+    private void CancelAll()
     {
         List<CancellableOperationLease> leases;
         lock (_sync)
@@ -77,18 +52,8 @@ public sealed class CancellableOperationService : IDisposable
 
         foreach (var lease in leases)
         {
-            lease.CancelFromOwner(message);
+            lease.CancelFromOwner();
         }
-    }
-
-    public void CancelPlanDependentOperations(string? message = null)
-    {
-        Cancel(CancellableOperationWorkflow.PriceRefresh, message);
-        Cancel(CancellableOperationWorkflow.MarketAnalysis, message);
-        Cancel(CancellableOperationWorkflow.ProcurementAnalysis, message);
-        Cancel(CancellableOperationWorkflow.ItemMarketRefresh, message);
-        Cancel(CancellableOperationWorkflow.TradeOrderPricing, message);
-        Cancel(CancellableOperationWorkflow.PlanDerivation, message);
     }
 
     public void Dispose()
@@ -217,10 +182,10 @@ public sealed class CancellableOperationLease : IDisposable
         CancelToken();
     }
 
-    internal void CancelFromOwner(string? message)
+    internal void CancelFromOwner()
     {
         CancelToken();
-        _owner.AppState.CancelOperation(Operation, message ?? "Ready");
+        _owner.AppState.CancelOperation(Operation, "Ready");
     }
 
     internal void CancelToken()
@@ -234,12 +199,6 @@ public sealed class CancellableOperationLease : IDisposable
 
 public enum CancellableOperationWorkflow
 {
-    RecipeBuild,
-    PriceRefresh,
-    MarketAnalysis,
-    ProcurementAnalysis,
-    ItemMarketRefresh,
-    PlanActivation,
     TradeOrderPricing,
     PlanDerivation
 }
