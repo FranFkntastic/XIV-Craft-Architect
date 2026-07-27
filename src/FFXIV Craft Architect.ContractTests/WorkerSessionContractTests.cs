@@ -173,6 +173,8 @@ public sealed class WorkerSessionContractTests
             WorkerSessionCommandKinds.MarketEvidencePublicationStage,
             expectedRevision: 2,
             new WorkerMarketEvidencePublicationRequest(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                2,
                 MarketFetchScope.SelectedDataCenter,
                 "Aether",
                 "North America",
@@ -212,10 +214,30 @@ public sealed class WorkerSessionContractTests
         Assert.True(staged.Accepted);
         Assert.Equal(2, staged.Revision);
 
+        var interleaved = await SendAsync(
+            WorkerSessionCommandKinds.MarketEvidencePublicationStage,
+            expectedRevision: 2,
+            new WorkerMarketEvidencePublicationRequest(
+                Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                2,
+                MarketFetchScope.SelectedDataCenter,
+                "Aether",
+                "North America",
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                [],
+                [],
+                new HashSet<int>(),
+                FetchedCount: 0,
+                ResetStaging: true,
+                CompleteStaging: false));
+        Assert.True(interleaved.Accepted);
+
         var completed = await SendAsync(
             WorkerSessionCommandKinds.MarketEvidencePublication,
             expectedRevision: 2,
             new WorkerMarketEvidencePublicationRequest(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                2,
                 MarketFetchScope.SelectedDataCenter,
                 "Aether",
                 "North America",

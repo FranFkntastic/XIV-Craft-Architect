@@ -282,6 +282,8 @@ public sealed record WorkerMarketProjectionRequest(
     int? WorldDetailItemId = null);
 
 public sealed record WorkerMarketEvidencePublicationRequest(
+    Guid OperationId,
+    long BaseRevision,
     MarketFetchScope Scope,
     string SelectedDataCenter,
     string SelectedRegion,

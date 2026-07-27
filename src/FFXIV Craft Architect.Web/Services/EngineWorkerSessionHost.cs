@@ -25,7 +25,8 @@ public static partial class ManagedHost
     private static readonly RecipeCalculationService SessionRecipeCalculator =
         new(SessionGarland, SessionVendorCache);
     private static WorkerCanonicalSession _canonicalSession = new();
-    private static PendingMarketEvidencePublication? _pendingMarketEvidencePublication;
+    private static readonly Dictionary<Guid, PendingMarketEvidencePublication>
+        PendingMarketEvidencePublications = [];
     private static long _sessionRevision;
     private static string? _sessionRestoreWarning;
     private static bool _sessionMigratedFromLegacy;
@@ -209,6 +210,7 @@ public static partial class ManagedHost
             restore.StoredPlan,
             restore.TrackStoredPlanIdentity);
         _canonicalSession = replacement;
+        PendingMarketEvidencePublications.Clear();
         _sessionRevision = restore.Revision +
                            (restoreResult.DurableRepairPatch is null ? 0 : 1);
         _sessionRestoreWarning = restoreResult.Warning;
@@ -548,9 +550,25 @@ public static partial class ManagedHost
         var request = command.Payload.Deserialize<WorkerMarketEvidencePublicationRequest>(
                 WireJsonOptions)
             ?? throw new InvalidOperationException("Market-evidence publication is empty.");
+        if (request.OperationId == Guid.Empty ||
+            request.BaseRevision != command.ExpectedRevision)
+        {
+            throw new InvalidOperationException(
+                "Market-evidence publication operation identity is invalid.");
+        }
+        RemoveExpiredMarketEvidencePublications();
         if (request.ResetStaging)
         {
-            _pendingMarketEvidencePublication = new PendingMarketEvidencePublication(
+            if (!PendingMarketEvidencePublications.ContainsKey(request.OperationId) &&
+                PendingMarketEvidencePublications.Count >= 2)
+            {
+                throw new InvalidOperationException(
+                    "Another market-evidence publication is already being prepared.");
+            }
+            PendingMarketEvidencePublications[request.OperationId] =
+                new PendingMarketEvidencePublication(
+                request.OperationId,
+                request.BaseRevision,
                 request.Scope,
                 request.SelectedDataCenter,
                 request.SelectedRegion,
@@ -558,9 +576,13 @@ public static partial class ManagedHost
                 request.RequestedDataCenters ?? Array.Empty<string>());
         }
 
-        var staging = _pendingMarketEvidencePublication
-            ?? throw new InvalidOperationException(
-                "Market-evidence publication staging was not initialized.");
+        if (!PendingMarketEvidencePublications.TryGetValue(
+                request.OperationId,
+                out var staging))
+        {
+            throw new InvalidOperationException(
+                "Market-evidence publication staging was not initialized for this operation.");
+        }
         staging.Validate(request);
         staging.ItemAnalyses.AddRange(request.ItemAnalyses);
         staging.ShoppingPlans.AddRange(request.ShoppingPlans);
@@ -577,6 +599,8 @@ public static partial class ManagedHost
         }
 
         request = new WorkerMarketEvidencePublicationRequest(
+            staging.OperationId,
+            staging.BaseRevision,
             staging.Scope,
             staging.SelectedDataCenter,
             staging.SelectedRegion,
@@ -588,7 +612,7 @@ public static partial class ManagedHost
             ResetStaging: true,
             CompleteStaging: true,
             RequestedDataCenters: staging.RequestedDataCenters);
-        _pendingMarketEvidencePublication = null;
+        PendingMarketEvidencePublications.Remove(staging.OperationId);
         var session = _canonicalSession.Session;
         var plan = session.BorrowActivePlan()
             ?? throw new InvalidOperationException(
@@ -658,6 +682,18 @@ public static partial class ManagedHost
                 replaceMarketEvidence: true,
                 replaceProcurementRoute: true,
                 replaceContext: true));
+    }
+
+    private static void RemoveExpiredMarketEvidencePublications()
+    {
+        var cutoff = DateTime.UtcNow - TimeSpan.FromMinutes(5);
+        foreach (var operationId in PendingMarketEvidencePublications
+                     .Where(pair => pair.Value.CreatedAtUtc < cutoff)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            PendingMarketEvidencePublications.Remove(operationId);
+        }
     }
 
     private static WorkerSessionResultEnvelope PublishMarketItemEvidence(
@@ -1765,24 +1801,32 @@ public static partial class ManagedHost
     private sealed class PendingMarketEvidencePublication
     {
         public PendingMarketEvidencePublication(
+            Guid operationId,
+            long baseRevision,
             MarketFetchScope scope,
             string selectedDataCenter,
             string selectedRegion,
             MarketAcquisitionLens lens,
             IReadOnlyList<string> requestedDataCenters)
         {
+            OperationId = operationId;
+            BaseRevision = baseRevision;
             Scope = scope;
             SelectedDataCenter = selectedDataCenter;
             SelectedRegion = selectedRegion;
             Lens = lens;
             RequestedDataCenters = requestedDataCenters;
+            CreatedAtUtc = DateTime.UtcNow;
         }
 
+        public Guid OperationId { get; }
+        public long BaseRevision { get; }
         public MarketFetchScope Scope { get; }
         public string SelectedDataCenter { get; }
         public string SelectedRegion { get; }
         public MarketAcquisitionLens Lens { get; }
         public IReadOnlyList<string> RequestedDataCenters { get; }
+        public DateTime CreatedAtUtc { get; }
         public List<MarketItemAnalysis> ItemAnalyses { get; } = [];
         public List<DetailedShoppingPlan> ShoppingPlans { get; } = [];
         public HashSet<int> UnavailableItemIds { get; } = [];
@@ -1790,7 +1834,9 @@ public static partial class ManagedHost
 
         public void Validate(WorkerMarketEvidencePublicationRequest request)
         {
-            if (request.Scope != Scope ||
+            if (request.OperationId != OperationId ||
+                request.BaseRevision != BaseRevision ||
+                request.Scope != Scope ||
                 request.Lens != Lens ||
                 !(request.RequestedDataCenters ?? Array.Empty<string>())
                     .SequenceEqual(

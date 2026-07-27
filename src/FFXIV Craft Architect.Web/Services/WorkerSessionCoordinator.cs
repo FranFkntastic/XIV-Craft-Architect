@@ -540,6 +540,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 $"The market source returned no usable evidence for {market.CandidateItems.Count:N0} items.");
         }
 
+        var publicationOperationId = Guid.NewGuid();
+        var publicationBaseRevision = market.Revision;
         WorkerSessionResultEnvelope? result = null;
         var publicationItemIds = analyses
             .Select(analysis => analysis.ItemId)
@@ -562,6 +564,8 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 $"Applying the best purchase options ({publishedCount:N0} of {publicationItemIds.Length:N0} materials)...",
                 80 + (15d * publishedCount / publicationItemIds.Length));
             var publicationRequest = new WorkerMarketEvidencePublicationRequest(
+                    publicationOperationId,
+                    publicationBaseRevision,
                     request.Scope,
                     request.SelectedDataCenter,
                     request.SelectedRegion,
@@ -575,11 +579,11 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                     RequestedDataCenters: dataCenters);
             result = isFinal
                 ? await _engineHost.PublishMarketEvidenceAsync(
-                    _projections.Shell.Revision,
+                    publicationBaseRevision,
                     publicationRequest,
                     cancellationToken)
                 : await _engineHost.StageMarketEvidenceAsync(
-                    _projections.Shell.Revision,
+                    publicationBaseRevision,
                     publicationRequest,
                     cancellationToken);
             if (!result.Accepted)
@@ -769,7 +773,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
 
         var result = await _engineHost.PublishMarketItemEvidenceAsync(
-            _projections.Shell.Revision,
+            market.Revision,
             new WorkerMarketItemEvidencePublicationRequest(
                 request.ItemId,
                 request.Scope,
