@@ -318,7 +318,11 @@
                 InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(
                     PackagedWorldDirectory,
                     UniversalisService)));
-            if (WorkerProjections.Shell.HasSession)
+            var restoredShell = WorkerProjections.Shell;
+            if (restoredShell.HasSession &&
+                (restoredShell.MarketAnalysisCount == 0 ||
+                 restoredShell.ShoppingPlanCount > 0 &&
+                 !restoredShell.HasProcurementRoute))
             {
                 PlanLifecycle.Schedule();
             }

@@ -100,7 +100,15 @@ public sealed class RecipePlanDiagnosticContractTests
         Assert.Contains("PlanLifecycle.ReplaceStoredPlanAsync(", planner, StringComparison.Ordinal);
         Assert.Contains("_planLifecycle.EnsureDerivedAsync(", tradePricing, StringComparison.Ordinal);
         Assert.Contains(
-            "if (WorkerProjections.Shell.HasSession)",
+            "restoredShell.MarketAnalysisCount == 0",
+            layout,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "restoredShell.ShoppingPlanCount > 0",
+            layout,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "!restoredShell.HasProcurementRoute",
             layout,
             StringComparison.Ordinal);
         Assert.Contains("PlanLifecycle.Schedule();", layout, StringComparison.Ordinal);
