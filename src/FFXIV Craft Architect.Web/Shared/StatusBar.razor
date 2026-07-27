@@ -165,10 +165,15 @@
     private string? _tradeCompanyName;
     private bool IsBusy => AppState.IsBusy;
     private string StatusMessage => IsBusy ? AppState.StatusMessage : "Ready";
-    private string SelectedRegion => WorkerProjections.Shell.HasSession
+    private bool HasActivePlanContext =>
+        WorkerProjections.Shell.HasSession &&
+        (WorkerProjections.Shell.ProjectItemCount > 0 ||
+         WorkerProjections.Shell.RootItemCount > 0 ||
+         WorkerProjections.Shell.PlanNodeCount > 0);
+    private string SelectedRegion => HasActivePlanContext
         ? WorkerProjections.Shell.SelectedRegion
         : AppState.SelectedRegion;
-    private string SelectedDataCenter => WorkerProjections.Shell.HasSession
+    private string SelectedDataCenter => HasActivePlanContext
         ? WorkerProjections.Shell.SelectedDataCenter
         : AppState.SelectedDataCenter;
     private int MaterialCount =>
@@ -186,7 +191,7 @@
 
     protected override void OnInitialized()
     {
-        AppState.OnStatusChanged += OnStatusChanged;
+        AppState.OnStateChanged += OnAppStateChanged;
         WorkerProjections.Changed += OnStatusChanged;
         NavigationManager.LocationChanged += OnLocationChanged;
     }
@@ -199,6 +204,14 @@
     private void OnStatusChanged()
     {
         InvokeAsync(StateHasChanged);
+    }
+
+    private void OnAppStateChanged(AppStateChange change)
+    {
+        if ((change.Scopes & (AppStateChangeScope.Settings | AppStateChangeScope.Status)) != 0)
+        {
+            InvokeAsync(StateHasChanged);
+        }
     }
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
@@ -231,7 +244,7 @@
     
     public void Dispose()
     {
-        AppState.OnStatusChanged -= OnStatusChanged;
+        AppState.OnStateChanged -= OnAppStateChanged;
         WorkerProjections.Changed -= OnStatusChanged;
         NavigationManager.LocationChanged -= OnLocationChanged;
     }
