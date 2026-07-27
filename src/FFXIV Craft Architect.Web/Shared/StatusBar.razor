@@ -167,8 +167,7 @@
     private string StatusMessage => IsBusy ? AppState.StatusMessage : "Ready";
     private bool HasActivePlanContext =>
         WorkerProjections.Shell.HasSession &&
-        (WorkerProjections.Shell.ProjectItemCount > 0 ||
-         WorkerProjections.Shell.RootItemCount > 0 ||
+        (WorkerProjections.Shell.RootItemCount > 0 ||
          WorkerProjections.Shell.PlanNodeCount > 0);
     private string SelectedRegion => HasActivePlanContext
         ? WorkerProjections.Shell.SelectedRegion

@@ -103,7 +103,9 @@ public sealed class TradeOrderPricingWorkflowService
                 new WorkerRecipeBuildRequest(
                     projectItems,
                     options.DataCenter,
-                    _projections.Shell.SelectedRegion,
+                    MarketFetchScopeResolver.ResolveRegionForDataCenter(
+                        options.DataCenter,
+                        _viewSettings.SelectedRegion),
                     _viewSettings.DefaultMarketFetchScope),
                 PlanDerivationDispatch.Deferred,
                 operation.Token);

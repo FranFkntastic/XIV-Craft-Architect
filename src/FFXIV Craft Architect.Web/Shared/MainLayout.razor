@@ -589,9 +589,9 @@
                     importCommandResult = await PlanLifecycle.BuildRecipeAsync(
                         new WorkerRecipeBuildRequest(
                             projectItems,
-                            WorkerProjections.Shell.SelectedDataCenter,
-                            WorkerProjections.Shell.SelectedRegion,
-                            MarketFetchScope.EntireRegion));
+                            AppState.SelectedDataCenter,
+                            AppState.SelectedRegion,
+                            AppState.DefaultMarketFetchScope));
                 }
 
                 Snackbar.Add($"Imported {items.Count} {(items.Count == 1 ? "item" : "items")}", Severity.Success);
