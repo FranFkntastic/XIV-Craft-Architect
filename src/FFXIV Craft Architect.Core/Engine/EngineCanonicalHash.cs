@@ -66,25 +66,6 @@ public static class EngineCanonicalHash
         }
     }
 
-    public static async ValueTask<string> ValidateAndComputeRequestIdentityAsync(
-        EngineRequestEnvelope request,
-        Func<CancellationToken, ValueTask>? cooperativeYield = null,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var inputHash = await ComputeEngineInputAsync(
-            request.Input,
-            cooperativeYield,
-            cancellationToken);
-        if (!string.IsNullOrWhiteSpace(request.InputHash) &&
-            !string.Equals(request.InputHash, inputHash, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("The bound engine input hash does not match the authoritative input.");
-        }
-
-        return ComputeRequestIdentity(request, inputHash);
-    }
-
     public static string ComputeRequestIdentity(EngineRequestEnvelope request) =>
         ComputeRequestIdentity(request, ResolveEngineInputHash(request));
 
@@ -124,68 +105,6 @@ public static class EngineCanonicalHash
             AnalysisResultHash = analysisResultHash,
             ProcurementRouteResultHash = procurementRouteResultHash
         });
-
-    public static string ComputeUnordered<T>(IEnumerable<T> values, JsonSerializerOptions? options = null)
-    {
-        var elementHashes = values
-            .Select(value => Compute(value, options))
-            .OrderBy(hash => hash, StringComparer.Ordinal)
-            .ToArray();
-        return Compute(elementHashes, options);
-    }
-
-    public static string ComputeFinalTransactionHash(
-        EngineRequestEnvelope request,
-        EngineTerminalStatus status,
-        string analysisResultHash,
-        string procurementRouteResultHash,
-        IReadOnlyDictionary<string, string> terminalEvidence)
-    {
-        terminalEvidence = EngineEvidenceSnapshots.Freeze(terminalEvidence);
-        var stableResult = new
-        {
-            request.ContractVersion,
-            request.TransactionId,
-            request.InputKind,
-            request.Basis,
-            request.Settings,
-            request.Budgets,
-            InputHash = ResolveEngineInputHash(request),
-            request.RootIntentHash,
-            request.ExpandedGraphHash,
-            request.AnalysisBasisHash,
-            request.RouteBasisHash,
-            AnalysisResultHash = analysisResultHash,
-            ProcurementRouteResultHash = procurementRouteResultHash,
-            Status = status,
-            TerminalEvidence = terminalEvidence
-        };
-        return Compute(stableResult);
-    }
-
-    public static string ComputeRequestValidationFailureIdentity(EngineRequestEnvelope request) =>
-        Compute(new
-        {
-            Domain = "engine-invalid-request-identity-v1",
-            request.ContractVersion,
-            request.TransactionId
-        });
-
-    public static string ComputeRequestValidationFailureHash(
-        EngineRequestEnvelope request,
-        EngineTerminalStatus status,
-        IReadOnlyDictionary<string, string> terminalEvidence)
-    {
-        terminalEvidence = EngineEvidenceSnapshots.Freeze(terminalEvidence);
-        return Compute(new
-        {
-            Domain = "engine-invalid-request-terminal-v1",
-            request.ContractVersion,
-            request.TransactionId,
-            Status = status,
-            TerminalEvidence = terminalEvidence
-        });
-    }
 
     public static string ComputeComputationHash(
         long generation,

@@ -505,34 +505,6 @@
         await DialogService.ShowAsync<PlanBrowserDialog>("Plan Browser", options);
     }
     
-    private async Task LoadPlanByIdAsync(string planId)
-    {
-        try
-        {
-            var stored = await PlanPersistence.LoadPlanPayloadAsync(planId);
-            if (stored == null)
-            {
-                Snackbar.Add("Plan not found", Severity.Error);
-                return;
-            }
-            await PlanLifecycle.ReplaceStoredPlanAsync(
-                stored,
-                trackStoredPlanIdentity: true);
-            Snackbar.Add($"Loaded '{stored.Name}'", Severity.Success);
-            
-            // Navigate to planner if we have a plan
-            if (stored.PlanJson != null || stored.ProjectItems.Count > 0)
-            {
-                // Use relative path (no leading slash) so it resolves against base href correctly
-                NavigationManager.NavigateTo("./");
-            }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to load plan: {ex.Message}", Severity.Error);
-        }
-    }
-    
     private async Task RefreshSavedPlansListAsync()
     {
         var summaries = await PlanPersistence.LoadPlanSummariesAsync();

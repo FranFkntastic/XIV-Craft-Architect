@@ -32,14 +32,6 @@ public enum EnginePhase
     Indeterminate = 17
 }
 
-public enum EngineTerminalStatus
-{
-    Succeeded = 1,
-    Cancelled = 2,
-    Failed = 3,
-    Indeterminate = 4
-}
-
 public enum EngineComputationStatus
 {
     Completed = 1,
@@ -145,33 +137,12 @@ public sealed record EngineComputationResult(
     public ReferenceEngineResultSnapshot? ValidatedTransportedResult { get; init; }
 }
 
-public sealed record EngineCompletionEvidence(
-    string ContractVersion,
-    Guid TransactionId,
-    EngineTerminalStatus Status,
-    EnginePhase TerminalPhase,
-    EngineBasisSet Basis,
-    string RootIntentHash,
-    string ExpandedGraphHash,
-    string AnalysisResultHash,
-    string ProcurementRouteResultHash,
-    string FinalTransactionHash,
-    IReadOnlyDictionary<string, string> TerminalEvidence);
-
 public sealed record EngineFailure(
     string Code,
     string Message,
     bool IsRetryable,
     EnginePhase FailedPhase,
     string FailureType);
-
-public sealed record EngineResultEnvelope(
-    string ContractVersion,
-    Guid TransactionId,
-    EngineTerminalStatus Status,
-    JsonElement? Result,
-    EngineCompletionEvidence Completion,
-    EngineFailure? Failure = null);
 
 internal static class EngineEvidenceSnapshots
 {
@@ -181,19 +152,6 @@ internal static class EngineEvidenceSnapshots
         return evidence
             .OrderBy(pair => pair.Key, StringComparer.Ordinal)
             .ToFrozenDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-    }
-
-    public static EngineResultEnvelope FreezeTerminal(EngineResultEnvelope result)
-    {
-        ArgumentNullException.ThrowIfNull(result);
-        ArgumentNullException.ThrowIfNull(result.Completion);
-        return result with
-        {
-            Completion = result.Completion with
-            {
-                TerminalEvidence = Freeze(result.Completion.TerminalEvidence)
-            }
-        };
     }
 }
 
