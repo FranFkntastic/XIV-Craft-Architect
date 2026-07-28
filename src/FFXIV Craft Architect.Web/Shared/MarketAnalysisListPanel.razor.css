@@ -178,13 +178,6 @@
     color: inherit;
 }
 
-.ma-total-value.is-projected-unsupported {
-    color: #ff6b6b;
-    text-decoration: underline;
-    text-decoration-color: rgba(255, 107, 107, 0.9);
-    text-underline-offset: 2px;
-}
-
 .ma-total-value.is-unavailable {
     color: #d27a72;
 }
@@ -527,51 +520,4 @@
     padding: 20px;
     color: var(--ca-text-muted);
     text-align: center;
-}
-
-.ma-projected-warning {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 7px 10px;
-    border-bottom: 1px solid #343a40;
-    color: #efb64d;
-    background: rgba(239, 182, 77, .06);
-    font-size: 12px;
-}
-
-.ma-projected-world-table {
-    width: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
-    font-size: 12px;
-}
-
-.ma-projected-world-table th,
-.ma-projected-world-table td {
-    padding: 6px 7px;
-    border-bottom: 1px solid #2c3135;
-    color: #d7d7d7;
-    text-align: left;
-    vertical-align: middle;
-}
-
-.ma-projected-world-table th {
-    color: var(--ca-text-muted);
-    background: #252a2e;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-}
-
-.ma-projected-world-table th:nth-child(1) { width: 19%; }
-.ma-projected-world-table th:nth-child(2) { width: 19%; }
-.ma-projected-world-table th:nth-child(3) { width: 14%; }
-.ma-projected-world-table th:nth-child(4) { width: 16%; }
-.ma-projected-world-table th:nth-child(5) { width: 18%; }
-.ma-projected-world-table th:nth-child(6) { width: 14%; }
-
-.ma-projected-world-name {
-    color: #f0f0f0;
-    font-weight: 700;
 }

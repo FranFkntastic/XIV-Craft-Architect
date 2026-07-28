@@ -130,19 +130,15 @@ public sealed class RecipePlanDiagnosticContractTests
         Assert.DoesNotContain("_worker.ReplaceStoredPlanAsync(", tradePricing, StringComparison.Ordinal);
         Assert.DoesNotContain("RefreshMarketEvidenceAsync(", tradePricing, StringComparison.Ordinal);
         Assert.Contains(
-            "_market?.Revision != revision &&",
+            "!HasSelectedMarketDetails(projected, selectedItemId.Value)",
             marketPage,
             StringComparison.Ordinal);
         Assert.Contains(
-            "WorkerProjections.Shell.MarketAnalysisCount == 0",
+            "LoadSelectedMarketDetailsAsync(projected, selectedItemId)",
             marketPage,
             StringComparison.Ordinal);
         Assert.Contains(
-            "RefreshProjectionAsync(revision)",
-            marketPage,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "await EnsureSelectedMarketDetailsAsync();",
+            "revision != WorkerProjections.Shell.Revision",
             marketPage,
             StringComparison.Ordinal);
         Assert.DoesNotContain("OnStateChanged +=", workflow, StringComparison.Ordinal);
@@ -174,6 +170,14 @@ public sealed class RecipePlanDiagnosticContractTests
             web,
             "Shared",
             "MarketAnalysisResultsPanel.razor.css"));
+        var marketList = File.ReadAllText(Path.Combine(
+            web,
+            "Shared",
+            "MarketAnalysisListPanel.razor"));
+        var marketListCss = File.ReadAllText(Path.Combine(
+            web,
+            "Shared",
+            "MarketAnalysisListPanel.razor.css"));
         var retiredAuthority = new[]
         {
             "CurrentPlan",
@@ -248,6 +252,11 @@ public sealed class RecipePlanDiagnosticContractTests
             "ProjectedItems=\"ProjectedItems\"",
             marketResults,
             StringComparison.Ordinal);
+        Assert.Contains("Price Bands", marketList, StringComparison.Ordinal);
+        Assert.Contains("Updating market detail...", marketList, StringComparison.Ordinal);
+        Assert.DoesNotContain("_selectedProjectedItem", marketList, StringComparison.Ordinal);
+        Assert.DoesNotContain("ma-projected-world-table", marketList, StringComparison.Ordinal);
+        Assert.DoesNotContain("ma-projected-world-table", marketListCss, StringComparison.Ordinal);
         Assert.DoesNotContain("ma-restored-", marketResults, StringComparison.Ordinal);
         Assert.DoesNotContain("ma-restored-", marketResultsCss, StringComparison.Ordinal);
     }

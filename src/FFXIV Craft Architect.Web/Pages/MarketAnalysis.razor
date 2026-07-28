@@ -47,10 +47,10 @@
             ExpandedWorldKeys="_expandedWorldKeys"
             ShowWorldsColumn="_searchEntireRegion"
             IsRefreshingItem="@(_isRefreshingSelectedItem || _isAnalyzing || _isRefreshingPrices || HasActiveWorkerOperation)"
+            IsLoadingDetails="_isLoadingMarketDetails"
             IsAnalyzing="_isAnalyzing"
             OnSelectedItemChanged="SelectMarketAnalysisItem"
             OnRefreshItemRequested="RefreshSelectedMarketItemAsync"
-            OnRefreshProjectedItemRequested="RefreshSelectedMarketItemAsync"
             OnWorldExpansionToggled="ToggleMarketAnalysisWorld"
             OnSortChanged="SetMarketAnalysisSort"
             OnWorldSortChanged="SetMarketAnalysisWorldSort"
@@ -66,6 +66,7 @@
     private bool _isAnalyzing;
     private bool _isRefreshingPrices;
     private bool _isRefreshingSelectedItem;
+    private bool _isLoadingMarketDetails;
     private bool _searchEntireRegion = true;
     private bool _secretDebugToolsEnabled;
     private bool _suppressProjectionRefresh;
@@ -120,7 +121,7 @@
         _market ??= await WorkerSession.GetMarketProjectionAsync();
         ApplyRequestedItem();
         _selectedItemId ??= _market?.Items.FirstOrDefault()?.ItemId;
-        await EnsureSelectedMarketDetailsAsync();
+        _market = await LoadSelectedMarketDetailsAsync(_market, _selectedItemId);
     }
 
     protected override void OnParametersSet()
@@ -136,29 +137,57 @@
         }
 
         var revision = WorkerProjections.Shell.Revision;
-        if (revision > 0 &&
-            _market?.Revision != revision &&
-            WorkerProjections.Shell.MarketAnalysisCount == 0)
+        var projected = WorkerProjections.Market;
+        if (projected is null)
         {
+            return;
+        }
+
+        var selectedItemId = ResolveSelectedItemId(projected, _selectedItemId);
+        if (projected.HasAnalysis &&
+            selectedItemId.HasValue &&
+            !HasSelectedMarketDetails(projected, selectedItemId.Value))
+        {
+            if (_market?.Revision == revision &&
+                HasSelectedMarketDetails(_market, selectedItemId.Value))
+            {
+                return;
+            }
+
             if (_projectionRefreshRevision != revision)
             {
                 _projectionRefreshRevision = revision;
-                _ = InvokeAsync(() => RefreshProjectionAsync(revision));
+                _ = InvokeAsync(() => RefreshProjectionAsync(revision, projected, selectedItemId));
             }
             return;
         }
 
-        _market = WorkerProjections.Market ?? _market;
+        _market = projected;
+        _selectedItemId = selectedItemId;
         ApplyRequestedItem();
         _ = InvokeAsync(StateHasChanged);
     }
 
-    private async Task RefreshProjectionAsync(long revision)
+    private async Task RefreshProjectionAsync(
+        long revision,
+        WorkerMarketProjection projected,
+        int? selectedItemId)
     {
         try
         {
-            _market = await WorkerSession.GetMarketProjectionAsync();
+            var detailed = await LoadSelectedMarketDetailsAsync(projected, selectedItemId);
+            if (revision != WorkerProjections.Shell.Revision)
+            {
+                return;
+            }
+
+            _market = detailed;
+            _selectedItemId = selectedItemId;
             ApplyRequestedItem();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Market detail could not be updated: {ex.Message}", Severity.Error);
         }
         finally
         {
@@ -191,10 +220,9 @@
         _suppressProjectionRefresh = true;
         try
         {
-            _market = await WorkerSession.GetMarketProjectionAsync(
-                includeDetails: true,
-                worldDetailItemId: itemId.Value);
-            _selectedItemId = itemId;
+            var projected = WorkerProjections.Market ?? _market;
+            _market = await LoadSelectedMarketDetailsAsync(projected, itemId);
+            _selectedItemId = itemId.Value;
         }
         finally
         {
@@ -202,19 +230,47 @@
         }
     }
 
-    private async Task EnsureSelectedMarketDetailsAsync()
+    private async Task<WorkerMarketProjection?> LoadSelectedMarketDetailsAsync(
+        WorkerMarketProjection? market,
+        int? selectedItemId)
     {
-        if (!_selectedItemId.HasValue ||
-            (_market?.ShoppingPlans.Any(plan => plan.ItemId == _selectedItemId.Value) == true &&
-             _market.ItemAnalyses.Any(analysis => analysis.ItemId == _selectedItemId.Value)))
+        if (market is null ||
+            !selectedItemId.HasValue ||
+            !market.HasAnalysis ||
+            HasSelectedMarketDetails(market, selectedItemId.Value))
         {
-            return;
+            return market;
         }
 
-        _market = await WorkerSession.GetMarketProjectionAsync(
-            includeDetails: true,
-            worldDetailItemId: _selectedItemId.Value);
+        _isLoadingMarketDetails = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            return await WorkerSession.GetMarketProjectionAsync(
+                includeDetails: true,
+                worldDetailItemId: selectedItemId.Value);
+        }
+        finally
+        {
+            _isLoadingMarketDetails = false;
+        }
     }
+
+    private static bool HasSelectedMarketDetails(
+        WorkerMarketProjection market,
+        int itemId) =>
+        market.ShoppingPlans.Any(plan => plan.ItemId == itemId) &&
+        market.ItemAnalyses.Any(analysis =>
+            analysis.ItemId == itemId &&
+            WorkerSessionCoordinator.HasCompleteMarketDetail(analysis));
+
+    private static int? ResolveSelectedItemId(
+        WorkerMarketProjection market,
+        int? selectedItemId) =>
+        selectedItemId.HasValue &&
+        market.Items.Any(item => item.ItemId == selectedItemId.Value)
+            ? selectedItemId
+            : market.Items.FirstOrDefault()?.ItemId;
 
     private Task ToggleMarketAnalysisWorld(MarketAnalysisExpandedWorldKey key)
     {
@@ -261,8 +317,10 @@
         try
         {
             _suppressProjectionRefresh = true;
-            _market = await WorkerSession.ApplyMarketLensAsync(lens);
-            await EnsureSelectedMarketDetailsAsync();
+            var projected = await WorkerSession.ApplyMarketLensAsync(lens);
+            var selectedItemId = ResolveSelectedItemId(projected, _selectedItemId);
+            _market = await LoadSelectedMarketDetailsAsync(projected, selectedItemId);
+            _selectedItemId = selectedItemId;
         }
         catch (Exception ex)
         {
@@ -298,11 +356,6 @@
         await RefreshSelectedMarketItemAsync(plan.ItemId, plan.Name);
     }
 
-    private async Task RefreshSelectedMarketItemAsync(WorkerMarketItemProjection item)
-    {
-        await RefreshSelectedMarketItemAsync(item.ItemId, item.Name);
-    }
-
     private async Task RefreshSelectedMarketItemAsync(int itemId, string itemName)
     {
         _selectedItemId = itemId;
@@ -321,8 +374,7 @@
                     _market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion,
                     _market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
                     RequestedDataCenters: _market?.RequestedDataCenters));
-            _market = outcome.Market;
-            await EnsureSelectedMarketDetailsAsync();
+            _market = await LoadSelectedMarketDetailsAsync(outcome.Market, itemId);
             Snackbar.Add($"Refreshed {itemName}", Severity.Success);
         }
         finally
@@ -365,8 +417,9 @@
                         operation,
                         message,
                         progress: progress));
-            _market = outcome.Market;
-            await EnsureSelectedMarketDetailsAsync();
+            var selectedItemId = ResolveSelectedItemId(outcome.Market, _selectedItemId);
+            _market = await LoadSelectedMarketDetailsAsync(outcome.Market, selectedItemId);
+            _selectedItemId = selectedItemId;
             if (showCompletionSnackbar)
             {
                 Snackbar.Add(

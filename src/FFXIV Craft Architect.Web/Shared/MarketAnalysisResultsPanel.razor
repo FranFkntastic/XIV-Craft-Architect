@@ -1,9 +1,12 @@
 <div class="ma-results-column">
-    @if (IsAnalyzing && (ShoppingPlans.Any() || ProjectedItems.Any()))
+    @if ((IsAnalyzing || IsLoadingDetails) && (ShoppingPlans.Any() || ProjectedItems.Any()))
     {
         <div class="ma-analysis-state" role="status">
             <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
-            <span><strong>Updating market analysis.</strong> Current results remain visible until the replacement is ready.</span>
+            <span>
+                <strong>@(IsAnalyzing ? "Updating market analysis." : "Updating market detail.")</strong>
+                Current results remain visible until the replacement is ready.
+            </span>
         </div>
     }
 
@@ -27,7 +30,7 @@
             </div>
         </MudPaper>
     }
-    else if (IsAnalyzing && !ShoppingPlans.Any() && !ProjectedItems.Any())
+    else if ((IsAnalyzing || IsLoadingDetails) && !ShoppingPlans.Any() && !ProjectedItems.Any())
     {
         <MudPaper Elevation="2" Class="pa-4 ma-state-paper">
             <div class="ma-state-inner" role="status">
@@ -55,9 +58,9 @@
                                  ExpandedWorldKeys="ExpandedWorldKeys"
                                  ShowWorldsColumn="ShowWorldsColumn"
                                  IsRefreshingItem="IsRefreshingItem"
+                                 IsLoadingDetails="IsLoadingDetails"
                                  OnSelectedItemChanged="OnSelectedItemChanged"
                                  OnRefreshItemRequested="OnRefreshItemRequested"
-                                 OnRefreshProjectedItemRequested="OnRefreshProjectedItemRequested"
                                  OnWorldExpansionToggled="OnWorldExpansionToggled"
                                  OnSortChanged="OnSortChanged"
                                  OnWorldSortChanged="OnWorldSortChanged" />
@@ -92,12 +95,12 @@
     [Parameter] public IReadOnlySet<MarketAnalysisExpandedWorldKey> ExpandedWorldKeys { get; set; } = new HashSet<MarketAnalysisExpandedWorldKey>();
     [Parameter] public bool ShowWorldsColumn { get; set; }
     [Parameter] public bool IsRefreshingItem { get; set; }
+    [Parameter] public bool IsLoadingDetails { get; set; }
     [Parameter] public bool IsAnalyzing { get; set; }
 
     [Parameter] public EventCallback OnGoToPlannerRequested { get; set; }
     [Parameter] public EventCallback<int?> OnSelectedItemChanged { get; set; }
     [Parameter] public EventCallback<DetailedShoppingPlan> OnRefreshItemRequested { get; set; }
-    [Parameter] public EventCallback<WorkerMarketItemProjection> OnRefreshProjectedItemRequested { get; set; }
     [Parameter] public EventCallback<MarketAnalysisExpandedWorldKey> OnWorldExpansionToggled { get; set; }
     [Parameter] public EventCallback<MarketAnalysisGridSortState> OnSortChanged { get; set; }
     [Parameter] public EventCallback<MarketAnalysisWorldGridSortState> OnWorldSortChanged { get; set; }
