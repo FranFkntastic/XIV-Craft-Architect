@@ -4,6 +4,7 @@
   "scripts": {
     "test": "node truth-suite.mjs",
     "test:engine": "node --test engine-worker.test.mjs",
+    "test:specialized": "node --test indexeddb.test.mjs specialized-storage.test.mjs",
     "test:stock-firefox": "node stock-firefox-verify.mjs",
     "test:syntax": "node --check truth-suite.mjs && node --check stock-firefox-verify.mjs"
   },

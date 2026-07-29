@@ -203,7 +203,12 @@ function dispatchManagedSessionCommandJson(messageJson, identity, host) {
         .catch(error => postProtocolError(identity, "session-command-rejected", String(error)));
 }
 
-const sessionDatabaseName = "FFXIVCraftArchitect";
+const legacySessionDatabaseName = "FFXIVCraftArchitect";
+const legacySessionDatabaseMaximumVersion = 15;
+const sessionDatabaseName = "FFXIVCraftArchitect.Engine";
+const sessionDatabaseVersion = 1;
+const sessionStorageMetadataStore = "storageMetadata";
+const legacySessionMigrationId = "legacy-monolith-v15";
 const sessionManifestStore = "engineSessionManifests";
 const sessionRevisionStore = "engineSessionRevisions";
 const sessionComponentStore = "engineSessionComponents";
@@ -544,24 +549,190 @@ async function loadDurableSession() {
 
 function openSessionDatabase() {
     return new Promise((resolve, reject) => {
-        const request = indexedDB.open(sessionDatabaseName);
-        request.onerror = () => reject(request.error);
-        request.onsuccess = () => {
-            const database = request.result;
-            const required = [
-                sessionManifestStore,
-                sessionRevisionStore,
-                sessionComponentStore,
-                legacyPlanStore
-            ];
-            const missing = required.filter(name => !database.objectStoreNames.contains(name));
-            if (missing.length > 0) {
-                database.close();
-                reject(new Error(`Worker session stores are unavailable: ${missing.join(", ")}.`));
+        let blocked = false;
+        const request = indexedDB.open(sessionDatabaseName, sessionDatabaseVersion);
+        request.onerror = () => {
+            if (request.error?.name === "VersionError") {
+                reject(new Error(
+                    `Worker session database uses an incompatible schema newer than v${sessionDatabaseVersion}.`));
                 return;
             }
-            resolve(database);
+            reject(request.error);
         };
+        request.onblocked = () => {
+            blocked = true;
+            reject(new Error(
+                "Worker session database upgrade is blocked by another Craft Architect tab."));
+        };
+        request.onupgradeneeded = () => {
+            const database = request.result;
+            if (!database.objectStoreNames.contains(sessionStorageMetadataStore)) {
+                database.createObjectStore(sessionStorageMetadataStore, { keyPath: "id" });
+            }
+            if (!database.objectStoreNames.contains(sessionManifestStore)) {
+                database.createObjectStore(sessionManifestStore, { keyPath: "id" });
+            }
+            if (!database.objectStoreNames.contains(sessionRevisionStore)) {
+                const store = database.createObjectStore(sessionRevisionStore, { keyPath: "id" });
+                store.createIndex(
+                    "createdAtUnixMilliseconds",
+                    "createdAtUnixMilliseconds",
+                    { unique: false });
+            }
+            if (!database.objectStoreNames.contains(sessionComponentStore)) {
+                const store = database.createObjectStore(sessionComponentStore, { keyPath: "id" });
+                store.createIndex(
+                    "createdAtUnixMilliseconds",
+                    "createdAtUnixMilliseconds",
+                    { unique: false });
+            }
+            if (!database.objectStoreNames.contains(legacyPlanStore)) {
+                database.createObjectStore(legacyPlanStore, { keyPath: "id" });
+            }
+            if (!database.objectStoreNames.contains(savedPlanComponentStore)) {
+                const store = database.createObjectStore(savedPlanComponentStore, { keyPath: "id" });
+                store.createIndex("planId", "planId", { unique: false });
+            }
+        };
+        request.onsuccess = async () => {
+            const database = request.result;
+            if (blocked) {
+                database.close();
+                return;
+            }
+            const incompatibility = sessionSchemaIncompatibility(database);
+            if (incompatibility) {
+                database.close();
+                reject(new Error(
+                    `Worker session database v${sessionDatabaseVersion} has an incompatible schema: ` +
+                    `${incompatibility}.`));
+                return;
+            }
+            database.onversionchange = () => database.close();
+            try {
+                await migrateLegacySessionDatabase(database);
+                resolve(database);
+            } catch (error) {
+                database.close();
+                reject(error);
+            }
+        };
+    });
+}
+
+function sessionSchemaIncompatibility(database) {
+    const requiredStores = [
+        sessionStorageMetadataStore,
+        sessionManifestStore,
+        sessionRevisionStore,
+        sessionComponentStore,
+        legacyPlanStore,
+        savedPlanComponentStore
+    ];
+    const missingStores = requiredStores.filter(
+        storeName => !database.objectStoreNames.contains(storeName));
+    if (missingStores.length > 0) {
+        return `missing stores ${missingStores.join(", ")}`;
+    }
+
+    const transaction = database.transaction(
+        [sessionRevisionStore, sessionComponentStore, savedPlanComponentStore],
+        "readonly");
+    const missingIndexes = [];
+    for (const [storeName, indexName] of [
+        [sessionRevisionStore, "createdAtUnixMilliseconds"],
+        [sessionComponentStore, "createdAtUnixMilliseconds"],
+        [savedPlanComponentStore, "planId"]
+    ]) {
+        if (!transaction.objectStore(storeName).indexNames.contains(indexName)) {
+            missingIndexes.push(`${storeName}.${indexName}`);
+        }
+    }
+    return missingIndexes.length > 0
+        ? `missing indexes ${missingIndexes.join(", ")}`
+        : null;
+}
+
+async function migrateLegacySessionDatabase(database) {
+    const migration = await readStoreValue(
+        database,
+        sessionStorageMetadataStore,
+        legacySessionMigrationId);
+    if (migration?.state === "complete") {
+        return;
+    }
+    if (typeof indexedDB.databases !== "function") {
+        throw new Error(
+            "This browser cannot enumerate databases, so Worker session migration cannot run safely.");
+    }
+
+    const databases = await indexedDB.databases();
+    const legacyInfo = databases.find(item => item.name === legacySessionDatabaseName);
+    const sourceStores = [
+        sessionManifestStore,
+        sessionRevisionStore,
+        sessionComponentStore,
+        legacyPlanStore,
+        savedPlanComponentStore
+    ];
+    const snapshot = Object.fromEntries(sourceStores.map(name => [name, []]));
+    if (legacyInfo) {
+        if ((legacyInfo.version ?? 0) > legacySessionDatabaseMaximumVersion) {
+            throw new Error(
+                `Legacy Worker session schema v${legacyInfo.version} is newer than the supported migration reader.`);
+        }
+        const legacy = await new Promise((resolve, reject) => {
+            const request = indexedDB.open(legacySessionDatabaseName);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+        try {
+            const available = sourceStores.filter(name => legacy.objectStoreNames.contains(name));
+            if (available.length > 0) {
+                await new Promise((resolve, reject) => {
+                    const transaction = legacy.transaction(available, "readonly");
+                    for (const storeName of available) {
+                        const request = transaction.objectStore(storeName).getAll();
+                        request.onsuccess = () => {
+                            snapshot[storeName] = request.result || [];
+                        };
+                        request.onerror = () => transaction.abort();
+                    }
+                    transaction.oncomplete = resolve;
+                    transaction.onerror = () => reject(transaction.error);
+                    transaction.onabort = () => reject(
+                        transaction.error ?? new Error("Legacy Worker session snapshot aborted."));
+                });
+            }
+        } finally {
+            legacy.close();
+        }
+    }
+
+    await new Promise((resolve, reject) => {
+        const transaction = database.transaction(
+            [sessionStorageMetadataStore, ...sourceStores],
+            "readwrite");
+        for (const storeName of sourceStores) {
+            const store = transaction.objectStore(storeName);
+            for (const record of snapshot[storeName]) {
+                store.put(record);
+            }
+        }
+        transaction.objectStore(sessionStorageMetadataStore).put({
+            id: legacySessionMigrationId,
+            schemaVersion: 1,
+            domain: "engine",
+            state: "complete",
+            sourceDatabase: legacySessionDatabaseName,
+            sourceSchemaVersion: legacyInfo?.version ?? null,
+            counts: Object.fromEntries(sourceStores.map(name => [name, snapshot[name].length])),
+            completedAtUtc: new Date().toISOString()
+        });
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(
+            transaction.error ?? new Error("Worker session migration transaction aborted."));
     });
 }
 

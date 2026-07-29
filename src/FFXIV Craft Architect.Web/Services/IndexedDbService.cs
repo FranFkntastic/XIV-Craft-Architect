@@ -64,6 +64,11 @@ public sealed class IndexedDbService
             new List<StoredPlanSummary>(),
             "load plan summaries");
 
+    public Task<SpecializedBrowserStorageDiagnostics> EnsureSpecializedStorageAsync() =>
+        InvokeRequiredAsync<SpecializedBrowserStorageDiagnostics>(
+            "IndexedDB.getSpecializedStorageDiagnostics",
+            "initialize specialized browser storage");
+
     public Task<bool> DeletePlanAsync(string planId) =>
         InvokeOrDefaultAsync(
             "IndexedDB.deletePlan",
@@ -277,6 +282,24 @@ public sealed class TradeIndexedDbDiagnostics
             ? details
             : $"{details} Reload after closing other Craft Architect tabs so the browser can finish the IndexedDB upgrade.";
     }
+}
+
+public sealed class SpecializedBrowserStorageDiagnostics
+{
+    public Dictionary<string, string> DatabaseNames { get; set; } = [];
+    public Dictionary<string, int> Versions { get; set; } = [];
+    public bool EngineDatabasePresent { get; set; }
+    public Dictionary<string, SpecializedBrowserStorageMigration> Migrations { get; set; } = [];
+}
+
+public sealed class SpecializedBrowserStorageMigration
+{
+    public string State { get; set; } = string.Empty;
+    public string Domain { get; set; } = string.Empty;
+    public int SchemaVersion { get; set; }
+    public string? SourceDatabase { get; set; }
+    public int? SourceSchemaVersion { get; set; }
+    public Dictionary<string, int> Counts { get; set; } = [];
 }
 
 public sealed class StoredPlan

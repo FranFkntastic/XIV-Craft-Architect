@@ -19,13 +19,13 @@ before(async () => {
       response.end('<!doctype html>');
       return;
     }
-    if (request.url === '/indexedDB.js?v=20') {
+    if (request.url === '/indexedDB.js?v=21') {
       response.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' });
       response.end(script);
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
-    response.end('<!doctype html><script src="/indexedDB.js?v=20"></script>');
+    response.end('<!doctype html><script src="/indexedDB.js?v=21"></script>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -36,7 +36,7 @@ after(async () => {
 });
 
 for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]) {
-  test(`${name}: repair creates complete Worker session schema`, { timeout: 30_000 }, async () => {
+  test(`${name}: legacy migration creates specialized browser schemas`, { timeout: 30_000 }, async () => {
     const browser = await browserType.launch({ headless: true });
     try {
       const context = await browser.newContext();
@@ -61,30 +61,38 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
       const page = await context.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 21);
       const repaired = await page.evaluate(async () => {
-        await IndexedDB.getTradeStoreDiagnostics();
-        const request = indexedDB.open('FFXIVCraftArchitect');
-        const database = await new Promise((resolve, reject) => {
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-        });
-        const result = {
-          hasSessionManifestStore: database.objectStoreNames.contains('engineSessionManifests'),
-          hasSessionRevisionStore: database.objectStoreNames.contains('engineSessionRevisions'),
-          hasSessionComponentStore: database.objectStoreNames.contains('engineSessionComponents'),
-          hasPlanComponentStore: database.objectStoreNames.contains('planComponents')
+        const diagnostics = await IndexedDB.getSpecializedStorageDiagnostics();
+        const inspect = async name => {
+          const request = indexedDB.open(name);
+          const database = await new Promise((resolve, reject) => {
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+          const result = Array.from(database.objectStoreNames).sort();
+          database.close();
+          return result;
         };
-        database.close();
-        return result;
+        return {
+          diagnostics,
+          personalStores: await inspect('FFXIVCraftArchitect.Personal'),
+          marketStores: await inspect('FFXIVCraftArchitect.Market'),
+          companyStores: await inspect('FFXIVCraftArchitect.Company')
+        };
       });
 
-      assert.deepEqual(repaired, {
-        hasSessionManifestStore: true,
-        hasSessionRevisionStore: true,
-        hasSessionComponentStore: true,
-        hasPlanComponentStore: true
-      });
+      assert.equal(repaired.diagnostics.versions.personal, 1);
+      assert.equal(repaired.diagnostics.versions.market, 1);
+      assert.equal(repaired.diagnostics.versions.company, 1);
+      assert.equal(repaired.diagnostics.migrations.personal.state, 'complete');
+      assert.equal(repaired.diagnostics.migrations.market.state, 'complete');
+      assert.equal(repaired.diagnostics.migrations.company.state, 'complete');
+      assert.ok(repaired.personalStores.includes('plans'));
+      assert.ok(repaired.personalStores.includes('planComponents'));
+      assert.ok(repaired.marketStores.includes('marketCache'));
+      assert.ok(repaired.companyStores.includes('companyMutationOutbox'));
+      assert.ok(repaired.companyStores.includes('portableOperatorSettings'));
     } finally {
       await browser.close();
     }
@@ -100,11 +108,11 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       });
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 21);
 
       const result = await page.evaluate(async () => {
         await window.IndexedDB.clearMarketCache();
-        const open = indexedDB.open('FFXIVCraftArchitect');
+        const open = indexedDB.open('FFXIVCraftArchitect.Market');
         const database = await new Promise((resolve, reject) => {
           open.onsuccess = () => resolve(open.result);
           open.onerror = () => reject(open.error);
@@ -161,7 +169,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 21);
 
       const patched = await page.evaluate(async () => {
         await IndexedDB.savePlan({
@@ -194,11 +202,11 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 21);
 
       const migrated = await page.evaluate(async () => {
         await IndexedDB.loadPlan('initialize-schema');
-        const open = indexedDB.open('FFXIVCraftArchitect');
+        const open = indexedDB.open('FFXIVCraftArchitect.Personal');
         const database = await new Promise((resolve, reject) => {
           open.onsuccess = () => resolve(open.result);
           open.onerror = () => reject(open.error);
@@ -226,7 +234,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           procurementRouteJson: '{"route":"migrated"}'
         });
         const after = await IndexedDB.loadPlan('legacy-plan');
-        const reopened = indexedDB.open('FFXIVCraftArchitect');
+        const reopened = indexedDB.open('FFXIVCraftArchitect.Personal');
         const migratedDatabase = await new Promise((resolve, reject) => {
           reopened.onsuccess = () => resolve(reopened.result);
           reopened.onerror = () => reject(reopened.error);
@@ -268,7 +276,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 21);
 
       const patched = await page.evaluate(async () => {
         const marketIntelligenceJson = JSON.stringify({ evidence: 'x'.repeat(1024 * 1024) });
@@ -280,7 +288,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           marketIntelligenceJson,
           procurementRouteJson: null
         });
-        const openBefore = indexedDB.open('FFXIVCraftArchitect');
+        const openBefore = indexedDB.open('FFXIVCraftArchitect.Personal');
         const databaseBefore = await new Promise((resolve, reject) => {
           openBefore.onsuccess = () => resolve(openBefore.result);
           openBefore.onerror = () => reject(openBefore.error);
@@ -296,7 +304,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           procurementRouteJson: '{"route":"current"}'
         });
         const plan = await IndexedDB.loadPlan('autosave');
-        const openAfter = indexedDB.open('FFXIVCraftArchitect');
+        const openAfter = indexedDB.open('FFXIVCraftArchitect.Personal');
         const databaseAfter = await new Promise((resolve, reject) => {
           openAfter.onsuccess = () => resolve(openAfter.result);
           openAfter.onerror = () => reject(openAfter.error);
