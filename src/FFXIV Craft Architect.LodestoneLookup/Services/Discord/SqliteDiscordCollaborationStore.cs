@@ -1,0 +1,1891 @@
+using System.Data;
+using System.Security.Cryptography;
+using Microsoft.Data.Sqlite;
+using FFXIV_Craft_Architect.Core.Models;
+
+namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
+
+public sealed class SqliteDiscordCollaborationStore(
+    DiscordCommissionOptions options) :
+    IDiscordVolunteerInteractionService,
+    IDiscordOutboxLeaseStore,
+    IDiscordInstallationRegistry,
+    IDiscordInstallationBindingWriter
+{
+    private readonly SemaphoreSlim _schemaGate = new(1, 1);
+    private bool _schemaReady;
+
+    public async Task InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        if (_schemaReady)
+        {
+            return;
+        }
+
+        await _schemaGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_schemaReady)
+            {
+                return;
+            }
+
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                CREATE TABLE IF NOT EXISTS discord_schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at_utc TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS discord_installations (
+                    installation_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    application_id TEXT NOT NULL,
+                    guild_id TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    granted_permissions INTEGER NOT NULL,
+                    active INTEGER NOT NULL,
+                    verified_at_utc TEXT NOT NULL,
+                    UNIQUE (application_id, guild_id, channel_id)
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_discord_installations_active_company
+                    ON discord_installations(company_id)
+                    WHERE active = 1;
+
+                CREATE TABLE IF NOT EXISTS discord_publications (
+                    publication_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    order_id TEXT NOT NULL,
+                    source_order_revision INTEGER NOT NULL,
+                    public_id TEXT NOT NULL,
+                    brief_version INTEGER NOT NULL,
+                    installation_id TEXT NOT NULL,
+                    application_id TEXT NOT NULL,
+                    guild_id TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    message_id TEXT NULL,
+                    action_token TEXT NOT NULL UNIQUE,
+                    state INTEGER NOT NULL,
+                    desired_projection_revision INTEGER NOT NULL,
+                    applied_projection_revision INTEGER NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    FOREIGN KEY (installation_id) REFERENCES discord_installations(installation_id)
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_discord_publications_active_order
+                    ON discord_publications(company_id, order_id)
+                    WHERE state IN (0, 1);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_discord_publications_message
+                    ON discord_publications(application_id, channel_id, message_id)
+                    WHERE message_id IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS discord_interest_claims (
+                    claim_id TEXT PRIMARY KEY,
+                    publication_id TEXT NOT NULL,
+                    company_id TEXT NOT NULL,
+                    order_id TEXT NOT NULL,
+                    discord_user_id TEXT NOT NULL,
+                    discord_display_name TEXT NOT NULL,
+                    state INTEGER NOT NULL,
+                    resolved_crafter_id TEXT NULL,
+                    accepted_order_revision INTEGER NULL,
+                    resolution_idempotency_key TEXT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    resolved_at_utc TEXT NULL,
+                    FOREIGN KEY (publication_id) REFERENCES discord_publications(publication_id),
+                    UNIQUE (publication_id, discord_user_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS discord_interaction_receipts (
+                    interaction_id TEXT PRIMARY KEY,
+                    claim_id TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    FOREIGN KEY (claim_id) REFERENCES discord_interest_claims(claim_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS discord_roster_bindings (
+                    company_id TEXT NOT NULL,
+                    discord_user_id TEXT NOT NULL,
+                    crafter_id TEXT NOT NULL,
+                    discord_display_name TEXT NOT NULL,
+                    bound_at_utc TEXT NOT NULL,
+                    PRIMARY KEY (company_id, discord_user_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS discord_outbox (
+                    work_item_id TEXT PRIMARY KEY,
+                    publication_id TEXT NOT NULL,
+                    dedupe_key TEXT NOT NULL UNIQUE,
+                    operation INTEGER NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    message_id TEXT NULL,
+                    payload_json TEXT NOT NULL,
+                    desired_projection_revision INTEGER NOT NULL,
+                    state INTEGER NOT NULL,
+                    attempt_count INTEGER NOT NULL,
+                    next_attempt_at_utc TEXT NOT NULL,
+                    lease_id TEXT NULL,
+                    lease_expires_at_utc TEXT NULL,
+                    last_error TEXT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    FOREIGN KEY (publication_id) REFERENCES discord_publications(publication_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_discord_outbox_due
+                    ON discord_outbox(state, next_attempt_at_utc);
+
+                CREATE TABLE IF NOT EXISTS discord_reconciliation_cursors (
+                    company_id TEXT PRIMARY KEY,
+                    company_revision INTEGER NOT NULL,
+                    updated_at_utc TEXT NOT NULL
+                );
+
+                INSERT OR IGNORE INTO discord_schema_migrations(version, applied_at_utc)
+                VALUES (1, $now);
+                """;
+            command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            _schemaReady = true;
+        }
+        finally
+        {
+            _schemaGate.Release();
+        }
+    }
+
+    public async Task UpsertInstallationAsync(
+        DiscordCompanyInstallationBinding binding,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ValidateInstallation(binding);
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        if (binding.Active)
+        {
+            await using var deactivate = connection.CreateCommand();
+            deactivate.Transaction = (SqliteTransaction)transaction;
+            deactivate.CommandText =
+                """
+                UPDATE discord_installations
+                SET active = 0
+                WHERE company_id = $companyId AND installation_id <> $installationId;
+                """;
+            deactivate.Parameters.AddWithValue("$companyId", binding.CompanyId.ToString());
+            deactivate.Parameters.AddWithValue("$installationId", binding.InstallationId.ToString("D"));
+            await deactivate.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            INSERT INTO discord_installations (
+                installation_id,
+                company_id,
+                application_id,
+                guild_id,
+                channel_id,
+                granted_permissions,
+                active,
+                verified_at_utc
+            )
+            VALUES (
+                $installationId,
+                $companyId,
+                $applicationId,
+                $guildId,
+                $channelId,
+                $grantedPermissions,
+                $active,
+                $verifiedAtUtc
+            )
+            ON CONFLICT(installation_id) DO UPDATE SET
+                company_id = excluded.company_id,
+                application_id = excluded.application_id,
+                guild_id = excluded.guild_id,
+                channel_id = excluded.channel_id,
+                granted_permissions = excluded.granted_permissions,
+                active = excluded.active,
+                verified_at_utc = excluded.verified_at_utc;
+            """;
+        AddInstallationParameters(command, binding);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<DiscordCompanyInstallationBinding?> LoadInstallationAsync(
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                installation_id,
+                company_id,
+                application_id,
+                guild_id,
+                channel_id,
+                granted_permissions,
+                active,
+                verified_at_utc
+            FROM discord_installations
+            WHERE company_id = $companyId AND active = 1;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? ReadInstallation(reader)
+            : null;
+    }
+
+    public async Task<DiscordInstallationDestination?> ResolveAsync(
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        var binding = await LoadInstallationAsync(companyId, cancellationToken);
+        return binding is null
+            ? null
+            : new DiscordInstallationDestination(
+                binding.InstallationId.ToString("D"),
+                binding.CompanyId,
+                binding.ApplicationId,
+                binding.GuildId,
+                binding.ChannelId,
+                (binding.GrantedPermissions & DiscordRuntimePermission.ViewChannel) != 0,
+                (binding.GrantedPermissions & DiscordRuntimePermission.SendMessages) != 0,
+                (binding.GrantedPermissions & DiscordRuntimePermission.EmbedLinks) != 0,
+                binding.Active);
+    }
+
+    public async Task<DiscordPublicationCreateResult> CreatePublicationAsync(
+        DiscordCompanyInstallationBinding installation,
+        TradeCompanyPublicationOwnership ownership,
+        string publicId,
+        int briefVersion,
+        string idempotencyKey,
+        string actionToken,
+        DiscordPublicationState initialState,
+        string initialPayloadJson,
+        DateTimeOffset createdAt,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateInstallation(installation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(actionToken);
+        ArgumentException.ThrowIfNullOrWhiteSpace(initialPayloadJson);
+        if (!installation.Active ||
+            !DiscordRuntimePermission.CanPublish(installation.GrantedPermissions) ||
+            installation.CompanyId != ownership.CompanyId ||
+            ownership.OrderId == Guid.Empty ||
+            briefVersion <= 0 ||
+            actionToken.Length > 100 ||
+            !actionToken.StartsWith("ca:v1:", StringComparison.Ordinal))
+        {
+            return new DiscordPublicationCreateResult(
+                DiscordPublicationCreateStatus.Conflict,
+                null,
+                "The canonical ownership and active Discord installation do not match.");
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var replay = await LoadPublicationByIdempotencyAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            idempotencyKey,
+            cancellationToken);
+        if (replay != null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            var matches =
+                replay.CompanyId == ownership.CompanyId &&
+                replay.OrderId == ownership.OrderId &&
+                replay.SourceOrderRevision == ownership.OrderRevision &&
+                string.Equals(replay.PublicId, publicId, StringComparison.Ordinal);
+            return new DiscordPublicationCreateResult(
+                matches
+                    ? DiscordPublicationCreateStatus.Replayed
+                    : DiscordPublicationCreateStatus.Conflict,
+                matches ? replay : null,
+                matches ? null : "The idempotency key is already bound to another publication.");
+        }
+
+        var publicationId = Guid.NewGuid();
+        var publication = new DiscordPublicationRecord(
+            publicationId,
+            ownership.CompanyId,
+            ownership.OrderId,
+            ownership.OrderRevision,
+            publicId,
+            briefVersion,
+            installation.InstallationId,
+            installation.ApplicationId,
+            installation.GuildId,
+            installation.ChannelId,
+            null,
+            actionToken,
+            initialState,
+            1,
+            0,
+            idempotencyKey,
+            createdAt,
+            createdAt);
+
+        try
+        {
+            await InsertPublicationAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                publication,
+                cancellationToken);
+            await InsertOutboxAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                publication,
+                DiscordOutboxOperation.CreateMessage,
+                initialPayloadJson,
+                "create:" + publicationId.ToString("N"),
+                createdAt,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new DiscordPublicationCreateResult(
+                DiscordPublicationCreateStatus.Created,
+                publication);
+        }
+        catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordPublicationCreateResult(
+                DiscordPublicationCreateStatus.Conflict,
+                null,
+                "An active Discord publication already owns this order or installation binding.");
+        }
+    }
+
+    public async Task<DiscordPublicationRecord?> LoadPublicationAsync(
+        Guid publicationId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = CreatePublicationSelect(connection);
+        command.CommandText += " WHERE publication_id = $value;";
+        command.Parameters.AddWithValue("$value", publicationId.ToString("D"));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
+    }
+
+    public async Task<DiscordPublicationRecord?> LoadPublicationByPublicIdAsync(
+        string publicId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = CreatePublicationSelect(connection);
+        command.CommandText +=
+            " WHERE public_id = $value ORDER BY created_at_utc DESC LIMIT 1;";
+        command.Parameters.AddWithValue("$value", publicId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
+    }
+
+    public async Task<DiscordPublicationRecord?> LoadPublicationByOrderAsync(
+        CompanyId companyId,
+        Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = CreatePublicationSelect(connection);
+        command.CommandText +=
+            """
+             WHERE company_id = $companyId AND order_id = $orderId
+             ORDER BY created_at_utc DESC
+             LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$orderId", orderId.ToString("D"));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<DiscordInterestClaim>> LoadPendingClaimsAsync(
+        CompanyId companyId,
+        Guid? orderId = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                claim_id,
+                publication_id,
+                company_id,
+                order_id,
+                discord_user_id,
+                discord_display_name,
+                state,
+                resolved_crafter_id,
+                accepted_order_revision,
+                resolution_idempotency_key,
+                created_at_utc,
+                resolved_at_utc
+            FROM discord_interest_claims
+            WHERE company_id = $companyId
+              AND state IN ($pending, $assignmentPending)
+            """ +
+            (orderId.HasValue ? " AND order_id = $orderId" : string.Empty) +
+            " ORDER BY created_at_utc;";
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$pending", (int)DiscordInterestClaimState.Pending);
+        command.Parameters.AddWithValue(
+            "$assignmentPending",
+            (int)DiscordInterestClaimState.AssignmentPending);
+        if (orderId.HasValue)
+        {
+            command.Parameters.AddWithValue("$orderId", orderId.Value.ToString("D"));
+        }
+
+        var claims = new List<DiscordInterestClaim>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            claims.Add(ReadClaim(reader));
+        }
+
+        return claims;
+    }
+
+    public async Task<DiscordClaimTransitionResult> BeginClaimAcceptanceAsync(
+        CompanyId companyId,
+        Guid claimId,
+        string resolutionIdempotencyKey,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(resolutionIdempotencyKey);
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var claim = await LoadClaimAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            companyId,
+            claimId,
+            cancellationToken);
+        if (claim == null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(DiscordClaimTransitionStatus.Missing, null);
+        }
+
+        if (claim.State == DiscordInterestClaimState.AssignmentPending &&
+            string.Equals(
+                claim.ResolutionIdempotencyKey,
+                resolutionIdempotencyKey,
+                StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Replayed,
+                claim);
+        }
+
+        if (claim.State == DiscordInterestClaimState.Accepted &&
+            string.Equals(
+                claim.ResolutionIdempotencyKey,
+                resolutionIdempotencyKey,
+                StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Replayed,
+                claim);
+        }
+
+        if (claim.State != DiscordInterestClaimState.Pending)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Conflict,
+                claim,
+                "The claim is no longer pending.");
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            UPDATE discord_interest_claims
+            SET state = $state, resolution_idempotency_key = $key
+            WHERE claim_id = $claimId AND state = $pending;
+            """;
+        command.Parameters.AddWithValue("$state", (int)DiscordInterestClaimState.AssignmentPending);
+        command.Parameters.AddWithValue("$key", resolutionIdempotencyKey);
+        command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
+        command.Parameters.AddWithValue("$pending", (int)DiscordInterestClaimState.Pending);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Conflict,
+                claim);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new DiscordClaimTransitionResult(
+            DiscordClaimTransitionStatus.Applied,
+            claim with
+            {
+                State = DiscordInterestClaimState.AssignmentPending,
+                ResolutionIdempotencyKey = resolutionIdempotencyKey
+            });
+    }
+
+    public async Task<DiscordClaimTransitionResult> CompleteClaimAcceptanceAsync(
+        CompanyId companyId,
+        Guid claimId,
+        string resolutionIdempotencyKey,
+        Guid crafterId,
+        CompanyRecordRevision acceptedOrderRevision,
+        DateTimeOffset resolvedAt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var claim = await LoadClaimAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            companyId,
+            claimId,
+            cancellationToken);
+        if (claim == null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(DiscordClaimTransitionStatus.Missing, null);
+        }
+
+        if (claim.State == DiscordInterestClaimState.Accepted &&
+            claim.ResolvedCrafterId == crafterId &&
+            string.Equals(
+                claim.ResolutionIdempotencyKey,
+                resolutionIdempotencyKey,
+                StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Replayed,
+                claim);
+        }
+
+        if (claim.State != DiscordInterestClaimState.AssignmentPending ||
+            !string.Equals(
+                claim.ResolutionIdempotencyKey,
+                resolutionIdempotencyKey,
+                StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Conflict,
+                claim);
+        }
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText =
+            """
+            UPDATE discord_interest_claims
+            SET
+                state = $state,
+                resolved_crafter_id = $crafterId,
+                accepted_order_revision = $acceptedRevision,
+                resolved_at_utc = $resolvedAt
+            WHERE claim_id = $claimId;
+            """;
+        update.Parameters.AddWithValue("$state", (int)DiscordInterestClaimState.Accepted);
+        update.Parameters.AddWithValue("$crafterId", crafterId.ToString("D"));
+        update.Parameters.AddWithValue("$acceptedRevision", acceptedOrderRevision.Value);
+        update.Parameters.AddWithValue("$resolvedAt", resolvedAt.ToString("O"));
+        update.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
+        await update.ExecuteNonQueryAsync(cancellationToken);
+
+        await UpsertRosterBindingAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            new DiscordRosterIdentityBinding(
+                companyId,
+                claim.DiscordUserId,
+                crafterId,
+                claim.DiscordDisplayName,
+                resolvedAt),
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new DiscordClaimTransitionResult(
+            DiscordClaimTransitionStatus.Applied,
+            claim with
+            {
+                State = DiscordInterestClaimState.Accepted,
+                ResolvedCrafterId = crafterId,
+                AcceptedOrderRevision = acceptedOrderRevision,
+                ResolvedAt = resolvedAt
+            });
+    }
+
+    public Task ResetClaimAcceptanceAsync(
+        CompanyId companyId,
+        Guid claimId,
+        string resolutionIdempotencyKey,
+        CancellationToken cancellationToken = default) =>
+        ChangeClaimStateAsync(
+            companyId,
+            claimId,
+            DiscordInterestClaimState.AssignmentPending,
+            DiscordInterestClaimState.Pending,
+            resolutionIdempotencyKey,
+            resolvedAt: null,
+            cancellationToken);
+
+    public Task DeclineClaimAsync(
+        CompanyId companyId,
+        Guid claimId,
+        DateTimeOffset declinedAt,
+        CancellationToken cancellationToken = default) =>
+        ChangeClaimStateAsync(
+            companyId,
+            claimId,
+            DiscordInterestClaimState.Pending,
+            DiscordInterestClaimState.Declined,
+            resolutionIdempotencyKey: null,
+            declinedAt,
+            cancellationToken);
+
+    public async Task EnqueueProjectionAsync(
+        Guid publicationId,
+        DiscordPublicationState state,
+        long desiredProjectionRevision,
+        string payloadJson,
+        DateTimeOffset queuedAt,
+        CancellationToken cancellationToken = default,
+        CompanyRevision? sourceCompanyRevision = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(payloadJson);
+        if (desiredProjectionRevision <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(desiredProjectionRevision));
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var publication = await LoadPublicationAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            publicationId,
+            cancellationToken) ??
+            throw new InvalidOperationException("Discord publication was not found.");
+        if (publication.State == DiscordPublicationState.ReconciliationRequired &&
+            string.IsNullOrWhiteSpace(publication.MessageId))
+        {
+            throw new InvalidOperationException(
+                "Discord message creation has an ambiguous result and requires explicit reconciliation.");
+        }
+
+        if (desiredProjectionRevision <= publication.DesiredProjectionRevision)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return;
+        }
+
+        await using var supersede = connection.CreateCommand();
+        supersede.Transaction = (SqliteTransaction)transaction;
+        supersede.CommandText =
+            """
+            UPDATE discord_outbox
+            SET state = $superseded, updated_at_utc = $now
+            WHERE publication_id = $publicationId
+              AND state IN ($pending, $retry)
+              AND desired_projection_revision < $desiredRevision;
+            """;
+        supersede.Parameters.AddWithValue("$superseded", (int)DiscordOutboxState.Superseded);
+        supersede.Parameters.AddWithValue("$now", queuedAt.ToString("O"));
+        supersede.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+        supersede.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+        supersede.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
+        supersede.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
+        await supersede.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText =
+            """
+            UPDATE discord_publications
+            SET
+                state = $state,
+                desired_projection_revision = $desiredRevision,
+                updated_at_utc = $now
+            WHERE publication_id = $publicationId;
+            """;
+        update.Parameters.AddWithValue("$state", (int)state);
+        update.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
+        update.Parameters.AddWithValue("$now", queuedAt.ToString("O"));
+        update.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+        await update.ExecuteNonQueryAsync(cancellationToken);
+
+        var operation = string.IsNullOrWhiteSpace(publication.MessageId)
+            ? DiscordOutboxOperation.CreateMessage
+            : DiscordOutboxOperation.EditMessage;
+        var updated = publication with
+        {
+            State = state,
+            DesiredProjectionRevision = desiredProjectionRevision,
+            UpdatedAt = queuedAt
+        };
+        await InsertOutboxAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            updated,
+            operation,
+            payloadJson,
+            $"projection:{publicationId:N}:{desiredProjectionRevision}",
+            queuedAt,
+            cancellationToken);
+        if (sourceCompanyRevision.HasValue)
+        {
+            await AdvanceReconciliationCursorAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                publication.CompanyId,
+                sourceCompanyRevision.Value,
+                queuedAt,
+                cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<long> LoadReconciliationCursorAsync(
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT company_revision
+            FROM discord_reconciliation_cursors
+            WHERE company_id = $companyId;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        return value is long revision ? revision : 0;
+    }
+
+    public async Task AdvanceReconciliationCursorAsync(
+        CompanyId companyId,
+        CompanyRevision companyRevision,
+        DateTimeOffset updatedAt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await AdvanceReconciliationCursorAsync(
+            connection,
+            transaction: null,
+            companyId,
+            companyRevision,
+            updatedAt,
+            cancellationToken);
+    }
+
+    private static async Task AdvanceReconciliationCursorAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        CompanyId companyId,
+        CompanyRevision companyRevision,
+        DateTimeOffset updatedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO discord_reconciliation_cursors(
+                company_id,
+                company_revision,
+                updated_at_utc
+            )
+            VALUES($companyId, $companyRevision, $updatedAt)
+            ON CONFLICT(company_id) DO UPDATE SET
+                company_revision = CASE
+                    WHEN excluded.company_revision > company_revision
+                    THEN excluded.company_revision
+                    ELSE company_revision
+                END,
+                updated_at_utc = excluded.updated_at_utc;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$companyRevision", companyRevision.Value);
+        command.Parameters.AddWithValue("$updatedAt", updatedAt.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<DiscordVolunteerInteractionResult> RecordInterestAsync(
+        DiscordVolunteerInteraction interaction,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsDiscordSnowflake(interaction.InteractionId) ||
+            !IsDiscordSnowflake(interaction.ApplicationId) ||
+            !IsDiscordSnowflake(interaction.GuildId) ||
+            !IsDiscordSnowflake(interaction.ChannelId) ||
+            !IsDiscordSnowflake(interaction.MessageId) ||
+            !IsDiscordSnowflake(interaction.DiscordUserId) ||
+            string.IsNullOrWhiteSpace(interaction.ActionToken) ||
+            interaction.ActionToken.Length > 100)
+        {
+            return new DiscordVolunteerInteractionResult(
+                DiscordVolunteerInteractionStatus.Rejected,
+                "This Volunteer action is invalid.");
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var publication = await LoadPublicationByActionTokenAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            interaction.ActionToken,
+            cancellationToken);
+        if (publication == null ||
+            publication.State != DiscordPublicationState.Open ||
+            !string.Equals(publication.ApplicationId, interaction.ApplicationId, StringComparison.Ordinal) ||
+            !string.Equals(publication.GuildId, interaction.GuildId, StringComparison.Ordinal) ||
+            !string.Equals(publication.ChannelId, interaction.ChannelId, StringComparison.Ordinal) ||
+            !string.Equals(publication.MessageId, interaction.MessageId, StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordVolunteerInteractionResult(
+                DiscordVolunteerInteractionStatus.NoLongerOpen,
+                "This commission is no longer accepting volunteers.");
+        }
+
+        var receiptClaim = await LoadClaimByInteractionAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            interaction.InteractionId,
+            cancellationToken);
+        if (receiptClaim != null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordVolunteerInteractionResult(
+                DiscordVolunteerInteractionStatus.Replayed,
+                ClaimMessage(receiptClaim));
+        }
+
+        var existingClaim = await LoadClaimByUserAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            publication.PublicationId,
+            interaction.DiscordUserId,
+            cancellationToken);
+        if (existingClaim != null)
+        {
+            await InsertInteractionReceiptAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                interaction.InteractionId,
+                existingClaim.ClaimId,
+                DateTimeOffset.UtcNow,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new DiscordVolunteerInteractionResult(
+                DiscordVolunteerInteractionStatus.Replayed,
+                ClaimMessage(existingClaim));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var claim = new DiscordInterestClaim(
+            Guid.NewGuid(),
+            publication.PublicationId,
+            publication.CompanyId,
+            publication.OrderId,
+            interaction.DiscordUserId,
+            Truncate(interaction.DiscordUserDisplayName, 120),
+            DiscordInterestClaimState.Pending,
+            null,
+            null,
+            null,
+            now,
+            null);
+        await InsertClaimAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            claim,
+            cancellationToken);
+        await InsertInteractionReceiptAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            interaction.InteractionId,
+            claim.ClaimId,
+            now,
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new DiscordVolunteerInteractionResult(
+            DiscordVolunteerInteractionStatus.Recorded,
+            "Your interest was recorded. The company operator must confirm the assignment in Craft Architect.");
+    }
+
+    public async Task<IReadOnlyList<DiscordOutboxWorkItem>> LeaseDueAsync(
+        DateTimeOffset now,
+        TimeSpan leaseDuration,
+        int maximumCount,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        await using var select = connection.CreateCommand();
+        select.Transaction = (SqliteTransaction)transaction;
+        select.CommandText =
+            """
+            SELECT
+                work_item_id,
+                operation,
+                channel_id,
+                message_id,
+                payload_json,
+                attempt_count
+            FROM discord_outbox
+            WHERE (
+                    state IN ($pending, $retry)
+                    AND next_attempt_at_utc <= $now
+                )
+                OR (
+                    state = $inFlight
+                    AND lease_expires_at_utc <= $now
+                )
+            ORDER BY created_at_utc
+            LIMIT $maximumCount;
+            """;
+        select.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+        select.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
+        select.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+        select.Parameters.AddWithValue("$now", now.ToString("O"));
+        select.Parameters.AddWithValue("$maximumCount", Math.Clamp(maximumCount, 1, 100));
+        var candidates = new List<(Guid Id, DiscordOutboxOperation Operation, string Channel, string? Message, string Payload, int Attempts)>();
+        await using (var reader = await select.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                candidates.Add((
+                    Guid.Parse(reader.GetString(0)),
+                    (DiscordOutboxOperation)reader.GetInt32(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.GetString(4),
+                    reader.GetInt32(5)));
+            }
+        }
+
+        var leased = new List<DiscordOutboxWorkItem>(candidates.Count);
+        foreach (var candidate in candidates)
+        {
+            var leaseId = Guid.NewGuid().ToString("N");
+            await using var update = connection.CreateCommand();
+            update.Transaction = (SqliteTransaction)transaction;
+            update.CommandText =
+                """
+                UPDATE discord_outbox
+                SET
+                    state = $inFlight,
+                    attempt_count = attempt_count + 1,
+                    lease_id = $leaseId,
+                    lease_expires_at_utc = $leaseExpiresAt,
+                    updated_at_utc = $now
+                WHERE work_item_id = $workItemId;
+                """;
+            update.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+            update.Parameters.AddWithValue("$leaseId", leaseId);
+            update.Parameters.AddWithValue("$leaseExpiresAt", (now + leaseDuration).ToString("O"));
+            update.Parameters.AddWithValue("$now", now.ToString("O"));
+            update.Parameters.AddWithValue("$workItemId", candidate.Id.ToString("D"));
+            await update.ExecuteNonQueryAsync(cancellationToken);
+            leased.Add(new DiscordOutboxWorkItem(
+                candidate.Id,
+                leaseId,
+                candidate.Operation,
+                candidate.Channel,
+                candidate.Message,
+                candidate.Payload,
+                candidate.Attempts + 1));
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return leased;
+    }
+
+    public async Task CompleteAsync(
+        Guid workItemId,
+        string leaseId,
+        string? messageId,
+        DateTimeOffset completedAt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var metadata = await LoadOutboxMetadataAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            workItemId,
+            leaseId,
+            cancellationToken);
+        if (metadata == null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return;
+        }
+
+        await UpdateOutboxTerminalAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            workItemId,
+            leaseId,
+            DiscordOutboxState.Succeeded,
+            null,
+            completedAt,
+            cancellationToken);
+        await using var publication = connection.CreateCommand();
+        publication.Transaction = (SqliteTransaction)transaction;
+        publication.CommandText =
+            """
+            UPDATE discord_publications
+            SET
+                message_id = COALESCE($messageId, message_id),
+                applied_projection_revision = CASE
+                    WHEN $desiredRevision > applied_projection_revision
+                    THEN $desiredRevision
+                    ELSE applied_projection_revision
+                END,
+                updated_at_utc = $now
+            WHERE publication_id = $publicationId;
+            """;
+        publication.Parameters.AddWithValue(
+            "$messageId",
+            string.IsNullOrWhiteSpace(messageId) ? DBNull.Value : messageId);
+        publication.Parameters.AddWithValue("$desiredRevision", metadata.Value.DesiredRevision);
+        publication.Parameters.AddWithValue("$now", completedAt.ToString("O"));
+        publication.Parameters.AddWithValue("$publicationId", metadata.Value.PublicationId.ToString("D"));
+        await publication.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public Task RetryAsync(
+        Guid workItemId,
+        string leaseId,
+        DateTimeOffset nextAttemptAt,
+        string error,
+        CancellationToken cancellationToken = default) =>
+        UpdateOutboxRetryAsync(
+            workItemId,
+            leaseId,
+            nextAttemptAt,
+            error,
+            cancellationToken);
+
+    public Task RequireReconciliationAsync(
+        Guid workItemId,
+        string leaseId,
+        string error,
+        DateTimeOffset failedAt,
+        CancellationToken cancellationToken = default) =>
+        FailOutboxAsync(
+            workItemId,
+            leaseId,
+            DiscordOutboxState.ReconciliationRequired,
+            DiscordPublicationState.ReconciliationRequired,
+            error,
+            failedAt,
+            cancellationToken);
+
+    public Task ExhaustAsync(
+        Guid workItemId,
+        string leaseId,
+        string error,
+        DateTimeOffset failedAt,
+        CancellationToken cancellationToken = default) =>
+        FailOutboxAsync(
+            workItemId,
+            leaseId,
+            DiscordOutboxState.Failed,
+            DiscordPublicationState.Failed,
+            error,
+            failedAt,
+            cancellationToken);
+
+    private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
+    {
+        await InitializeAsync(cancellationToken);
+        return await OpenConnectionAsync(cancellationToken);
+    }
+
+    private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
+    {
+        var absolutePath = Path.GetFullPath(options.DatabasePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = absolutePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared,
+            Pooling = true
+        }.ToString());
+        await connection.OpenAsync(cancellationToken);
+        await using var pragma = connection.CreateCommand();
+        pragma.CommandText =
+            """
+            PRAGMA foreign_keys = ON;
+            PRAGMA busy_timeout = 5000;
+            PRAGMA journal_mode = WAL;
+            """;
+        await pragma.ExecuteNonQueryAsync(cancellationToken);
+        return connection;
+    }
+
+    private static async Task InsertPublicationAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        DiscordPublicationRecord publication,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO discord_publications (
+                publication_id,
+                company_id,
+                order_id,
+                source_order_revision,
+                public_id,
+                brief_version,
+                installation_id,
+                application_id,
+                guild_id,
+                channel_id,
+                message_id,
+                action_token,
+                state,
+                desired_projection_revision,
+                applied_projection_revision,
+                idempotency_key,
+                created_at_utc,
+                updated_at_utc
+            )
+            VALUES (
+                $publicationId,
+                $companyId,
+                $orderId,
+                $sourceOrderRevision,
+                $publicId,
+                $briefVersion,
+                $installationId,
+                $applicationId,
+                $guildId,
+                $channelId,
+                $messageId,
+                $actionToken,
+                $state,
+                $desiredProjectionRevision,
+                $appliedProjectionRevision,
+                $idempotencyKey,
+                $createdAt,
+                $updatedAt
+            );
+            """;
+        AddPublicationParameters(command, publication);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InsertOutboxAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        DiscordPublicationRecord publication,
+        DiscordOutboxOperation operation,
+        string payloadJson,
+        string dedupeKey,
+        DateTimeOffset queuedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT OR IGNORE INTO discord_outbox (
+                work_item_id,
+                publication_id,
+                dedupe_key,
+                operation,
+                channel_id,
+                message_id,
+                payload_json,
+                desired_projection_revision,
+                state,
+                attempt_count,
+                next_attempt_at_utc,
+                lease_id,
+                lease_expires_at_utc,
+                last_error,
+                created_at_utc,
+                updated_at_utc
+            )
+            VALUES (
+                $workItemId,
+                $publicationId,
+                $dedupeKey,
+                $operation,
+                $channelId,
+                $messageId,
+                $payloadJson,
+                $desiredProjectionRevision,
+                $state,
+                0,
+                $nextAttemptAt,
+                NULL,
+                NULL,
+                NULL,
+                $createdAt,
+                $updatedAt
+            );
+            """;
+        command.Parameters.AddWithValue("$workItemId", Guid.NewGuid().ToString("D"));
+        command.Parameters.AddWithValue("$publicationId", publication.PublicationId.ToString("D"));
+        command.Parameters.AddWithValue("$dedupeKey", dedupeKey);
+        command.Parameters.AddWithValue("$operation", (int)operation);
+        command.Parameters.AddWithValue("$channelId", publication.ChannelId);
+        command.Parameters.AddWithValue(
+            "$messageId",
+            string.IsNullOrWhiteSpace(publication.MessageId)
+                ? DBNull.Value
+                : publication.MessageId);
+        command.Parameters.AddWithValue("$payloadJson", payloadJson);
+        command.Parameters.AddWithValue(
+            "$desiredProjectionRevision",
+            publication.DesiredProjectionRevision);
+        command.Parameters.AddWithValue("$state", (int)DiscordOutboxState.Pending);
+        command.Parameters.AddWithValue("$nextAttemptAt", queuedAt.ToString("O"));
+        command.Parameters.AddWithValue("$createdAt", queuedAt.ToString("O"));
+        command.Parameters.AddWithValue("$updatedAt", queuedAt.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<DiscordPublicationRecord?> LoadPublicationByIdempotencyAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreatePublicationSelect(connection, transaction);
+        command.CommandText += " WHERE idempotency_key = $value;";
+        command.Parameters.AddWithValue("$value", idempotencyKey);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
+    }
+
+    private static async Task<DiscordPublicationRecord?> LoadPublicationAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid publicationId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreatePublicationSelect(connection, transaction);
+        command.CommandText += " WHERE publication_id = $value;";
+        command.Parameters.AddWithValue("$value", publicationId.ToString("D"));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
+    }
+
+    private static async Task<DiscordPublicationRecord?> LoadPublicationByActionTokenAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string actionToken,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreatePublicationSelect(connection, transaction);
+        command.CommandText += " WHERE action_token = $value;";
+        command.Parameters.AddWithValue("$value", actionToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
+    }
+
+    private static SqliteCommand CreatePublicationSelect(
+        SqliteConnection connection,
+        SqliteTransaction? transaction = null)
+    {
+        var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT
+                publication_id,
+                company_id,
+                order_id,
+                source_order_revision,
+                public_id,
+                brief_version,
+                installation_id,
+                application_id,
+                guild_id,
+                channel_id,
+                message_id,
+                action_token,
+                state,
+                desired_projection_revision,
+                applied_projection_revision,
+                idempotency_key,
+                created_at_utc,
+                updated_at_utc
+            FROM discord_publications
+            """;
+        return command;
+    }
+
+    private static DiscordPublicationRecord ReadPublication(SqliteDataReader reader) =>
+        new(
+            Guid.Parse(reader.GetString(0)),
+            CompanyId.Parse(reader.GetString(1)),
+            Guid.Parse(reader.GetString(2)),
+            new CompanyRecordRevision(reader.GetInt64(3)),
+            reader.GetString(4),
+            reader.GetInt32(5),
+            Guid.Parse(reader.GetString(6)),
+            reader.GetString(7),
+            reader.GetString(8),
+            reader.GetString(9),
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            reader.GetString(11),
+            (DiscordPublicationState)reader.GetInt32(12),
+            reader.GetInt64(13),
+            reader.GetInt64(14),
+            reader.GetString(15),
+            DateTimeOffset.Parse(reader.GetString(16)),
+            DateTimeOffset.Parse(reader.GetString(17)));
+
+    private static DiscordCompanyInstallationBinding ReadInstallation(SqliteDataReader reader) =>
+        new(
+            Guid.Parse(reader.GetString(0)),
+            CompanyId.Parse(reader.GetString(1)),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetInt64(5),
+            reader.GetInt32(6) != 0,
+            DateTimeOffset.Parse(reader.GetString(7)));
+
+    private static void AddInstallationParameters(
+        SqliteCommand command,
+        DiscordCompanyInstallationBinding binding)
+    {
+        command.Parameters.AddWithValue("$installationId", binding.InstallationId.ToString("D"));
+        command.Parameters.AddWithValue("$companyId", binding.CompanyId.ToString());
+        command.Parameters.AddWithValue("$applicationId", binding.ApplicationId);
+        command.Parameters.AddWithValue("$guildId", binding.GuildId);
+        command.Parameters.AddWithValue("$channelId", binding.ChannelId);
+        command.Parameters.AddWithValue("$grantedPermissions", binding.GrantedPermissions);
+        command.Parameters.AddWithValue("$active", binding.Active ? 1 : 0);
+        command.Parameters.AddWithValue("$verifiedAtUtc", binding.VerifiedAt.ToString("O"));
+    }
+
+    private static void AddPublicationParameters(
+        SqliteCommand command,
+        DiscordPublicationRecord publication)
+    {
+        command.Parameters.AddWithValue("$publicationId", publication.PublicationId.ToString("D"));
+        command.Parameters.AddWithValue("$companyId", publication.CompanyId.ToString());
+        command.Parameters.AddWithValue("$orderId", publication.OrderId.ToString("D"));
+        command.Parameters.AddWithValue("$sourceOrderRevision", publication.SourceOrderRevision.Value);
+        command.Parameters.AddWithValue("$publicId", publication.PublicId);
+        command.Parameters.AddWithValue("$briefVersion", publication.BriefVersion);
+        command.Parameters.AddWithValue("$installationId", publication.InstallationId.ToString("D"));
+        command.Parameters.AddWithValue("$applicationId", publication.ApplicationId);
+        command.Parameters.AddWithValue("$guildId", publication.GuildId);
+        command.Parameters.AddWithValue("$channelId", publication.ChannelId);
+        command.Parameters.AddWithValue(
+            "$messageId",
+            string.IsNullOrWhiteSpace(publication.MessageId)
+                ? DBNull.Value
+                : publication.MessageId);
+        command.Parameters.AddWithValue("$actionToken", publication.ActionToken);
+        command.Parameters.AddWithValue("$state", (int)publication.State);
+        command.Parameters.AddWithValue(
+            "$desiredProjectionRevision",
+            publication.DesiredProjectionRevision);
+        command.Parameters.AddWithValue(
+            "$appliedProjectionRevision",
+            publication.AppliedProjectionRevision);
+        command.Parameters.AddWithValue("$idempotencyKey", publication.IdempotencyKey);
+        command.Parameters.AddWithValue("$createdAt", publication.CreatedAt.ToString("O"));
+        command.Parameters.AddWithValue("$updatedAt", publication.UpdatedAt.ToString("O"));
+    }
+
+    private static async Task<DiscordInterestClaim?> LoadClaimAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyId companyId,
+        Guid claimId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateClaimSelect(connection, transaction);
+        command.CommandText += " WHERE company_id = $companyId AND claim_id = $claimId;";
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadClaim(reader) : null;
+    }
+
+    private static async Task<DiscordInterestClaim?> LoadClaimByInteractionAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string interactionId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT
+                c.claim_id,
+                c.publication_id,
+                c.company_id,
+                c.order_id,
+                c.discord_user_id,
+                c.discord_display_name,
+                c.state,
+                c.resolved_crafter_id,
+                c.accepted_order_revision,
+                c.resolution_idempotency_key,
+                c.created_at_utc,
+                c.resolved_at_utc
+            FROM discord_interaction_receipts r
+            JOIN discord_interest_claims c ON c.claim_id = r.claim_id
+            WHERE r.interaction_id = $interactionId;
+            """;
+        command.Parameters.AddWithValue("$interactionId", interactionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadClaim(reader) : null;
+    }
+
+    private static async Task<DiscordInterestClaim?> LoadClaimByUserAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid publicationId,
+        string discordUserId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateClaimSelect(connection, transaction);
+        command.CommandText +=
+            " WHERE publication_id = $publicationId AND discord_user_id = $discordUserId;";
+        command.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+        command.Parameters.AddWithValue("$discordUserId", discordUserId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadClaim(reader) : null;
+    }
+
+    private static SqliteCommand CreateClaimSelect(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
+    {
+        var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT
+                claim_id,
+                publication_id,
+                company_id,
+                order_id,
+                discord_user_id,
+                discord_display_name,
+                state,
+                resolved_crafter_id,
+                accepted_order_revision,
+                resolution_idempotency_key,
+                created_at_utc,
+                resolved_at_utc
+            FROM discord_interest_claims
+            """;
+        return command;
+    }
+
+    private static DiscordInterestClaim ReadClaim(SqliteDataReader reader) =>
+        new(
+            Guid.Parse(reader.GetString(0)),
+            Guid.Parse(reader.GetString(1)),
+            CompanyId.Parse(reader.GetString(2)),
+            Guid.Parse(reader.GetString(3)),
+            reader.GetString(4),
+            reader.GetString(5),
+            (DiscordInterestClaimState)reader.GetInt32(6),
+            reader.IsDBNull(7) ? null : Guid.Parse(reader.GetString(7)),
+            reader.IsDBNull(8) ? null : new CompanyRecordRevision(reader.GetInt64(8)),
+            reader.IsDBNull(9) ? null : reader.GetString(9),
+            DateTimeOffset.Parse(reader.GetString(10)),
+            reader.IsDBNull(11) ? null : DateTimeOffset.Parse(reader.GetString(11)));
+
+    private static async Task InsertClaimAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        DiscordInterestClaim claim,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO discord_interest_claims (
+                claim_id,
+                publication_id,
+                company_id,
+                order_id,
+                discord_user_id,
+                discord_display_name,
+                state,
+                resolved_crafter_id,
+                accepted_order_revision,
+                resolution_idempotency_key,
+                created_at_utc,
+                resolved_at_utc
+            )
+            VALUES (
+                $claimId,
+                $publicationId,
+                $companyId,
+                $orderId,
+                $discordUserId,
+                $discordDisplayName,
+                $state,
+                NULL,
+                NULL,
+                NULL,
+                $createdAt,
+                NULL
+            );
+            """;
+        command.Parameters.AddWithValue("$claimId", claim.ClaimId.ToString("D"));
+        command.Parameters.AddWithValue("$publicationId", claim.PublicationId.ToString("D"));
+        command.Parameters.AddWithValue("$companyId", claim.CompanyId.ToString());
+        command.Parameters.AddWithValue("$orderId", claim.OrderId.ToString("D"));
+        command.Parameters.AddWithValue("$discordUserId", claim.DiscordUserId);
+        command.Parameters.AddWithValue("$discordDisplayName", claim.DiscordDisplayName);
+        command.Parameters.AddWithValue("$state", (int)claim.State);
+        command.Parameters.AddWithValue("$createdAt", claim.CreatedAt.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InsertInteractionReceiptAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string interactionId,
+        Guid claimId,
+        DateTimeOffset createdAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO discord_interaction_receipts(
+                interaction_id,
+                claim_id,
+                created_at_utc
+            )
+            VALUES($interactionId, $claimId, $createdAt);
+            """;
+        command.Parameters.AddWithValue("$interactionId", interactionId);
+        command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
+        command.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpsertRosterBindingAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        DiscordRosterIdentityBinding binding,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO discord_roster_bindings (
+                company_id,
+                discord_user_id,
+                crafter_id,
+                discord_display_name,
+                bound_at_utc
+            )
+            VALUES (
+                $companyId,
+                $discordUserId,
+                $crafterId,
+                $discordDisplayName,
+                $boundAt
+            )
+            ON CONFLICT(company_id, discord_user_id) DO UPDATE SET
+                crafter_id = excluded.crafter_id,
+                discord_display_name = excluded.discord_display_name,
+                bound_at_utc = excluded.bound_at_utc;
+            """;
+        command.Parameters.AddWithValue("$companyId", binding.CompanyId.ToString());
+        command.Parameters.AddWithValue("$discordUserId", binding.DiscordUserId);
+        command.Parameters.AddWithValue("$crafterId", binding.CrafterId.ToString("D"));
+        command.Parameters.AddWithValue("$discordDisplayName", binding.DiscordDisplayName);
+        command.Parameters.AddWithValue("$boundAt", binding.BoundAt.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private async Task ChangeClaimStateAsync(
+        CompanyId companyId,
+        Guid claimId,
+        DiscordInterestClaimState fromState,
+        DiscordInterestClaimState toState,
+        string? resolutionIdempotencyKey,
+        DateTimeOffset? resolvedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE discord_interest_claims
+            SET
+                state = $toState,
+                resolution_idempotency_key = CASE
+                    WHEN $toState = $pending THEN NULL
+                    ELSE resolution_idempotency_key
+                END,
+                resolved_at_utc = $resolvedAt
+            WHERE company_id = $companyId
+              AND claim_id = $claimId
+              AND state = $fromState
+              AND (
+                    $resolutionKey IS NULL
+                    OR resolution_idempotency_key = $resolutionKey
+              );
+            """;
+        command.Parameters.AddWithValue("$toState", (int)toState);
+        command.Parameters.AddWithValue("$pending", (int)DiscordInterestClaimState.Pending);
+        command.Parameters.AddWithValue(
+            "$resolvedAt",
+            resolvedAt.HasValue ? resolvedAt.Value.ToString("O") : DBNull.Value);
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
+        command.Parameters.AddWithValue("$fromState", (int)fromState);
+        command.Parameters.AddWithValue(
+            "$resolutionKey",
+            resolutionIdempotencyKey is null ? DBNull.Value : resolutionIdempotencyKey);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private async Task UpdateOutboxRetryAsync(
+        Guid workItemId,
+        string leaseId,
+        DateTimeOffset nextAttemptAt,
+        string error,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE discord_outbox
+            SET
+                state = $state,
+                next_attempt_at_utc = $nextAttemptAt,
+                lease_id = NULL,
+                lease_expires_at_utc = NULL,
+                last_error = $error,
+                updated_at_utc = $updatedAt
+            WHERE work_item_id = $workItemId
+              AND lease_id = $leaseId
+              AND state = $inFlight;
+            """;
+        command.Parameters.AddWithValue("$state", (int)DiscordOutboxState.Retry);
+        command.Parameters.AddWithValue("$nextAttemptAt", nextAttemptAt.ToString("O"));
+        command.Parameters.AddWithValue("$error", Truncate(error, 512));
+        command.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$workItemId", workItemId.ToString("D"));
+        command.Parameters.AddWithValue("$leaseId", leaseId);
+        command.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private async Task FailOutboxAsync(
+        Guid workItemId,
+        string leaseId,
+        DiscordOutboxState outboxState,
+        DiscordPublicationState publicationState,
+        string error,
+        DateTimeOffset failedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var metadata = await LoadOutboxMetadataAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            workItemId,
+            leaseId,
+            cancellationToken);
+        if (metadata == null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return;
+        }
+
+        await UpdateOutboxTerminalAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            workItemId,
+            leaseId,
+            outboxState,
+            error,
+            failedAt,
+            cancellationToken);
+        await using var publication = connection.CreateCommand();
+        publication.Transaction = (SqliteTransaction)transaction;
+        publication.CommandText =
+            """
+            UPDATE discord_publications
+            SET state = $state, updated_at_utc = $updatedAt
+            WHERE publication_id = $publicationId;
+            """;
+        publication.Parameters.AddWithValue("$state", (int)publicationState);
+        publication.Parameters.AddWithValue("$updatedAt", failedAt.ToString("O"));
+        publication.Parameters.AddWithValue("$publicationId", metadata.Value.PublicationId.ToString("D"));
+        await publication.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task<(Guid PublicationId, long DesiredRevision)?> LoadOutboxMetadataAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid workItemId,
+        string leaseId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT publication_id, desired_projection_revision
+            FROM discord_outbox
+            WHERE work_item_id = $workItemId
+              AND lease_id = $leaseId
+              AND state = $inFlight;
+            """;
+        command.Parameters.AddWithValue("$workItemId", workItemId.ToString("D"));
+        command.Parameters.AddWithValue("$leaseId", leaseId);
+        command.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? (Guid.Parse(reader.GetString(0)), reader.GetInt64(1))
+            : null;
+    }
+
+    private static async Task UpdateOutboxTerminalAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid workItemId,
+        string leaseId,
+        DiscordOutboxState state,
+        string? error,
+        DateTimeOffset updatedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            UPDATE discord_outbox
+            SET
+                state = $state,
+                lease_id = NULL,
+                lease_expires_at_utc = NULL,
+                last_error = $error,
+                updated_at_utc = $updatedAt
+            WHERE work_item_id = $workItemId
+              AND lease_id = $leaseId
+              AND state = $inFlight;
+            """;
+        command.Parameters.AddWithValue("$state", (int)state);
+        command.Parameters.AddWithValue(
+            "$error",
+            string.IsNullOrWhiteSpace(error) ? DBNull.Value : Truncate(error, 512));
+        command.Parameters.AddWithValue("$updatedAt", updatedAt.ToString("O"));
+        command.Parameters.AddWithValue("$workItemId", workItemId.ToString("D"));
+        command.Parameters.AddWithValue("$leaseId", leaseId);
+        command.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static void ValidateInstallation(DiscordCompanyInstallationBinding binding)
+    {
+        if (binding.InstallationId == Guid.Empty ||
+            binding.CompanyId == default ||
+            !IsDiscordSnowflake(binding.ApplicationId) ||
+            !IsDiscordSnowflake(binding.GuildId) ||
+            !IsDiscordSnowflake(binding.ChannelId) ||
+            binding.GrantedPermissions < 0)
+        {
+            throw new ArgumentException("Discord installation binding is incomplete.", nameof(binding));
+        }
+    }
+
+    private static bool IsDiscordSnowflake(string value) =>
+        value.Length is >= 1 and <= 32 &&
+        value.All(char.IsAsciiDigit);
+
+    private static string CreateToken(int byteCount) =>
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(byteCount))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
+    public static string CreateActionToken() =>
+        "ca:v1:" + CreateToken(18);
+
+    private static string ClaimMessage(DiscordInterestClaim claim) =>
+        claim.State switch
+        {
+            DiscordInterestClaimState.Pending or DiscordInterestClaimState.AssignmentPending =>
+                "Your interest is already recorded. The company operator must confirm the assignment in Craft Architect.",
+            DiscordInterestClaimState.Accepted =>
+                "The company operator accepted this assignment.",
+            DiscordInterestClaimState.Declined =>
+                "The company operator declined this request.",
+            _ => "This Volunteer request is no longer active."
+        };
+
+    private static string Truncate(string value, int maximumLength) =>
+        value.Length <= maximumLength ? value : value[..maximumLength];
+}

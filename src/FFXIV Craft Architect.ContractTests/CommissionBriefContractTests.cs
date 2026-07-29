@@ -97,15 +97,19 @@ public sealed class CommissionBriefContractTests
                 2_920,
                 600)
         };
+        var ownership = new TradeCompanyPublicationOwnership(
+            new CompanyId(Guid.Parse("018fdc85-9b7a-7c31-87ed-6f9bdb4a4444")),
+            Guid.Parse("cc58c224-d6e6-402b-bcdd-e7b45dd00b44"),
+            new CompanyRecordRevision(17));
 
         using var productionClient = application.CreateClient();
         productionClient.DefaultRequestHeaders.Host = "xivcraftarchitect.com";
         using var productionCreateResponse = await productionClient.PostAsJsonAsync(
             "/xivdata/commission-briefs",
-            new CommissionBriefCreateRequest { Brief = source });
+            new CommissionBriefCreateRequest { Brief = source, Ownership = ownership });
         using var createResponse = await client.PostAsJsonAsync(
             "/xivdata/commission-briefs",
-            new CommissionBriefCreateRequest { Brief = source });
+            new CommissionBriefCreateRequest { Brief = source, Ownership = ownership });
         createResponse.EnsureSuccessStatusCode();
         var created = (await createResponse.Content.ReadFromJsonAsync<CommissionBriefCreateResponse>())!;
         var published = await client.GetFromJsonAsync<PublishedCommissionBrief>(
@@ -129,6 +133,7 @@ public sealed class CommissionBriefContractTests
         Assert.Equal(10m, published?.Brief.Payment.MaterialAdjustmentPercent);
         Assert.Equal(2_920, published?.Brief.Payment.CraftSynthCount);
         Assert.Equal(79_194m, published?.Brief.CrafterMaterials.Single().UnitCost);
+        Assert.Equal(ownership, published?.Ownership);
         Assert.Equal(HttpStatusCode.Unauthorized, badRevokeResponse.StatusCode);
         Assert.Equal(HttpStatusCode.OK, stillPublic.StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, revokeResponse.StatusCode);
