@@ -40,11 +40,6 @@
         "resolved": "3.1.4",
         "contentHash": "5mj99LvCqrq3CNi06xYdyIAXOEh+5b33F2nErCzI5zWiDdLHXiPXEWFSUAF8zlIv0ZWqjZNCwHTQeAPYbF3pCg=="
       },
-      "Chaos.NaCl.Standard": {
-        "type": "Transitive",
-        "resolved": "1.0.0",
-        "contentHash": "8ajPyzu49LSIdPgeg56eDdKu1j8FZJngKgTn9rXHV3GNVly49XFvPAwoWuUT8xPze3OjVUOWQZaO82HWrYFFEw=="
-      },
       "HtmlAgilityPack": {
         "type": "Transitive",
         "resolved": "1.11.46",
@@ -628,7 +623,6 @@
       "ffxiv craft architect.lodestonelookup": {
         "type": "Project",
         "dependencies": {
-          "Chaos.NaCl.Standard": "[1.0.0, )",
           "Gooseworks.FFXIVCraftArchitect.Core": "[0.1.0-local, )",
           "Microsoft.Data.Sqlite": "[8.0.28, )",
           "NetStone": "[1.4.1, )",

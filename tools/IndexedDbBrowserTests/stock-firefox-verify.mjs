@@ -281,7 +281,7 @@ async function openApplication() {
   await waitFor(
     'IndexedDB module',
     () => driver.executeScript(
-      () => window.IndexedDB?.moduleRevision === 21),
+      () => window.IndexedDB?.moduleRevision === 20),
     120_000);
   await waitFor(
     'initial startup overlay completion',
