@@ -1,4 +1,5 @@
 @using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
 
 <MudDialog>
     <TitleContent>
@@ -31,11 +32,34 @@
         <MudAlert Severity="Severity.Info" Dense="true">
             Publishing freezes this crafter brief. Future order edits or repricing will not silently change the published terms.
         </MudAlert>
+        <MudRadioGroup T="TradeCommissionDestination" @bind-Value="_destination" Class="mt-3">
+            <MudRadio T="TradeCommissionDestination"
+                      Value="TradeCommissionDestination.PublicLink"
+                      Dense="true">
+                Public link
+            </MudRadio>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-8 mb-2">
+                Create a read-only brief you can share yourself.
+            </MudText>
+            <MudRadio T="TradeCommissionDestination"
+                      Value="TradeCommissionDestination.DiscordChannel"
+                      Dense="true"
+                      Disabled="@(!DiscordAvailable)">
+                Discord channel
+            </MudRadio>
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-8">
+                @(DiscordAvailable
+                    ? "Queue the current company destination and keep delivery status on this order."
+                    : DiscordUnavailableReason)
+            </MudText>
+        </MudRadioGroup>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Publish">
-            Publish &amp; Copy Link
+            @(_destination == TradeCommissionDestination.PublicLink
+                ? "Publish & Copy Link"
+                : "Publish to Discord")
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -44,7 +68,12 @@
     [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public string Title { get; set; } = string.Empty;
     [Parameter] public decimal TotalPayment { get; set; }
+    [Parameter] public bool DiscordAvailable { get; set; }
+    [Parameter] public string DiscordUnavailableReason { get; set; } =
+        "Refresh the canonical company order before publishing to Discord.";
 
+    private TradeCommissionDestination _destination = TradeCommissionDestination.PublicLink;
     private void Cancel() => MudDialog.Cancel();
-    private void Publish() => MudDialog.Close(DialogResult.Ok(true));
+    private void Publish() => MudDialog.Close(DialogResult.Ok(
+        new TradeCommissionPublishDialogResult(_destination)));
 }

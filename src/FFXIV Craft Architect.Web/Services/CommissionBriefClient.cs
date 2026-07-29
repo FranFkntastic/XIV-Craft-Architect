@@ -19,11 +19,16 @@ public sealed class CommissionBriefClient
 
     public async Task<CommissionBriefCreateResponse> PublishAsync(
         CommissionBriefDocument brief,
+        TradeCompanyPublicationOwnership? ownership = null,
         CancellationToken ct = default)
     {
         using var response = await _httpClient.PostAsJsonAsync(
             "xivdata/commission-briefs",
-            new CommissionBriefCreateRequest { Brief = brief },
+            new CommissionBriefCreateRequest
+            {
+                Brief = brief,
+                Ownership = ownership
+            },
             ct);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<CommissionBriefCreateResponse>(cancellationToken: ct)

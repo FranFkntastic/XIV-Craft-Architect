@@ -10,6 +10,9 @@
 @inject TradeOrderPricingWorkflowService TradeOrderPricingWorkflow
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeOrderMutationService TradeOrderMutations
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyClientOrchestrator TradeCompanyClient
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyCollaborationService TradeCollaboration
 @inject CommissionBriefClient CommissionBriefs
 @inject CommissionBriefLocalStateService CommissionBriefLocalState
 @inject WebPlanPersistenceService PlanPersistence
@@ -826,6 +829,110 @@
                                 </ul>
                             </MudTabPanel>
                             <MudTabPanel Text="Collaboration">
+                                <section class="trade-orders-company-sync">
+                                    <div>
+                                        <span class="@GetCompanyConnectionChipClass()">
+                                            @FormatCompanyConnectionState()
+                                        </span>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            @TradeCompanyClient.Connection.Message
+                                        </MudText>
+                                    </div>
+                                    @if (TradeCompanyClient.Connection.PendingCount > 0)
+                                    {
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   Disabled="@_isRetryingCompanyMutation"
+                                                   OnClick="RetryCompanyMutationsAsync">
+                                            @(_isRetryingCompanyMutation ? "Retrying..." : "Retry Company Sync")
+                                        </MudButton>
+                                    }
+                                </section>
+                                @if (SelectedOrderConflict is not null)
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                                        <div class="trade-orders-conflict-row">
+                                            <span>
+                                                This order changed in another client while local edits were pending.
+                                                Review before any publication or claim action.
+                                            </span>
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Warning"
+                                                       Size="Size.Small"
+                                                       Disabled="@(SelectedOrderConflict.CurrentRecord is null)"
+                                                       OnClick="UseCompanyOrderVersionAsync">
+                                                Use Company Version
+                                            </MudButton>
+                                        </div>
+                                    </MudAlert>
+                                }
+                                @if (SelectedPendingInterests.Count > 0)
+                                {
+                                    <section class="trade-orders-interest-list">
+                                        <div class="trade-orders-section-heading">
+                                            <div>
+                                                <MudText Typo="Typo.subtitle2">Crafter interest</MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                    Confirm assignment here; Discord never assigns the order by itself.
+                                                </MudText>
+                                            </div>
+                                            <span class="trade-orders-publication-chip is-attention">
+                                                @SelectedPendingInterests.Count pending
+                                            </span>
+                                        </div>
+                                        @foreach (var claim in SelectedPendingInterests)
+                                        {
+                                            <div class="trade-orders-interest-row">
+                                                <div class="trade-orders-interest-identity">
+                                                    <strong>@claim.DisplayName</strong>
+                                                    <span>@claim.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                                                </div>
+                                                <CompactSelectField Id="@($"interest-crafter-{claim.ClaimId}")"
+                                                                    Label="Assign to crafter"
+                                                                    Value="@GetInterestCrafterValue(claim)"
+                                                                    ValueChanged="value => SetInterestCrafterValue(claim, value)"
+                                                                    Options="GetCrafterOptions()"
+                                                                    Disabled="@(_activeInterestClaimId is not null)" />
+                                                <div class="trade-orders-interest-actions">
+                                                    <MudButton Variant="Variant.Filled"
+                                                               Color="Color.Primary"
+                                                               Size="Size.Small"
+                                                               Disabled="@(_activeInterestClaimId is not null || string.IsNullOrWhiteSpace(GetInterestCrafterValue(claim)))"
+                                                               OnClick="() => AcceptInterestAsync(claim)">
+                                                        @(_activeInterestClaimId == claim.ClaimId ? "Assigning..." : "Assign")
+                                                    </MudButton>
+                                                    <MudButton Variant="Variant.Outlined"
+                                                               Color="Color.Secondary"
+                                                               Size="Size.Small"
+                                                               Disabled="@(_activeInterestClaimId is not null)"
+                                                               OnClick="() => DeclineInterestAsync(claim)">
+                                                        Decline
+                                                    </MudButton>
+                                                </div>
+                                            </div>
+                                        }
+                                    </section>
+                                }
+                                @if (SelectedCompanyPublication is { } companyPublication)
+                                {
+                                    <section class="@GetCompanyPublicationClass(companyPublication)">
+                                        <div class="trade-orders-section-heading">
+                                            <div>
+                                                <MudText Typo="Typo.subtitle2">
+                                                    @FormatCompanyPublicationDestination(companyPublication)
+                                                </MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                    @(companyPublication.Message ??
+                                                      $"Updated {companyPublication.UpdatedAtUtc.ToLocalTime():yyyy-MM-dd HH:mm}.")
+                                                </MudText>
+                                            </div>
+                                            <span class="@GetCompanyPublicationChipClass(companyPublication)">
+                                                @companyPublication.State
+                                            </span>
+                                        </div>
+                                    </section>
+                                }
                                 @if (HasLiveCommissionPublication)
                                 {
                                     var publication = _selectedOrder.CommissionPublication!;
@@ -879,7 +986,7 @@
                                         </MudButton>
                                     </div>
                                 }
-                                else
+                                else if (!HasActiveCompanyPublication)
                                 {
                                     <section class="trade-orders-collaboration-state">
                                         <div class="trade-orders-section-heading">
@@ -932,7 +1039,7 @@
                                                StartIcon="@Icons.Material.Filled.Share"
                                                Disabled="@(!CanPublishCommission)"
                                                OnClick="PublishSelectedCommissionAsync">
-                                        @(_isPublishingCommission ? "Publishing..." : "Publish Commission")
+                                        @(_isPublishingCommission ? "Publishing..." : PublishCommissionButtonLabel)
                                     </MudButton>
                                 }
                             </MudTabPanel>
