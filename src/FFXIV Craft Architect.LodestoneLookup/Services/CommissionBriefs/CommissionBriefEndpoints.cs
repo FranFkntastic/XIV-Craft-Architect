@@ -22,6 +22,15 @@ public static class CommissionBriefEndpoints
                     return Results.NotFound();
                 }
 
+                if (request.Ownership != null)
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "canonical_company_ownership_required",
+                        message = "Company-owned publications require the authenticated Trade Company API."
+                    });
+                }
+
                 var validationError = Validate(request.Brief);
                 if (validationError != null)
                 {

@@ -6,6 +6,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.XivData;
 
 const string CorsPolicyName = "CraftArchitectWeb";
@@ -57,6 +58,21 @@ builder.Services.AddSingleton(_ => new DiscordCommissionOptions
         ?? "https://dev.xivcraftarchitect.com/commission.html?id="
 });
 builder.Services.AddSingleton<DiscordRequestVerifier>();
+builder.Services.AddSingleton(_ => new TradeCompanyOptions
+{
+    Enabled = builder.Configuration.GetValue("TradeCompany:Enabled", false),
+    DatabasePath = builder.Configuration["TradeCompany:DatabasePath"]
+        ?? Path.Combine(AppContext.BaseDirectory, "trade-company.db"),
+    EnvironmentId = builder.Configuration["TradeCompany:EnvironmentId"] ?? "unconfigured",
+    ProvisioningKey = builder.Configuration["TradeCompany:ProvisioningKey"] ?? string.Empty
+});
+builder.Services.AddSingleton<TradeCompanyAccessKeyHasher>();
+builder.Services.AddSingleton<SqliteTradeCompanyStore>();
+builder.Services.AddSingleton<ITradeCompanyStore>(
+    services => services.GetRequiredService<SqliteTradeCompanyStore>());
+builder.Services.AddSingleton<TradeCompanyService>();
+builder.Services.AddSingleton<ITradeCompanyService>(
+    services => services.GetRequiredService<TradeCompanyService>());
 
 if (ProfileHostProvisioningCommand.TryParse(args) is { } profileHostCommand)
 {
@@ -180,6 +196,7 @@ app.MapGet(
 app.MapProfileHostEndpoints();
 app.MapCommissionBriefEndpoints();
 app.MapDiscordCommissionEndpoints();
+app.MapTradeCompanyEndpoints();
 
 app.Run();
 

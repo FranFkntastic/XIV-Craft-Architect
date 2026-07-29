@@ -11,6 +11,49 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class CommissionBriefContractTests
 {
     [Fact]
+    public async Task UnauthenticatedPublicationCannotClaimCanonicalCompanyOwnership()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"ca-commission-{Guid.NewGuid():N}.db");
+        var application = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.ConfigureAppConfiguration((_, configuration) =>
+                {
+                    configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["CommissionBriefs:Enabled"] = "true",
+                        ["CommissionBriefs:DatabasePath"] = databasePath
+                    });
+                });
+            });
+        using var client = application.CreateClient();
+        using var response = await client.PostAsJsonAsync(
+            "/xivdata/commission-briefs",
+            new CommissionBriefCreateRequest
+            {
+                Brief = new CommissionBriefDocument
+                {
+                    CompanyName = "Sapphire Avenue",
+                    Title = "Untrusted binding",
+                    Outputs = [new CommissionBriefOutput(1, "Test Item", 1, false)]
+                },
+                Ownership = new TradeCompanyPublicationOwnership(
+                    new CompanyId(Guid.NewGuid()),
+                    Guid.NewGuid(),
+                    new CompanyRecordRevision(1))
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        await application.DisposeAsync();
+        SqliteConnection.ClearAllPools();
+        if (File.Exists(databasePath))
+        {
+            File.Delete(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Publication_IsImmutablePublicEvidenceUntilCapabilityRevokesIt()
     {
         var databasePath = Path.Combine(Path.GetTempPath(), $"ca-commission-{Guid.NewGuid():N}.db");
