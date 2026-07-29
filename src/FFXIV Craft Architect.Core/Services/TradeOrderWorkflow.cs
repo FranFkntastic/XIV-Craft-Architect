@@ -34,7 +34,8 @@ public static class TradeOrderWorkflow
                     PublicId = order.CommissionPublication.PublicId,
                     Version = order.CommissionPublication.Version,
                     PublishedAtUtc = order.CommissionPublication.PublishedAtUtc,
-                    RevokedAtUtc = order.CommissionPublication.RevokedAtUtc
+                    RevokedAtUtc = order.CommissionPublication.RevokedAtUtc,
+                    Ownership = order.CommissionPublication.Ownership
                 },
             RemoteId = order.RemoteId,
             SyncState = order.SyncState
