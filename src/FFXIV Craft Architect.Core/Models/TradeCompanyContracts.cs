@@ -188,6 +188,7 @@ public static class TradeCompanyRecordKinds
     public const string PlanArtifact = "planArtifact";
     public const string Publication = "publication";
     public const string Collaboration = "collaboration";
+    public const string OperatorSettings = "operatorSettings";
 
     public static IReadOnlySet<string> All { get; } = new HashSet<string>(
         [
@@ -197,7 +198,8 @@ public static class TradeCompanyRecordKinds
             Payroll,
             PlanArtifact,
             Publication,
-            Collaboration
+            Collaboration,
+            OperatorSettings
         ],
         StringComparer.Ordinal);
 }

@@ -130,13 +130,35 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           return { worker, capability: await capabilityPromise };
         }
 
-        await IndexedDB.savePlan({
-          id: 'autosave',
-          name: 'Legacy autosave',
-          dataCenter: 'Aether',
-          projectItems: [{ id: 42, name: 'Worker item', iconId: 0, quantity: 2, mustBeHq: false }],
-          planJson: null,
-          savedAt: new Date().toISOString()
+        // Seed the pre-split monolith directly. IndexedDB.savePlan now writes
+        // the Personal database, while this acceptance path must prove that
+        // the Worker copies an existing monolithic autosave into Engine.
+        await new Promise((resolve, reject) => {
+          const request = indexedDB.open('FFXIVCraftArchitect', 15);
+          request.onupgradeneeded = () => {
+            if (!request.result.objectStoreNames.contains('plans')) {
+              request.result.createObjectStore('plans', { keyPath: 'id' });
+            }
+          };
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const database = request.result;
+            const transaction = database.transaction('plans', 'readwrite');
+            transaction.objectStore('plans').put({
+              id: 'autosave',
+              name: 'Legacy autosave',
+              dataCenter: 'Aether',
+              projectItems: [{ id: 42, name: 'Worker item', iconId: 0, quantity: 2, mustBeHq: false }],
+              planJson: null,
+              savedAt: new Date().toISOString()
+            });
+            transaction.oncomplete = () => {
+              database.close();
+              resolve();
+            };
+            transaction.onerror = () => reject(transaction.error);
+            transaction.onabort = () => reject(transaction.error);
+          };
         });
 
         const active = await startWorker(1);
@@ -188,7 +210,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
         async function inspectDurableSession() {
           const database = await new Promise((resolve, reject) => {
-            const request = indexedDB.open('FFXIVCraftArchitect');
+            const request = indexedDB.open('FFXIVCraftArchitect.Engine');
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
           });
@@ -218,7 +240,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
         async function deleteSessionComponent(componentId) {
           const database = await new Promise((resolve, reject) => {
-            const request = indexedDB.open('FFXIVCraftArchitect');
+            const request = indexedDB.open('FFXIVCraftArchitect.Engine');
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
           });

@@ -74,6 +74,7 @@ public class WebSettingsService : ISettingsService
     {
         try
         {
+            await _indexedDb.EnsureSpecializedStorageAsync();
             await ApplyMigrationsAsync();
 
             var storedSettings = await _indexedDb.LoadAllSettingsAsync();
@@ -96,12 +97,9 @@ public class WebSettingsService : ISettingsService
         catch (Exception ex)
         {
             _logger?.LogError(ex, "[WebSettingsService] Failed to load settings");
-            // Fall back to defaults
-            foreach (var kvp in DefaultSettings)
-            {
-                _cache[kvp.Key] = kvp.Value;
-            }
-            _isLoaded = true;
+            throw new InvalidOperationException(
+                "Browser settings storage is unavailable or uses an incompatible schema.",
+                ex);
         }
     }
 
