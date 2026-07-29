@@ -1,6 +1,7 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Dialogs;
+using FFXIV_Craft_Architect.Web.Services.BrowserPersistence;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using Microsoft.JSInterop;
 using MudBlazor;
@@ -14,6 +15,7 @@ public partial class TradeOrders
     private bool _isPublishingCommission;
     private bool _isRevokingCommission;
     private bool _isRetryingCompanyMutation;
+    private bool _isSavingCompanyConnection;
     private string? _activeInterestClaimId;
     private readonly Dictionary<string, Guid?> _interestCrafterSelections =
         new(StringComparer.Ordinal);
@@ -80,6 +82,36 @@ public partial class TradeOrders
         foreach (var claim in TradeCollaboration.GetPendingInterests(order.Id))
         {
             _interestCrafterSelections.TryAdd(claim.ClaimId, claim.MatchedCrafterId);
+        }
+        _ = RefreshCollaborationAsync(order);
+    }
+
+    private async Task RefreshCollaborationAsync(TradeOrder order)
+    {
+        if (TradeCompanyClient.Connection is not
+            {
+                State: TradeCompanyConnectionState.Current,
+                CompanyId: { } companyId
+            })
+        {
+            return;
+        }
+
+        try
+        {
+            await TradeCollaboration.RefreshAsync(companyId, order.Id);
+            foreach (var claim in TradeCollaboration.GetPendingInterests(order.Id))
+            {
+                _interestCrafterSelections.TryAdd(claim.ClaimId, claim.MatchedCrafterId);
+            }
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception exception)
+        {
+            await InvokeAsync(() =>
+                Snackbar.Add(
+                    $"Collaboration refresh failed: {exception.Message}",
+                    Severity.Warning));
         }
     }
 
@@ -181,10 +213,19 @@ public partial class TradeOrders
             BuildCommissionBrief(_selectedOrder, payment));
         if (!result.Success)
         {
+            if (result.Publication != null)
+            {
+                await LoadAsync();
+                SelectOrderAfterReload(
+                    orderId,
+                    "The commission terms were committed, but the order could not be reloaded.");
+                _activeOpsTab = 3;
+            }
             Snackbar.Add(
                 result.Publication?.Message ??
                     result.Message ??
                     "Discord publication could not be queued.",
+                result.Publication != null ||
                 result.Disposition == TradeCompanyMutationDisposition.Conflict
                     ? Severity.Warning
                     : Severity.Error);
@@ -301,7 +342,7 @@ public partial class TradeOrders
         try
         {
             var orderId = _selectedOrder?.Id;
-            await TradeOrderMutations.RetryPendingAsync();
+            await TradeOrderMutations.RetryPendingAsync(_companyProfile);
             await LoadAsync();
             if (orderId.HasValue)
             {
@@ -323,6 +364,87 @@ public partial class TradeOrders
         }
     }
 
+    private async Task OpenTradeCompanyConnectionAsync()
+    {
+        if (_companyProfile == null)
+        {
+            return;
+        }
+
+        TradeCompanyBrowserConnection? existing = null;
+        if (CompanyId.TryParse(_companyProfile.RemoteId, out var existingCompanyId))
+        {
+            try
+            {
+                existing = await TradeCompanyConnections.LoadAsync(existingCompanyId);
+            }
+            catch
+            {
+                // Keep the connection editor available so malformed local state can be replaced.
+            }
+        }
+
+        var parameters = new DialogParameters
+        {
+            [nameof(TradeCompanyConnectionDialog.CompanyId)] =
+                existing?.CompanyId.ToString() ?? _companyProfile.RemoteId ?? string.Empty,
+            [nameof(TradeCompanyConnectionDialog.ServiceUrl)] =
+                existing?.ServiceUrl ?? "http://localhost:5128",
+            [nameof(TradeCompanyConnectionDialog.AccessKey)] =
+                existing?.AccessKey ?? string.Empty
+        };
+        var dialog = await DialogService.ShowAsync<TradeCompanyConnectionDialog>(
+            "Connect Trade Company",
+            parameters,
+            new DialogOptions
+            {
+                CloseOnEscapeKey = true,
+                MaxWidth = MaxWidth.Small,
+                FullWidth = true
+            });
+        var result = await dialog.Result;
+        if (result?.Canceled != false ||
+            result.Data is not TradeCompanyConnectionDialogResult connection)
+        {
+            return;
+        }
+
+        _isSavingCompanyConnection = true;
+        try
+        {
+            var session = await TradeCompanyConnector.ConnectAsync(
+                connection.CompanyId,
+                connection.ServiceUrl,
+                connection.AccessKey);
+            _companyProfile.RemoteId = connection.CompanyId.ToString();
+            _companyProfile.Name = session.Company.DisplayName;
+            _companyProfile.SyncState = TradeSyncState.LocalOnly;
+            _companyProfile.UpdatedAtUtc = DateTime.UtcNow;
+            if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile))
+            {
+                throw new InvalidOperationException(
+                    "The company profile could not retain its canonical identity.");
+            }
+
+            await LoadAsync();
+            Snackbar.Add(
+                TradeCompanyClient.Connection.State == TradeCompanyConnectionState.Current
+                    ? "Trade Company connected"
+                    : TradeCompanyClient.Connection.Message ?? "Trade Company connection failed.",
+                TradeCompanyClient.Connection.State == TradeCompanyConnectionState.Current
+                    ? Severity.Success
+                    : Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Trade Company connection failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSavingCompanyConnection = false;
+        }
+    }
+
     private async Task UseCompanyOrderVersionAsync()
     {
         if (SelectedOrderConflict?.CurrentRecord == null)
@@ -331,7 +453,10 @@ public partial class TradeOrders
         }
 
         var orderId = _selectedOrder?.Id;
-        if (!await TradeOrderMutations.AcceptRemoteConflictAsync(SelectedOrderConflict.CurrentRecord))
+        if (_companyProfile == null ||
+            !await TradeOrderMutations.AcceptRemoteConflictAsync(
+                SelectedOrderConflict.CurrentRecord,
+                _companyProfile.Id))
         {
             Snackbar.Add("The company order could not be applied locally.", Severity.Error);
             return;
@@ -402,19 +527,34 @@ public partial class TradeOrders
             return;
         }
 
-        var editorToken = await CommissionBriefLocalState.LoadEditorTokenAsync(_selectedOrder.Id);
-        if (string.IsNullOrWhiteSpace(editorToken))
+        string? editorToken = null;
+        if (publication.Ownership == null)
         {
-            Snackbar.Add("This browser no longer has the capability needed to revoke this link.", Severity.Error);
-            return;
+            editorToken = await CommissionBriefLocalState.LoadEditorTokenAsync(_selectedOrder.Id);
+            if (string.IsNullOrWhiteSpace(editorToken))
+            {
+                Snackbar.Add(
+                    "This browser no longer has the capability needed to revoke this link.",
+                    Severity.Error);
+                return;
+            }
         }
 
         _isRevokingCommission = true;
         try
         {
             var orderId = _selectedOrder.Id;
-            await CommissionBriefs.RevokeAsync(publication.PublicId, editorToken);
-            await CommissionBriefLocalState.ForgetEditorTokenAsync(orderId);
+            if (publication.Ownership is { } ownership)
+            {
+                await TradeCollaboration.RevokePublicationAsync(
+                    ownership,
+                    publication.PublicId);
+            }
+            else
+            {
+                await CommissionBriefs.RevokeAsync(publication.PublicId, editorToken!);
+                await CommissionBriefLocalState.ForgetEditorTokenAsync(orderId);
+            }
             var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
             orderToSave.CommissionPublication!.RevokedAtUtc = DateTime.UtcNow;
             AppendCommissionHistory(

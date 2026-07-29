@@ -911,8 +911,26 @@
 .trade-orders-company-sync > div {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: flex-start;
   min-width: 0;
+}
+
+.trade-orders-company-sync > div:first-child {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.trade-orders-company-identity {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.trade-orders-company-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .trade-orders-company-chip {

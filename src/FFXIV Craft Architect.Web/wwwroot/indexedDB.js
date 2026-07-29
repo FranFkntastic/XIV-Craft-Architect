@@ -2507,6 +2507,74 @@ async function loadPortableOperatorSettings(companyId, grantId) {
     };
 }
 
+async function hydratePortableOperatorSettings(document, portableKeys) {
+    const companyId = normalizeCompanyId(document?.companyId ?? document?.CompanyId);
+    const grantId = String(document?.grantId ?? document?.GrantId ?? '').toLowerCase();
+    portableSettingsScope(companyId, grantId);
+    const schemaVersion = document?.schemaVersion ?? document?.SchemaVersion;
+    if (schemaVersion !== PORTABLE_SETTINGS_SCHEMA_VERSION) {
+        throw new Error(
+            `[IndexedDB] Portable settings schema v${String(schemaVersion)} is incompatible; ` +
+            `expected v${PORTABLE_SETTINGS_SCHEMA_VERSION}.`);
+    }
+
+    const allowed = new Set(portableKeys || []);
+    const settings = document?.settings ?? document?.Settings ?? {};
+    const invalidKey = Object.keys(settings).find(key => !allowed.has(key));
+    if (invalidKey) {
+        throw new Error(
+            `[IndexedDB] Browser-local setting '${invalidKey}' cannot be hydrated from company storage.`);
+    }
+
+    const scopeKey = portableSettingsScope(companyId, grantId);
+    const database = await initCompanyDatabase();
+    await new Promise((resolve, reject) => {
+        const transaction = database.transaction(STORE_PORTABLE_SETTINGS, 'readwrite');
+        const store = transaction.objectStore(STORE_PORTABLE_SETTINGS);
+        const existingRequest = store.index('scopeKey').getAllKeys(scopeKey);
+        existingRequest.onsuccess = () => {
+            for (const key of existingRequest.result || []) store.delete(key);
+            for (const [settingKey, value] of Object.entries(settings).sort(([left], [right]) =>
+                left.localeCompare(right))) {
+                store.put({
+                    key: `${scopeKey}|${settingKey}`,
+                    scopeKey,
+                    companyId,
+                    grantId,
+                    settingKey,
+                    value,
+                    schemaVersion,
+                    updatedAtUtc: new Date().toISOString()
+                });
+            }
+        };
+        existingRequest.onerror = () => transaction.abort();
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(
+            transaction.error ??
+            new Error('[IndexedDB] Canonical portable settings hydration aborted.'));
+    });
+    const personal = await initPersonalDatabase();
+    await new Promise((resolve, reject) => {
+        const transaction = personal.transaction(STORE_SETTINGS, 'readwrite');
+        const store = transaction.objectStore(STORE_SETTINGS);
+        for (const settingKey of allowed) {
+            if (Object.prototype.hasOwnProperty.call(settings, settingKey)) {
+                store.put({ key: settingKey, value: settings[settingKey] });
+            } else {
+                store.delete(settingKey);
+            }
+        }
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(
+            transaction.error ??
+            new Error('[IndexedDB] Personal portable settings replacement aborted.'));
+    });
+    return true;
+}
+
 async function savePortableOperatorSettings(document, mutationRequest) {
     const companyId = normalizeCompanyId(document?.companyId ?? document?.CompanyId);
     const grantId = String(document?.grantId ?? document?.GrantId ?? '').toLowerCase();
@@ -2652,6 +2720,7 @@ window.IndexedDB = {
     completeTradeCompanyMutation,
     migratePortableOperatorSettings,
     loadPortableOperatorSettings,
+    hydratePortableOperatorSettings,
     savePortableOperatorSettings
 };
 

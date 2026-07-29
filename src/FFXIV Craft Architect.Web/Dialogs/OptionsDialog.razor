@@ -10,6 +10,7 @@
 @inject IndexedDbService IndexedDb
 @inject GarlandService GarlandService
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyProfileMutationService TradeCompanyProfiles
 @inject TradeLaborBenchmarkCalibrationWorkflowService LaborBenchmarkCalibrationWorkflow
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService ProfileSyncLocalState
@@ -1383,6 +1384,7 @@
         try
         {
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            await TradeCompanyProfiles.SynchronizeAsync(_companyProfile);
             var crafters = await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id);
             _companyCrafterCount = crafters.Count;
             ApplyCompanyProfileFields(_companyProfile);
@@ -1655,7 +1657,7 @@
                 LaborStandardMaterialBonusPercent = _companyLaborMaterialBonusPercent
             };
 
-            var saved = await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile);
+            var saved = await TradeCompanyProfiles.SaveAsync(_companyProfile);
             if (!saved)
             {
                 _laborBenchmarkStatus = "Benchmark recalculated but company profile save failed.";
@@ -1997,7 +1999,7 @@
             _companyProfile.Description = NormalizeOptionalText(_companyDescription);
             _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
             _companyProfile.PaymentPolicy = paymentPolicy;
-            var companySaved = await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile);
+            var companySaved = await TradeCompanyProfiles.SaveAsync(_companyProfile);
             if (!companySaved)
             {
                 Snackbar.Add("Failed to save company profile.", Severity.Error);

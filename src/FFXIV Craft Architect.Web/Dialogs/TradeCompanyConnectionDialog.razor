@@ -1,0 +1,101 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+<MudDialog>
+    <TitleContent>
+        <div>
+            <MudText Typo="Typo.overline">Canonical company</MudText>
+            <MudText Typo="Typo.h6">Connect Trade Company</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2">
+            Connect this browser to an existing company. The company ID names the durable
+            workspace; the service URL only tells this browser where to reach it.
+        </MudText>
+        <MudTextField @bind-Value="_companyId"
+                      Label="Company ID"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Class="mt-3"
+                      Immediate="true" />
+        <MudTextField @bind-Value="_serviceUrl"
+                      Label="Service URL"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Immediate="true" />
+        <MudTextField @bind-Value="_accessKey"
+                      Label="Access key"
+                      InputType="InputType.Password"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Immediate="true" />
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+            The access key stays in this browser and is never copied into portable company
+            settings. Non-secret operator preferences synchronize after the connection is active.
+        </MudAlert>
+        @if (!string.IsNullOrWhiteSpace(_validationError))
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mt-2">
+                @_validationError
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Connect">
+            Connect
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string CompanyId { get; set; } = string.Empty;
+    [Parameter] public string ServiceUrl { get; set; } = "http://localhost:5128";
+    [Parameter] public string AccessKey { get; set; } = string.Empty;
+
+    private string _companyId = string.Empty;
+    private string _serviceUrl = string.Empty;
+    private string _accessKey = string.Empty;
+    private string? _validationError;
+
+    protected override void OnInitialized()
+    {
+        _companyId = CompanyId;
+        _serviceUrl = ServiceUrl;
+        _accessKey = AccessKey;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Connect()
+    {
+        if (!FFXIV_Craft_Architect.Core.Models.CompanyId.TryParse(
+                _companyId,
+                out var companyId))
+        {
+            _validationError = "Enter a valid non-empty company ID.";
+            return;
+        }
+
+        if (!Uri.TryCreate(_serviceUrl.Trim(), UriKind.Absolute, out var serviceUri) ||
+            serviceUri.Scheme is not ("https" or "http") ||
+            (serviceUri.Scheme == "http" && !serviceUri.IsLoopback))
+        {
+            _validationError =
+                "Use an HTTPS service URL, or HTTP only for local development.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_accessKey))
+        {
+            _validationError = "Enter the company access key.";
+            return;
+        }
+
+        MudDialog.Close(DialogResult.Ok(new TradeCompanyConnectionDialogResult(
+            companyId,
+            _serviceUrl.Trim().TrimEnd('/'),
+            _accessKey.Trim())));
+    }
+}

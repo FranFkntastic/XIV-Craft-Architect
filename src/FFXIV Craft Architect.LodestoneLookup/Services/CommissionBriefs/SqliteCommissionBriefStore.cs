@@ -30,10 +30,60 @@ public sealed class SqliteCommissionBriefStore
         TradeCompanyPublicationOwnership? ownership,
         CancellationToken ct)
     {
+        return await CreateAsync(brief, ownership, publicId: null, ct);
+    }
+
+    public async Task<PublishedCommissionBrief> CreateCompanyOwnedAsync(
+        CommissionBriefDocument brief,
+        TradeCompanyPublicationOwnership ownership,
+        string idempotencyKey,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        var publicId = CreateCompanyPublicId(ownership, idempotencyKey);
+        var existing = await LoadAsync(publicId, ct);
+        if (existing != null)
+        {
+            if (existing.Ownership != ownership ||
+                !string.Equals(
+                    JsonSerializer.Serialize(existing.Brief, JsonOptions),
+                    JsonSerializer.Serialize(brief, JsonOptions),
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The company publication idempotency key was reused for different terms.");
+            }
+
+            return existing;
+        }
+
+        try
+        {
+            var created = await CreateAsync(brief, ownership, publicId, ct);
+            return created.Published;
+        }
+        catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
+        {
+            existing = await LoadAsync(publicId, ct);
+            if (existing?.Ownership == ownership)
+            {
+                return existing;
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<(PublishedCommissionBrief Published, string EditorToken)> CreateAsync(
+        CommissionBriefDocument brief,
+        TradeCompanyPublicationOwnership? ownership,
+        string? publicId,
+        CancellationToken ct)
+    {
         await using var connection = await OpenAsync(ct);
         await EnsureSchemaAsync(connection, ct);
 
-        var publicId = CreateToken(12);
+        publicId ??= CreateToken(12);
         var editorToken = CreateToken(32);
         var publishedAt = DateTime.UtcNow;
         await using var command = connection.CreateCommand();
@@ -164,6 +214,60 @@ public sealed class SqliteCommissionBriefStore
         return await update.ExecuteNonQueryAsync(ct) == 1;
     }
 
+    public async Task<bool> RevokeCompanyOwnedAsync(
+        string publicId,
+        CompanyId companyId,
+        CancellationToken ct)
+    {
+        await using var connection = await OpenAsync(ct);
+        await EnsureSchemaAsync(connection, ct);
+        await using var read = connection.CreateCommand();
+        read.CommandText =
+            "SELECT company_id FROM commission_briefs WHERE public_id = $publicId;";
+        read.Parameters.AddWithValue("$publicId", publicId);
+        var storedCompanyId = await read.ExecuteScalarAsync(ct) as string;
+        if (!CompanyId.TryParse(storedCompanyId, out var parsedCompanyId) ||
+            parsedCompanyId != companyId)
+        {
+            return false;
+        }
+
+        await using var update = connection.CreateCommand();
+        update.CommandText =
+            """
+            UPDATE commission_briefs
+            SET revoked_at_utc = COALESCE(revoked_at_utc, $revokedAtUtc)
+            WHERE public_id = $publicId AND company_id = $companyId;
+            """;
+        update.Parameters.AddWithValue("$revokedAtUtc", DateTime.UtcNow.ToString("O"));
+        update.Parameters.AddWithValue("$publicId", publicId);
+        update.Parameters.AddWithValue("$companyId", companyId.ToString());
+        return await update.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<bool> DiscardCompanyOwnedAsync(
+        string publicId,
+        TradeCompanyPublicationOwnership ownership,
+        CancellationToken ct)
+    {
+        await using var connection = await OpenAsync(ct);
+        await EnsureSchemaAsync(connection, ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM commission_briefs
+            WHERE public_id = $publicId
+              AND company_id = $companyId
+              AND order_id = $orderId
+              AND order_revision = $orderRevision;
+            """;
+        command.Parameters.AddWithValue("$publicId", publicId);
+        command.Parameters.AddWithValue("$companyId", ownership.CompanyId.ToString());
+        command.Parameters.AddWithValue("$orderId", ownership.OrderId.ToString("D"));
+        command.Parameters.AddWithValue("$orderRevision", ownership.OrderRevision.Value);
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
     private async Task<SqliteConnection> OpenAsync(CancellationToken ct)
     {
         var absolutePath = Path.GetFullPath(_options.DatabasePath);
@@ -248,6 +352,23 @@ public sealed class SqliteCommissionBriefStore
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
+
+    internal static string CreateCompanyPublicId(
+        TradeCompanyPublicationOwnership ownership,
+        string idempotencyKey)
+    {
+        var material = string.Join(
+            ":",
+            ownership.CompanyId,
+            ownership.OrderId.ToString("D"),
+            ownership.OrderRevision.Value,
+            idempotencyKey);
+        return Convert.ToBase64String(
+                SHA256.HashData(Encoding.UTF8.GetBytes(material))[..15])
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
 
     private static string HashToken(string token) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));

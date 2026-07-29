@@ -660,19 +660,90 @@ public sealed class SqliteDiscordCollaborationStore(
             resolvedAt: null,
             cancellationToken);
 
-    public Task DeclineClaimAsync(
+    public async Task<DiscordClaimTransitionResult> DeclineClaimAsync(
         CompanyId companyId,
         Guid claimId,
+        string resolutionIdempotencyKey,
         DateTimeOffset declinedAt,
-        CancellationToken cancellationToken = default) =>
-        ChangeClaimStateAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(resolutionIdempotencyKey);
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var claim = await LoadClaimAsync(
+            connection,
+            (SqliteTransaction)transaction,
             companyId,
             claimId,
-            DiscordInterestClaimState.Pending,
-            DiscordInterestClaimState.Declined,
-            resolutionIdempotencyKey: null,
-            declinedAt,
             cancellationToken);
+        if (claim == null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Missing,
+                null);
+        }
+
+        if (claim.State == DiscordInterestClaimState.Declined &&
+            string.Equals(
+                claim.ResolutionIdempotencyKey,
+                resolutionIdempotencyKey,
+                StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Replayed,
+                claim);
+        }
+
+        if (claim.State != DiscordInterestClaimState.Pending)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Conflict,
+                claim,
+                "The claim is no longer pending.");
+        }
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText =
+            """
+            UPDATE discord_interest_claims
+            SET
+                state = $state,
+                resolution_idempotency_key = $key,
+                resolved_at_utc = $resolvedAt
+            WHERE company_id = $companyId
+              AND claim_id = $claimId
+              AND state = $pending;
+            """;
+        update.Parameters.AddWithValue("$state", (int)DiscordInterestClaimState.Declined);
+        update.Parameters.AddWithValue("$key", resolutionIdempotencyKey);
+        update.Parameters.AddWithValue("$resolvedAt", declinedAt.ToString("O"));
+        update.Parameters.AddWithValue("$companyId", companyId.ToString());
+        update.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
+        update.Parameters.AddWithValue("$pending", (int)DiscordInterestClaimState.Pending);
+        if (await update.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordClaimTransitionResult(
+                DiscordClaimTransitionStatus.Conflict,
+                claim);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new DiscordClaimTransitionResult(
+            DiscordClaimTransitionStatus.Applied,
+            claim with
+            {
+                State = DiscordInterestClaimState.Declined,
+                ResolutionIdempotencyKey = resolutionIdempotencyKey,
+                ResolvedAt = declinedAt
+            });
+    }
 
     public async Task EnqueueProjectionAsync(
         Guid publicationId,

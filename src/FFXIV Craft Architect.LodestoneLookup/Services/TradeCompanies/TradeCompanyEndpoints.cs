@@ -105,6 +105,37 @@ public static class TradeCompanyEndpoints
             });
 
         group.MapGet(
+            "/companies/{companyId}/session",
+            async (
+                string companyId,
+                HttpRequest request,
+                TradeCompanyOptions options,
+                SqliteTradeCompanyStore store,
+                ITradeCompanyService service,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeAsync(
+                    companyId,
+                    request,
+                    options,
+                    store,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+
+                var company = await service.GetCompanyAsync(
+                    authorization.Access!,
+                    cancellationToken);
+                return company == null
+                    ? Results.NotFound()
+                    : Results.Ok(new TradeCompanySessionResponse(
+                        company,
+                        authorization.Access!));
+            });
+
+        group.MapGet(
             "/companies/{companyId}/changes",
             async (
                 string companyId,

@@ -54,13 +54,23 @@ public sealed class PortableOperatorSettingsStore
 
     private readonly IJSRuntime _jsRuntime;
     private readonly TradeCompanyBrowserPersistence _companyPersistence;
+    private readonly DurableTradeCompanyClient? _durableClient;
 
     public PortableOperatorSettingsStore(
         IJSRuntime jsRuntime,
         TradeCompanyBrowserPersistence companyPersistence)
+        : this(jsRuntime, companyPersistence, durableClient: null)
+    {
+    }
+
+    public PortableOperatorSettingsStore(
+        IJSRuntime jsRuntime,
+        TradeCompanyBrowserPersistence companyPersistence,
+        DurableTradeCompanyClient? durableClient)
     {
         _jsRuntime = jsRuntime;
         _companyPersistence = companyPersistence;
+        _durableClient = durableClient;
     }
 
     public async Task<PortableOperatorSettingsDocument> MigrateLegacyAsync(
@@ -92,6 +102,37 @@ public sealed class PortableOperatorSettingsStore
             cancellationToken,
             access.CompanyId.ToString(),
             access.GrantId.ToString("D"));
+    }
+
+    public async Task<PortableOperatorSettingsDocument?> HydrateCanonicalAsync(
+        TradeCompanyAccessContext access,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateAccessScope(access);
+        var record = await _companyPersistence.LoadRecordAsync(
+            access.CompanyId,
+            TradeCompanyRecordKinds.OperatorSettings,
+            $"operator:{access.GrantId:D}",
+            cancellationToken);
+        if (record == null || record.Deleted)
+        {
+            return null;
+        }
+
+        var document = JsonSerializer.Deserialize<PortableOperatorSettingsDocument>(
+            record.PayloadJson,
+            JsonOptions)
+            ?? throw new InvalidOperationException(
+                "The canonical portable settings document is empty.");
+        ValidateDocumentScope(access, document);
+        await _jsRuntime.InvokeAsync<bool>(
+            "IndexedDB.hydratePortableOperatorSettings",
+            cancellationToken,
+            document,
+            PortableOperatorSettingKeys.All.OrderBy(
+                key => key,
+                StringComparer.Ordinal).ToArray());
+        return document;
     }
 
     public async Task<T?> GetAsync<T>(
@@ -152,25 +193,50 @@ public sealed class PortableOperatorSettingsStore
             current?.RecordRevision ?? CompanyRecordRevision.None,
             identity.Revision,
             idempotencyKey);
-        await _jsRuntime.InvokeAsync<bool>(
+        if (!await _jsRuntime.InvokeAsync<bool>(
             "IndexedDB.savePortableOperatorSettings",
             cancellationToken,
             document,
-            mutation);
+            mutation))
+        {
+            throw new InvalidOperationException(
+                "The browser could not stage portable settings for the Trade Company.");
+        }
+
+        if (_durableClient == null)
+        {
+            return;
+        }
+
+        var completed = await _durableClient.ReplayPendingAsync(
+            access.CompanyId,
+            idempotencyKey,
+            cancellationToken);
+        if (completed is not { Success: true })
+        {
+            throw new InvalidOperationException(
+                completed?.ErrorMessage ??
+                "Portable settings remain queued for company synchronization.");
+        }
     }
 
     private static void ValidateAccess(TradeCompanyAccessContext access)
+    {
+        ValidateAccessScope(access);
+        if (access.Role is TradeCompanyRole.ReadOnly)
+        {
+            throw new InvalidOperationException(
+                "Portable operator settings require an operator or owner grant.");
+        }
+    }
+
+    private static void ValidateAccessScope(TradeCompanyAccessContext access)
     {
         if (access.GrantId == Guid.Empty)
         {
             throw new ArgumentException(
                 "Portable operator settings require a non-empty grant ID.",
                 nameof(access));
-        }
-        if (access.Role is TradeCompanyRole.ReadOnly)
-        {
-            throw new InvalidOperationException(
-                "Portable operator settings require an operator or owner grant.");
         }
     }
 

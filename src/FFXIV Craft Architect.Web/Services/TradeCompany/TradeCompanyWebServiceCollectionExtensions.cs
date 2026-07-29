@@ -12,6 +12,9 @@ public static class TradeCompanyWebServiceCollectionExtensions
         services.AddScoped<TradeCompanyClientOrchestrator>();
         services.AddScoped<ITradeOrderLocalStore, TradeOperationsOrderLocalStore>();
         services.AddScoped<TradeOrderMutationService>();
+        services.AddScoped<TradeCrafterMutationService>();
+        services.AddScoped<TradeCompanyProfileMutationService>();
+        services.AddScoped<ITradeCompanyCollaborationClient, HttpTradeCompanyCollaborationClient>();
         services.AddScoped<TradeCompanyCollaborationService>();
         return services;
     }

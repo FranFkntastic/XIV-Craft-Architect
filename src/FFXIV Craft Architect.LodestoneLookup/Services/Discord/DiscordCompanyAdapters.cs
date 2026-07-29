@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
@@ -22,6 +23,34 @@ public sealed class DenyDiscordCompanyAccessResolver : IDiscordCompanyAccessReso
     {
         ArgumentNullException.ThrowIfNull(request);
         return Task.FromResult<TradeCompanyAccessContext?>(null);
+    }
+}
+
+public sealed class TradeCompanyDiscordAccessResolver(
+    TradeCompanyOptions options,
+    SqliteTradeCompanyStore companies) : IDiscordCompanyAccessResolver
+{
+    private const string AccessKeyHeader = "X-Trade-Company-Key";
+
+    public async Task<TradeCompanyAccessContext?> ResolveAsync(
+        HttpRequest request,
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!options.IsReady)
+        {
+            return null;
+        }
+
+        var key = request.Headers[AccessKeyHeader].ToString();
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return null;
+        }
+
+        var access = await companies.AuthenticateAsync(key, cancellationToken);
+        return access?.CompanyId == companyId ? access : null;
     }
 }
 
@@ -122,6 +151,13 @@ public static class DiscordCompanyAdapterRegistrations
         services.TryAddScoped<DiscordProjectionService>();
         return services;
     }
+
+    public static IServiceCollection AddTradeCompanyDiscordAccess(this IServiceCollection services)
+    {
+        services.Replace(ServiceDescriptor.Singleton<IDiscordCompanyAccessResolver,
+            TradeCompanyDiscordAccessResolver>());
+        return services;
+    }
 }
 
 public sealed record DiscordCanonicalOrderProjection(
@@ -181,6 +217,7 @@ public sealed class DiscordCompanyOrderAdapter
             throw new InvalidOperationException(
                 "The canonical Trade order payload does not match its record identity.");
         }
+        NormalizeCompanyScope(order, access.CompanyId);
 
         return new DiscordCanonicalOrderProjection(order, envelope, changes.CompanyRevision);
     }
@@ -214,6 +251,7 @@ public sealed class DiscordCompanyOrderAdapter
             throw new InvalidOperationException(
                 "The canonical Trade crafter payload does not match its record identity.");
         }
+        crafter.CompanyProfileId = access.CompanyId.Value;
 
         return new DiscordCanonicalCrafterProjection(crafter, envelope);
     }
@@ -350,6 +388,17 @@ public sealed class DiscordCompanyOrderAdapter
         {
             throw new InvalidOperationException(
                 "The company service returned a cross-company change set.");
+        }
+    }
+
+    private static void NormalizeCompanyScope(
+        TradeOrder order,
+        CompanyId companyId)
+    {
+        order.CompanyProfileId = companyId.Value;
+        foreach (var history in order.History)
+        {
+            history.CompanyProfileId = companyId.Value;
         }
     }
 }

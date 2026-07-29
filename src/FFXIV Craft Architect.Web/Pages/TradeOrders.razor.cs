@@ -188,6 +188,8 @@ public partial class TradeOrders
         {
             _loadError = null;
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            await TradeCompanyProfiles.SynchronizeAsync(_companyProfile);
+            await TradeCrafterMutations.SynchronizeAsync(_companyProfile);
             var refresh = await TradeOrderMutations.SynchronizeAsync(_companyProfile);
             if (refresh.ChangedRecords.Count > 0)
             {

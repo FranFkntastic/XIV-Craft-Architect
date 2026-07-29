@@ -98,6 +98,7 @@ builder.Services.AddSingleton<ITradeCompanyService>(
     services => services.GetRequiredService<TradeCompanyService>());
 builder.Services.AddDiscordCollaboration();
 builder.Services.AddDiscordCompanyAdapters();
+builder.Services.AddTradeCompanyDiscordAccess();
 
 if (ProfileHostProvisioningCommand.TryParse(args) is { } profileHostCommand)
 {

@@ -3,6 +3,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.BrowserPersistence;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using Microsoft.AspNetCore.Components.Web;
@@ -56,7 +57,9 @@ builder.Services.AddScoped<IWorkshopHostAcquisitionClient>(provider =>
 builder.Services.AddScoped<CraftAppraisalQuoteExportService>();
 
 // Register Settings Service (Web implementation)
-builder.Services.AddScoped<ISettingsService, WebSettingsService>();
+builder.Services.AddScoped<WebSettingsService>();
+builder.Services.AddScoped<ISettingsService>(provider =>
+    provider.GetRequiredService<WebSettingsService>());
 
 // Register App State (singleton to persist across tab switches)
 builder.Services.AddSingleton<AppState>();
@@ -82,6 +85,7 @@ builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
 builder.Services.AddScoped<TradeCompanyProfilePackageService>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
+builder.Services.AddTradeCompanyBrowserIntegration();
 builder.Services.AddTradeCompanyWebIntegration();
 builder.Services.AddScoped<CommissionBriefClient>();
 builder.Services.AddScoped<CommissionBriefLocalStateService>();

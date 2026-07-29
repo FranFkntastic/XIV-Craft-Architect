@@ -83,4 +83,29 @@ public sealed class DurableTradeCompanyClient : ITradeCompanyClient
         }
         return results;
     }
+
+    public async Task<TradeCompanyMutationResult?> ReplayPendingAsync(
+        CompanyId companyId,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default)
+    {
+        var entry = (await _browser.LoadOutboxAsync(
+                companyId,
+                includeTerminal: false,
+                cancellationToken))
+            .FirstOrDefault(candidate =>
+                string.Equals(
+                    candidate.Request.IdempotencyKey,
+                    idempotencyKey,
+                    StringComparison.Ordinal));
+        if (entry == null)
+        {
+            return null;
+        }
+
+        await _browser.RecordAttemptAsync(entry.Request, cancellationToken);
+        var result = await _transport.MutateAsync(entry.Request, cancellationToken);
+        await _browser.CompleteAsync(entry.Request, result, cancellationToken);
+        return result;
+    }
 }

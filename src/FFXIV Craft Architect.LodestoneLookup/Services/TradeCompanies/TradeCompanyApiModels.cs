@@ -21,6 +21,10 @@ public sealed record TradeCompanyProvisionResponse(
     TradeCompanyGrantRecord OwnerGrant,
     string AccessKey);
 
+public sealed record TradeCompanySessionResponse(
+    TradeCompanyIdentity Company,
+    TradeCompanyAccessContext Access);
+
 public sealed record TradeCompanyGrantRecord(
     Guid GrantId,
     CompanyId CompanyId,

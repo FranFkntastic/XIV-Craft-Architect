@@ -85,9 +85,24 @@ public sealed class DiscordClaimService(
 
         if (begun.Claim.State == DiscordInterestClaimState.Accepted)
         {
+            var replayOrder = await orders.LoadOrderAsync(
+                access,
+                begun.Claim.OrderId,
+                cancellationToken);
+            if (replayOrder == null ||
+                !begun.Claim.ResolvedCrafterId.HasValue ||
+                replayOrder.Order.AssignedCrafterId != begun.Claim.ResolvedCrafterId)
+            {
+                return new DiscordOperatorClaimResult(
+                    DiscordOperatorClaimStatus.Rejected,
+                    begun.Claim,
+                    Error: "The accepted Discord claim no longer matches the canonical order.");
+            }
+
             return new DiscordOperatorClaimResult(
                 DiscordOperatorClaimStatus.Replayed,
-                begun.Claim);
+                begun.Claim,
+                ReplayOrderMutation(replayOrder));
         }
 
         if (!begun.Success)
@@ -152,7 +167,8 @@ public sealed class DiscordClaimService(
                 repaired.Status == DiscordClaimTransitionStatus.Replayed
                     ? DiscordOperatorClaimStatus.Replayed
                     : DiscordOperatorClaimStatus.Applied,
-                repaired.Claim);
+                repaired.Claim,
+                ReplayOrderMutation(order));
         }
 
         DiscordOrderAssignmentMutation assignment;
@@ -236,6 +252,7 @@ public sealed class DiscordClaimService(
     public async Task<DiscordOperatorClaimResult> DeclineAsync(
         TradeCompanyAccessContext access,
         Guid claimId,
+        string idempotencyKey,
         CancellationToken cancellationToken = default)
     {
         RequireOperator(access);
@@ -244,39 +261,26 @@ public sealed class DiscordClaimService(
             throw new ArgumentException("Claim IDs cannot be empty.", nameof(claimId));
         }
 
-        var pending = await collaboration.LoadPendingClaimsAsync(
-            access.CompanyId,
-            orderId: null,
-            cancellationToken);
-        var claim = pending.FirstOrDefault(candidate => candidate.ClaimId == claimId);
-        if (claim == null)
-        {
-            return new DiscordOperatorClaimResult(
-                DiscordOperatorClaimStatus.Missing,
-                null,
-                Error: "The pending Discord interest claim was not found.");
-        }
-
-        if (claim.State != DiscordInterestClaimState.Pending)
-        {
-            return new DiscordOperatorClaimResult(
-                DiscordOperatorClaimStatus.Conflict,
-                claim,
-                Error: "An assignment operation is already resolving this claim.");
-        }
-
-        await collaboration.DeclineClaimAsync(
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        var declined = await collaboration.DeclineClaimAsync(
             access.CompanyId,
             claimId,
+            idempotencyKey,
             timeProvider.GetUtcNow(),
             cancellationToken);
         return new DiscordOperatorClaimResult(
-            DiscordOperatorClaimStatus.Applied,
-            claim with
+            declined.Status switch
             {
-                State = DiscordInterestClaimState.Declined,
-                ResolvedAt = timeProvider.GetUtcNow()
-            });
+                DiscordClaimTransitionStatus.Applied =>
+                    DiscordOperatorClaimStatus.Applied,
+                DiscordClaimTransitionStatus.Replayed =>
+                    DiscordOperatorClaimStatus.Replayed,
+                DiscordClaimTransitionStatus.Missing =>
+                    DiscordOperatorClaimStatus.Missing,
+                _ => DiscordOperatorClaimStatus.Conflict
+            },
+            declined.Claim,
+            Error: declined.Error);
     }
 
     private Task<DiscordClaimTransitionResult> CompleteAsync(
@@ -305,6 +309,12 @@ public sealed class DiscordClaimService(
             claimId,
             idempotencyKey,
             cancellationToken);
+
+    private static TradeCompanyMutationResult ReplayOrderMutation(
+        DiscordCanonicalOrderProjection order) =>
+        new(
+            TradeCompanyMutationStatus.Replayed,
+            order.Envelope);
 
     private static void ValidateAccess(TradeCompanyAccessContext access)
     {

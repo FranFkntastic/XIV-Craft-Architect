@@ -10,7 +10,11 @@
 @inject TradeOrderPricingWorkflowService TradeOrderPricingWorkflow
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
+@inject FFXIV_Craft_Architect.Web.Services.BrowserPersistence.TradeCompanyConnectionStore TradeCompanyConnections
+@inject FFXIV_Craft_Architect.Web.Services.BrowserPersistence.TradeCompanyConnectionService TradeCompanyConnector
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeOrderMutationService TradeOrderMutations
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCrafterMutationService TradeCrafterMutations
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyProfileMutationService TradeCompanyProfiles
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyClientOrchestrator TradeCompanyClient
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyCollaborationService TradeCollaboration
 @inject CommissionBriefClient CommissionBriefs
@@ -128,6 +132,39 @@
                 </aside>
 
                 <main class="trade-orders-workspace">
+                    <section class="trade-orders-company-sync">
+                        <div>
+                            <MudText Typo="Typo.overline">Trade Company</MudText>
+                            <div class="trade-orders-company-identity">
+                                <strong>@(_companyProfile?.Name ?? "Company workspace")</strong>
+                                <span class="@GetCompanyConnectionChipClass()">
+                                    @FormatCompanyConnectionState()
+                                </span>
+                            </div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @TradeCompanyClient.Connection.Message
+                            </MudText>
+                        </div>
+                        <div class="trade-orders-company-actions">
+                            <MudButton Variant="Variant.Text"
+                                       Color="Color.Secondary"
+                                       Size="Size.Small"
+                                       Disabled="@(_companyProfile == null || _isSavingCompanyConnection)"
+                                       OnClick="OpenTradeCompanyConnectionAsync">
+                                @(_isSavingCompanyConnection ? "Connecting..." : "Connection")
+                            </MudButton>
+                            @if (TradeCompanyClient.Connection.PendingCount > 0)
+                            {
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Secondary"
+                                           Size="Size.Small"
+                                           Disabled="@_isRetryingCompanyMutation"
+                                           OnClick="RetryCompanyMutationsAsync">
+                                    @(_isRetryingCompanyMutation ? "Retrying..." : "Retry Company Sync")
+                                </MudButton>
+                            }
+                        </div>
+                    </section>
                     @if (_pendingImport != null)
                     {
                         <section class="trade-orders-workspace-card is-import">
@@ -829,26 +866,6 @@
                                 </ul>
                             </MudTabPanel>
                             <MudTabPanel Text="Collaboration">
-                                <section class="trade-orders-company-sync">
-                                    <div>
-                                        <span class="@GetCompanyConnectionChipClass()">
-                                            @FormatCompanyConnectionState()
-                                        </span>
-                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                            @TradeCompanyClient.Connection.Message
-                                        </MudText>
-                                    </div>
-                                    @if (TradeCompanyClient.Connection.PendingCount > 0)
-                                    {
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   Disabled="@_isRetryingCompanyMutation"
-                                                   OnClick="RetryCompanyMutationsAsync">
-                                            @(_isRetryingCompanyMutation ? "Retrying..." : "Retry Company Sync")
-                                        </MudButton>
-                                    }
-                                </section>
                                 @if (SelectedOrderConflict is not null)
                                 {
                                     <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">

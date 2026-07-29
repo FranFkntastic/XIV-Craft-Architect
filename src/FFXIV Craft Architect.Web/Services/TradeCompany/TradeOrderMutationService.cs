@@ -52,23 +52,29 @@ public sealed class TradeOrderMutationService
         CancellationToken cancellationToken = default)
     {
         var refresh = await _company.RefreshAsync(profile, cancellationToken);
-        if (refresh.ChangedRecords.Count == 0)
-        {
-            return refresh;
-        }
+        var orderRecords = _company.GetRecords(TradeCompanyRecordKinds.Order)
+            .Concat(refresh.ChangedRecords.Where(record =>
+                record.Deleted &&
+                string.Equals(
+                    record.RecordKind,
+                    TradeCompanyRecordKinds.Order,
+                    StringComparison.Ordinal)))
+            .GroupBy(record => record.RecordId, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(record => record.CompanyRevision.Value)
+                .First())
+            .ToArray();
 
         var localOrders = (await _localStore.LoadAsync(profile.Id))
             .ToDictionary(order => order.Id);
-        foreach (var record in refresh.ChangedRecords.Where(record =>
-                     string.Equals(
-                         record.RecordKind,
-                         TradeCompanyRecordKinds.Order,
-                         StringComparison.Ordinal)))
+        var remoteIds = new HashSet<Guid>();
+        foreach (var record in orderRecords)
         {
             if (!Guid.TryParse(record.RecordId, out var orderId))
             {
                 continue;
             }
+            remoteIds.Add(orderId);
 
             if (record.Deleted)
             {
@@ -88,11 +94,12 @@ public sealed class TradeOrderMutationService
             }
 
             var remoteOrder = DeserializeOrder(record);
-            if (remoteOrder == null || remoteOrder.CompanyProfileId != profile.Id)
+            if (remoteOrder == null)
             {
                 continue;
             }
 
+            NormalizeForLocalProfile(remoteOrder, profile.Id);
             if (localOrders.TryGetValue(orderId, out var localOrder) &&
                 localOrder.SyncState is TradeSyncState.PendingSync or TradeSyncState.Conflict)
             {
@@ -106,7 +113,17 @@ public sealed class TradeOrderMutationService
             await _localStore.SaveAsync(remoteOrder);
         }
 
-        return new TradeCompanyRefreshResult(_company.Connection, refresh.ChangedRecords);
+        if (CompanyId.TryParse(profile.RemoteId, out _))
+        {
+            foreach (var localOnly in localOrders.Values.Where(order =>
+                         !remoteIds.Contains(order.Id) &&
+                         order.SyncState == TradeSyncState.LocalOnly))
+            {
+                await SaveAsync(profile, localOnly, cancellationToken);
+            }
+        }
+
+        return new TradeCompanyRefreshResult(_company.Connection, orderRecords);
     }
 
     public async Task<TradeOrderMutationOutcome> SaveAsync(
@@ -134,6 +151,10 @@ public sealed class TradeOrderMutationService
         var companyOrder = TradeOrderWorkflow.CopyOrder(order);
         companyOrder.RemoteId = order.Id.ToString("D");
         companyOrder.SyncState = TradeSyncState.Synced;
+        if (CompanyId.TryParse(profile.RemoteId, out var companyId))
+        {
+            NormalizeForCanonicalCompany(companyOrder, companyId);
+        }
         var companyResult = await _company.MutateAsync(
             TradeCompanyRecordKinds.Order,
             order.Id.ToString("D"),
@@ -145,6 +166,7 @@ public sealed class TradeOrderMutationService
             case TradeCompanyMutationDisposition.Synced:
                 {
                     var authoritative = DeserializeOrder(companyResult.Record) ?? order;
+                    NormalizeForLocalProfile(authoritative, profile.Id);
                     MarkSynced(authoritative, companyResult.Record?.RecordId ?? order.Id.ToString("D"));
                     await _localStore.SaveAsync(authoritative);
                     return new TradeOrderMutationOutcome(
@@ -168,6 +190,7 @@ public sealed class TradeOrderMutationService
                     var currentRemote = DeserializeOrder(companyResult.CurrentRecord);
                     if (currentRemote != null)
                     {
+                        NormalizeForLocalProfile(currentRemote, profile.Id);
                         MarkSynced(currentRemote, companyResult.CurrentRecord!.RecordId);
                     }
 
@@ -204,10 +227,12 @@ public sealed class TradeOrderMutationService
 
     public async Task<TradeOrderMutationOutcome> ApplyCanonicalOrderAsync(
         TradeOrder order,
+        Guid localCompanyProfileId,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(order);
 
+        NormalizeForLocalProfile(order, localCompanyProfileId);
         MarkSynced(order, order.Id.ToString("D"));
         var saved = await _localStore.SaveAsync(order);
         return new TradeOrderMutationOutcome(
@@ -222,6 +247,7 @@ public sealed class TradeOrderMutationService
     }
 
     public async Task<IReadOnlyList<TradeOrderMutationOutcome>> RetryPendingAsync(
+        TradeCompanyProfile? profile = null,
         CancellationToken cancellationToken = default)
     {
         var results = await _company.RetryPendingAsync(cancellationToken);
@@ -239,6 +265,10 @@ public sealed class TradeOrderMutationService
                 continue;
             }
 
+            if (profile != null)
+            {
+                NormalizeForLocalProfile(order, profile.Id);
+            }
             MarkSynced(order, result.Record!.RecordId);
             var saved = await _localStore.SaveAsync(order);
             outcomes.Add(new TradeOrderMutationOutcome(
@@ -253,6 +283,7 @@ public sealed class TradeOrderMutationService
 
     public async Task<bool> AcceptRemoteConflictAsync(
         TradeCompanyRecordEnvelope currentRecord,
+        Guid localCompanyProfileId,
         CancellationToken cancellationToken = default)
     {
         var order = DeserializeOrder(currentRecord);
@@ -261,6 +292,7 @@ public sealed class TradeOrderMutationService
             return false;
         }
 
+        NormalizeForLocalProfile(order, localCompanyProfileId);
         MarkSynced(order, currentRecord.RecordId);
         if (!await _localStore.SaveAsync(order))
         {
@@ -292,5 +324,27 @@ public sealed class TradeOrderMutationService
     {
         order.RemoteId = remoteId;
         order.SyncState = TradeSyncState.Synced;
+    }
+
+    private static void NormalizeForCanonicalCompany(
+        TradeOrder order,
+        CompanyId companyId)
+    {
+        order.CompanyProfileId = companyId.Value;
+        foreach (var history in order.History)
+        {
+            history.CompanyProfileId = companyId.Value;
+        }
+    }
+
+    private static void NormalizeForLocalProfile(
+        TradeOrder order,
+        Guid localCompanyProfileId)
+    {
+        order.CompanyProfileId = localCompanyProfileId;
+        foreach (var history in order.History)
+        {
+            history.CompanyProfileId = localCompanyProfileId;
+        }
     }
 }

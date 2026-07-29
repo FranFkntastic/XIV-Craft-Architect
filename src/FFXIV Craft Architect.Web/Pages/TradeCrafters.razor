@@ -2,6 +2,8 @@
 @using FFXIV_Craft_Architect.Web.Shared.TablePrimitives
 @inject AppState AppState
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCrafterMutationService TradeCrafterMutations
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyProfileMutationService TradeCompanyProfiles
 @inject ILodestoneCrafterLookupService LodestoneCrafterLookup
 @inject TradeCrafterProfileImportMapper LodestoneImportMapper
 @inject NavigationManager NavigationManager
@@ -445,6 +447,8 @@
         {
             _loadError = null;
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            await TradeCompanyProfiles.SynchronizeAsync(_companyProfile);
+            await TradeCrafterMutations.SynchronizeAsync(_companyProfile);
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
             EnsureNewCrafterLocationDefaults();
@@ -487,7 +491,7 @@
             UpdatedAtUtc = now
         };
 
-        var saved = await TradeOperationsPersistence.SaveCrafterAsync(crafter);
+        var saved = await TradeCrafterMutations.SaveAsync(_companyProfile, crafter);
         if (!saved)
         {
             Snackbar.Add("Failed to save crafter.", Severity.Error);
@@ -576,7 +580,7 @@
         }
 
         var crafter = LodestoneImportMapper.CreateProfile(_companyProfile.Id, _lodestonePreview);
-        var saved = await TradeOperationsPersistence.SaveCrafterAsync(crafter);
+        var saved = await TradeCrafterMutations.SaveAsync(_companyProfile, crafter);
         if (!saved)
         {
             Snackbar.Add("Failed to save Lodestone crafter.", Severity.Error);
@@ -595,13 +599,15 @@
 
     private async Task UpdateSelectedCrafterFromLodestoneAsync()
     {
-        if (_selectedCrafter == null || _lodestonePreview == null)
+        if (_companyProfile == null ||
+            _selectedCrafter == null ||
+            _lodestonePreview == null)
         {
             return;
         }
 
         var crafter = LodestoneImportMapper.UpdateProfile(_selectedCrafter, _lodestonePreview);
-        var saved = await TradeOperationsPersistence.SaveCrafterAsync(crafter);
+        var saved = await TradeCrafterMutations.SaveAsync(_companyProfile, crafter);
         if (!saved)
         {
             Snackbar.Add("Failed to update crafter from Lodestone.", Severity.Error);
@@ -658,7 +664,9 @@
 
     private async Task SaveSelectedCrafterAsync()
     {
-        if (_selectedCrafter == null || string.IsNullOrWhiteSpace(_detailName))
+        if (_companyProfile == null ||
+            _selectedCrafter == null ||
+            string.IsNullOrWhiteSpace(_detailName))
         {
             return;
         }
@@ -681,7 +689,7 @@
             .Select(pair => new TradeCraftingJobLevel(pair.Key, pair.Value))
             .ToArray();
 
-        var saved = await TradeOperationsPersistence.SaveCrafterAsync(crafterToSave);
+        var saved = await TradeCrafterMutations.SaveAsync(_companyProfile, crafterToSave);
         if (!saved)
         {
             Snackbar.Add("Failed to save crafter.", Severity.Error);
