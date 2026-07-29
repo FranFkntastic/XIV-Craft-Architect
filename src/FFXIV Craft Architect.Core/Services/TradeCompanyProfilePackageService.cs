@@ -35,6 +35,7 @@ public sealed class TradeCompanyProfilePackageService
         var sourceProfile = package.Profile;
         var importedProfile = TradeCompanyProfile.CreateLocal(sourceProfile.Name, importedAtUtc);
         importedProfile.Description = sourceProfile.Description;
+        importedProfile.CommissionContact = sourceProfile.CommissionContact;
         importedProfile.PaymentPolicy = NormalizePaymentPolicy(sourceProfile.PaymentPolicy);
 
         var importedCrafters = package.Crafters
@@ -76,6 +77,7 @@ public sealed class TradeCompanyProfilePackageService
             SchemaVersion = profile.SchemaVersion,
             Name = profile.Name,
             Description = profile.Description,
+            CommissionContact = profile.CommissionContact,
             RemoteId = profile.RemoteId,
             SyncState = profile.SyncState,
             PaymentPolicy = NormalizePaymentPolicy(profile.PaymentPolicy),

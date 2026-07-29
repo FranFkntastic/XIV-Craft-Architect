@@ -1,0 +1,63 @@
+.commission-publish-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.commission-publish-preview div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: #202020;
+  padding: 10px;
+}
+
+.commission-publish-preview span,
+.commission-publish-checklist span {
+  color: #b8b8b8;
+  font-size: 0.76rem;
+}
+
+.commission-publish-preview strong:last-child {
+  color: #f2d36d;
+}
+
+.commission-publish-checklist {
+  display: grid;
+  gap: 0;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+  border: 1px solid #3b3b3b;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.commission-publish-checklist li {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.45fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 10px;
+  border-bottom: 1px solid #333;
+}
+
+.commission-publish-checklist li:last-child {
+  border-bottom: 0;
+}
+
+.commission-publish-checklist li::before {
+  content: "✓";
+  color: #78c878;
+  font-weight: 800;
+}
+
+.commission-publish-checklist li {
+  grid-template-columns: 18px minmax(130px, 0.45fr) minmax(0, 1fr);
+}
+
+.commission-publish-checklist li.is-private::before {
+  content: "—";
+  color: #999;
+}

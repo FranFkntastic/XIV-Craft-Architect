@@ -52,12 +52,19 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
       VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
       VPS_SSH_PORT: 22
+      DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_BOT_TOKEN }}
+      DISCORD_APPLICATION_ID: ${{ vars.CA_DISCORD_APPLICATION_ID }}
+      DISCORD_PUBLIC_KEY: ${{ secrets.CA_DISCORD_PUBLIC_KEY }}
+      DISCORD_GUILD_ID: ${{ secrets.CA_DISCORD_ALLOWED_GUILD_ID }}
+      DISCORD_CHANNEL_NAME: craft-commissions
+      DISCORD_CHANNEL_PARENT_ID: ${{ vars.CA_DISCORD_CHANNEL_PARENT_ID }}
     steps:
       - name: Checkout source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -85,6 +92,29 @@ jobs:
           echo "release=$release" >> "$GITHUB_OUTPUT"
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
+      - name: Test Discord guild reconciler
+        run: node --test tools/Discord/reconcile-guild.test.mjs
+
+      - name: Reconcile Discord guild integration
+        id: discord
+        run: node tools/Discord/reconcile-guild.mjs
+
+      - name: Write Discord environment
+        shell: bash
+        run: |
+          test "${#DISCORD_PUBLIC_KEY}" -eq 64
+          case "$DISCORD_PUBLIC_KEY" in
+            *[!0-9a-fA-F]*) exit 1 ;;
+          esac
+          umask 077
+          {
+            printf 'Discord__Enabled=true\n'
+            printf 'Discord__PublicKey=%s\n' "$DISCORD_PUBLIC_KEY"
+            printf 'Discord__AllowedGuildId=%s\n' "$DISCORD_GUILD_ID"
+            printf 'Discord__AllowedChannelId=%s\n' '${{ steps.discord.outputs.channel_id }}'
+            printf 'Discord__CommissionBaseUrl=https://dev.xivcraftarchitect.com/commission.html?id=\n'
+          } > discord.env
+
       - name: Write remote deploy script
         shell: bash
         run: |
@@ -111,12 +141,19 @@ jobs:
           ENV
           fi
 
+          sudo install -o "$USER" -g "$USER" -m 600 /tmp/discord.env "$root/env/discord.env"
+
           sudo tee "$root/run-lodestone.sh" > /dev/null <<'SCRIPT'
           #!/usr/bin/env bash
           set -euo pipefail
           if [[ -f /srv/craftarchitect/services/lodestone/env/profile-host.env ]]; then
             set -a
             source /srv/craftarchitect/services/lodestone/env/profile-host.env
+            set +a
+          fi
+          if [[ -f /srv/craftarchitect/services/lodestone/env/discord.env ]]; then
+            set -a
+            source /srv/craftarchitect/services/lodestone/env/discord.env
             set +a
           fi
           cd /srv/craftarchitect/services/lodestone/current
@@ -140,7 +177,46 @@ jobs:
             sleep 1
           done
 
-          rm -f "$archive" /tmp/deploy-lodestone-remote.sh
+          caddyfile="/etc/caddy/Caddyfile"
+          discord_route_count="$(sudo grep -cF 'handle /api/discord* {' "$caddyfile" || true)"
+          if [[ "$discord_route_count" == "0" ]]; then
+            caddy_candidate="$(mktemp)"
+            sudo cat "$caddyfile" > "$caddy_candidate"
+            python3 - "$caddy_candidate" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          content = path.read_text()
+          lines = content.splitlines(keepends=True)
+          route = (
+              "\thandle /api/discord* {\n"
+              "\t\turi strip_prefix /api\n"
+              "\t\treverse_proxy 127.0.0.1:5128\n"
+              "\t}\n\n"
+          )
+          for host in ("xivcraftarchitect.com", "dev.xivcraftarchitect.com"):
+              anchors = [
+                  index
+                  for index, line in enumerate(lines)
+                  if line.rstrip("\r\n") == f"{host} {{"
+              ]
+              if len(anchors) != 1:
+                  raise SystemExit(f"Expected one Caddy site block for {host}.")
+              lines.insert(anchors[0] + 1, route)
+          path.write_text("".join(lines))
+          PY
+            sudo caddy validate --config "$caddy_candidate" --adapter caddyfile
+            sudo cp --preserve=mode,ownership,timestamps "$caddyfile" "$caddyfile.pre-discord"
+            sudo install -m 644 "$caddy_candidate" "$caddyfile"
+            rm -f "$caddy_candidate"
+            sudo systemctl reload caddy
+          elif [[ "$discord_route_count" != "2" ]]; then
+            echo "Expected zero or two Discord Caddy routes; found $discord_route_count." >&2
+            exit 1
+          fi
+
+          rm -f "$archive" /tmp/deploy-lodestone-remote.sh /tmp/discord.env
 
           sudo find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' |
             sort -rn |
@@ -169,6 +245,7 @@ jobs:
           scp -P "$VPS_SSH_PORT"
           -i ~/.ssh/craftarchitect_vps
           "${{ steps.package.outputs.archive }}"
+          discord.env
           deploy-lodestone-remote.sh
           "$VPS_USER@$VPS_HOST:/tmp/"
 
@@ -190,4 +267,16 @@ jobs:
             curl --fail --silent --show-error \
               "https://$domain/api/xivdata/items/search?q=Varn&limit=12" \
               | grep -qi varn
+            test "$(
+              curl --silent --show-error \
+                --output /dev/null \
+                --write-out '%{http_code}' \
+                --request POST \
+                --header 'Content-Type: application/json' \
+                --data '{"type":1}' \
+                "https://$domain/api/discord/interactions"
+            )" = "401"
+            curl --fail --silent --show-error \
+              "https://$domain/api/discord/health" \
+              | grep -q '"publishingReady":true'
           done

@@ -81,6 +81,8 @@ builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
 builder.Services.AddScoped<TradeCompanyProfilePackageService>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
+builder.Services.AddScoped<CommissionBriefClient>();
+builder.Services.AddScoped<CommissionBriefLocalStateService>();
 builder.Services.AddScoped<TradeLaborBenchmarkCalibrationWorkflowService>();
 builder.Services.AddScoped<ProfileHostClient>();
 builder.Services.AddScoped<ProfileSyncLocalStateService>();

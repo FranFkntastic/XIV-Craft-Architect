@@ -10,6 +10,8 @@
 @inject TradeOrderPricingWorkflowService TradeOrderPricingWorkflow
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
+@inject CommissionBriefClient CommissionBriefs
+@inject CommissionBriefLocalStateService CommissionBriefLocalState
 @inject WebPlanPersistenceService PlanPersistence
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
@@ -822,6 +824,117 @@
                                         <li><strong>@FormatHistoryKind(item.Kind)</strong> @item.Note</li>
                                     }
                                 </ul>
+                            </MudTabPanel>
+                            <MudTabPanel Text="Collaboration">
+                                @if (HasLiveCommissionPublication)
+                                {
+                                    var publication = _selectedOrder.CommissionPublication!;
+                                    <section class="trade-orders-collaboration-state is-live">
+                                        <div class="trade-orders-section-heading">
+                                            <div>
+                                                <MudText Typo="Typo.subtitle2">Published commission</MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                    Crafter brief version @publication.Version is live.
+                                                </MudText>
+                                            </div>
+                                            <span class="trade-orders-publication-chip is-live">Live</span>
+                                        </div>
+                                    </section>
+                                    <div class="trade-orders-published-link">
+                                        <code>@GetCommissionUrl(publication.PublicId)</code>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   OnClick="CopyCommissionLinkAsync">
+                                            Copy
+                                        </MudButton>
+                                    </div>
+                                    <div class="trade-orders-visibility">
+                                        <div><strong>Published</strong><span>@publication.PublishedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span><b>v@(publication.Version)</b></div>
+                                        <div><strong>Payment snapshot</strong><span>@FormatGil(paymentSummary.TotalPayment)</span><b>Locked</b></div>
+                                        <div><strong>Pricing evidence</strong><span>@FormatCommissionLocation(_selectedOrder.SourceSnapshot)</span><b>Locked</b></div>
+                                        <div><strong>Crafter access</strong><span>No account or CA workflow required</span><b>Open link</b></div>
+                                    </div>
+                                    <MudAlert Severity="Severity.Success" Dense="true" Class="mt-3">
+                                        Repricing this order will not silently alter the published terms. Publish a replacement only when both sides agree to new terms.
+                                    </MudAlert>
+                                    <div class="trade-orders-collaboration-actions">
+                                        <MudButton Variant="Variant.Filled"
+                                                   Color="Color.Primary"
+                                                   StartIcon="@Icons.Material.Filled.OpenInNew"
+                                                   OnClick="OpenCommissionBriefAsync">
+                                            View Crafter Brief
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   StartIcon="@Icons.Material.Filled.ContentCopy"
+                                                   OnClick="CopyCommissionLinkAsync">
+                                            Copy Link
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Error"
+                                                   Disabled="@_isRevokingCommission"
+                                                   OnClick="RevokeSelectedCommissionAsync">
+                                            @(_isRevokingCommission ? "Revoking..." : "Revoke Link")
+                                        </MudButton>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <section class="trade-orders-collaboration-state">
+                                        <div class="trade-orders-section-heading">
+                                            <div>
+                                                <MudText Typo="Typo.subtitle2">Private order</MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                    Publish a crafter-facing brief without sharing this workspace, internal notes, or the mutable Craft Architect plan.
+                                                </MudText>
+                                            </div>
+                                            <span class="trade-orders-publication-chip">Not published</span>
+                                        </div>
+                                    </section>
+                                    <div class="trade-orders-visibility">
+                                        <div><strong>Requested delivery</strong><span>Item, quantity, and quality</span><b>Included</b></div>
+                                        <div><strong>Payment terms</strong><span>@FormatGil(paymentSummary.TotalPayment)</span><b>Included</b></div>
+                                        <div><strong>Material responsibility</strong><span>Crafter and company responsibility groups</span><b>Included</b></div>
+                                        <div><strong>Evidence identity</strong><span>Scope, basis, and captured time</span><b>Included</b></div>
+                                        <div class="is-private"><strong>Internal notes</strong><span>Operator-only planning notes</span><b>Private</b></div>
+                                        <div class="is-private"><strong>Full craft plan</strong><span>Never required for the crafter</span><b>Private</b></div>
+                                    </div>
+                                    <div class="trade-orders-collaboration-fields">
+                                        <MudTextField @bind-Value="_commissionContact"
+                                                      id="commission-contact"
+                                                      Label="Commission contact"
+                                                      HelperText="Discord username or reply method shown to the crafter; defaults from company settings"
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense"
+                                                      Immediate="true"
+                                                      MaxLength="240" />
+                                        <MudTextField @bind-Value="_commissionDeliveryInstructions"
+                                                      id="commission-delivery-instructions"
+                                                      Label="Crafter-facing delivery note"
+                                                      HelperText="Internal order notes remain private"
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense"
+                                                      Immediate="true"
+                                                      Lines="2"
+                                                      MaxLength="1000" />
+                                    </div>
+                                    @if (!CanPublishCommission)
+                                    {
+                                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                                            A publishable brief needs requested outputs and an available payment total from the current order evidence.
+                                        </MudAlert>
+                                    }
+                                    <MudButton Variant="Variant.Filled"
+                                               Color="Color.Primary"
+                                               FullWidth="true"
+                                               Class="mt-3"
+                                               StartIcon="@Icons.Material.Filled.Share"
+                                               Disabled="@(!CanPublishCommission)"
+                                               OnClick="PublishSelectedCommissionAsync">
+                                        @(_isPublishingCommission ? "Publishing..." : "Publish Commission")
+                                    </MudButton>
+                                }
                             </MudTabPanel>
                         </MudTabs>
                     }

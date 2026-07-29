@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Commission Brief — FFXIV Craft Architect</title>
+    <link rel="stylesheet" href="commission.css">
+</head>
+<body>
+    <header class="brief-topbar">
+        <div class="brand">FFXIV Craft Architect <small>Commission brief</small></div>
+        <span class="status-chip" id="statusChip">Loading</span>
+    </header>
+
+    <main class="brief-shell" id="briefShell" hidden>
+        <section class="brief-hero">
+            <div>
+                <div class="eyebrow" id="companyName"></div>
+                <h1 id="briefTitle"></h1>
+                <p class="brief-subtitle" id="publishedDate"></p>
+                <div class="brief-actions">
+                    <div class="copy-action">
+                        <button class="button primary" id="copyCommission">Copy full commission brief</button>
+                        <small>Delivery, materials, payment, evidence, contact, and link</small>
+                    </div>
+                    <div class="copy-action" id="copyContactAction">
+                        <button class="button" id="copyContact">Copy contact details</button>
+                        <small>Contact method and commission reference only</small>
+                    </div>
+                </div>
+            </div>
+            <div class="brief-total">
+                <span>Total payment</span>
+                <strong id="totalPayment"></strong>
+            </div>
+        </section>
+
+        <div class="brief-grid">
+            <div class="brief-main">
+                <section class="brief-section">
+                    <div class="brief-section-head">
+                        <h2>Requested Delivery</h2>
+                        <span class="status-chip" id="assignmentStatus"></span>
+                    </div>
+                    <div class="brief-section-body" id="outputs"></div>
+                </section>
+
+                <section class="brief-section">
+                    <div class="brief-section-head">
+                        <h2>Material Responsibility</h2>
+                        <span>Published terms</span>
+                    </div>
+                    <div class="brief-section-body material-groups">
+                        <div class="material-group">
+                            <div class="material-group-heading">
+                                <strong>Crafter procures</strong>
+                                <span>Reimbursed at the frozen costs below</span>
+                            </div>
+                            <div class="material-list" id="crafterMaterials"></div>
+                        </div>
+                        <div class="material-group">
+                            <div class="material-group-heading">
+                                <strong>Company provides</strong>
+                                <span>No purchase or reimbursement expected from the crafter</span>
+                            </div>
+                            <div class="material-list" id="companyMaterials"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="brief-section">
+                    <div class="brief-section-head">
+                        <h2>Payment Breakdown</h2>
+                        <span id="paymentContract"></span>
+                    </div>
+                    <div class="brief-section-body">
+                        <div id="paymentBreakdown"></div>
+                        <p class="payment-explanation" id="paymentExplanation"></p>
+                    </div>
+                </section>
+            </div>
+
+            <aside class="brief-side">
+                <section class="brief-section">
+                    <div class="brief-section-head"><h2>Commission Terms</h2></div>
+                    <div class="brief-section-body">
+                        <div class="term-row"><span>Status</span><strong id="termStatus"></strong></div>
+                        <div class="term-row"><span>Assignment</span><strong id="termAssignment"></strong></div>
+                        <div class="term-row"><span>Payment basis</span><strong id="termPayment"></strong></div>
+                        <div class="term-row"><span>Brief version</span><strong id="termVersion"></strong></div>
+                        <div class="term-row"><span>Reference</span><strong id="termReference"></strong></div>
+                    </div>
+                </section>
+
+                <section class="brief-section">
+                    <div class="brief-section-head"><h2>Pricing Evidence</h2></div>
+                    <div class="brief-section-body evidence">
+                        <strong id="evidenceTime"></strong>
+                        <span id="evidenceLocation"></span>
+                        <span id="evidenceScope"></span>
+                        <span id="evidenceBasis"></span>
+                        <span>This evidence is frozen to this commission brief.</span>
+                    </div>
+                </section>
+
+                <section class="brief-section" id="contactSection">
+                    <div class="brief-section-head"><h2>Contact</h2></div>
+                    <div class="brief-section-body contact">
+                        <strong id="contactCompany"></strong>
+                        <span id="contactMethod"></span>
+                        <span id="contactReference"></span>
+                    </div>
+                </section>
+            </aside>
+        </div>
+
+        <section class="optional-ca">
+            <strong>Want planning help? Craft Architect is optional.</strong>
+            <p>You can accept and complete this commission using any workflow you prefer. Craft Architect remains available if you want recipe and procurement planning help.</p>
+            <a class="button" href="/">Open Craft Architect</a>
+        </section>
+    </main>
+
+    <main class="brief-shell brief-message" id="briefMessage">
+        <h1 id="messageTitle">Loading commission brief</h1>
+        <p id="messageBody">Retrieving the published terms.</p>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="commission.js"></script>
+</body>
+</html>
