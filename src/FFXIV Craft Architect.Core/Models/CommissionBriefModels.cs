@@ -53,6 +53,7 @@ public sealed class CommissionBriefDocument
 public sealed class CommissionBriefCreateRequest
 {
     public CommissionBriefDocument Brief { get; set; } = new();
+    public TradeCompanyPublicationOwnership? Ownership { get; set; }
 }
 
 public sealed class CommissionBriefCreateResponse
@@ -69,6 +70,7 @@ public sealed class PublishedCommissionBrief
     public int Version { get; set; }
     public DateTime PublishedAtUtc { get; set; }
     public CommissionBriefDocument Brief { get; set; } = new();
+    public TradeCompanyPublicationOwnership? Ownership { get; set; }
 }
 
 public sealed class TradeCommissionPublication
@@ -77,4 +79,5 @@ public sealed class TradeCommissionPublication
     public int Version { get; set; }
     public DateTime PublishedAtUtc { get; set; }
     public DateTime? RevokedAtUtc { get; set; }
+    public TradeCompanyPublicationOwnership? Ownership { get; set; }
 }
