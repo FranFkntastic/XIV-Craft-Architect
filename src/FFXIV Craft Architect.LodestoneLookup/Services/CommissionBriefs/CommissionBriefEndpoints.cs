@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
 
@@ -28,7 +29,7 @@ public static class CommissionBriefEndpoints
                     return Results.BadRequest(new { error = validationError });
                 }
 
-                var created = await store.CreateAsync(request.Brief, ct);
+                var created = await store.CreateAsync(request.Brief, request.Ownership, ct);
                 return Results.Ok(new CommissionBriefCreateResponse
                 {
                     PublicId = created.Published.PublicId,
@@ -76,9 +77,19 @@ public static class CommissionBriefEndpoints
                     return Results.Unauthorized();
                 }
 
-                return await store.RevokeAsync(publicId, token, ct)
-                    ? Results.NoContent()
-                    : Results.Unauthorized();
+                if (!await store.RevokeAsync(publicId, token, ct))
+                {
+                    return Results.Unauthorized();
+                }
+
+                var revocations = context.RequestServices
+                    .GetService<IDiscordPublicationRevocationSink>();
+                if (revocations != null)
+                {
+                    await revocations.RevokeAsync(publicId, ct);
+                }
+
+                return Results.NoContent();
             });
     }
 

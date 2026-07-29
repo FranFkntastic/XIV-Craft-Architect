@@ -47,16 +47,41 @@ builder.Services.AddSingleton(_ => new CommissionBriefOptions
         ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(profileDatabasePath))!, "commission-briefs.db")
 });
 builder.Services.AddSingleton<SqliteCommissionBriefStore>();
-builder.Services.AddSingleton(_ => new DiscordCommissionOptions
+builder.Services.AddSingleton(_ =>
 {
-    Enabled = builder.Configuration.GetValue("Discord:Enabled", false),
-    PublicKey = builder.Configuration["Discord:PublicKey"] ?? string.Empty,
-    AllowedGuildId = builder.Configuration["Discord:AllowedGuildId"] ?? string.Empty,
-    AllowedChannelId = builder.Configuration["Discord:AllowedChannelId"] ?? string.Empty,
-    CommissionBaseUrl = builder.Configuration["Discord:CommissionBaseUrl"]
-        ?? "https://dev.xivcraftarchitect.com/commission.html?id="
+    var discordDatabasePath = builder.Configuration["Discord:DatabasePath"]
+        ?? Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(profileDatabasePath))!,
+            "discord-collaboration.db");
+    return new DiscordCommissionOptions
+    {
+        Enabled = builder.Configuration.GetValue("Discord:Enabled", false),
+        ApplicationId = builder.Configuration["Discord:ApplicationId"] ?? string.Empty,
+        PublicKey = builder.Configuration["Discord:PublicKey"] ?? string.Empty,
+        BotToken = builder.Configuration["Discord:RuntimeBotToken"] ?? string.Empty,
+        AllowedGuildId = builder.Configuration["Discord:AllowedGuildId"] ?? string.Empty,
+        AllowedChannelId = builder.Configuration["Discord:AllowedChannelId"] ?? string.Empty,
+        CommissionBaseUrl = builder.Configuration["Discord:CommissionBaseUrl"]
+            ?? "https://dev.xivcraftarchitect.com/commission.html?id=",
+        ApiBaseUrl = builder.Configuration["Discord:ApiBaseUrl"]
+            ?? "https://discord.com/api/v10/",
+        DatabasePath = discordDatabasePath,
+        OutboxMaximumAttempts = Math.Clamp(
+            builder.Configuration.GetValue("Discord:OutboxMaximumAttempts", 5),
+            1,
+            10),
+        OutboxLeaseDuration = TimeSpan.FromSeconds(Math.Clamp(
+            builder.Configuration.GetValue("Discord:OutboxLeaseSeconds", 30),
+            5,
+            300)),
+        OutboxPollInterval = TimeSpan.FromSeconds(Math.Clamp(
+            builder.Configuration.GetValue("Discord:OutboxPollSeconds", 2),
+            1,
+            60))
+    };
 });
-builder.Services.AddSingleton<DiscordRequestVerifier>();
+builder.Services.AddDiscordCollaboration();
+builder.Services.AddDiscordCompanyAdapters();
 
 if (ProfileHostProvisioningCommand.TryParse(args) is { } profileHostCommand)
 {
@@ -180,6 +205,7 @@ app.MapGet(
 app.MapProfileHostEndpoints();
 app.MapCommissionBriefEndpoints();
 app.MapDiscordCommissionEndpoints();
+app.MapDiscordCollaborationEndpoints();
 
 app.Run();
 

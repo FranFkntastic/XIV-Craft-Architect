@@ -3,14 +3,53 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
+public sealed record DiscordVolunteerInteraction(
+    string InteractionId,
+    string ApplicationId,
+    string GuildId,
+    string ChannelId,
+    string MessageId,
+    string ActionToken,
+    string DiscordUserId,
+    string DiscordUserDisplayName);
+
+public enum DiscordVolunteerInteractionStatus
+{
+    Recorded,
+    Replayed,
+    NoLongerOpen,
+    Rejected
+}
+
+public sealed record DiscordVolunteerInteractionResult(
+    DiscordVolunteerInteractionStatus Status,
+    string Message);
+
+public interface IDiscordVolunteerInteractionService
+{
+    Task<DiscordVolunteerInteractionResult> RecordInterestAsync(
+        DiscordVolunteerInteraction interaction,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class DenyDiscordVolunteerInteractionService : IDiscordVolunteerInteractionService
+{
+    public Task<DiscordVolunteerInteractionResult> RecordInterestAsync(
+        DiscordVolunteerInteraction interaction,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new DiscordVolunteerInteractionResult(
+            DiscordVolunteerInteractionStatus.Rejected,
+            "Volunteer claims are not available for this installation."));
+}
+
 public static class DiscordCommissionEndpoints
 {
     private const int MaximumRequestBodyBytes = 128 * 1024;
     private const int PingInteraction = 1;
     private const int ApplicationCommandInteraction = 2;
+    private const int MessageComponentInteraction = 3;
     private const int PongResponse = 1;
     private const int ChannelMessageResponse = 4;
-    private const int EphemeralMessageFlag = 64;
 
     public static void MapDiscordCommissionEndpoints(this WebApplication app)
     {
@@ -24,7 +63,8 @@ public static class DiscordCommissionEndpoints
                         ? "pending-channel"
                         : "disabled",
                 signingReady = options.CanVerifyInteractions,
-                publishingReady = options.IsConfigured
+                publishingReady = options.IsConfigured,
+                directPublishingReady = options.CanPublishDirectly
             }));
 
         app.MapPost(
@@ -84,6 +124,14 @@ public static class DiscordCommissionEndpoints
                                 store,
                                 ct)
                             : InteractionError("Commission publishing has not been connected to a channel yet."),
+                        MessageComponentInteraction => options.IsConfigured
+                            ? await HandleMessageComponentAsync(
+                                payload.RootElement,
+                                options,
+                                context.RequestServices.GetService<IDiscordVolunteerInteractionService>()
+                                    ?? new DenyDiscordVolunteerInteractionService(),
+                                ct)
+                            : InteractionError("Commission collaboration has not been connected to a channel yet."),
                         _ => InteractionError("This interaction is not supported by the prototype.")
                     };
                 }
@@ -138,6 +186,72 @@ public static class DiscordCommissionEndpoints
             type = ChannelMessageResponse,
             data = DiscordCommissionMessage.Create(published, options.CommissionBaseUrl)
         });
+    }
+
+    private static async Task<IResult> HandleMessageComponentAsync(
+        JsonElement interaction,
+        DiscordCommissionOptions options,
+        IDiscordVolunteerInteractionService volunteerInteractions,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(options.ApplicationId) ||
+            ReadString(interaction, "application_id") != options.ApplicationId ||
+            ReadString(interaction, "guild_id") != options.AllowedGuildId ||
+            ReadString(interaction, "channel_id") != options.AllowedChannelId)
+        {
+            return InteractionError("This Volunteer action does not belong to this commission installation.");
+        }
+
+        if (!interaction.TryGetProperty("message", out var message) ||
+            !interaction.TryGetProperty("data", out var data) ||
+            !interaction.TryGetProperty("member", out var member) ||
+            !member.TryGetProperty("user", out var user))
+        {
+            return InteractionError("This Volunteer action is incomplete.");
+        }
+
+        var interactionId = ReadString(interaction, "id");
+        var messageId = ReadString(message, "id");
+        var actionToken = ReadString(data, "custom_id");
+        var userId = ReadString(user, "id");
+        if (string.IsNullOrWhiteSpace(interactionId) ||
+            string.IsNullOrWhiteSpace(messageId) ||
+            string.IsNullOrWhiteSpace(actionToken) ||
+            actionToken.Length > 100 ||
+            string.IsNullOrWhiteSpace(userId))
+        {
+            return InteractionError("This Volunteer action is invalid.");
+        }
+
+        var displayName = ReadString(member, "nick") ??
+            ReadString(user, "global_name") ??
+            ReadString(user, "username") ??
+            "Discord volunteer";
+        var result = await volunteerInteractions.RecordInterestAsync(
+            new DiscordVolunteerInteraction(
+                interactionId,
+                options.ApplicationId,
+                options.AllowedGuildId,
+                options.AllowedChannelId,
+                messageId,
+                actionToken,
+                userId,
+                displayName),
+            ct);
+
+        var response = result.Status switch
+        {
+            DiscordVolunteerInteractionStatus.Recorded =>
+                "Interest recorded. A commission operator still needs to confirm assignment.",
+            DiscordVolunteerInteractionStatus.Replayed =>
+                "Your interest is already recorded. A commission operator still needs to confirm assignment.",
+            DiscordVolunteerInteractionStatus.NoLongerOpen =>
+                "This commission is no longer accepting volunteers.",
+            _ => string.IsNullOrWhiteSpace(result.Message)
+                ? "This Volunteer action could not be accepted."
+                : result.Message
+        };
+        return InteractionError(response);
     }
 
     private static bool TryReadPublicId(JsonElement data, out string publicId)
@@ -206,14 +320,6 @@ public static class DiscordCommissionEndpoints
         Results.Json(new
         {
             type = ChannelMessageResponse,
-            data = new
-            {
-                content = message,
-                flags = EphemeralMessageFlag,
-                allowed_mentions = new
-                {
-                    parse = Array.Empty<string>()
-                }
-            }
+            data = DiscordCommissionMessage.CreateEphemeral(message)
         });
 }

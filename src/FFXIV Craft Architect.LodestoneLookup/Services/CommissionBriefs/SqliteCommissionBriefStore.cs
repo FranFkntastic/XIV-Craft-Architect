@@ -10,6 +10,8 @@ public sealed class SqliteCommissionBriefStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly CommissionBriefOptions _options;
+    private readonly SemaphoreSlim _schemaGate = new(1, 1);
+    private bool _schemaReady;
 
     public SqliteCommissionBriefStore(CommissionBriefOptions options)
     {
@@ -18,6 +20,14 @@ public sealed class SqliteCommissionBriefStore
 
     public async Task<(PublishedCommissionBrief Published, string EditorToken)> CreateAsync(
         CommissionBriefDocument brief,
+        CancellationToken ct)
+    {
+        return await CreateAsync(brief, ownership: null, ct);
+    }
+
+    public async Task<(PublishedCommissionBrief Published, string EditorToken)> CreateAsync(
+        CommissionBriefDocument brief,
+        TradeCompanyPublicationOwnership? ownership,
         CancellationToken ct)
     {
         await using var connection = await OpenAsync(ct);
@@ -30,14 +40,41 @@ public sealed class SqliteCommissionBriefStore
         command.CommandText =
             """
             INSERT INTO commission_briefs
-                (public_id, editor_token_hash, version, payload_json, published_at_utc)
+                (
+                    public_id,
+                    editor_token_hash,
+                    version,
+                    payload_json,
+                    published_at_utc,
+                    company_id,
+                    order_id,
+                    order_revision
+                )
             VALUES
-                ($publicId, $editorTokenHash, 1, $payloadJson, $publishedAtUtc);
+                (
+                    $publicId,
+                    $editorTokenHash,
+                    1,
+                    $payloadJson,
+                    $publishedAtUtc,
+                    $companyId,
+                    $orderId,
+                    $orderRevision
+                );
             """;
         command.Parameters.AddWithValue("$publicId", publicId);
         command.Parameters.AddWithValue("$editorTokenHash", HashToken(editorToken));
         command.Parameters.AddWithValue("$payloadJson", JsonSerializer.Serialize(brief, JsonOptions));
         command.Parameters.AddWithValue("$publishedAtUtc", publishedAt.ToString("O"));
+        command.Parameters.AddWithValue(
+            "$companyId",
+            ownership is null ? DBNull.Value : ownership.CompanyId.ToString());
+        command.Parameters.AddWithValue(
+            "$orderId",
+            ownership is null ? DBNull.Value : ownership.OrderId.ToString("D"));
+        command.Parameters.AddWithValue(
+            "$orderRevision",
+            ownership is null ? DBNull.Value : ownership.OrderRevision.Value);
         await command.ExecuteNonQueryAsync(ct);
 
         return (
@@ -46,7 +83,8 @@ public sealed class SqliteCommissionBriefStore
                 PublicId = publicId,
                 Version = 1,
                 PublishedAtUtc = publishedAt,
-                Brief = brief
+                Brief = brief,
+                Ownership = ownership
             },
             editorToken);
     }
@@ -58,7 +96,13 @@ public sealed class SqliteCommissionBriefStore
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT version, payload_json, published_at_utc
+            SELECT
+                version,
+                payload_json,
+                published_at_utc,
+                company_id,
+                order_id,
+                order_revision
             FROM commission_briefs
             WHERE public_id = $publicId AND revoked_at_utc IS NULL;
             """;
@@ -75,12 +119,26 @@ public sealed class SqliteCommissionBriefStore
             return null;
         }
 
+        TradeCompanyPublicationOwnership? ownership = null;
+        if (!reader.IsDBNull(3) &&
+            !reader.IsDBNull(4) &&
+            !reader.IsDBNull(5) &&
+            CompanyId.TryParse(reader.GetString(3), out var companyId) &&
+            Guid.TryParse(reader.GetString(4), out var orderId))
+        {
+            ownership = new TradeCompanyPublicationOwnership(
+                companyId,
+                orderId,
+                new CompanyRecordRevision(reader.GetInt64(5)));
+        }
+
         return new PublishedCommissionBrief
         {
             PublicId = publicId,
             Version = reader.GetInt32(0),
             PublishedAtUtc = DateTime.Parse(reader.GetString(2), null, System.Globalization.DateTimeStyles.RoundtripKind),
-            Brief = brief
+            Brief = brief,
+            Ownership = ownership
         };
     }
 
@@ -119,21 +177,70 @@ public sealed class SqliteCommissionBriefStore
         return connection;
     }
 
-    private static async Task EnsureSchemaAsync(SqliteConnection connection, CancellationToken ct)
+    private async Task EnsureSchemaAsync(SqliteConnection connection, CancellationToken ct)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            CREATE TABLE IF NOT EXISTS commission_briefs (
-                public_id TEXT PRIMARY KEY,
-                editor_token_hash TEXT NOT NULL,
-                version INTEGER NOT NULL,
-                payload_json TEXT NOT NULL,
-                published_at_utc TEXT NOT NULL,
-                revoked_at_utc TEXT NULL
-            );
-            """;
-        await command.ExecuteNonQueryAsync(ct);
+        if (_schemaReady)
+        {
+            return;
+        }
+
+        await _schemaGate.WaitAsync(ct);
+        try
+        {
+            if (_schemaReady)
+            {
+                return;
+            }
+
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                CREATE TABLE IF NOT EXISTS commission_briefs (
+                    public_id TEXT PRIMARY KEY,
+                    editor_token_hash TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    published_at_utc TEXT NOT NULL,
+                    revoked_at_utc TEXT NULL,
+                    company_id TEXT NULL,
+                    order_id TEXT NULL,
+                    order_revision INTEGER NULL
+                );
+                """;
+            await command.ExecuteNonQueryAsync(ct);
+
+            await AddColumnIfMissingAsync(connection, "company_id", "TEXT NULL", ct);
+            await AddColumnIfMissingAsync(connection, "order_id", "TEXT NULL", ct);
+            await AddColumnIfMissingAsync(connection, "order_revision", "INTEGER NULL", ct);
+            _schemaReady = true;
+        }
+        finally
+        {
+            _schemaGate.Release();
+        }
+    }
+
+    private static async Task AddColumnIfMissingAsync(
+        SqliteConnection connection,
+        string columnName,
+        string definition,
+        CancellationToken ct)
+    {
+        await using var inspect = connection.CreateCommand();
+        inspect.CommandText = "PRAGMA table_info(commission_briefs);";
+        await using var reader = await inspect.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        await reader.DisposeAsync();
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE commission_briefs ADD COLUMN {columnName} {definition};";
+        await alter.ExecuteNonQueryAsync(ct);
     }
 
     private static string CreateToken(int byteCount) =>
