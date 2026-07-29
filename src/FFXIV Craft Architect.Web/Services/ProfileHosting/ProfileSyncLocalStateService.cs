@@ -18,7 +18,8 @@ public sealed class ProfileSyncLocalStateService
     {
         return !ProfileSyncSettingsKeys.ConnectionSettingKeys.Contains(key) &&
                !string.Equals(key, ConnectedProfileNameKey, StringComparison.OrdinalIgnoreCase) &&
-               !key.StartsWith(ObjectRevisionPrefix, StringComparison.OrdinalIgnoreCase);
+               !key.StartsWith(ObjectRevisionPrefix, StringComparison.OrdinalIgnoreCase) &&
+               !key.StartsWith(CommissionBriefLocalStateService.SettingPrefix, StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<HostedProfileConnectionSettings> LoadConnectionSettingsAsync()

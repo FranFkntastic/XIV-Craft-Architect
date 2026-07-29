@@ -849,6 +849,99 @@
   padding-left: 18px;
 }
 
+.trade-orders-collaboration-state {
+  border: 1px solid #3d3d3d;
+  border-radius: 6px;
+  background: #202020;
+  padding: 12px;
+}
+
+.trade-orders-collaboration-state.is-live {
+  border-color: #4f8f4f;
+  background: #1d321d;
+}
+
+.trade-orders-publication-chip {
+  border: 1px solid #555;
+  border-radius: 999px;
+  color: #d0d0d0;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+
+.trade-orders-publication-chip.is-live {
+  border-color: #65a765;
+  color: #b8e6a6;
+}
+
+.trade-orders-visibility {
+  margin-top: 10px;
+  border: 1px solid #353535;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.trade-orders-visibility > div {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.55fr) minmax(150px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 38px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #333;
+}
+
+.trade-orders-visibility > div:last-child {
+  border-bottom: 0;
+}
+
+.trade-orders-visibility span {
+  color: #b8b8b8;
+  font-size: 0.72rem;
+}
+
+.trade-orders-visibility b {
+  color: #86ca7a;
+  font-size: 0.68rem;
+}
+
+.trade-orders-visibility .is-private b {
+  color: #999;
+}
+
+.trade-orders-collaboration-fields {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.trade-orders-published-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid #414141;
+  border-radius: 6px;
+  background: #181818;
+}
+
+.trade-orders-published-link code {
+  overflow: hidden;
+  color: #e6d27c;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-orders-collaboration-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .trade-orders-history li {
   margin-bottom: 6px;
 }

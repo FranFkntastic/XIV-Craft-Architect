@@ -331,6 +331,8 @@ public partial class TradeOrders
             TradeOrderHistoryEventKind.PayrollLinked => "Payroll",
             TradeOrderHistoryEventKind.CraftPlanLinked => "Plan",
             TradeOrderHistoryEventKind.PricingRefreshed => "Pricing",
+            TradeOrderHistoryEventKind.CommissionPublished => "Published",
+            TradeOrderHistoryEventKind.CommissionRevoked => "Revoked",
             _ => kind.ToString()
         };
     }

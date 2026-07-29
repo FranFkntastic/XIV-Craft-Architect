@@ -1,0 +1,50 @@
+@using FFXIV_Craft_Architect.Core.Models
+
+<MudDialog>
+    <TitleContent>
+        <div>
+            <MudText Typo="Typo.overline">Crafter-facing snapshot</MudText>
+            <MudText Typo="Typo.h6">Publish Commission</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2">
+            This creates a read-only link. The crafter sees the agreed work and payment terms, but does not need a Craft Architect account or access to your company workspace.
+        </MudText>
+        <div class="commission-publish-preview">
+            <div>
+                <span>Commission</span>
+                <strong>@Title</strong>
+            </div>
+            <div>
+                <span>Total payment</span>
+                <strong>@($"{Math.Round(TotalPayment, 0):N0}g")</strong>
+            </div>
+        </div>
+        <ul class="commission-publish-checklist">
+            <li><strong>Delivery</strong><span>Item, quantity, and quality requirements</span></li>
+            <li><strong>Payment</strong><span>Reimbursement, bonus or labor, and total</span></li>
+            <li><strong>Responsibilities</strong><span>Which materials the crafter or company provides</span></li>
+            <li><strong>Evidence</strong><span>Cost basis, market scope, and snapshot time</span></li>
+            <li class="is-private"><strong>Private company data</strong><span>Operator notes, other orders, roster, and full plan stay hidden</span></li>
+        </ul>
+        <MudAlert Severity="Severity.Info" Dense="true">
+            Publishing freezes this crafter brief. Future order edits or repricing will not silently change the published terms.
+        </MudAlert>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Publish">
+            Publish &amp; Copy Link
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string Title { get; set; } = string.Empty;
+    [Parameter] public decimal TotalPayment { get; set; }
+
+    private void Cancel() => MudDialog.Cancel();
+    private void Publish() => MudDialog.Close(DialogResult.Ok(true));
+}

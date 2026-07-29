@@ -10,12 +10,13 @@ public enum TradeSyncState
 
 public sealed class TradeCompanyProfile
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public Guid Id { get; set; } = Guid.NewGuid();
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
+    public string? CommissionContact { get; set; }
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
     public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.LegacyDefault;
@@ -163,6 +164,7 @@ public sealed class TradeOrder
     public string? CraftPlanName { get; set; }
     public DateTime? CraftPlanSavedAtUtc { get; set; }
     public TradeOrderCraftPlanLinkKind CraftPlanLinkKind { get; set; } = TradeOrderCraftPlanLinkKind.Unknown;
+    public TradeCommissionPublication? CommissionPublication { get; set; }
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
 }
@@ -234,7 +236,9 @@ public enum TradeOrderHistoryEventKind
     PayrollLinked,
     CraftPlanLinked,
     PricingRefreshed,
-    RequestUpdated
+    RequestUpdated,
+    CommissionPublished,
+    CommissionRevoked
 }
 
 public sealed class TradeOrderHistoryEvent

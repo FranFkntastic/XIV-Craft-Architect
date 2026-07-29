@@ -316,6 +316,15 @@
                                   Margin="Margin.Dense"
                                   Lines="2"
                                   Class="my-2" />
+                    <MudTextField @bind-Value="_companyCommissionContact"
+                                  id="company-commission-contact"
+                                  Label="Default commission contact"
+                                  HelperText="Discord username or reply method published on crafter briefs; leave blank to omit contact"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  MaxLength="240"
+                                  Class="my-2" />
 
                     <MudDivider Class="my-4" />
 
@@ -1102,6 +1111,7 @@
     private TradeCompanyProfile? _companyProfile;
     private string _companyName = string.Empty;
     private string? _companyDescription;
+    private string? _companyCommissionContact;
     private int _companyCrafterCount;
     private string? _companyLoadError;
     private bool _companyIsBusy;
@@ -1393,6 +1403,7 @@
     {
         _companyName = profile.Name;
         _companyDescription = profile.Description;
+        _companyCommissionContact = profile.CommissionContact;
         var policy = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
             profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
         _companyPaymentContract = policy.ActiveContract;
@@ -1984,6 +1995,7 @@
 
             _companyProfile.Name = _companyName.Trim();
             _companyProfile.Description = NormalizeOptionalText(_companyDescription);
+            _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
             _companyProfile.PaymentPolicy = paymentPolicy;
             var companySaved = await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile);
             if (!companySaved)

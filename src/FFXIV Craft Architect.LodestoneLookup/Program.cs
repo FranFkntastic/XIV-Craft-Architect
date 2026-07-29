@@ -3,6 +3,8 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.LodestoneLookup.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.XivData;
 
@@ -36,6 +38,25 @@ builder.Services.AddSingleton(_ => new ProfileHostOptions
 });
 builder.Services.AddSingleton<ProfileAccessKeyHasher>();
 builder.Services.AddSingleton<SqliteProfileHostStore>();
+var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
+    ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db");
+builder.Services.AddSingleton(_ => new CommissionBriefOptions
+{
+    Enabled = builder.Configuration.GetValue("CommissionBriefs:Enabled", true),
+    DatabasePath = builder.Configuration["CommissionBriefs:DatabasePath"]
+        ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(profileDatabasePath))!, "commission-briefs.db")
+});
+builder.Services.AddSingleton<SqliteCommissionBriefStore>();
+builder.Services.AddSingleton(_ => new DiscordCommissionOptions
+{
+    Enabled = builder.Configuration.GetValue("Discord:Enabled", false),
+    PublicKey = builder.Configuration["Discord:PublicKey"] ?? string.Empty,
+    AllowedGuildId = builder.Configuration["Discord:AllowedGuildId"] ?? string.Empty,
+    AllowedChannelId = builder.Configuration["Discord:AllowedChannelId"] ?? string.Empty,
+    CommissionBaseUrl = builder.Configuration["Discord:CommissionBaseUrl"]
+        ?? "https://dev.xivcraftarchitect.com/commission.html?id="
+});
+builder.Services.AddSingleton<DiscordRequestVerifier>();
 
 if (ProfileHostProvisioningCommand.TryParse(args) is { } profileHostCommand)
 {
@@ -157,6 +178,8 @@ app.MapGet(
     });
 
 app.MapProfileHostEndpoints();
+app.MapCommissionBriefEndpoints();
+app.MapDiscordCommissionEndpoints();
 
 app.Run();
 
