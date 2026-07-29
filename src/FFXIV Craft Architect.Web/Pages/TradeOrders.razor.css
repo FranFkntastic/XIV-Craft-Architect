@@ -861,6 +861,16 @@
   background: #1d321d;
 }
 
+.trade-orders-collaboration-state.is-pending {
+  border-color: #8b7136;
+  background: #30291a;
+}
+
+.trade-orders-collaboration-state.is-failed {
+  border-color: #8f4f4f;
+  background: #321d1d;
+}
+
 .trade-orders-publication-chip {
   border: 1px solid #555;
   border-radius: 999px;
@@ -874,6 +884,104 @@
 .trade-orders-publication-chip.is-live {
   border-color: #65a765;
   color: #b8e6a6;
+}
+
+.trade-orders-publication-chip.is-attention {
+  border-color: #a88a45;
+  color: #f0d78b;
+}
+
+.trade-orders-publication-chip.is-failed {
+  border-color: #a76565;
+  color: #f0a6a6;
+}
+
+.trade-orders-company-sync {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid #353535;
+  border-radius: 6px;
+  background: #1c1c1c;
+}
+
+.trade-orders-company-sync > div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.trade-orders-company-chip {
+  flex: 0 0 auto;
+  border: 1px solid #555;
+  border-radius: 999px;
+  color: #c4c4c4;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 4px 7px;
+}
+
+.trade-orders-company-chip.is-current {
+  border-color: #568e56;
+  color: #b8e6a6;
+}
+
+.trade-orders-company-chip.is-pending {
+  border-color: #a88a45;
+  color: #f0d78b;
+}
+
+.trade-orders-company-chip.is-conflict {
+  border-color: #a76565;
+  color: #f0a6a6;
+}
+
+.trade-orders-conflict-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.trade-orders-interest-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid #4b4130;
+  border-radius: 6px;
+  background: #27231b;
+}
+
+.trade-orders-interest-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.65fr) minmax(170px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding-top: 8px;
+  border-top: 1px solid #40392d;
+}
+
+.trade-orders-interest-identity {
+  display: grid;
+  gap: 2px;
+  align-self: center;
+}
+
+.trade-orders-interest-identity span {
+  color: #a9a9a9;
+  font-size: 0.7rem;
+}
+
+.trade-orders-interest-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding-bottom: 2px;
 }
 
 .trade-orders-visibility {

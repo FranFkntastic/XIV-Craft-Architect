@@ -6,6 +6,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Dialogs;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using FFXIV_Craft_Architect.Web.Shared;
 using FFXIV_Craft_Architect.Web.Shared.TablePrimitives;
 
@@ -187,6 +188,12 @@ public partial class TradeOrders
         {
             _loadError = null;
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            var refresh = await TradeOrderMutations.SynchronizeAsync(_companyProfile);
+            if (refresh.ChangedRecords.Count > 0)
+            {
+                AppState.NotifyTradeOperationsDataChanged();
+            }
+
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
@@ -206,13 +213,38 @@ public partial class TradeOrders
 
     private async Task<bool> SaveOrderAndNotifyAsync(TradeOrder order)
     {
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(order);
-        if (saved)
+        if (_companyProfile == null)
+        {
+            return false;
+        }
+
+        var result = await TradeOrderMutations.SaveAsync(_companyProfile, order);
+        if (result.LocalSaved)
         {
             AppState.NotifyTradeOperationsDataChanged();
         }
 
-        return saved;
+        if (result.Disposition == TradeCompanyMutationDisposition.Conflict)
+        {
+            Snackbar.Add(
+                "Saved locally, but this order changed in another client. Review the company version in Collaboration.",
+                Severity.Warning);
+        }
+        else if (result.Disposition is
+                 TradeCompanyMutationDisposition.Pending)
+        {
+            Snackbar.Add(
+                "Saved locally. The company update is still pending.",
+                Severity.Warning);
+        }
+        else if (result.Disposition == TradeCompanyMutationDisposition.Rejected)
+        {
+            Snackbar.Add(
+                result.Message ?? "Saved locally, but the company rejected this update.",
+                Severity.Error);
+        }
+
+        return result.LocalSaved;
     }
 
     private async Task PrepareOrderImport()
