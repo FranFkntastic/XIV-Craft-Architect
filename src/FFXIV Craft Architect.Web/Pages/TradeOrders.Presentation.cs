@@ -104,6 +104,14 @@ public partial class TradeOrders
             GetOrderRootItems(order)
                 .Select(item => new TradeOrderPaymentOutput(item.Name, item.Quantity, item.MustBeHq))
                 .ToArray(),
+            new TradeOrderPaymentProvenance(
+                order.SourceSnapshot.SourcePlanName,
+                order.SourceSnapshot.CostBasis,
+                order.SourceSnapshot.MarketFetchScope,
+                order.SourceSnapshot.DataCenter,
+                order.SourceSnapshot.Region,
+                order.SourceSnapshot.RequestedDataCenters,
+                order.SourceSnapshot.ImportedAtUtc),
             summary);
     }
 

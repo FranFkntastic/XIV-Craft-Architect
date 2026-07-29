@@ -482,6 +482,7 @@ public sealed class WorkerSessionContractTests
         Assert.Equal("named-plan", trade.PlanId);
         Assert.NotEmpty(trade.RootItems);
         Assert.NotEmpty(trade.AcquisitionRows);
+        Assert.NotEmpty(trade.RequestedDataCenters);
 
         var exported = await SendAsync(
             "export",

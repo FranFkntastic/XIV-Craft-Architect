@@ -388,7 +388,11 @@ public sealed class TradeOrderPricingWorkflowService
         order.SourceSnapshot.SourcePlanId = order.CraftPlanId;
         order.SourceSnapshot.SourcePlanName =
             order.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(order);
+        order.SourceSnapshot.CostBasis = CommissionCostBasis.SelectedAcquisitionSources;
+        order.SourceSnapshot.MarketFetchScope = source.MarketFetchScope;
+        order.SourceSnapshot.Region = source.SelectedRegion;
         order.SourceSnapshot.DataCenter = source.SelectedDataCenter;
+        order.SourceSnapshot.RequestedDataCenters = source.RequestedDataCenters.ToArray();
         order.SourceSnapshot.PlanSessionVersion = source.PlanSessionVersion;
         order.SourceSnapshot.MarketAnalysisVersion = source.MarketAnalysisVersion;
         order.SourceSnapshot.Materials = materials;

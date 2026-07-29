@@ -2,7 +2,8 @@ namespace FFXIV_Craft_Architect.Core.Models;
 
 public enum CommissionCostBasis
 {
-    MarketRecommendation
+    MarketRecommendation,
+    SelectedAcquisitionSources
 }
 
 public enum CommissionMaterialResponsibility

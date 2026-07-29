@@ -1603,6 +1603,7 @@ public static partial class ManagedHost
                 session.ActiveContext.DataCenter ?? "Aether",
                 session.ActiveContext.Region ?? "North America",
                 session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
+                Array.Empty<string>(),
                 session.BorrowMarketEvidence().Lens,
                 session.PlanSessionVersion,
                 session.Versions.MarketAnalysis,
@@ -1706,6 +1707,11 @@ public static partial class ManagedHost
             session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
             session.ActiveContext.Region ?? "North America",
             session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
+            ResolveTradeRequestedDataCenters(
+                evidence.PublicationContext,
+                session.ActiveContext.MarketFetchScope ?? MarketFetchScope.EntireRegion,
+                session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
+                session.ActiveContext.Region ?? "North America"),
             evidence.Lens,
             session.PlanSessionVersion,
             session.Versions.MarketAnalysis,
@@ -1720,6 +1726,21 @@ public static partial class ManagedHost
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
                 .ToArray());
+    }
+
+    private static IReadOnlyList<string> ResolveTradeRequestedDataCenters(
+        MarketIntelligencePublicationContext? publication,
+        MarketFetchScope scope,
+        string selectedDataCenter,
+        string selectedRegion)
+    {
+        var recorded = publication?.RequestedDataCenters
+            .Where(dataCenter => !string.IsNullOrWhiteSpace(dataCenter))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return recorded is { Length: > 0 }
+            ? recorded
+            : MarketFetchScopeResolver.GetDataCenters(scope, selectedDataCenter, selectedRegion);
     }
 
     private static MarketRouteDecision? CompactProcurementDecision(

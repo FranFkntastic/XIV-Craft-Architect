@@ -140,6 +140,7 @@ public sealed record WorkerTradeProjection(
     string SelectedDataCenter,
     string SelectedRegion,
     MarketFetchScope MarketFetchScope,
+    IReadOnlyList<string> RequestedDataCenters,
     MarketAcquisitionLens MarketLens,
     long PlanSessionVersion,
     long MarketAnalysisVersion,

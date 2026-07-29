@@ -75,7 +75,11 @@ public sealed class TradeOrderDraftFactory
                 SourceKind = TradeOrderSourceKind.ActiveCraftPlan,
                 SourcePlanId = source.PlanId,
                 SourcePlanName = source.PlanName,
+                CostBasis = CommissionCostBasis.SelectedAcquisitionSources,
+                MarketFetchScope = source.MarketFetchScope,
+                Region = source.SelectedRegion,
                 DataCenter = source.SelectedDataCenter,
+                RequestedDataCenters = source.RequestedDataCenters.ToArray(),
                 PlanSessionVersion = source.PlanSessionVersion,
                 MarketAnalysisVersion = source.MarketAnalysisVersion,
                 ImportedAtUtc = request.CreatedAtUtc,
@@ -135,8 +139,11 @@ public sealed class TradeOrderDraftFactory
             {
                 SourceKind = TradeOrderSourceKind.TradeRequestedOutputs,
                 SourcePlanName = "Trade requested outputs",
+                MarketFetchScope = FFXIV_Craft_Architect.Core.Models.MarketFetchScope.SelectedDataCenter,
+                Region = MarketFetchScopeResolver.ResolveRegionForDataCenter(request.DataCenter, string.Empty),
                 DataCenter = request.DataCenter,
                 World = NormalizeOptionalText(request.World),
+                RequestedDataCenters = [request.DataCenter],
                 ImportedAtUtc = request.CreatedAtUtc,
                 RootItems = rootItems,
                 Materials = []

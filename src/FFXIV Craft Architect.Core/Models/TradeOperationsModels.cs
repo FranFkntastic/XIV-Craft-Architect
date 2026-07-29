@@ -172,8 +172,12 @@ public sealed class TradeOrderSourceSnapshot
     public TradeOrderSourceKind SourceKind { get; set; } = TradeOrderSourceKind.ActiveCraftPlan;
     public string? SourcePlanId { get; set; }
     public string SourcePlanName { get; set; } = "Active craft plan";
+    public CommissionCostBasis? CostBasis { get; set; }
+    public MarketFetchScope? MarketFetchScope { get; set; }
+    public string? Region { get; set; }
     public string? DataCenter { get; set; }
     public string? World { get; set; }
+    public IReadOnlyList<string> RequestedDataCenters { get; set; } = Array.Empty<string>();
     public long PlanSessionVersion { get; set; }
     public long MarketAnalysisVersion { get; set; }
     public DateTime ImportedAtUtc { get; set; } = DateTime.UtcNow;

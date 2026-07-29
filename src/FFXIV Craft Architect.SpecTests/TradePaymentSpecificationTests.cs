@@ -270,6 +270,66 @@ public sealed class TradePaymentSpecificationTests
         Assert.Equal("Market evidence fallback", line.EvidenceSource);
     }
 
+    [Fact]
+    public void ReceiptAndSummaryPreserveProvenanceWithoutCollapsingTheirRoles()
+    {
+        var order = new TradeOrder
+        {
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(
+                        1,
+                        "Crafter ore",
+                        2,
+                        false,
+                        100m,
+                        200m,
+                        "Fixed fixture",
+                        "Controlled input",
+                        new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc),
+                        [])
+                ]
+            }
+        };
+        var payment = TradeCommissionPaymentSummary.FromOrder(
+            order,
+            draft: null,
+            new TradePaymentPolicy(TradePaymentContractMode.LegacyCommission, 20m, null));
+        var context = new TradeOrderPaymentCopyContext(
+            "Commission",
+            "Crafter",
+            [new TradeOrderPaymentOutput("Finished item", 1, true)],
+            new TradeOrderPaymentProvenance(
+                "Workshop plan",
+                CommissionCostBasis.SelectedAcquisitionSources,
+                MarketFetchScope.EntireRegion,
+                "Aether",
+                "North America",
+                ["Aether", "Primal", "Chaos", "Light"],
+                new DateTime(2026, 7, 28, 16, 30, 0, DateTimeKind.Utc)),
+            payment);
+
+        var receipt = TradeOrderPaymentCopyFormatter.BuildReceipt(context);
+        var summary = TradeOrderPaymentCopyFormatter.BuildSummary(context);
+
+        foreach (var copy in new[] { receipt, summary })
+        {
+            Assert.Contains("Plan: Workshop plan", copy);
+            Assert.Contains("Material cost basis: Selected acquisition sources", copy);
+            Assert.Contains(
+                "Evidence scope: North America + Europe regions (Aether, Chaos, Light, Primal)",
+                copy);
+            Assert.Contains("Evidence snapshot: 2026-07-28 16:30 UTC", copy);
+        }
+
+        Assert.DoesNotContain("Crafter procures:", receipt);
+        Assert.DoesNotContain("Legacy comparison", receipt);
+        Assert.Contains("Crafter ore x2: 200 gil", summary);
+        Assert.Contains("Legacy comparison", summary);
+    }
+
     private static TradePaymentMaterialInput Material(
         int itemId,
         string name,
