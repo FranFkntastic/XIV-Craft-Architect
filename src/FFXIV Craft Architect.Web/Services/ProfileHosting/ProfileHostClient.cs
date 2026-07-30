@@ -162,8 +162,13 @@ public sealed class ProfileHostClient
             throw new InvalidOperationException("A profile host URL is required.");
         }
 
-        var baseUri = new Uri(hostUrl.Trim().TrimEnd('/') + "/");
-        return new Uri(baseUri, path.TrimStart('/'));
+        var hostUri = new Uri(hostUrl.Trim().TrimEnd('/') + "/");
+        var apiBaseUri = hostUri.AbsolutePath.TrimEnd('/').EndsWith(
+            "/api",
+            StringComparison.OrdinalIgnoreCase)
+            ? hostUri
+            : new Uri(hostUri, "api/");
+        return new Uri(apiBaseUri, path.TrimStart('/'));
     }
 
     private static async Task<ProfileSyncPutResponse> ReadProfileSyncPutResponseAsync(
