@@ -553,6 +553,25 @@ public sealed partial class SqliteProfileHostStore
                 sourceCurrent = existingSource;
             }
 
+            if (sourceIdentity.Collection == ProfileSyncCollections.TradeOrders &&
+                OrderPublicationIdentityWouldBeRemapped(
+                    sourceIdentity,
+                    inputs[sourceIdentity].PayloadJson,
+                    mappingMap) &&
+                (HasCommissionPublication(inputs[sourceIdentity].PayloadJson) ||
+                 HasCommissionPublication(sourceCurrent?.PayloadJson) ||
+                 HasCommissionPublication(targetCurrent?.PayloadJson)))
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.PublishedOrderRemapRequiresReissue,
+                    "A published trade order cannot be remapped until its external publication is atomically revoked and reissued.",
+                    sourceIdentity.Collection,
+                    sourceIdentity.ObjectId,
+                    targetIdentity.Collection,
+                    targetIdentity.ObjectId);
+            }
+
             var classifyCurrent = keepBoth ? sourceCurrent : targetCurrent;
             var payloadForClassification =
                 keepBoth
@@ -1254,34 +1273,98 @@ public sealed partial class SqliteProfileHostStore
             }
         }
 
-        if (TryGetProperty(
-                payload,
-                "commissionPublication",
-                out _,
-                out var publicationNode) &&
-            publicationNode is JsonObject publication &&
-            TryGetProperty(publication, "ownership", out _, out var ownershipNode) &&
-            ownershipNode is JsonObject ownership)
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool OrderPublicationIdentityWouldBeRemapped(
+        (string Collection, string ObjectId) orderIdentity,
+        string payloadJson,
+        IReadOnlyDictionary<(string Collection, string ObjectId), string> mappings)
+    {
+        if (mappings.ContainsKey(orderIdentity))
         {
-            if (!TryRewriteGuidReference(
-                    ownership,
-                    "companyId",
-                    ProfileSyncCollections.TradeCompanyProfiles,
-                    mappings,
-                    out error) ||
-                !TryRewriteGuidReference(
-                    ownership,
-                    "orderId",
-                    ProfileSyncCollections.TradeOrders,
-                    mappings,
-                    out error))
+            return true;
+        }
+
+        try
+        {
+            if (JsonNode.Parse(payloadJson) is not JsonObject payload)
             {
                 return false;
             }
+
+            if (JsonPropertyHasMapping(
+                    payload,
+                    "companyProfileId",
+                    ProfileSyncCollections.TradeCompanyProfiles,
+                    mappings))
+            {
+                return true;
+            }
+
+            return TryGetProperty(
+                       payload,
+                       "commissionPublication",
+                       out _,
+                       out var publicationNode) &&
+                   publicationNode is JsonObject publication &&
+                   TryGetProperty(
+                       publication,
+                       "ownership",
+                       out _,
+                       out var ownershipNode) &&
+                   ownershipNode is JsonObject ownership &&
+                   (JsonPropertyHasMapping(
+                        ownership,
+                        "companyId",
+                        ProfileSyncCollections.TradeCompanyProfiles,
+                        mappings) ||
+                    JsonPropertyHasMapping(
+                        ownership,
+                        "orderId",
+                        ProfileSyncCollections.TradeOrders,
+                        mappings));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool JsonPropertyHasMapping(
+        JsonObject payload,
+        string propertyName,
+        string collection,
+        IReadOnlyDictionary<(string Collection, string ObjectId), string> mappings)
+    {
+        return TryGetProperty(payload, propertyName, out _, out var node) &&
+               node != null &&
+               TryReadString(node, out var objectId) &&
+               TryGetMappedId(mappings, collection, objectId, out _);
+    }
+
+    private static bool HasCommissionPublication(string? payloadJson)
+    {
+        if (string.IsNullOrWhiteSpace(payloadJson))
+        {
+            return false;
         }
 
-        error = string.Empty;
-        return true;
+        try
+        {
+            return JsonNode.Parse(payloadJson) is JsonObject payload &&
+                   TryGetProperty(
+                       payload,
+                       "commissionPublication",
+                       out _,
+                       out var publication) &&
+                   publication != null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool TryWriteGuidIdentity(
