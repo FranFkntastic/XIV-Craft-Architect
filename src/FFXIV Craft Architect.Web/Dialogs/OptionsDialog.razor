@@ -8,9 +8,7 @@
 @inject AppState AppState
 @inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
-@inject GarlandService GarlandService
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
-@inject TradeLaborBenchmarkCalibrationWorkflowService LaborBenchmarkCalibrationWorkflow
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService ProfileSyncLocalState
 @inject ProfileSyncService ProfileSync
@@ -351,204 +349,17 @@
                                      Max="100m"
                                      Class="my-2" />
                     <MudNumericField T="decimal"
-                                     id="labor-material-value-bonus-percent"
-                                     @bind-Value="_companyLaborMaterialBonusPercent"
-                                     Label="Labor material value bonus percent"
+                                     id="labor-gil-per-synth"
+                                     @bind-Value="_companyLaborGilPerSynth"
+                                     Label="Labor pay per synth"
+                                     HelperText="Applied to every active craft synth. Materials supplied by the crafter are reimbursed separately."
                                      Variant="Variant.Outlined"
                                      Margin="Margin.Dense"
                                      HideSpinButtons="true"
-                                     Min="0m"
-                                     Max="100m"
+                                     Min="1m"
+                                     Adornment="Adornment.End"
+                                     AdornmentText="gil"
                                      Class="my-2" />
-
-                    <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Labor Standard</MudText>
-                    <MudSwitch T="bool"
-                               Value="_useCustomLaborBenchmark"
-                               ValueChanged="OnCustomLaborBenchmarkChanged"
-                               Label="Use custom benchmark"
-                               Color="Color.Primary"
-                               Class="my-2" />
-                    @if (!_useCustomLaborBenchmark)
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
-                            Managed Cobalt Rivets benchmark. Recalculate uses fresh market evidence when available and refreshes only when needed.
-                        </MudText>
-                        <MudButton Variant="Variant.Outlined"
-                                   Color="Color.Secondary"
-                                   StartIcon="@Icons.Material.Filled.Calculate"
-                                   OnClick="RecalculateLaborBenchmarkAsync"
-                                   Disabled="_companyIsBusy || _laborBenchmarkIsRecalculating">
-                            @if (_laborBenchmarkIsRecalculating)
-                            {
-                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                            }
-                            Recalculate Benchmark
-                        </MudButton>
-                        <MudButton Variant="Variant.Text"
-                                   Color="Color.Secondary"
-                                   StartIcon="@Icons.Material.Filled.AccountTree"
-                                   OnClick="ToggleLaborBenchmarkPlanPreviewAsync"
-                                   Disabled="_companyIsBusy || _laborBenchmarkPlanPreviewIsLoading"
-                                   Class="ml-2">
-                            @if (_laborBenchmarkPlanPreviewIsLoading)
-                            {
-                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                            }
-                            @(_laborBenchmarkPlanPreviewIsLoading
-                                ? "Loading Plan"
-                                : _showLaborBenchmarkPlanPreview ? "Hide Plan" : "View Plan")
-                        </MudButton>
-                    }
-                    @if (!string.IsNullOrWhiteSpace(_laborBenchmarkStatus))
-                    {
-                        <MudText Typo="Typo.caption" Color="@_laborBenchmarkStatusColor" Class="mt-2 mb-2 d-block">
-                            @_laborBenchmarkStatus
-                        </MudText>
-                    }
-                    @if (_useCustomLaborBenchmark)
-                    {
-                        <MudTextField @bind-Value="_laborStandardName"
-                                      id="labor-standard-name"
-                                      Label="Benchmark name"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Class="my-2" />
-                        <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end;">
-                            <MudTextField @bind-Value="_laborBenchmarkItemSearchQuery"
-                                          id="labor-benchmark-item-search"
-                                          Label="Find benchmark item"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense" />
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       StartIcon="@Icons.Material.Filled.Search"
-                                       OnClick="SearchLaborBenchmarkItemsAsync"
-                                       Disabled="_laborBenchmarkItemSearchIsSearching">
-                                @if (_laborBenchmarkItemSearchIsSearching)
-                                {
-                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                                }
-                                Search
-                            </MudButton>
-                        </div>
-                        @if (_laborBenchmarkItemSearchResults.Count > 0)
-                        {
-                            <MudSimpleTable Dense="true" Hover="true" Class="mb-2">
-                                <thead>
-                                    <tr>
-                                        <th>Item</th>
-                                        <th class="text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    @foreach (var result in _laborBenchmarkItemSearchResults)
-                                    {
-                                        <tr>
-                                            <td>@result.Object.Name</td>
-                                            <td class="text-right">
-                                                <MudButton Variant="Variant.Text"
-                                                           Color="Color.Secondary"
-                                                           Size="Size.Small"
-                                                           OnClick="() => SelectLaborBenchmarkItem(result)">
-                                                    Select
-                                                </MudButton>
-                                            </td>
-                                        </tr>
-                                    }
-                                </tbody>
-                            </MudSimpleTable>
-                        }
-                        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
-                            <MudTextField @bind-Value="_laborBenchmarkItemName"
-                                          id="labor-benchmark-item-name"
-                                          Label="Selected benchmark item"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          ReadOnly="true" />
-                            <MudNumericField T="int"
-                                             id="labor-benchmark-quantity"
-                                             @bind-Value="_laborBenchmarkQuantity"
-                                             Label="Benchmark quantity"
-                                             Variant="Variant.Outlined"
-                                             Margin="Margin.Dense"
-                                             HideSpinButtons="true"
-                                             Min="1" />
-                            <MudNumericField T="int"
-                                             id="labor-benchmark-synths"
-                                             @bind-Value="_laborBenchmarkSynthCount"
-                                             Label="Benchmark synths"
-                                             Variant="Variant.Outlined"
-                                             Margin="Margin.Dense"
-                                             HideSpinButtons="true"
-                                             Min="1" />
-                            <MudNumericField T="decimal"
-                                             id="labor-benchmark-payout"
-                                             @bind-Value="_laborBenchmarkPayout"
-                                             Label="Benchmark payout"
-                                             Variant="Variant.Outlined"
-                                             Margin="Margin.Dense"
-                                             HideSpinButtons="true"
-                                             Min="0m" />
-                            <MudTextField Value="@FormatGilPerSynth()"
-                                          id="labor-benchmark-derived-rate"
-                                          Label="Derived rate"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          ReadOnly="true" />
-                        </div>
-                        <MudSwitch @bind-Value="_laborBenchmarkRequiresHq"
-                                   Label="Benchmark requires HQ"
-                                   Color="Color.Primary"
-                                   Class="my-2" />
-                    }
-                    else
-                    {
-                        <div class="d-flex flex-wrap gap-2 my-2">
-                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">@_laborBenchmarkItemName</MudChip>
-                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">x@_laborBenchmarkQuantity.ToString("N0")</MudChip>
-                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">@_laborBenchmarkSynthCount.ToString("N0") synths</MudChip>
-                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">@FormatGilPerSynth()</MudChip>
-                        </div>
-                    }
-                    @if (_showLaborBenchmarkPlanPreview)
-                    {
-                        <MudPaper Variant="Variant.Outlined" Class="pa-3 my-3">
-                            @if (_laborBenchmarkPlanPreview == null)
-                            {
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                    @_laborBenchmarkPlanPreviewStatus
-                                </MudText>
-                            }
-                            else
-                            {
-                                <MudText Typo="Typo.subtitle2">@_laborBenchmarkPlanPreview.Title</MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
-                                    Data center: @_laborBenchmarkPlanPreview.DataCenter
-                                </MudText>
-                                <MudSimpleTable Dense="true" Hover="true">
-                                    <thead>
-                                        <tr>
-                                            <th>Item</th>
-                                            <th class="text-right">Qty</th>
-                                            <th>Source</th>
-                                            <th>Role</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        @foreach (var item in _laborBenchmarkPlanPreview.Items)
-                                        {
-                                            <tr>
-                                                <td style="@($"padding-left: {item.Depth * 18}px;")">@item.Name</td>
-                                                <td class="text-right">@item.Quantity.ToString("N0")</td>
-                                                <td>@RecipePlanDisplayHelpers.GetSourceDisplayName(item.Source)</td>
-                                                <td>@(item.IsActiveProcurement ? "Procure" : "Craft tree")</td>
-                                            </tr>
-                                        }
-                                    </tbody>
-                                </MudSimpleTable>
-                            }
-                        </MudPaper>
-                    }
 
                     <MudDivider Class="my-4" />
 
@@ -1124,27 +935,7 @@
     private bool _companyIsBusy;
     private TradePaymentContractMode _companyPaymentContract = TradePaymentContractMode.LegacyCommission;
     private decimal _companyLegacyCommissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
-    private decimal _companyLaborMaterialBonusPercent = TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent;
-    private string _laborStandardName = "Cobalt Rivets benchmark";
-    private int _laborBenchmarkItemId = TradeLaborStandardCalibrationService.CobaltRivetsItemId;
-    private string _laborBenchmarkItemName = TradeLaborStandardCalibrationService.CobaltRivetsItemName;
-    private int _laborBenchmarkQuantity = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity;
-    private bool _laborBenchmarkRequiresHq = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq;
-    private decimal _laborBenchmarkPayout = 120_000m;
-    private int _laborBenchmarkSynthCount = 200;
-    private bool _useCustomLaborBenchmark;
-    private bool _laborBenchmarkIsRecalculating;
-    private bool _showLaborBenchmarkPlanPreview;
-    private bool _laborBenchmarkPlanPreviewIsLoading;
-    private string? _laborBenchmarkStatus;
-    private Color _laborBenchmarkStatusColor = Color.Secondary;
-    private DateTime? _laborBenchmarkCalibratedAtUtc;
-    private string? _laborBenchmarkCalibrationEvidence;
-    private TradeLaborBenchmarkPlanPreview? _laborBenchmarkPlanPreview;
-    private string? _laborBenchmarkPlanPreviewStatus;
-    private string _laborBenchmarkItemSearchQuery = string.Empty;
-    private bool _laborBenchmarkItemSearchIsSearching;
-    private readonly List<GarlandSearchResult> _laborBenchmarkItemSearchResults = [];
+    private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
     private string _profileHostUrl = string.Empty;
     private string _profileHostAccessKey = string.Empty;
     private string? _profileHostProfileName;
@@ -1425,32 +1216,11 @@
         _companyName = profile.Name;
         _companyDescription = profile.Description;
         _companyCommissionContact = profile.CommissionContact;
-        var policy = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
+        var policy = TradePaymentPolicyNormalizer.Normalize(
             profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
         _companyPaymentContract = policy.ActiveContract;
         _companyLegacyCommissionPercent = policy.LegacyCommissionPercent;
-        _companyLaborMaterialBonusPercent = policy.LaborStandardMaterialBonusPercent;
-
-        if (policy.LaborStandard != null)
-        {
-            _laborStandardName = policy.LaborStandard.Name;
-            _laborBenchmarkItemId = policy.LaborStandard.BenchmarkItemId;
-            _laborBenchmarkItemName = policy.LaborStandard.BenchmarkItemName;
-            _laborBenchmarkQuantity = policy.LaborStandard.BenchmarkQuantity;
-            _laborBenchmarkRequiresHq = policy.LaborStandard.BenchmarkRequiresHq;
-            _laborBenchmarkPayout = policy.LaborStandard.BenchmarkLaborPayout;
-            _laborBenchmarkSynthCount = policy.LaborStandard.BenchmarkSynthCount;
-            _useCustomLaborBenchmark = policy.LaborStandard.IsCustomBenchmark;
-            _laborBenchmarkCalibratedAtUtc = policy.LaborStandard.CalibratedAtUtc;
-            _laborBenchmarkCalibrationEvidence = policy.LaborStandard.CalibrationEvidence;
-        }
-        else
-        {
-            RestoreManagedLaborBenchmarkFields(keepCurrentRate: true);
-            _laborBenchmarkCalibratedAtUtc = null;
-            _laborBenchmarkCalibrationEvidence = null;
-            _useCustomLaborBenchmark = false;
-        }
+        _companyLaborGilPerSynth = policy.LaborGilPerSynth;
     }
 
     private TradePaymentPolicy? BuildCompanyPaymentPolicy()
@@ -1461,258 +1231,16 @@
             return null;
         }
 
-        if (_companyLaborMaterialBonusPercent < 0 || _companyLaborMaterialBonusPercent > 100)
+        if (_companyLaborGilPerSynth <= 0)
         {
-            Snackbar.Add("Labor material value bonus percent must be between 0 and 100.", Severity.Error);
-            return null;
-        }
-
-        var laborStandard = BuildLaborStandard();
-        if (_companyPaymentContract == TradePaymentContractMode.LaborStandard && laborStandard == null)
-        {
-            Snackbar.Add("Labor standard requires a benchmark name, item, payout, and synth count.", Severity.Error);
+            Snackbar.Add("Labor pay per synth must be greater than zero.", Severity.Error);
             return null;
         }
 
         return new TradePaymentPolicy(
             _companyPaymentContract,
             _companyLegacyCommissionPercent,
-            laborStandard)
-        {
-            LaborStandardMaterialBonusPercent = _companyLaborMaterialBonusPercent
-        };
-    }
-
-    private TradeLaborStandard? BuildLaborStandard()
-    {
-        if (string.IsNullOrWhiteSpace(_laborStandardName) ||
-            string.IsNullOrWhiteSpace(_laborBenchmarkItemName) ||
-            _laborBenchmarkItemId <= 0 ||
-            _laborBenchmarkQuantity <= 0 ||
-            _laborBenchmarkPayout <= 0 ||
-            _laborBenchmarkSynthCount <= 0)
-        {
-            return null;
-        }
-
-        return new TradeLaborStandard(
-            _laborStandardName.Trim(),
-            _laborBenchmarkItemId,
-            _laborBenchmarkItemName.Trim(),
-            _laborBenchmarkQuantity,
-            _laborBenchmarkRequiresHq,
-            _laborBenchmarkPayout,
-            _laborBenchmarkSynthCount,
-            _laborBenchmarkCalibratedAtUtc ?? DateTime.UtcNow,
-            _useCustomLaborBenchmark
-                ? TradeLaborBenchmarkMode.Custom
-                : TradeLaborBenchmarkMode.CobaltRivets,
-            _laborBenchmarkCalibratedAtUtc,
-            _laborBenchmarkCalibrationEvidence);
-    }
-
-    private string FormatGilPerSynth()
-    {
-        return _laborBenchmarkSynthCount <= 0
-            ? "Unavailable"
-            : $"{_laborBenchmarkPayout / _laborBenchmarkSynthCount:N2} gil/synth";
-    }
-
-    private void OnCustomLaborBenchmarkChanged(bool useCustomBenchmark)
-    {
-        _useCustomLaborBenchmark = useCustomBenchmark;
-        _laborBenchmarkStatus = null;
-        _showLaborBenchmarkPlanPreview = false;
-        _laborBenchmarkPlanPreview = null;
-        _laborBenchmarkPlanPreviewStatus = null;
-        _laborBenchmarkItemSearchResults.Clear();
-        if (!useCustomBenchmark)
-        {
-            RestoreManagedLaborBenchmarkFields(keepCurrentRate: true);
-        }
-        else
-        {
-            _laborBenchmarkCalibratedAtUtc = DateTime.UtcNow;
-            _laborBenchmarkCalibrationEvidence = "Custom company benchmark.";
-            _laborBenchmarkItemSearchQuery = _laborBenchmarkItemName;
-        }
-    }
-
-    private void RestoreManagedLaborBenchmarkFields(bool keepCurrentRate)
-    {
-        _laborStandardName = "Cobalt Rivets benchmark";
-        _laborBenchmarkItemId = TradeLaborStandardCalibrationService.CobaltRivetsItemId;
-        _laborBenchmarkItemName = TradeLaborStandardCalibrationService.CobaltRivetsItemName;
-        _laborBenchmarkQuantity = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity;
-        _laborBenchmarkRequiresHq = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq;
-        if (!keepCurrentRate)
-        {
-            _laborBenchmarkPayout = 120_000m;
-            _laborBenchmarkSynthCount = 200;
-        }
-
-        _laborBenchmarkCalibrationEvidence ??= "Managed Cobalt Rivets benchmark.";
-    }
-
-    private async Task ToggleLaborBenchmarkPlanPreviewAsync()
-    {
-        if (_showLaborBenchmarkPlanPreview)
-        {
-            _showLaborBenchmarkPlanPreview = false;
-            return;
-        }
-
-        _showLaborBenchmarkPlanPreview = true;
-        if (_laborBenchmarkPlanPreview != null)
-        {
-            return;
-        }
-
-        _laborBenchmarkPlanPreviewIsLoading = true;
-        _laborBenchmarkPlanPreviewStatus = "Loading Cobalt Rivets benchmark craft plan...";
-        try
-        {
-            _laborBenchmarkPlanPreview = await LaborBenchmarkCalibrationWorkflow.BuildManagedCobaltRivetsPlanPreviewAsync(_defaultDataCenter);
-            _laborBenchmarkPlanPreviewStatus = null;
-        }
-        catch (Exception ex)
-        {
-            _laborBenchmarkPlanPreview = null;
-            _laborBenchmarkPlanPreviewStatus = $"Could not load benchmark plan: {ex.Message}";
-            Snackbar.Add(_laborBenchmarkPlanPreviewStatus, Severity.Error);
-        }
-        finally
-        {
-            _laborBenchmarkPlanPreviewIsLoading = false;
-        }
-    }
-
-    private async Task SearchLaborBenchmarkItemsAsync()
-    {
-        if (string.IsNullOrWhiteSpace(_laborBenchmarkItemSearchQuery))
-        {
-            Snackbar.Add("Enter an item name to search.", Severity.Warning);
-            return;
-        }
-
-        _laborBenchmarkItemSearchIsSearching = true;
-        _laborBenchmarkItemSearchResults.Clear();
-        try
-        {
-            var results = await GarlandService.SearchAsync(_laborBenchmarkItemSearchQuery);
-            _laborBenchmarkItemSearchResults.AddRange(results.Take(25));
-            if (_laborBenchmarkItemSearchResults.Count == 0)
-            {
-                Snackbar.Add("No matching items found.", Severity.Warning);
-            }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Benchmark item search failed: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _laborBenchmarkItemSearchIsSearching = false;
-        }
-    }
-
-    private void SelectLaborBenchmarkItem(GarlandSearchResult result)
-    {
-        if (result.Id <= 0 || string.IsNullOrWhiteSpace(result.Object.Name))
-        {
-            Snackbar.Add("Selected benchmark item did not include a usable item identity.", Severity.Error);
-            return;
-        }
-
-        _laborBenchmarkItemId = result.Id;
-        _laborBenchmarkItemName = result.Object.Name;
-        _laborBenchmarkItemSearchQuery = result.Object.Name;
-        _laborBenchmarkItemSearchResults.Clear();
-        _laborBenchmarkCalibratedAtUtc = DateTime.UtcNow;
-        _laborBenchmarkCalibrationEvidence = "Custom company benchmark.";
-    }
-
-    private async Task RecalculateLaborBenchmarkAsync()
-    {
-        if (_companyProfile == null)
-        {
-            return;
-        }
-
-        if (_laborBenchmarkSynthCount <= 0)
-        {
-            Snackbar.Add("Benchmark synth count must be greater than zero.", Severity.Error);
-            return;
-        }
-
-        _companyIsBusy = true;
-        _laborBenchmarkIsRecalculating = true;
-        _laborBenchmarkStatus = "Recalculating Cobalt Rivets benchmark...";
-        _laborBenchmarkStatusColor = Color.Secondary;
-        try
-        {
-            var result = await LaborBenchmarkCalibrationWorkflow.RecalculateManagedCobaltRivetsAsync(
-                new TradeLaborBenchmarkCalibrationRequest(
-                    _defaultDataCenter,
-                    _selectedRegion,
-                    _companyLegacyCommissionPercent,
-                    _laborBenchmarkSynthCount));
-
-            if (result.LaborStandard == null)
-            {
-                _laborBenchmarkStatus = result.Message;
-                _laborBenchmarkStatusColor = Color.Error;
-                Snackbar.Add(result.Message, Severity.Error);
-                return;
-            }
-
-            ApplyLaborStandardFields(result.LaborStandard);
-            _useCustomLaborBenchmark = false;
-            _companyProfile.PaymentPolicy = new TradePaymentPolicy(
-                _companyPaymentContract,
-                _companyLegacyCommissionPercent,
-                result.LaborStandard)
-            {
-                LaborStandardMaterialBonusPercent = _companyLaborMaterialBonusPercent
-            };
-
-            var saved = await SaveCompanyProfileAsync(_companyProfile);
-            if (!saved)
-            {
-                _laborBenchmarkStatus = "Benchmark recalculated but company profile save failed.";
-                _laborBenchmarkStatusColor = Color.Error;
-                Snackbar.Add(_laborBenchmarkStatus, Severity.Error);
-                return;
-            }
-
-            _laborBenchmarkStatus = result.Message;
-            _laborBenchmarkStatusColor = Color.Success;
-            Snackbar.Add(result.Message, Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            _laborBenchmarkStatus = $"Benchmark recalculation failed: {ex.Message}";
-            _laborBenchmarkStatusColor = Color.Error;
-            Snackbar.Add(_laborBenchmarkStatus, Severity.Error);
-        }
-        finally
-        {
-            _laborBenchmarkIsRecalculating = false;
-            _companyIsBusy = false;
-        }
-    }
-
-    private void ApplyLaborStandardFields(TradeLaborStandard laborStandard)
-    {
-        _laborStandardName = laborStandard.Name;
-        _laborBenchmarkItemId = laborStandard.BenchmarkItemId;
-        _laborBenchmarkItemName = laborStandard.BenchmarkItemName;
-        _laborBenchmarkQuantity = laborStandard.BenchmarkQuantity;
-        _laborBenchmarkRequiresHq = laborStandard.BenchmarkRequiresHq;
-        _laborBenchmarkPayout = laborStandard.BenchmarkLaborPayout;
-        _laborBenchmarkSynthCount = laborStandard.BenchmarkSynthCount;
-        _laborBenchmarkCalibratedAtUtc = laborStandard.CalibratedAtUtc;
-        _laborBenchmarkCalibrationEvidence = laborStandard.CalibrationEvidence;
+            _companyLaborGilPerSynth);
     }
 
     private async Task ExportCompanyProfileAsync()

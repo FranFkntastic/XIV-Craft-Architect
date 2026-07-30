@@ -88,7 +88,7 @@ public sealed class TradeCompanyProfilePackageService
 
     private static TradePaymentPolicy NormalizePaymentPolicy(TradePaymentPolicy? policy)
     {
-        return TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
+        return TradePaymentPolicyNormalizer.Normalize(
             policy ?? TradePaymentPolicy.LegacyDefault);
     }
 

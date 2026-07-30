@@ -918,8 +918,10 @@ public static class CompanyCommissionCommandWorkflow
             terms.Payment.Total >= 0 &&
             terms.Payment.MaterialReimbursement >= 0 &&
             terms.Payment.MaterialAdjustment >= 0 &&
-            terms.Payment.CraftLabor >= 0,
-            "Payment amounts cannot be negative.");
+            terms.Payment.CraftLabor >= 0 &&
+            terms.Payment.CraftSynthCount >= 0 &&
+            terms.Payment.GilPerSynth >= 0,
+            "Payment amounts and labor basis cannot be negative.");
     }
 
     private static void ValidateProvisionalCrafter(

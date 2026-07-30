@@ -51,13 +51,6 @@ public partial class TradeOrders
         return TradeOrderPaymentCopyFormatter.FormatPaymentBreakdown(breakdown);
     }
 
-    private static string FormatActiveMaterialAdjustmentLabel(TradePaymentContractMode contract)
-    {
-        return contract == TradePaymentContractMode.LaborStandard
-            ? "Labor material value bonus"
-            : "Legacy material commission";
-    }
-
     private static string FormatPaymentDifference(
         TradePaymentContractBreakdown laborStandard,
         TradePaymentContractBreakdown legacy)

@@ -203,7 +203,7 @@ public sealed class TradeOperationsPersistenceService
     private static bool NormalizeProfile(TradeCompanyProfile profile)
     {
         var changed = false;
-        var normalizedPaymentPolicy = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
+        var normalizedPaymentPolicy = TradePaymentPolicyNormalizer.Normalize(
             profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
         if (profile.PaymentPolicy != normalizedPaymentPolicy)
         {

@@ -13,9 +13,8 @@ public sealed class TradePayrollWorkflowDraft
     public Guid? AssignedCrafterId { get; set; }
     public string? AssignedCrafterDisplayName { get; set; }
     public decimal CommissionPercent { get; set; } = CommissionPayoutPolicy.Default.CommissionPercent;
-    public decimal LaborStandardMaterialBonusPercent { get; set; } = TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent;
     public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LegacyCommission;
-    public TradeLaborStandard? LaborStandard { get; set; }
+    public decimal LaborGilPerSynth { get; set; } = TradePaymentPolicy.DefaultLaborGilPerSynth;
     public IReadOnlyList<TradePayrollResponsibilityLine> Responsibilities { get; set; } = Array.Empty<TradePayrollResponsibilityLine>();
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
@@ -86,16 +85,13 @@ public sealed record TradeCommissionPaymentSummary(
             })
             .ToArray();
         var policy = effectivePolicy != null
-            ? TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(effectivePolicy)
-            : new TradePaymentPolicy(
+            ? TradePaymentPolicyNormalizer.Normalize(effectivePolicy)
+            : TradePaymentPolicyNormalizer.Normalize(new TradePaymentPolicy(
                 draft?.ActivePaymentContract ?? TradePaymentContractMode.LegacyCommission,
                 draft?.CommissionPercent ?? CommissionPayoutPolicy.Default.CommissionPercent,
-                draft?.LaborStandard)
-            {
-                LaborStandardMaterialBonusPercent = draft == null || draft.LaborStandardMaterialBonusPercent < 0
-                    ? TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent
-                    : draft.LaborStandardMaterialBonusPercent
-            };
+                draft?.LaborGilPerSynth > 0
+                    ? draft.LaborGilPerSynth
+                    : TradePaymentPolicy.DefaultLaborGilPerSynth));
         var paymentMaterials = materials
             .Select(material => new TradePaymentMaterialInput(
                 material.ItemId,
