@@ -77,6 +77,9 @@ public enum CompanyCommissionActivityKind
     SettlementRecorded,
     CommissionCanceled,
     CommissionClosed,
+    CommissionPublicationRevoked,
+    ParticipantRecoveryIssued,
+    ParticipantRecoveryRedeemed,
     MigratedFromTradeOrder,
     MigratedTradeOrderHistory
 }
@@ -157,6 +160,14 @@ public sealed record CompanyCommissionParticipantGrant(
     int TermsVersionFloor,
     long CapabilityRevision,
     DateTime IssuedAtUtc,
+    DateTime? RevokedAtUtc = null);
+
+public sealed record CompanyCommissionRecoveryGrant(
+    Guid RecoveryGrantId,
+    Guid ParticipantGrantId,
+    long RecoveryRevision,
+    DateTime IssuedAtUtc,
+    DateTime? RedeemedAtUtc = null,
     DateTime? RevokedAtUtc = null);
 
 public sealed record CompanyCommissionIdentityClearance(
@@ -268,6 +279,7 @@ public sealed record TradeCompanyCommission
     public CompanyCommissionClaim? ActiveClaim { get; init; }
     public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
     public CompanyCommissionParticipantGrant? ParticipantGrant { get; init; }
+    public CompanyCommissionRecoveryGrant? RecoveryGrant { get; init; }
     public required CompanyCommissionGateState Gates { get; init; }
     public IReadOnlyList<CompanyCommissionOutputProgress> OutputProgress { get; init; } = [];
     public required CompanyCommissionDeliveryReadiness DeliveryReadiness { get; init; }
