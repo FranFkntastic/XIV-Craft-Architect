@@ -132,18 +132,7 @@ public sealed partial class SqliteProfileHostStore
                      .ThenBy(item => item.ObjectId, StringComparer.Ordinal))
         {
             var identity = (assessment.Collection, assessment.ObjectId);
-            var shouldWrite =
-                assessment.Disposition == ProfileHostMigrationObjectDisposition.Insert ||
-                assessment is
-                {
-                    Disposition: ProfileHostMigrationObjectDisposition.SameIdDifferentContent,
-                    Resolution: ProfileHostMigrationConflictResolution.UseIncoming
-                } ||
-                assessment is
-                {
-                    Disposition: ProfileHostMigrationObjectDisposition.AuthoritativeTombstone,
-                    Resolution: ProfileHostMigrationConflictResolution.ResurrectIncoming
-                };
+            var shouldWrite = ShouldWriteMigrationObject(assessment);
             long revision;
             var deleted = false;
             if (shouldWrite)
@@ -249,6 +238,18 @@ public sealed partial class SqliteProfileHostStore
                     blockers,
                     ProfileHostMigrationBlockerCodes.DuplicateObjectIdentity,
                     "A migration resolution identity appears more than once.",
+                    identity.Item1,
+                    identity.Item2);
+            }
+
+            if (!Enum.IsDefined(
+                    typeof(ProfileHostMigrationConflictResolution),
+                    resolution.Resolution))
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.InvalidResolution,
+                    "The migration resolution value is not defined by this server contract.",
                     identity.Item1,
                     identity.Item2);
             }
@@ -476,6 +477,29 @@ public sealed partial class SqliteProfileHostStore
         response.PreflightHash = ComputePreflightHash(response);
         return response;
     }
+
+    private static bool ShouldWriteMigrationObject(
+        ProfileHostMigrationObjectAssessment assessment) =>
+        (assessment.Disposition, assessment.Resolution) switch
+        {
+            (ProfileHostMigrationObjectDisposition.Insert, null) => true,
+            (ProfileHostMigrationObjectDisposition.Identical, null) => false,
+            (
+                ProfileHostMigrationObjectDisposition.SameIdDifferentContent,
+                ProfileHostMigrationConflictResolution.KeepAuthoritative) => false,
+            (
+                ProfileHostMigrationObjectDisposition.SameIdDifferentContent,
+                ProfileHostMigrationConflictResolution.UseIncoming) => true,
+            (
+                ProfileHostMigrationObjectDisposition.AuthoritativeTombstone,
+                ProfileHostMigrationConflictResolution.KeepAuthoritative) => false,
+            (
+                ProfileHostMigrationObjectDisposition.AuthoritativeTombstone,
+                ProfileHostMigrationConflictResolution.ResurrectIncoming) => true,
+            _ => throw new InvalidOperationException(
+                $"Hosted migration assessment '{assessment.Collection}/{assessment.ObjectId}' " +
+                "has no valid commit behavior.")
+        };
 
     private static async Task<Dictionary<
         (string Collection, string ObjectId),

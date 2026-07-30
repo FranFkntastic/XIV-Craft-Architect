@@ -15,6 +15,7 @@ public static class ProfileHostMigrationBlockerCodes
     public const string InvalidPayload = "invalid_payload";
     public const string ObjectIdentityMismatch = "object_identity_mismatch";
     public const string ResolutionRequired = "resolution_required";
+    public const string InvalidResolution = "invalid_resolution";
     public const string UnexpectedResolution = "unexpected_resolution";
     public const string MissingCompany = "missing_company";
     public const string MissingCrafter = "missing_crafter";
