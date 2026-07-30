@@ -1616,7 +1616,7 @@ public sealed partial class SqliteProfileHostStore
         public void Validate((string Collection, string ObjectId) identity)
         {
             if (!_visited.Add(identity) ||
-                !IsTradeCollection(identity.Collection))
+                !IsValidatedCollection(identity.Collection))
             {
                 return;
             }
@@ -1631,7 +1631,9 @@ public sealed partial class SqliteProfileHostStore
                         ProfileHostMigrationBlockerCodes.MissingCrafter,
                     ProfileSyncCollections.TradeOrders =>
                         ProfileHostMigrationBlockerCodes.MissingOrder,
-                    _ => ProfileHostMigrationBlockerCodes.MissingPayrollDraft
+                    ProfileSyncCollections.TradePayrollDrafts =>
+                        ProfileHostMigrationBlockerCodes.MissingPayrollDraft,
+                    _ => ProfileHostMigrationBlockerCodes.MissingPlan
                 });
                 return;
             }
@@ -1649,6 +1651,9 @@ public sealed partial class SqliteProfileHostStore
                     break;
                 case ProfileSyncCollections.TradePayrollDrafts:
                     ValidatePayroll(identity, payloadJson);
+                    break;
+                case ProfileSyncCollections.Plans:
+                    ValidatePlan(identity, payloadJson);
                     break;
             }
         }
@@ -1751,6 +1756,37 @@ public sealed partial class SqliteProfileHostStore
 
                 Validate(payrollIdentity);
             }
+
+            if (!string.IsNullOrWhiteSpace(order.CraftPlanId))
+            {
+                var planIdentity = (
+                    ProfileSyncCollections.Plans,
+                    order.CraftPlanId);
+                if (!objects.TryGetValue(planIdentity, out var planPayload))
+                {
+                    AddMissingReference(
+                        identity,
+                        planIdentity,
+                        ProfileHostMigrationBlockerCodes.MissingPlan,
+                        "Trade order references a missing craft plan.");
+                }
+                else if (TryReadPlanCompanyId(
+                             planIdentity,
+                             planPayload,
+                             out var planCompanyId) &&
+                         planCompanyId.HasValue &&
+                         planCompanyId.Value != order.CompanyProfileId)
+                {
+                    AddReferenceMismatch(
+                        identity,
+                        planIdentity.Item1,
+                        planIdentity.Item2,
+                        "Trade order craft plan belongs to another company.",
+                        ProfileHostMigrationBlockerCodes.PlanReferenceMismatch);
+                }
+
+                Validate(planIdentity);
+            }
         }
 
         private void ValidatePayroll(
@@ -1797,6 +1833,106 @@ public sealed partial class SqliteProfileHostStore
 
                 Validate(orderIdentity);
             }
+        }
+
+        private void ValidatePlan(
+            (string Collection, string ObjectId) identity,
+            string payloadJson)
+        {
+            if (!TryReadPlanObject(identity, payloadJson, out var plan))
+            {
+                return;
+            }
+
+            if (!TryGetProperty(plan!, "id", out _, out var idNode) ||
+                idNode == null ||
+                !TryReadString(idNode, out var planId) ||
+                !string.Equals(planId, identity.ObjectId, StringComparison.Ordinal))
+            {
+                AddIdentityMismatch(identity, "Craft plan payload ID does not match ObjectId.");
+            }
+
+            if (TryReadPlanCompanyId(identity, plan!, out var companyId) &&
+                companyId.HasValue)
+            {
+                ValidateCompanyReference(identity, companyId.Value);
+            }
+        }
+
+        private bool TryReadPlanCompanyId(
+            (string Collection, string ObjectId) identity,
+            string payloadJson,
+            out Guid? companyId)
+        {
+            if (!TryReadPlanObject(identity, payloadJson, out var plan))
+            {
+                companyId = null;
+                return false;
+            }
+
+            return TryReadPlanCompanyId(identity, plan!, out companyId);
+        }
+
+        private bool TryReadPlanCompanyId(
+            (string Collection, string ObjectId) identity,
+            JsonObject plan,
+            out Guid? companyId)
+        {
+            if (!TryGetProperty(
+                    plan,
+                    "companyProfileId",
+                    out _,
+                    out var companyNode) ||
+                companyNode == null)
+            {
+                companyId = null;
+                return true;
+            }
+
+            if (!TryReadString(companyNode, out var companyIdText) ||
+                !Guid.TryParse(companyIdText, out var parsedCompanyId) ||
+                parsedCompanyId == Guid.Empty)
+            {
+                companyId = null;
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.PlanReferenceMismatch,
+                    "Craft plan company ownership must be a non-empty GUID when encoded.",
+                    identity.Collection,
+                    identity.ObjectId);
+                return false;
+            }
+
+            companyId = parsedCompanyId;
+            return true;
+        }
+
+        private bool TryReadPlanObject(
+            (string Collection, string ObjectId) identity,
+            string payloadJson,
+            out JsonObject? plan)
+        {
+            try
+            {
+                plan = JsonNode.Parse(payloadJson) as JsonObject;
+            }
+            catch (JsonException)
+            {
+                plan = null;
+            }
+
+            if (plan != null)
+            {
+                return true;
+            }
+
+            AddBlocker(
+                blockers,
+                ProfileHostMigrationBlockerCodes.InvalidPayload,
+                "Hosted migration payload is not a valid craft plan object.",
+                identity.Collection,
+                identity.ObjectId);
+            return false;
         }
 
         private void ValidateCompanyReference(
@@ -1936,22 +2072,24 @@ public sealed partial class SqliteProfileHostStore
             (string Collection, string ObjectId) source,
             string referencedCollection,
             string referencedObjectId,
-            string message) =>
+            string message,
+            string code = ProfileHostMigrationBlockerCodes.CompanyReferenceMismatch) =>
             AddBlocker(
                 blockers,
-                ProfileHostMigrationBlockerCodes.CompanyReferenceMismatch,
+                code,
                 message,
                 source.Collection,
                 source.ObjectId,
                 referencedCollection,
                 referencedObjectId);
 
-        private static bool IsTradeCollection(string collection) =>
+        private static bool IsValidatedCollection(string collection) =>
             collection is
                 ProfileSyncCollections.TradeCompanyProfiles or
                 ProfileSyncCollections.TradeCrafters or
                 ProfileSyncCollections.TradeOrders or
-                ProfileSyncCollections.TradePayrollDrafts;
+                ProfileSyncCollections.TradePayrollDrafts or
+                ProfileSyncCollections.Plans;
     }
 
     private sealed class StringTupleComparer :

@@ -23,8 +23,10 @@ public static class ProfileHostMigrationBlockerCodes
     public const string MissingCrafter = "missing_crafter";
     public const string MissingOrder = "missing_order";
     public const string MissingPayrollDraft = "missing_payroll_draft";
+    public const string MissingPlan = "missing_plan";
     public const string CompanyReferenceMismatch = "company_reference_mismatch";
     public const string OrderReferenceMismatch = "order_reference_mismatch";
+    public const string PlanReferenceMismatch = "plan_reference_mismatch";
     public const string PreflightChanged = "preflight_changed";
     public const string MigrationIdConflict = "migration_id_conflict";
 }
