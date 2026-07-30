@@ -859,8 +859,8 @@ public sealed partial class SqliteProfileHostStore
         {
             var item = ReadObject(reader);
             var identity = (
-                item.Collection,
-                NormalizeMigrationObjectId(item.Collection, item.ObjectId));
+                Collection: item.Collection,
+                ObjectId: NormalizeMigrationObjectId(item.Collection, item.ObjectId));
             if (!result.TryAdd(identity, item))
             {
                 if (blockers == null)
@@ -1661,14 +1661,6 @@ public sealed partial class SqliteProfileHostStore
             AppendHashPart(builder, blocker.ReferencedObjectId ?? string.Empty);
         }
 
-        foreach (var source in response.RetiredSources)
-        {
-            AppendHashPart(builder, source.Collection);
-            AppendHashPart(builder, source.ObjectId);
-            AppendHashPart(builder, source.Revision.ToString());
-            AppendHashPart(builder, source.Deleted ? "1" : "0");
-        }
-
         return HashText(builder.ToString());
     }
 
@@ -1695,6 +1687,14 @@ public sealed partial class SqliteProfileHostStore
             AppendHashPart(builder, mapping.Collection);
             AppendHashPart(builder, mapping.SourceObjectId);
             AppendHashPart(builder, mapping.TargetObjectId);
+        }
+
+        foreach (var source in response.RetiredSources)
+        {
+            AppendHashPart(builder, source.Collection);
+            AppendHashPart(builder, source.ObjectId);
+            AppendHashPart(builder, source.Revision.ToString());
+            AppendHashPart(builder, source.Deleted ? "1" : "0");
         }
 
         return HashText(builder.ToString());
