@@ -28,8 +28,8 @@ public sealed class DiscordCommissionOptions
         Uri.TryCreate(CommissionBaseUrl, UriKind.Absolute, out _);
 
     public bool CanPublishDirectly =>
-        IsConfigured &&
-        !string.IsNullOrWhiteSpace(ApplicationId) &&
+        Enabled &&
         !string.IsNullOrWhiteSpace(BotToken) &&
+        Uri.TryCreate(CommissionBaseUrl, UriKind.Absolute, out _) &&
         Uri.TryCreate(ApiBaseUrl, UriKind.Absolute, out _);
 }

@@ -79,7 +79,7 @@ public static class DiscordCollaborationEndpoints
                     return Results.Unauthorized();
                 }
 
-                if (access.Role == TradeCompanyRole.ReadOnly)
+                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
                 {
                     return Results.Forbid();
                 }
@@ -192,7 +192,7 @@ public static class DiscordCollaborationEndpoints
                     return Results.Unauthorized();
                 }
 
-                if (access.Role == TradeCompanyRole.ReadOnly)
+                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
                 {
                     return Results.Forbid();
                 }
@@ -231,7 +231,7 @@ public static class DiscordCollaborationEndpoints
                     return Results.Unauthorized();
                 }
 
-                if (access.Role == TradeCompanyRole.ReadOnly)
+                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
                 {
                     return Results.Forbid();
                 }
@@ -290,7 +290,7 @@ public static class DiscordCollaborationEndpoints
                     return Results.Unauthorized();
                 }
 
-                if (access.Role == TradeCompanyRole.ReadOnly)
+                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
                 {
                     return Results.Forbid();
                 }

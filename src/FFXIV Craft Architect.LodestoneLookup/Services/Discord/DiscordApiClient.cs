@@ -96,13 +96,13 @@ public sealed class DiscordApiClient(
         CancellationToken cancellationToken)
     {
         if (!options.CanPublishDirectly ||
-            !string.Equals(channelId, options.AllowedChannelId, StringComparison.Ordinal) ||
+            !IsDiscordSnowflake(channelId) ||
             (method != HttpMethod.Post && string.IsNullOrWhiteSpace(messageId)) ||
             (payload != null && !HasMentionSuppression(payload)))
         {
             return new DiscordApiResult(
                 DiscordApiOutcome.TerminalFailure,
-                Error: "Discord publication is disabled, outside the configured channel, or lacks mention suppression.");
+                Error: "Discord publication is disabled, has an invalid channel, or lacks mention suppression.");
         }
 
         var relativePath = messageId == null
@@ -220,6 +220,10 @@ public sealed class DiscordApiClient(
             DiscordApiOutcome.RetryableFailure,
             Error: "Discord request exhausted its retry budget.");
     }
+
+    private static bool IsDiscordSnowflake(string value) =>
+        value.Length is >= 17 and <= 20 &&
+        value.All(char.IsAsciiDigit);
 
     private static bool HasMentionSuppression(object payload)
     {

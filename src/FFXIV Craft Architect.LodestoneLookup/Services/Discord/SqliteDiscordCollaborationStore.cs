@@ -111,6 +111,7 @@ public sealed class SqliteDiscordCollaborationStore(
         int briefVersion,
         string idempotencyKey,
         string actionToken,
+        string channelId,
         DiscordPublicationState initialState,
         string initialPayloadJson,
         DateTimeOffset createdAt,
@@ -119,8 +120,10 @@ public sealed class SqliteDiscordCollaborationStore(
         ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(actionToken);
+        ArgumentException.ThrowIfNullOrWhiteSpace(channelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(initialPayloadJson);
         if (!options.CanPublishDirectly ||
+            !IsDiscordSnowflake(channelId) ||
             ownership.OrderId == Guid.Empty ||
             briefVersion <= 0 ||
             actionToken.Length > 100 ||
@@ -148,7 +151,8 @@ public sealed class SqliteDiscordCollaborationStore(
                 replay.CompanyId == ownership.CompanyId &&
                 replay.OrderId == ownership.OrderId &&
                 replay.SourceOrderRevision == ownership.OrderRevision &&
-                string.Equals(replay.PublicId, publicId, StringComparison.Ordinal);
+                string.Equals(replay.PublicId, publicId, StringComparison.Ordinal) &&
+                string.Equals(replay.ChannelId, channelId, StringComparison.Ordinal);
             return new DiscordPublicationCreateResult(
                 matches
                     ? DiscordPublicationCreateStatus.Replayed
@@ -165,7 +169,7 @@ public sealed class SqliteDiscordCollaborationStore(
             ownership.OrderRevision,
             publicId,
             briefVersion,
-            options.AllowedChannelId,
+            channelId,
             null,
             actionToken,
             initialState,

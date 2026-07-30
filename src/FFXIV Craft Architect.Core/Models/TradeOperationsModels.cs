@@ -8,6 +8,24 @@ public enum TradeSyncState
     Conflict
 }
 
+public enum TradeCompanyDiscordInstallationHealth
+{
+    Unknown,
+    Ready,
+    Unavailable,
+    Misconfigured
+}
+
+public sealed class TradeCompanyDiscordInstallationBinding
+{
+    public string ApplicationId { get; set; } = string.Empty;
+    public string GuildId { get; set; } = string.Empty;
+    public string ChannelId { get; set; } = string.Empty;
+    public TradeCompanyDiscordInstallationHealth Health { get; set; }
+    public string? HealthMessage { get; set; }
+    public DateTime? HealthCheckedAtUtc { get; set; }
+}
+
 public sealed class TradeCompanyProfile
 {
     public const int CurrentSchemaVersion = 2;
@@ -17,6 +35,7 @@ public sealed class TradeCompanyProfile
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? CommissionContact { get; set; }
+    public TradeCompanyDiscordInstallationBinding? DiscordInstallation { get; set; }
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
     public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.LegacyDefault;
