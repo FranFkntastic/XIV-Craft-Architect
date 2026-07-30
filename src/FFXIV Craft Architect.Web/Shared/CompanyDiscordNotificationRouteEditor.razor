@@ -1,0 +1,384 @@
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+@inject TradeCompanyCollaborationClient CollaborationClient
+
+<section class="notification-route-editor">
+    <MudText Typo="Typo.subtitle2" Class="mb-2">Commission notifications</MudText>
+
+    @if (_isBusy && !_hasLoaded)
+    {
+        <MudProgressLinear Indeterminate="true" Class="my-2" />
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mb-2">
+                <div class="notification-route-error">
+                    <span>@_error</span>
+                    @if (!_hasLoaded || _requiresReload)
+                    {
+                        <MudButton Variant="Variant.Text"
+                                   Color="Color.Error"
+                                   Size="Size.Small"
+                                   Disabled="_isBusy"
+                                   OnClick="LoadAsync">
+                            Reload
+                        </MudButton>
+                    }
+                </div>
+            </MudAlert>
+        }
+
+        @if (_hasLoaded)
+        {
+            <div class="notification-route-grid">
+                <CompactSelectField Id="company-notification-destination"
+                                    Label="Destination"
+                                    @bind-Value="DestinationValue"
+                                    Options="DestinationOptions"
+                                    Disabled="_isBusy || _requiresReload"
+                                    Class="options-select" />
+                <MudTextField @bind-Value="_commissionerDiscordUserId"
+                              id="company-notification-commissioner"
+                              Label="Commissioner Discord user ID"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Immediate="true"
+                              MaxLength="20"
+                              Disabled="_isBusy || _requiresReload" />
+                @if (RequiresUpdateChannel)
+                {
+                    <MudTextField @bind-Value="_updateChannelId"
+                                  id="company-notification-channel"
+                                  Label="Update channel ID"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  MaxLength="20"
+                                  Disabled="_isBusy || _requiresReload" />
+                }
+                @if (HasDirectMessageDestination)
+                {
+                    <CompactSelectField Id="company-notification-fallback"
+                                        Label="DM fallback"
+                                        @bind-Value="FallbackValue"
+                                        Options="FallbackOptions"
+                                        Disabled="_isBusy || _requiresReload"
+                                        Class="options-select" />
+                }
+            </div>
+
+            <div class="notification-policy-grid">
+                <CompactSelectField Id="company-notification-routine"
+                                    Label="Routine"
+                                    @bind-Value="RoutineBehaviorValue"
+                                    Options="BehaviorOptions"
+                                    Disabled="_isBusy || _requiresReload"
+                                    Class="options-select" />
+                <CompactSelectField Id="company-notification-action"
+                                    Label="Action required"
+                                    @bind-Value="ActionRequiredBehaviorValue"
+                                    Options="BehaviorOptions"
+                                    Disabled="_isBusy || _requiresReload"
+                                    Class="options-select" />
+                <CompactSelectField Id="company-notification-critical"
+                                    Label="Critical"
+                                    @bind-Value="CriticalBehaviorValue"
+                                    Options="BehaviorOptions"
+                                    Disabled="_isBusy || _requiresReload"
+                                    Class="options-select" />
+            </div>
+
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Secondary"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Notifications"
+                       Disabled="_isBusy || _requiresReload"
+                       OnClick="SaveAsync"
+                       Class="mt-2">
+                @if (_isBusy)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                }
+                Save routing
+            </MudButton>
+        }
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public Guid CompanyProfileId { get; set; }
+
+    private static readonly IReadOnlyList<CompactSelectOption> DestinationOptions =
+    [
+        new(
+            nameof(TradeDiscordNotificationDestinationMode.CommissionerDirectMessage),
+            "Commissioner DM"),
+        new(nameof(TradeDiscordNotificationDestinationMode.UpdateChannel), "Update channel"),
+        new(nameof(TradeDiscordNotificationDestinationMode.Both), "DM and channel")
+    ];
+
+    private static readonly IReadOnlyList<CompactSelectOption> FallbackOptions =
+    [
+        new(nameof(TradeDiscordDirectMessageFallback.None), "None"),
+        new(nameof(TradeDiscordDirectMessageFallback.UpdateChannel), "Update channel")
+    ];
+
+    private static readonly IReadOnlyList<CompactSelectOption> BehaviorOptions =
+    [
+        new(nameof(TradeDiscordNotificationBehavior.Push), "Push"),
+        new(nameof(TradeDiscordNotificationBehavior.SilentPing), "Silent ping"),
+        new(nameof(TradeDiscordNotificationBehavior.NoPing), "No ping"),
+        new(nameof(TradeDiscordNotificationBehavior.Off), "Off")
+    ];
+
+    private Guid _loadedCompanyProfileId;
+    private bool _hasLoaded;
+    private bool _isBusy;
+    private bool _requiresReload;
+    private string? _error;
+    private string? _saveFingerprint;
+    private string? _saveIdempotencyKey;
+    private long _revision;
+    private string _commissionerDiscordUserId = string.Empty;
+    private string? _updateChannelId;
+    private TradeDiscordNotificationDestinationMode _destination =
+        TradeDiscordNotificationDestinationMode.CommissionerDirectMessage;
+    private TradeDiscordDirectMessageFallback _fallback =
+        TradeDiscordDirectMessageFallback.None;
+    private TradeDiscordNotificationBehavior _routineBehavior =
+        TradeDiscordNotificationBehavior.NoPing;
+    private TradeDiscordNotificationBehavior _actionRequiredBehavior =
+        TradeDiscordNotificationBehavior.Push;
+    private TradeDiscordNotificationBehavior _criticalBehavior =
+        TradeDiscordNotificationBehavior.Push;
+
+    private bool HasDirectMessageDestination =>
+        _destination is
+            TradeDiscordNotificationDestinationMode.CommissionerDirectMessage or
+            TradeDiscordNotificationDestinationMode.Both;
+
+    private bool RequiresUpdateChannel =>
+        _destination is
+            TradeDiscordNotificationDestinationMode.UpdateChannel or
+            TradeDiscordNotificationDestinationMode.Both ||
+        _fallback == TradeDiscordDirectMessageFallback.UpdateChannel;
+
+    private string DestinationValue
+    {
+        get => _destination.ToString();
+        set
+        {
+            if (Enum.TryParse<TradeDiscordNotificationDestinationMode>(value, out var parsed))
+            {
+                _destination = parsed;
+                if (!HasDirectMessageDestination)
+                {
+                    _fallback = TradeDiscordDirectMessageFallback.None;
+                }
+            }
+        }
+    }
+
+    private string FallbackValue
+    {
+        get => _fallback.ToString();
+        set => SetEnum<TradeDiscordDirectMessageFallback>(
+            value,
+            parsed => _fallback = parsed);
+    }
+
+    private string RoutineBehaviorValue
+    {
+        get => _routineBehavior.ToString();
+        set => SetEnum<TradeDiscordNotificationBehavior>(
+            value,
+            parsed => _routineBehavior = parsed);
+    }
+
+    private string ActionRequiredBehaviorValue
+    {
+        get => _actionRequiredBehavior.ToString();
+        set => SetEnum<TradeDiscordNotificationBehavior>(
+            value,
+            parsed => _actionRequiredBehavior = parsed);
+    }
+
+    private string CriticalBehaviorValue
+    {
+        get => _criticalBehavior.ToString();
+        set => SetEnum<TradeDiscordNotificationBehavior>(
+            value,
+            parsed => _criticalBehavior = parsed);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (CompanyProfileId == Guid.Empty ||
+            CompanyProfileId == _loadedCompanyProfileId)
+        {
+            return;
+        }
+
+        _loadedCompanyProfileId = CompanyProfileId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _isBusy = true;
+        _hasLoaded = false;
+        _requiresReload = false;
+        _error = null;
+        try
+        {
+            var route = await CollaborationClient.LoadNotificationRouteAsync(
+                CompanyProfileId);
+            if (route == null)
+            {
+                ResetToDefaults();
+            }
+            else
+            {
+                Apply(route);
+            }
+
+            _hasLoaded = true;
+            ResetSaveIdentity();
+        }
+        catch (Exception exception)
+        {
+            _error = exception.Message;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        _error = Validate();
+        if (_error != null)
+        {
+            return;
+        }
+
+        _isBusy = true;
+        try
+        {
+            var fingerprint = BuildSaveFingerprint();
+            if (!string.Equals(fingerprint, _saveFingerprint, StringComparison.Ordinal))
+            {
+                _saveFingerprint = fingerprint;
+                _saveIdempotencyKey = $"discord-route:{Guid.NewGuid():N}";
+            }
+
+            var result = await CollaborationClient.SaveNotificationRouteAsync(
+                CompanyProfileId,
+                new TradeDiscordNotificationRouteUpdate(
+                    _commissionerDiscordUserId.Trim(),
+                    _destination,
+                    RequiresUpdateChannel ? _updateChannelId?.Trim() : null,
+                    HasDirectMessageDestination
+                        ? _fallback
+                        : TradeDiscordDirectMessageFallback.None,
+                    _routineBehavior,
+                    _actionRequiredBehavior,
+                    _criticalBehavior,
+                    _revision,
+                    _saveIdempotencyKey!));
+            if (result.Success && result.Route != null)
+            {
+                Apply(result.Route);
+                _error = null;
+                ResetSaveIdentity();
+                return;
+            }
+
+            _error = result.Status == TradeDiscordNotificationRouteSaveStatus.Conflict
+                ? "Routing changed on the host. Reload before saving."
+                : result.Error ?? "The notification route was rejected.";
+            _requiresReload =
+                result.Status == TradeDiscordNotificationRouteSaveStatus.Conflict;
+        }
+        catch (Exception exception)
+        {
+            _requiresReload = false;
+            _error = exception.Message;
+        }
+        finally
+        {
+            _isBusy = false;
+        }
+    }
+
+    private string? Validate()
+    {
+        if (!IsSnowflake(_commissionerDiscordUserId))
+        {
+            return "Commissioner Discord user ID must be a 17-20 digit ID.";
+        }
+
+        return RequiresUpdateChannel && !IsSnowflake(_updateChannelId)
+            ? "Update channel ID must be a 17-20 digit ID."
+            : null;
+    }
+
+    private string BuildSaveFingerprint() =>
+        string.Join(
+            "|",
+            _revision,
+            _commissionerDiscordUserId.Trim(),
+            _destination,
+            RequiresUpdateChannel ? _updateChannelId?.Trim() : null,
+            HasDirectMessageDestination
+                ? _fallback
+                : TradeDiscordDirectMessageFallback.None,
+            _routineBehavior,
+            _actionRequiredBehavior,
+            _criticalBehavior);
+
+    private void Apply(TradeDiscordNotificationRoute route)
+    {
+        _revision = route.Revision;
+        _commissionerDiscordUserId = route.CommissionerDiscordUserId;
+        _destination = route.DestinationMode;
+        _updateChannelId = route.UpdateChannelId;
+        _fallback = route.DirectMessageFallback;
+        _routineBehavior = route.RoutineBehavior;
+        _actionRequiredBehavior = route.ActionRequiredBehavior;
+        _criticalBehavior = route.CriticalExceptionBehavior;
+    }
+
+    private void ResetToDefaults()
+    {
+        _revision = 0;
+        _commissionerDiscordUserId = string.Empty;
+        _updateChannelId = null;
+        _destination = TradeDiscordNotificationDestinationMode.CommissionerDirectMessage;
+        _fallback = TradeDiscordDirectMessageFallback.None;
+        _routineBehavior = TradeDiscordNotificationBehavior.NoPing;
+        _actionRequiredBehavior = TradeDiscordNotificationBehavior.Push;
+        _criticalBehavior = TradeDiscordNotificationBehavior.Push;
+    }
+
+    private void ResetSaveIdentity()
+    {
+        _saveFingerprint = null;
+        _saveIdempotencyKey = null;
+    }
+
+    private static bool IsSnowflake(string? value) =>
+        value is { Length: >= 17 and <= 20 } &&
+        value.All(char.IsAsciiDigit);
+
+    private static void SetEnum<T>(string value, Action<T> apply)
+        where T : struct, Enum
+    {
+        if (Enum.TryParse<T>(value, out var parsed))
+        {
+            apply(parsed);
+        }
+    }
+}
