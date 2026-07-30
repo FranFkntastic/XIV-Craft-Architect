@@ -121,7 +121,12 @@ jobs:
 
       - name: Verify formatting
         shell: bash
-        run: timeout --signal=KILL 5m dotnet format "FFXIV Craft Architect.sln" --verify-no-changes --no-restore
+        run: >
+          timeout --signal=KILL 5m
+          dotnet format "FFXIV Craft Architect.sln"
+          --verify-no-changes
+          --no-restore
+          --exclude "$FranthropyRoot"
 
       - name: Build full solution
         run: >

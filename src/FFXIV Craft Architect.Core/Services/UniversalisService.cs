@@ -60,7 +60,9 @@ public class UniversalisService : IUniversalisService
             cancellationToken: ct).ConfigureAwait(false);
 
         if (result.Items.TryGetValue((uint)itemId, out var item))
+        {
             return item;
+        }
 
         throw BuildIncompleteFetchException(result.MissingItemIds, result.Failures);
     }
@@ -77,9 +79,14 @@ public class UniversalisService : IUniversalisService
     {
         var ids = itemIds.Distinct().ToArray();
         if (ids.Length == 0)
+        {
             return [];
+        }
+
         if (ids.Any(itemId => itemId <= 0))
+        {
             throw new ArgumentOutOfRangeException(nameof(itemIds), "Universalis item IDs must be positive.");
+        }
 
         logger?.LogInformation(
             "Fetching bulk market data for {Count} items from {WorldOrDc} (parallel={UseParallel})",
@@ -121,7 +128,9 @@ public class UniversalisService : IUniversalisService
     {
         ct.ThrowIfCancellationRequested();
         if (worldDataCache != null)
+        {
             return Task.FromResult(worldDataCache);
+        }
 
         logger?.LogDebug("Loading packaged world directory");
         worldDataCache = packagedWorldDirectory.LoadWorldData();
@@ -149,7 +158,9 @@ public class UniversalisService : IUniversalisService
         foreach (var listing in listings.OrderBy(listing => listing.PricePerUnit))
         {
             if (remaining <= 0)
+            {
                 break;
+            }
 
             var toBuy = Math.Min(listing.Quantity, remaining);
             totalCost += toBuy * listing.PricePerUnit;
@@ -174,7 +185,10 @@ public class UniversalisService : IUniversalisService
         var detail = failures.FirstOrDefault()?.Message;
         var message = $"Universalis did not return item(s) {string.Join(", ", missingItemIds)}.";
         if (!string.IsNullOrWhiteSpace(detail))
+        {
             message += $" {detail}";
+        }
+
         return new HttpRequestException(message);
     }
 }
