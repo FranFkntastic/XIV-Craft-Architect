@@ -47,8 +47,13 @@ public sealed class CompanyMigrationSourceMetadata
     public string InstallationId { get; init; } = string.Empty;
     public DateTime CapturedAtUtc { get; init; }
     public int IndexedDbModuleRevision { get; init; }
+    public bool PersonalDatabaseExists { get; init; }
+    public string PersonalDatabaseName { get; init; } = string.Empty;
+    public int? PersonalSchemaVersion { get; init; }
+    public bool CompanyDatabaseExists { get; init; }
     public string CompanyDatabaseName { get; init; } = string.Empty;
-    public int CompanySchemaVersion { get; init; }
+    public int? CompanySchemaVersion { get; init; }
+    public bool LegacyDatabaseExists { get; init; }
     public string LegacyDatabaseName { get; init; } = string.Empty;
     public int? LegacySchemaVersion { get; init; }
 }
@@ -63,6 +68,7 @@ public sealed class CompanyMigrationSourceRecord
     public string PayloadJson { get; init; } = "{}";
     public string ContentHash { get; init; } = string.Empty;
     public bool Supported { get; init; }
+    public bool RequiredBySource { get; init; }
 }
 
 public sealed class CompanyMigrationCompanySummary
@@ -103,6 +109,7 @@ internal sealed class BrowserCompanyMigrationSource
     public int ModuleRevision { get; set; }
     public JsonElement SpecializedStorage { get; set; }
     public BrowserCompanyDatabase Company { get; set; } = new();
+    public BrowserPersonalDatabase Personal { get; set; } = new();
     public IReadOnlyList<BrowserLinkedPlan> LinkedPlans { get; set; } =
         Array.Empty<BrowserLinkedPlan>();
     public BrowserLegacyDatabase Legacy { get; set; } = new();
@@ -111,7 +118,8 @@ internal sealed class BrowserCompanyMigrationSource
 internal class BrowserCompanyDatabase
 {
     public string DatabaseName { get; set; } = string.Empty;
-    public int SchemaVersion { get; set; }
+    public bool Exists { get; set; }
+    public int? SchemaVersion { get; set; }
     public IReadOnlyList<JsonElement> CompanyProfiles { get; set; } = [];
     public IReadOnlyList<JsonElement> Crafters { get; set; } = [];
     public IReadOnlyList<JsonElement> Orders { get; set; } = [];
@@ -120,9 +128,19 @@ internal class BrowserCompanyDatabase
     public IReadOnlyList<BrowserUnsupportedStore> UnsupportedStores { get; set; } = [];
 }
 
+internal sealed class BrowserPersonalDatabase
+{
+    public string DatabaseName { get; set; } = string.Empty;
+    public bool Exists { get; set; }
+    public int? SchemaVersion { get; set; }
+    public IReadOnlyList<JsonElement> LinkedPlans { get; set; } = [];
+    public IReadOnlyList<JsonElement> LinkedPlanComponents { get; set; } = [];
+}
+
 internal sealed class BrowserLegacyDatabase
 {
     public string DatabaseName { get; set; } = string.Empty;
+    public bool Exists { get; set; }
     public int? SchemaVersion { get; set; }
     public IReadOnlyList<JsonElement> CompanyProfiles { get; set; } = [];
     public IReadOnlyList<JsonElement> Crafters { get; set; } = [];
@@ -135,7 +153,9 @@ internal sealed class BrowserLegacyDatabase
 
 internal sealed class BrowserLinkedPlan
 {
+    public string DatabaseRole { get; set; } = string.Empty;
     public string PlanId { get; set; } = string.Empty;
+    public bool RequiredBySource { get; set; }
     public JsonElement Payload { get; set; }
     public string? Error { get; set; }
 }
@@ -173,7 +193,7 @@ internal static class CompanyMigrationInventoryBuilder
             ObjectId = reference.ObjectId
         }));
 
-        if (source.FormatVersion != 1)
+        if (source.FormatVersion != 2)
         {
             blockers.Add(new CompanyMigrationSourceBlocker
             {
@@ -256,8 +276,13 @@ internal static class CompanyMigrationInventoryBuilder
                     InstallationId = installationId,
                     CapturedAtUtc = source.CapturedAtUtc,
                     IndexedDbModuleRevision = source.ModuleRevision,
+                    PersonalDatabaseExists = source.Personal.Exists,
+                    PersonalDatabaseName = source.Personal.DatabaseName,
+                    PersonalSchemaVersion = source.Personal.SchemaVersion,
+                    CompanyDatabaseExists = source.Company.Exists,
                     CompanyDatabaseName = source.Company.DatabaseName,
                     CompanySchemaVersion = source.Company.SchemaVersion,
+                    LegacyDatabaseExists = source.Legacy.Exists,
                     LegacyDatabaseName = source.Legacy.DatabaseName,
                     LegacySchemaVersion = source.Legacy.SchemaVersion
                 },
@@ -288,6 +313,8 @@ internal static class CompanyMigrationInventoryBuilder
         Add(records, "legacy", source.Legacy.DatabaseName, OrdersStore, ProfileSyncCollections.TradeOrders, source.Legacy.Orders);
         Add(records, "legacy", source.Legacy.DatabaseName, PayrollDraftsStore, ProfileSyncCollections.TradePayrollDrafts, source.Legacy.PayrollDrafts);
         Add(records, "legacy", source.Legacy.DatabaseName, OrderCraftSnapshotsStore, ProfileHostMigrationCollections.TradeOrderCraftSnapshots, source.Legacy.OrderCraftSnapshots);
+        Add(records, "personal", source.Personal.DatabaseName, PlansStore, null, source.Personal.LinkedPlans);
+        Add(records, "personal", source.Personal.DatabaseName, PlanComponentsStore, null, source.Personal.LinkedPlanComponents);
         Add(records, "legacy", source.Legacy.DatabaseName, PlansStore, null, source.Legacy.LinkedPlans);
         Add(records, "legacy", source.Legacy.DatabaseName, PlanComponentsStore, null, source.Legacy.LinkedPlanComponents);
         foreach (var snapshot in records.Where(record =>
@@ -310,16 +337,30 @@ internal static class CompanyMigrationInventoryBuilder
         {
             if (plan.Payload.ValueKind is JsonValueKind.Object)
             {
-                Add(records, "personal", PersonalDatabaseName(source), PlansStore, ProfileSyncCollections.Plans, [plan.Payload], plan.PlanId);
+                var databaseName = plan.DatabaseRole == "legacy"
+                    ? source.Legacy.DatabaseName
+                    : source.Personal.DatabaseName;
+                Add(
+                    records,
+                    plan.DatabaseRole,
+                    databaseName,
+                    $"{PlansStore}.materialized",
+                    ProfileSyncCollections.Plans,
+                    [plan.Payload],
+                    plan.PlanId,
+                    requiredBySource: plan.RequiredBySource);
             }
             else
             {
                 blockers.Add(new CompanyMigrationSourceBlocker
                 {
-                    Code = "linked_plan_unavailable",
+                    Code = plan.RequiredBySource
+                        ? "linked_plan_unavailable"
+                        : "linked_plan_candidate_unreadable",
                     Message = string.IsNullOrWhiteSpace(plan.Error)
-                        ? $"Linked saved plan '{plan.PlanId}' is missing."
-                        : $"Linked saved plan '{plan.PlanId}' could not be materialized: {plan.Error}",
+                        ? $"Linked saved plan '{plan.PlanId}' is missing from the {plan.DatabaseRole} source."
+                        : $"Linked saved plan '{plan.PlanId}' from the {plan.DatabaseRole} source could not be materialized: {plan.Error}",
+                    DatabaseRole = plan.DatabaseRole,
                     Collection = ProfileSyncCollections.Plans,
                     ObjectId = plan.PlanId
                 });
@@ -348,7 +389,8 @@ internal static class CompanyMigrationInventoryBuilder
         string? collection,
         IEnumerable<JsonElement> payloads,
         string? forcedId = null,
-        bool supported = true)
+        bool supported = true,
+        bool requiredBySource = false)
     {
         foreach (var payload in payloads)
         {
@@ -363,7 +405,8 @@ internal static class CompanyMigrationInventoryBuilder
                 TransferCollection = collection,
                 PayloadJson = payloadJson,
                 ContentHash = hash,
-                Supported = supported
+                Supported = supported,
+                RequiredBySource = requiredBySource
             });
         }
     }
@@ -373,6 +416,12 @@ internal static class CompanyMigrationInventoryBuilder
         ICollection<CompanyMigrationSourceBlocker> blockers)
     {
         var result = new List<ProfileHostMigrationObjectInput>();
+        var blockedPlanIds = blockers
+            .Where(blocker =>
+                blocker.Collection == ProfileSyncCollections.Plans &&
+                blocker.ObjectId != null)
+            .Select(blocker => blocker.ObjectId!)
+            .ToHashSet(StringComparer.Ordinal);
         foreach (var group in records
                      .Where(record => record.Supported && record.TransferCollection != null)
                      .GroupBy(record => (
@@ -381,6 +430,11 @@ internal static class CompanyMigrationInventoryBuilder
                              record.TransferCollection!,
                              record.RecordId))))
         {
+            if (group.Key.Collection == ProfileSyncCollections.Plans &&
+                blockedPlanIds.Contains(group.Key.RecordId))
+            {
+                continue;
+            }
             var ordered = group
                 .OrderBy(record => record.DatabaseRole == "legacy" ? 1 : 0)
                 .ThenBy(record => record.DatabaseName, StringComparer.Ordinal)
@@ -402,17 +456,29 @@ internal static class CompanyMigrationInventoryBuilder
                 blockers.Add(new CompanyMigrationSourceBlocker
                 {
                     Code = "divergent_source_copy",
-                    Message =
-                        $"{group.Key.Item1}/{group.Key.RecordId} differs between preserved source databases; the specialized copy is selected and every copy remains in the manifest.",
+                    Message = group.Key.Collection == ProfileSyncCollections.Plans
+                        ? $"{group.Key.Collection}/{group.Key.RecordId} differs between personal and legacy source databases; explicit source selection is required and every copy remains in the manifest."
+                        : $"{group.Key.Collection}/{group.Key.RecordId} differs between preserved source databases; the specialized copy is selected and every copy remains in the manifest.",
                     Collection = group.Key.Item1,
                     ObjectId = group.Key.RecordId
                 });
+                if (group.Key.Collection == ProfileSyncCollections.Plans)
+                {
+                    continue;
+                }
             }
+            var selected = group.Key.Collection == ProfileSyncCollections.Plans
+                ? ordered.FirstOrDefault(record =>
+                      record.RequiredBySource &&
+                      record.DatabaseRole == "legacy") ??
+                  ordered.FirstOrDefault(record => record.RequiredBySource) ??
+                  ordered[0]
+                : ordered[0];
             result.Add(new ProfileHostMigrationObjectInput
             {
                 Collection = group.Key.Item1,
                 ObjectId = group.Key.RecordId,
-                PayloadJson = ordered[0].PayloadJson
+                PayloadJson = selected.PayloadJson
             });
         }
         return result
@@ -444,10 +510,6 @@ internal static class CompanyMigrationInventoryBuilder
                 AddIfMissing(ProfileSyncCollections.TradeCrafters, NormalizeGuid(GetString(payload, "assignedCrafterId")));
                 AddIfMissing(ProfileSyncCollections.TradePayrollDrafts, GetString(payload, "payrollDraftId"));
                 AddIfMissing(ProfileSyncCollections.Plans, GetString(payload, "craftPlanId"));
-                if (TryGet(payload, "sourceSnapshot", out var sourceSnapshot))
-                {
-                    AddIfMissing(ProfileSyncCollections.Plans, GetString(sourceSnapshot, "sourcePlanId"));
-                }
             }
             if (item.Collection == ProfileSyncCollections.TradePayrollDrafts)
             {
@@ -569,12 +631,6 @@ internal static class CompanyMigrationInventoryBuilder
         }
         return string.Join('|', parts);
     }
-
-    private static string PersonalDatabaseName(BrowserCompanyMigrationSource source) =>
-        TryGet(source.SpecializedStorage, "databaseNames", out var names) &&
-        TryGet(names, "personal", out var personal)
-            ? personal.GetString() ?? "FFXIVCraftArchitect.Personal"
-            : "FFXIVCraftArchitect.Personal";
 
     private static string NormalizeId(string collection, string objectId) =>
         collection is ProfileSyncCollections.TradeCompanyProfiles or
