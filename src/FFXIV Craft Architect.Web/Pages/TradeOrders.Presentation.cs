@@ -128,7 +128,10 @@ public partial class TradeOrders
         }
     }
 
-    private sealed record OrderStatusGroup(TradeOrderStatus Status, IReadOnlyList<TradeOrder> Orders);
+    private sealed record OrderAttentionGroup(
+        string Key,
+        string Label,
+        IReadOnlyList<TradeOrder> Orders);
 
     private readonly record struct LiveProcurementKey(
         Guid OrderId,
