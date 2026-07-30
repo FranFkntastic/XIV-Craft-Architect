@@ -1,9 +1,11 @@
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.LodestoneLookup.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.CraftAppraisal;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -31,6 +33,19 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<ILodestoneCrafterLookupService, NetStoneLodestoneCrafterLookupService>();
 builder.Services.AddHttpClient<IGarlandService, GarlandService>();
 builder.Services.AddSingleton<IXivItemDataProvider, GarlandXivItemDataProvider>();
+var craftAppraisalOptions = CraftAppraisalApiOptions.FromConfiguration(
+    builder.Configuration,
+    builder.Environment.ContentRootPath);
+craftAppraisalOptions.Validate();
+builder.Services.AddSingleton(craftAppraisalOptions);
+builder.Services.AddMemoryCache();
+builder.Services.AddWorkshopHostCraftAppraisal();
+builder.Services.AddSingleton<IMarketCacheService>(services =>
+    new JsonFileMarketCacheService(
+        services.GetRequiredService<UniversalisService>(),
+        craftAppraisalOptions.CacheDirectory));
+builder.Services.AddSingleton<CraftAppraisalPlanStore>();
+builder.Services.AddSingleton<IHostedCraftAppraisalCoordinator, HostedCraftAppraisalCoordinator>();
 builder.Services.AddSingleton(_ => new ProfileHostOptions
 {
     Enabled = builder.Configuration.GetValue("ProfileHost:Enabled", false),
@@ -225,6 +240,7 @@ app.MapGet(
     });
 
 app.MapProfileHostEndpoints();
+app.MapCraftAppraisalEndpoints();
 app.MapCommissionBriefEndpoints();
 app.MapCompanyCommissionBriefEndpoints();
 app.MapDiscordCommissionEndpoints();
