@@ -233,7 +233,7 @@ public partial class TradeOrders
                 orderToSave.CommissionPublication = new TradeCommissionPublication
                 {
                     PublicId = link.PublicId,
-                    PublicUrl = link.Url,
+                    PublicUrl = link.PublicUrl,
                     Version = link.Version,
                     PublishedAtUtc = link.PublishedAtUtc
                 };
