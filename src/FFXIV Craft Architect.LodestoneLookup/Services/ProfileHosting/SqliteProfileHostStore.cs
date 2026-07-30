@@ -1,3 +1,4 @@
+using System.Data;
 using System.Globalization;
 using FFXIV_Craft_Architect.Core.Models;
 using Microsoft.Data.Sqlite;
@@ -217,10 +218,21 @@ public sealed class SqliteProfileHostStore
         }
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
-        var existing = await LoadObjectAsync(connection, profileId, collection, objectId, ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+        var revision = await ReserveNextRevisionAsync(connection, transaction, profileId, ct);
+        var existing = await LoadObjectAsync(
+            connection,
+            profileId,
+            collection,
+            objectId,
+            ct,
+            transaction);
 
         if (existing != null && existing.Revision != expectedRevision)
         {
+            await transaction.RollbackAsync(ct);
             return new ProfileSyncPutResponse
             {
                 Success = false,
@@ -231,6 +243,7 @@ public sealed class SqliteProfileHostStore
 
         if (existing == null && expectedRevision != 0)
         {
+            await transaction.RollbackAsync(ct);
             return new ProfileSyncPutResponse
             {
                 Success = false,
@@ -240,9 +253,9 @@ public sealed class SqliteProfileHostStore
             };
         }
 
-        var revision = await GetNextRevisionAsync(connection, profileId, ct);
         var now = DateTime.UtcNow;
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             insert into sync_objects (profile_id, collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc)
             values ($profileId, $collection, $objectId, $payloadJson, $revision, $updatedAtUtc, 0, null)
@@ -251,7 +264,8 @@ public sealed class SqliteProfileHostStore
                 revision = excluded.revision,
                 updated_at_utc = excluded.updated_at_utc,
                 deleted = 0,
-                deleted_at_utc = null;
+                deleted_at_utc = null
+            where sync_objects.revision = $expectedRevision;
             """;
         command.Parameters.AddWithValue("$profileId", profileId);
         command.Parameters.AddWithValue("$collection", collection);
@@ -259,7 +273,20 @@ public sealed class SqliteProfileHostStore
         command.Parameters.AddWithValue("$payloadJson", payloadJson);
         command.Parameters.AddWithValue("$revision", revision);
         command.Parameters.AddWithValue("$updatedAtUtc", now.ToString("O"));
-        await command.ExecuteNonQueryAsync(ct);
+        command.Parameters.AddWithValue("$expectedRevision", expectedRevision);
+        if (await command.ExecuteNonQueryAsync(ct) != 1)
+        {
+            await transaction.RollbackAsync(ct);
+            return new ProfileSyncPutResponse
+            {
+                Success = false,
+                Conflict = true,
+                RemoteObject = existing,
+                ErrorCode = "revision_conflict",
+                ErrorMessage = "Remote object changed before the hosted write completed."
+            };
+        }
+        await transaction.CommitAsync(ct);
 
         return new ProfileSyncPutResponse
         {
@@ -338,10 +365,21 @@ public sealed class SqliteProfileHostStore
         ValidateCollection(collection);
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
-        var existing = await LoadObjectAsync(connection, profileId, collection, objectId, ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+        var revision = await ReserveNextRevisionAsync(connection, transaction, profileId, ct);
+        var existing = await LoadObjectAsync(
+            connection,
+            profileId,
+            collection,
+            objectId,
+            ct,
+            transaction);
 
         if (existing != null && existing.Revision != expectedRevision)
         {
+            await transaction.RollbackAsync(ct);
             return new ProfileSyncPutResponse
             {
                 Success = false,
@@ -350,9 +388,21 @@ public sealed class SqliteProfileHostStore
             };
         }
 
-        var revision = await GetNextRevisionAsync(connection, profileId, ct);
+        if (existing == null && expectedRevision != 0)
+        {
+            await transaction.RollbackAsync(ct);
+            return new ProfileSyncPutResponse
+            {
+                Success = false,
+                Conflict = true,
+                ErrorCode = "missing_remote_object",
+                ErrorMessage = "Remote object does not exist."
+            };
+        }
+
         var now = DateTime.UtcNow;
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             insert into sync_objects (profile_id, collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc)
             values ($profileId, $collection, $objectId, '{}', $revision, $updatedAtUtc, 1, $deletedAtUtc)
@@ -361,7 +411,8 @@ public sealed class SqliteProfileHostStore
                 revision = excluded.revision,
                 updated_at_utc = excluded.updated_at_utc,
                 deleted = 1,
-                deleted_at_utc = excluded.deleted_at_utc;
+                deleted_at_utc = excluded.deleted_at_utc
+            where sync_objects.revision = $expectedRevision;
             """;
         command.Parameters.AddWithValue("$profileId", profileId);
         command.Parameters.AddWithValue("$collection", collection);
@@ -369,7 +420,20 @@ public sealed class SqliteProfileHostStore
         command.Parameters.AddWithValue("$revision", revision);
         command.Parameters.AddWithValue("$updatedAtUtc", now.ToString("O"));
         command.Parameters.AddWithValue("$deletedAtUtc", now.ToString("O"));
-        await command.ExecuteNonQueryAsync(ct);
+        command.Parameters.AddWithValue("$expectedRevision", expectedRevision);
+        if (await command.ExecuteNonQueryAsync(ct) != 1)
+        {
+            await transaction.RollbackAsync(ct);
+            return new ProfileSyncPutResponse
+            {
+                Success = false,
+                Conflict = true,
+                RemoteObject = existing,
+                ErrorCode = "revision_conflict",
+                ErrorMessage = "Remote object changed before the hosted delete completed."
+            };
+        }
+        await transaction.CommitAsync(ct);
 
         return new ProfileSyncPutResponse
         {
@@ -392,9 +456,11 @@ public sealed class SqliteProfileHostStore
         string profileId,
         string collection,
         string objectId,
-        CancellationToken ct)
+        CancellationToken ct,
+        SqliteTransaction? transaction = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             select payload_json, revision, updated_at_utc, deleted, deleted_at_utc
             from sync_objects
@@ -461,18 +527,38 @@ public sealed class SqliteProfileHostStore
         await command.ExecuteNonQueryAsync(ct);
     }
 
-    private static async Task<long> GetNextRevisionAsync(SqliteConnection connection, string profileId, CancellationToken ct)
+    private static async Task<long> ReserveNextRevisionAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string profileId,
+        CancellationToken ct)
     {
-        return await GetServerRevisionAsync(connection, profileId, ct) + 1;
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            insert into profile_revisions (profile_id, revision)
+            values ($profileId, 1)
+            on conflict(profile_id) do update set
+                revision = profile_revisions.revision + 1
+            returning revision;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        var scalar = await command.ExecuteScalarAsync(ct);
+        return Convert.ToInt64(scalar, CultureInfo.InvariantCulture);
     }
 
     private static async Task<long> GetServerRevisionAsync(SqliteConnection connection, string profileId, CancellationToken ct)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            select coalesce(max(revision), 0)
-            from sync_objects
-            where profile_id = $profileId;
+            select coalesce(
+                (
+                    select revision
+                    from profile_revisions
+                    where profile_id = $profileId
+                ),
+                0
+            );
             """;
         command.Parameters.AddWithValue("$profileId", profileId);
         var scalar = await command.ExecuteScalarAsync(ct);
@@ -520,6 +606,20 @@ public sealed class SqliteProfileHostStore
                 primary key(profile_id, collection, object_id),
                 foreign key(profile_id) references hosted_profiles(id)
             );
+
+            create table if not exists profile_revisions (
+                profile_id text primary key,
+                revision integer not null,
+                foreign key(profile_id) references hosted_profiles(id)
+            );
+
+            insert into profile_revisions (profile_id, revision)
+            select p.id, coalesce(max(o.revision), 0)
+            from hosted_profiles p
+            left join sync_objects o on o.profile_id = p.id
+            group by p.id
+            on conflict(profile_id) do update set
+                revision = max(profile_revisions.revision, excluded.revision);
             """;
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -533,6 +633,12 @@ public sealed class SqliteProfileHostStore
         }.ToString();
         var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync(ct);
+        await using var pragma = connection.CreateCommand();
+        pragma.CommandText = """
+            PRAGMA foreign_keys = ON;
+            PRAGMA busy_timeout = 5000;
+            """;
+        await pragma.ExecuteNonQueryAsync(ct);
         return connection;
     }
 }

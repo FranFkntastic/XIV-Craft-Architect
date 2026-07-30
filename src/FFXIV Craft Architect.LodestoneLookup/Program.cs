@@ -38,6 +38,7 @@ builder.Services.AddSingleton(_ => new ProfileHostOptions
         ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db")
 });
 builder.Services.AddSingleton<ProfileAccessKeyHasher>();
+builder.Services.AddSingleton<ProfileAuthenticationGate>();
 builder.Services.AddSingleton<SqliteProfileHostStore>();
 var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
     ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db");

@@ -5,6 +5,7 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 public sealed class TradeCompanyAuthorization(
     ProfileHostOptions options,
+    ProfileAuthenticationGate authentication,
     ProfileHostedTradeCompanyService companies)
 {
     private const string AccessKeyHeader = "X-Profile-Key";
@@ -26,9 +27,9 @@ public sealed class TradeCompanyAuthorization(
             return null;
         }
 
-        var access = await companies.AuthenticateAsync(
+        var access = await authentication.ExecuteAsync(
             key,
-            companyId,
+            ct => companies.AuthenticateAsync(key, companyId, ct),
             cancellationToken);
         return access is
         {

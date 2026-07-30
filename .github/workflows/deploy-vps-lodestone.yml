@@ -102,6 +102,8 @@ jobs:
       - name: Write Discord environment
         shell: bash
         run: |
+          test -n "$DISCORD_APPLICATION_ID"
+          test -n "$DISCORD_BOT_TOKEN"
           test "${#DISCORD_PUBLIC_KEY}" -eq 64
           case "$DISCORD_PUBLIC_KEY" in
             *[!0-9a-fA-F]*) exit 1 ;;
@@ -109,7 +111,9 @@ jobs:
           umask 077
           {
             printf 'Discord__Enabled=true\n'
+            printf 'Discord__ApplicationId=%s\n' "$DISCORD_APPLICATION_ID"
             printf 'Discord__PublicKey=%s\n' "$DISCORD_PUBLIC_KEY"
+            printf 'Discord__RuntimeBotToken=%s\n' "$DISCORD_BOT_TOKEN"
             printf 'Discord__AllowedGuildId=%s\n' "$DISCORD_GUILD_ID"
             printf 'Discord__AllowedChannelId=%s\n' '${{ steps.discord.outputs.channel_id }}'
             printf 'Discord__CommissionBaseUrl=https://dev.xivcraftarchitect.com/commission.html?id=\n'
