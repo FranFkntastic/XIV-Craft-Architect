@@ -120,6 +120,10 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Restore pinned browser package metadata
+        shell: bash
+        run: timeout --signal=KILL 2m npm --prefix "tools/IndexedDbBrowserTests" ci
+
       - name: Publish Release web app
         env:
           BUILD_SOURCE_REF: ${{ steps.target.outputs.source_ref }}
