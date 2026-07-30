@@ -10,7 +10,6 @@
 @inject IndexedDbService IndexedDb
 @inject GarlandService GarlandService
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
-@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyProfileMutationService TradeCompanyProfiles
 @inject TradeLaborBenchmarkCalibrationWorkflowService LaborBenchmarkCalibrationWorkflow
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService ProfileSyncLocalState
@@ -1383,8 +1382,8 @@
         _companyLoadError = null;
         try
         {
+            await ProfileSync.SyncNowAsync();
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
-            await TradeCompanyProfiles.SynchronizeAsync(_companyProfile);
             var crafters = await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id);
             _companyCrafterCount = crafters.Count;
             ApplyCompanyProfileFields(_companyProfile);
@@ -1399,6 +1398,19 @@
         {
             _companyIsBusy = false;
         }
+    }
+
+    private async Task<bool> SaveCompanyProfileAsync(TradeCompanyProfile profile)
+    {
+        if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(profile))
+        {
+            return false;
+        }
+
+        await ProfileSync.QueueLocalSaveAsync(
+            ProfileSyncCollections.TradeCompanyProfiles,
+            profile.Id.ToString("D"));
+        return true;
     }
 
     private void ApplyCompanyProfileFields(TradeCompanyProfile profile)
@@ -1657,7 +1669,7 @@
                 LaborStandardMaterialBonusPercent = _companyLaborMaterialBonusPercent
             };
 
-            var saved = await TradeCompanyProfiles.SaveAsync(_companyProfile);
+            var saved = await SaveCompanyProfileAsync(_companyProfile);
             if (!saved)
             {
                 _laborBenchmarkStatus = "Benchmark recalculated but company profile save failed.";
@@ -1999,7 +2011,7 @@
             _companyProfile.Description = NormalizeOptionalText(_companyDescription);
             _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
             _companyProfile.PaymentPolicy = paymentPolicy;
-            var companySaved = await TradeCompanyProfiles.SaveAsync(_companyProfile);
+            var companySaved = await SaveCompanyProfileAsync(_companyProfile);
             if (!companySaved)
             {
                 Snackbar.Add("Failed to save company profile.", Severity.Error);

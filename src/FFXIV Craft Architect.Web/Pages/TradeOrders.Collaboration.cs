@@ -1,7 +1,7 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Dialogs;
-using FFXIV_Craft_Architect.Web.Services.BrowserPersistence;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using Microsoft.JSInterop;
 using MudBlazor;
@@ -14,8 +14,6 @@ public partial class TradeOrders
     private string _commissionDeliveryInstructions = string.Empty;
     private bool _isPublishingCommission;
     private bool _isRevokingCommission;
-    private bool _isRetryingCompanyMutation;
-    private bool _isSavingCompanyConnection;
     private string? _activeInterestClaimId;
     private readonly Dictionary<string, Guid?> _interestCrafterSelections =
         new(StringComparer.Ordinal);
@@ -33,16 +31,16 @@ public partial class TradeOrders
             ? []
             : TradeCollaboration.GetPendingInterests(_selectedOrder.Id);
 
-    private TradeCompanyRecordConflict? SelectedOrderConflict =>
+    private ProfileSyncConflict? SelectedOrderConflict =>
         _selectedOrder == null
             ? null
-            : TradeCompanyClient.Conflicts.FirstOrDefault(conflict =>
+            : ProfileSync.Conflicts.FirstOrDefault(conflict =>
                 string.Equals(
-                    conflict.RecordKind,
-                    TradeCompanyRecordKinds.Order,
+                    conflict.Collection,
+                    ProfileSyncCollections.TradeOrders,
                     StringComparison.Ordinal) &&
                 string.Equals(
-                    conflict.RecordId,
+                    conflict.ObjectId,
                     _selectedOrder.Id.ToString("D"),
                     StringComparison.OrdinalIgnoreCase));
 
@@ -88,18 +86,16 @@ public partial class TradeOrders
 
     private async Task RefreshCollaborationAsync(TradeOrder order)
     {
-        if (TradeCompanyClient.Connection is not
-            {
-                State: TradeCompanyConnectionState.Current,
-                CompanyId: { } companyId
-            })
+        if (_companyProfile == null ||
+            !ProfileSync.CurrentStatus.IsConnected ||
+            !ProfileSync.CurrentStatus.HostReachable)
         {
             return;
         }
 
         try
         {
-            await TradeCollaboration.RefreshAsync(companyId, order.Id);
+            await TradeCollaboration.RefreshAsync(_companyProfile.Id, order.Id);
             foreach (var claim in TradeCollaboration.GetPendingInterests(order.Id))
             {
                 _interestCrafterSelections.TryAdd(claim.ClaimId, claim.MatchedCrafterId);
@@ -123,8 +119,8 @@ public partial class TradeOrders
         }
 
         var payment = GetSelectedOrderPaymentSummary();
-        var discordAvailable = TradeCompanyClient.CanPerformExternalAction(
-            _selectedOrder.Id,
+        var discordAvailable = TradeCollaboration.CanPerformExternalAction(
+            _selectedOrder,
             out var discordUnavailableReason);
         var parameters = new DialogParameters
         {
@@ -156,7 +152,7 @@ public partial class TradeOrders
             }
 
             var orderId = _selectedOrder.Id;
-            var ownership = TradeCompanyClient.GetPublicationOwnership(orderId);
+            var ownership = await TradeCollaboration.GetPublicationOwnershipAsync(_selectedOrder);
             var response = await CommissionBriefs.PublishAsync(
                 BuildCommissionBrief(_selectedOrder, payment),
                 ownership);
@@ -331,168 +327,38 @@ public partial class TradeOrders
         }
     }
 
-    private async Task RetryCompanyMutationsAsync()
+    private async Task UseHostedOrderVersionAsync()
     {
-        if (_companyProfile == null)
-        {
-            return;
-        }
-
-        _isRetryingCompanyMutation = true;
-        try
-        {
-            var orderId = _selectedOrder?.Id;
-            await TradeOrderMutations.RetryPendingAsync(_companyProfile);
-            await LoadAsync();
-            if (orderId.HasValue)
-            {
-                SelectOrderAfterReload(orderId.Value, "Company sync completed, but the order could not be reloaded.");
-                _activeOpsTab = 3;
-            }
-
-            Snackbar.Add(
-                TradeCompanyClient.Connection.State == TradeCompanyConnectionState.Current
-                    ? "Company changes are current"
-                    : TradeCompanyClient.Connection.Message ?? "Company changes are still pending.",
-                TradeCompanyClient.Connection.State == TradeCompanyConnectionState.Current
-                    ? Severity.Success
-                    : Severity.Warning);
-        }
-        finally
-        {
-            _isRetryingCompanyMutation = false;
-        }
-    }
-
-    private async Task OpenTradeCompanyConnectionAsync()
-    {
-        if (_companyProfile == null)
-        {
-            return;
-        }
-
-        TradeCompanyBrowserConnection? existing = null;
-        if (CompanyId.TryParse(_companyProfile.RemoteId, out var existingCompanyId))
-        {
-            try
-            {
-                existing = await TradeCompanyConnections.LoadAsync(existingCompanyId);
-            }
-            catch
-            {
-                // Keep the connection editor available so malformed local state can be replaced.
-            }
-        }
-
-        var parameters = new DialogParameters
-        {
-            [nameof(TradeCompanyConnectionDialog.CompanyId)] =
-                existing?.CompanyId.ToString() ?? _companyProfile.RemoteId ?? string.Empty,
-            [nameof(TradeCompanyConnectionDialog.ServiceUrl)] =
-                existing?.ServiceUrl ?? "http://localhost:5128",
-            [nameof(TradeCompanyConnectionDialog.AccessKey)] =
-                existing?.AccessKey ?? string.Empty
-        };
-        var dialog = await DialogService.ShowAsync<TradeCompanyConnectionDialog>(
-            "Connect Trade Company",
-            parameters,
-            new DialogOptions
-            {
-                CloseOnEscapeKey = true,
-                MaxWidth = MaxWidth.Small,
-                FullWidth = true
-            });
-        var result = await dialog.Result;
-        if (result?.Canceled != false ||
-            result.Data is not TradeCompanyConnectionDialogResult connection)
-        {
-            return;
-        }
-
-        _isSavingCompanyConnection = true;
-        try
-        {
-            var session = await TradeCompanyConnector.ConnectAsync(
-                connection.CompanyId,
-                connection.ServiceUrl,
-                connection.AccessKey);
-            _companyProfile.RemoteId = connection.CompanyId.ToString();
-            _companyProfile.Name = session.Company.DisplayName;
-            _companyProfile.SyncState = TradeSyncState.LocalOnly;
-            _companyProfile.UpdatedAtUtc = DateTime.UtcNow;
-            if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile))
-            {
-                throw new InvalidOperationException(
-                    "The company profile could not retain its canonical identity.");
-            }
-
-            await LoadAsync();
-            Snackbar.Add(
-                TradeCompanyClient.Connection.State == TradeCompanyConnectionState.Current
-                    ? "Trade Company connected"
-                    : TradeCompanyClient.Connection.Message ?? "Trade Company connection failed.",
-                TradeCompanyClient.Connection.State == TradeCompanyConnectionState.Current
-                    ? Severity.Success
-                    : Severity.Error);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Trade Company connection failed: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _isSavingCompanyConnection = false;
-        }
-    }
-
-    private async Task UseCompanyOrderVersionAsync()
-    {
-        if (SelectedOrderConflict?.CurrentRecord == null)
+        if (SelectedOrderConflict == null)
         {
             return;
         }
 
         var orderId = _selectedOrder?.Id;
-        if (_companyProfile == null ||
-            !await TradeOrderMutations.AcceptRemoteConflictAsync(
-                SelectedOrderConflict.CurrentRecord,
-                _companyProfile.Id))
+        try
         {
-            Snackbar.Add("The company order could not be applied locally.", Severity.Error);
+            await ProfileSync.AcceptRemoteConflictAsync(SelectedOrderConflict);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(
+                $"The hosted order could not be applied locally: {exception.Message}",
+                Severity.Error);
             return;
         }
 
         await LoadAsync();
         if (orderId.HasValue)
         {
-            SelectOrderAfterReload(orderId.Value, "The company version was applied, but the order could not be reloaded.");
+            SelectOrderAfterReload(
+                orderId.Value,
+                "The hosted version was applied, but the order could not be reloaded.");
             _activeOpsTab = 3;
         }
 
         AppState.NotifyTradeOperationsDataChanged();
-        Snackbar.Add("Company order version applied", Severity.Success);
+        Snackbar.Add("Hosted order version applied", Severity.Success);
     }
-
-    private string FormatCompanyConnectionState() =>
-        TradeCompanyClient.Connection.State switch
-        {
-            TradeCompanyConnectionState.LocalOnly => "Local only",
-            TradeCompanyConnectionState.Refreshing => "Refreshing",
-            TradeCompanyConnectionState.Current => "Company current",
-            TradeCompanyConnectionState.Pending => "Sync pending",
-            TradeCompanyConnectionState.Conflict => "Conflict",
-            TradeCompanyConnectionState.Unavailable => "Company unavailable",
-            _ => "Company unavailable"
-        };
-
-    private string GetCompanyConnectionChipClass() =>
-        TradeCompanyClient.Connection.State switch
-        {
-            TradeCompanyConnectionState.Current => "trade-orders-company-chip is-current",
-            TradeCompanyConnectionState.Pending => "trade-orders-company-chip is-pending",
-            TradeCompanyConnectionState.Conflict => "trade-orders-company-chip is-conflict",
-            _ => "trade-orders-company-chip"
-        };
 
     private static string GetCompanyPublicationClass(
         TradeCommissionPublicationProjection publication) =>

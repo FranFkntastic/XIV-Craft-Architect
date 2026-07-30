@@ -1,24 +1,16 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
 
-public sealed class TradeCompanyCollaborationService
+public sealed class TradeCompanyCollaborationService(
+    TradeCompanyCollaborationClient client,
+    TradeOperationsPersistenceService tradeOperations,
+    ProfileSyncLocalStateService localState,
+    ProfileSyncService profileSync)
 {
-    private readonly TradeCompanyClientOrchestrator _company;
-    private readonly TradeOrderMutationService _orders;
-    private readonly ITradeCompanyCollaborationClient _collaboration;
     private readonly Dictionary<Guid, IReadOnlyList<TradeCommissionInterest>> _interests = [];
     private readonly Dictionary<Guid, TradeCommissionPublicationProjection> _publications = [];
-
-    public TradeCompanyCollaborationService(
-        TradeCompanyClientOrchestrator company,
-        TradeOrderMutationService orders,
-        ITradeCompanyCollaborationClient collaboration)
-    {
-        _company = company;
-        _orders = orders;
-        _collaboration = collaboration;
-    }
 
     public IReadOnlyList<TradeCommissionInterest> GetPendingInterests(Guid orderId) =>
         _interests.GetValueOrDefault(orderId, [])
@@ -29,17 +21,66 @@ public sealed class TradeCompanyCollaborationService
     public TradeCommissionPublicationProjection? GetPublication(Guid orderId) =>
         _publications.GetValueOrDefault(orderId);
 
+    public bool CanPerformExternalAction(TradeOrder order, out string reason)
+    {
+        if (!profileSync.CurrentStatus.IsConnected)
+        {
+            reason = "Connect Profile Hosting in Options first.";
+            return false;
+        }
+
+        if (!profileSync.CurrentStatus.HostReachable)
+        {
+            reason = profileSync.CurrentStatus.Message ?? "Profile Hosting is unavailable.";
+            return false;
+        }
+
+        var objectId = order.Id.ToString("D");
+        if (profileSync.PendingSaves.Any(item =>
+                string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
+                string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)) ||
+            profileSync.Conflicts.Any(item =>
+                string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
+                string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)))
+        {
+            reason = "Resolve the pending hosted order update before continuing.";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    public async Task<TradeCompanyPublicationOwnership?> GetPublicationOwnershipAsync(
+        TradeOrder order)
+    {
+        if (!CanPerformExternalAction(order, out _))
+        {
+            return null;
+        }
+
+        var revision = await localState.LoadObjectRevisionAsync(
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"));
+        return revision > 0
+            ? new TradeCompanyPublicationOwnership(
+                new CompanyId(order.CompanyProfileId),
+                order.Id,
+                new CompanyRecordRevision(revision))
+            : null;
+    }
+
     public async Task RefreshAsync(
-        CompanyId companyId,
+        Guid companyProfileId,
         Guid orderId,
         CancellationToken cancellationToken = default)
     {
-        var interests = await _collaboration.LoadPendingInterestsAsync(
-            companyId,
+        var interests = await client.LoadPendingInterestsAsync(
+            companyProfileId,
             orderId,
             cancellationToken);
-        var publication = await _collaboration.LoadPublicationAsync(
-            companyId,
+        var publication = await client.LoadPublicationAsync(
+            companyProfileId,
             orderId,
             cancellationToken);
         _interests[orderId] = interests;
@@ -58,25 +99,27 @@ public sealed class TradeCompanyCollaborationService
         CommissionBriefDocument brief,
         CancellationToken cancellationToken = default)
     {
-        if (!_company.CanPerformExternalAction(order.Id, out var reason))
+        if (!CanPerformExternalAction(order, out var reason))
         {
             return Rejected(reason);
         }
 
-        var ownership = _company.GetPublicationOwnership(order.Id);
-        if (ownership == null)
+        var revision = await localState.LoadObjectRevisionAsync(
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"));
+        if (revision <= 0)
         {
-            return Rejected("Sync this order before publishing it to Discord.");
+            return Rejected("Sync this order through Profile Hosting before publishing it.");
         }
 
         try
         {
-            var publication = await _collaboration.PublishAsync(
-                ownership.CompanyId,
+            var publication = await client.PublishAsync(
+                order.CompanyProfileId,
                 order.Id,
-                ownership.OrderRevision,
+                revision,
                 brief,
-                $"discord-publish:{order.Id:D}:{ownership.OrderRevision.Value}",
+                $"discord-publish:{order.Id:D}:{revision}",
                 cancellationToken);
             _publications[order.Id] = publication;
             return new TradeCommissionWorkflowResult(
@@ -98,31 +141,21 @@ public sealed class TradeCompanyCollaborationService
         TradeCommissionInterest claim,
         Guid crafterId,
         CancellationToken cancellationToken = default) =>
-        ResolveInterestAsync(
-            accept: true,
-            order,
-            claim,
-            crafterId,
-            cancellationToken);
+        ResolveInterestAsync(true, order, claim, crafterId, cancellationToken);
 
     public Task<TradeCommissionWorkflowResult> DeclineInterestAsync(
         TradeOrder order,
         TradeCommissionInterest claim,
         CancellationToken cancellationToken = default) =>
-        ResolveInterestAsync(
-            accept: false,
-            order,
-            claim,
-            crafterId: null,
-            cancellationToken);
+        ResolveInterestAsync(false, order, claim, null, cancellationToken);
 
     public async Task RevokePublicationAsync(
         TradeCompanyPublicationOwnership ownership,
         string publicId,
         CancellationToken cancellationToken = default)
     {
-        await _collaboration.RevokeAsync(
-            ownership.CompanyId,
+        await client.RevokeAsync(
+            ownership.CompanyId.Value,
             publicId,
             cancellationToken);
         _publications.Remove(ownership.OrderId);
@@ -135,42 +168,40 @@ public sealed class TradeCompanyCollaborationService
         Guid? crafterId,
         CancellationToken cancellationToken)
     {
-        if (!_company.CanPerformExternalAction(order.Id, out var reason))
+        if (!CanPerformExternalAction(order, out var reason))
         {
             return Rejected(reason);
-        }
-
-        var ownership = _company.GetPublicationOwnership(order.Id);
-        if (ownership == null)
-        {
-            return Rejected("Refresh this order before resolving crafter interest.");
         }
 
         try
         {
             var receipt = accept
-                ? await _collaboration.AcceptAsync(
-                    ownership.CompanyId,
+                ? await client.AcceptAsync(
+                    order.CompanyProfileId,
                     claim.ClaimId,
                     crafterId ?? throw new InvalidOperationException(
-                        "Choose a canonical company crafter before accepting interest."),
+                        "Choose a hosted company crafter before accepting interest."),
                     $"discord-claim:{claim.ClaimId}:{crafterId:D}",
                     cancellationToken)
-                : await _collaboration.DeclineAsync(
-                    ownership.CompanyId,
+                : await client.DeclineAsync(
+                    order.CompanyProfileId,
                     claim.ClaimId,
                     cancellationToken);
 
             if (receipt.UpdatedOrder != null)
             {
-                var local = await _orders.ApplyCanonicalOrderAsync(
-                    receipt.UpdatedOrder,
-                    order.CompanyProfileId,
-                    cancellationToken);
-                if (!local.LocalSaved)
+                if (!await tradeOperations.SaveOrderAsync(receipt.UpdatedOrder))
                 {
-                    return Rejected(local.Message ??
-                        "The canonical assignment could not be saved locally.");
+                    return Rejected(
+                        "The hosted assignment was accepted, but the order could not be saved locally.");
+                }
+
+                if (receipt.UpdatedOrderRevision is > 0)
+                {
+                    await localState.SaveObjectRevisionAsync(
+                        ProfileSyncCollections.TradeOrders,
+                        receipt.UpdatedOrder.Id.ToString("D"),
+                        receipt.UpdatedOrderRevision.Value);
                 }
             }
 
@@ -190,8 +221,5 @@ public sealed class TradeCompanyCollaborationService
     }
 
     private static TradeCommissionWorkflowResult Rejected(string message) =>
-        new(
-            false,
-            TradeCompanyMutationDisposition.Rejected,
-            Message: message);
+        new(false, TradeCompanyMutationDisposition.Rejected, Message: message);
 }

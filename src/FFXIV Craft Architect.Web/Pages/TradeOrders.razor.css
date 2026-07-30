@@ -896,68 +896,6 @@
   color: #f0a6a6;
 }
 
-.trade-orders-company-sync {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  padding: 8px 10px;
-  border: 1px solid #353535;
-  border-radius: 6px;
-  background: #1c1c1c;
-}
-
-.trade-orders-company-sync > div {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  min-width: 0;
-}
-
-.trade-orders-company-sync > div:first-child {
-  flex-direction: column;
-  gap: 2px;
-}
-
-.trade-orders-company-identity {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.trade-orders-company-actions {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  justify-content: flex-end;
-}
-
-.trade-orders-company-chip {
-  flex: 0 0 auto;
-  border: 1px solid #555;
-  border-radius: 999px;
-  color: #c4c4c4;
-  font-size: 0.68rem;
-  font-weight: 800;
-  padding: 4px 7px;
-}
-
-.trade-orders-company-chip.is-current {
-  border-color: #568e56;
-  color: #b8e6a6;
-}
-
-.trade-orders-company-chip.is-pending {
-  border-color: #a88a45;
-  color: #f0d78b;
-}
-
-.trade-orders-company-chip.is-conflict {
-  border-color: #a76565;
-  color: #f0a6a6;
-}
-
 .trade-orders-conflict-row {
   display: flex;
   gap: 12px;

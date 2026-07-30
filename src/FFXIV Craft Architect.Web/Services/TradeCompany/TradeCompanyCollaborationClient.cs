@@ -2,66 +2,27 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.Web.Services.BrowserPersistence;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
 
-public interface ITradeCompanyCollaborationClient
-{
-    Task<IReadOnlyList<TradeCommissionInterest>> LoadPendingInterestsAsync(
-        CompanyId companyId,
-        Guid orderId,
-        CancellationToken cancellationToken = default);
-
-    Task<TradeCommissionPublicationProjection?> LoadPublicationAsync(
-        CompanyId companyId,
-        Guid orderId,
-        CancellationToken cancellationToken = default);
-
-    Task<TradeCommissionPublicationProjection> PublishAsync(
-        CompanyId companyId,
-        Guid orderId,
-        CompanyRecordRevision orderRevision,
-        CommissionBriefDocument brief,
-        string idempotencyKey,
-        CancellationToken cancellationToken = default);
-
-    Task<TradeCommissionInterestResolutionReceipt> AcceptAsync(
-        CompanyId companyId,
-        string claimId,
-        Guid crafterId,
-        string idempotencyKey,
-        CancellationToken cancellationToken = default);
-
-    Task<TradeCommissionInterestResolutionReceipt> DeclineAsync(
-        CompanyId companyId,
-        string claimId,
-        CancellationToken cancellationToken = default);
-
-    Task RevokeAsync(
-        CompanyId companyId,
-        string publicId,
-        CancellationToken cancellationToken = default);
-}
-
-internal sealed class HttpTradeCompanyCollaborationClient(
+public sealed class TradeCompanyCollaborationClient(
     HttpClient http,
-    TradeCompanyConnectionStore connections) : ITradeCompanyCollaborationClient
+    ProfileSyncLocalStateService localState)
 {
-    private const string AccessKeyHeader = "X-Trade-Company-Key";
+    private const string AccessKeyHeader = "X-Profile-Key";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async Task<IReadOnlyList<TradeCommissionInterest>> LoadPendingInterestsAsync(
-        CompanyId companyId,
+        Guid companyProfileId,
         Guid orderId,
         CancellationToken cancellationToken = default)
     {
-        using var request = await CreateRequestAsync(
+        using var response = await SendAsync(
             HttpMethod.Get,
-            companyId,
-            $"trade/v1/companies/{companyId}/discord/claims?orderId={orderId:D}",
+            $"trade/v1/companies/{companyProfileId:D}/discord/claims?orderId={orderId:D}",
+            content: null,
             cancellationToken);
-        using var response = await http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         var claims = await response.Content.ReadFromJsonAsync<DiscordInterestClaimDto[]>(
             JsonOptions,
@@ -70,16 +31,15 @@ internal sealed class HttpTradeCompanyCollaborationClient(
     }
 
     public async Task<TradeCommissionPublicationProjection?> LoadPublicationAsync(
-        CompanyId companyId,
+        Guid companyProfileId,
         Guid orderId,
         CancellationToken cancellationToken = default)
     {
-        using var request = await CreateRequestAsync(
+        using var response = await SendAsync(
             HttpMethod.Get,
-            companyId,
-            $"trade/v1/companies/{companyId}/discord/publications?orderId={orderId:D}",
+            $"trade/v1/companies/{companyProfileId:D}/discord/publications?orderId={orderId:D}",
+            content: null,
             cancellationToken);
-        using var response = await http.SendAsync(request, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
@@ -95,27 +55,23 @@ internal sealed class HttpTradeCompanyCollaborationClient(
     }
 
     public async Task<TradeCommissionPublicationProjection> PublishAsync(
-        CompanyId companyId,
+        Guid companyProfileId,
         Guid orderId,
-        CompanyRecordRevision orderRevision,
+        long orderRevision,
         CommissionBriefDocument brief,
         string idempotencyKey,
         CancellationToken cancellationToken = default)
     {
-        using var request = await CreateRequestAsync(
+        using var response = await SendAsync(
             HttpMethod.Post,
-            companyId,
-            $"trade/v1/companies/{companyId}/discord/publications",
-            cancellationToken);
-        request.Content = JsonContent.Create(
+            $"trade/v1/companies/{companyProfileId:D}/discord/publications",
             new DiscordCreatePublicationBody(
                 orderId,
-                orderRevision,
+                new CompanyRecordRevision(orderRevision),
                 brief,
                 idempotencyKey),
-            options: JsonOptions);
-        using var response = await http.SendAsync(request, cancellationToken);
-        await EnsureCollaborationSuccessAsync(response, cancellationToken);
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
         var publication = await response.Content.ReadFromJsonAsync<DiscordPublicationDto>(
             JsonOptions,
             cancellationToken)
@@ -125,86 +81,83 @@ internal sealed class HttpTradeCompanyCollaborationClient(
     }
 
     public async Task<TradeCommissionInterestResolutionReceipt> AcceptAsync(
-        CompanyId companyId,
+        Guid companyProfileId,
         string claimId,
         Guid crafterId,
         string idempotencyKey,
         CancellationToken cancellationToken = default)
     {
         var parsedClaimId = ParseClaimId(claimId);
-        using var request = await CreateRequestAsync(
+        using var response = await SendAsync(
             HttpMethod.Post,
-            companyId,
-            $"trade/v1/companies/{companyId}/discord/claims/{parsedClaimId:D}/accept",
-            cancellationToken);
-        request.Content = JsonContent.Create(
+            $"trade/v1/companies/{companyProfileId:D}/discord/claims/{parsedClaimId:D}/accept",
             new DiscordAcceptInterestBody(crafterId, idempotencyKey),
-            options: JsonOptions);
-        using var response = await http.SendAsync(request, cancellationToken);
-        await EnsureCollaborationSuccessAsync(response, cancellationToken);
-        var result = await response.Content.ReadFromJsonAsync<DiscordClaimResultDto>(
-            JsonOptions,
-            cancellationToken)
-            ?? throw new InvalidOperationException(
-                "The Discord claim endpoint returned an empty response.");
-        return ToReceipt(result, accepted: true);
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await ReadReceiptAsync(response, accepted: true, cancellationToken);
     }
 
     public async Task<TradeCommissionInterestResolutionReceipt> DeclineAsync(
-        CompanyId companyId,
+        Guid companyProfileId,
         string claimId,
         CancellationToken cancellationToken = default)
     {
         var parsedClaimId = ParseClaimId(claimId);
-        using var request = await CreateRequestAsync(
+        using var response = await SendAsync(
             HttpMethod.Post,
-            companyId,
-            $"trade/v1/companies/{companyId}/discord/claims/{parsedClaimId:D}/decline",
-            cancellationToken);
-        request.Content = JsonContent.Create(
+            $"trade/v1/companies/{companyProfileId:D}/discord/claims/{parsedClaimId:D}/decline",
             new DiscordDeclineInterestBody($"discord-decline:{parsedClaimId:D}"),
-            options: JsonOptions);
-        using var response = await http.SendAsync(request, cancellationToken);
-        await EnsureCollaborationSuccessAsync(response, cancellationToken);
-        var result = await response.Content.ReadFromJsonAsync<DiscordClaimResultDto>(
-            JsonOptions,
-            cancellationToken)
-            ?? throw new InvalidOperationException(
-                "The Discord claim endpoint returned an empty response.");
-        return ToReceipt(result, accepted: false);
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await ReadReceiptAsync(response, accepted: false, cancellationToken);
     }
 
     public async Task RevokeAsync(
-        CompanyId companyId,
+        Guid companyProfileId,
         string publicId,
         CancellationToken cancellationToken = default)
     {
-        using var request = await CreateRequestAsync(
+        using var response = await SendAsync(
             HttpMethod.Delete,
-            companyId,
-            $"trade/v1/companies/{companyId}/discord/publications/" +
+            $"trade/v1/companies/{companyProfileId:D}/discord/publications/" +
             Uri.EscapeDataString(publicId),
+            content: null,
             cancellationToken);
-        using var response = await http.SendAsync(request, cancellationToken);
-        await EnsureCollaborationSuccessAsync(response, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
     }
 
-    private async Task<HttpRequestMessage> CreateRequestAsync(
+    private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method,
-        CompanyId companyId,
         string relativePath,
+        object? content,
         CancellationToken cancellationToken)
     {
-        var connection = await connections.LoadAsync(companyId, cancellationToken)
-            ?? throw new InvalidOperationException(
-                "Connect this browser to the Trade Company before using Discord collaboration.");
-        var baseUri = new Uri(connection.ServiceUrl.Trim().TrimEnd('/') + "/");
+        var connection = await localState.LoadConnectionSettingsAsync();
+        if (!connection.IsConfigured)
+        {
+            throw new InvalidOperationException(
+                "Connect Profile Hosting in Options before using Discord collaboration.");
+        }
+
+        var baseUri = new Uri(connection.HostUrl!.Trim().TrimEnd('/') + "/");
         var request = new HttpRequestMessage(method, new Uri(baseUri, relativePath));
         request.Headers.Add(AccessKeyHeader, connection.AccessKey);
-        return request;
+        if (content != null)
+        {
+            request.Content = JsonContent.Create(content, options: JsonOptions);
+        }
+
+        try
+        {
+            return await http.SendAsync(request, cancellationToken);
+        }
+        finally
+        {
+            request.Dispose();
+        }
     }
 
-    private static async Task EnsureCollaborationSuccessAsync(
+    private static async Task EnsureSuccessAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
@@ -219,6 +172,39 @@ internal sealed class HttpTradeCompanyCollaborationClient(
         throw new InvalidOperationException(
             problem?.Message ??
             $"Discord collaboration failed with HTTP {(int)response.StatusCode}.");
+    }
+
+    private static async Task<TradeCommissionInterestResolutionReceipt> ReadReceiptAsync(
+        HttpResponseMessage response,
+        bool accepted,
+        CancellationToken cancellationToken)
+    {
+        var result = await response.Content.ReadFromJsonAsync<DiscordClaimResultDto>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The Discord claim endpoint returned an empty response.");
+        var claim = result.Claim
+            ?? throw new InvalidOperationException(
+                result.Error ?? "The Discord claim response did not include a claim.");
+        TradeOrder? order = null;
+        if (!string.IsNullOrWhiteSpace(result.OrderMutation?.Record?.PayloadJson))
+        {
+            order = JsonSerializer.Deserialize<TradeOrder>(
+                result.OrderMutation.Record.PayloadJson,
+                JsonOptions);
+        }
+
+        return new TradeCommissionInterestResolutionReceipt(
+            ToInterest(claim) with
+            {
+                State = accepted
+                    ? TradeCommissionInterestState.Accepted
+                    : TradeCommissionInterestState.Declined
+            },
+            order,
+            result.OrderMutation?.Record?.RecordRevision.Value,
+            result.Error);
     }
 
     private static Guid ParseClaimId(string claimId) =>
@@ -259,44 +245,14 @@ internal sealed class HttpTradeCompanyCollaborationClient(
             publication.PublishedAtUtc,
             publication.Message);
 
-    private static TradeCommissionInterestResolutionReceipt ToReceipt(
-        DiscordClaimResultDto result,
-        bool accepted)
-    {
-        var claim = result.Claim
-            ?? throw new InvalidOperationException(
-                result.Error ?? "The Discord claim response did not include a claim.");
-        TradeOrder? order = null;
-        if (!string.IsNullOrWhiteSpace(result.OrderMutation?.Record?.PayloadJson))
-        {
-            order = JsonSerializer.Deserialize<TradeOrder>(
-                result.OrderMutation.Record.PayloadJson,
-                JsonOptions);
-        }
-
-        return new TradeCommissionInterestResolutionReceipt(
-            ToInterest(claim) with
-            {
-                State = accepted
-                    ? TradeCommissionInterestState.Accepted
-                    : TradeCommissionInterestState.Declined
-            },
-            order,
-            result.Error);
-    }
-
     private sealed record DiscordCreatePublicationBody(
         Guid OrderId,
         CompanyRecordRevision OrderRevision,
         CommissionBriefDocument Brief,
         string IdempotencyKey);
 
-    private sealed record DiscordAcceptInterestBody(
-        Guid CrafterId,
-        string IdempotencyKey);
-
+    private sealed record DiscordAcceptInterestBody(Guid CrafterId, string IdempotencyKey);
     private sealed record DiscordDeclineInterestBody(string IdempotencyKey);
-
     private sealed record DiscordPublicationDto(
         Guid OrderId,
         string PublicId,
@@ -336,7 +292,5 @@ internal sealed class HttpTradeCompanyCollaborationClient(
         TradeCompanyMutationResult? OrderMutation,
         string? Error);
 
-    private sealed record DiscordProblemDto(
-        string? Error,
-        string? Message);
+    private sealed record DiscordProblemDto(string? Error, string? Message);
 }
