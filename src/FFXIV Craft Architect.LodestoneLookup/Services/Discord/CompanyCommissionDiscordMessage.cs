@@ -141,7 +141,10 @@ public static class CompanyCommissionDiscordMessage
                 ? OneUserMention(commissionerDiscordUserId)
                 : NoMentions()
         };
-        if (behavior == DiscordNotificationMentionBehavior.SilentPing)
+        if (behavior == DiscordNotificationMentionBehavior.SilentPing ||
+            (destinationKind ==
+                    DiscordNotificationDestinationKind.CommissionerDirectMessage &&
+                behavior == DiscordNotificationMentionBehavior.NoPing))
         {
             payload["flags"] = SuppressNotificationsFlag;
         }
