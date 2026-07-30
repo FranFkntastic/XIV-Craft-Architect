@@ -57,7 +57,6 @@ public static class DiscordCommissionEndpoints
                 DiscordCommissionOptions options,
                 DiscordRequestVerifier verifier,
                 SqliteCommissionBriefStore store,
-                DiscordClaimService volunteer,
                 CancellationToken ct) =>
             {
                 if (!options.CanVerifyInteractions)
@@ -108,12 +107,8 @@ public static class DiscordCommissionEndpoints
                                 store,
                                 ct)
                             : InteractionError("Commission publishing has not been connected to a channel yet."),
-                        MessageComponentInteraction => options.IsConfigured
-                            ? await HandleMessageComponentAsync(
-                                payload.RootElement,
-                                volunteer,
-                                ct)
-                            : InteractionError("Commission collaboration has not been connected to a channel yet."),
+                        MessageComponentInteraction => InteractionError(
+                            "Discord interest controls are retired. Open the current commission brief to claim its one available slot."),
                         _ => InteractionError("This interaction is not supported by the prototype.")
                     };
                 }
@@ -168,73 +163,6 @@ public static class DiscordCommissionEndpoints
             type = ChannelMessageResponse,
             data = DiscordCommissionMessage.Create(published, options.CommissionBaseUrl)
         });
-    }
-
-    private static async Task<IResult> HandleMessageComponentAsync(
-        JsonElement interaction,
-        DiscordClaimService volunteerInteractions,
-        CancellationToken ct)
-    {
-        var applicationId = ReadString(interaction, "application_id");
-        var guildId = ReadString(interaction, "guild_id");
-        var channelId = ReadString(interaction, "channel_id");
-        if (string.IsNullOrWhiteSpace(applicationId) ||
-            string.IsNullOrWhiteSpace(guildId) ||
-            string.IsNullOrWhiteSpace(channelId))
-        {
-            return InteractionError("This Volunteer action does not belong to this commission installation.");
-        }
-
-        if (!interaction.TryGetProperty("message", out var message) ||
-            !interaction.TryGetProperty("data", out var data) ||
-            !interaction.TryGetProperty("member", out var member) ||
-            !member.TryGetProperty("user", out var user))
-        {
-            return InteractionError("This Volunteer action is incomplete.");
-        }
-
-        var interactionId = ReadString(interaction, "id");
-        var messageId = ReadString(message, "id");
-        var actionToken = ReadString(data, "custom_id");
-        var userId = ReadString(user, "id");
-        if (string.IsNullOrWhiteSpace(interactionId) ||
-            string.IsNullOrWhiteSpace(messageId) ||
-            string.IsNullOrWhiteSpace(actionToken) ||
-            actionToken.Length > 100 ||
-            string.IsNullOrWhiteSpace(userId))
-        {
-            return InteractionError("This Volunteer action is invalid.");
-        }
-
-        var displayName = ReadString(member, "nick") ??
-            ReadString(user, "global_name") ??
-            ReadString(user, "username") ??
-            "Discord volunteer";
-        var result = await volunteerInteractions.RecordInterestAsync(
-            new DiscordVolunteerInteraction(
-                interactionId,
-                applicationId,
-                guildId,
-                channelId,
-                messageId,
-                actionToken,
-                userId,
-                displayName),
-            ct);
-
-        var response = result.Status switch
-        {
-            DiscordVolunteerInteractionStatus.Recorded =>
-                "Interest recorded. A commission operator still needs to confirm assignment.",
-            DiscordVolunteerInteractionStatus.Replayed =>
-                "Your interest is already recorded. A commission operator still needs to confirm assignment.",
-            DiscordVolunteerInteractionStatus.NoLongerOpen =>
-                "This commission is no longer accepting volunteers.",
-            _ => string.IsNullOrWhiteSpace(result.Message)
-                ? "This Volunteer action could not be accepted."
-                : result.Message
-        };
-        return InteractionError(response);
     }
 
     private static bool TryReadPublicId(JsonElement data, out string publicId)

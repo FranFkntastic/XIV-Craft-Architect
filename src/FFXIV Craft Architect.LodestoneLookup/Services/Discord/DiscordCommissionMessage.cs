@@ -125,19 +125,6 @@ public static class DiscordCommissionMessage
                 url = publicUrl
             }
         };
-        if (state == DiscordPublicationState.Open &&
-            !string.IsNullOrWhiteSpace(actionToken) &&
-            actionToken.Length <= 100)
-        {
-            buttons.Add(new
-            {
-                type = 2,
-                style = 1,
-                label = "Volunteer",
-                custom_id = actionToken
-            });
-        }
-
         return
         [
             new
@@ -167,7 +154,7 @@ public static class DiscordCommissionMessage
         DiscordPublicationState state) =>
         state switch
         {
-            DiscordPublicationState.Open => "Volunteer below or contact the operator",
+            DiscordPublicationState.Open => "Open the canonical brief to claim",
             DiscordPublicationState.Assigned => string.IsNullOrWhiteSpace(brief.AssignmentLabel)
                 ? "Assigned by the operator"
                 : brief.AssignmentLabel,
