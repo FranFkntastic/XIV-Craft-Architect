@@ -17,6 +17,7 @@ jobs:
     env:
       TRUTHFUL_RUN_ID: ${{ github.run_id }}
       TRUTHFUL_RUN_ATTEMPT: ${{ github.run_attempt }}
+      FranthropyRoot: ${{ runner.temp }}/franthropy
     steps:
       - name: Checkout source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -67,6 +68,17 @@ jobs:
             echo "TRUTHFUL_SOURCE_SHA=$commit_sha"
           } >> "$GITHUB_OUTPUT"
           echo "TRUTHFUL_SOURCE_SHA=$commit_sha" >> "$GITHUB_ENV"
+
+      - name: Checkout pinned Franthropy dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(tr -d '[:space:]' < eng/Franthropy.version)"
+          git init "$FranthropyRoot"
+          git -C "$FranthropyRoot" remote add origin https://github.com/FranFkntastic/Franthropy.git
+          git -C "$FranthropyRoot" fetch --depth=1 origin "$revision"
+          git -C "$FranthropyRoot" checkout --detach FETCH_HEAD
+          test "$(git -C "$FranthropyRoot" rev-parse HEAD)" = "$revision"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
