@@ -3,8 +3,8 @@ namespace FFXIV_Craft_Architect.Core.Models;
 public sealed record CompanyCommissionCommandContext(
     CompanyId CompanyId,
     Guid CommissionId,
-    long ExpectedObjectRevision,
-    long ExpectedCompanyRevision,
+    CompanyRecordRevision ExpectedObjectRevision,
+    CompanyRecordRevision ExpectedCompanyRevision,
     Guid CommandId,
     string Fingerprint,
     int ProtocolVersion,
@@ -59,7 +59,8 @@ public sealed record ConfirmCompanyCommissionIdentityCommand(
 
 public sealed record RequestCompanyCommissionPaymentPolicyChangeCommand(
     CompanyCommissionCommandContext Context,
-    CompanyCommissionPaymentTerms RequestedPayment,
+    CompanyCommissionPaymentSchedule RequestedSchedule,
+    string? RequestedCustomTerms,
     string Reason) : ICompanyCommissionParticipantCommand;
 
 public sealed record DecideCompanyCommissionPaymentPolicyChangeCommand(
@@ -90,6 +91,7 @@ public sealed record ReportCompanyCommissionProgressCommand(
     string? Comment = null) : ICompanyCommissionParticipantCommand;
 
 public sealed record CompanyCommissionProgressQuantity(
+    Guid LineId,
     int ItemId,
     int CompletedQuantity,
     int ReadyQuantity);
