@@ -3,6 +3,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.CompanyMigration;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using Microsoft.AspNetCore.Components.Web;
@@ -70,6 +71,7 @@ builder.Services.AddScoped<PlanLifecycleWorkflowService>();
 builder.Services.AddScoped<NativePlanImportClassifier>();
 builder.Services.AddScoped<GitHubIssueReportService>();
 builder.Services.AddScoped<BrowserFileExportService>();
+builder.Services.AddScoped<CompanyMigrationInventoryExportService>();
 builder.Services.AddSingleton(new ProcurementRouteAvailability(
     bool.TryParse(builder.Configuration["ProcurementRoutes:GenerationEnabled"], out var routeGenerationEnabled) &&
     routeGenerationEnabled));

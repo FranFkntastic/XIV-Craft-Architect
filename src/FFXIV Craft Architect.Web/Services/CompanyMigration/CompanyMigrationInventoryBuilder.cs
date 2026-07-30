@@ -1,0 +1,627 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
+
+namespace FFXIV_Craft_Architect.Web.Services.CompanyMigration;
+
+public sealed class CompanyMigrationExportBundle
+{
+    public const int CurrentFormatVersion = 1;
+    public const string PackageKindValue =
+        "ffxiv-craft-architect.company-migration-inventory";
+
+    public int FormatVersion { get; init; } = CurrentFormatVersion;
+    public string PackageKind { get; init; } = PackageKindValue;
+    public DateTime ExportedAtUtc { get; init; }
+    public Guid MigrationId { get; init; }
+    public string ContentHash { get; init; } = string.Empty;
+    public CompanyMigrationLocalManifest Manifest { get; init; } = new();
+    public IReadOnlyList<ProfileHostMigrationObjectInput> Objects { get; init; } =
+        Array.Empty<ProfileHostMigrationObjectInput>();
+}
+
+public sealed class CompanyMigrationLocalManifest
+{
+    public CompanyMigrationSourceMetadata Source { get; init; } = new();
+    public JsonElement SpecializedStorage { get; init; }
+    public IReadOnlyList<CompanyMigrationSourceRecord> Records { get; init; } =
+        Array.Empty<CompanyMigrationSourceRecord>();
+    public IReadOnlyList<CompanyMigrationCompanySummary> Companies { get; init; } =
+        Array.Empty<CompanyMigrationCompanySummary>();
+    public IReadOnlyList<CompanyMigrationDanglingReference> DanglingReferences { get; init; } =
+        Array.Empty<CompanyMigrationDanglingReference>();
+    public IReadOnlyList<CompanyMigrationSourceBlocker> Blockers { get; init; } =
+        Array.Empty<CompanyMigrationSourceBlocker>();
+    public IReadOnlyDictionary<string, int> Counts { get; init; } =
+        new Dictionary<string, int>();
+    public IReadOnlyDictionary<string, string> StoreContentHashes { get; init; } =
+        new Dictionary<string, string>();
+    public string SourceContentHash { get; init; } = string.Empty;
+    public bool CanPreflight => Blockers.Count == 0;
+}
+
+public sealed class CompanyMigrationSourceMetadata
+{
+    public string? Origin { get; init; }
+    public string InstallationId { get; init; } = string.Empty;
+    public DateTime CapturedAtUtc { get; init; }
+    public int IndexedDbModuleRevision { get; init; }
+    public string CompanyDatabaseName { get; init; } = string.Empty;
+    public int CompanySchemaVersion { get; init; }
+    public string LegacyDatabaseName { get; init; } = string.Empty;
+    public int? LegacySchemaVersion { get; init; }
+}
+
+public sealed class CompanyMigrationSourceRecord
+{
+    public string DatabaseRole { get; init; } = string.Empty;
+    public string DatabaseName { get; init; } = string.Empty;
+    public string StoreName { get; init; } = string.Empty;
+    public string RecordId { get; init; } = string.Empty;
+    public string? TransferCollection { get; init; }
+    public string PayloadJson { get; init; } = "{}";
+    public string ContentHash { get; init; } = string.Empty;
+    public bool Supported { get; init; }
+}
+
+public sealed class CompanyMigrationCompanySummary
+{
+    public string CompanyId { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public int CrafterCount { get; init; }
+    public int OrderCount { get; init; }
+    public int PayrollDraftCount { get; init; }
+    public int OrderCraftSnapshotCount { get; init; }
+    public int LinkedPlanReferenceCount { get; init; }
+    public string ContentHash { get; init; } = string.Empty;
+}
+
+public sealed class CompanyMigrationDanglingReference
+{
+    public string Collection { get; init; } = string.Empty;
+    public string ObjectId { get; init; } = string.Empty;
+    public string ReferencedCollection { get; init; } = string.Empty;
+    public string ReferencedObjectId { get; init; } = string.Empty;
+}
+
+public sealed class CompanyMigrationSourceBlocker
+{
+    public string Code { get; init; } = string.Empty;
+    public string Message { get; init; } = string.Empty;
+    public string? DatabaseRole { get; init; }
+    public string? StoreName { get; init; }
+    public string? Collection { get; init; }
+    public string? ObjectId { get; init; }
+}
+
+internal sealed class BrowserCompanyMigrationSource
+{
+    public int FormatVersion { get; set; }
+    public DateTime CapturedAtUtc { get; set; }
+    public string? Origin { get; set; }
+    public int ModuleRevision { get; set; }
+    public JsonElement SpecializedStorage { get; set; }
+    public BrowserCompanyDatabase Company { get; set; } = new();
+    public IReadOnlyList<BrowserLinkedPlan> LinkedPlans { get; set; } =
+        Array.Empty<BrowserLinkedPlan>();
+    public BrowserLegacyDatabase Legacy { get; set; } = new();
+}
+
+internal class BrowserCompanyDatabase
+{
+    public string DatabaseName { get; set; } = string.Empty;
+    public int SchemaVersion { get; set; }
+    public IReadOnlyList<JsonElement> CompanyProfiles { get; set; } = [];
+    public IReadOnlyList<JsonElement> Crafters { get; set; } = [];
+    public IReadOnlyList<JsonElement> Orders { get; set; } = [];
+    public IReadOnlyList<JsonElement> OrderCraftSnapshots { get; set; } = [];
+    public IReadOnlyList<JsonElement> PayrollDrafts { get; set; } = [];
+    public IReadOnlyList<BrowserUnsupportedStore> UnsupportedStores { get; set; } = [];
+}
+
+internal sealed class BrowserLegacyDatabase
+{
+    public string DatabaseName { get; set; } = string.Empty;
+    public int? SchemaVersion { get; set; }
+    public IReadOnlyList<JsonElement> CompanyProfiles { get; set; } = [];
+    public IReadOnlyList<JsonElement> Crafters { get; set; } = [];
+    public IReadOnlyList<JsonElement> Orders { get; set; } = [];
+    public IReadOnlyList<JsonElement> OrderCraftSnapshots { get; set; } = [];
+    public IReadOnlyList<JsonElement> PayrollDrafts { get; set; } = [];
+    public IReadOnlyList<JsonElement> LinkedPlans { get; set; } = [];
+    public IReadOnlyList<JsonElement> LinkedPlanComponents { get; set; } = [];
+}
+
+internal sealed class BrowserLinkedPlan
+{
+    public string PlanId { get; set; } = string.Empty;
+    public JsonElement Payload { get; set; }
+    public string? Error { get; set; }
+}
+
+internal sealed class BrowserUnsupportedStore
+{
+    public string StoreName { get; set; } = string.Empty;
+    public IReadOnlyList<JsonElement> Records { get; set; } = [];
+}
+
+internal static class CompanyMigrationInventoryBuilder
+{
+    private const string PlansStore = "plans";
+    private const string PlanComponentsStore = "planComponents";
+    private const string CompanyProfilesStore = "tradeCompanyProfiles";
+    private const string CraftersStore = "tradeCrafters";
+    private const string OrdersStore = "tradeOrders";
+    private const string OrderCraftSnapshotsStore = "tradeOrderCraftSnapshots";
+    private const string PayrollDraftsStore = "tradePayrollDrafts";
+
+    public static CompanyMigrationExportBundle Build(
+        BrowserCompanyMigrationSource source,
+        DateTime exportedAtUtc)
+    {
+        var blockers = new List<CompanyMigrationSourceBlocker>();
+        var records = Flatten(source, blockers);
+        var objects = SelectTransferObjects(records, blockers);
+        var dangling = FindDanglingReferences(objects);
+        blockers.AddRange(dangling.Select(reference => new CompanyMigrationSourceBlocker
+        {
+            Code = "dangling_reference",
+            Message =
+                $"{reference.Collection}/{reference.ObjectId} references missing {reference.ReferencedCollection}/{reference.ReferencedObjectId}.",
+            Collection = reference.Collection,
+            ObjectId = reference.ObjectId
+        }));
+
+        if (source.FormatVersion != 1)
+        {
+            blockers.Add(new CompanyMigrationSourceBlocker
+            {
+                Code = "unsupported_inventory_format",
+                Message = $"Browser inventory format v{source.FormatVersion} is unsupported."
+            });
+        }
+        if (string.IsNullOrWhiteSpace(source.Origin))
+        {
+            blockers.Add(new CompanyMigrationSourceBlocker
+            {
+                Code = "source_origin_missing",
+                Message = "Browser origin metadata is missing."
+            });
+        }
+        var markerFingerprint = ReadMarkerFingerprint(source.SpecializedStorage, blockers);
+        var installationId = HashLines(
+        [
+            "ffxiv-craft-architect-browser-installation/v1",
+            source.Origin ?? "<missing-origin>",
+            source.Company.DatabaseName,
+            markerFingerprint
+        ]);
+        var sourceHash = HashLines(records
+            .OrderBy(record => record.DatabaseName, StringComparer.Ordinal)
+            .ThenBy(record => record.StoreName, StringComparer.Ordinal)
+            .ThenBy(record => record.RecordId, StringComparer.Ordinal)
+            .Select(record =>
+                $"{record.DatabaseName}/{record.StoreName}/{record.RecordId}/{record.ContentHash}"));
+        var transferHash = HashLines(objects.Select(item =>
+            $"{item.Collection}/{item.ObjectId}/{HashText(item.PayloadJson)}"));
+        var contentHash = HashLines(
+        [
+            CompanyMigrationExportBundle.PackageKindValue,
+            installationId,
+            sourceHash,
+            transferHash
+        ]);
+        var migrationId = DeterministicGuid(contentHash);
+        var companies = SummarizeCompanies(objects);
+        var storeHashes = records
+            .GroupBy(record => $"{record.DatabaseName}/{record.StoreName}", StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => HashLines(group
+                    .OrderBy(record => record.RecordId, StringComparer.Ordinal)
+                    .Select(record => $"{record.RecordId}/{record.ContentHash}")),
+                StringComparer.Ordinal);
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["companies"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.TradeCompanyProfiles),
+            ["crafters"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.TradeCrafters),
+            ["orders"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.TradeOrders),
+            ["payrollDrafts"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.TradePayrollDrafts),
+            ["linkedPlans"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.Plans),
+            ["orderCraftSnapshots"] = objects.Count(item =>
+                item.Collection == ProfileHostMigrationCollections.TradeOrderCraftSnapshots),
+            ["sourceRecords"] = records.Count,
+            ["unsupportedRecords"] = records.Count(record => !record.Supported),
+            ["danglingReferences"] = dangling.Count,
+            ["blockers"] = blockers.Count
+        };
+
+        return new CompanyMigrationExportBundle
+        {
+            ExportedAtUtc = exportedAtUtc,
+            MigrationId = migrationId,
+            ContentHash = contentHash,
+            Objects = objects,
+            Manifest = new CompanyMigrationLocalManifest
+            {
+                Source = new CompanyMigrationSourceMetadata
+                {
+                    Origin = source.Origin,
+                    InstallationId = installationId,
+                    CapturedAtUtc = source.CapturedAtUtc,
+                    IndexedDbModuleRevision = source.ModuleRevision,
+                    CompanyDatabaseName = source.Company.DatabaseName,
+                    CompanySchemaVersion = source.Company.SchemaVersion,
+                    LegacyDatabaseName = source.Legacy.DatabaseName,
+                    LegacySchemaVersion = source.Legacy.SchemaVersion
+                },
+                SpecializedStorage = source.SpecializedStorage.Clone(),
+                Records = records,
+                Companies = companies,
+                DanglingReferences = dangling,
+                Blockers = blockers,
+                Counts = counts,
+                StoreContentHashes = storeHashes,
+                SourceContentHash = sourceHash
+            }
+        };
+    }
+
+    private static List<CompanyMigrationSourceRecord> Flatten(
+        BrowserCompanyMigrationSource source,
+        ICollection<CompanyMigrationSourceBlocker> blockers)
+    {
+        var records = new List<CompanyMigrationSourceRecord>();
+        Add(records, "company", source.Company.DatabaseName, CompanyProfilesStore, ProfileSyncCollections.TradeCompanyProfiles, source.Company.CompanyProfiles);
+        Add(records, "company", source.Company.DatabaseName, CraftersStore, ProfileSyncCollections.TradeCrafters, source.Company.Crafters);
+        Add(records, "company", source.Company.DatabaseName, OrdersStore, ProfileSyncCollections.TradeOrders, source.Company.Orders);
+        Add(records, "company", source.Company.DatabaseName, PayrollDraftsStore, ProfileSyncCollections.TradePayrollDrafts, source.Company.PayrollDrafts);
+        Add(records, "company", source.Company.DatabaseName, OrderCraftSnapshotsStore, ProfileHostMigrationCollections.TradeOrderCraftSnapshots, source.Company.OrderCraftSnapshots);
+        Add(records, "legacy", source.Legacy.DatabaseName, CompanyProfilesStore, ProfileSyncCollections.TradeCompanyProfiles, source.Legacy.CompanyProfiles);
+        Add(records, "legacy", source.Legacy.DatabaseName, CraftersStore, ProfileSyncCollections.TradeCrafters, source.Legacy.Crafters);
+        Add(records, "legacy", source.Legacy.DatabaseName, OrdersStore, ProfileSyncCollections.TradeOrders, source.Legacy.Orders);
+        Add(records, "legacy", source.Legacy.DatabaseName, PayrollDraftsStore, ProfileSyncCollections.TradePayrollDrafts, source.Legacy.PayrollDrafts);
+        Add(records, "legacy", source.Legacy.DatabaseName, OrderCraftSnapshotsStore, ProfileHostMigrationCollections.TradeOrderCraftSnapshots, source.Legacy.OrderCraftSnapshots);
+        Add(records, "legacy", source.Legacy.DatabaseName, PlansStore, null, source.Legacy.LinkedPlans);
+        Add(records, "legacy", source.Legacy.DatabaseName, PlanComponentsStore, null, source.Legacy.LinkedPlanComponents);
+        foreach (var snapshot in records.Where(record =>
+                     record.TransferCollection ==
+                     ProfileHostMigrationCollections.TradeOrderCraftSnapshots))
+        {
+            blockers.Add(new CompanyMigrationSourceBlocker
+            {
+                Code = ProfileHostMigrationBlockerCodes.UnsupportedOrderCraftSnapshot,
+                Message =
+                    $"Order craft snapshot '{snapshot.RecordId}' is preserved but unsupported by hosted migration.",
+                DatabaseRole = snapshot.DatabaseRole,
+                StoreName = snapshot.StoreName,
+                Collection = snapshot.TransferCollection,
+                ObjectId = snapshot.RecordId
+            });
+        }
+
+        foreach (var plan in source.LinkedPlans)
+        {
+            if (plan.Payload.ValueKind is JsonValueKind.Object)
+            {
+                Add(records, "personal", PersonalDatabaseName(source), PlansStore, ProfileSyncCollections.Plans, [plan.Payload], plan.PlanId);
+            }
+            else
+            {
+                blockers.Add(new CompanyMigrationSourceBlocker
+                {
+                    Code = "linked_plan_unavailable",
+                    Message = string.IsNullOrWhiteSpace(plan.Error)
+                        ? $"Linked saved plan '{plan.PlanId}' is missing."
+                        : $"Linked saved plan '{plan.PlanId}' could not be materialized: {plan.Error}",
+                    Collection = ProfileSyncCollections.Plans,
+                    ObjectId = plan.PlanId
+                });
+            }
+        }
+        foreach (var store in source.Company.UnsupportedStores)
+        {
+            Add(records, "company", source.Company.DatabaseName, store.StoreName, null, store.Records, supported: false);
+            blockers.Add(new CompanyMigrationSourceBlocker
+            {
+                Code = "unsupported_company_store",
+                Message =
+                    $"Unsupported company store '{store.StoreName}' has {store.Records.Count} preserved records.",
+                DatabaseRole = "company",
+                StoreName = store.StoreName
+            });
+        }
+        return records;
+    }
+
+    private static void Add(
+        ICollection<CompanyMigrationSourceRecord> target,
+        string role,
+        string database,
+        string store,
+        string? collection,
+        IEnumerable<JsonElement> payloads,
+        string? forcedId = null,
+        bool supported = true)
+    {
+        foreach (var payload in payloads)
+        {
+            var payloadJson = payload.GetRawText();
+            var hash = HashText(payloadJson);
+            target.Add(new CompanyMigrationSourceRecord
+            {
+                DatabaseRole = role,
+                DatabaseName = database,
+                StoreName = store,
+                RecordId = forcedId ?? GetString(payload, "id") ?? $"missing-id:{hash}",
+                TransferCollection = collection,
+                PayloadJson = payloadJson,
+                ContentHash = hash,
+                Supported = supported
+            });
+        }
+    }
+
+    private static IReadOnlyList<ProfileHostMigrationObjectInput> SelectTransferObjects(
+        IEnumerable<CompanyMigrationSourceRecord> records,
+        ICollection<CompanyMigrationSourceBlocker> blockers)
+    {
+        var result = new List<ProfileHostMigrationObjectInput>();
+        foreach (var group in records
+                     .Where(record => record.Supported && record.TransferCollection != null)
+                     .GroupBy(record => (
+                         Collection: record.TransferCollection!,
+                         RecordId: NormalizeId(
+                             record.TransferCollection!,
+                             record.RecordId))))
+        {
+            var ordered = group
+                .OrderBy(record => record.DatabaseRole == "legacy" ? 1 : 0)
+                .ThenBy(record => record.DatabaseName, StringComparer.Ordinal)
+                .ToArray();
+            if (group.Key.RecordId.StartsWith("missing-id:", StringComparison.Ordinal))
+            {
+                blockers.Add(new CompanyMigrationSourceBlocker
+                {
+                    Code = "missing_record_id",
+                    Message = $"Store '{ordered[0].StoreName}' contains a record without an ID.",
+                    DatabaseRole = ordered[0].DatabaseRole,
+                    StoreName = ordered[0].StoreName,
+                    Collection = group.Key.Item1
+                });
+                continue;
+            }
+            if (ordered.Select(record => record.ContentHash).Distinct().Count() > 1)
+            {
+                blockers.Add(new CompanyMigrationSourceBlocker
+                {
+                    Code = "divergent_source_copy",
+                    Message =
+                        $"{group.Key.Item1}/{group.Key.RecordId} differs between preserved source databases; the specialized copy is selected and every copy remains in the manifest.",
+                    Collection = group.Key.Item1,
+                    ObjectId = group.Key.RecordId
+                });
+            }
+            result.Add(new ProfileHostMigrationObjectInput
+            {
+                Collection = group.Key.Item1,
+                ObjectId = group.Key.RecordId,
+                PayloadJson = ordered[0].PayloadJson
+            });
+        }
+        return result
+            .OrderBy(item => item.Collection, StringComparer.Ordinal)
+            .ThenBy(item => item.ObjectId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<CompanyMigrationDanglingReference> FindDanglingReferences(
+        IReadOnlyList<ProfileHostMigrationObjectInput> objects)
+    {
+        var identities = objects
+            .Select(item => (item.Collection, item.ObjectId))
+            .ToHashSet();
+        var references = new List<CompanyMigrationDanglingReference>();
+        foreach (var item in objects)
+        {
+            using var document = JsonDocument.Parse(item.PayloadJson);
+            var payload = document.RootElement;
+            if (item.Collection is ProfileSyncCollections.TradeCrafters or
+                ProfileSyncCollections.TradeOrders or
+                ProfileSyncCollections.TradePayrollDrafts ||
+                item.Collection == ProfileHostMigrationCollections.TradeOrderCraftSnapshots)
+            {
+                AddIfMissing(ProfileSyncCollections.TradeCompanyProfiles, NormalizeGuid(GetString(payload, "companyProfileId")));
+            }
+            if (item.Collection == ProfileSyncCollections.TradeOrders)
+            {
+                AddIfMissing(ProfileSyncCollections.TradeCrafters, NormalizeGuid(GetString(payload, "assignedCrafterId")));
+                AddIfMissing(ProfileSyncCollections.TradePayrollDrafts, GetString(payload, "payrollDraftId"));
+                AddIfMissing(ProfileSyncCollections.Plans, GetString(payload, "craftPlanId"));
+                if (TryGet(payload, "sourceSnapshot", out var sourceSnapshot))
+                {
+                    AddIfMissing(ProfileSyncCollections.Plans, GetString(sourceSnapshot, "sourcePlanId"));
+                }
+            }
+            if (item.Collection == ProfileSyncCollections.TradePayrollDrafts)
+            {
+                AddIfMissing(ProfileSyncCollections.TradeOrders, NormalizeGuid(GetString(payload, "orderId")));
+                AddIfMissing(ProfileSyncCollections.TradeCrafters, NormalizeGuid(GetString(payload, "assignedCrafterId")));
+            }
+            if (item.Collection == ProfileHostMigrationCollections.TradeOrderCraftSnapshots)
+            {
+                AddIfMissing(ProfileSyncCollections.TradeOrders, NormalizeGuid(GetString(payload, "orderId")));
+            }
+
+            void AddIfMissing(string collection, string? objectId)
+            {
+                if (!string.IsNullOrWhiteSpace(objectId) &&
+                    !identities.Contains((collection, objectId)))
+                {
+                    references.Add(new CompanyMigrationDanglingReference
+                    {
+                        Collection = item.Collection,
+                        ObjectId = item.ObjectId,
+                        ReferencedCollection = collection,
+                        ReferencedObjectId = objectId
+                    });
+                }
+            }
+        }
+        return references
+            .DistinctBy(reference =>
+                $"{reference.Collection}\0{reference.ObjectId}\0{reference.ReferencedCollection}\0{reference.ReferencedObjectId}")
+            .OrderBy(reference => reference.Collection, StringComparer.Ordinal)
+            .ThenBy(reference => reference.ObjectId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<CompanyMigrationCompanySummary> SummarizeCompanies(
+        IReadOnlyList<ProfileHostMigrationObjectInput> objects)
+    {
+        var companyObjects = objects
+            .Where(item => item.Collection == ProfileSyncCollections.TradeCompanyProfiles)
+            .ToDictionary(item => item.ObjectId, StringComparer.Ordinal);
+        var ownership = objects.ToDictionary(
+            item => (item.Collection, item.ObjectId),
+            item =>
+            {
+                using var document = JsonDocument.Parse(item.PayloadJson);
+                return NormalizeGuid(GetString(document.RootElement, "companyProfileId"));
+            });
+        return companyObjects.Select(pair =>
+        {
+            using var document = JsonDocument.Parse(pair.Value.PayloadJson);
+            var owned = ownership
+                .Where(item => item.Value == pair.Key)
+                .Select(item => item.Key)
+                .ToArray();
+            var planReferences = objects
+                .Where(item => item.Collection == ProfileSyncCollections.TradeOrders &&
+                               ownership[(item.Collection, item.ObjectId)] == pair.Key)
+                .Sum(item =>
+                {
+                    using var order = JsonDocument.Parse(item.PayloadJson);
+                    return (string.IsNullOrWhiteSpace(GetString(order.RootElement, "craftPlanId")) ? 0 : 1) +
+                           (TryGet(order.RootElement, "sourceSnapshot", out var snapshot) &&
+                            !string.IsNullOrWhiteSpace(GetString(snapshot, "sourcePlanId")) ? 1 : 0);
+                });
+            return new CompanyMigrationCompanySummary
+            {
+                CompanyId = pair.Key,
+                Name = GetString(document.RootElement, "name") ?? string.Empty,
+                CrafterCount = owned.Count(identity =>
+                    identity.Collection == ProfileSyncCollections.TradeCrafters),
+                OrderCount = owned.Count(identity =>
+                    identity.Collection == ProfileSyncCollections.TradeOrders),
+                PayrollDraftCount = owned.Count(identity =>
+                    identity.Collection == ProfileSyncCollections.TradePayrollDrafts),
+                OrderCraftSnapshotCount = owned.Count(identity =>
+                    identity.Collection == ProfileHostMigrationCollections.TradeOrderCraftSnapshots),
+                LinkedPlanReferenceCount = planReferences,
+                ContentHash = HashLines(objects
+                    .Where(item => item.ObjectId == pair.Key ||
+                                   ownership[(item.Collection, item.ObjectId)] == pair.Key)
+                    .Select(item =>
+                        $"{item.Collection}/{item.ObjectId}/{HashText(item.PayloadJson)}"))
+            };
+        }).OrderBy(company => company.CompanyId, StringComparer.Ordinal).ToArray();
+    }
+
+    private static string ReadMarkerFingerprint(
+        JsonElement diagnostics,
+        ICollection<CompanyMigrationSourceBlocker> blockers)
+    {
+        if (!TryGet(diagnostics, "migrations", out var migrations))
+        {
+            blockers.Add(new CompanyMigrationSourceBlocker
+            {
+                Code = "migration_markers_missing",
+                Message = "Specialized storage migration markers are unavailable."
+            });
+            return "<missing-markers>";
+        }
+        var parts = new List<string>();
+        foreach (var domain in new[] { "personal", "company" })
+        {
+            if (!TryGet(migrations, domain, out var marker) ||
+                marker.ValueKind == JsonValueKind.Null)
+            {
+                blockers.Add(new CompanyMigrationSourceBlocker
+                {
+                    Code = "migration_marker_missing",
+                    Message = $"Specialized {domain} storage has no migration marker.",
+                    DatabaseRole = domain,
+                    StoreName = "storageMetadata"
+                });
+                parts.Add($"{domain}:<missing>");
+            }
+            else
+            {
+                parts.Add($"{domain}:{HashText(marker.GetRawText())}");
+            }
+        }
+        return string.Join('|', parts);
+    }
+
+    private static string PersonalDatabaseName(BrowserCompanyMigrationSource source) =>
+        TryGet(source.SpecializedStorage, "databaseNames", out var names) &&
+        TryGet(names, "personal", out var personal)
+            ? personal.GetString() ?? "FFXIVCraftArchitect.Personal"
+            : "FFXIVCraftArchitect.Personal";
+
+    private static string NormalizeId(string collection, string objectId) =>
+        collection is ProfileSyncCollections.TradeCompanyProfiles or
+            ProfileSyncCollections.TradeCrafters or
+            ProfileSyncCollections.TradeOrders
+            ? NormalizeGuid(objectId) ?? objectId
+            : objectId;
+
+    private static string? NormalizeGuid(string? value) =>
+        Guid.TryParse(value, out var parsed) && parsed != Guid.Empty
+            ? parsed.ToString("D")
+            : null;
+
+    private static string? GetString(JsonElement element, string property) =>
+        TryGet(element, property, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static bool TryGet(JsonElement element, string property, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var candidate in element.EnumerateObject())
+            {
+                if (string.Equals(candidate.Name, property, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = candidate.Value;
+                    return true;
+                }
+            }
+        }
+        value = default;
+        return false;
+    }
+
+    private static string HashText(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))
+            .ToLowerInvariant();
+
+    private static string HashLines(IEnumerable<string> lines) =>
+        HashText(string.Join('\n', lines));
+
+    private static Guid DeterministicGuid(string hash)
+    {
+        var bytes = Convert.FromHexString(hash)[..16];
+        bytes[7] = (byte)((bytes[7] & 0x0f) | 0x50);
+        bytes[8] = (byte)((bytes[8] & 0x3f) | 0x80);
+        return new Guid(bytes);
+    }
+}
