@@ -88,6 +88,7 @@ public sealed class CraftAppraisalService : ICraftAppraisalService
             AppraisalStatus = appraisalStatus,
             Materials = materialQuotes,
             Warnings = warningList,
+            Plan = plan,
         };
     }
 
