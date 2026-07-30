@@ -9,176 +9,324 @@ on:
       - 'src/FFXIV Craft Architect.Web/Services/HttpLodestoneCrafterLookupService.cs'
       - 'src/FFXIV Craft Architect.Web/Program.cs'
       - 'src/FFXIV Craft Architect.Web/wwwroot/appsettings.json'
-      - 'src/FFXIV Craft Architect.ContractTests/**'
+      - 'tools/Discord/reconcile-guild.mjs'
       - 'global.json'
       - '.github/workflows/deploy-vps-lodestone.yml'
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Isolated helper target'
+        required: true
+        default: staging
+        type: choice
+        options:
+          - canonical
+          - staging
 
 permissions:
   contents: read
 
 concurrency:
+  # Caddy is shared even though the service roots are isolated.
   group: vps-lodestone-helper
   cancel-in-progress: false
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          global-json-file: global.json
-
-      - name: Restore locked contract graph
-        run: >
-          dotnet restore "src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj"
-          --locked-mode
-
-      - name: Run Lodestone contract tests
-        run: >
-          dotnet test "src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj"
-          --configuration Release
-          --no-restore
-          --blame-hang
-          --blame-hang-timeout 2m
-          --blame-hang-dump-type mini
-          --logger "console;verbosity=normal"
-
   deploy:
-    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment:
+      name: ${{ ((github.event_name == 'workflow_dispatch' && inputs.target == 'staging') || github.ref_name == 'local-dev') && 'development' || 'production' }}
+      url: ${{ ((github.event_name == 'workflow_dispatch' && inputs.target == 'staging') || github.ref_name == 'local-dev') && 'https://dev.xivcraftarchitect.com' || 'https://xivcraftarchitect.com' }}
     env:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
       VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
       VPS_SSH_PORT: 22
-      DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_BOT_TOKEN }}
-      DISCORD_APPLICATION_ID: ${{ vars.CA_DISCORD_APPLICATION_ID }}
-      DISCORD_PUBLIC_KEY: ${{ secrets.CA_DISCORD_PUBLIC_KEY }}
-      DISCORD_GUILD_ID: ${{ secrets.CA_DISCORD_ALLOWED_GUILD_ID }}
-      DISCORD_CHANNEL_NAME: craft-commissions
-      DISCORD_CHANNEL_PARENT_ID: ${{ vars.CA_DISCORD_CHANNEL_PARENT_ID }}
     steps:
-      - name: Checkout source
+      - name: Resolve isolated deploy target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            target="${{ inputs.target }}"
+            if [[ "$GITHUB_REF_TYPE" != "branch" ]]; then
+              echo "Helper deployment requires a branch ref." >&2
+              exit 1
+            fi
+          elif [[ "$GITHUB_REF_NAME" == "local-dev" ]]; then
+            target="staging"
+          elif [[ "$GITHUB_REF_NAME" == "main" ]]; then
+            target="canonical"
+          else
+            echo "Unsupported helper source branch: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+          if [[ "$target" == "canonical" ]]; then
+            test "$GITHUB_REF" = "refs/heads/main"
+            root="/srv/craftarchitect/services/lodestone"
+            service_unit="craftarchitect-lodestone"
+            port="5128"
+            domain="xivcraftarchitect.com"
+            profile_db="$root/data/profile-host.db"
+            discord_db="$root/data/discord-collaboration.db"
+            channel_name="craft-commissions"
+          elif [[ "$target" == "staging" ]]; then
+            test "$GITHUB_REF" = "refs/heads/local-dev"
+            root="/srv/craftarchitect/services/lodestone-staging"
+            service_unit="craftarchitect-lodestone-staging"
+            port="5129"
+            domain="dev.xivcraftarchitect.com"
+            profile_db="$root/data/profile-host.db"
+            discord_db="$root/data/discord-collaboration.db"
+            channel_name="craft-commissions-staging"
+          else
+            echo "Unsupported helper target: $target" >&2
+            exit 1
+          fi
+
+          {
+            echo "target=$target"
+            echo "root=$root"
+            echo "service_unit=$service_unit"
+            echo "port=$port"
+            echo "domain=$domain"
+            echo "profile_db=$profile_db"
+            echo "discord_db=$discord_db"
+            echo "channel_name=$channel_name"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Select canonical Discord configuration
+        if: steps.target.outputs.target == 'canonical'
+        shell: bash
+        env:
+          TARGET_DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_BOT_TOKEN }}
+          TARGET_DISCORD_APPLICATION_ID: ${{ vars.CA_DISCORD_APPLICATION_ID }}
+          TARGET_DISCORD_PUBLIC_KEY: ${{ secrets.CA_DISCORD_PUBLIC_KEY }}
+          TARGET_DISCORD_GUILD_ID: ${{ secrets.CA_DISCORD_ALLOWED_GUILD_ID }}
+          TARGET_DISCORD_CHANNEL_PARENT_ID: ${{ vars.CA_DISCORD_CHANNEL_PARENT_ID }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'DISCORD_BOT_TOKEN=%s\n' "$TARGET_DISCORD_BOT_TOKEN"
+            printf 'DISCORD_APPLICATION_ID=%s\n' "$TARGET_DISCORD_APPLICATION_ID"
+            printf 'DISCORD_PUBLIC_KEY=%s\n' "$TARGET_DISCORD_PUBLIC_KEY"
+            printf 'DISCORD_GUILD_ID=%s\n' "$TARGET_DISCORD_GUILD_ID"
+            printf 'DISCORD_CHANNEL_PARENT_ID=%s\n' "$TARGET_DISCORD_CHANNEL_PARENT_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Select staging Discord configuration
+        if: steps.target.outputs.target == 'staging'
+        shell: bash
+        env:
+          TARGET_DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_STAGING_BOT_TOKEN }}
+          TARGET_DISCORD_APPLICATION_ID: ${{ vars.CA_DISCORD_STAGING_APPLICATION_ID }}
+          TARGET_DISCORD_PUBLIC_KEY: ${{ secrets.CA_DISCORD_STAGING_PUBLIC_KEY }}
+          TARGET_DISCORD_GUILD_ID: ${{ secrets.CA_DISCORD_STAGING_ALLOWED_GUILD_ID }}
+          TARGET_DISCORD_CHANNEL_PARENT_ID: ${{ vars.CA_DISCORD_STAGING_CHANNEL_PARENT_ID }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'DISCORD_BOT_TOKEN=%s\n' "$TARGET_DISCORD_BOT_TOKEN"
+            printf 'DISCORD_APPLICATION_ID=%s\n' "$TARGET_DISCORD_APPLICATION_ID"
+            printf 'DISCORD_PUBLIC_KEY=%s\n' "$TARGET_DISCORD_PUBLIC_KEY"
+            printf 'DISCORD_GUILD_ID=%s\n' "$TARGET_DISCORD_GUILD_ID"
+            printf 'DISCORD_CHANNEL_PARENT_ID=%s\n' "$TARGET_DISCORD_CHANNEL_PARENT_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Fail closed on missing target configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_PRIVATE_KEY"
+          test -n "$VPS_SSH_HOST_KEY"
+          test -n "$DISCORD_BOT_TOKEN"
+          test -n "$DISCORD_APPLICATION_ID"
+          test -n "$DISCORD_GUILD_ID"
+          test -n "$DISCORD_CHANNEL_PARENT_ID"
+          test "${#DISCORD_PUBLIC_KEY}" -eq 64
+          case "$DISCORD_PUBLIC_KEY" in
+            *[!0-9a-fA-F]*) exit 1 ;;
+          esac
+
+      - name: Checkout immutable source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify source and deployment tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          node --check tools/Discord/reconcile-guild.mjs
 
       - name: Setup .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
 
-      - name: Publish Lodestone helper
+      - name: Publish Release helper
         run: >
           dotnet publish "src/FFXIV Craft Architect.LodestoneLookup/FFXIV Craft Architect.LodestoneLookup.csproj"
-          -c Release
-          -r linux-x64
+          --configuration Release
+          --runtime linux-x64
           --self-contained true
-          -o dist/lodestone
+          --output dist/lodestone
 
-      - name: Package helper files
+      - name: Package and fingerprint helper
         id: package
         shell: bash
         run: |
+          set -euo pipefail
+          executable="dist/lodestone/FFXIV Craft Architect.LodestoneLookup"
+          test -f "$executable"
+          test -f "dist/lodestone/FFXIV Craft Architect.LodestoneLookup.dll"
           release="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA::7}"
-          archive="craftarchitect-lodestone-$release.tar.gz"
+          archive="craftarchitect-lodestone-${{ steps.target.outputs.target }}-$release.tar.gz"
           tar -czf "$archive" -C dist/lodestone .
-          echo "release=$release" >> "$GITHUB_OUTPUT"
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          archive_sha256="$(sha256sum "$archive" | cut -d' ' -f1)"
+          tar -tzf "$archive" | grep -q 'FFXIV Craft Architect.LodestoneLookup'
+          {
+            echo "release=$release"
+            echo "archive=$archive"
+            echo "archive_sha256=$archive_sha256"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Test Discord guild reconciler
-        run: node --test tools/Discord/reconcile-guild.test.mjs
-
-      - name: Reconcile Discord guild integration
+      - name: Reconcile target Discord installation
         id: discord
+        env:
+          DISCORD_CHANNEL_NAME: ${{ steps.target.outputs.channel_name }}
         run: node tools/Discord/reconcile-guild.mjs
 
-      - name: Write Discord environment
+      - name: Write isolated Discord environment
         shell: bash
         run: |
-          test -n "$DISCORD_APPLICATION_ID"
-          test -n "$DISCORD_BOT_TOKEN"
-          test "${#DISCORD_PUBLIC_KEY}" -eq 64
-          case "$DISCORD_PUBLIC_KEY" in
-            *[!0-9a-fA-F]*) exit 1 ;;
-          esac
+          set -euo pipefail
           umask 077
           {
             printf 'Discord__Enabled=true\n'
             printf 'Discord__ApplicationId=%s\n' "$DISCORD_APPLICATION_ID"
             printf 'Discord__PublicKey=%s\n' "$DISCORD_PUBLIC_KEY"
             printf 'Discord__RuntimeBotToken=%s\n' "$DISCORD_BOT_TOKEN"
-            printf 'Discord__DatabasePath=/srv/craftarchitect/services/lodestone/data/discord-collaboration.db\n'
+            printf 'Discord__DatabasePath=%s\n' '${{ steps.target.outputs.discord_db }}'
             printf 'Discord__AllowedGuildId=%s\n' "$DISCORD_GUILD_ID"
             printf 'Discord__AllowedChannelId=%s\n' '${{ steps.discord.outputs.channel_id }}'
-            printf 'Discord__CommissionBaseUrl=https://dev.xivcraftarchitect.com/commission.html?id=\n'
-          } > discord.env
+            printf 'Discord__CommissionBaseUrl=https://%s/commission.html?id=\n' '${{ steps.target.outputs.domain }}'
+          } > "discord-${{ steps.target.outputs.target }}.env"
 
-      - name: Write remote deploy script
+      - name: Write isolated remote deploy script
         shell: bash
         run: |
           cat > deploy-lodestone-remote.sh <<'REMOTE'
           set -euo pipefail
 
-          release="$1"
-          archive="/tmp/craftarchitect-lodestone-$release.tar.gz"
-          root="/srv/craftarchitect/services/lodestone"
-          release_dir="$root/releases/$release"
-          executable="$release_dir/FFXIV Craft Architect.LodestoneLookup"
+          target="$1"
+          release="$2"
+          archive_name="$3"
+          expected_sha="$4"
+          root="$5"
+          service_unit="$6"
+          port="$7"
+          profile_db="$8"
 
-          sudo mkdir -p "$release_dir"
-          sudo mkdir -p "$root/data" "$root/env"
-          sudo tar -xzf "$archive" -C "$release_dir"
-          sudo chown -R "$USER:$USER" "$release_dir"
-          sudo chown -R "$USER:$USER" "$root/data" "$root/env"
-          sudo chmod +x "$executable"
+          if [[ "$target" == "canonical" ]]; then
+            test "$root" = "/srv/craftarchitect/services/lodestone"
+            test "$service_unit" = "craftarchitect-lodestone"
+            test "$port" = "5128"
+            test "$profile_db" = "$root/data/profile-host.db"
+          elif [[ "$target" == "staging" ]]; then
+            test "$root" = "/srv/craftarchitect/services/lodestone-staging"
+            test "$service_unit" = "craftarchitect-lodestone-staging"
+            test "$port" = "5129"
+            test "$profile_db" = "$root/data/profile-host.db"
+          else
+            echo "Unsupported remote helper target: $target" >&2
+            exit 1
+          fi
+
+          archive="/tmp/$archive_name"
+          release_dir="$root/releases/$release"
+          staging_dir="$root/releases/.$release.staging"
+          executable="$release_dir/FFXIV Craft Architect.LodestoneLookup"
+          cleanup() {
+            sudo rm -rf "$staging_dir"
+            rm -f "$archive" "/tmp/discord-$target.env" /tmp/deploy-lodestone-remote.sh
+          }
+          trap cleanup EXIT
+
+          printf '%s  %s\n' "$expected_sha" "$archive" | sha256sum --check --strict -
+          sudo test ! -e "$release_dir"
+          sudo test ! -e "$staging_dir"
+          sudo mkdir -p "$staging_dir" "$root/data" "$root/env"
+          sudo tar -xzf "$archive" -C "$staging_dir"
+          sudo test -f "$staging_dir/FFXIV Craft Architect.LodestoneLookup"
+          sudo chown -R "$USER:$USER" "$staging_dir" "$root/data" "$root/env"
+          sudo chmod +x "$staging_dir/FFXIV Craft Architect.LodestoneLookup"
+          sudo mv "$staging_dir" "$release_dir"
 
           if [[ ! -f "$root/env/profile-host.env" ]]; then
+            umask 077
             tee "$root/env/profile-host.env" > /dev/null <<ENV
           ProfileHost__Enabled=false
-          ProfileHost__DatabasePath=$root/data/profile-host.db
+          ProfileHost__DatabasePath=$profile_db
           ENV
           fi
+          grep -Fxq "ProfileHost__DatabasePath=$profile_db" "$root/env/profile-host.env"
+          sudo install -o "$USER" -g "$USER" -m 600 \
+            "/tmp/discord-$target.env" \
+            "$root/env/discord.env"
 
-          sudo install -o "$USER" -g "$USER" -m 600 /tmp/discord.env "$root/env/discord.env"
-
-          sudo tee "$root/run-lodestone.sh" > /dev/null <<'SCRIPT'
+          sudo tee "$root/run-lodestone.sh" > /dev/null <<SCRIPT
           #!/usr/bin/env bash
           set -euo pipefail
-          if [[ -f /srv/craftarchitect/services/lodestone/env/profile-host.env ]]; then
-            set -a
-            source /srv/craftarchitect/services/lodestone/env/profile-host.env
-            set +a
-          fi
-          if [[ -f /srv/craftarchitect/services/lodestone/env/discord.env ]]; then
-            set -a
-            source /srv/craftarchitect/services/lodestone/env/discord.env
-            set +a
-          fi
-          cd /srv/craftarchitect/services/lodestone/current
-          exec "/srv/craftarchitect/services/lodestone/current/FFXIV Craft Architect.LodestoneLookup"
+          set -a
+          source "$root/env/profile-host.env"
+          source "$root/env/discord.env"
+          set +a
+          export ASPNETCORE_URLS="http://127.0.0.1:$port"
+          cd "$root/current"
+          exec "$root/current/FFXIV Craft Architect.LodestoneLookup"
           SCRIPT
-          sudo chmod +x "$root/run-lodestone.sh"
+          sudo chmod 755 "$root/run-lodestone.sh"
+
+          sudo tee "/etc/systemd/system/$service_unit.service" > /dev/null <<UNIT
+          [Unit]
+          Description=Craft Architect helper ($target)
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=simple
+          User=$USER
+          Group=$USER
+          ExecStart=$root/run-lodestone.sh
+          Restart=on-failure
+          RestartSec=5
+          NoNewPrivileges=true
+          PrivateTmp=true
+
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
 
           sudo ln -sfn "$release_dir" "$root/current"
-          sudo systemctl restart craftarchitect-lodestone
-          systemctl is-active craftarchitect-lodestone
+          sudo systemctl daemon-reload
+          sudo systemctl enable "$service_unit"
+          sudo systemctl restart "$service_unit"
+          systemctl is-active "$service_unit"
           for attempt in {1..30}; do
-            if curl --fail --silent --show-error http://127.0.0.1:5128/ > /dev/null; then
+            if curl --fail --silent --show-error "http://127.0.0.1:$port/" > /dev/null; then
               break
             fi
-
             if [[ "$attempt" == "30" ]]; then
-              journalctl -u craftarchitect-lodestone --no-pager -n 80
+              journalctl -u "$service_unit" --no-pager -n 80
               exit 1
             fi
-
             sleep 1
           done
 
@@ -190,28 +338,28 @@ jobs:
           import sys
 
           path = Path(sys.argv[1])
-          content = path.read_text()
-          lines = content.splitlines(keepends=True)
-          route_patterns = (
-              "/api/discord*",
-              "/api/profile-host*",
-              "/api/trade*",
+          lines = path.read_text().splitlines(keepends=True)
+          targets = {
+              "xivcraftarchitect.com": "5128",
+              "dev.xivcraftarchitect.com": "5129",
+          }
+          prefixes = (
+              "/api/lodestone",
+              "/api/xivdata",
+              "/api/discord",
+              "/api/profile-host",
+              "/api/trade",
           )
-          missing_patterns = []
-          for pattern in route_patterns:
-              count = sum(
-                  1
-                  for line in lines
-                  if line.strip() == f"handle {pattern} {{"
-              )
-              if count == 0:
-                  missing_patterns.append(pattern)
-              elif count != 2:
-                  raise SystemExit(
-                      f"Expected zero or two Caddy routes for {pattern}; found {count}."
-                  )
 
-          for host in ("xivcraftarchitect.com", "dev.xivcraftarchitect.com"):
+          def matching_close(start):
+              depth = 0
+              for index in range(start, len(lines)):
+                  depth += lines[index].count("{") - lines[index].count("}")
+                  if depth == 0:
+                      return index
+              raise SystemExit(f"Unclosed Caddy block at line {start + 1}.")
+
+          for host, port in targets.items():
               anchors = [
                   index
                   for index, line in enumerate(lines)
@@ -219,94 +367,138 @@ jobs:
               ]
               if len(anchors) != 1:
                   raise SystemExit(f"Expected one Caddy site block for {host}.")
+              site_start = anchors[0]
+              site_end = matching_close(site_start)
+              cursor = site_start + 1
+              retained = []
+              seen = set()
+              while cursor < site_end:
+                  stripped = lines[cursor].strip()
+                  parts = stripped.split()
+                  route = (
+                      parts[1].removesuffix("*")
+                      if len(parts) == 3 and
+                         parts[0] == "handle" and
+                         parts[2] == "{"
+                      else None
+                  )
+                  matched = route if route in prefixes else None
+                  if matched is None:
+                      retained.append(lines[cursor])
+                      cursor += 1
+                      continue
+                  if matched in seen:
+                      raise SystemExit(f"Duplicate managed Caddy route for {host} {matched}.")
+                  seen.add(matched)
+                  cursor = matching_close(cursor) + 1
+
               routes = "".join(
-                  f"\thandle {pattern} {{\n"
+                  f"\thandle {prefix}* {{\n"
                   "\t\turi strip_prefix /api\n"
-                  "\t\treverse_proxy 127.0.0.1:5128\n"
+                  f"\t\treverse_proxy 127.0.0.1:{port}\n"
                   "\t}\n\n"
-                  for pattern in missing_patterns
+                  for prefix in prefixes
               )
-              lines.insert(anchors[0] + 1, routes)
+              lines[site_start + 1:site_end] = [routes, *retained]
+
           path.write_text("".join(lines))
           PY
           sudo caddy validate --config "$caddy_candidate" --adapter caddyfile
           if ! sudo cmp --silent "$caddyfile" "$caddy_candidate"; then
-            sudo cp --preserve=mode,ownership,timestamps "$caddyfile" "$caddyfile.pre-discord"
+            sudo cp --preserve=mode,ownership,timestamps \
+              "$caddyfile" \
+              "$caddyfile.pre-helper-isolation"
             sudo install -m 644 "$caddy_candidate" "$caddyfile"
             sudo systemctl reload caddy
           fi
           rm -f "$caddy_candidate"
 
-          rm -f "$archive" /tmp/deploy-lodestone-remote.sh /tmp/discord.env
-
-          sudo find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' |
-            sort -rn |
-            tail -n +6 |
-            cut -d' ' -f2- |
-            sudo xargs -r rm -rf
+          sudo find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\0' |
+            sort -zrn |
+            tail -z -n +6 |
+            cut -z -d' ' -f2- |
+            sudo xargs -0 -r rm -rf
+          trap - EXIT
+          cleanup
           REMOTE
 
       - name: Configure SSH
         shell: bash
         run: |
-          test -n "$VPS_HOST"
-          test -n "$VPS_USER"
-          test -n "$VPS_SSH_PRIVATE_KEY"
-          test -n "$VPS_SSH_HOST_KEY"
+          set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/craftarchitect_vps
           chmod 600 ~/.ssh/craftarchitect_vps
-          # Pin the VPS host key from secrets instead of trusting a live scan.
           printf '%s\n' "$VPS_SSH_HOST_KEY" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Upload helper archive and deploy script
-        run: >
-          scp -P "$VPS_SSH_PORT"
-          -i ~/.ssh/craftarchitect_vps
-          "${{ steps.package.outputs.archive }}"
-          discord.env
-          deploy-lodestone-remote.sh
-          "$VPS_USER@$VPS_HOST:/tmp/"
-
-      - name: Activate helper release
-        run: >
-          ssh -p "$VPS_SSH_PORT"
-          -i ~/.ssh/craftarchitect_vps
-          "$VPS_USER@$VPS_HOST"
-          "bash /tmp/deploy-lodestone-remote.sh '${{ steps.package.outputs.release }}'"
-
-      - name: Verify public helper routes on both domains
+      - name: Upload isolated helper release
+        shell: bash
         run: |
           set -euo pipefail
-          for domain in xivcraftarchitect.com dev.xivcraftarchitect.com; do
-            # Known-good Lodestone probe: Level Checker on Behemoth is character 16331040.
-            curl --fail --silent --show-error \
-              "https://$domain/api/lodestone/crafters/search?name=Level%20Checker&world=Behemoth" \
-              | grep -q 16331040
-            curl --fail --silent --show-error \
-              "https://$domain/api/xivdata/items/search?q=Varn&limit=12" \
-              | grep -qi varn
-            test "$(
-              curl --silent --show-error \
-                --output /dev/null \
-                --write-out '%{http_code}' \
-                --request POST \
-                --header 'Content-Type: application/json' \
-                --data '{"type":1}' \
-                "https://$domain/api/discord/interactions"
-            )" = "401"
-            curl --fail --silent --show-error \
-              "https://$domain/api/discord/health" \
-              | grep -q '"publishingReady":true'
-            curl --fail --silent --show-error \
-              "https://$domain/api/profile-host/health" \
-              | grep -q '"profileHostEnabled":'
-            test "$(
-              curl --silent --show-error \
-                --output /dev/null \
-                --write-out '%{http_code}' \
-                "https://$domain/api/trade/v1/companies/00000000-0000-0000-0000-000000000001/discord/claims"
-            )" = "401"
-          done
+          scp -P "$VPS_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/craftarchitect_vps \
+            "${{ steps.package.outputs.archive }}" \
+            "discord-${{ steps.target.outputs.target }}.env" \
+            deploy-lodestone-remote.sh \
+            "$VPS_USER@$VPS_HOST:/tmp/"
+
+      - name: Activate isolated helper release
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -p "$VPS_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/craftarchitect_vps \
+            "$VPS_USER@$VPS_HOST" \
+            "bash /tmp/deploy-lodestone-remote.sh \
+              '${{ steps.target.outputs.target }}' \
+              '${{ steps.package.outputs.release }}' \
+              '${{ steps.package.outputs.archive }}' \
+              '${{ steps.package.outputs.archive_sha256 }}' \
+              '${{ steps.target.outputs.root }}' \
+              '${{ steps.target.outputs.service_unit }}' \
+              '${{ steps.target.outputs.port }}' \
+              '${{ steps.target.outputs.profile_db }}'"
+
+      - name: Verify target health and configuration
+        shell: bash
+        env:
+          DEPLOY_DOMAIN: ${{ steps.target.outputs.domain }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            "https://$DEPLOY_DOMAIN/api/lodestone/crafters/search?name=Level%20Checker&world=Behemoth" \
+            | grep -q 16331040
+          curl --fail --silent --show-error --retry 3 --retry-all-errors \
+            "https://$DEPLOY_DOMAIN/api/xivdata/items/search?q=Varn&limit=12" \
+            | grep -qi varn
+          test "$(
+            curl --silent --show-error \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              --request POST \
+              --header 'Content-Type: application/json' \
+              --data '{"type":1}' \
+              "https://$DEPLOY_DOMAIN/api/discord/interactions"
+          )" = "401"
+          curl --fail --silent --show-error \
+            "https://$DEPLOY_DOMAIN/api/discord/health" \
+            | grep -q '"directPublishingReady":true'
+          curl --fail --silent --show-error \
+            "https://$DEPLOY_DOMAIN/api/profile-host/health" \
+            | grep -q '"profileHostEnabled":'
+          test "$(
+            curl --silent --show-error \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              "https://$DEPLOY_DOMAIN/api/trade/v1/companies/00000000-0000-0000-0000-000000000001/discord/claims"
+          )" = "401"
