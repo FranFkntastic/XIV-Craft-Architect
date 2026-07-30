@@ -318,8 +318,10 @@
                 InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(
                     PackagedWorldDirectory,
                     UniversalisService)));
+            var openedAppraisalPlan = await TryOpenAppraisalPlanAsync();
             var restoredShell = WorkerProjections.Shell;
-            if (restoredShell.HasSession &&
+            if (!openedAppraisalPlan &&
+                restoredShell.HasSession &&
                 (restoredShell.MarketAnalysisCount == 0 ||
                  restoredShell.ShoppingPlanCount > 0 &&
                  !restoredShell.HasProcurementRoute))
@@ -720,6 +722,58 @@
         {
             Snackbar.Add($"Failed to rebuild plan: {ex.Message}", Severity.Warning);
         }
+    }
+
+    private async Task<bool> TryOpenAppraisalPlanAsync()
+    {
+        var uri = new Uri(NavigationManager.Uri);
+        var encodedPath = uri.Query
+            .TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Split('=', 2))
+            .Where(parts => parts.Length == 2)
+            .FirstOrDefault(parts => string.Equals(
+                Uri.UnescapeDataString(parts[0]),
+                "appraisalPlan",
+                StringComparison.Ordinal))?[1];
+        if (string.IsNullOrWhiteSpace(encodedPath))
+            return false;
+
+        var snapshotPath = Uri.UnescapeDataString(encodedPath);
+        if (!snapshotPath.StartsWith("/marketmafioso/api/craft/plans/", StringComparison.Ordinal) ||
+            snapshotPath.Contains('?', StringComparison.Ordinal) ||
+            snapshotPath.Contains('#', StringComparison.Ordinal) ||
+            Uri.TryCreate(snapshotPath, UriKind.Absolute, out _))
+        {
+            Snackbar.Add("The appraisal plan link is invalid.", Severity.Error);
+            NavigationManager.NavigateTo("./", replace: true);
+            return true;
+        }
+
+        try
+        {
+            AppState.SetStatus("Opening the quoted Craft Architect plan...", busy: true);
+            var json = await Http.GetStringAsync(snapshotPath);
+            var plan = RecipeService.DeserializePlan(json)
+                ?? throw new InvalidOperationException("The appraisal plan snapshot could not be parsed.");
+            await LoadNativePlanAsync(
+                plan,
+                $"Opened quoted plan '{plan.Name}'",
+                refreshPrices: false,
+                clearCurrentPlanId: true);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to open appraisal plan snapshot {Path}", snapshotPath);
+            Snackbar.Add($"Failed to open appraisal plan: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            AppState.SetStatus("Ready", busy: false);
+            NavigationManager.NavigateTo("./", replace: true);
+        }
+
+        return true;
     }
 
     private bool IsLocalBenchmarkWorkflowRequest()

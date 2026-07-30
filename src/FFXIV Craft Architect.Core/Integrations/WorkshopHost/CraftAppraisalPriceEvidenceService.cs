@@ -68,8 +68,64 @@ public sealed class CraftAppraisalPriceEvidenceService : ICraftAppraisalPriceEvi
             return new CraftAppraisalPriceEvidenceResult(0, 0, vendorItemsPriced, issues);
         }
 
-        await marketCache.RefreshRequestedAsync(requests, progress: null, cancellationToken);
-        var entries = await marketCache.GetManyAsync(requests, MarketEvidenceMaxAge);
+        var entries = new Dictionary<(int itemId, string dataCenter), CachedMarketData>(
+            await marketCache.GetManyAsync(requests, MarketEvidenceMaxAge));
+        var missing = new List<(int itemId, string dataCenter)>();
+        foreach (var cacheRequest in requests.Where(requestKey => !entries.ContainsKey(requestKey)))
+        {
+            var (retained, _) = await marketCache.GetWithStaleAsync(
+                cacheRequest.Item1,
+                cacheRequest.dataCenter,
+                MarketEvidenceMaxAge);
+            if (retained != null)
+            {
+                entries[cacheRequest] = retained;
+                var row = marketRows.First(candidate => candidate.ItemId == cacheRequest.Item1);
+                issues.Add(new CraftAppraisalPriceEvidenceIssue(
+                    row.ItemId,
+                    row.ItemName,
+                    row.Source.ToString(),
+                    $"{row.ItemName}: using retained market evidence from {retained.FetchedAt:u} because the current observation is older than 30 minutes."));
+            }
+            else
+            {
+                missing.Add(cacheRequest);
+            }
+        }
+
+        if (missing.Count > 0)
+        {
+            try
+            {
+                await marketCache.EnsurePopulatedAsync(
+                    missing,
+                    MarketEvidenceMaxAge,
+                    progress: null,
+                    cancellationToken);
+                foreach (var entry in await marketCache.GetManyAsync(missing, MarketEvidenceMaxAge))
+                    entries[entry.Key] = entry.Value;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (
+                ex is HttpRequestException or
+                TimeoutException or
+                OperationCanceledException)
+            {
+                foreach (var cacheRequest in missing)
+                {
+                    var row = marketRows.First(candidate => candidate.ItemId == cacheRequest.Item1);
+                    issues.Add(new CraftAppraisalPriceEvidenceIssue(
+                        row.ItemId,
+                        row.ItemName,
+                        row.Source.ToString(),
+                        $"{row.ItemName}: current market evidence could not be retrieved and no retained observation is available."));
+                }
+            }
+        }
+
         ApplyMarketEvidenceToPlan(plan, entries);
 
         var pricedMarketItems = 0;

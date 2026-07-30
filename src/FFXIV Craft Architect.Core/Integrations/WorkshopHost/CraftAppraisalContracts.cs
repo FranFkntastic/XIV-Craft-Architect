@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using FFXIV_Craft_Architect.Core.Models;
+
 namespace FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 
 public sealed record CraftAppraisalRequest
@@ -38,8 +41,13 @@ public sealed record CraftAppraisalQuote
     public string Confidence { get; init; } = "Unknown";
     public bool IsComplete { get; init; }
     public string AppraisalStatus { get; init; } = "Unknown";
+    public string? PlanId { get; init; }
+    public string? PlanUrl { get; init; }
     public IReadOnlyList<CraftAppraisalMaterialQuote> Materials { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    [JsonIgnore]
+    public CraftingPlan? Plan { get; init; }
 }
 
 public sealed record CraftAppraisalMaterialQuote
