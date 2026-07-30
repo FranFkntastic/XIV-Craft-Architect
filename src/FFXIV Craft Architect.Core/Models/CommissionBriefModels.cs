@@ -68,6 +68,7 @@ public sealed class CommissionBriefCreateResponse
 {
     public string PublicId { get; set; } = string.Empty;
     public string PublicUrl { get; set; } = string.Empty;
+    public string? ClaimUrl { get; set; }
     public string EditorToken { get; set; } = string.Empty;
     public int Version { get; set; }
     public DateTime PublishedAtUtc { get; set; }

@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using System.Text.Json;
 
 namespace FFXIV_Craft_Architect.Core.Services;
 
@@ -38,10 +39,24 @@ public static class TradeOrderWorkflow
                     RevokedAtUtc = order.CommissionPublication.RevokedAtUtc,
                     Ownership = order.CommissionPublication.Ownership
                 },
-            CompanyCommission = order.CompanyCommission,
+            CompanyCommission = CopyCompanyCommission(order.CompanyCommission),
             RemoteId = order.RemoteId,
             SyncState = order.SyncState
         };
+    }
+
+    private static TradeCompanyCommission? CopyCompanyCommission(
+        TradeCompanyCommission? commission)
+    {
+        if (commission == null)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<TradeCompanyCommission>(
+                JsonSerializer.Serialize(commission))
+            ?? throw new InvalidOperationException(
+                "The canonical company commission could not be cloned.");
     }
 
     public static TradeOrder WithPaymentPolicyOverride(TradeOrder order, TradePaymentPolicy policy)
