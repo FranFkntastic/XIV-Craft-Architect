@@ -323,10 +323,12 @@ public sealed class SqliteDiscordCollaborationStore(
         Guid publicationId,
         string publicId,
         DiscordPublicationState restoredState,
+        string payloadJson,
         DateTimeOffset queuedAt,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(payloadJson);
         if (publicationId == Guid.Empty ||
             restoredState is DiscordPublicationState.Failed or
             DiscordPublicationState.ReconciliationRequired)
@@ -481,6 +483,7 @@ public sealed class SqliteDiscordCollaborationStore(
             UPDATE discord_outbox
             SET
                 state = $pending,
+                payload_json = $payloadJson,
                 attempt_count = 0,
                 next_attempt_at_utc = $queuedAt,
                 lease_id = NULL,
@@ -491,6 +494,7 @@ public sealed class SqliteDiscordCollaborationStore(
               AND state = $failed;
             """;
         requeue.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+        requeue.Parameters.AddWithValue("$payloadJson", payloadJson);
         requeue.Parameters.AddWithValue("$queuedAt", queuedAt.ToString("O"));
         requeue.Parameters.AddWithValue("$workItemId", workItem.WorkItemId.ToString("D"));
         requeue.Parameters.AddWithValue("$failed", (int)DiscordOutboxState.Failed);

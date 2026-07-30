@@ -391,7 +391,8 @@ public sealed class SqliteProfileHostStore
         string payloadJson,
         long expectedRevision,
         CancellationToken ct,
-        bool allowCompanyCollection = false)
+        bool allowCompanyCollection = false,
+        long? expectedServerRevision = null)
     {
         if (!allowCompanyCollection)
         {
@@ -402,6 +403,26 @@ public sealed class SqliteProfileHostStore
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             ct);
+        if (expectedServerRevision is { } expectedCompanyRevision)
+        {
+            var currentServerRevision = await GetServerRevisionAsync(
+                connection,
+                profileId,
+                ct,
+                transaction);
+            if (currentServerRevision != expectedCompanyRevision)
+            {
+                await transaction.RollbackAsync(ct);
+                return new ProfileSyncPutResponse
+                {
+                    Success = false,
+                    Conflict = true,
+                    ErrorCode = "company_revision_conflict",
+                    ErrorMessage = "The hosted company changed before the write completed."
+                };
+            }
+        }
+
         var revision = await ReserveNextRevisionAsync(connection, transaction, profileId, ct);
         var existing = await LoadObjectAsync(
             connection,
@@ -504,7 +525,8 @@ public sealed class SqliteProfileHostStore
               and o.collection = $collection
               and o.object_id = $objectId
               and o.deleted = 0
-            limit 1;
+            order by o.profile_id
+            limit 2;
             """;
         command.Parameters.AddWithValue("$collection", collection);
         command.Parameters.AddWithValue("$objectId", objectId);
@@ -514,26 +536,67 @@ public sealed class SqliteProfileHostStore
             return null;
         }
 
-        return new HostedProfileObject(
-            reader.GetString(0),
-            new ProfileSyncObjectEnvelope
-            {
-                Collection = collection,
-                ObjectId = objectId,
-                PayloadJson = reader.GetString(1),
-                Revision = reader.GetInt64(2),
-                UpdatedAtUtc = DateTime.Parse(
-                    reader.GetString(3),
-                    null,
-                    DateTimeStyles.RoundtripKind),
-                Deleted = reader.GetInt64(4) == 1,
-                DeletedAtUtc = reader.IsDBNull(5)
-                    ? null
-                    : DateTime.Parse(
-                        reader.GetString(5),
+        var found = ReadHostedObject(reader, collection, objectId);
+        if (await reader.ReadAsync(ct))
+        {
+            throw new InvalidOperationException(
+                $"Hosted object identity '{collection}/{objectId}' is duplicated across active profiles.");
+        }
+
+        return found;
+    }
+
+    public async Task<IReadOnlyList<HostedProfileObject>> LoadObjectsAsync(
+        string collection,
+        CancellationToken ct)
+    {
+        ValidateCollection(collection);
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select o.profile_id,
+                   o.object_id,
+                   o.payload_json,
+                   o.revision,
+                   o.updated_at_utc,
+                   o.deleted,
+                   o.deleted_at_utc
+            from sync_objects o
+            inner join hosted_profiles p on p.id = o.profile_id
+            where p.disabled_at_utc is null
+              and o.collection = $collection
+              and o.deleted = 0
+            order by o.profile_id, o.object_id;
+            """;
+        command.Parameters.AddWithValue("$collection", collection);
+        var found = new List<HostedProfileObject>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            found.Add(new HostedProfileObject(
+                reader.GetString(0),
+                new ProfileSyncObjectEnvelope
+                {
+                    Collection = collection,
+                    ObjectId = reader.GetString(1),
+                    PayloadJson = reader.GetString(2),
+                    Revision = reader.GetInt64(3),
+                    UpdatedAtUtc = DateTime.Parse(
+                        reader.GetString(4),
                         null,
-                        DateTimeStyles.RoundtripKind)
-            });
+                        DateTimeStyles.RoundtripKind),
+                    Deleted = reader.GetInt64(5) == 1,
+                    DeletedAtUtc = reader.IsDBNull(6)
+                        ? null
+                        : DateTime.Parse(
+                            reader.GetString(6),
+                            null,
+                            DateTimeStyles.RoundtripKind)
+                }));
+        }
+
+        return found;
     }
 
     public async Task<ProfileSyncPutResponse> DeleteObjectAsync(
@@ -694,6 +757,31 @@ public sealed class SqliteProfileHostStore
                 : DateTime.Parse(reader.GetString(6), null, DateTimeStyles.RoundtripKind)
         };
     }
+
+    private static HostedProfileObject ReadHostedObject(
+        SqliteDataReader reader,
+        string collection,
+        string objectId) =>
+        new(
+            reader.GetString(0),
+            new ProfileSyncObjectEnvelope
+            {
+                Collection = collection,
+                ObjectId = objectId,
+                PayloadJson = reader.GetString(1),
+                Revision = reader.GetInt64(2),
+                UpdatedAtUtc = DateTime.Parse(
+                    reader.GetString(3),
+                    null,
+                    DateTimeStyles.RoundtripKind),
+                Deleted = reader.GetInt64(4) == 1,
+                DeletedAtUtc = reader.IsDBNull(5)
+                    ? null
+                    : DateTime.Parse(
+                        reader.GetString(5),
+                        null,
+                        DateTimeStyles.RoundtripKind)
+            });
 
     private static async Task TouchAccessKeyAsync(SqliteConnection connection, string keyId, CancellationToken ct)
     {

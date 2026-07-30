@@ -21,7 +21,8 @@ public static class DiscordCommissionMessage
         string publicUrl,
         DiscordPublicationState state,
         string? actionToken,
-        string? assignmentLabel = null)
+        string? assignmentLabel = null,
+        string? claimUrl = null)
     {
         var brief = published.Brief;
         var fields = new List<object>
@@ -69,7 +70,8 @@ public static class DiscordCommissionMessage
                 published,
                 publicUrl,
                 state,
-                actionToken),
+                actionToken,
+                claimUrl),
             allowed_mentions = new
             {
                 parse = Array.Empty<string>()
@@ -113,7 +115,8 @@ public static class DiscordCommissionMessage
         PublishedCommissionBrief published,
         string publicUrl,
         DiscordPublicationState state,
-        string? actionToken)
+        string? actionToken,
+        string? claimUrl)
     {
         var buttons = new List<object>
         {
@@ -125,6 +128,17 @@ public static class DiscordCommissionMessage
                 url = publicUrl
             }
         };
+        if (state == DiscordPublicationState.Open &&
+            !string.IsNullOrWhiteSpace(claimUrl))
+        {
+            buttons.Add(new
+            {
+                type = 2,
+                style = 5,
+                label = "Claim commission",
+                url = claimUrl
+            });
+        }
         return
         [
             new

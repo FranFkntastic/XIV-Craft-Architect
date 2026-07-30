@@ -22,7 +22,7 @@ public sealed class TradeCompanyAuthorization(
         }
 
         var key = request.Headers[AccessKeyHeader].ToString();
-        if (string.IsNullOrWhiteSpace(key))
+        if (string.IsNullOrWhiteSpace(key) || key.Length > 256)
         {
             return null;
         }
