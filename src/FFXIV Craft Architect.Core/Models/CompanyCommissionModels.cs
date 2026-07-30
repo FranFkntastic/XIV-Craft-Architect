@@ -87,12 +87,14 @@ public sealed record CompanyCommissionActor(
     string? DisplayName = null);
 
 public sealed record CompanyCommissionOutputTerm(
+    Guid LineId,
     int ItemId,
     string Name,
     int RequiredQuantity,
     bool MustBeHq);
 
 public sealed record CompanyCommissionMaterialTerm(
+    Guid LineId,
     int ItemId,
     string Name,
     int Quantity,
@@ -154,7 +156,6 @@ public sealed record CompanyCommissionParticipantGrant(
     Guid ClaimId,
     int TermsVersionFloor,
     long CapabilityRevision,
-    string CapabilityHash,
     DateTime IssuedAtUtc,
     DateTime? RevokedAtUtc = null);
 
@@ -179,6 +180,7 @@ public sealed record CompanyCommissionMaterialClearance(
     string? ReceivedByActorId = null);
 
 public sealed record CompanyCommissionMaterialQuantity(
+    Guid LineId,
     int ItemId,
     int Quantity);
 
@@ -194,6 +196,7 @@ public sealed record CompanyCommissionGateState(
 }
 
 public sealed record CompanyCommissionOutputProgress(
+    Guid LineId,
     int ItemId,
     int RequiredQuantity,
     int CompletedQuantity,
@@ -211,6 +214,7 @@ public sealed record CompanyCommissionDeliveryReadiness(
 public sealed record CompanyCommissionActivityEvent
 {
     public required Guid EventId { get; init; }
+    public Guid? CommandId { get; init; }
     public required Guid CommissionId { get; init; }
     public required long CommissionRevision { get; init; }
     public required CompanyCommissionActor Actor { get; init; }
@@ -235,7 +239,6 @@ public sealed record CompanyCommissionPublicMetadata
     public required CompanyCommissionPublicViewState ViewState { get; init; }
     public DateTime? PublishedAtUtc { get; init; }
     public DateTime? RevokedAtUtc { get; init; }
-    public string? ClaimCapabilityHash { get; init; }
     public TradeCompanyPublicationOwnership? LegacyOwnership { get; init; }
     public IReadOnlyList<CompanyCommissionDiscordBinding> DiscordBindings { get; init; } = [];
 }
@@ -243,12 +246,15 @@ public sealed record CompanyCommissionPublicMetadata
 public sealed record CompanyCommissionProcessedCommand(
     Guid CommandId,
     string Fingerprint,
-    long AppliedOrderRevision,
+    CompanyRecordRevision AppliedOrderRevision,
     Guid ActivityEventId,
     DateTime AppliedAtUtc);
 
 public sealed record TradeCompanyCommission
 {
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public required Guid CommissionId { get; init; }
     public required CompanyId CompanyId { get; init; }
     public required string CommissionerActorId { get; init; }
@@ -283,18 +289,74 @@ public sealed record CompanyCommissionPublicBrief
 {
     public required string PublicBriefId { get; init; }
     public required Guid CommissionId { get; init; }
+    public required string Title { get; init; }
+    public required string CompanyDisplayName { get; init; }
     public required string Reference { get; init; }
     public required CompanyCommissionPublicViewState ViewState { get; init; }
-    public required CompanyCommissionTermsVersion Terms { get; init; }
+    public required CompanyCommissionPublicTerms Terms { get; init; }
     public required TradeOrderStatus Status { get; init; }
-    public required CompanyCommissionGateState Gates { get; init; }
+    public required CompanyCommissionPublicGateState Gates { get; init; }
     public required bool ClearedToWork { get; init; }
-    public Guid? AssignedCrafterId { get; init; }
-    public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
-    public IReadOnlyList<CompanyCommissionOutputProgress> OutputProgress { get; init; } = [];
-    public required CompanyCommissionDeliveryReadiness DeliveryReadiness { get; init; }
+    public required bool IsClaimed { get; init; }
+    public IReadOnlyList<CompanyCommissionPublicOutputProgress> OutputProgress { get; init; } = [];
+    public required CompanyCommissionPublicDeliveryReadiness DeliveryReadiness { get; init; }
     public required CompanyCommissionSettlementState SettlementState { get; init; }
     public required bool Closed { get; init; }
-    public IReadOnlyList<CompanyCommissionActivityEvent> Activity { get; init; } = [];
     public required long ProjectionRevision { get; init; }
+}
+
+public sealed record CompanyCommissionPublicTerms
+{
+    public required int Version { get; init; }
+    public IReadOnlyList<CompanyCommissionOutputTerm> Outputs { get; init; } = [];
+    public IReadOnlyList<CompanyCommissionMaterialTerm> Materials { get; init; } = [];
+    public required CompanyCommissionPaymentTerms Payment { get; init; }
+    public string DeliveryInstructions { get; init; } = string.Empty;
+    public required CompanyCommissionPricingEvidence PricingEvidence { get; init; }
+    public string ContactInstructions { get; init; } = string.Empty;
+}
+
+public sealed record CompanyCommissionPublicGateState(
+    CompanyCommissionClearanceState Identity,
+    CompanyCommissionClearanceState Payment,
+    CompanyCommissionClearanceState CompanyMaterials);
+
+public sealed record CompanyCommissionPublicOutputProgress(
+    Guid LineId,
+    int ItemId,
+    int RequiredQuantity,
+    int CompletedQuantity,
+    int ReadyQuantity,
+    int AcceptedQuantity,
+    DateTime UpdatedAtUtc);
+
+public sealed record CompanyCommissionPublicDeliveryReadiness(
+    bool IsReady,
+    DateTime? DeclaredAtUtc,
+    DateTime? WithdrawnAtUtc);
+
+public sealed record CompanyCommissionParticipantActivity(
+    Guid EventId,
+    long CommissionRevision,
+    CompanyCommissionActorKind ActorKind,
+    string? ActorDisplayName,
+    CompanyCommissionSourceSurface SourceSurface,
+    DateTime CreatedAtUtc,
+    CompanyCommissionActivityKind Kind,
+    int TermsVersion,
+    string? Comment);
+
+public sealed record CompanyCommissionParticipantBrief
+{
+    public required CompanyCommissionPublicBrief Public { get; init; }
+    public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
+    public required long ParticipantCapabilityRevision { get; init; }
+    public IReadOnlyList<CompanyCommissionParticipantActivity> Activity { get; init; } = [];
+}
+
+public sealed record CompanyCommissionOwnerProjection
+{
+    public required TradeOrder Order { get; init; }
+    public required CompanyRecordRevision ObjectRevision { get; init; }
+    public required CompanyRecordRevision CompanyRevision { get; init; }
 }
