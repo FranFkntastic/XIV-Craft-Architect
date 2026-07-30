@@ -32,11 +32,13 @@ public static class TradeOrderWorkflow
                 : new TradeCommissionPublication
                 {
                     PublicId = order.CommissionPublication.PublicId,
+                    PublicUrl = order.CommissionPublication.PublicUrl,
                     Version = order.CommissionPublication.Version,
                     PublishedAtUtc = order.CommissionPublication.PublishedAtUtc,
                     RevokedAtUtc = order.CommissionPublication.RevokedAtUtc,
                     Ownership = order.CommissionPublication.Ownership
                 },
+            CompanyCommission = order.CompanyCommission,
             RemoteId = order.RemoteId,
             SyncState = order.SyncState
         };
