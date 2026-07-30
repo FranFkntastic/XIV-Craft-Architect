@@ -153,6 +153,7 @@ public sealed partial class SqliteProfileHostStore
             ct);
         var committed = new List<ProfileHostMigrationAuthoritativeObject>(
             preflight.Objects.Count);
+        var retiredSources = new List<ProfileHostMigrationRetiredSource>();
         var now = DateTime.UtcNow;
         foreach (var assessment in preflight.Objects
                      .OrderBy(item => item.Collection, StringComparer.Ordinal)
@@ -199,6 +200,50 @@ public sealed partial class SqliteProfileHostStore
                 Revision = revision,
                 Deleted = deleted
             });
+
+            authoritative.TryGetValue(sourceIdentity, out var authoritativeSource);
+            if (assessment.RetiresAuthoritativeSource)
+            {
+                if (authoritativeSource == null || authoritativeSource.Deleted)
+                {
+                    throw new InvalidOperationException(
+                        "A migration source selected for retirement lost its live authoritative state.");
+                }
+
+                var retirementRevision = await ReserveNextRevisionAsync(
+                    connection,
+                    transaction,
+                    profileId,
+                    ct);
+                await TombstoneMigratedSourceAsync(
+                    connection,
+                    transaction,
+                    profileId,
+                    authoritativeSource,
+                    retirementRevision,
+                    now,
+                    ct);
+                retiredSources.Add(new ProfileHostMigrationRetiredSource
+                {
+                    Collection = assessment.Collection,
+                    ObjectId = assessment.ObjectId,
+                    Revision = retirementRevision,
+                    Deleted = true
+                });
+            }
+            else if (mappingMap.ContainsKey(sourceIdentity) &&
+                     assessment.Resolution !=
+                        ProfileHostMigrationConflictResolution.KeepBothAsCopy &&
+                     authoritativeSource is { Deleted: true })
+            {
+                retiredSources.Add(new ProfileHostMigrationRetiredSource
+                {
+                    Collection = assessment.Collection,
+                    ObjectId = assessment.ObjectId,
+                    Revision = authoritativeSource.Revision,
+                    Deleted = true
+                });
+            }
         }
 
         var serverRevision = await GetServerRevisionAsync(
@@ -212,7 +257,8 @@ public sealed partial class SqliteProfileHostStore
             RequestHash = requestHash,
             ServerRevision = serverRevision,
             Objects = committed,
-            Mappings = preflight.Mappings
+            Mappings = preflight.Mappings,
+            RetiredSources = retiredSources
         };
         response.ReceiptHash = ComputeReceiptHash(profileId, response);
         var responseJson = JsonSerializer.Serialize(response, MigrationJsonOptions);
@@ -496,26 +542,20 @@ public sealed partial class SqliteProfileHostStore
             resolutionMap.TryGetValue(sourceIdentity, out var selectedResolution);
             ProfileHostMigrationConflictResolution? resolution =
                 resolutionMap.ContainsKey(sourceIdentity) ? selectedResolution : null;
-            if (mappingMap.ContainsKey(sourceIdentity) &&
-                resolution != ProfileHostMigrationConflictResolution.KeepBothAsCopy &&
-                authoritative.ContainsKey(sourceIdentity))
+            var hasMapping = mappingMap.ContainsKey(sourceIdentity);
+            var keepBoth =
+                resolution == ProfileHostMigrationConflictResolution.KeepBothAsCopy;
+            authoritative.TryGetValue(targetIdentity, out var targetCurrent);
+            ProfileSyncObjectEnvelope? sourceCurrent = null;
+            if (hasMapping &&
+                authoritative.TryGetValue(sourceIdentity, out var existingSource))
             {
-                AddBlocker(
-                    blockers,
-                    ProfileHostMigrationBlockerCodes.AuthoritativeSourceRequiresRetirement,
-                    "This canonical remap would leave its authoritative source beside the target. Atomic source retirement is required before merging an existing hosted identity.",
-                    sourceIdentity.Collection,
-                    sourceIdentity.ObjectId,
-                    targetIdentity.Collection,
-                    targetIdentity.ObjectId);
+                sourceCurrent = existingSource;
             }
 
-            var classifyIdentity =
-                resolution == ProfileHostMigrationConflictResolution.KeepBothAsCopy
-                    ? sourceIdentity
-                    : targetIdentity;
+            var classifyCurrent = keepBoth ? sourceCurrent : targetCurrent;
             var payloadForClassification =
-                resolution == ProfileHostMigrationConflictResolution.KeepBothAsCopy
+                keepBoth
                     ? inputs[sourceIdentity].PayloadJson ?? string.Empty
                     : pair.Value.PayloadJson ?? string.Empty;
             TryCanonicalizeJson(
@@ -528,29 +568,28 @@ public sealed partial class SqliteProfileHostStore
                 out var incomingHash);
 
             var disposition = ProfileHostMigrationObjectDisposition.Insert;
-            long? authoritativeRevision = null;
-            var authoritativeDeleted = false;
-            DateTime? authoritativeDeletedAtUtc = null;
-            string? authoritativeHash = null;
-            if (authoritative.TryGetValue(classifyIdentity, out var current))
+            string? targetHash = null;
+            if (targetCurrent != null)
             {
-                authoritativeRevision = current.Revision;
-                authoritativeDeleted = current.Deleted;
-                authoritativeDeletedAtUtc = current.DeletedAtUtc;
-                if (!TryCanonicalizeJson(
-                        current.PayloadJson,
-                        out var authoritativeCanonical,
-                        out authoritativeHash))
-                {
-                    authoritativeCanonical = current.PayloadJson;
-                    authoritativeHash = HashText(authoritativeCanonical);
-                }
+                _ = CanonicalizeAuthoritativePayload(targetCurrent, out targetHash);
+            }
 
-                disposition = current.Deleted
+            string? sourceHash = null;
+            if (sourceCurrent != null)
+            {
+                _ = CanonicalizeAuthoritativePayload(sourceCurrent, out sourceHash);
+            }
+
+            if (classifyCurrent != null)
+            {
+                var classifyCanonical = CanonicalizeAuthoritativePayload(
+                    classifyCurrent,
+                    out _);
+                disposition = classifyCurrent.Deleted
                     ? ProfileHostMigrationObjectDisposition.AuthoritativeTombstone
                     : string.Equals(
                             canonicalForClassification,
-                            authoritativeCanonical,
+                            classifyCanonical,
                             StringComparison.Ordinal)
                         ? ProfileHostMigrationObjectDisposition.Identical
                         : ProfileHostMigrationObjectDisposition.SameIdDifferentContent;
@@ -649,11 +688,19 @@ public sealed partial class SqliteProfileHostStore
                 CanonicalObjectId = targetIdentity.ObjectId,
                 Disposition = disposition,
                 Resolution = resolution,
-                AuthoritativeRevision = authoritativeRevision,
-                AuthoritativeDeleted = authoritativeDeleted,
-                AuthoritativeDeletedAtUtc = authoritativeDeletedAtUtc,
+                AuthoritativeRevision = targetCurrent?.Revision,
+                AuthoritativeDeleted = targetCurrent?.Deleted ?? false,
+                AuthoritativeDeletedAtUtc = targetCurrent?.DeletedAtUtc,
+                RetiresAuthoritativeSource =
+                    hasMapping &&
+                    !keepBoth &&
+                    sourceCurrent is { Deleted: false },
+                AuthoritativeSourceRevision = sourceCurrent?.Revision,
+                AuthoritativeSourceDeleted = sourceCurrent?.Deleted ?? false,
+                AuthoritativeSourceDeletedAtUtc = sourceCurrent?.DeletedAtUtc,
+                AuthoritativeSourceContentHash = sourceHash,
                 IncomingContentHash = incomingHash,
-                AuthoritativeContentHash = authoritativeHash
+                AuthoritativeContentHash = targetHash
             });
         }
 
@@ -681,6 +728,11 @@ public sealed partial class SqliteProfileHostStore
         {
             var sourceIdentity = (assessment.Collection, assessment.ObjectId);
             var identity = (assessment.Collection, assessment.CanonicalObjectId);
+            if (assessment.RetiresAuthoritativeSource)
+            {
+                finalObjects.Remove(sourceIdentity);
+            }
+
             if (assessment.Disposition == ProfileHostMigrationObjectDisposition.Insert ||
                 assessment.Resolution is
                     ProfileHostMigrationConflictResolution.UseIncoming or
@@ -693,9 +745,12 @@ public sealed partial class SqliteProfileHostStore
         }
 
         var validator = new MigrationGraphValidator(finalObjects, blockers);
-        foreach (var assessment in assessments)
+        var identitiesToValidate = assessments.Any(item =>
+            item.RetiresAuthoritativeSource)
+            ? finalObjects.Keys
+            : assessments.Select(item => (item.Collection, item.CanonicalObjectId));
+        foreach (var identity in identitiesToValidate)
         {
-            var identity = (assessment.Collection, assessment.CanonicalObjectId);
             if (ProfileSyncCollections.All.Contains(identity.Collection) &&
                 finalObjects.ContainsKey(identity))
             {
@@ -784,8 +839,9 @@ public sealed partial class SqliteProfileHostStore
         while (await reader.ReadAsync(ct))
         {
             var item = ReadObject(reader);
-            item.ObjectId = NormalizeMigrationObjectId(item.Collection, item.ObjectId);
-            var identity = (item.Collection, item.ObjectId);
+            var identity = (
+                item.Collection,
+                NormalizeMigrationObjectId(item.Collection, item.ObjectId));
             if (!result.TryAdd(identity, item))
             {
                 if (blockers == null)
@@ -853,6 +909,44 @@ public sealed partial class SqliteProfileHostStore
         command.Parameters.AddWithValue("$revision", revision);
         command.Parameters.AddWithValue("$updatedAtUtc", updatedAt.ToString("O"));
         await command.ExecuteNonQueryAsync(ct);
+    }
+
+    private static async Task TombstoneMigratedSourceAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string profileId,
+        ProfileSyncObjectEnvelope source,
+        long revision,
+        DateTime deletedAt,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            update sync_objects
+            set revision = $revision,
+                updated_at_utc = $deletedAtUtc,
+                deleted = 1,
+                deleted_at_utc = $deletedAtUtc
+            where profile_id = $profileId
+              and collection = $collection
+              and object_id = $objectId
+              and revision = $expectedRevision
+              and deleted = 0;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$collection", source.Collection);
+        command.Parameters.AddWithValue("$objectId", source.ObjectId);
+        command.Parameters.AddWithValue("$expectedRevision", source.Revision);
+        command.Parameters.AddWithValue("$revision", revision);
+        command.Parameters.AddWithValue("$deletedAtUtc", deletedAt.ToString("O"));
+        var changed = await command.ExecuteNonQueryAsync(ct);
+        if (changed != 1)
+        {
+            throw new DBConcurrencyException(
+                "The authoritative migration source changed before atomic retirement.");
+        }
     }
 
     private static async Task<(string RequestHash, string ResponseJson)?> LoadMigrationReceiptAsync(
@@ -1452,6 +1546,18 @@ public sealed partial class SqliteProfileHostStore
             AppendHashPart(
                 builder,
                 item.AuthoritativeDeletedAtUtc?.ToUniversalTime().ToString("O") ?? string.Empty);
+            AppendHashPart(builder, item.RetiresAuthoritativeSource ? "1" : "0");
+            AppendHashPart(
+                builder,
+                item.AuthoritativeSourceRevision?.ToString() ?? string.Empty);
+            AppendHashPart(builder, item.AuthoritativeSourceDeleted ? "1" : "0");
+            AppendHashPart(
+                builder,
+                item.AuthoritativeSourceDeletedAtUtc?.ToUniversalTime().ToString("O") ??
+                string.Empty);
+            AppendHashPart(
+                builder,
+                item.AuthoritativeSourceContentHash ?? string.Empty);
             AppendHashPart(builder, item.IncomingContentHash);
             AppendHashPart(builder, item.AuthoritativeContentHash ?? string.Empty);
         }
@@ -1470,6 +1576,14 @@ public sealed partial class SqliteProfileHostStore
             AppendHashPart(builder, blocker.ObjectId ?? string.Empty);
             AppendHashPart(builder, blocker.ReferencedCollection ?? string.Empty);
             AppendHashPart(builder, blocker.ReferencedObjectId ?? string.Empty);
+        }
+
+        foreach (var source in response.RetiredSources)
+        {
+            AppendHashPart(builder, source.Collection);
+            AppendHashPart(builder, source.ObjectId);
+            AppendHashPart(builder, source.Revision.ToString());
+            AppendHashPart(builder, source.Deleted ? "1" : "0");
         }
 
         return HashText(builder.ToString());
@@ -1527,6 +1641,23 @@ public sealed partial class SqliteProfileHostStore
             contentHash = string.Empty;
             return false;
         }
+    }
+
+    private static string CanonicalizeAuthoritativePayload(
+        ProfileSyncObjectEnvelope current,
+        out string contentHash)
+    {
+        if (TryCanonicalizeJson(
+                current.PayloadJson,
+                out var canonical,
+                out contentHash))
+        {
+            return canonical;
+        }
+
+        canonical = current.PayloadJson;
+        contentHash = HashText(canonical);
+        return canonical;
     }
 
     private static void WriteCanonicalJson(Utf8JsonWriter writer, JsonElement element)

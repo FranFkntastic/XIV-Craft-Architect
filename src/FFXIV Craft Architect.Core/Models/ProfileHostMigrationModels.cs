@@ -13,8 +13,6 @@ public static class ProfileHostMigrationBlockerCodes
     public const string DuplicateAuthoritativeIdentity = "duplicate_authoritative_identity";
     public const string InvalidCanonicalMapping = "invalid_canonical_mapping";
     public const string CanonicalTargetConflict = "canonical_target_conflict";
-    public const string AuthoritativeSourceRequiresRetirement =
-        "authoritative_source_requires_retirement";
     public const string UnsupportedCollection = "unsupported_collection";
     public const string UnsupportedOrderCraftSnapshot = "unsupported_order_craft_snapshot";
     public const string InvalidPayload = "invalid_payload";
@@ -105,6 +103,11 @@ public sealed class ProfileHostMigrationObjectAssessment
     public long? AuthoritativeRevision { get; set; }
     public bool AuthoritativeDeleted { get; set; }
     public DateTime? AuthoritativeDeletedAtUtc { get; set; }
+    public bool RetiresAuthoritativeSource { get; set; }
+    public long? AuthoritativeSourceRevision { get; set; }
+    public bool AuthoritativeSourceDeleted { get; set; }
+    public DateTime? AuthoritativeSourceDeletedAtUtc { get; set; }
+    public string? AuthoritativeSourceContentHash { get; set; }
     public string IncomingContentHash { get; set; } = string.Empty;
     public string? AuthoritativeContentHash { get; set; }
 }
@@ -152,4 +155,14 @@ public sealed class ProfileHostMigrationCommitResponse
         Array.Empty<ProfileHostMigrationAuthoritativeObject>();
     public IReadOnlyList<ProfileHostMigrationCanonicalMapping> Mappings { get; set; } =
         Array.Empty<ProfileHostMigrationCanonicalMapping>();
+    public IReadOnlyList<ProfileHostMigrationRetiredSource> RetiredSources { get; set; } =
+        Array.Empty<ProfileHostMigrationRetiredSource>();
+}
+
+public sealed class ProfileHostMigrationRetiredSource
+{
+    public string Collection { get; set; } = string.Empty;
+    public string ObjectId { get; set; } = string.Empty;
+    public long Revision { get; set; }
+    public bool Deleted { get; set; }
 }
