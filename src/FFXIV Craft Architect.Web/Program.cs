@@ -3,7 +3,9 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.CompanyMigration;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
+using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using MudBlazor.Services;
@@ -55,7 +57,9 @@ builder.Services.AddScoped<IWorkshopHostAcquisitionClient>(provider =>
 builder.Services.AddScoped<CraftAppraisalQuoteExportService>();
 
 // Register Settings Service (Web implementation)
-builder.Services.AddScoped<ISettingsService, WebSettingsService>();
+builder.Services.AddScoped<WebSettingsService>();
+builder.Services.AddScoped<ISettingsService>(provider =>
+    provider.GetRequiredService<WebSettingsService>());
 
 // Register App State (singleton to persist across tab switches)
 builder.Services.AddSingleton<AppState>();
@@ -67,6 +71,10 @@ builder.Services.AddScoped<PlanLifecycleWorkflowService>();
 builder.Services.AddScoped<NativePlanImportClassifier>();
 builder.Services.AddScoped<GitHubIssueReportService>();
 builder.Services.AddScoped<BrowserFileExportService>();
+builder.Services.AddScoped<CompanyMigrationInventoryExportService>();
+builder.Services.AddScoped<CompanyMigrationBundleService>();
+builder.Services.AddScoped<CompanyMigrationCheckpointStore>();
+builder.Services.AddScoped<CompanyMigrationWorkflowService>();
 builder.Services.AddSingleton(new ProcurementRouteAvailability(
     bool.TryParse(builder.Configuration["ProcurementRoutes:GenerationEnabled"], out var routeGenerationEnabled) &&
     routeGenerationEnabled));
@@ -81,6 +89,10 @@ builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
 builder.Services.AddScoped<TradeCompanyProfilePackageService>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
+builder.Services.AddScoped<TradeCompanyCollaborationClient>();
+builder.Services.AddScoped<TradeCompanyCollaborationService>();
+builder.Services.AddScoped<CommissionBriefClient>();
+builder.Services.AddScoped<CommissionBriefLocalStateService>();
 builder.Services.AddScoped<TradeLaborBenchmarkCalibrationWorkflowService>();
 builder.Services.AddScoped<ProfileHostClient>();
 builder.Services.AddScoped<ProfileSyncLocalStateService>();

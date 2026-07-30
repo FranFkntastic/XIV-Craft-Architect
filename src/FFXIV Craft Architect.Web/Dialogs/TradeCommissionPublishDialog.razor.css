@@ -1,0 +1,22 @@
+.commission-delivery-choices {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.commission-delivery-choice {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #3b3b3b;
+  border-radius: 6px;
+  background: #202020;
+  padding: 10px 12px;
+}
+
+.commission-delivery-choice ::deep .mud-typography-caption {
+  margin-left: 32px;
+}
+
+.commission-delivery-choice.is-disabled {
+  opacity: 0.72;
+}

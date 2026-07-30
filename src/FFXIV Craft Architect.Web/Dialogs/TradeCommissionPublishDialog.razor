@@ -1,0 +1,63 @@
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+
+<MudDialog>
+    <TitleContent>
+        <div>
+            <MudText Typo="Typo.overline">Crafter delivery</MudText>
+            <MudText Typo="Typo.h6">Choose Delivery</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2">
+            Send the commission already shown on this order. Its crafter-facing terms are frozen when published; company notes and the mutable craft plan stay private.
+        </MudText>
+        <MudRadioGroup T="TradeCommissionDestination"
+                       @bind-Value="_destination"
+                       Class="commission-delivery-choices">
+            <div class="commission-delivery-choice">
+                <MudRadio T="TradeCommissionDestination"
+                          Value="TradeCommissionDestination.PublicLink"
+                          Dense="true">
+                    Portable crafter link
+                </MudRadio>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Create the read-only brief and copy its link for any chat or message.
+                </MudText>
+            </div>
+            <div class="@($"commission-delivery-choice{(DiscordAvailable ? string.Empty : " is-disabled")}")">
+                <MudRadio T="TradeCommissionDestination"
+                          Value="TradeCommissionDestination.DiscordChannel"
+                          Dense="true"
+                          Disabled="@(!DiscordAvailable)">
+                    Company trade channel
+                </MudRadio>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @(DiscordAvailable
+                        ? "Publish through the active company's configured Discord channel."
+                        : DiscordUnavailableReason)
+                </MudText>
+            </div>
+        </MudRadioGroup>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Publish">
+            @(_destination == TradeCommissionDestination.PublicLink
+                ? "Create & Copy Link"
+                : "Publish to Trade Channel")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public bool DiscordAvailable { get; set; }
+    [Parameter] public string DiscordUnavailableReason { get; set; } =
+        "Refresh the canonical company order before publishing to Discord.";
+
+    private TradeCommissionDestination _destination = TradeCommissionDestination.PublicLink;
+    private void Cancel() => MudDialog.Cancel();
+    private void Publish() => MudDialog.Close(DialogResult.Ok(
+        new TradeCommissionPublishDialogResult(_destination)));
+}

@@ -316,6 +316,15 @@
                                   Margin="Margin.Dense"
                                   Lines="2"
                                   Class="my-2" />
+                    <MudTextField @bind-Value="_companyCommissionContact"
+                                  id="company-commission-contact"
+                                  Label="Default commission contact"
+                                  HelperText="Discord username or reply method published on crafter briefs; leave blank to omit contact"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  MaxLength="240"
+                                  Class="my-2" />
 
                     <MudDivider Class="my-4" />
 
@@ -684,6 +693,30 @@
                         </MudText>
                     }
                 </MudPaper>
+
+                @if (!ProfileSync.CurrentStatus.IsConnected)
+                {
+                    <MudPaper Variant="Variant.Outlined" Class="hosting-migration-entry pa-3 my-3">
+                        <div class="hosting-migration-copy">
+                            <MudIcon Icon="@Icons.Material.Filled.MoveUp"
+                                     Color="Color.Secondary"
+                                     Size="Size.Medium" />
+                            <div>
+                                <MudText Typo="Typo.subtitle2">Move browser companies to hosted storage</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    One-time cutover: review every company, preserve a recovery archive, reconcile hosted conflicts, and switch this browser only after the move succeeds.
+                                </MudText>
+                            </div>
+                        </div>
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.ArrowForward"
+                                   OnClick="OpenCompanyMigration"
+                                   Disabled="_profileHostIsBusy">
+                            Move Companies
+                        </MudButton>
+                    </MudPaper>
+                }
 
                 @if (ProfileSync.Conflicts.Count > 0)
                 {
@@ -1102,6 +1135,7 @@
     private TradeCompanyProfile? _companyProfile;
     private string _companyName = string.Empty;
     private string? _companyDescription;
+    private string? _companyCommissionContact;
     private int _companyCrafterCount;
     private string? _companyLoadError;
     private bool _companyIsBusy;
@@ -1372,6 +1406,7 @@
         _companyLoadError = null;
         try
         {
+            await ProfileSync.SyncNowAsync();
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             var crafters = await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id);
             _companyCrafterCount = crafters.Count;
@@ -1389,10 +1424,24 @@
         }
     }
 
+    private async Task<bool> SaveCompanyProfileAsync(TradeCompanyProfile profile)
+    {
+        if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(profile))
+        {
+            return false;
+        }
+
+        await ProfileSync.QueueLocalSaveAsync(
+            ProfileSyncCollections.TradeCompanyProfiles,
+            profile.Id.ToString("D"));
+        return true;
+    }
+
     private void ApplyCompanyProfileFields(TradeCompanyProfile profile)
     {
         _companyName = profile.Name;
         _companyDescription = profile.Description;
+        _companyCommissionContact = profile.CommissionContact;
         var policy = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
             profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
         _companyPaymentContract = policy.ActiveContract;
@@ -1644,7 +1693,7 @@
                 LaborStandardMaterialBonusPercent = _companyLaborMaterialBonusPercent
             };
 
-            var saved = await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile);
+            var saved = await SaveCompanyProfileAsync(_companyProfile);
             if (!saved)
             {
                 _laborBenchmarkStatus = "Benchmark recalculated but company profile save failed.";
@@ -1984,8 +2033,9 @@
 
             _companyProfile.Name = _companyName.Trim();
             _companyProfile.Description = NormalizeOptionalText(_companyDescription);
+            _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
             _companyProfile.PaymentPolicy = paymentPolicy;
-            var companySaved = await TradeOperationsPersistence.SaveCompanyProfileAsync(_companyProfile);
+            var companySaved = await SaveCompanyProfileAsync(_companyProfile);
             if (!companySaved)
             {
                 Snackbar.Add("Failed to save company profile.", Severity.Error);
@@ -2035,7 +2085,7 @@
         }
         
         Snackbar.Add("Settings saved", Severity.Success);
-        MudDialog.Close(DialogResult.Ok(true));
+        MudDialog.Close(DialogResult.Ok(new OptionsDialogResult()));
     }
 
     private async Task ToggleSecretDebugToolsAsync()
@@ -2196,6 +2246,14 @@
     private void Cancel()
     {
         MudDialog.Cancel();
+    }
+
+    private void OpenCompanyMigration()
+    {
+        MudDialog.Close(DialogResult.Ok(new OptionsDialogResult(
+            OpenCompanyMigration: true,
+            HostUrl: _profileHostUrl,
+            AccessKey: _profileHostAccessKey)));
     }
 
     private static MarketFetchScope ParseMarketFetchScope(string? value)

@@ -763,13 +763,13 @@ public class RecipeCalculationService
     /// <summary>
     /// Serialize a plan to JSON for saving.
     /// </summary>
-    public string SerializePlan(CraftingPlan plan)
+    public string SerializePlan(CraftingPlan plan, bool includeMarketPrices = false)
     {
         var serializableNodes = new List<SerializablePlanNode>();
 
         foreach (var root in plan.RootItems)
         {
-            SerializeNode(root, null, serializableNodes);
+            SerializeNode(root, null, serializableNodes, includeMarketPrices);
         }
 
         var wrapper = new PlanSerializationWrapper
@@ -790,7 +790,11 @@ public class RecipeCalculationService
         });
     }
 
-    private void SerializeNode(PlanNode node, string? parentId, List<SerializablePlanNode> list)
+    private void SerializeNode(
+        PlanNode node,
+        string? parentId,
+        List<SerializablePlanNode> list,
+        bool includeMarketPrices)
     {
         var serializable = new SerializablePlanNode
         {
@@ -814,8 +818,8 @@ public class RecipeCalculationService
             VendorPrice = node.VendorPrice,
             Vendors = node.VendorOptions.ToList(),
             SelectedVendorIndex = node.SelectedVendorIndex,
-            // Market prices intentionally NOT serialized - they bloat the file 
-            // and will be refreshed from market data on load anyway
+            MarketPrice = includeMarketPrices ? node.MarketPrice : 0,
+            HqMarketPrice = includeMarketPrices ? node.HqMarketPrice : 0,
             NodeId = node.NodeId,
             ParentNodeId = parentId,
             Notes = node.Notes,
@@ -826,7 +830,7 @@ public class RecipeCalculationService
 
         foreach (var child in node.Children)
         {
-            SerializeNode(child, node.NodeId, list);
+            SerializeNode(child, node.NodeId, list, includeMarketPrices);
         }
     }
 

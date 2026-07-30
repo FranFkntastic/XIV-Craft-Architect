@@ -6,6 +6,8 @@ namespace FFXIV_Craft_Architect.Web.Services;
 public sealed class TradeOperationsPersistenceService
 {
     private const string DefaultCompanyProfileName = "FFXIV Trade Company";
+    private const string PrototypeDefaultCommissionContact = "franfkntastic";
+    private const string SelectedCompanyProfileIdKey = "trade.selected_company_profile_id";
 
     private readonly IndexedDbService _indexedDb;
     private readonly TradeCompanyProfilePackageService _profilePackageService;
@@ -21,17 +23,38 @@ public sealed class TradeOperationsPersistenceService
     public async Task<TradeCompanyProfile> GetOrCreateActiveCompanyProfileAsync()
     {
         var profiles = await _indexedDb.LoadTradeCompanyProfilesAsync();
-        var profile = profiles
-            .OrderByDescending(profile => profile.UpdatedAtUtc)
+        var selectedProfileId = await LoadSelectedCompanyProfileIdAsync();
+        var profile = selectedProfileId.HasValue
+            ? profiles.FirstOrDefault(candidate => candidate.Id == selectedProfileId.Value)
+            : null;
+        profile ??= profiles
+            .OrderBy(candidate => candidate.CreatedAtUtc)
+            .ThenBy(candidate => candidate.Id)
             .FirstOrDefault();
         if (profile != null)
         {
-            NormalizePaymentPolicy(profile);
+            if (selectedProfileId != profile.Id)
+            {
+                await SaveSelectedCompanyProfileIdAsync(profile.Id);
+            }
+
+            if (NormalizeProfile(profile))
+            {
+                profile.UpdatedAtUtc = DateTime.UtcNow;
+                var migrated = await _indexedDb.SaveTradeCompanyProfileAsync(profile);
+                if (!migrated)
+                {
+                    var diagnostics = await _indexedDb.GetTradeStoreDiagnosticsAsync();
+                    throw new InvalidOperationException($"Failed to migrate the active Trade company profile. {diagnostics.ToDisplayMessage()}");
+                }
+            }
+
             return profile;
         }
 
         var now = DateTime.UtcNow;
         profile = TradeCompanyProfile.CreateLocal(DefaultCompanyProfileName, now);
+        profile.CommissionContact = PrototypeDefaultCommissionContact;
         var saved = await _indexedDb.SaveTradeCompanyProfileAsync(profile);
         if (!saved)
         {
@@ -39,6 +62,7 @@ public sealed class TradeOperationsPersistenceService
             throw new InvalidOperationException($"Failed to create the default Trade company profile. {diagnostics.ToDisplayMessage()}");
         }
 
+        await SaveSelectedCompanyProfileIdAsync(profile.Id);
         return profile;
     }
 
@@ -47,7 +71,7 @@ public sealed class TradeOperationsPersistenceService
         var profiles = await _indexedDb.LoadTradeCompanyProfilesAsync();
         foreach (var profile in profiles)
         {
-            NormalizePaymentPolicy(profile);
+            NormalizeProfile(profile);
         }
 
         return profiles;
@@ -55,9 +79,39 @@ public sealed class TradeOperationsPersistenceService
 
     public async Task<bool> SaveCompanyProfileAsync(TradeCompanyProfile profile)
     {
-        NormalizePaymentPolicy(profile);
+        NormalizeProfile(profile);
         profile.UpdatedAtUtc = DateTime.UtcNow;
         return await _indexedDb.SaveTradeCompanyProfileAsync(profile);
+    }
+
+    public Task<bool> DeleteCompanyProfileAsync(Guid companyProfileId)
+    {
+        return _indexedDb.DeleteTradeCompanyProfileAsync(companyProfileId);
+    }
+
+    public async Task SelectCompanyProfileAsync(Guid companyProfileId)
+    {
+        var profiles = await _indexedDb.LoadTradeCompanyProfilesAsync();
+        if (profiles.All(profile => profile.Id != companyProfileId))
+        {
+            throw new InvalidOperationException(
+                $"Trade company profile '{companyProfileId:D}' does not exist in browser storage.");
+        }
+
+        await SaveSelectedCompanyProfileIdAsync(companyProfileId);
+    }
+
+    public async Task RequireCompanyProfileAsync(
+        Guid companyProfileId,
+        string childKind,
+        string childId)
+    {
+        var profiles = await LoadCompanyProfilesAsync();
+        if (profiles.All(profile => profile.Id != companyProfileId))
+        {
+            throw new InvalidOperationException(
+                $"Trade {childKind} '{childId}' references missing company profile '{companyProfileId:D}'.");
+        }
     }
 
     public async Task<IReadOnlyList<TradeCrafterProfile>> LoadCraftersAsync(Guid companyProfileId)
@@ -69,6 +123,11 @@ public sealed class TradeOperationsPersistenceService
     {
         crafter.UpdatedAtUtc = DateTime.UtcNow;
         return await _indexedDb.SaveTradeCrafterAsync(crafter);
+    }
+
+    public Task<bool> DeleteCrafterAsync(Guid crafterId)
+    {
+        return _indexedDb.DeleteTradeCrafterAsync(crafterId);
     }
 
     public async Task<TradeCompanyProfilePackage> ExportActiveCompanyProfilePackageAsync(DateTime exportedAtUtc)
@@ -99,6 +158,7 @@ public sealed class TradeOperationsPersistenceService
             }
         }
 
+        await SaveSelectedCompanyProfileIdAsync(imported.Profile.Id);
         return imported;
     }
 
@@ -118,9 +178,47 @@ public sealed class TradeOperationsPersistenceService
         return await _indexedDb.DeleteTradeOrderAsync(orderId);
     }
 
-    private static void NormalizePaymentPolicy(TradeCompanyProfile profile)
+    private async Task<Guid?> LoadSelectedCompanyProfileIdAsync()
     {
-        profile.PaymentPolicy = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
+        var serializedId = await _indexedDb.LoadSettingAsync<string>(SelectedCompanyProfileIdKey);
+        return Guid.TryParse(serializedId, out var selectedProfileId)
+            ? selectedProfileId
+            : null;
+    }
+
+    private async Task SaveSelectedCompanyProfileIdAsync(Guid companyProfileId)
+    {
+        if (!await _indexedDb.SaveSettingAsync(
+                SelectedCompanyProfileIdKey,
+                companyProfileId.ToString("D")))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not persist selected Trade company profile '{companyProfileId:D}'.");
+        }
+    }
+
+    private static bool NormalizeProfile(TradeCompanyProfile profile)
+    {
+        var changed = false;
+        var normalizedPaymentPolicy = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
             profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
+        if (profile.PaymentPolicy != normalizedPaymentPolicy)
+        {
+            profile.PaymentPolicy = normalizedPaymentPolicy;
+            changed = true;
+        }
+
+        if (profile.SchemaVersion < TradeCompanyProfile.CurrentSchemaVersion)
+        {
+            if (string.IsNullOrWhiteSpace(profile.CommissionContact))
+            {
+                profile.CommissionContact = PrototypeDefaultCommissionContact;
+            }
+
+            profile.SchemaVersion = TradeCompanyProfile.CurrentSchemaVersion;
+            changed = true;
+        }
+
+        return changed;
     }
 }

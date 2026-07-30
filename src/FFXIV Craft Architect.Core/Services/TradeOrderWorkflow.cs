@@ -27,6 +27,16 @@ public static class TradeOrderWorkflow
             CraftPlanName = order.CraftPlanName,
             CraftPlanSavedAtUtc = order.CraftPlanSavedAtUtc,
             CraftPlanLinkKind = order.CraftPlanLinkKind,
+            CommissionPublication = order.CommissionPublication == null
+                ? null
+                : new TradeCommissionPublication
+                {
+                    PublicId = order.CommissionPublication.PublicId,
+                    Version = order.CommissionPublication.Version,
+                    PublishedAtUtc = order.CommissionPublication.PublishedAtUtc,
+                    RevokedAtUtc = order.CommissionPublication.RevokedAtUtc,
+                    Ownership = order.CommissionPublication.Ownership
+                },
             RemoteId = order.RemoteId,
             SyncState = order.SyncState
         };

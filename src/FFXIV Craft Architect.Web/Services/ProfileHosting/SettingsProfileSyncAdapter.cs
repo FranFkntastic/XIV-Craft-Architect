@@ -5,10 +5,14 @@ namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 public sealed class SettingsProfileSyncAdapter : IProfileSyncCollectionAdapter
 {
     private readonly IndexedDbService _indexedDb;
+    private readonly WebSettingsService _settings;
 
-    public SettingsProfileSyncAdapter(IndexedDbService indexedDb)
+    public SettingsProfileSyncAdapter(
+        IndexedDbService indexedDb,
+        WebSettingsService settings)
     {
         _indexedDb = indexedDb;
+        _settings = settings;
     }
 
     public string Collection => ProfileSyncCollections.Settings;
@@ -31,23 +35,20 @@ public sealed class SettingsProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var settings = await _indexedDb.LoadAllSettingsAsync();
+        var settings = await _indexedDb.LoadAllSettingsRequiredAsync();
         return ToSyncObjects(settings, DateTime.UtcNow);
     }
 
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
     {
-        await _indexedDb.SaveSettingsBatchAsync(new Dictionary<string, string>
-        {
-            [envelope.ObjectId] = envelope.PayloadJson
-        });
+        await _settings.ApplyHostedSettingAsync(
+            envelope.ObjectId,
+            envelope.PayloadJson,
+            ct);
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
     {
-        await _indexedDb.SaveSettingsBatchAsync(new Dictionary<string, string>
-        {
-            [objectId] = "null"
-        });
+        await _settings.ApplyHostedSettingAsync(objectId, "null", ct);
     }
 }

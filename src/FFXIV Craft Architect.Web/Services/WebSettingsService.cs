@@ -1,5 +1,7 @@
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIV_Craft_Architect.Web.Services;
@@ -51,11 +53,16 @@ public class WebSettingsService : ISettingsService
         ["debug.secret_tools_enabled"] = false
     };
 
-    public WebSettingsService(IndexedDbService indexedDb, ILogger<WebSettingsService>? logger = null)
+    public WebSettingsService(
+        IndexedDbService indexedDb,
+        ILogger<WebSettingsService>? logger = null)
     {
         _indexedDb = indexedDb;
         _logger = logger;
     }
+
+    public event Action? PortableSettingsApplied;
+    public event Func<string, Task>? PortableSettingSaved;
 
     private Task EnsureLoadedAsync()
     {
@@ -74,6 +81,7 @@ public class WebSettingsService : ISettingsService
     {
         try
         {
+            await _indexedDb.EnsureSpecializedStorageAsync();
             await ApplyMigrationsAsync();
 
             var storedSettings = await _indexedDb.LoadAllSettingsAsync();
@@ -96,12 +104,9 @@ public class WebSettingsService : ISettingsService
         catch (Exception ex)
         {
             _logger?.LogError(ex, "[WebSettingsService] Failed to load settings");
-            // Fall back to defaults
-            foreach (var kvp in DefaultSettings)
-            {
-                _cache[kvp.Key] = kvp.Value;
-            }
-            _isLoaded = true;
+            throw new InvalidOperationException(
+                "Browser settings storage is unavailable or uses an incompatible schema.",
+                ex);
         }
     }
 
@@ -132,7 +137,7 @@ public class WebSettingsService : ISettingsService
     {
         // Sync wrapper - updates cache, fire-and-forget save
         _cache[keyPath] = value!;
-        _ = SaveToIndexedDb(keyPath, value, throwOnFailure: false);
+        _ = SaveAndQueueSettingAsync(keyPath, value);
     }
 
     public async Task<T?> GetAsync<T>(string keyPath, T? defaultValue = default)
@@ -167,6 +172,8 @@ public class WebSettingsService : ISettingsService
             }
             throw;
         }
+
+        await NotifyPortableSettingSavedAsync(keyPath);
     }
 
     public async Task ResetToDefaultsAsync()
@@ -176,15 +183,94 @@ public class WebSettingsService : ISettingsService
         {
             _cache[kvp.Key] = kvp.Value;
             await SaveToIndexedDb(kvp.Key, kvp.Value, throwOnFailure: true);
+            await NotifyPortableSettingSavedAsync(kvp.Key);
         }
         _logger?.LogInformation("[WebSettingsService] Reset all settings to defaults");
+    }
+
+    public async Task ApplyHostedSettingAsync(
+        string key,
+        string serialized,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await EnsureLoadedAsync();
+        if (!ProfileSyncLocalStateService.IsSyncedSetting(key))
+        {
+            throw new InvalidOperationException(
+                $"Browser-local setting '{key}' cannot be hydrated from hosted profile sync.");
+        }
+
+        if (!await _indexedDb.SaveSettingsBatchAsync(new Dictionary<string, string>
+        {
+            [key] = serialized
+        }))
+        {
+            throw new InvalidOperationException(
+                $"The browser could not persist hosted setting '{key}'.");
+        }
+
+        if (string.Equals(serialized, "null", StringComparison.OrdinalIgnoreCase))
+        {
+            if (DefaultSettings.TryGetValue(key, out var defaultValue))
+            {
+                _cache[key] = defaultValue;
+            }
+            else
+            {
+                _cache.Remove(key);
+            }
+        }
+        else
+        {
+            _cache[key] = JsonSerializer.Deserialize<object>(serialized)
+                ?? throw new InvalidOperationException(
+                    $"Hosted setting '{key}' contains an empty value.");
+        }
+
+        PortableSettingsApplied?.Invoke();
+    }
+
+    private async Task SaveAndQueueSettingAsync<T>(string key, T value)
+    {
+        try
+        {
+            await SaveToIndexedDb(key, value, throwOnFailure: true);
+            await NotifyPortableSettingSavedAsync(key);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(
+                ex,
+                "[WebSettingsService] Failed to persist or queue setting '{Key}'",
+                key);
+        }
+    }
+
+    private async Task NotifyPortableSettingSavedAsync(string key)
+    {
+        if (!ProfileSyncLocalStateService.IsSyncedSetting(key) ||
+            PortableSettingSaved == null)
+        {
+            return;
+        }
+
+        foreach (Func<string, Task> handler in PortableSettingSaved.GetInvocationList())
+        {
+            await handler(key);
+        }
     }
 
     private async Task SaveToIndexedDb<T>(string key, T value, bool throwOnFailure)
     {
         try
         {
-            await _indexedDb.SaveSettingAsync(key, value);
+            if (!await _indexedDb.SaveSettingAsync(key, value))
+            {
+                throw new InvalidOperationException(
+                    $"Browser settings storage rejected '{key}'.");
+            }
+
             _logger?.LogDebug("[WebSettingsService] Saved setting '{Key}'", key);
         }
         catch (Exception ex)
