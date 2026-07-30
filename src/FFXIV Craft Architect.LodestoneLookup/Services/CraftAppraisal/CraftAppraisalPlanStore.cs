@@ -14,7 +14,9 @@ public sealed class CraftAppraisalPlanStore(CraftAppraisalApiOptions options)
             SHA256.HashData(Encoding.UTF8.GetBytes(planJson))).ToLowerInvariant();
         var destination = GetPath(planId);
         if (File.Exists(destination))
+        {
             return planId;
+        }
 
         var temporary = Path.Combine(
             options.PlanDirectory,
@@ -31,7 +33,9 @@ public sealed class CraftAppraisalPlanStore(CraftAppraisalApiOptions options)
         finally
         {
             if (File.Exists(temporary))
+            {
                 File.Delete(temporary);
+            }
         }
 
         return planId;
@@ -40,7 +44,9 @@ public sealed class CraftAppraisalPlanStore(CraftAppraisalApiOptions options)
     public async Task<string?> ReadAsync(string planId, CancellationToken cancellationToken)
     {
         if (planId.Length != 64 || !planId.All(Uri.IsHexDigit))
+        {
             return null;
+        }
 
         var path = GetPath(planId.ToLowerInvariant());
         return File.Exists(path)

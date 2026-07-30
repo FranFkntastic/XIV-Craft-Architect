@@ -36,17 +36,32 @@ public static class CraftAppraisalEndpoints
         CancellationToken cancellationToken)
     {
         if (!coordinator.IsAvailable)
+        {
             return Results.Json(
                 new { error = "craft_appraisal_unavailable" },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
         if (request.SchemaVersion != 1)
+        {
             return Results.BadRequest(new { error = "unsupported_schema_version" });
+        }
+
         if (request.ItemId == 0)
+        {
             return Results.BadRequest(new { error = "item_id_required" });
+        }
+
         if (request.Quantity == 0)
+        {
             return Results.BadRequest(new { error = "quantity_required" });
+        }
+
         if (request.Quantity > options.MaximumQuantity)
+        {
             return Results.BadRequest(new { error = "quantity_exceeds_limit" });
+        }
+
         if (!request.Options.PricingMode.Equals(
                 "CurrentMarketEvidence",
                 StringComparison.OrdinalIgnoreCase))
