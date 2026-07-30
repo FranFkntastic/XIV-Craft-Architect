@@ -194,6 +194,7 @@ public partial class TradeOrders
         _selectedOrderOutputSearchQuery = string.Empty;
         _selectedOrderOutputSearchResults = [];
         _manualNote = string.Empty;
+        PrepareCommissionDraft(order);
         AppState.SelectTradeOrder(order.Id);
         PersistSelectedOrderInNavigation(order.Id);
     }

@@ -6,6 +6,8 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Dialogs;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
+using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using FFXIV_Craft_Architect.Web.Shared;
 using FFXIV_Craft_Architect.Web.Shared.TablePrimitives;
 
@@ -186,6 +188,7 @@ public partial class TradeOrders
         try
         {
             _loadError = null;
+            await ProfileSync.SyncNowAsync();
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
@@ -206,13 +209,21 @@ public partial class TradeOrders
 
     private async Task<bool> SaveOrderAndNotifyAsync(TradeOrder order)
     {
-        var saved = await TradeOperationsPersistence.SaveOrderAsync(order);
-        if (saved)
+        if (_companyProfile == null)
         {
-            AppState.NotifyTradeOperationsDataChanged();
+            return false;
         }
 
-        return saved;
+        if (!await TradeOperationsPersistence.SaveOrderAsync(order))
+        {
+            return false;
+        }
+
+        await ProfileSync.QueueLocalSaveAsync(
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"));
+        AppState.NotifyTradeOperationsDataChanged();
+        return true;
     }
 
     private async Task PrepareOrderImport()

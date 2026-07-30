@@ -3,7 +3,10 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.LodestoneLookup.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.XivData;
 
 const string CorsPolicyName = "CraftArchitectWeb";
@@ -35,7 +38,72 @@ builder.Services.AddSingleton(_ => new ProfileHostOptions
         ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db")
 });
 builder.Services.AddSingleton<ProfileAccessKeyHasher>();
+builder.Services.AddSingleton<ProfileAuthenticationGate>();
 builder.Services.AddSingleton<SqliteProfileHostStore>();
+var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
+    ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db");
+builder.Services.AddSingleton(_ => new CommissionBriefOptions
+{
+    Enabled = builder.Configuration.GetValue("CommissionBriefs:Enabled", true),
+    DatabasePath = builder.Configuration["CommissionBriefs:DatabasePath"]
+        ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(profileDatabasePath))!, "commission-briefs.db"),
+    PublicPageUrl = builder.Configuration["CommissionBriefs:PublicPageUrl"]
+        ?? "http://localhost:5000/commission.html"
+});
+builder.Services.AddSingleton<SqliteCommissionBriefStore>();
+builder.Services.AddSingleton(_ =>
+{
+    var discordDatabasePath = builder.Configuration["Discord:DatabasePath"]
+        ?? Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(profileDatabasePath))!,
+            "discord-collaboration.db");
+    return new DiscordCommissionOptions
+    {
+        Enabled = builder.Configuration.GetValue("Discord:Enabled", false),
+        CompanyId = builder.Configuration["Discord:CompanyId"] ?? string.Empty,
+        ApplicationId = builder.Configuration["Discord:ApplicationId"] ?? string.Empty,
+        PublicKey = builder.Configuration["Discord:PublicKey"] ?? string.Empty,
+        BotToken = builder.Configuration["Discord:RuntimeBotToken"] ?? string.Empty,
+        AllowedGuildId = builder.Configuration["Discord:AllowedGuildId"] ?? string.Empty,
+        AllowedChannelId = builder.Configuration["Discord:AllowedChannelId"] ?? string.Empty,
+        CommissionBaseUrl = builder.Configuration["Discord:CommissionBaseUrl"]
+            ?? "https://dev.xivcraftarchitect.com/commission.html?id=",
+        ApiBaseUrl = builder.Configuration["Discord:ApiBaseUrl"]
+            ?? "https://discord.com/api/v10/",
+        DatabasePath = discordDatabasePath,
+        OutboxMaximumAttempts = Math.Clamp(
+            builder.Configuration.GetValue("Discord:OutboxMaximumAttempts", 5),
+            1,
+            10),
+        OutboxLeaseDuration = TimeSpan.FromSeconds(Math.Clamp(
+            builder.Configuration.GetValue("Discord:OutboxLeaseSeconds", 30),
+            5,
+            300)),
+        OutboxPollInterval = TimeSpan.FromSeconds(Math.Clamp(
+            builder.Configuration.GetValue("Discord:OutboxPollSeconds", 2),
+            1,
+            60))
+    };
+});
+builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
+builder.Services.AddSingleton<TradeCompanyAuthorization>();
+builder.Services.AddSingleton<DiscordRequestVerifier>();
+builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
+builder.Services.AddSingleton<SqliteDiscordCollaborationStore>();
+builder.Services.AddScoped<DiscordCompanyOrderAdapter>();
+builder.Services.AddScoped<DiscordPublicationService>();
+builder.Services.AddScoped<DiscordClaimService>();
+builder.Services.AddHttpClient<IDiscordApiClient, DiscordApiClient>((services, client) =>
+{
+    var options = services.GetRequiredService<DiscordCommissionOptions>();
+    client.BaseAddress = new Uri(
+        options.ApiBaseUrl.EndsWith("/", StringComparison.Ordinal)
+            ? options.ApiBaseUrl
+            : options.ApiBaseUrl + "/",
+        UriKind.Absolute);
+    client.Timeout = TimeSpan.FromSeconds(15);
+});
+builder.Services.AddHostedService<DiscordOutboxDispatcher>();
 
 if (ProfileHostProvisioningCommand.TryParse(args) is { } profileHostCommand)
 {
@@ -157,6 +225,10 @@ app.MapGet(
     });
 
 app.MapProfileHostEndpoints();
+app.MapCommissionBriefEndpoints();
+app.MapCompanyCommissionBriefEndpoints();
+app.MapDiscordCommissionEndpoints();
+app.MapDiscordCollaborationEndpoints();
 
 app.Run();
 
@@ -182,6 +254,47 @@ static async Task RunProfileHostProvisioningCommandAsync(
                     profile.ProfileId,
                     profile.DisplayName,
                     AccessKey = key.PlaintextKey
+                });
+                break;
+            }
+        case ProfileHostProvisioningAction.EnsureProfile:
+            {
+                var rawProfileId = command.ProfileId ??
+                    throw new InvalidOperationException("Profile id is required.");
+                if (!Guid.TryParseExact(rawProfileId, "D", out var parsedProfileId) ||
+                    parsedProfileId == Guid.Empty)
+                {
+                    throw new InvalidOperationException(
+                        "Profile id must be a non-empty UUID in canonical form.");
+                }
+
+                var displayName = command.DisplayName?.Trim();
+                if (string.IsNullOrWhiteSpace(displayName) || displayName.Length > 120)
+                {
+                    throw new InvalidOperationException(
+                        "Display name must contain 1 to 120 characters.");
+                }
+
+                var plaintextKey = Environment.GetEnvironmentVariable(
+                    "CRAFT_ARCHITECT_PROFILE_ACCESS_KEY");
+                if (string.IsNullOrWhiteSpace(plaintextKey) || plaintextKey.Length > 256)
+                {
+                    throw new InvalidOperationException(
+                        "CRAFT_ARCHITECT_PROFILE_ACCESS_KEY must contain 1 to 256 characters.");
+                }
+
+                var ensured = await store.EnsureProfileAsync(
+                    parsedProfileId.ToString("D"),
+                    displayName,
+                    plaintextKey,
+                    hasher,
+                    cancellationToken);
+                WriteJson(new
+                {
+                    ensured.Profile.ProfileId,
+                    ensured.Profile.DisplayName,
+                    ensured.Created,
+                    Ensured = true
                 });
                 break;
             }

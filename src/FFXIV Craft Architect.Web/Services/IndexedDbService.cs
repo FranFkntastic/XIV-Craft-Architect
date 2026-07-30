@@ -58,11 +58,21 @@ public sealed class IndexedDbService
             new List<StoredPlan>(),
             "load plans");
 
+    public Task<List<StoredPlan>> LoadAllPlansRequiredAsync() =>
+        InvokeRequiredAsync<List<StoredPlan>>(
+            "IndexedDB.loadAllPlans",
+            "load plans for hosted profile sync");
+
     public Task<List<StoredPlanSummary>> LoadPlanSummariesAsync() =>
         InvokeOrDefaultAsync(
             "IndexedDB.loadPlanSummaries",
             new List<StoredPlanSummary>(),
             "load plan summaries");
+
+    public Task<SpecializedBrowserStorageDiagnostics> EnsureSpecializedStorageAsync() =>
+        InvokeRequiredAsync<SpecializedBrowserStorageDiagnostics>(
+            "IndexedDB.getSpecializedStorageDiagnostics",
+            "initialize specialized browser storage");
 
     public Task<bool> DeletePlanAsync(string planId) =>
         InvokeOrDefaultAsync(
@@ -109,11 +119,41 @@ public sealed class IndexedDbService
         }
     }
 
+    public async Task<T?> LoadRequiredSettingAsync<T>(
+        string key,
+        T? defaultValue = default)
+    {
+        var serialized = await InvokeRequiredAsync<string?>(
+            "IndexedDB.loadSetting",
+            $"load required setting {key}",
+            key);
+        if (string.IsNullOrEmpty(serialized))
+        {
+            return defaultValue;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<T>(serialized);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Required browser setting '{key}' is invalid.",
+                ex);
+        }
+    }
+
     public Task<Dictionary<string, string>> LoadAllSettingsAsync() =>
         InvokeOrDefaultAsync(
             "IndexedDB.loadAllSettings",
             new Dictionary<string, string>(),
             "load settings");
+
+    public Task<Dictionary<string, string>> LoadAllSettingsRequiredAsync() =>
+        InvokeRequiredAsync<Dictionary<string, string>>(
+            "IndexedDB.loadAllSettings",
+            "load settings for hosted profile sync");
 
     public Task<bool> SaveSettingsBatchAsync(
         Dictionary<string, string> settings) =>
@@ -152,6 +192,13 @@ public sealed class IndexedDbService
             "IndexedDB.loadTradeCompanyProfiles",
             "load Trade company profiles");
 
+    public Task<bool> DeleteTradeCompanyProfileAsync(Guid companyProfileId) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.deleteTradeCompanyProfile",
+            false,
+            $"delete Trade company {companyProfileId}",
+            companyProfileId);
+
     public Task<bool> SaveTradeCrafterAsync(TradeCrafterProfile crafter) =>
         InvokeOrDefaultAsync(
             "IndexedDB.saveTradeCrafter",
@@ -165,6 +212,13 @@ public sealed class IndexedDbService
             "IndexedDB.loadTradeCrafters",
             "load Trade crafters",
             companyProfileId);
+
+    public Task<bool> DeleteTradeCrafterAsync(Guid crafterId) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.deleteTradeCrafter",
+            false,
+            $"delete Trade crafter {crafterId}",
+            crafterId);
 
     public Task<bool> SaveTradeOrderAsync(TradeOrder order) =>
         InvokeOrDefaultAsync(
@@ -277,6 +331,24 @@ public sealed class TradeIndexedDbDiagnostics
             ? details
             : $"{details} Reload after closing other Craft Architect tabs so the browser can finish the IndexedDB upgrade.";
     }
+}
+
+public sealed class SpecializedBrowserStorageDiagnostics
+{
+    public Dictionary<string, string> DatabaseNames { get; set; } = [];
+    public Dictionary<string, int> Versions { get; set; } = [];
+    public bool EngineDatabasePresent { get; set; }
+    public Dictionary<string, SpecializedBrowserStorageMigration> Migrations { get; set; } = [];
+}
+
+public sealed class SpecializedBrowserStorageMigration
+{
+    public string State { get; set; } = string.Empty;
+    public string Domain { get; set; } = string.Empty;
+    public int SchemaVersion { get; set; }
+    public string? SourceDatabase { get; set; }
+    public int? SourceSchemaVersion { get; set; }
+    public Dictionary<string, int> Counts { get; set; } = [];
 }
 
 public sealed class StoredPlan

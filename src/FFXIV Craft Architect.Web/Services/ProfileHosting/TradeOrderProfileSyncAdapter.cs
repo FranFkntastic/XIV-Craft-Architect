@@ -16,8 +16,14 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var profile = await _tradeOperations.GetOrCreateActiveCompanyProfileAsync();
-        var orders = await _tradeOperations.LoadOrdersAsync(profile.Id);
+        var profiles = await _tradeOperations.LoadCompanyProfilesAsync();
+        var orders = new List<TradeOrder>();
+        foreach (var profile in profiles.OrderBy(profile => profile.Id))
+        {
+            ct.ThrowIfCancellationRequested();
+            orders.AddRange(await _tradeOperations.LoadOrdersAsync(profile.Id));
+        }
+
         var now = DateTime.UtcNow;
         return orders.Select(order => ToEnvelope(order, now)).ToArray();
     }
@@ -30,7 +36,15 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             throw new InvalidOperationException($"Hosted Trade order payload '{envelope.ObjectId}' could not be deserialized.");
         }
 
-        await _tradeOperations.SaveOrderAsync(order);
+        await _tradeOperations.RequireCompanyProfileAsync(
+            order.CompanyProfileId,
+            "order",
+            envelope.ObjectId);
+        if (!await _tradeOperations.SaveOrderAsync(order))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
+        }
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
@@ -40,7 +54,11 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             throw new InvalidOperationException($"Hosted Trade order id '{objectId}' is not a valid GUID.");
         }
 
-        await _tradeOperations.DeleteOrderAsync(orderId);
+        if (!await _tradeOperations.DeleteOrderAsync(orderId))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not delete hosted Trade order '{objectId}'.");
+        }
     }
 
     private static ProfileSyncObjectEnvelope ToEnvelope(TradeOrder order, DateTime updatedAtUtc)

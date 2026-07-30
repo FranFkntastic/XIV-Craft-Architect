@@ -20,8 +20,14 @@ public sealed class TradePayrollDraftProfileSyncAdapter : IProfileSyncCollection
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var profile = await _tradeOperations.GetOrCreateActiveCompanyProfileAsync();
-        var drafts = await _tradePayrollPersistence.LoadDraftsAsync(profile.Id);
+        var profiles = await _tradeOperations.LoadCompanyProfilesAsync();
+        var drafts = new List<TradePayrollWorkflowDraft>();
+        foreach (var profile in profiles.OrderBy(profile => profile.Id))
+        {
+            ct.ThrowIfCancellationRequested();
+            drafts.AddRange(await _tradePayrollPersistence.LoadDraftsAsync(profile.Id));
+        }
+
         var now = DateTime.UtcNow;
         return drafts.Select(draft => ToEnvelope(draft, now)).ToArray();
     }
@@ -34,12 +40,24 @@ public sealed class TradePayrollDraftProfileSyncAdapter : IProfileSyncCollection
             throw new InvalidOperationException($"Hosted Trade payroll draft payload '{envelope.ObjectId}' could not be deserialized.");
         }
 
-        await _tradePayrollPersistence.SaveDraftAsync(draft);
+        await _tradeOperations.RequireCompanyProfileAsync(
+            draft.CompanyProfileId,
+            "payroll draft",
+            envelope.ObjectId);
+        if (!await _tradePayrollPersistence.SaveDraftAsync(draft))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not apply hosted Trade payroll draft '{envelope.ObjectId}'.");
+        }
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
     {
-        await _tradePayrollPersistence.DeleteDraftAsync(objectId);
+        if (!await _tradePayrollPersistence.DeleteDraftAsync(objectId))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not delete hosted Trade payroll draft '{objectId}'.");
+        }
     }
 
     private static ProfileSyncObjectEnvelope ToEnvelope(TradePayrollWorkflowDraft draft, DateTime updatedAtUtc)

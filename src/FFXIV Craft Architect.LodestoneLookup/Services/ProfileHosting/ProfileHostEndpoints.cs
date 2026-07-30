@@ -20,6 +20,7 @@ public static class ProfileHostEndpoints
             async (
                 HttpRequest request,
                 ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
@@ -29,7 +30,12 @@ public static class ProfileHostEndpoints
                     return Results.NotFound();
                 }
 
-                var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
                 return profile == null ? Results.Unauthorized() : Results.Ok(profile);
             });
 
@@ -39,6 +45,7 @@ public static class ProfileHostEndpoints
                 HttpRequest request,
                 ProfileHostOptions options,
                 long? sinceRevision,
+                ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
@@ -48,7 +55,12 @@ public static class ProfileHostEndpoints
                     return Results.NotFound();
                 }
 
-                var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
                 if (profile == null)
                 {
                     return Results.Unauthorized();
@@ -66,6 +78,7 @@ public static class ProfileHostEndpoints
                 ProfileSyncPutRequest putRequest,
                 HttpRequest request,
                 ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
@@ -75,7 +88,12 @@ public static class ProfileHostEndpoints
                     return Results.NotFound();
                 }
 
-                var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
                 if (profile == null)
                 {
                     return Results.Unauthorized();
@@ -109,6 +127,7 @@ public static class ProfileHostEndpoints
                 long? expectedRevision,
                 HttpRequest request,
                 ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
@@ -118,7 +137,12 @@ public static class ProfileHostEndpoints
                     return Results.NotFound();
                 }
 
-                var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
                 if (profile == null)
                 {
                     return Results.Unauthorized();
@@ -149,6 +173,7 @@ public static class ProfileHostEndpoints
                 ProfileHostBootstrapPayload payload,
                 HttpRequest request,
                 ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
@@ -158,7 +183,12 @@ public static class ProfileHostEndpoints
                     return Results.NotFound();
                 }
 
-                var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
                 if (profile == null)
                 {
                     return Results.Unauthorized();
@@ -199,6 +229,7 @@ public static class ProfileHostEndpoints
             async (
                 HttpRequest request,
                 ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
                 CancellationToken cancellationToken) =>
@@ -208,7 +239,12 @@ public static class ProfileHostEndpoints
                     return Results.NotFound();
                 }
 
-                var profile = await AuthenticateAsync(request, store, hasher, cancellationToken);
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
                 if (profile == null)
                 {
                     return Results.Unauthorized();
@@ -218,11 +254,82 @@ public static class ProfileHostEndpoints
                 return Results.Ok(new ProfileHostBootstrapPayload { Objects = changes.Objects });
             });
 
+        group.MapPost(
+            "/migrations/preflight",
+            async (
+                ProfileHostMigrationPreflightRequest migration,
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (profile == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                var preflight = await store.PreflightMigrationAsync(
+                    profile.ProfileId,
+                    migration,
+                    cancellationToken);
+                return Results.Ok(preflight);
+            });
+
+        group.MapPost(
+            "/migrations/commit",
+            async (
+                ProfileHostMigrationCommitRequest migration,
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (profile == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                var commit = await store.CommitMigrationAsync(
+                    profile.ProfileId,
+                    migration,
+                    cancellationToken);
+                return commit.Success
+                    ? Results.Ok(commit.Response)
+                    : Results.Conflict(commit.Conflict);
+            });
+
         return group;
     }
 
     private static async Task<ProfileHostProfileResponse?> AuthenticateAsync(
         HttpRequest request,
+        ProfileAuthenticationGate authentication,
         SqliteProfileHostStore store,
         ProfileAccessKeyHasher hasher,
         CancellationToken cancellationToken)
@@ -233,7 +340,10 @@ public static class ProfileHostEndpoints
             return null;
         }
 
-        return await store.AuthenticateAsync(accessKey, hasher, cancellationToken);
+        return await authentication.ExecuteAsync(
+            accessKey,
+            ct => store.AuthenticateAsync(accessKey, hasher, ct),
+            cancellationToken);
     }
 
     private static string? ReadAccessKey(HttpRequest request)
