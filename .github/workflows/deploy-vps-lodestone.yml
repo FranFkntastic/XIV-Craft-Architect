@@ -114,6 +114,7 @@ jobs:
             printf 'Discord__ApplicationId=%s\n' "$DISCORD_APPLICATION_ID"
             printf 'Discord__PublicKey=%s\n' "$DISCORD_PUBLIC_KEY"
             printf 'Discord__RuntimeBotToken=%s\n' "$DISCORD_BOT_TOKEN"
+            printf 'Discord__DatabasePath=/srv/craftarchitect/services/lodestone/data/discord-collaboration.db\n'
             printf 'Discord__AllowedGuildId=%s\n' "$DISCORD_GUILD_ID"
             printf 'Discord__AllowedChannelId=%s\n' '${{ steps.discord.outputs.channel_id }}'
             printf 'Discord__CommissionBaseUrl=https://dev.xivcraftarchitect.com/commission.html?id=\n'
@@ -182,23 +183,34 @@ jobs:
           done
 
           caddyfile="/etc/caddy/Caddyfile"
-          discord_route_count="$(sudo grep -cF 'handle /api/discord* {' "$caddyfile" || true)"
-          if [[ "$discord_route_count" == "0" ]]; then
-            caddy_candidate="$(mktemp)"
-            sudo cat "$caddyfile" > "$caddy_candidate"
-            python3 - "$caddy_candidate" <<'PY'
+          caddy_candidate="$(mktemp)"
+          sudo cat "$caddyfile" > "$caddy_candidate"
+          python3 - "$caddy_candidate" <<'PY'
           from pathlib import Path
           import sys
 
           path = Path(sys.argv[1])
           content = path.read_text()
           lines = content.splitlines(keepends=True)
-          route = (
-              "\thandle /api/discord* {\n"
-              "\t\turi strip_prefix /api\n"
-              "\t\treverse_proxy 127.0.0.1:5128\n"
-              "\t}\n\n"
+          route_patterns = (
+              "/api/discord*",
+              "/api/profile-host*",
+              "/api/trade*",
           )
+          missing_patterns = []
+          for pattern in route_patterns:
+              count = sum(
+                  1
+                  for line in lines
+                  if line.strip() == f"handle {pattern} {{"
+              )
+              if count == 0:
+                  missing_patterns.append(pattern)
+              elif count != 2:
+                  raise SystemExit(
+                      f"Expected zero or two Caddy routes for {pattern}; found {count}."
+                  )
+
           for host in ("xivcraftarchitect.com", "dev.xivcraftarchitect.com"):
               anchors = [
                   index
@@ -207,18 +219,23 @@ jobs:
               ]
               if len(anchors) != 1:
                   raise SystemExit(f"Expected one Caddy site block for {host}.")
-              lines.insert(anchors[0] + 1, route)
+              routes = "".join(
+                  f"\thandle {pattern} {{\n"
+                  "\t\turi strip_prefix /api\n"
+                  "\t\treverse_proxy 127.0.0.1:5128\n"
+                  "\t}\n\n"
+                  for pattern in missing_patterns
+              )
+              lines.insert(anchors[0] + 1, routes)
           path.write_text("".join(lines))
           PY
-            sudo caddy validate --config "$caddy_candidate" --adapter caddyfile
+          sudo caddy validate --config "$caddy_candidate" --adapter caddyfile
+          if ! sudo cmp --silent "$caddyfile" "$caddy_candidate"; then
             sudo cp --preserve=mode,ownership,timestamps "$caddyfile" "$caddyfile.pre-discord"
             sudo install -m 644 "$caddy_candidate" "$caddyfile"
-            rm -f "$caddy_candidate"
             sudo systemctl reload caddy
-          elif [[ "$discord_route_count" != "2" ]]; then
-            echo "Expected zero or two Discord Caddy routes; found $discord_route_count." >&2
-            exit 1
           fi
+          rm -f "$caddy_candidate"
 
           rm -f "$archive" /tmp/deploy-lodestone-remote.sh /tmp/discord.env
 
@@ -283,4 +300,13 @@ jobs:
             curl --fail --silent --show-error \
               "https://$domain/api/discord/health" \
               | grep -q '"publishingReady":true'
+            curl --fail --silent --show-error \
+              "https://$domain/api/profile-host/health" \
+              | grep -q '"profileHostEnabled":'
+            test "$(
+              curl --silent --show-error \
+                --output /dev/null \
+                --write-out '%{http_code}' \
+                "https://$domain/api/trade/v1/companies/00000000-0000-0000-0000-000000000001/discord/claims"
+            )" = "401"
           done

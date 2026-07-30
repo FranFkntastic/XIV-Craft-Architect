@@ -177,7 +177,11 @@ public sealed class SqliteProfileHostStore
     {
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             select collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc
             from sync_objects
@@ -188,17 +192,23 @@ public sealed class SqliteProfileHostStore
         command.Parameters.AddWithValue("$sinceRevision", sinceRevision);
 
         var objects = new List<ProfileSyncObjectEnvelope>();
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using (var reader = await command.ExecuteReaderAsync(ct))
         {
-            objects.Add(ReadObject(reader));
+            while (await reader.ReadAsync(ct))
+            {
+                objects.Add(ReadObject(reader));
+            }
         }
 
+        var serverRevision = await GetServerRevisionAsync(
+            connection,
+            profileId,
+            ct,
+            transaction);
+        await transaction.CommitAsync(ct);
         return new ProfileSyncChangesResponse
         {
-            ServerRevision = objects.Count == 0
-                ? await GetServerRevisionAsync(connection, profileId, ct)
-                : objects.Max(item => item.Revision),
+            ServerRevision = serverRevision,
             Objects = objects
         };
     }
@@ -547,9 +557,14 @@ public sealed class SqliteProfileHostStore
         return Convert.ToInt64(scalar, CultureInfo.InvariantCulture);
     }
 
-    private static async Task<long> GetServerRevisionAsync(SqliteConnection connection, string profileId, CancellationToken ct)
+    private static async Task<long> GetServerRevisionAsync(
+        SqliteConnection connection,
+        string profileId,
+        CancellationToken ct,
+        SqliteTransaction? transaction = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             select coalesce(
                 (
