@@ -326,6 +326,13 @@
                                   MaxLength="240"
                                   Class="my-2" />
 
+                    @if (ProfileSync.CurrentStatus.IsConnected)
+                    {
+                        <MudDivider Class="my-4" />
+                        <CompanyDiscordNotificationRouteEditor
+                            CompanyProfileId="_companyProfile.Id" />
+                    }
+
                     <MudDivider Class="my-4" />
 
                     <CompactSelectField Id="options-payment-contract"

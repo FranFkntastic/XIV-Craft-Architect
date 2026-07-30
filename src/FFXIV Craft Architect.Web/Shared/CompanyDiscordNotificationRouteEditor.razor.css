@@ -1,0 +1,36 @@
+.notification-route-grid,
+.notification-policy-grid {
+    display: grid;
+    gap: 10px;
+}
+
+.notification-route-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.notification-policy-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-top: 10px;
+}
+
+.notification-route-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.notification-route-error span {
+    min-width: 0;
+}
+
+.notification-route-editor ::deep .options-select {
+    max-width: 100%;
+}
+
+@media (max-width: 640px) {
+    .notification-route-grid,
+    .notification-policy-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
