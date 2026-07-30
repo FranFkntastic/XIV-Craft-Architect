@@ -7,16 +7,27 @@ namespace FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 public sealed class CraftAppraisalPriceEvidenceService : ICraftAppraisalPriceEvidenceService
 {
     private static readonly TimeSpan MarketEvidenceMaxAge = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan DefaultMarketEvidenceScopeTimeout = TimeSpan.FromSeconds(10);
 
     private readonly IMarketCacheService marketCache;
     private readonly ICoreRecipePlanBuilder planBuilder;
+    private readonly TimeSpan marketEvidenceScopeTimeout;
 
     public CraftAppraisalPriceEvidenceService(
         IMarketCacheService marketCache,
-        ICoreRecipePlanBuilder planBuilder)
+        ICoreRecipePlanBuilder planBuilder,
+        TimeSpan? marketEvidenceScopeTimeout = null)
     {
         this.marketCache = marketCache ?? throw new ArgumentNullException(nameof(marketCache));
         this.planBuilder = planBuilder ?? throw new ArgumentNullException(nameof(planBuilder));
+        this.marketEvidenceScopeTimeout = marketEvidenceScopeTimeout ?? DefaultMarketEvidenceScopeTimeout;
+        if (this.marketEvidenceScopeTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(marketEvidenceScopeTimeout),
+                this.marketEvidenceScopeTimeout,
+                "Market evidence scope timeout must be positive.");
+        }
     }
 
     public async Task<CraftAppraisalPriceEvidenceResult> ApplyAsync(
@@ -95,36 +106,47 @@ public sealed class CraftAppraisalPriceEvidenceService : ICraftAppraisalPriceEvi
 
         if (missing.Count > 0)
         {
-            try
-            {
-                await marketCache.EnsurePopulatedAsync(
-                    missing,
-                    MarketEvidenceMaxAge,
-                    progress: null,
-                    cancellationToken);
-                foreach (var entry in await marketCache.GetManyAsync(missing, MarketEvidenceMaxAge))
+            await Task.WhenAll(missing
+                .GroupBy(requestKey => requestKey.dataCenter, StringComparer.OrdinalIgnoreCase)
+                .Select(async scopeRequests =>
                 {
-                    entries[entry.Key] = entry.Value;
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    using var scopeTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    scopeTimeout.CancelAfter(marketEvidenceScopeTimeout);
+                    try
+                    {
+                        await marketCache.EnsurePopulatedAsync(
+                            scopeRequests.ToList(),
+                            MarketEvidenceMaxAge,
+                            progress: null,
+                            scopeTimeout.Token);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex) when (
+                        ex is HttpRequestException or
+                        TimeoutException or
+                        OperationCanceledException)
+                    {
+                        // A regional appraisal remains useful with partial data-center evidence.
+                        // Missing pairs are identified explicitly after all scopes settle.
+                    }
+                }));
+
+            foreach (var entry in await marketCache.GetManyAsync(missing, MarketEvidenceMaxAge))
             {
-                throw;
+                entries[entry.Key] = entry.Value;
             }
-            catch (Exception ex) when (
-                ex is HttpRequestException or
-                TimeoutException or
-                OperationCanceledException)
+
+            foreach (var cacheRequest in missing.Where(requestKey => !entries.ContainsKey(requestKey)))
             {
-                foreach (var cacheRequest in missing)
-                {
-                    var row = marketRows.First(candidate => candidate.ItemId == cacheRequest.Item1);
-                    issues.Add(new CraftAppraisalPriceEvidenceIssue(
-                        row.ItemId,
-                        row.ItemName,
-                        row.Source.ToString(),
-                        $"{row.ItemName}: current market evidence could not be retrieved and no retained observation is available."));
-                }
+                var row = marketRows.First(candidate => candidate.ItemId == cacheRequest.Item1);
+                issues.Add(new CraftAppraisalPriceEvidenceIssue(
+                    row.ItemId,
+                    row.ItemName,
+                    row.Source.ToString(),
+                    $"{row.ItemName}: current market evidence for {cacheRequest.dataCenter} could not be retrieved and no retained observation is available."));
             }
         }
 

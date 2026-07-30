@@ -16,6 +16,7 @@ public sealed class JsonFileMarketCacheService : IMarketCacheService
 
     private readonly UniversalisService _universalis;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private readonly TimeSpan _defaultMaxAge = MarketEvidencePolicyDefaults.ReusableCacheMaxAge;
     private Dictionary<string, CachedMarketData>? _cache;
 
@@ -84,13 +85,21 @@ public sealed class JsonFileMarketCacheService : IMarketCacheService
     {
         ArgumentNullException.ThrowIfNull(data);
 
-        var cache = await LoadCacheAsync();
-        cache.TryGetValue(GetKey(itemId, dataCenter), out var retained);
-        data = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, data);
-        data.ItemId = itemId;
-        data.DataCenter = dataCenter;
-        cache[GetKey(itemId, dataCenter)] = data;
-        await SaveCacheAsync(cache);
+        await _mutationGate.WaitAsync();
+        try
+        {
+            var cache = await LoadCacheAsync();
+            cache.TryGetValue(GetKey(itemId, dataCenter), out var retained);
+            data = MarketEvidenceCacheMerger.PreferNewestWorldEvidence(retained, data);
+            data.ItemId = itemId;
+            data.DataCenter = dataCenter;
+            cache[GetKey(itemId, dataCenter)] = data;
+            await SaveCacheAsync(cache);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
     }
 
     public async Task<bool> HasValidCacheAsync(int itemId, string dataCenter, TimeSpan? maxAge = null) =>
