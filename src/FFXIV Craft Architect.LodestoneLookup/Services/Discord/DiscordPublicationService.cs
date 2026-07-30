@@ -37,6 +37,7 @@ public sealed class DiscordPublicationService(
         TradeCompanyAccessContext access,
         string publicId,
         string idempotencyKey,
+        HostedTradeCompanyDiscordInstallation installation,
         CancellationToken cancellationToken = default)
     {
         RequireOperator(access);
@@ -88,6 +89,7 @@ public sealed class DiscordPublicationService(
             published.Version,
             idempotencyKey,
             actionToken,
+            installation.ChannelId,
             state,
             JsonSerializer.Serialize(initialPayload, JsonOptions),
             now,
@@ -152,6 +154,15 @@ public sealed class DiscordPublicationService(
         {
             return NewPublicationConflict(
                 "Discord direct publishing is not configured.");
+        }
+
+        var installation = await companies.ResolveDiscordInstallationAsync(
+            access,
+            cancellationToken);
+        if (installation == null)
+        {
+            return NewPublicationConflict(
+                "The hosted Trade company does not have a ready Discord installation.");
         }
 
         PublishedCommissionBrief published;
@@ -305,6 +316,7 @@ public sealed class DiscordPublicationService(
             access,
             published.PublicId,
             idempotencyKey,
+            installation,
             cancellationToken);
         return new DiscordNewPublicationResult(
             delivery,
