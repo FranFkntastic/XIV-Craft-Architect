@@ -159,9 +159,6 @@ public sealed class ProfileHostedTradeCompanyService(
         {
             return recordKind switch
             {
-                TradeCompanyRecordKinds.Profile =>
-                    JsonSerializer.Deserialize<TradeCompanyProfile>(payloadJson, JsonOptions)?.Id ==
-                    companyId.Value,
                 TradeCompanyRecordKinds.Crafter =>
                     JsonSerializer.Deserialize<TradeCrafterProfile>(payloadJson, JsonOptions)?
                         .CompanyProfileId == companyId.Value,
@@ -169,9 +166,6 @@ public sealed class ProfileHostedTradeCompanyService(
                     OrderBelongsToCompany(
                         JsonSerializer.Deserialize<TradeOrder>(payloadJson, JsonOptions),
                         companyId),
-                TradeCompanyRecordKinds.Payroll =>
-                    JsonSerializer.Deserialize<TradePayrollWorkflowDraft>(payloadJson, JsonOptions)?
-                        .CompanyProfileId == companyId.Value,
                 TradeCompanyRecordKinds.Publication =>
                     DeserializeOwnership(payloadJson)?.CompanyId == companyId,
                 _ => true
@@ -205,10 +199,8 @@ public sealed class ProfileHostedTradeCompanyService(
     private static string ToCollection(string recordKind) =>
         recordKind switch
         {
-            TradeCompanyRecordKinds.Profile => ProfileSyncCollections.TradeCompanyProfiles,
             TradeCompanyRecordKinds.Crafter => ProfileSyncCollections.TradeCrafters,
             TradeCompanyRecordKinds.Order => ProfileSyncCollections.TradeOrders,
-            TradeCompanyRecordKinds.Payroll => ProfileSyncCollections.TradePayrollDrafts,
             _ => CompanyCollectionPrefix + recordKind
         };
 
@@ -217,10 +209,8 @@ public sealed class ProfileHostedTradeCompanyService(
         string recordKind,
         string recordId) =>
         recordKind is
-            TradeCompanyRecordKinds.Profile or
             TradeCompanyRecordKinds.Crafter or
             TradeCompanyRecordKinds.Order or
-            TradeCompanyRecordKinds.Payroll or
             TradeCompanyRecordKinds.Publication
                 ? recordId
                 : $"{companyId}:{recordId}";
@@ -236,7 +226,6 @@ public sealed class ProfileHostedTradeCompanyService(
             recordId,
             item.PayloadJson,
             new CompanyRecordRevision(item.Revision),
-            new CompanyRevision(item.Revision),
             item.UpdatedAtUtc,
             item.Deleted,
             item.DeletedAtUtc);

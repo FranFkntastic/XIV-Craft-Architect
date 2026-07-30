@@ -3,12 +3,6 @@ using System.Text.Json.Serialization;
 
 namespace FFXIV_Craft_Architect.Core.Models;
 
-public static class TradeCompanyProtocol
-{
-    public const int CurrentVersion = 1;
-    public const int MinimumSupportedVersion = 1;
-}
-
 [JsonConverter(typeof(CompanyIdJsonConverter))]
 public readonly record struct CompanyId
 {
@@ -68,54 +62,6 @@ public sealed class CompanyIdJsonConverter : JsonConverter<CompanyId>
     }
 }
 
-[JsonConverter(typeof(CompanyRevisionJsonConverter))]
-public readonly record struct CompanyRevision
-{
-    public CompanyRevision(long value)
-    {
-        if (value < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(value), "Company revisions cannot be negative.");
-        }
-
-        Value = value;
-    }
-
-    public long Value { get; }
-
-    public static CompanyRevision None => new(0);
-
-    public CompanyRevision Next()
-    {
-        if (Value == long.MaxValue)
-        {
-            throw new InvalidOperationException("The company revision has reached its maximum value.");
-        }
-
-        return new CompanyRevision(Value + 1);
-    }
-
-    public override string ToString() => Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-}
-
-public sealed class CompanyRevisionJsonConverter : JsonConverter<CompanyRevision>
-{
-    public override CompanyRevision Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        if (reader.TokenType != JsonTokenType.Number || !reader.TryGetInt64(out var value) || value < 0)
-        {
-            throw new JsonException("Company revisions must be non-negative integers.");
-        }
-
-        return new CompanyRevision(value);
-    }
-
-    public override void Write(Utf8JsonWriter writer, CompanyRevision value, JsonSerializerOptions options)
-    {
-        writer.WriteNumberValue(value.Value);
-    }
-}
-
 [JsonConverter(typeof(CompanyRecordRevisionJsonConverter))]
 public readonly record struct CompanyRecordRevision
 {
@@ -167,13 +113,6 @@ public enum TradeCompanyRole
     Owner
 }
 
-public sealed record TradeCompanyIdentity(
-    CompanyId CompanyId,
-    string DisplayName,
-    CompanyRevision Revision,
-    DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
-
 public sealed record TradeCompanyAccessContext(
     CompanyId CompanyId,
     Guid GrantId,
@@ -182,25 +121,15 @@ public sealed record TradeCompanyAccessContext(
 
 public static class TradeCompanyRecordKinds
 {
-    public const string Profile = "profile";
     public const string Crafter = "crafter";
     public const string Order = "order";
-    public const string Payroll = "payroll";
-    public const string PlanArtifact = "planArtifact";
     public const string Publication = "publication";
-    public const string Collaboration = "collaboration";
-    public const string OperatorSettings = "operatorSettings";
 
     public static IReadOnlySet<string> All { get; } = new HashSet<string>(
         [
-            Profile,
             Crafter,
             Order,
-            Payroll,
-            PlanArtifact,
-            Publication,
-            Collaboration,
-            OperatorSettings
+            Publication
         ],
         StringComparer.Ordinal);
 }
@@ -211,25 +140,9 @@ public sealed record TradeCompanyRecordEnvelope(
     string RecordId,
     string PayloadJson,
     CompanyRecordRevision RecordRevision,
-    CompanyRevision CompanyRevision,
     DateTime UpdatedAtUtc,
     bool Deleted = false,
     DateTime? DeletedAtUtc = null);
-
-public sealed record TradeCompanyChangeSet(
-    CompanyId CompanyId,
-    CompanyRevision CompanyRevision,
-    IReadOnlyList<TradeCompanyRecordEnvelope> Records);
-
-public sealed record TradeCompanyMutationRequest(
-    CompanyId CompanyId,
-    string RecordKind,
-    string RecordId,
-    string PayloadJson,
-    CompanyRecordRevision ExpectedRecordRevision,
-    CompanyRevision ExpectedCompanyRevision,
-    string IdempotencyKey,
-    int ProtocolVersion = TradeCompanyProtocol.CurrentVersion);
 
 public enum TradeCompanyMutationStatus
 {
