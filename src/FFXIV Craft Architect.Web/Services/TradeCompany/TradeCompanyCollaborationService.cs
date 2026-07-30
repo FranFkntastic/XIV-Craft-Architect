@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
@@ -135,6 +136,43 @@ public sealed class TradeCompanyCollaborationService(
             return Rejected(exception.Message);
         }
     }
+
+    public async Task<PortableCommissionLink> PublishPortableLinkAsync(
+        TradeOrder order,
+        CommissionBriefDocument brief,
+        CancellationToken cancellationToken = default)
+    {
+        if (!CanPerformExternalAction(order, out var reason))
+        {
+            throw new InvalidOperationException(reason);
+        }
+
+        var revision = await localState.LoadObjectRevisionAsync(
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"));
+        if (revision <= 0)
+        {
+            throw new InvalidOperationException(
+                "Sync this order through Profile Hosting before publishing its company-owned link.");
+        }
+
+        return await client.PublishPortableLinkAsync(
+            order.CompanyProfileId,
+            order.Id,
+            revision,
+            brief,
+            $"portable-link:{order.Id:D}:{revision}",
+            cancellationToken);
+    }
+
+    public Task RevokePortableLinkAsync(
+        TradeOrder order,
+        string publicId,
+        CancellationToken cancellationToken = default) =>
+        client.RevokePortableLinkAsync(
+            order.CompanyProfileId,
+            publicId,
+            cancellationToken);
 
     public Task<TradeCommissionWorkflowResult> AcceptInterestAsync(
         TradeOrder order,

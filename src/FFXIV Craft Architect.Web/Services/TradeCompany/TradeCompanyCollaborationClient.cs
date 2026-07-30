@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
@@ -78,6 +79,48 @@ public sealed class TradeCompanyCollaborationClient(
             ?? throw new InvalidOperationException(
                 "The Discord publication endpoint returned an empty response.");
         return ToPublication(publication);
+    }
+
+    public async Task<PortableCommissionLink> PublishPortableLinkAsync(
+        Guid companyProfileId,
+        Guid orderId,
+        long orderRevision,
+        CommissionBriefDocument brief,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{companyProfileId:D}/commission-briefs",
+            new CompanyCommissionBriefCreateRequest
+            {
+                OrderId = orderId,
+                OrderRevision = new CompanyRecordRevision(orderRevision),
+                Brief = brief,
+                IdempotencyKey = idempotencyKey
+            },
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var published = await response.Content.ReadFromJsonAsync<CommissionBriefCreateResponse>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "Portable commission publication returned an empty response.");
+        return CommissionBriefClient.CreatePortableLink(published);
+    }
+
+    public async Task RevokePortableLinkAsync(
+        Guid companyProfileId,
+        string publicId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Delete,
+            $"trade/v1/companies/{companyProfileId:D}/commission-briefs/" +
+            Uri.EscapeDataString(publicId),
+            content: null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
     }
 
     public async Task<TradeCommissionInterestResolutionReceipt> AcceptAsync(

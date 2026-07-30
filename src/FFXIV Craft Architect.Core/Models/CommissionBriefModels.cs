@@ -56,10 +56,27 @@ public sealed class CommissionBriefCreateRequest
     public TradeCompanyPublicationOwnership? Ownership { get; set; }
 }
 
+public sealed class CompanyCommissionBriefCreateRequest
+{
+    public Guid OrderId { get; set; }
+    public CompanyRecordRevision OrderRevision { get; set; }
+    public CommissionBriefDocument Brief { get; set; } = new();
+    public string IdempotencyKey { get; set; } = string.Empty;
+}
+
 public sealed class CommissionBriefCreateResponse
 {
     public string PublicId { get; set; } = string.Empty;
+    public string PublicUrl { get; set; } = string.Empty;
     public string EditorToken { get; set; } = string.Empty;
+    public int Version { get; set; }
+    public DateTime PublishedAtUtc { get; set; }
+}
+
+public sealed class CommissionBriefLinkResponse
+{
+    public string PublicId { get; set; } = string.Empty;
+    public string PublicUrl { get; set; } = string.Empty;
     public int Version { get; set; }
     public DateTime PublishedAtUtc { get; set; }
 }
