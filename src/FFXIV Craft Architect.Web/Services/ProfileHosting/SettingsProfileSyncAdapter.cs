@@ -35,7 +35,7 @@ public sealed class SettingsProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var settings = await _indexedDb.LoadAllSettingsAsync();
+        var settings = await _indexedDb.LoadAllSettingsRequiredAsync();
         return ToSyncObjects(settings, DateTime.UtcNow);
     }
 

@@ -58,6 +58,11 @@ public sealed class IndexedDbService
             new List<StoredPlan>(),
             "load plans");
 
+    public Task<List<StoredPlan>> LoadAllPlansRequiredAsync() =>
+        InvokeRequiredAsync<List<StoredPlan>>(
+            "IndexedDB.loadAllPlans",
+            "load plans for hosted profile sync");
+
     public Task<List<StoredPlanSummary>> LoadPlanSummariesAsync() =>
         InvokeOrDefaultAsync(
             "IndexedDB.loadPlanSummaries",
@@ -114,11 +119,41 @@ public sealed class IndexedDbService
         }
     }
 
+    public async Task<T?> LoadRequiredSettingAsync<T>(
+        string key,
+        T? defaultValue = default)
+    {
+        var serialized = await InvokeRequiredAsync<string?>(
+            "IndexedDB.loadSetting",
+            $"load required setting {key}",
+            key);
+        if (string.IsNullOrEmpty(serialized))
+        {
+            return defaultValue;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<T>(serialized);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Required browser setting '{key}' is invalid.",
+                ex);
+        }
+    }
+
     public Task<Dictionary<string, string>> LoadAllSettingsAsync() =>
         InvokeOrDefaultAsync(
             "IndexedDB.loadAllSettings",
             new Dictionary<string, string>(),
             "load settings");
+
+    public Task<Dictionary<string, string>> LoadAllSettingsRequiredAsync() =>
+        InvokeRequiredAsync<Dictionary<string, string>>(
+            "IndexedDB.loadAllSettings",
+            "load settings for hosted profile sync");
 
     public Task<bool> SaveSettingsBatchAsync(
         Dictionary<string, string> settings) =>

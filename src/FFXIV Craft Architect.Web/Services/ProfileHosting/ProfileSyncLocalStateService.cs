@@ -48,13 +48,19 @@ public sealed class ProfileSyncLocalStateService
 
     public async Task<HostedProfileConnectionSettings> LoadConnectionSettingsAsync()
     {
+        var settings = await _indexedDb.LoadAllSettingsRequiredAsync();
         return new HostedProfileConnectionSettings
         {
-            HostUrl = await _indexedDb.LoadSettingAsync<string>(ProfileSyncSettingsKeys.HostUrl),
-            AccessKey = await _indexedDb.LoadSettingAsync<string>(ProfileSyncSettingsKeys.AccessKey),
-            RememberAccessKey = await _indexedDb.LoadSettingAsync(ProfileSyncSettingsKeys.RememberAccessKey, false),
-            ConnectedProfileId = await _indexedDb.LoadSettingAsync<string>(ProfileSyncSettingsKeys.ConnectedProfileId),
-            ConnectedProfileName = await _indexedDb.LoadSettingAsync<string>(ConnectedProfileNameKey)
+            HostUrl = ReadSetting<string>(settings, ProfileSyncSettingsKeys.HostUrl),
+            AccessKey = ReadSetting<string>(settings, ProfileSyncSettingsKeys.AccessKey),
+            RememberAccessKey = ReadSetting(
+                settings,
+                ProfileSyncSettingsKeys.RememberAccessKey,
+                false),
+            ConnectedProfileId = ReadSetting<string>(
+                settings,
+                ProfileSyncSettingsKeys.ConnectedProfileId),
+            ConnectedProfileName = ReadSetting<string>(settings, ConnectedProfileNameKey)
         };
     }
 
@@ -82,16 +88,16 @@ public sealed class ProfileSyncLocalStateService
         }
     }
 
-    public async Task<long> LoadLastSyncRevisionAsync()
+    public async Task<long> LoadLastSyncRevisionAsync(string profileId)
     {
-        return await _indexedDb.LoadSettingAsync(
-            await BuildProfileStateKeyAsync(LastSyncRevisionSuffix),
+        return await _indexedDb.LoadRequiredSettingAsync(
+            BuildProfileStateKey(profileId, LastSyncRevisionSuffix),
             0L);
     }
 
-    public async Task SaveLastSyncRevisionAsync(long revision)
+    public async Task SaveLastSyncRevisionAsync(string profileId, long revision)
     {
-        var key = await BuildProfileStateKeyAsync(LastSyncRevisionSuffix);
+        var key = BuildProfileStateKey(profileId, LastSyncRevisionSuffix);
         if (!await _indexedDb.SaveSettingAsync(key, revision))
         {
             throw new InvalidOperationException(
@@ -99,16 +105,23 @@ public sealed class ProfileSyncLocalStateService
         }
     }
 
-    public async Task<long> LoadObjectRevisionAsync(string collection, string objectId)
+    public async Task<long> LoadObjectRevisionAsync(
+        string profileId,
+        string collection,
+        string objectId)
     {
-        return await _indexedDb.LoadSettingAsync(
-            await BuildObjectRevisionKeyAsync(collection, objectId),
+        return await _indexedDb.LoadRequiredSettingAsync(
+            BuildObjectRevisionKey(profileId, collection, objectId),
             0L);
     }
 
-    public async Task SaveObjectRevisionAsync(string collection, string objectId, long revision)
+    public async Task SaveObjectRevisionAsync(
+        string profileId,
+        string collection,
+        string objectId,
+        long revision)
     {
-        var key = await BuildObjectRevisionKeyAsync(collection, objectId);
+        var key = BuildObjectRevisionKey(profileId, collection, objectId);
         if (!await _indexedDb.SaveSettingAsync(key, revision))
         {
             throw new InvalidOperationException(
@@ -116,17 +129,20 @@ public sealed class ProfileSyncLocalStateService
         }
     }
 
-    public async Task<IReadOnlyList<ProfileSyncPendingSave>> LoadPendingSavesAsync()
+    public async Task<IReadOnlyList<ProfileSyncPendingSave>> LoadPendingSavesAsync(
+        string profileId)
     {
-        return await _indexedDb.LoadSettingAsync(
-                   await BuildProfileStateKeyAsync(PendingSavesSuffix),
+        return await _indexedDb.LoadRequiredSettingAsync(
+                   BuildProfileStateKey(profileId, PendingSavesSuffix),
                    Array.Empty<ProfileSyncPendingSave>())
                ?? Array.Empty<ProfileSyncPendingSave>();
     }
 
-    public async Task SavePendingSavesAsync(IReadOnlyList<ProfileSyncPendingSave> pendingSaves)
+    public async Task SavePendingSavesAsync(
+        string profileId,
+        IReadOnlyList<ProfileSyncPendingSave> pendingSaves)
     {
-        var key = await BuildProfileStateKeyAsync(PendingSavesSuffix);
+        var key = BuildProfileStateKey(profileId, PendingSavesSuffix);
         if (!await _indexedDb.SaveSettingAsync(key, pendingSaves))
         {
             throw new InvalidOperationException(
@@ -136,27 +152,78 @@ public sealed class ProfileSyncLocalStateService
 
     public async Task<string?> LoadConnectedProfileScopeIdAsync()
     {
-        var rawProfileId = await _indexedDb.LoadSettingAsync<string>(
-            ProfileSyncSettingsKeys.ConnectedProfileId);
-        return Guid.TryParse(rawProfileId, out var profileId) &&
-               profileId != Guid.Empty
-            ? profileId.ToString("D")
-            : null;
+        return (await LoadConnectionSettingsAsync()).ProfileScopeId;
     }
 
-    private async Task<string> BuildObjectRevisionKeyAsync(
+    public async Task<long> LoadObjectRevisionAsync(
         string collection,
         string objectId)
     {
-        return await BuildProfileStateKeyAsync(
+        var profileId = await RequireConnectedProfileScopeIdAsync();
+        return await LoadObjectRevisionAsync(profileId, collection, objectId);
+    }
+
+    public async Task SaveObjectRevisionAsync(
+        string collection,
+        string objectId,
+        long revision)
+    {
+        var profileId = await RequireConnectedProfileScopeIdAsync();
+        await SaveObjectRevisionAsync(profileId, collection, objectId, revision);
+    }
+
+    private static string BuildObjectRevisionKey(
+        string profileId,
+        string collection,
+        string objectId)
+    {
+        return BuildProfileStateKey(
+            profileId,
             $"{ObjectRevisionSuffix}{collection}.{Uri.EscapeDataString(objectId)}");
     }
 
-    private async Task<string> BuildProfileStateKeyAsync(string suffix)
+    private async Task<string> RequireConnectedProfileScopeIdAsync()
     {
-        var profileId = await LoadConnectedProfileScopeIdAsync()
+        return await LoadConnectedProfileScopeIdAsync()
             ?? throw new InvalidOperationException(
                 "Hosted-profile sync state requires a connected profile ID.");
+    }
+
+    private static string BuildProfileStateKey(string profileId, string suffix)
+    {
+        profileId = NormalizeProfileScopeId(profileId);
         return $"{ProfileStatePrefix}{profileId}.{suffix}";
+    }
+
+    private static string NormalizeProfileScopeId(string profileId)
+    {
+        return Guid.TryParse(profileId, out var parsed) &&
+               parsed != Guid.Empty
+            ? parsed.ToString("D")
+            : throw new InvalidOperationException(
+                "Hosted-profile sync state requires a valid profile ID.");
+    }
+
+    private static T? ReadSetting<T>(
+        IReadOnlyDictionary<string, string> settings,
+        string key,
+        T? defaultValue = default)
+    {
+        if (!settings.TryGetValue(key, out var serialized) ||
+            string.IsNullOrEmpty(serialized))
+        {
+            return defaultValue;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<T>(serialized);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Required browser setting '{key}' is invalid.",
+                ex);
+        }
     }
 }

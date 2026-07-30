@@ -8,9 +8,24 @@ public sealed class HostedProfileConnectionSettings
     public string? ConnectedProfileId { get; set; }
     public string? ConnectedProfileName { get; set; }
 
+    public string? ProfileScopeId =>
+        Guid.TryParse(ConnectedProfileId, out var profileId) &&
+        profileId != Guid.Empty
+            ? profileId.ToString("D")
+            : null;
+
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(HostUrl) &&
         !string.IsNullOrWhiteSpace(AccessKey) &&
-        Guid.TryParse(ConnectedProfileId, out var profileId) &&
-        profileId != Guid.Empty;
+        ProfileScopeId != null;
+
+    public HostedProfileConnectionSettings Snapshot() =>
+        new()
+        {
+            HostUrl = HostUrl,
+            AccessKey = AccessKey,
+            RememberAccessKey = RememberAccessKey,
+            ConnectedProfileId = ProfileScopeId,
+            ConnectedProfileName = ConnectedProfileName
+        };
 }

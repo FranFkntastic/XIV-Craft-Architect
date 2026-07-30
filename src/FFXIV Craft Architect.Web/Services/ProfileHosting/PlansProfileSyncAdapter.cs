@@ -29,7 +29,7 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var plans = await _indexedDb.LoadAllPlansAsync();
+        var plans = await _indexedDb.LoadAllPlansRequiredAsync();
         var now = DateTime.UtcNow;
         return plans.Select(plan => ToSyncObject(plan, now)).ToArray();
     }
