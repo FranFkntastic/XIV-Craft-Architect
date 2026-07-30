@@ -136,9 +136,16 @@ public partial class TradeOrders
         Item,
         Quantity,
         Source,
-        Unit,
-        EstimatedCost,
+        Cost,
         Responsibility
+    }
+
+    private enum TradeOrderProcurementFilter
+    {
+        All,
+        Attention,
+        Crafter,
+        Company
     }
 
     private sealed class RequestedOrderOutputEditor

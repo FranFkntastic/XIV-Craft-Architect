@@ -375,6 +375,7 @@ public partial class TradeOrders
 
         _isRepricingSelectedOrder = true;
         var orderId = _selectedOrder.Id;
+        var activeOpsTab = _activeOpsTab;
 
         try
         {
@@ -409,7 +410,7 @@ public partial class TradeOrders
             {
                 if (SelectOrderAfterReload(orderId, "Order pricing was saved, but the order could not be loaded."))
                 {
-                    _activeOpsTab = 0;
+                    _activeOpsTab = activeOpsTab;
                 }
             }
 

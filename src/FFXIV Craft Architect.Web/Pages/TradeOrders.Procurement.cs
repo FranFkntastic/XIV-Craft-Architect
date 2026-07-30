@@ -158,8 +158,7 @@ public partial class TradeOrders
             TradeOrderProcurementColumn.Item => rows.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase),
             TradeOrderProcurementColumn.Quantity => rows.OrderBy(GetProcurementSortQuantity),
             TradeOrderProcurementColumn.Source => rows.OrderBy(row => row.SourceLabel, StringComparer.OrdinalIgnoreCase),
-            TradeOrderProcurementColumn.Unit => rows.OrderBy(row => row.UnitCost),
-            TradeOrderProcurementColumn.EstimatedCost => rows.OrderBy(row => row.TotalCost),
+            TradeOrderProcurementColumn.Cost => rows.OrderBy(row => row.TotalCost),
             TradeOrderProcurementColumn.Responsibility => rows.OrderBy(row => row.Responsibility.ToString(), StringComparer.OrdinalIgnoreCase),
             _ => rows.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
         };
@@ -174,52 +173,46 @@ public partial class TradeOrders
             new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
             {
                 Id = TradeOrderProcurementColumn.Item,
-                Header = "Item",
-                Size = new WebTableColumnSize(150, 120),
+                Header = "Material",
+                Size = new WebTableColumnSize(180, 150),
                 Sortable = true,
                 CellCssClass = "trade-orders-procurement-item-cell",
                 CellTemplate = RenderProcurementItemCell
             },
             WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
                 TradeOrderProcurementColumn.Quantity,
-                "Qty",
+                "Required",
                 FormatProcurementQuantity,
-                widthPx: 82,
-                minWidthPx: 72,
+                widthPx: 90,
+                minWidthPx: 78,
                 alignEnd: true,
                 cellCssClass: "trade-orders-procurement-quantity",
                 headerTooltip: "Active procurement quantity for live linked plans; total quantity for saved snapshots."),
             new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
             {
                 Id = TradeOrderProcurementColumn.Source,
-                Header = "Source",
-                Size = new WebTableColumnSize(150, 120),
+                Header = "Procurement Route",
+                Size = new WebTableColumnSize(170, 132),
                 Sortable = true,
                 SuppressRowActivation = true,
                 CellTemplate = RenderProcurementSourceCell
             },
-            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
-                TradeOrderProcurementColumn.Unit,
-                "Unit",
-                row => FormatGil(row.UnitCost),
-                widthPx: 76,
-                minWidthPx: 68,
-                alignEnd: true,
-                cellCssClass: "trade-orders-procurement-cost"),
-            WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>.Text(
-                TradeOrderProcurementColumn.EstimatedCost,
-                "Est. Cost",
-                row => FormatGil(row.TotalCost),
-                widthPx: 112,
-                minWidthPx: 96,
-                alignEnd: true,
-                cellCssClass: "trade-orders-procurement-cost"),
+            new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
+            {
+                Id = TradeOrderProcurementColumn.Cost,
+                Header = "Estimated Cost",
+                Size = new WebTableColumnSize(140, 116),
+                Sortable = true,
+                CellCssClass = "trade-orders-procurement-cost",
+                CellTemplate = RenderProcurementCostCell
+            },
             new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
             {
                 Id = TradeOrderProcurementColumn.Responsibility,
-                Header = "Resp.",
-                Size = new WebTableColumnSize(114, 104),
+                Header = "Responsibility",
+                Size = new WebTableColumnSize(150, 126),
                 Sortable = true,
+                SuppressRowActivation = true,
                 CellTemplate = RenderProcurementResponsibilityCell
             }
         ];
@@ -228,10 +221,12 @@ public partial class TradeOrders
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementItemCell => row => builder =>
     {
         var sequence = 0;
-        builder.OpenElement(sequence++, "button");
-        builder.AddAttribute(sequence++, "type", "button");
-        builder.AddAttribute(sequence++, "class", "trade-orders-link-button");
-        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this, () => OpenProcurementRowDetailsAsync(row)));
+        builder.OpenElement(sequence++, "div");
+        builder.AddAttribute(sequence++, "class", "trade-orders-procurement-item-primary");
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", GetProcurementStatusDotClass(row));
+        builder.CloseElement();
+        builder.OpenElement(sequence++, "strong");
         builder.AddContent(sequence++, row.ItemName);
         builder.CloseElement();
         if (row.RequiresHq)
@@ -241,22 +236,170 @@ public partial class TradeOrders
             builder.AddContent(sequence++, "HQ");
             builder.CloseElement();
         }
+        builder.CloseElement();
+
+        builder.OpenElement(sequence++, "span");
+        builder.AddAttribute(sequence++, "class", GetProcurementEvidenceTextClass(row));
+        builder.AddAttribute(sequence++, "title", row.UnitCostExplanation);
+        builder.AddContent(sequence++, FormatProcurementEvidence(row));
+        builder.CloseElement();
     };
 
-    private RenderFragment<TradeOrderProcurementRow> RenderProcurementResponsibilityCell => row => builder =>
+    private static IReadOnlyList<TradeOrderProcurementRow> GetActiveProcurementRows(
+        IReadOnlyList<TradeOrderProcurementRow> rows)
     {
-        var sequence = 0;
-        if (row.IsLiveAcquisitionRow && !row.IsActiveProcurement)
+        return rows
+            .Where(row => !row.IsLiveAcquisitionRow || row.IsActiveProcurement)
+            .ToArray();
+    }
+
+    private IReadOnlyList<TradeOrderProcurementRow> GetFilteredProcurementRows(
+        IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        return rows
+            .Where(row => MatchesProcurementFilter(row, _procurementFilter))
+            .ToArray();
+    }
+
+    private static int CountProcurementRows(
+        IReadOnlyList<TradeOrderProcurementRow> rows,
+        TradeOrderProcurementFilter filter)
+    {
+        return rows.Count(row => MatchesProcurementFilter(row, filter));
+    }
+
+    private static bool MatchesProcurementFilter(
+        TradeOrderProcurementRow row,
+        TradeOrderProcurementFilter filter)
+    {
+        return filter switch
         {
-            builder.OpenElement(sequence++, "span");
-            builder.AddAttribute(sequence++, "class", "trade-orders-procurement-reference");
-            builder.AddContent(sequence++, row.IsFullySuppressed ? "Suppressed" : "Reference");
-            builder.CloseElement();
-            return;
+            TradeOrderProcurementFilter.Attention => ProcurementRowNeedsAttention(row),
+            TradeOrderProcurementFilter.Crafter =>
+                row.Responsibility == CommissionMaterialResponsibility.Crafter,
+            TradeOrderProcurementFilter.Company =>
+                row.Responsibility == CommissionMaterialResponsibility.Provided,
+            _ => true
+        };
+    }
+
+    private static bool ProcurementRowNeedsAttention(TradeOrderProcurementRow row)
+    {
+        return row.TotalCost <= 0 ||
+            row.HasSuppressedOccurrences ||
+            row.Warnings.Count > 0 ||
+            !string.Equals(row.EvidenceStatus, "Priced", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void SetProcurementFilter(TradeOrderProcurementFilter filter)
+    {
+        _procurementFilter = filter;
+    }
+
+    private string GetProcurementFilterClass(TradeOrderProcurementFilter filter)
+    {
+        return _procurementFilter == filter
+            ? "trade-orders-procurement-filter is-active"
+            : "trade-orders-procurement-filter";
+    }
+
+    private string GetProcurementFilterEmptyMessage()
+    {
+        return _procurementFilter switch
+        {
+            TradeOrderProcurementFilter.Attention => "No procurement materials need attention.",
+            TradeOrderProcurementFilter.Crafter => "No materials are assigned to the crafter.",
+            TradeOrderProcurementFilter.Company => "No materials are assigned to the company.",
+            _ => "No procurement materials match this view."
+        };
+    }
+
+    private static string FormatProcurementOutputSummary(TradeOrder order)
+    {
+        var outputs = GetOrderRootItems(order);
+        if (outputs.Count == 0)
+        {
+            return "No requested outputs";
         }
 
-        builder.AddContent(sequence++, FormatResponsibility(row.Responsibility));
-    };
+        var first = outputs[0];
+        var firstLabel = $"{first.Name} {TradeDisplayFormatter.FormatQuantity(first.Quantity)}";
+        return outputs.Count == 1
+            ? firstLabel
+            : $"{firstLabel} + {outputs.Count - 1:N0} more";
+    }
+
+    private static string FormatProcurementRouteSummary(TradeOrder order, int materialCount)
+    {
+        var route = HasLinkedCraftPlan(order)
+            ? "Crafted from linked plan"
+            : "Saved order snapshot";
+        return $"{route} | {materialCount:N0} procured {(materialCount == 1 ? "material" : "materials")}";
+    }
+
+    private static decimal GetProcurementEstimatedTotal(
+        IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        return rows.Sum(row => Math.Max(row.TotalCost, 0m));
+    }
+
+    private static string GetProcurementHealthLabel(
+        IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        var attentionCount = rows.Count(ProcurementRowNeedsAttention);
+        return attentionCount == 0
+            ? "Evidence current"
+            : $"{attentionCount:N0} {(attentionCount == 1 ? "line needs" : "lines need")} attention";
+    }
+
+    private static string FormatProcurementEvidenceContext(TradeOrder order)
+    {
+        var scope = string.IsNullOrWhiteSpace(order.SourceSnapshot.DataCenter)
+            ? order.SourceSnapshot.Region
+            : order.SourceSnapshot.DataCenter;
+        var refreshed = order.SourceSnapshot.ImportedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+        return string.IsNullOrWhiteSpace(scope)
+            ? $"Refreshed {refreshed}"
+            : $"{scope} | refreshed {refreshed}";
+    }
+
+    private static string FormatProcurementFooter(IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        var attentionCount = rows.Count(ProcurementRowNeedsAttention);
+        var state = attentionCount == 0
+            ? "all pricing evidence current"
+            : $"{attentionCount:N0} {(attentionCount == 1 ? "line needs" : "lines need")} attention";
+        return $"{rows.Count:N0} {(rows.Count == 1 ? "material" : "materials")} | {state}";
+    }
+
+    private static string GetProcurementStatusDotClass(TradeOrderProcurementRow row)
+    {
+        return ProcurementRowNeedsAttention(row)
+            ? "trade-orders-procurement-status-dot is-attention"
+            : "trade-orders-procurement-status-dot";
+    }
+
+    private static string GetProcurementEvidenceTextClass(TradeOrderProcurementRow row)
+    {
+        return ProcurementRowNeedsAttention(row)
+            ? "trade-orders-procurement-evidence is-attention"
+            : "trade-orders-procurement-evidence";
+    }
+
+    private static string FormatProcurementEvidence(TradeOrderProcurementRow row)
+    {
+        if (!string.IsNullOrWhiteSpace(row.WarningSummary))
+        {
+            return row.WarningSummary;
+        }
+
+        if (!string.IsNullOrWhiteSpace(row.EvidenceSource))
+        {
+            return $"{row.EvidenceStatus} | {row.EvidenceSource}";
+        }
+
+        return row.EvidenceStatus;
+    }
 
     private static string GetProcurementRowClass(TradeOrderProcurementRow row)
     {
@@ -302,12 +445,37 @@ public partial class TradeOrders
         return TradeProcurementSourceMutationPolicy.CanChangeSource(row);
     }
 
-    private Task OpenProcurementRowDetailsAsync(TradeOrderProcurementRow row)
+    private async Task ChangeProcurementRowSourceValueAsync(
+        TradeOrderProcurementRow row,
+        string? value)
     {
-        return row.IsLiveAcquisitionRow &&
-            (!row.IsActiveProcurement || row.Source == AcquisitionSource.Craft)
-                ? OpenAcquisitionEvaluationForProcurementRowAsync(row)
-                : OpenMarketAnalysisForProcurementRowAsync(row);
+        if (!Enum.TryParse<AcquisitionSource>(value, out var source))
+        {
+            return;
+        }
+
+        await ChangeProcurementRowSourceAsync(row, source);
+    }
+
+    private async Task ChangeProcurementRowResponsibilityValueAsync(
+        TradeOrderProcurementRow row,
+        string? value)
+    {
+        if (!Enum.TryParse<CommissionMaterialResponsibility>(value, out var responsibility))
+        {
+            return;
+        }
+
+        var material = GetSelectedOrderPaymentSummary().Materials.FirstOrDefault(candidate =>
+            candidate.ItemId == row.ItemId &&
+            candidate.RequiresHq == row.RequiresHq);
+        if (material == null)
+        {
+            Snackbar.Add("This material is missing from the order payment basis.", Severity.Warning);
+            return;
+        }
+
+        await SetOrderMaterialResponsibilityAsync(material, responsibility);
     }
 
     private Task OnProcurementSortChanged(WebTableSortState<TradeOrderProcurementColumn> sortState)

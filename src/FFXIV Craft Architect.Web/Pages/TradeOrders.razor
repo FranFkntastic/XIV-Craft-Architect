@@ -1,4 +1,5 @@
 @page "/trade/orders"
+@implements IAsyncDisposable
 @using System.Text
 @using FFXIV_Craft_Architect.Core.Helpers
 @using FFXIV_Craft_Architect.Web.Services.TradeCompany
@@ -12,6 +13,7 @@
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncService ProfileSync
+@inject WebSettingsService WebSettings
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyCollaborationService TradeCollaboration
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCommissionOperationsService CommissionOperations
 @inject CommissionBriefClient CommissionBriefs
@@ -38,7 +40,9 @@
     }
     else
     {
-        <div class="trade-orders-board">
+        <div class="trade-orders-board"
+             @ref="_boardElement"
+             style="@TradeOrdersBoardStyle">
                 <aside class="trade-orders-rail">
                     <div class="trade-orders-rail-header">
                         <MudText Typo="Typo.subtitle1">Orders</MudText>
@@ -559,6 +563,16 @@
                     }
                 </main>
 
+                <div class="trade-orders-ops-splitter"
+                     @ref="_opsSplitterElement"
+                     role="separator"
+                     aria-label="Resize order operations pane"
+                     aria-orientation="vertical"
+                     aria-valuemin="@MinimumOpsPaneWidth"
+                     aria-valuemax="@MaximumOpsPaneWidth"
+                     aria-valuenow="@_opsPaneWidth"
+                     tabindex="0"></div>
+
                 <aside class="trade-orders-ops">
                     @if (_selectedOrder == null)
                     {
@@ -947,9 +961,10 @@
                                 }
                             </MudTabPanel>
                             <MudTabPanel Text="Procurement">
-                                <MudText Typo="Typo.subtitle2">Procurement Evidence</MudText>
                                 @{
-                                    var procurementRows = GetSelectedOrderProcurementRows();
+                                    var allProcurementRows = GetSelectedOrderProcurementRows();
+                                    var procurementRows = GetActiveProcurementRows(allProcurementRows);
+                                    var visibleProcurementRows = GetFilteredProcurementRows(procurementRows);
                                 }
                                 @if (procurementRows.Count == 0)
                                 {
@@ -957,17 +972,88 @@
                                 }
                                 else
                                 {
+                                    <section class="trade-orders-procurement-context">
+                                        <div>
+                                            <span>Output route</span>
+                                            <strong>@FormatProcurementOutputSummary(_selectedOrder)</strong>
+                                            <small>@FormatProcurementRouteSummary(_selectedOrder, procurementRows.Count)</small>
+                                        </div>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.OpenInNew"
+                                                   OnClick="OpenSelectedOrderCraftPlanAsync"
+                                                   Disabled="@(_isOpeningSelectedOrderCraftPlan || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isOpeningSelectedOrderCraftPlan ? "Opening..." : "Open Craft Plan")
+                                        </MudButton>
+                                    </section>
+
+                                    <section class="trade-orders-procurement-summary">
+                                        <div class="trade-orders-procurement-total">
+                                            <span>Estimated procurement</span>
+                                            <strong>@FormatGil(GetProcurementEstimatedTotal(procurementRows))</strong>
+                                        </div>
+                                        <div class="trade-orders-procurement-health">
+                                            <strong>@GetProcurementHealthLabel(procurementRows)</strong>
+                                            <span>@FormatProcurementEvidenceContext(_selectedOrder)</span>
+                                        </div>
+                                        <MudButton Variant="Variant.Filled"
+                                                   Color="Color.Primary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.Refresh"
+                                                   OnClick="RepriceSelectedOrderAsync"
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isRepricingSelectedOrder ? "Refreshing..." : "Refresh Prices")
+                                        </MudButton>
+                                    </section>
+
+                                    <div class="trade-orders-procurement-filters" role="group" aria-label="Filter procurement materials">
+                                        <button type="button"
+                                                class="@GetProcurementFilterClass(TradeOrderProcurementFilter.All)"
+                                                aria-pressed="@(_procurementFilter == TradeOrderProcurementFilter.All)"
+                                                @onclick="@(() => SetProcurementFilter(TradeOrderProcurementFilter.All))">
+                                            All <span>@procurementRows.Count.ToString("N0")</span>
+                                        </button>
+                                        <button type="button"
+                                                class="@GetProcurementFilterClass(TradeOrderProcurementFilter.Attention)"
+                                                aria-pressed="@(_procurementFilter == TradeOrderProcurementFilter.Attention)"
+                                                @onclick="@(() => SetProcurementFilter(TradeOrderProcurementFilter.Attention))">
+                                            Needs attention <span>@CountProcurementRows(procurementRows, TradeOrderProcurementFilter.Attention).ToString("N0")</span>
+                                        </button>
+                                        <button type="button"
+                                                class="@GetProcurementFilterClass(TradeOrderProcurementFilter.Crafter)"
+                                                aria-pressed="@(_procurementFilter == TradeOrderProcurementFilter.Crafter)"
+                                                @onclick="@(() => SetProcurementFilter(TradeOrderProcurementFilter.Crafter))">
+                                            Crafter supplies <span>@CountProcurementRows(procurementRows, TradeOrderProcurementFilter.Crafter).ToString("N0")</span>
+                                        </button>
+                                        <button type="button"
+                                                class="@GetProcurementFilterClass(TradeOrderProcurementFilter.Company)"
+                                                aria-pressed="@(_procurementFilter == TradeOrderProcurementFilter.Company)"
+                                                @onclick="@(() => SetProcurementFilter(TradeOrderProcurementFilter.Company))">
+                                            Company supplies <span>@CountProcurementRows(procurementRows, TradeOrderProcurementFilter.Company).ToString("N0")</span>
+                                        </button>
+                                    </div>
+
                                     <WebGridTable TItem="TradeOrderProcurementRow"
                                                   TColumnId="TradeOrderProcurementColumn"
                                                   CssClass="trade-orders-procurement-grid"
-                                                  Items="@GetOrderedProcurementRows(procurementRows)"
+                                                  Items="@GetOrderedProcurementRows(visibleProcurementRows)"
                                                   Columns="@GetProcurementColumns()"
                                                   GetRowKey="row => row.RowKey"
                                                   GetRowClass="GetProcurementRowClass"
                                                   SortState="@_procurementSortState"
                                                   SortChanged="OnProcurementSortChanged"
-                                                  ColumnGapPx="4"
-                                                  HorizontalPaddingPx="8" />
+                                                  FitToContainer="true"
+                                                  ColumnGapPx="8"
+                                                  HorizontalPaddingPx="8">
+                                        <EmptyContent>
+                                            <div class="trade-orders-procurement-empty">@GetProcurementFilterEmptyMessage()</div>
+                                        </EmptyContent>
+                                    </WebGridTable>
+                                    <div class="trade-orders-procurement-footer">
+                                        <span>@FormatProcurementFooter(procurementRows)</span>
+                                        <strong>@FormatGil(GetProcurementEstimatedTotal(procurementRows))</strong>
+                                    </div>
                                     @if (paymentSummary.Warnings.Count > 0)
                                     {
                                         <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
@@ -1487,41 +1573,57 @@
 
 @code {
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementSourceCell => row => @<div class="trade-orders-source-cell">
-        <div class="trade-orders-source-primary">
-            <button type="button"
-                    class="trade-orders-link-button"
-                    @onclick="@(() => OpenAcquisitionEvaluationForProcurementRowAsync(row))">
-                @row.SourceLabel
-            </button>
-            @if (CanEditProcurementSource(row))
-            {
-                <MudMenu Icon="@Icons.Material.Filled.KeyboardArrowDown"
-                         Dense="true"
-                         Size="Size.Small"
-                         AnchorOrigin="Origin.BottomRight"
-                         TransformOrigin="Origin.TopRight"
-                         Class="trade-orders-source-menu">
-                    @foreach (var source in GetProcurementSourceOptions())
-                    {
-                        <MudMenuItem OnClick="@(() => ChangeProcurementRowSourceAsync(row, source))">
-                            @RecipePlanDisplayHelpers.GetSourceDisplayName(source)
-                        </MudMenuItem>
-                    }
-                </MudMenu>
-            }
-            else if (row.IsLiveAcquisitionRow)
-            {
-                <span class="trade-orders-source-locked">locked</span>
-            }
-        </div>
-        @if (!string.IsNullOrWhiteSpace(row.EvidenceSource) &&
-            !string.Equals(row.EvidenceSource, row.SourceLabel, StringComparison.OrdinalIgnoreCase))
+        @if (CanEditProcurementSource(row))
         {
-            <span class="trade-orders-source-evidence" title="@row.UnitCostExplanation">@row.EvidenceSource</span>
+            <select class="trade-orders-procurement-select"
+                    aria-label="@($"{row.ItemName} procurement route")"
+                    value="@row.Source.ToString()"
+                    @onchange="args => ChangeProcurementRowSourceValueAsync(row, args.Value?.ToString())">
+                @foreach (var source in GetProcurementSourceOptions())
+                {
+                    <option value="@source.ToString()"
+                            selected="@(source == row.Source)">@RecipePlanDisplayHelpers.GetSourceDisplayName(source)</option>
+                }
+            </select>
         }
-        @if (!string.IsNullOrWhiteSpace(row.WarningSummary))
+        else
         {
-            <span class="trade-orders-source-warning">@row.WarningSummary</span>
+            <strong class="trade-orders-source-locked">@row.SourceLabel</strong>
+        }
+        <div class="trade-orders-procurement-route-actions">
+            <button type="button"
+                    @onclick="@(() => OpenMarketAnalysisForProcurementRowAsync(row))">
+                Market
+            </button>
+            <button type="button"
+                    @onclick="@(() => OpenAcquisitionEvaluationForProcurementRowAsync(row))">
+                Compare routes
+            </button>
+        </div>
+    </div>;
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => @<div class="trade-orders-procurement-cost-cell">
+        <strong>@FormatGil(row.TotalCost)</strong>
+        <span>@(row.UnitCost > 0 ? $"{FormatGil(row.UnitCost)} each" : row.UnitCostExplanation)</span>
+    </div>;
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementResponsibilityCell => row => @<div class="trade-orders-procurement-responsibility-cell">
+        @if (HasCanonicalCommission)
+        {
+            <strong title="Published commission responsibility is changed through commission terms.">@FormatResponsibility(row.Responsibility)</strong>
+        }
+        else
+        {
+            <select class="trade-orders-procurement-select"
+                    aria-label="@($"{row.ItemName} responsibility")"
+                    value="@row.Responsibility.ToString()"
+                    disabled="@IsSelectedOrderArchived"
+                    @onchange="args => ChangeProcurementRowResponsibilityValueAsync(row, args.Value?.ToString())">
+                <option value="@CommissionMaterialResponsibility.Crafter.ToString()"
+                        selected="@(row.Responsibility == CommissionMaterialResponsibility.Crafter)">Crafter supplies</option>
+                <option value="@CommissionMaterialResponsibility.Provided.ToString()"
+                        selected="@(row.Responsibility == CommissionMaterialResponsibility.Provided)">Company supplies</option>
+            </select>
         }
     </div>;
 }
