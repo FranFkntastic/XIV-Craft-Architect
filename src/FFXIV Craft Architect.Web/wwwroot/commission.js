@@ -63,6 +63,9 @@ const activityLabels = {
     SettlementRecorded: "Settlement recorded",
     CommissionCanceled: "Commission canceled",
     CommissionClosed: "Commission closed",
+    CommissionPublicationRevoked: "Public brief revoked",
+    ParticipantRecoveryIssued: "Recovery access issued",
+    ParticipantRecoveryRedeemed: "Recovery access redeemed",
     MigratedFromTradeOrder: "Commission imported",
     MigratedTradeOrderHistory: "Earlier history imported"
 };
@@ -211,7 +214,11 @@ async function load() {
         state.store.completeAuthorityExchange(state.access);
         state.access = state.store.load();
         clearCapabilityFragment();
-        state.capabilities = { claimCapability: null, recoveryCapability: null };
+        state.capabilities = {
+            claimCapability: null,
+            recoveryCapability: null,
+            recoveryGrantId: null
+        };
     }
 
     render();
@@ -1014,10 +1021,17 @@ async function retryClaim() {
 }
 
 async function recoverAccess() {
-    const access = state.store.beginAuthorityExchange("recover", {});
+    if (!state.capabilities.recoveryGrantId) {
+        throw new CommissionClientError(
+            "The recovery link does not identify a one-time recovery grant.",
+            "missing-recovery-grant");
+    }
+    const access = state.store.beginAuthorityExchange("recover", {
+        recoveryGrantId: state.capabilities.recoveryGrantId
+    });
     state.access = access;
     await sendAuthorityExchange(
-        "recover-participant",
+        "redeem-participant-recovery",
         access,
         state.capabilities.recoveryCapability,
         "Participant access restored in this browser.");
@@ -1045,13 +1059,17 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
             command,
             {
                 ...access.pending.payload,
-                newParticipantSecret: access.participantSecret
+                newParticipantCredential: access.participantSecret
             },
             authorization);
         applied = true;
         state.store.completeAuthorityExchange(access);
         clearCapabilityFragment();
-        state.capabilities = { claimCapability: null, recoveryCapability: null };
+        state.capabilities = {
+            claimCapability: null,
+            recoveryCapability: null,
+            recoveryGrantId: null
+        };
         await reloadProjection(successMessage);
     } catch (caught) {
         showNotice(
