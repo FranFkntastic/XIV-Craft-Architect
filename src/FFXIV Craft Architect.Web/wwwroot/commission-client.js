@@ -2,6 +2,7 @@ const PROTOCOL_VERSION = 1;
 const ACCESS_STORAGE_PREFIX = "craftArchitect.companyCommission.participant.v1.";
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{32,512}$/;
 
 const enumMaps = {
     viewState: ["Draft", "Published", "Revoked"],
@@ -38,6 +39,9 @@ const enumMaps = {
         "SettlementRecorded",
         "CommissionCanceled",
         "CommissionClosed",
+        "CommissionPublicationRevoked",
+        "ParticipantRecoveryIssued",
+        "ParticipantRecoveryRedeemed",
         "MigratedFromTradeOrder",
         "MigratedTradeOrderHistory"
     ]
@@ -251,14 +255,36 @@ export class ParticipantAccessStore {
 
 export function readCapabilityFragment(location = window.location) {
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
-    const claimCapability = optionalText(fragment.get("claim"));
-    const recoveryCapability = optionalText(fragment.get("recover"));
-    if (claimCapability && recoveryCapability) {
+    const claimCapability = optionalCapability(fragment.get("claim"), "Claim capability");
+    const recoveryAuthority = optionalText(fragment.get("recover"));
+    if (claimCapability && recoveryAuthority) {
         throw new CommissionClientError(
             "This link contains both claim and recovery authority. Ask the commissioner for a fresh link.",
             "ambiguous-authority");
     }
-    return { claimCapability, recoveryCapability };
+    if (!recoveryAuthority) {
+        return {
+            claimCapability,
+            recoveryCapability: null,
+            recoveryGrantId: null
+        };
+    }
+
+    const separator = recoveryAuthority.indexOf(".");
+    if (separator <= 0 || separator === recoveryAuthority.length - 1) {
+        throw new CommissionClientError(
+            "This recovery link is malformed. Ask the commissioner for a fresh link.",
+            "invalid-recovery-authority");
+    }
+    return {
+        claimCapability: null,
+        recoveryGrantId: requiredGuid(
+            recoveryAuthority.slice(0, separator),
+            "Recovery grant ID"),
+        recoveryCapability: optionalCapability(
+            recoveryAuthority.slice(separator + 1),
+            "Recovery capability")
+    };
 }
 
 export function clearCapabilityFragment(history = window.history, location = window.location) {
@@ -536,6 +562,14 @@ function requiredText(value, label) {
 
 function optionalText(value) {
     return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function optionalCapability(value, label) {
+    const text = optionalText(value);
+    if (text && !CAPABILITY_PATTERN.test(text)) {
+        throw new CommissionClientError(`${label} is invalid.`, "invalid-authority");
+    }
+    return text;
 }
 
 function requiredGuid(value, label) {
