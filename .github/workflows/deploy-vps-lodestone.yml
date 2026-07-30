@@ -99,8 +99,35 @@ jobs:
             echo "channel_name=$channel_name"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Resolve environment feature flags
+        id: features
+        shell: bash
+        env:
+          TARGET_DISCORD_ENABLED: ${{ vars.CRAFT_ARCHITECT_DISCORD_ENABLED }}
+          TARGET_PROFILE_HOST_ENABLED: ${{ vars.CRAFT_ARCHITECT_PROFILE_HOST_ENABLED }}
+        run: |
+          set -euo pipefail
+          case "$TARGET_DISCORD_ENABLED" in
+            true|false) ;;
+            *)
+              echo "CRAFT_ARCHITECT_DISCORD_ENABLED must be the literal true or false." >&2
+              exit 1
+              ;;
+          esac
+          case "$TARGET_PROFILE_HOST_ENABLED" in
+            true|false) ;;
+            *)
+              echo "CRAFT_ARCHITECT_PROFILE_HOST_ENABLED must be the literal true or false." >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "discord_enabled=$TARGET_DISCORD_ENABLED"
+            echo "profile_host_enabled=$TARGET_PROFILE_HOST_ENABLED"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Select canonical Discord configuration
-        if: steps.target.outputs.target == 'canonical'
+        if: steps.features.outputs.discord_enabled == 'true' && steps.target.outputs.target == 'canonical'
         shell: bash
         env:
           TARGET_DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_BOT_TOKEN }}
@@ -119,7 +146,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Select staging Discord configuration
-        if: steps.target.outputs.target == 'staging'
+        if: steps.features.outputs.discord_enabled == 'true' && steps.target.outputs.target == 'staging'
         shell: bash
         env:
           TARGET_DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_STAGING_BOT_TOKEN }}
@@ -139,20 +166,39 @@ jobs:
 
       - name: Fail closed on missing target configuration
         shell: bash
+        env:
+          TRADE_COMPANY_ID: ${{ vars.CRAFT_ARCHITECT_TRADE_COMPANY_ID }}
+          PROFILE_ID: ${{ vars.CRAFT_ARCHITECT_PROFILE_ID }}
+          PROFILE_DISPLAY_NAME: ${{ vars.CRAFT_ARCHITECT_PROFILE_DISPLAY_NAME }}
+          PROFILE_ACCESS_KEY: ${{ secrets.CRAFT_ARCHITECT_PROFILE_ACCESS_KEY }}
+          TARGET_DISCORD_ENABLED: ${{ steps.features.outputs.discord_enabled }}
+          TARGET_PROFILE_HOST_ENABLED: ${{ steps.features.outputs.profile_host_enabled }}
         run: |
           set -euo pipefail
           test -n "$VPS_HOST"
           test -n "$VPS_USER"
           test -n "$VPS_SSH_PRIVATE_KEY"
           test -n "$VPS_SSH_HOST_KEY"
-          test -n "$DISCORD_BOT_TOKEN"
-          test -n "$DISCORD_APPLICATION_ID"
-          test -n "$DISCORD_GUILD_ID"
-          test -n "$DISCORD_CHANNEL_PARENT_ID"
-          test "${#DISCORD_PUBLIC_KEY}" -eq 64
-          case "$DISCORD_PUBLIC_KEY" in
-            *[!0-9a-fA-F]*) exit 1 ;;
-          esac
+          if [[ "$TARGET_DISCORD_ENABLED" == "true" ]]; then
+            test -n "$DISCORD_BOT_TOKEN"
+            [[ "$TRADE_COMPANY_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+            test "${TRADE_COMPANY_ID,,}" != "00000000-0000-0000-0000-000000000000"
+            [[ "$DISCORD_APPLICATION_ID" =~ ^[0-9]{17,20}$ ]]
+            [[ "$DISCORD_GUILD_ID" =~ ^[0-9]{17,20}$ ]]
+            [[ "$DISCORD_CHANNEL_PARENT_ID" =~ ^[0-9]{17,20}$ ]]
+            test "${#DISCORD_PUBLIC_KEY}" -eq 64
+            case "$DISCORD_PUBLIC_KEY" in
+              *[!0-9a-fA-F]*) exit 1 ;;
+            esac
+          fi
+          if [[ "$TARGET_PROFILE_HOST_ENABLED" == "true" ]]; then
+            [[ "$PROFILE_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+            test "${PROFILE_ID,,}" != "00000000-0000-0000-0000-000000000000"
+            test "${#PROFILE_DISPLAY_NAME}" -ge 1
+            test "${#PROFILE_DISPLAY_NAME}" -le 120
+            test "${#PROFILE_ACCESS_KEY}" -ge 1
+            test "${#PROFILE_ACCESS_KEY}" -le 256
+          fi
 
       - name: Checkout immutable source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -197,7 +243,27 @@ jobs:
             echo "archive_sha256=$archive_sha256"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Write profile host provisioning environment
+        if: steps.features.outputs.profile_host_enabled == 'true'
+        shell: bash
+        env:
+          PROFILE_ID: ${{ vars.CRAFT_ARCHITECT_PROFILE_ID }}
+          PROFILE_DISPLAY_NAME: ${{ vars.CRAFT_ARCHITECT_PROFILE_DISPLAY_NAME }}
+          PROFILE_ACCESS_KEY: ${{ secrets.CRAFT_ARCHITECT_PROFILE_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            printf 'CRAFT_ARCHITECT_PROFILE_ID=%q\n' "$PROFILE_ID"
+            printf 'CRAFT_ARCHITECT_PROFILE_DISPLAY_NAME=%q\n' "$PROFILE_DISPLAY_NAME"
+            printf 'CRAFT_ARCHITECT_PROFILE_ACCESS_KEY=%q\n' "$PROFILE_ACCESS_KEY"
+          } > "profile-host-provisioning-${{ steps.target.outputs.target }}.env"
+          test "$(
+            stat -c '%a' "profile-host-provisioning-${{ steps.target.outputs.target }}.env"
+          )" = "600"
+
       - name: Reconcile target Discord installation
+        if: steps.features.outputs.discord_enabled == 'true'
         id: discord
         env:
           DISCORD_CHANNEL_NAME: ${{ steps.target.outputs.channel_name }}
@@ -206,22 +272,36 @@ jobs:
       - name: Write isolated Discord environment
         env:
           TRADE_COMPANY_ID: ${{ vars.CRAFT_ARCHITECT_TRADE_COMPANY_ID }}
+          TARGET_DISCORD_ENABLED: ${{ steps.features.outputs.discord_enabled }}
+          TARGET_DISCORD_CHANNEL_ID: ${{ steps.discord.outputs.channel_id }}
         shell: bash
         run: |
           set -euo pipefail
           umask 077
-          {
-            printf 'Discord__Enabled=true\n'
-            printf 'Discord__CompanyId=%s\n' "$TRADE_COMPANY_ID"
-            printf 'Discord__ApplicationId=%s\n' "$DISCORD_APPLICATION_ID"
-            printf 'Discord__PublicKey=%s\n' "$DISCORD_PUBLIC_KEY"
-            printf 'Discord__RuntimeBotToken=%s\n' "$DISCORD_BOT_TOKEN"
-            printf 'Discord__DatabasePath=%s\n' '${{ steps.target.outputs.discord_db }}'
-            printf 'Discord__AllowedGuildId=%s\n' "$DISCORD_GUILD_ID"
-            printf 'Discord__AllowedChannelId=%s\n' '${{ steps.discord.outputs.channel_id }}'
-            printf 'Discord__CommissionBaseUrl=https://%s/commission.html?id=\n' '${{ steps.target.outputs.domain }}'
-            printf 'CommissionBriefs__PublicPageUrl=https://%s/commission.html\n' '${{ steps.target.outputs.domain }}'
-          } > "discord-${{ steps.target.outputs.target }}.env"
+          if [[ "$TARGET_DISCORD_ENABLED" == "true" ]]; then
+            [[ "$TARGET_DISCORD_CHANNEL_ID" =~ ^[0-9]{17,20}$ ]]
+            {
+              printf 'Discord__Enabled=true\n'
+              printf 'Discord__CompanyId=%s\n' "$TRADE_COMPANY_ID"
+              printf 'Discord__ApplicationId=%s\n' "$DISCORD_APPLICATION_ID"
+              printf 'Discord__PublicKey=%s\n' "$DISCORD_PUBLIC_KEY"
+              printf 'Discord__RuntimeBotToken=%s\n' "$DISCORD_BOT_TOKEN"
+              printf 'Discord__DatabasePath=%s\n' '${{ steps.target.outputs.discord_db }}'
+              printf 'Discord__AllowedGuildId=%s\n' "$DISCORD_GUILD_ID"
+              printf 'Discord__AllowedChannelId=%s\n' "$TARGET_DISCORD_CHANNEL_ID"
+              printf 'Discord__CommissionBaseUrl=https://%s/commission.html?id=\n' '${{ steps.target.outputs.domain }}'
+              printf 'CommissionBriefs__PublicPageUrl=https://%s/commission.html\n' '${{ steps.target.outputs.domain }}'
+            } > "discord-${{ steps.target.outputs.target }}.env"
+          else
+            {
+              printf 'Discord__Enabled=false\n'
+              printf 'Discord__DatabasePath=%s\n' '${{ steps.target.outputs.discord_db }}'
+              printf 'CommissionBriefs__PublicPageUrl=https://%s/commission.html\n' '${{ steps.target.outputs.domain }}'
+            } > "discord-${{ steps.target.outputs.target }}.env"
+          fi
+          test "$(
+            stat -c '%a' "discord-${{ steps.target.outputs.target }}.env"
+          )" = "600"
 
       - name: Write isolated remote deploy script
         shell: bash
@@ -237,6 +317,8 @@ jobs:
           service_unit="$6"
           port="$7"
           profile_db="$8"
+          discord_enabled="$9"
+          profile_host_enabled="${10}"
 
           if [[ "$target" == "canonical" ]]; then
             test "$root" = "/srv/craftarchitect/services/lodestone"
@@ -252,14 +334,30 @@ jobs:
             echo "Unsupported remote helper target: $target" >&2
             exit 1
           fi
+          case "$discord_enabled" in
+            true|false) ;;
+            *) echo "Invalid Discord enabled state." >&2; exit 1 ;;
+          esac
+          case "$profile_host_enabled" in
+            true|false) ;;
+            *) echo "Invalid Profile Host enabled state." >&2; exit 1 ;;
+          esac
 
           archive="/tmp/$archive_name"
           release_dir="$root/releases/$release"
           staging_dir="$root/releases/.$release.staging"
           executable="$release_dir/FFXIV Craft Architect.LodestoneLookup"
+          discord_upload="/tmp/discord-$target.env"
+          provisioning_upload="/tmp/profile-host-provisioning-$target.env"
+          profile_runtime_upload="/tmp/profile-host-runtime-$target.env"
           cleanup() {
             sudo rm -rf "$staging_dir"
-            rm -f "$archive" "/tmp/discord-$target.env" /tmp/deploy-lodestone-remote.sh
+            rm -f \
+              "$archive" \
+              "$discord_upload" \
+              "$provisioning_upload" \
+              "$profile_runtime_upload" \
+              /tmp/deploy-lodestone-remote.sh
           }
           trap cleanup EXIT
 
@@ -273,17 +371,39 @@ jobs:
           sudo chmod +x "$staging_dir/FFXIV Craft Architect.LodestoneLookup"
           sudo mv "$staging_dir" "$release_dir"
 
-          if [[ ! -f "$root/env/profile-host.env" ]]; then
-            umask 077
-            tee "$root/env/profile-host.env" > /dev/null <<ENV
-          ProfileHost__Enabled=false
-          ProfileHost__DatabasePath=$profile_db
-          ENV
-          fi
-          grep -Fxq "ProfileHost__DatabasePath=$profile_db" "$root/env/profile-host.env"
+          test "$(stat -c '%a' "$discord_upload")" = "600"
+          umask 077
+          {
+            printf 'ProfileHost__Enabled=%s\n' "$profile_host_enabled"
+            printf 'ProfileHost__DatabasePath=%s\n' "$profile_db"
+          } > "$profile_runtime_upload"
+          test "$(stat -c '%a' "$profile_runtime_upload")" = "600"
           sudo install -o "$USER" -g "$USER" -m 600 \
-            "/tmp/discord-$target.env" \
+            "$profile_runtime_upload" \
+            "$root/env/profile-host.env"
+          sudo install -o "$USER" -g "$USER" -m 600 \
+            "$discord_upload" \
             "$root/env/discord.env"
+          grep -Fxq "ProfileHost__Enabled=$profile_host_enabled" "$root/env/profile-host.env"
+          grep -Fxq "ProfileHost__DatabasePath=$profile_db" "$root/env/profile-host.env"
+          grep -Fxq "Discord__Enabled=$discord_enabled" "$root/env/discord.env"
+
+          if [[ "$profile_host_enabled" == "true" ]]; then
+            test "$(stat -c '%a' "$provisioning_upload")" = "600"
+            set -a
+            source "$provisioning_upload"
+            set +a
+            test -n "$CRAFT_ARCHITECT_PROFILE_ID"
+            test -n "$CRAFT_ARCHITECT_PROFILE_DISPLAY_NAME"
+            test -n "$CRAFT_ARCHITECT_PROFILE_ACCESS_KEY"
+            ProfileHost__DatabasePath="$profile_db" \
+              "$executable" \
+              profile-host \
+              ensure-profile \
+              "$CRAFT_ARCHITECT_PROFILE_ID" \
+              "$CRAFT_ARCHITECT_PROFILE_DISPLAY_NAME"
+            unset CRAFT_ARCHITECT_PROFILE_ACCESS_KEY
+          fi
 
           sudo tee "$root/run-lodestone.sh" > /dev/null <<SCRIPT
           #!/usr/bin/env bash
@@ -448,9 +568,34 @@ jobs:
             -o UserKnownHostsFile=~/.ssh/known_hosts \
             -i ~/.ssh/craftarchitect_vps \
             "${{ steps.package.outputs.archive }}" \
-            "discord-${{ steps.target.outputs.target }}.env" \
             deploy-lodestone-remote.sh \
             "$VPS_USER@$VPS_HOST:/tmp/"
+          ssh -p "$VPS_SSH_PORT" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -i ~/.ssh/craftarchitect_vps \
+            "$VPS_USER@$VPS_HOST" \
+            "rm -f '/tmp/discord-${{ steps.target.outputs.target }}.env'; \
+              umask 077; cat > '/tmp/discord-${{ steps.target.outputs.target }}.env'; \
+              chmod 600 '/tmp/discord-${{ steps.target.outputs.target }}.env'; \
+              test \"\$(stat -c '%a' '/tmp/discord-${{ steps.target.outputs.target }}.env')\" = 600" \
+            < "discord-${{ steps.target.outputs.target }}.env"
+          if [[ "${{ steps.features.outputs.profile_host_enabled }}" == "true" ]]; then
+            ssh -p "$VPS_SSH_PORT" \
+              -o BatchMode=yes \
+              -o ConnectTimeout=15 \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -i ~/.ssh/craftarchitect_vps \
+              "$VPS_USER@$VPS_HOST" \
+              "rm -f '/tmp/profile-host-provisioning-${{ steps.target.outputs.target }}.env'; \
+                umask 077; cat > '/tmp/profile-host-provisioning-${{ steps.target.outputs.target }}.env'; \
+                chmod 600 '/tmp/profile-host-provisioning-${{ steps.target.outputs.target }}.env'; \
+                test \"\$(stat -c '%a' '/tmp/profile-host-provisioning-${{ steps.target.outputs.target }}.env')\" = 600" \
+              < "profile-host-provisioning-${{ steps.target.outputs.target }}.env"
+          fi
 
       - name: Activate isolated helper release
         shell: bash
@@ -471,12 +616,16 @@ jobs:
               '${{ steps.target.outputs.root }}' \
               '${{ steps.target.outputs.service_unit }}' \
               '${{ steps.target.outputs.port }}' \
-              '${{ steps.target.outputs.profile_db }}'"
+              '${{ steps.target.outputs.profile_db }}' \
+              '${{ steps.features.outputs.discord_enabled }}' \
+              '${{ steps.features.outputs.profile_host_enabled }}'"
 
       - name: Verify target health and configuration
         shell: bash
         env:
           DEPLOY_DOMAIN: ${{ steps.target.outputs.domain }}
+          EXPECTED_DISCORD_ENABLED: ${{ steps.features.outputs.discord_enabled }}
+          EXPECTED_PROFILE_HOST_ENABLED: ${{ steps.features.outputs.profile_host_enabled }}
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --retry 3 --retry-all-errors \
@@ -493,13 +642,47 @@ jobs:
               --header 'Content-Type: application/json' \
               --data '{"type":1}' \
               "https://$DEPLOY_DOMAIN/api/discord/interactions"
-          )" = "401"
+          )" = "$(
+            if [[ "$EXPECTED_DISCORD_ENABLED" == "true" ]]; then
+              printf 401
+            else
+              printf 404
+            fi
+          )"
           curl --fail --silent --show-error \
             "https://$DEPLOY_DOMAIN/api/discord/health" \
-            | grep -q '"directPublishingReady":true'
+            --output discord-health.json
+          node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const health = JSON.parse(await readFile("discord-health.json", "utf8"));
+            const enabled = process.env.EXPECTED_DISCORD_ENABLED === "true";
+            const expected = enabled
+              ? {
+                  status: "ready",
+                  signingReady: true,
+                  publishingReady: true,
+                  directPublishingReady: true
+                }
+              : {
+                  status: "disabled",
+                  signingReady: false,
+                  publishingReady: false,
+                  directPublishingReady: false
+                };
+            for (const [key, value] of Object.entries(expected)) {
+              if (health?.[key] !== value) process.exit(1);
+            }
+          '
           curl --fail --silent --show-error \
             "https://$DEPLOY_DOMAIN/api/profile-host/health" \
-            | grep -q '"profileHostEnabled":'
+            --output profile-host-health.json
+          node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const health = JSON.parse(await readFile("profile-host-health.json", "utf8"));
+            const enabled = process.env.EXPECTED_PROFILE_HOST_ENABLED === "true";
+            if (health?.status !== "ready") process.exit(1);
+            if (health?.profileHostEnabled !== enabled) process.exit(1);
+          '
           test "$(
             curl --silent --show-error \
               --output /dev/null \

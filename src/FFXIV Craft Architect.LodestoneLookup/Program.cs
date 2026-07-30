@@ -257,6 +257,47 @@ static async Task RunProfileHostProvisioningCommandAsync(
                 });
                 break;
             }
+        case ProfileHostProvisioningAction.EnsureProfile:
+            {
+                var rawProfileId = command.ProfileId ??
+                    throw new InvalidOperationException("Profile id is required.");
+                if (!Guid.TryParseExact(rawProfileId, "D", out var parsedProfileId) ||
+                    parsedProfileId == Guid.Empty)
+                {
+                    throw new InvalidOperationException(
+                        "Profile id must be a non-empty UUID in canonical form.");
+                }
+
+                var displayName = command.DisplayName?.Trim();
+                if (string.IsNullOrWhiteSpace(displayName) || displayName.Length > 120)
+                {
+                    throw new InvalidOperationException(
+                        "Display name must contain 1 to 120 characters.");
+                }
+
+                var plaintextKey = Environment.GetEnvironmentVariable(
+                    "CRAFT_ARCHITECT_PROFILE_ACCESS_KEY");
+                if (string.IsNullOrWhiteSpace(plaintextKey) || plaintextKey.Length > 256)
+                {
+                    throw new InvalidOperationException(
+                        "CRAFT_ARCHITECT_PROFILE_ACCESS_KEY must contain 1 to 256 characters.");
+                }
+
+                var ensured = await store.EnsureProfileAsync(
+                    parsedProfileId.ToString("D"),
+                    displayName,
+                    plaintextKey,
+                    hasher,
+                    cancellationToken);
+                WriteJson(new
+                {
+                    ensured.Profile.ProfileId,
+                    ensured.Profile.DisplayName,
+                    ensured.Created,
+                    Ensured = true
+                });
+                break;
+            }
         case ProfileHostProvisioningAction.RotateKey:
             {
                 var profileId = command.ProfileId ?? throw new InvalidOperationException("Profile id is required.");

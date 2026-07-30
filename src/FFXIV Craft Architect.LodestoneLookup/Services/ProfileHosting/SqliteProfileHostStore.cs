@@ -40,6 +40,146 @@ public sealed partial class SqliteProfileHostStore
         };
     }
 
+    public async Task<ProfileHostEnsureResult> EnsureProfileAsync(
+        string profileId,
+        string displayName,
+        string plaintextKey,
+        ProfileAccessKeyHasher hasher,
+        CancellationToken ct)
+    {
+        if (!Guid.TryParseExact(profileId, "D", out var parsedProfileId) ||
+            parsedProfileId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(displayName) ||
+            displayName.Length > 120 ||
+            string.IsNullOrWhiteSpace(plaintextKey) ||
+            plaintextKey.Length > 256)
+        {
+            throw new InvalidOperationException("The profile identity, display name, or access key is invalid.");
+        }
+
+        profileId = parsedProfileId.ToString("D");
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+
+        string? existingDisplayName = null;
+        var existingDisabled = false;
+        await using (var profile = connection.CreateCommand())
+        {
+            profile.Transaction = (SqliteTransaction)transaction;
+            profile.CommandText =
+                """
+                SELECT display_name, disabled_at_utc
+                FROM hosted_profiles
+                WHERE id = $profileId;
+                """;
+            profile.Parameters.AddWithValue("$profileId", profileId);
+            await using var reader = await profile.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                existingDisplayName = reader.GetString(0);
+                existingDisabled = !reader.IsDBNull(1);
+            }
+        }
+
+        if (existingDisplayName != null)
+        {
+            if (existingDisabled ||
+                !string.Equals(existingDisplayName, displayName, StringComparison.Ordinal))
+            {
+                await transaction.RollbackAsync(ct);
+                throw new InvalidOperationException(
+                    "The existing profile does not match the requested active profile identity.");
+            }
+
+            var keyMatches = false;
+            await using (var keys = connection.CreateCommand())
+            {
+                keys.Transaction = (SqliteTransaction)transaction;
+                keys.CommandText =
+                    """
+                    SELECT key_hash
+                    FROM profile_access_keys
+                    WHERE profile_id = $profileId AND revoked_at_utc IS NULL;
+                    """;
+                keys.Parameters.AddWithValue("$profileId", profileId);
+                await using var reader = await keys.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    if (hasher.Verify(plaintextKey, reader.GetString(0)))
+                    {
+                        keyMatches = true;
+                    }
+                }
+            }
+
+            if (!keyMatches)
+            {
+                await transaction.RollbackAsync(ct);
+                throw new InvalidOperationException(
+                    "The supplied access key does not authenticate the existing profile.");
+            }
+
+            var revision = await GetServerRevisionAsync(
+                connection,
+                profileId,
+                ct,
+                (SqliteTransaction)transaction);
+            await transaction.CommitAsync(ct);
+            return new ProfileHostEnsureResult(
+                new ProfileHostProfileResponse
+                {
+                    ProfileId = profileId,
+                    DisplayName = existingDisplayName,
+                    ServerRevision = revision
+                },
+                Created: false);
+        }
+
+        var now = DateTime.UtcNow;
+        await using (var insertProfile = connection.CreateCommand())
+        {
+            insertProfile.Transaction = (SqliteTransaction)transaction;
+            insertProfile.CommandText =
+                """
+                INSERT INTO hosted_profiles (id, display_name, created_at_utc, updated_at_utc)
+                VALUES ($id, $displayName, $createdAtUtc, $updatedAtUtc);
+                """;
+            insertProfile.Parameters.AddWithValue("$id", profileId);
+            insertProfile.Parameters.AddWithValue("$displayName", displayName);
+            insertProfile.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
+            insertProfile.Parameters.AddWithValue("$updatedAtUtc", now.ToString("O"));
+            await insertProfile.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var insertKey = connection.CreateCommand())
+        {
+            insertKey.Transaction = (SqliteTransaction)transaction;
+            insertKey.CommandText =
+                """
+                INSERT INTO profile_access_keys (id, profile_id, key_hash, created_at_utc)
+                VALUES ($id, $profileId, $keyHash, $createdAtUtc);
+                """;
+            insertKey.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
+            insertKey.Parameters.AddWithValue("$profileId", profileId);
+            insertKey.Parameters.AddWithValue("$keyHash", hasher.Hash(plaintextKey));
+            insertKey.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
+            await insertKey.ExecuteNonQueryAsync(ct);
+        }
+
+        await transaction.CommitAsync(ct);
+        return new ProfileHostEnsureResult(
+            new ProfileHostProfileResponse
+            {
+                ProfileId = profileId,
+                DisplayName = displayName,
+                ServerRevision = 0
+            },
+            Created: true);
+    }
+
     public async Task<ProfileSyncObjectEnvelope?> LoadObjectAsync(
         string profileId,
         string collection,
@@ -672,3 +812,7 @@ public sealed partial class SqliteProfileHostStore
 public sealed record HostedProfileObject(
     string ProfileId,
     ProfileSyncObjectEnvelope Object);
+
+public sealed record ProfileHostEnsureResult(
+    ProfileHostProfileResponse Profile,
+    bool Created);
