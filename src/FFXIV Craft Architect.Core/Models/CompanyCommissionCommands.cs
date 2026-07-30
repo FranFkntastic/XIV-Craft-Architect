@@ -119,13 +119,20 @@ public sealed record RecordCompanyCommissionSettlementCommand(
     CompanyCommissionCommandContext Context,
     string Note) : ICompanyCommissionCompanyCommand;
 
-public sealed record RecoverCompanyCommissionParticipantCapabilityCommand(
+public sealed record ResetCompanyCommissionParticipantRecoveryCommand(
+    CompanyCommissionCommandContext Context) : ICompanyCommissionCompanyCommand;
+
+public sealed record RedeemCompanyCommissionParticipantRecoveryCommand(
     CompanyCommissionCommandContext Context,
-    string NewCapabilityHash) : ICompanyCommissionCompanyCommand;
+    Guid RecoveryGrantId,
+    string NewParticipantCredentialHash) : ICompanyCommissionParticipantCommand;
 
 public sealed record CancelCompanyCommissionCommand(
     CompanyCommissionCommandContext Context,
     string Reason) : ICompanyCommissionCompanyCommand;
+
+public sealed record RevokeCompanyCommissionPublicationCommand(
+    CompanyCommissionCommandContext Context) : ICompanyCommissionCompanyCommand;
 
 public enum CompanyCommissionMutationStatus
 {
