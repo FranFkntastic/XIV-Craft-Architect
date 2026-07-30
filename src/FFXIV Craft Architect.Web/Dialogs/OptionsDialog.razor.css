@@ -49,28 +49,6 @@
     scrollbar-gutter: stable;
 }
 
-.hosting-migration-entry {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    border-color: color-mix(in srgb, #8fbf7f 48%, var(--mud-palette-lines-default)) !important;
-}
-
-.hosting-migration-copy {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    min-width: 0;
-}
-
-@media (max-width: 680px) {
-    .hosting-migration-entry {
-        align-items: stretch;
-        flex-direction: column;
-    }
-}
-
 .options-shell ::deep .mud-secondary-text {
     color: #aeb7c0 !important;
 }
