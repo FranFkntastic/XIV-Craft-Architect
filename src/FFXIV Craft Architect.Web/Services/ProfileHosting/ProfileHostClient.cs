@@ -98,56 +98,6 @@ public sealed class ProfileHostClient
         return (await response.Content.ReadFromJsonAsync<ProfileHostBootstrapPayload>(cancellationToken: ct))!;
     }
 
-    public async Task<ProfileHostMigrationPreflightResponse> PreflightMigrationAsync(
-        string hostUrl,
-        string accessKey,
-        ProfileHostMigrationPreflightRequest payload,
-        CancellationToken ct)
-    {
-        using var request = CreateRequest(
-            HttpMethod.Post,
-            hostUrl,
-            "/profile-host/migrations/preflight",
-            accessKey);
-        request.Content = JsonContent.Create(payload);
-        using var response = await _httpClient.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
-        return await ReadRequiredJsonAsync<ProfileHostMigrationPreflightResponse>(
-            response,
-            "Migration preflight",
-            ct);
-    }
-
-    public async Task<ProfileHostMigrationCommitClientResult> CommitMigrationAsync(
-        string hostUrl,
-        string accessKey,
-        ProfileHostMigrationCommitRequest payload,
-        CancellationToken ct)
-    {
-        using var request = CreateRequest(
-            HttpMethod.Post,
-            hostUrl,
-            "/profile-host/migrations/commit",
-            accessKey);
-        request.Content = JsonContent.Create(payload);
-        using var response = await _httpClient.SendAsync(request, ct);
-        if (response.StatusCode == HttpStatusCode.Conflict)
-        {
-            var conflict = await ReadRequiredJsonAsync<ProfileHostMigrationPreflightResponse>(
-                response,
-                "Migration commit conflict",
-                ct);
-            return ProfileHostMigrationCommitClientResult.FromConflict(conflict);
-        }
-
-        response.EnsureSuccessStatusCode();
-        var committed = await ReadRequiredJsonAsync<ProfileHostMigrationCommitResponse>(
-            response,
-            "Migration commit",
-            ct);
-        return ProfileHostMigrationCommitClientResult.FromCommit(committed);
-    }
-
     private static HttpRequestMessage CreateRequest(HttpMethod method, string hostUrl, string path, string accessKey)
     {
         var request = new HttpRequestMessage(method, BuildUri(hostUrl, path));
@@ -183,40 +133,4 @@ public sealed class ProfileHostClient
         return (await response.Content.ReadFromJsonAsync<ProfileSyncPutResponse>(cancellationToken: ct))!;
     }
 
-    private static async Task<T> ReadRequiredJsonAsync<T>(
-        HttpResponseMessage response,
-        string operation,
-        CancellationToken ct)
-        where T : class
-    {
-        var payload = await response.Content.ReadFromJsonAsync<T>(cancellationToken: ct);
-        return payload ??
-               throw new InvalidOperationException(
-                   $"{operation} returned an empty response.");
-    }
-}
-
-public sealed record ProfileHostMigrationCommitClientResult
-{
-    private ProfileHostMigrationCommitClientResult()
-    {
-    }
-
-    public ProfileHostMigrationCommitResponse? Commit { get; private init; }
-    public ProfileHostMigrationPreflightResponse? Conflict { get; private init; }
-    public bool Succeeded => Commit is not null;
-
-    public static ProfileHostMigrationCommitClientResult FromCommit(
-        ProfileHostMigrationCommitResponse commit) =>
-        new()
-        {
-            Commit = commit
-        };
-
-    public static ProfileHostMigrationCommitClientResult FromConflict(
-        ProfileHostMigrationPreflightResponse conflict) =>
-        new()
-        {
-            Conflict = conflict
-        };
 }
