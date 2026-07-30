@@ -6,10 +6,7 @@ public sealed record CompanyCommissionCommandContext(
     CompanyRecordRevision ExpectedObjectRevision,
     CompanyRecordRevision ExpectedCompanyRevision,
     Guid CommandId,
-    string Fingerprint,
-    int ProtocolVersion,
-    CompanyCommissionActor Actor,
-    CompanyCommissionSourceSurface SourceSurface);
+    int ProtocolVersion);
 
 public interface ICompanyCommissionCommand
 {
@@ -66,8 +63,7 @@ public sealed record RequestCompanyCommissionPaymentPolicyChangeCommand(
 public sealed record DecideCompanyCommissionPaymentPolicyChangeCommand(
     CompanyCommissionCommandContext Context,
     bool Accepted,
-    string Reason,
-    CompanyCommissionTermsVersion? AcceptedTerms) : ICompanyCommissionCompanyCommand;
+    string Reason) : ICompanyCommissionCompanyCommand;
 
 public sealed record AcknowledgeCompanyCommissionTermsCommand(
     CompanyCommissionCommandContext Context,
@@ -98,7 +94,9 @@ public sealed record CompanyCommissionProgressQuantity(
 
 public sealed record AddCompanyCommissionCommentCommand(
     CompanyCommissionCommandContext Context,
-    string Comment) : ICompanyCommissionCommand;
+    string Comment) :
+    ICompanyCommissionCompanyCommand,
+    ICompanyCommissionParticipantCommand;
 
 public sealed record DeclareCompanyCommissionReadinessCommand(
     CompanyCommissionCommandContext Context,
@@ -124,8 +122,7 @@ public sealed record ResetCompanyCommissionParticipantRecoveryCommand(
 
 public sealed record RedeemCompanyCommissionParticipantRecoveryCommand(
     CompanyCommissionCommandContext Context,
-    Guid RecoveryGrantId,
-    string NewParticipantCredentialHash) : ICompanyCommissionParticipantCommand;
+    Guid RecoveryGrantId) : ICompanyCommissionParticipantCommand;
 
 public sealed record CancelCompanyCommissionCommand(
     CompanyCommissionCommandContext Context,

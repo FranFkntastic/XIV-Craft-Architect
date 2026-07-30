@@ -33,6 +33,13 @@ public enum CompanyCommissionSettlementState
     Satisfied
 }
 
+public enum CompanyCommissionPaymentPolicyRequestState
+{
+    Pending,
+    Accepted,
+    Refused
+}
+
 public enum CompanyCommissionActorKind
 {
     Commissioner,
@@ -183,6 +190,17 @@ public sealed record CompanyCommissionPaymentClearance(
     string? RecordedByActorId = null,
     string? Note = null);
 
+public sealed record CompanyCommissionPaymentPolicyChangeRequest(
+    Guid RequestId,
+    int RequestedAgainstTermsVersion,
+    CompanyCommissionPaymentSchedule RequestedSchedule,
+    string? RequestedCustomTerms,
+    string Reason,
+    CompanyCommissionPaymentPolicyRequestState State,
+    DateTime RequestedAtUtc,
+    DateTime? DecidedAtUtc = null,
+    string? DecisionReason = null);
+
 public sealed record CompanyCommissionMaterialClearance(
     CompanyCommissionClearanceState State,
     IReadOnlyList<CompanyCommissionMaterialQuantity> PromisedQuantities,
@@ -257,7 +275,6 @@ public sealed record CompanyCommissionPublicMetadata
 public sealed record CompanyCommissionProcessedCommand(
     Guid CommandId,
     string Fingerprint,
-    CompanyRecordRevision AppliedOrderRevision,
     Guid ActivityEventId,
     DateTime AppliedAtUtc);
 
@@ -280,6 +297,8 @@ public sealed record TradeCompanyCommission
     public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
     public CompanyCommissionParticipantGrant? ParticipantGrant { get; init; }
     public CompanyCommissionRecoveryGrant? RecoveryGrant { get; init; }
+    public CompanyCommissionPaymentPolicyChangeRequest? PaymentPolicyChangeRequest { get; init; }
+    public int? ParticipantAcknowledgedTermsVersion { get; init; }
     public required CompanyCommissionGateState Gates { get; init; }
     public IReadOnlyList<CompanyCommissionOutputProgress> OutputProgress { get; init; } = [];
     public required CompanyCommissionDeliveryReadiness DeliveryReadiness { get; init; }
