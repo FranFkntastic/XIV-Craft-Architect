@@ -38,7 +38,7 @@ jobs:
     env:
       TRUTHFUL_RUN_ID: ${{ github.run_id }}
       TRUTHFUL_RUN_ATTEMPT: ${{ github.run_attempt }}
-      FranthropyRoot: ${{ runner.temp }}/franthropy
+      FranthropyRoot: /tmp/franthropy
     steps:
       - name: Resolve deploy target
         id: deploy-target
