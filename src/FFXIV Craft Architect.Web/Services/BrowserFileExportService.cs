@@ -42,7 +42,7 @@ public sealed class BrowserFileExportService
             contentType);
     }
 
-    public async Task SaveTextFileAsync(
+    public async Task<BrowserFileSaveResult> SaveTextFileAsync(
         string key,
         string fileName,
         string content,
@@ -52,7 +52,10 @@ public sealed class BrowserFileExportService
         await PrepareTextFileSaveAsync(key, fileName, content, contentType, cancellationToken);
 
         var module = await GetModuleAsync(cancellationToken);
-        await module.InvokeVoidAsync("savePreparedFile", cancellationToken, key);
+        return await module.InvokeAsync<BrowserFileSaveResult>(
+            "savePreparedFile",
+            cancellationToken,
+            key);
     }
 
     private Task<IJSObjectReference> GetModuleAsync(CancellationToken cancellationToken)
@@ -63,4 +66,12 @@ public sealed class BrowserFileExportService
 
         return _moduleTask;
     }
+}
+
+public sealed record BrowserFileSaveResult(
+    string Mode,
+    bool Canceled,
+    string FileName)
+{
+    public bool Completed => !Canceled;
 }

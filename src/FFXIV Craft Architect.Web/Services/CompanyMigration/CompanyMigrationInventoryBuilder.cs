@@ -38,7 +38,8 @@ public sealed class CompanyMigrationLocalManifest
     public IReadOnlyDictionary<string, string> StoreContentHashes { get; init; } =
         new Dictionary<string, string>();
     public string SourceContentHash { get; init; } = string.Empty;
-    public bool CanPreflight => Blockers.Count == 0;
+    public bool CanPreflight => Blockers.All(blocker => blocker.IsArchiveOnly);
+    public bool RequiresRecoveryArchive => Blockers.Any(blocker => blocker.IsArchiveOnly);
 }
 
 public sealed class CompanyMigrationSourceMetadata
@@ -99,6 +100,26 @@ public sealed class CompanyMigrationSourceBlocker
     public string? StoreName { get; init; }
     public string? Collection { get; init; }
     public string? ObjectId { get; init; }
+
+    public bool IsArchiveOnly =>
+        Code is ProfileHostMigrationBlockerCodes.UnsupportedOrderCraftSnapshot or
+            "unsupported_company_store" or
+            "unsupported_legacy_store" or
+            "linked_plan_candidate_unreadable" ||
+        Code == "divergent_source_copy" &&
+        Collection != ProfileSyncCollections.Plans;
+}
+
+public sealed class CompanyMigrationBundleIntegrity
+{
+    public string SourceContentHash { get; init; } = string.Empty;
+    public string TransferContentHash { get; init; } = string.Empty;
+    public string ContentHash { get; init; } = string.Empty;
+    public Guid MigrationId { get; init; }
+    public IReadOnlyDictionary<string, string> RecordContentHashes { get; init; } =
+        new Dictionary<string, string>();
+    public IReadOnlyDictionary<string, string> StoreContentHashes { get; init; } =
+        new Dictionary<string, string>();
 }
 
 internal sealed class BrowserCompanyMigrationSource
@@ -167,7 +188,7 @@ internal sealed class BrowserUnsupportedStore
     public IReadOnlyList<JsonElement> Records { get; set; } = [];
 }
 
-internal static class CompanyMigrationInventoryBuilder
+public static class CompanyMigrationInventoryBuilder
 {
     private const string PlansStore = "plans";
     private const string PlanComponentsStore = "planComponents";
@@ -177,7 +198,7 @@ internal static class CompanyMigrationInventoryBuilder
     private const string OrderCraftSnapshotsStore = "tradeOrderCraftSnapshots";
     private const string PayrollDraftsStore = "tradePayrollDrafts";
 
-    public static CompanyMigrationExportBundle Build(
+    internal static CompanyMigrationExportBundle Build(
         BrowserCompanyMigrationSource source,
         DateTime exportedAtUtc)
     {
@@ -218,56 +239,19 @@ internal static class CompanyMigrationInventoryBuilder
             source.Company.DatabaseName,
             markerFingerprint
         ]);
-        var sourceHash = HashLines(records
-            .OrderBy(record => record.DatabaseName, StringComparer.Ordinal)
-            .ThenBy(record => record.StoreName, StringComparer.Ordinal)
-            .ThenBy(record => record.RecordId, StringComparer.Ordinal)
-            .Select(record =>
-                $"{record.DatabaseName}/{record.StoreName}/{record.RecordId}/{record.ContentHash}"));
-        var transferHash = HashLines(objects.Select(item =>
-            $"{item.Collection}/{item.ObjectId}/{HashText(item.PayloadJson)}"));
-        var contentHash = HashLines(
-        [
+        var integrity = ComputeIntegrity(
             CompanyMigrationExportBundle.PackageKindValue,
             installationId,
-            sourceHash,
-            transferHash
-        ]);
-        var migrationId = DeterministicGuid(contentHash);
+            records,
+            objects);
         var companies = SummarizeCompanies(objects);
-        var storeHashes = records
-            .GroupBy(record => $"{record.DatabaseName}/{record.StoreName}", StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => HashLines(group
-                    .OrderBy(record => record.RecordId, StringComparer.Ordinal)
-                    .Select(record => $"{record.RecordId}/{record.ContentHash}")),
-                StringComparer.Ordinal);
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal)
-        {
-            ["companies"] = objects.Count(item =>
-                item.Collection == ProfileSyncCollections.TradeCompanyProfiles),
-            ["crafters"] = objects.Count(item =>
-                item.Collection == ProfileSyncCollections.TradeCrafters),
-            ["orders"] = objects.Count(item =>
-                item.Collection == ProfileSyncCollections.TradeOrders),
-            ["payrollDrafts"] = objects.Count(item =>
-                item.Collection == ProfileSyncCollections.TradePayrollDrafts),
-            ["linkedPlans"] = objects.Count(item =>
-                item.Collection == ProfileSyncCollections.Plans),
-            ["orderCraftSnapshots"] = objects.Count(item =>
-                item.Collection == ProfileHostMigrationCollections.TradeOrderCraftSnapshots),
-            ["sourceRecords"] = records.Count,
-            ["unsupportedRecords"] = records.Count(record => !record.Supported),
-            ["danglingReferences"] = dangling.Count,
-            ["blockers"] = blockers.Count
-        };
+        var counts = CreateCounts(records, objects, dangling, blockers);
 
         return new CompanyMigrationExportBundle
         {
             ExportedAtUtc = exportedAtUtc,
-            MigrationId = migrationId,
-            ContentHash = contentHash,
+            MigrationId = integrity.MigrationId,
+            ContentHash = integrity.ContentHash,
             Objects = objects,
             Manifest = new CompanyMigrationLocalManifest
             {
@@ -293,11 +277,150 @@ internal static class CompanyMigrationInventoryBuilder
                 DanglingReferences = dangling,
                 Blockers = blockers,
                 Counts = counts,
-                StoreContentHashes = storeHashes,
-                SourceContentHash = sourceHash
+                StoreContentHashes = integrity.StoreContentHashes,
+                SourceContentHash = integrity.SourceContentHash
             }
         };
     }
+
+    public static CompanyMigrationBundleIntegrity ComputeBundleIntegrity(
+        CompanyMigrationExportBundle bundle)
+    {
+        ArgumentNullException.ThrowIfNull(bundle);
+        var manifest = bundle.Manifest ??
+            throw new ArgumentException("The migration bundle has no manifest.", nameof(bundle));
+        return ComputeIntegrity(
+            bundle.PackageKind,
+            manifest.Source?.InstallationId ?? string.Empty,
+            manifest.Records ?? Array.Empty<CompanyMigrationSourceRecord>(),
+            bundle.Objects ?? Array.Empty<ProfileHostMigrationObjectInput>());
+    }
+
+    public static string ComputePayloadContentHash(string payloadJson)
+    {
+        ArgumentNullException.ThrowIfNull(payloadJson);
+        return HashText(payloadJson);
+    }
+
+    public static string ComputeCanonicalPayloadContentHash(string payloadJson)
+    {
+        ArgumentNullException.ThrowIfNull(payloadJson);
+        using var document = JsonDocument.Parse(payloadJson);
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            WriteCanonicalJson(writer, document.RootElement);
+        }
+        return HashText(Encoding.UTF8.GetString(stream.ToArray()));
+    }
+
+    public static IReadOnlyList<CompanyMigrationDanglingReference> FindDanglingReferences(
+        IReadOnlyList<ProfileHostMigrationObjectInput> objects)
+    {
+        ArgumentNullException.ThrowIfNull(objects);
+        return FindDanglingReferencesCore(objects);
+    }
+
+    public static IReadOnlyList<CompanyMigrationCompanySummary> SummarizeCompanies(
+        IReadOnlyList<ProfileHostMigrationObjectInput> objects)
+    {
+        ArgumentNullException.ThrowIfNull(objects);
+        return SummarizeCompaniesCore(objects);
+    }
+
+    public static IReadOnlyDictionary<string, int> CreateCounts(
+        IReadOnlyCollection<CompanyMigrationSourceRecord> records,
+        IReadOnlyCollection<ProfileHostMigrationObjectInput> objects,
+        IReadOnlyCollection<CompanyMigrationDanglingReference> dangling,
+        IReadOnlyCollection<CompanyMigrationSourceBlocker> blockers)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        ArgumentNullException.ThrowIfNull(objects);
+        ArgumentNullException.ThrowIfNull(dangling);
+        ArgumentNullException.ThrowIfNull(blockers);
+        return new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["companies"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.TradeCompanyProfiles),
+            ["crafters"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.TradeCrafters),
+            ["orders"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.TradeOrders),
+            ["payrollDrafts"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.TradePayrollDrafts),
+            ["linkedPlans"] = objects.Count(item =>
+                item.Collection == ProfileSyncCollections.Plans),
+            ["orderCraftSnapshots"] = objects.Count(item =>
+                item.Collection == ProfileHostMigrationCollections.TradeOrderCraftSnapshots),
+            ["sourceRecords"] = records.Count,
+            ["unsupportedRecords"] = records.Count(record => !record.Supported),
+            ["danglingReferences"] = dangling.Count,
+            ["blockers"] = blockers.Count
+        };
+    }
+
+    private static CompanyMigrationBundleIntegrity ComputeIntegrity(
+        string packageKind,
+        string installationId,
+        IReadOnlyCollection<CompanyMigrationSourceRecord> records,
+        IReadOnlyCollection<ProfileHostMigrationObjectInput> objects)
+    {
+        var indexedRecords = records
+            .Select((record, index) => new
+            {
+                Record = record,
+                IntegrityKey = $"{BuildRecordIntegrityKey(record)}\0{index}",
+                ContentHash = HashText(record.PayloadJson ?? string.Empty)
+            })
+            .ToArray();
+        var recordHashes = indexedRecords.ToDictionary(
+            item => item.IntegrityKey,
+            item => item.ContentHash,
+            StringComparer.Ordinal);
+        var sourceHash = HashLines(indexedRecords
+            .OrderBy(item => item.Record.DatabaseName, StringComparer.Ordinal)
+            .ThenBy(item => item.Record.StoreName, StringComparer.Ordinal)
+            .ThenBy(item => item.Record.RecordId, StringComparer.Ordinal)
+            .ThenBy(item => item.IntegrityKey, StringComparer.Ordinal)
+            .Select(item =>
+                $"{item.Record.DatabaseName}/{item.Record.StoreName}/{item.Record.RecordId}/{item.ContentHash}"));
+        var transferHash = HashLines(objects
+            .OrderBy(item => item.Collection, StringComparer.Ordinal)
+            .ThenBy(item => item.ObjectId, StringComparer.Ordinal)
+            .Select(item =>
+                $"{item.Collection}/{item.ObjectId}/{HashText(item.PayloadJson ?? string.Empty)}"));
+        var contentHash = HashLines(
+        [
+            packageKind,
+            installationId,
+            sourceHash,
+            transferHash
+        ]);
+        var storeHashes = indexedRecords
+            .GroupBy(
+                item => $"{item.Record.DatabaseName}/{item.Record.StoreName}",
+                StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => HashLines(group
+                    .OrderBy(item => item.Record.RecordId, StringComparer.Ordinal)
+                    .ThenBy(item => item.IntegrityKey, StringComparer.Ordinal)
+                    .Select(item =>
+                        $"{item.Record.RecordId}/{item.ContentHash}")),
+                StringComparer.Ordinal);
+        return new CompanyMigrationBundleIntegrity
+        {
+            SourceContentHash = sourceHash,
+            TransferContentHash = transferHash,
+            ContentHash = contentHash,
+            MigrationId = DeterministicGuid(contentHash),
+            RecordContentHashes = recordHashes,
+            StoreContentHashes = storeHashes
+        };
+    }
+
+    private static string BuildRecordIntegrityKey(CompanyMigrationSourceRecord record) =>
+        $"{record.DatabaseRole}\0{record.DatabaseName}\0{record.StoreName}\0{record.RecordId}";
 
     private static List<CompanyMigrationSourceRecord> Flatten(
         BrowserCompanyMigrationSource source,
@@ -500,7 +623,7 @@ internal static class CompanyMigrationInventoryBuilder
             .ToArray();
     }
 
-    private static IReadOnlyList<CompanyMigrationDanglingReference> FindDanglingReferences(
+    private static IReadOnlyList<CompanyMigrationDanglingReference> FindDanglingReferencesCore(
         IReadOnlyList<ProfileHostMigrationObjectInput> objects)
     {
         var identities = objects
@@ -557,7 +680,7 @@ internal static class CompanyMigrationInventoryBuilder
             .ToArray();
     }
 
-    private static IReadOnlyList<CompanyMigrationCompanySummary> SummarizeCompanies(
+    private static IReadOnlyList<CompanyMigrationCompanySummary> SummarizeCompaniesCore(
         IReadOnlyList<ProfileHostMigrationObjectInput> objects)
     {
         var companyObjects = objects
@@ -685,6 +808,35 @@ internal static class CompanyMigrationInventoryBuilder
 
     private static string HashLines(IEnumerable<string> lines) =>
         HashText(string.Join('\n', lines));
+
+    private static void WriteCanonicalJson(Utf8JsonWriter writer, JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element
+                             .EnumerateObject()
+                             .OrderBy(item => item.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonicalJson(writer, property.Value);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteCanonicalJson(writer, item);
+                }
+                writer.WriteEndArray();
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
+    }
 
     private static Guid DeterministicGuid(string hash)
     {

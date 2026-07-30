@@ -72,6 +72,9 @@ builder.Services.AddScoped<NativePlanImportClassifier>();
 builder.Services.AddScoped<GitHubIssueReportService>();
 builder.Services.AddScoped<BrowserFileExportService>();
 builder.Services.AddScoped<CompanyMigrationInventoryExportService>();
+builder.Services.AddScoped<CompanyMigrationBundleService>();
+builder.Services.AddScoped<CompanyMigrationCheckpointStore>();
+builder.Services.AddScoped<CompanyMigrationWorkflowService>();
 builder.Services.AddSingleton(new ProcurementRouteAvailability(
     bool.TryParse(builder.Configuration["ProcurementRoutes:GenerationEnabled"], out var routeGenerationEnabled) &&
     routeGenerationEnabled));

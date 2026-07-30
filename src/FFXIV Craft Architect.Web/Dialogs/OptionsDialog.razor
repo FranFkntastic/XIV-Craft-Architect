@@ -694,6 +694,30 @@
                     }
                 </MudPaper>
 
+                @if (!ProfileSync.CurrentStatus.IsConnected)
+                {
+                    <MudPaper Variant="Variant.Outlined" Class="hosting-migration-entry pa-3 my-3">
+                        <div class="hosting-migration-copy">
+                            <MudIcon Icon="@Icons.Material.Filled.MoveUp"
+                                     Color="Color.Secondary"
+                                     Size="Size.Medium" />
+                            <div>
+                                <MudText Typo="Typo.subtitle2">Move browser companies to hosted storage</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    One-time cutover: review every company, preserve a recovery archive, reconcile hosted conflicts, and switch this browser only after the move succeeds.
+                                </MudText>
+                            </div>
+                        </div>
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.ArrowForward"
+                                   OnClick="OpenCompanyMigration"
+                                   Disabled="_profileHostIsBusy">
+                            Move Companies
+                        </MudButton>
+                    </MudPaper>
+                }
+
                 @if (ProfileSync.Conflicts.Count > 0)
                 {
                     <MudText Typo="Typo.subtitle2" Class="mb-2">Conflicts</MudText>
@@ -2061,7 +2085,7 @@
         }
         
         Snackbar.Add("Settings saved", Severity.Success);
-        MudDialog.Close(DialogResult.Ok(true));
+        MudDialog.Close(DialogResult.Ok(new OptionsDialogResult()));
     }
 
     private async Task ToggleSecretDebugToolsAsync()
@@ -2222,6 +2246,14 @@
     private void Cancel()
     {
         MudDialog.Cancel();
+    }
+
+    private void OpenCompanyMigration()
+    {
+        MudDialog.Close(DialogResult.Ok(new OptionsDialogResult(
+            OpenCompanyMigration: true,
+            HostUrl: _profileHostUrl,
+            AccessKey: _profileHostAccessKey)));
     }
 
     private static MarketFetchScope ParseMarketFetchScope(string? value)

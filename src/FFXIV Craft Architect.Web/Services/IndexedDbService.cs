@@ -192,6 +192,13 @@ public sealed class IndexedDbService
             "IndexedDB.loadTradeCompanyProfiles",
             "load Trade company profiles");
 
+    public Task<bool> DeleteTradeCompanyProfileAsync(Guid companyProfileId) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.deleteTradeCompanyProfile",
+            false,
+            $"delete Trade company {companyProfileId}",
+            companyProfileId);
+
     public Task<bool> SaveTradeCrafterAsync(TradeCrafterProfile crafter) =>
         InvokeOrDefaultAsync(
             "IndexedDB.saveTradeCrafter",
@@ -205,6 +212,13 @@ public sealed class IndexedDbService
             "IndexedDB.loadTradeCrafters",
             "load Trade crafters",
             companyProfileId);
+
+    public Task<bool> DeleteTradeCrafterAsync(Guid crafterId) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.deleteTradeCrafter",
+            false,
+            $"delete Trade crafter {crafterId}",
+            crafterId);
 
     public Task<bool> SaveTradeOrderAsync(TradeOrder order) =>
         InvokeOrDefaultAsync(

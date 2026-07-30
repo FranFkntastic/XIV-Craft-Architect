@@ -900,7 +900,37 @@
     {
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
         var dialog = DialogService.Show<OptionsDialog>("Options", options);
-        await dialog.Result;
+        var result = await dialog.Result;
+        if (result?.Data is OptionsDialogResult { OpenCompanyMigration: true } migration)
+        {
+            await ShowCompanyMigrationAsync(migration);
+        }
+    }
+
+    private async Task ShowCompanyMigrationAsync(OptionsDialogResult launch)
+    {
+        var parameters = new DialogParameters
+        {
+            [nameof(CompanyMigrationDialog.InitialHostUrl)] = launch.HostUrl ?? string.Empty,
+            [nameof(CompanyMigrationDialog.InitialAccessKey)] = launch.AccessKey ?? string.Empty
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            FullWidth = true,
+            MaxWidth = MaxWidth.ExtraLarge
+        };
+        var dialog = DialogService.Show<CompanyMigrationDialog>(
+            "Move companies to hosted storage",
+            parameters,
+            options);
+        var result = await dialog.Result;
+        if (result?.Data is ProfileHostMigrationCommitResponse)
+        {
+            NavigationManager.NavigateTo(
+                NavigationManager.Uri,
+                forceLoad: true);
+        }
     }
 
     public void Dispose()

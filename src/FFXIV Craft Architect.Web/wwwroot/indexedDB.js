@@ -1157,6 +1157,10 @@ async function loadTradeCompanyProfiles() {
     return profiles.sort((a, b) => String(b.updatedAtUtc || '').localeCompare(String(a.updatedAtUtc || '')));
 }
 
+async function deleteTradeCompanyProfile(companyProfileId) {
+    return await deleteStoreRecord(STORE_TRADE_COMPANY_PROFILES, companyProfileId);
+}
+
 async function saveTradeCrafter(crafter) {
     return await saveStoreRecord(STORE_TRADE_CRAFTERS, crafter);
 }
@@ -1170,6 +1174,10 @@ async function loadTradeCrafters(companyProfileId) {
     return crafters
         .filter(crafter => crafter.companyProfileId === companyProfileId)
         .sort((a, b) => String(a.displayName || '').localeCompare(String(b.displayName || '')));
+}
+
+async function deleteTradeCrafter(crafterId) {
+    return await deleteStoreRecord(STORE_TRADE_CRAFTERS, crafterId);
 }
 
 async function saveTradeOrder(order) {
@@ -2231,9 +2239,11 @@ window.IndexedDB = {
     getMarketCacheStats,
     saveTradeCompanyProfile,
     loadTradeCompanyProfiles,
+    deleteTradeCompanyProfile,
     saveTradeCrafter,
     saveTradeCraftersBatch,
     loadTradeCrafters,
+    deleteTradeCrafter,
     saveTradeOrder,
     saveTradeOrdersBatch,
     loadTradeOrders,
