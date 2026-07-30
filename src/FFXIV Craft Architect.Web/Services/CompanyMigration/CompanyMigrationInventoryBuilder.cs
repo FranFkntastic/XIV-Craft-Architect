@@ -149,6 +149,7 @@ internal sealed class BrowserLegacyDatabase
     public IReadOnlyList<JsonElement> PayrollDrafts { get; set; } = [];
     public IReadOnlyList<JsonElement> LinkedPlans { get; set; } = [];
     public IReadOnlyList<JsonElement> LinkedPlanComponents { get; set; } = [];
+    public IReadOnlyList<BrowserUnsupportedStore> UnsupportedStores { get; set; } = [];
 }
 
 internal sealed class BrowserLinkedPlan
@@ -375,6 +376,18 @@ internal static class CompanyMigrationInventoryBuilder
                 Message =
                     $"Unsupported company store '{store.StoreName}' has {store.Records.Count} preserved records.",
                 DatabaseRole = "company",
+                StoreName = store.StoreName
+            });
+        }
+        foreach (var store in source.Legacy.UnsupportedStores)
+        {
+            Add(records, "legacy", source.Legacy.DatabaseName, store.StoreName, null, store.Records, supported: false);
+            blockers.Add(new CompanyMigrationSourceBlocker
+            {
+                Code = "unsupported_legacy_store",
+                Message =
+                    $"Unsupported legacy store '{store.StoreName}' has {store.Records.Count} preserved records.",
+                DatabaseRole = "legacy",
                 StoreName = store.StoreName
             });
         }
