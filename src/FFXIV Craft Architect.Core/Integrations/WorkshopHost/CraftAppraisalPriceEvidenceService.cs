@@ -103,7 +103,9 @@ public sealed class CraftAppraisalPriceEvidenceService : ICraftAppraisalPriceEvi
                     progress: null,
                     cancellationToken);
                 foreach (var entry in await marketCache.GetManyAsync(missing, MarketEvidenceMaxAge))
+                {
                     entries[entry.Key] = entry.Value;
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
