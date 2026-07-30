@@ -739,11 +739,8 @@
         if (string.IsNullOrWhiteSpace(encodedPath))
             return false;
 
-        var snapshotPath = Uri.UnescapeDataString(encodedPath);
-        if (!snapshotPath.StartsWith("/marketmafioso/api/craft/plans/", StringComparison.Ordinal) ||
-            snapshotPath.Contains('?', StringComparison.Ordinal) ||
-            snapshotPath.Contains('#', StringComparison.Ordinal) ||
-            Uri.TryCreate(snapshotPath, UriKind.Absolute, out _))
+        var snapshotTarget = Uri.UnescapeDataString(encodedPath);
+        if (!IsValidAppraisalPlanSnapshotTarget(snapshotTarget))
         {
             Snackbar.Add("The appraisal plan link is invalid.", Severity.Error);
             NavigationManager.NavigateTo("./", replace: true);
@@ -753,7 +750,7 @@
         try
         {
             AppState.SetStatus("Opening the quoted Craft Architect plan...", busy: true);
-            var json = await Http.GetStringAsync(snapshotPath);
+            var json = await Http.GetStringAsync(snapshotTarget);
             var plan = RecipeService.DeserializePlan(json)
                 ?? throw new InvalidOperationException("The appraisal plan snapshot could not be parsed.");
             await LoadNativePlanAsync(
@@ -764,7 +761,7 @@
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Failed to open appraisal plan snapshot {Path}", snapshotPath);
+            Logger.LogError(ex, "Failed to open appraisal plan snapshot {Target}", snapshotTarget);
             Snackbar.Add($"Failed to open appraisal plan: {ex.Message}", Severity.Error);
         }
         finally
@@ -774,6 +771,42 @@
         }
 
         return true;
+    }
+
+    private static bool IsValidAppraisalPlanSnapshotTarget(string target)
+    {
+        const string marker = "/api/craft/plans/";
+        string path;
+        if (target.StartsWith("/", StringComparison.Ordinal))
+        {
+            if (target.Contains('?', StringComparison.Ordinal) ||
+                target.Contains('#', StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            path = target;
+        }
+        else
+        {
+            if (!Uri.TryCreate(target, UriKind.Absolute, out var absolute) ||
+                absolute.Scheme is not ("http" or "https") ||
+                !string.IsNullOrEmpty(absolute.UserInfo) ||
+                !string.IsNullOrEmpty(absolute.Query) ||
+                !string.IsNullOrEmpty(absolute.Fragment))
+            {
+                return false;
+            }
+
+            path = absolute.AbsolutePath;
+        }
+
+        var markerIndex = path.LastIndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+            return false;
+
+        var token = path[(markerIndex + marker.Length)..];
+        return token.Length == 32 && token.All(Uri.IsHexDigit);
     }
 
     private bool IsLocalBenchmarkWorkflowRequest()
