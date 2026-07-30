@@ -9,6 +9,7 @@ public sealed class ProfileSyncLocalStateService
     private const string ProfileStatePrefix = "profileHost.profile.";
     private const string LastSyncRevisionSuffix = "lastSyncRevision";
     private const string ObjectRevisionSuffix = "objectRevision.";
+    private const string HostedObjectSuffix = "hostedObject.";
     private const string PendingSavesSuffix = "pendingSaves";
     private static readonly IReadOnlySet<string> PortableSettingKeys = new HashSet<string>(
         [
@@ -113,6 +114,40 @@ public sealed class ProfileSyncLocalStateService
         return await _indexedDb.LoadRequiredSettingAsync(
             BuildObjectRevisionKey(profileId, collection, objectId),
             0L);
+    }
+
+    public async Task<bool> HasKnownHostedObjectAsync(
+        string collection,
+        string objectId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(objectId);
+        var hostedSuffix =
+            $".{HostedObjectSuffix}{collection}.{Uri.EscapeDataString(objectId)}";
+        var revisionSuffix =
+            $".{ObjectRevisionSuffix}{collection}.{Uri.EscapeDataString(objectId)}";
+        var settings = await _indexedDb.LoadAllSettingsRequiredAsync();
+        return settings.Any(item =>
+            item.Key.StartsWith(ProfileStatePrefix, StringComparison.Ordinal) &&
+            (item.Key.EndsWith(hostedSuffix, StringComparison.Ordinal) ||
+             item.Key.EndsWith(revisionSuffix, StringComparison.Ordinal)));
+    }
+
+    public async Task SaveHostedObjectProvenanceAsync(
+        string profileId,
+        string collection,
+        string objectId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(collection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(objectId);
+        var key = BuildProfileStateKey(
+            profileId,
+            $"{HostedObjectSuffix}{collection}.{Uri.EscapeDataString(objectId)}");
+        if (!await _indexedDb.SaveSettingAsync(key, true))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not persist hosted provenance for '{collection}/{objectId}'.");
+        }
     }
 
     public async Task SaveObjectRevisionAsync(
@@ -226,4 +261,5 @@ public sealed class ProfileSyncLocalStateService
                 ex);
         }
     }
+
 }

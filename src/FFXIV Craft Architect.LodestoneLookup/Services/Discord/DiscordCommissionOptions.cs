@@ -3,6 +3,7 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 public sealed class DiscordCommissionOptions
 {
     public bool Enabled { get; init; }
+    public string CompanyId { get; init; } = string.Empty;
     public string ApplicationId { get; init; } = string.Empty;
     public string PublicKey { get; init; } = string.Empty;
     public string BotToken { get; init; } = string.Empty;
@@ -32,4 +33,36 @@ public sealed class DiscordCommissionOptions
         !string.IsNullOrWhiteSpace(BotToken) &&
         Uri.TryCreate(CommissionBaseUrl, UriKind.Absolute, out _) &&
         Uri.TryCreate(ApiBaseUrl, UriKind.Absolute, out _);
+
+    public bool HasBootstrapInstallation =>
+        Enabled &&
+        Guid.TryParse(CompanyId, out var companyId) &&
+        companyId != Guid.Empty &&
+        IsDiscordSnowflake(ApplicationId) &&
+        IsDiscordSnowflake(AllowedGuildId) &&
+        IsDiscordSnowflake(AllowedChannelId);
+
+    public bool TryBuildCommissionUrl(string publicId, out string publicUrl)
+    {
+        publicUrl = string.Empty;
+        if (string.IsNullOrWhiteSpace(publicId) ||
+            !Uri.TryCreate(
+                CommissionBaseUrl + Uri.EscapeDataString(publicId),
+                UriKind.Absolute,
+                out var uri) ||
+            uri.Scheme is not ("https" or "http") ||
+            uri.Scheme == "http" && !uri.IsLoopback ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            return false;
+        }
+
+        publicUrl = uri.AbsoluteUri;
+        return true;
+    }
+
+    private static bool IsDiscordSnowflake(string value) =>
+        value.Length is >= 17 and <= 20 &&
+        value.All(char.IsAsciiDigit);
 }

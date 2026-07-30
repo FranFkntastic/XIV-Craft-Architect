@@ -65,9 +65,19 @@ public sealed class SqliteCommissionBriefStore
         catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
         {
             existing = await LoadAsync(publicId, ct);
-            if (existing?.Ownership == ownership)
+            if (existing?.Ownership == ownership &&
+                string.Equals(
+                    JsonSerializer.Serialize(existing.Brief, JsonOptions),
+                    JsonSerializer.Serialize(brief, JsonOptions),
+                    StringComparison.Ordinal))
             {
                 return existing;
+            }
+
+            if (existing != null)
+            {
+                throw new InvalidOperationException(
+                    "The company publication idempotency key was reused for different terms.");
             }
 
             throw;
@@ -198,7 +208,7 @@ public sealed class SqliteCommissionBriefStore
         await EnsureSchemaAsync(connection, ct);
         await using var read = connection.CreateCommand();
         read.CommandText =
-            "SELECT editor_token_hash FROM commission_briefs WHERE public_id = $publicId AND revoked_at_utc IS NULL;";
+            "SELECT editor_token_hash FROM commission_briefs WHERE public_id = $publicId;";
         read.Parameters.AddWithValue("$publicId", publicId);
         var storedHash = await read.ExecuteScalarAsync(ct) as string;
         if (storedHash == null || !TokenMatches(editorToken, storedHash))
@@ -208,7 +218,11 @@ public sealed class SqliteCommissionBriefStore
 
         await using var update = connection.CreateCommand();
         update.CommandText =
-            "UPDATE commission_briefs SET revoked_at_utc = $revokedAtUtc WHERE public_id = $publicId AND revoked_at_utc IS NULL;";
+            """
+            UPDATE commission_briefs
+            SET revoked_at_utc = COALESCE(revoked_at_utc, $revokedAtUtc)
+            WHERE public_id = $publicId;
+            """;
         update.Parameters.AddWithValue("$revokedAtUtc", DateTime.UtcNow.ToString("O"));
         update.Parameters.AddWithValue("$publicId", publicId);
         return await update.ExecuteNonQueryAsync(ct) == 1;

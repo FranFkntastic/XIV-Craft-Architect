@@ -1,6 +1,7 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Dialogs;
+using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using Microsoft.JSInterop;
@@ -76,6 +77,20 @@ public partial class TradeOrders
                 return "Trade channel delivery is already in progress.";
             }
 
+            if (HasFailedCompanyPublication)
+            {
+                if (string.IsNullOrWhiteSpace(SelectedCompanyPublication?.PublicId))
+                {
+                    return "The failed trade channel publication identity is unavailable.";
+                }
+
+                return CanPublishToConfiguredTradeChannel(
+                    _selectedOrder,
+                    out var retryReason)
+                        ? null
+                        : retryReason;
+            }
+
             if (GetOrderRootItems(_selectedOrder).Count == 0)
             {
                 return "Add at least one requested output before publishing.";
@@ -85,14 +100,6 @@ public partial class TradeOrders
             if (payment.TotalPayment <= 0 || !payment.Active.IsAvailable)
             {
                 return "Resolve the current payment evidence before publishing.";
-            }
-
-            if (HasFailedCompanyPublication &&
-                !TradeCollaboration.CanPerformExternalAction(
-                    _selectedOrder,
-                    out var retryReason))
-            {
-                return retryReason;
             }
 
             return null;
@@ -148,13 +155,12 @@ public partial class TradeOrders
             return;
         }
 
-        var payment = GetSelectedOrderPaymentSummary();
         if (HasFailedCompanyPublication)
         {
             _isPublishingCommission = true;
             try
             {
-                await PublishSelectedCommissionToDiscordAsync(payment);
+                await RetrySelectedCommissionToDiscordAsync();
             }
             finally
             {
@@ -164,7 +170,8 @@ public partial class TradeOrders
             return;
         }
 
-        var discordAvailable = TradeCollaboration.CanPerformExternalAction(
+        var payment = GetSelectedOrderPaymentSummary();
+        var discordAvailable = CanPublishToConfiguredTradeChannel(
             _selectedOrder,
             out var discordUnavailableReason);
         var parameters = new DialogParameters
@@ -186,6 +193,10 @@ public partial class TradeOrders
         }
 
         _isPublishingCommission = true;
+        var publicationOrderId = _selectedOrder.Id;
+        TradeCompanyPublicationOwnership? ownership = null;
+        PortableCommissionLink? localLink = null;
+        var localOrderAttached = false;
         try
         {
             if (publishResult.Destination == TradeCommissionDestination.DiscordChannel)
@@ -194,45 +205,90 @@ public partial class TradeOrders
                 return;
             }
 
-            var orderId = _selectedOrder.Id;
-            var ownership = await TradeCollaboration.GetPublicationOwnershipAsync(_selectedOrder);
-            var response = await CommissionBriefs.PublishAsync(
-                BuildCommissionBrief(_selectedOrder, payment),
-                ownership);
-            if (!await CommissionBriefLocalState.SaveEditorTokenAsync(orderId, response.EditorToken))
+            var orderId = publicationOrderId;
+            ownership = await TradeCollaboration.GetPublicationOwnershipAsync(_selectedOrder);
+            var brief = BuildCommissionBrief(_selectedOrder, payment);
+            var link = ownership == null
+                ? await CommissionBriefs.PublishPortableLinkAsync(brief)
+                : await TradeCollaboration.PublishPortableLinkAsync(
+                    _selectedOrder,
+                    brief);
+            if (ownership == null)
             {
-                Snackbar.Add("The brief was published, but this browser could not retain its revoke capability.", Severity.Warning);
+                localLink = link;
+                var editorToken = link.EditorToken ??
+                    throw new InvalidOperationException(
+                        "The local brief did not return its revoke capability.");
+                if (!await CommissionBriefLocalState.SaveEditorTokenAsync(
+                        orderId,
+                        editorToken))
+                {
+                    await RollBackLocalPortableLinkAsync(
+                        _selectedOrder,
+                        link);
+                    return;
+                }
+
+                var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+                orderToSave.CommissionPublication = new TradeCommissionPublication
+                {
+                    PublicId = link.PublicId,
+                    PublicUrl = link.Url,
+                    Version = link.Version,
+                    PublishedAtUtc = link.PublishedAtUtc
+                };
+                AppendCommissionHistory(
+                    orderToSave,
+                    TradeOrderHistoryEventKind.CommissionPublished,
+                    $"Published crafter brief v{link.Version}.",
+                    link.PublishedAtUtc);
+                if (!await TradeOperationsPersistence.SaveOrderAsync(orderToSave))
+                {
+                    await RollBackLocalPortableLinkAsync(
+                        _selectedOrder,
+                        link);
+                    return;
+                }
+
+                localOrderAttached = true;
+                await ProfileSync.QueueLocalSaveAsync(
+                    ProfileSyncCollections.TradeOrders,
+                    orderId.ToString("D"));
             }
 
-            var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
-            orderToSave.CommissionPublication = new TradeCommissionPublication
-            {
-                PublicId = response.PublicId,
-                Version = response.Version,
-                PublishedAtUtc = response.PublishedAtUtc,
-                Ownership = ownership
-            };
-            AppendCommissionHistory(
-                orderToSave,
-                TradeOrderHistoryEventKind.CommissionPublished,
-                $"Published crafter brief v{response.Version}.",
-                response.PublishedAtUtc);
-            if (!await SaveOrderAndNotifyAsync(orderToSave))
-            {
-                Snackbar.Add("The brief was published, but its link could not be attached to this order.", Severity.Warning);
-                return;
-            }
-
+            AppState.NotifyTradeOperationsDataChanged();
             await LoadAsync();
             SelectOrderAfterReload(orderId, "The brief was published, but the order could not be reloaded.");
             _activeOpsTab = 3;
-            await CopyTextToClipboardAsync(GetCommissionUrl(response.PublicId), "Commission published and link copied");
+            await CopyTextToClipboardAsync(
+                link.Url,
+                "Commission published and link copied");
         }
         catch (Exception exception)
         {
+            if (localLink != null && !localOrderAttached)
+            {
+                await RollBackLocalPortableLinkAsync(
+                    _selectedOrder,
+                    localLink);
+            }
+
+            if (localOrderAttached || ownership != null)
+            {
+                await LoadAsync();
+                SelectOrderAfterReload(
+                    publicationOrderId,
+                    "The publication may be attached remotely, but the order could not be reloaded.");
+                _activeOpsTab = 3;
+            }
+
             Snackbar.Add(
-                $"Commission publication failed: {exception.Message}",
-                Severity.Error);
+                localOrderAttached || ownership != null
+                    ? $"The commission publication status could not be confirmed: {exception.Message}"
+                    : $"Commission publication failed: {exception.Message}",
+                localOrderAttached || ownership != null
+                    ? Severity.Warning
+                    : Severity.Error);
         }
         finally
         {
@@ -281,6 +337,78 @@ public partial class TradeOrders
                 ? "Commission published to Discord"
                 : "Discord publication queued",
             Severity.Success);
+    }
+
+    private async Task RetrySelectedCommissionToDiscordAsync()
+    {
+        if (_selectedOrder == null ||
+            SelectedCompanyPublication?.PublicId is not { Length: > 0 } publicId)
+        {
+            return;
+        }
+
+        var orderId = _selectedOrder.Id;
+        var result = await TradeCollaboration.RetryDiscordPublicationAsync(
+            _selectedOrder,
+            publicId);
+        if (!result.Success)
+        {
+            Snackbar.Add(
+                result.Publication?.Message ??
+                    result.Message ??
+                    "Discord publication could not be retried.",
+                result.Disposition == TradeCompanyMutationDisposition.Conflict
+                    ? Severity.Warning
+                    : Severity.Error);
+            return;
+        }
+
+        await TradeCollaboration.RefreshAsync(
+            _selectedOrder.CompanyProfileId,
+            orderId);
+        Snackbar.Add("Discord publication requeued", Severity.Success);
+    }
+
+    private bool CanPublishToConfiguredTradeChannel(
+        TradeOrder order,
+        out string reason) =>
+        TradeCollaboration.CanPerformExternalAction(order, out reason);
+
+    private async Task RollBackLocalPortableLinkAsync(
+        TradeOrder order,
+        PortableCommissionLink link)
+    {
+        try
+        {
+            var editorToken = link.EditorToken ??
+                throw new InvalidOperationException(
+                    "The local brief revoke capability was unavailable.");
+            await CommissionBriefs.RevokeAsync(
+                link.PublicId,
+                editorToken);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(
+                $"The order could not retain the new link, and the orphaned brief could not be revoked: {exception.Message}",
+                Severity.Error);
+            return;
+        }
+
+        try
+        {
+            await CommissionBriefLocalState.ForgetEditorTokenAsync(order.Id);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(
+                $"The unpublished revoke capability could not be cleared from browser storage: {exception.Message}",
+                Severity.Warning);
+        }
+
+        Snackbar.Add(
+            "The order could not retain the new link, so the brief was revoked.",
+            Severity.Warning);
     }
 
     private string GetInterestCrafterValue(TradeCommissionInterest claim)
@@ -455,10 +583,10 @@ public partial class TradeOrders
         try
         {
             var orderId = _selectedOrder.Id;
-            if (publication.Ownership is { } ownership)
+            if (publication.Ownership is not null)
             {
-                await TradeCollaboration.RevokePublicationAsync(
-                    ownership,
+                await TradeCollaboration.RevokePortableLinkAsync(
+                    _selectedOrder,
                     publication.PublicId);
             }
             else
@@ -559,14 +687,14 @@ public partial class TradeOrders
             material.UnitCost,
             material.TotalCost);
 
-    private string GetCommissionUrl(string publicId) =>
-        $"{NavigationManager.BaseUri.TrimEnd('/')}/commission.html?id={Uri.EscapeDataString(publicId)}";
-
     private async Task CopyCommissionLinkAsync()
     {
         if (_selectedOrder?.CommissionPublication is { RevokedAtUtc: null } publication)
         {
-            await CopyTextToClipboardAsync(GetCommissionUrl(publication.PublicId), "Commission link copied");
+            var link = await ResolvePortableLinkAsync(publication);
+            await CopyTextToClipboardAsync(
+                link.Url,
+                "Commission link copied");
         }
     }
 
@@ -574,8 +702,33 @@ public partial class TradeOrders
     {
         if (_selectedOrder?.CommissionPublication is { RevokedAtUtc: null } publication)
         {
-            await JSRuntime.InvokeVoidAsync("open", GetCommissionUrl(publication.PublicId), "_blank");
+            var link = await ResolvePortableLinkAsync(publication);
+            await JSRuntime.InvokeVoidAsync(
+                "open",
+                link.Url,
+                "_blank");
         }
+    }
+
+    private async Task<PortableCommissionLink> ResolvePortableLinkAsync(
+        TradeCommissionPublication publication)
+    {
+        if (!string.IsNullOrWhiteSpace(publication.PublicUrl))
+        {
+            return CommissionBriefClient.CreatePortableLink(
+                publication.PublicId,
+                publication.PublicUrl,
+                publication.Version,
+                publication.PublishedAtUtc);
+        }
+
+        var resolved = publication.Ownership == null
+            ? await CommissionBriefs.ResolvePortableLinkAsync(
+                publication.PublicId)
+            : await TradeCollaboration.ResolvePortableLinkAsync(
+                publication.PublicId);
+        publication.PublicUrl = resolved.Url;
+        return resolved;
     }
 
     private static string FormatCommissionCostBasis(TradeOrderSourceSnapshot source) =>

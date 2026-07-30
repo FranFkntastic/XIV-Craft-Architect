@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
@@ -10,6 +11,7 @@ public sealed class TradeCompanyCollaborationService(
     ProfileSyncLocalStateService localState,
     ProfileSyncService profileSync)
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly Dictionary<Guid, IReadOnlyList<TradeCommissionInterest>> _interests = [];
     private readonly Dictionary<Guid, TradeCommissionPublicationProjection> _publications = [];
 
@@ -55,20 +57,45 @@ public sealed class TradeCompanyCollaborationService(
     public async Task<TradeCompanyPublicationOwnership?> GetPublicationOwnershipAsync(
         TradeOrder order)
     {
-        if (!CanPerformExternalAction(order, out _))
+        var connection = await localState.LoadConnectionSettingsAsync();
+        var knownHosted = await localState.HasKnownHostedObjectAsync(
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"));
+        if (connection.ProfileScopeId == null)
         {
+            if (knownHosted)
+            {
+                throw new InvalidOperationException(
+                    "Reconnect the order's hosted profile before publishing its company-owned link.");
+            }
+
             return null;
+        }
+
+        if (!connection.IsConfigured)
+        {
+            throw new InvalidOperationException(
+                "Reconnect Profile Hosting before publishing this hosted order.");
+        }
+
+        if (!CanPerformExternalAction(order, out var reason))
+        {
+            throw new InvalidOperationException(reason);
         }
 
         var revision = await localState.LoadObjectRevisionAsync(
             ProfileSyncCollections.TradeOrders,
             order.Id.ToString("D"));
-        return revision > 0
-            ? new TradeCompanyPublicationOwnership(
-                new CompanyId(order.CompanyProfileId),
-                order.Id,
-                new CompanyRecordRevision(revision))
-            : null;
+        if (revision <= 0)
+        {
+            throw new InvalidOperationException(
+                "Sync this order through Profile Hosting before publishing its company-owned link.");
+        }
+
+        return new TradeCompanyPublicationOwnership(
+            new CompanyId(order.CompanyProfileId),
+            order.Id,
+            new CompanyRecordRevision(revision));
     }
 
     public async Task RefreshAsync(
@@ -137,6 +164,40 @@ public sealed class TradeCompanyCollaborationService(
         }
     }
 
+    public async Task<TradeCommissionWorkflowResult> RetryDiscordPublicationAsync(
+        TradeOrder order,
+        string publicId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!CanPerformExternalAction(order, out var reason))
+        {
+            return Rejected(reason);
+        }
+
+        if (string.IsNullOrWhiteSpace(publicId))
+        {
+            return Rejected("The failed Discord publication identity is unavailable.");
+        }
+
+        try
+        {
+            var publication = await client.RetryPublicationAsync(
+                order.CompanyProfileId,
+                publicId,
+                cancellationToken);
+            _publications[order.Id] = publication;
+            return new TradeCommissionWorkflowResult(
+                publication.State == TradeCommissionDeliveryState.Pending,
+                TradeCompanyMutationDisposition.Synced,
+                publication,
+                Message: publication.Message);
+        }
+        catch (Exception exception)
+        {
+            return Rejected(exception.Message);
+        }
+    }
+
     public async Task<PortableCommissionLink> PublishPortableLinkAsync(
         TradeOrder order,
         CommissionBriefDocument brief,
@@ -156,14 +217,38 @@ public sealed class TradeCompanyCollaborationService(
                 "Sync this order through Profile Hosting before publishing its company-owned link.");
         }
 
-        return await client.PublishPortableLinkAsync(
+        var published = await client.PublishPortableLinkAsync(
             order.CompanyProfileId,
             order.Id,
             revision,
             brief,
             $"portable-link:{order.Id:D}:{revision}",
             cancellationToken);
+        var expectedOwnership = new TradeCompanyPublicationOwnership(
+            new CompanyId(order.CompanyProfileId),
+            order.Id,
+            new CompanyRecordRevision(revision));
+        var hostedOrder = ReadHostedPublishedOrder(
+            order,
+            expectedOwnership,
+            published);
+        if (!await tradeOperations.SaveOrderAsync(hostedOrder))
+        {
+            throw new InvalidOperationException(
+                "The company brief was attached by Profile Hosting, but browser storage could not apply the authoritative order.");
+        }
+
+        await localState.SaveObjectRevisionAsync(
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"),
+            published.OrderRecord.RecordRevision.Value);
+        return published.Link;
     }
+
+    public Task<PortableCommissionLink> ResolvePortableLinkAsync(
+        string publicId,
+        CancellationToken cancellationToken = default) =>
+        client.ResolvePortableLinkAsync(publicId, cancellationToken);
 
     public Task RevokePortableLinkAsync(
         TradeOrder order,
@@ -260,4 +345,55 @@ public sealed class TradeCompanyCollaborationService(
 
     private static TradeCommissionWorkflowResult Rejected(string message) =>
         new(false, TradeCompanyMutationDisposition.Rejected, Message: message);
+
+    private static TradeOrder ReadHostedPublishedOrder(
+        TradeOrder sourceOrder,
+        TradeCompanyPublicationOwnership expectedOwnership,
+        TradeCompanyPortablePublication published)
+    {
+        var record = published.OrderRecord;
+        if (record.CompanyId.Value != sourceOrder.CompanyProfileId ||
+            !string.Equals(
+                record.RecordKind,
+                TradeCompanyRecordKinds.Order,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                record.RecordId,
+                sourceOrder.Id.ToString("D"),
+                StringComparison.OrdinalIgnoreCase) ||
+            record.RecordRevision.Value <= 0)
+        {
+            throw new InvalidOperationException(
+                "Portable commission publication returned the wrong authoritative Trade order.");
+        }
+
+        var order = JsonSerializer.Deserialize<TradeOrder>(
+            record.PayloadJson,
+            JsonOptions)
+            ?? throw new InvalidOperationException(
+                "Portable commission publication returned an invalid authoritative Trade order.");
+        var publication = order.CommissionPublication;
+        var validatedLink = publication?.PublicUrl is { Length: > 0 } publicUrl
+            ? CommissionBriefClient.CreatePortableLink(
+                publication.PublicId,
+                publicUrl,
+                publication.Version,
+                publication.PublishedAtUtc)
+            : null;
+        if (order.Id != sourceOrder.Id ||
+            order.CompanyProfileId != sourceOrder.CompanyProfileId ||
+            publication?.Ownership is not { } ownership ||
+            ownership != expectedOwnership ||
+            !string.Equals(
+                publication.PublicId,
+                published.Link.PublicId,
+                StringComparison.Ordinal) ||
+            validatedLink != published.Link)
+        {
+            throw new InvalidOperationException(
+                "Portable commission publication returned inconsistent authoritative link ownership.");
+        }
+
+        return order;
+    }
 }

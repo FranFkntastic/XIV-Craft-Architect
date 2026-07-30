@@ -2,6 +2,13 @@ using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
+public sealed record DiscordCompanyInstallationBinding(
+    CompanyId CompanyId,
+    string ApplicationId,
+    string GuildId,
+    string ChannelId,
+    DateTimeOffset UpdatedAt);
+
 public enum DiscordPublicationState
 {
     Open = 0,
@@ -42,6 +49,21 @@ public sealed record DiscordPublicationCreateResult(
 {
     public bool Success =>
         Status is DiscordPublicationCreateStatus.Created or DiscordPublicationCreateStatus.Replayed;
+}
+
+public enum DiscordPublicationRetryStatus
+{
+    Queued,
+    Conflict,
+    Missing
+}
+
+public sealed record DiscordPublicationRetryResult(
+    DiscordPublicationRetryStatus Status,
+    DiscordPublicationRecord? Publication,
+    string? Error = null)
+{
+    public bool Success => Status == DiscordPublicationRetryStatus.Queued;
 }
 
 public enum DiscordInterestClaimState

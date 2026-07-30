@@ -111,7 +111,6 @@ public static class DiscordCommissionEndpoints
                         MessageComponentInteraction => options.IsConfigured
                             ? await HandleMessageComponentAsync(
                                 payload.RootElement,
-                                options,
                                 volunteer,
                                 ct)
                             : InteractionError("Commission collaboration has not been connected to a channel yet."),
@@ -173,14 +172,15 @@ public static class DiscordCommissionEndpoints
 
     private static async Task<IResult> HandleMessageComponentAsync(
         JsonElement interaction,
-        DiscordCommissionOptions options,
         DiscordClaimService volunteerInteractions,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(options.ApplicationId) ||
-            ReadString(interaction, "application_id") != options.ApplicationId ||
-            ReadString(interaction, "guild_id") != options.AllowedGuildId ||
-            ReadString(interaction, "channel_id") != options.AllowedChannelId)
+        var applicationId = ReadString(interaction, "application_id");
+        var guildId = ReadString(interaction, "guild_id");
+        var channelId = ReadString(interaction, "channel_id");
+        if (string.IsNullOrWhiteSpace(applicationId) ||
+            string.IsNullOrWhiteSpace(guildId) ||
+            string.IsNullOrWhiteSpace(channelId))
         {
             return InteractionError("This Volunteer action does not belong to this commission installation.");
         }
@@ -213,9 +213,9 @@ public static class DiscordCommissionEndpoints
         var result = await volunteerInteractions.RecordInterestAsync(
             new DiscordVolunteerInteraction(
                 interactionId,
-                options.ApplicationId,
-                options.AllowedGuildId,
-                options.AllowedChannelId,
+                applicationId,
+                guildId,
+                channelId,
                 messageId,
                 actionToken,
                 userId,

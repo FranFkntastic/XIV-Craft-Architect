@@ -135,6 +135,71 @@ public static class DiscordCollaborationEndpoints
                     brief.PublishedAtUtc));
             });
 
+        group.MapPost(
+            "/publications/{publicId}/retry",
+            async (
+                string companyId,
+                string publicId,
+                HttpRequest request,
+                TradeCompanyAuthorization authorization,
+                DiscordPublicationService publications,
+                CancellationToken cancellationToken) =>
+            {
+                var access = await ResolveAccessAsync(
+                    companyId,
+                    request,
+                    authorization,
+                    cancellationToken);
+                if (access == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
+                {
+                    return Results.Forbid();
+                }
+
+                if (string.IsNullOrWhiteSpace(publicId))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "invalid_publication",
+                        message = "An existing failed publication identity is required."
+                    });
+                }
+
+                var result = await publications.RetryFailedAsync(
+                    access,
+                    publicId,
+                    cancellationToken);
+                return result.Status switch
+                {
+                    DiscordPublicationRetryStatus.Queued
+                        when result.Publication is { } publication =>
+                        Results.Ok(new DiscordCompanyPublicationResponse(
+                            publication.OrderId,
+                            publication.PublicId,
+                            publication.BriefVersion,
+                            publication.CreatedAt.UtcDateTime,
+                            "Pending",
+                            publication.ChannelId,
+                            "Discord retry queued.")),
+                    DiscordPublicationRetryStatus.Missing =>
+                        Results.NotFound(new
+                        {
+                            error = "publication_not_found",
+                            message = result.Error
+                        }),
+                    _ => Results.Conflict(new
+                    {
+                        error = "publication_not_retryable",
+                        message = result.Error ??
+                            "The Discord publication is not safe to retry."
+                    })
+                };
+            });
+
         group.MapGet(
             "/publications",
             async (

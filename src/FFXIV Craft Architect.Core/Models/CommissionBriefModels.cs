@@ -71,6 +71,7 @@ public sealed class CommissionBriefCreateResponse
     public string EditorToken { get; set; } = string.Empty;
     public int Version { get; set; }
     public DateTime PublishedAtUtc { get; set; }
+    public TradeCompanyRecordEnvelope? OrderRecord { get; set; }
 }
 
 public sealed class CommissionBriefLinkResponse
@@ -93,6 +94,7 @@ public sealed class PublishedCommissionBrief
 public sealed class TradeCommissionPublication
 {
     public string PublicId { get; set; } = string.Empty;
+    public string? PublicUrl { get; set; }
     public int Version { get; set; }
     public DateTime PublishedAtUtc { get; set; }
     public DateTime? RevokedAtUtc { get; set; }

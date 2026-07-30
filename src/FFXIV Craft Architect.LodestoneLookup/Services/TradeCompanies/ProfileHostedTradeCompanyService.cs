@@ -4,11 +4,6 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
-public sealed record HostedTradeCompanyDiscordInstallation(
-    string ApplicationId,
-    string GuildId,
-    string ChannelId);
-
 public sealed class ProfileHostedTradeCompanyService(
     SqliteProfileHostStore profiles,
     ProfileAccessKeyHasher accessKeyHasher)
@@ -125,30 +120,6 @@ public sealed class ProfileHostedTradeCompanyService(
             publicId,
             cancellationToken);
         return found == null ? null : DeserializeOwnership(found.Object.PayloadJson);
-    }
-
-    public async Task<HostedTradeCompanyDiscordInstallation?> ResolveDiscordInstallationAsync(
-        TradeCompanyAccessContext access,
-        CancellationToken cancellationToken = default)
-    {
-        var hostProfileId = RequireHostProfile(access);
-        var company = await LoadCompanyProfileAsync(
-            hostProfileId,
-            access.CompanyId,
-            cancellationToken);
-        var installation = company?.DiscordInstallation;
-        return installation is
-               {
-                   Health: TradeCompanyDiscordInstallationHealth.Ready
-               } &&
-               IsDiscordSnowflake(installation.ApplicationId) &&
-               IsDiscordSnowflake(installation.GuildId) &&
-               IsDiscordSnowflake(installation.ChannelId)
-            ? new HostedTradeCompanyDiscordInstallation(
-                installation.ApplicationId,
-                installation.GuildId,
-                installation.ChannelId)
-            : null;
     }
 
     private async Task<TradeCompanyProfile?> LoadCompanyProfileAsync(
@@ -274,8 +245,4 @@ public sealed class ProfileHostedTradeCompanyService(
 
     private static TradeCompanyMutationResult Rejected(string code, string message) =>
         new(TradeCompanyMutationStatus.Rejected, null, ErrorCode: code, ErrorMessage: message);
-
-    private static bool IsDiscordSnowflake(string value) =>
-        value.Length is >= 17 and <= 20 &&
-        value.All(char.IsAsciiDigit);
 }

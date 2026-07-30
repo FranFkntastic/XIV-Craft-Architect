@@ -81,7 +81,27 @@ public sealed class TradeCompanyCollaborationClient(
         return ToPublication(publication);
     }
 
-    public async Task<PortableCommissionLink> PublishPortableLinkAsync(
+    public async Task<TradeCommissionPublicationProjection> RetryPublicationAsync(
+        Guid companyProfileId,
+        string publicId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{companyProfileId:D}/discord/publications/{Uri.EscapeDataString(publicId)}/retry",
+            content: null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var publication = await response.Content.ReadFromJsonAsync<DiscordPublicationDto>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The Discord retry endpoint returned an empty response.");
+        return ToPublication(publication);
+    }
+
+    public async Task<TradeCompanyPortablePublication> PublishPortableLinkAsync(
         Guid companyProfileId,
         Guid orderId,
         long orderRevision,
@@ -106,7 +126,34 @@ public sealed class TradeCompanyCollaborationClient(
             cancellationToken)
             ?? throw new InvalidOperationException(
                 "Portable commission publication returned an empty response.");
-        return CommissionBriefClient.CreatePortableLink(published);
+        return new TradeCompanyPortablePublication(
+            CommissionBriefClient.CreatePortableLink(published),
+            published.OrderRecord ??
+            throw new InvalidOperationException(
+                "Portable commission publication did not return its authoritative Trade order."));
+    }
+
+    public async Task<PortableCommissionLink> ResolvePortableLinkAsync(
+        string publicId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"xivdata/commission-briefs/{Uri.EscapeDataString(publicId)}/link",
+            content: null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var link = await response.Content.ReadFromJsonAsync<CommissionBriefLinkResponse>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "Commission link resolution returned an empty response.");
+        return CommissionBriefClient.CreatePortableLink(
+            link.PublicId,
+            link.PublicUrl,
+            link.Version,
+            link.PublishedAtUtc);
     }
 
     public async Task RevokePortableLinkAsync(
@@ -337,3 +384,7 @@ public sealed class TradeCompanyCollaborationClient(
 
     private sealed record DiscordProblemDto(string? Error, string? Message);
 }
+
+public sealed record TradeCompanyPortablePublication(
+    PortableCommissionLink Link,
+    TradeCompanyRecordEnvelope OrderRecord);

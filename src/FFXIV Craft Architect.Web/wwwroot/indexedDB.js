@@ -525,6 +525,44 @@ function putMigrationMarker(transaction, domain, counts) {
     });
 }
 
+async function commitLegacyMigrationOnce(
+    database,
+    stores,
+    domain,
+    counts,
+    writeSnapshot,
+    abortedMessage) {
+    await new Promise((resolve, reject) => {
+        const transaction = database.transaction(stores, 'readwrite');
+        let setupError = null;
+        const markerRequest = transaction
+            .objectStore(STORE_STORAGE_METADATA)
+            .get(LEGACY_MIGRATION_ID);
+        markerRequest.onsuccess = () => {
+            if (markerRequest.result) {
+                return;
+            }
+
+            try {
+                writeSnapshot(transaction);
+                putMigrationMarker(transaction, domain, counts);
+            } catch (error) {
+                setupError = error;
+                transaction.abort();
+            }
+        };
+        markerRequest.onerror = () => {
+            setupError = markerRequest.error;
+            transaction.abort();
+        };
+        transaction.oncomplete = resolve;
+        transaction.onerror = () => reject(
+            setupError ?? transaction.error);
+        transaction.onabort = () => reject(
+            setupError ?? transaction.error ?? new Error(abortedMessage));
+    });
+}
+
 async function migratePersonalDatabase(database) {
     if (await loadMigrationMarker(database)) {
         return;
@@ -545,23 +583,23 @@ async function migratePersonalDatabase(database) {
         STORE_SETTINGS
     ];
 
-    await new Promise((resolve, reject) => {
-        const transaction = database.transaction(stores, 'readwrite');
-        for (const record of plans) transaction.objectStore(STORE_PLANS).put(record);
-        for (const record of components) transaction.objectStore(STORE_PLAN_COMPONENTS).put(record);
-        for (const record of summaries) transaction.objectStore(STORE_PLAN_SUMMARIES).put(record);
-        for (const record of settings) transaction.objectStore(STORE_SETTINGS).put(record);
-        putMigrationMarker(transaction, 'personal', {
+    await commitLegacyMigrationOnce(
+        database,
+        stores,
+        'personal',
+        {
             plans: plans.length,
             planComponents: components.length,
             planSummaries: summaries.length,
             settings: settings.length
-        });
-        transaction.oncomplete = resolve;
-        transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(
-            transaction.error ?? new Error('[IndexedDB] Personal storage migration aborted.'));
-    });
+        },
+        transaction => {
+            for (const record of plans) transaction.objectStore(STORE_PLANS).put(record);
+            for (const record of components) transaction.objectStore(STORE_PLAN_COMPONENTS).put(record);
+            for (const record of summaries) transaction.objectStore(STORE_PLAN_SUMMARIES).put(record);
+            for (const record of settings) transaction.objectStore(STORE_SETTINGS).put(record);
+        },
+        '[IndexedDB] Personal storage migration aborted.');
 }
 
 async function migrateMarketDatabase(database) {
@@ -574,17 +612,17 @@ async function migrateMarketDatabase(database) {
         const fetchedAtUnix = getFetchedAtUnix(entry);
         return fetchedAtUnix > 0 ? { ...entry, fetchedAtUnix } : entry;
     });
-    await new Promise((resolve, reject) => {
-        const transaction = database.transaction(
-            [STORE_STORAGE_METADATA, STORE_MARKET_CACHE],
-            'readwrite');
-        for (const record of entries) transaction.objectStore(STORE_MARKET_CACHE).put(record);
-        putMigrationMarker(transaction, 'market', { marketCache: entries.length });
-        transaction.oncomplete = resolve;
-        transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(
-            transaction.error ?? new Error('[IndexedDB] Market storage migration aborted.'));
-    });
+    await commitLegacyMigrationOnce(
+        database,
+        [STORE_STORAGE_METADATA, STORE_MARKET_CACHE],
+        'market',
+        { marketCache: entries.length },
+        transaction => {
+            for (const record of entries) {
+                transaction.objectStore(STORE_MARKET_CACHE).put(record);
+            }
+        },
+        '[IndexedDB] Market storage migration aborted.');
 }
 
 async function migrateCompanyDatabase(database) {
@@ -601,31 +639,31 @@ async function migrateCompanyDatabase(database) {
         STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
         STORE_TRADE_PAYROLL_DRAFTS
     ];
-    await new Promise((resolve, reject) => {
-        const transaction = database.transaction(stores, 'readwrite');
-        for (const storeName of [
-            STORE_TRADE_COMPANY_PROFILES,
-            STORE_TRADE_CRAFTERS,
-            STORE_TRADE_ORDERS,
-            STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
-            STORE_TRADE_PAYROLL_DRAFTS
-        ]) {
-            for (const record of snapshot[storeName]) {
-                transaction.objectStore(storeName).put(record);
-            }
-        }
-        putMigrationMarker(transaction, 'company', {
+    await commitLegacyMigrationOnce(
+        database,
+        stores,
+        'company',
+        {
             tradeCompanyProfiles: snapshot[STORE_TRADE_COMPANY_PROFILES].length,
             tradeCrafters: snapshot[STORE_TRADE_CRAFTERS].length,
             tradeOrders: snapshot[STORE_TRADE_ORDERS].length,
             tradeOrderCraftSnapshots: snapshot[STORE_TRADE_ORDER_CRAFT_SNAPSHOTS].length,
             tradePayrollDrafts: snapshot[STORE_TRADE_PAYROLL_DRAFTS].length
-        });
-        transaction.oncomplete = resolve;
-        transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(
-            transaction.error ?? new Error('[IndexedDB] Company storage migration aborted.'));
-    });
+        },
+        transaction => {
+            for (const storeName of [
+                STORE_TRADE_COMPANY_PROFILES,
+                STORE_TRADE_CRAFTERS,
+                STORE_TRADE_ORDERS,
+                STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
+                STORE_TRADE_PAYROLL_DRAFTS
+            ]) {
+                for (const record of snapshot[storeName]) {
+                    transaction.objectStore(storeName).put(record);
+                }
+            }
+        },
+        '[IndexedDB] Company storage migration aborted.');
 }
 
 async function initPersonalDatabase() {

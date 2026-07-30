@@ -10,15 +10,15 @@ public static class DiscordCommissionMessage
     public static object Create(
         PublishedCommissionBrief published,
         string commissionBaseUrl) =>
-        Create(
+        CreateWithPublicUrl(
             published,
-            commissionBaseUrl,
+            commissionBaseUrl + Uri.EscapeDataString(published.PublicId),
             DiscordPublicationState.Open,
             actionToken: null);
 
-    public static object Create(
+    public static object CreateWithPublicUrl(
         PublishedCommissionBrief published,
-        string commissionBaseUrl,
+        string publicUrl,
         DiscordPublicationState state,
         string? actionToken,
         string? assignmentLabel = null)
@@ -67,7 +67,7 @@ public static class DiscordCommissionMessage
             },
             components = CreateComponents(
                 published,
-                commissionBaseUrl,
+                publicUrl,
                 state,
                 actionToken),
             allowed_mentions = new
@@ -111,7 +111,7 @@ public static class DiscordCommissionMessage
 
     private static object[] CreateComponents(
         PublishedCommissionBrief published,
-        string commissionBaseUrl,
+        string publicUrl,
         DiscordPublicationState state,
         string? actionToken)
     {
@@ -122,7 +122,7 @@ public static class DiscordCommissionMessage
                 type = 2,
                 style = 5,
                 label = "View full brief",
-                url = commissionBaseUrl + Uri.EscapeDataString(published.PublicId)
+                url = publicUrl
             }
         };
         if (state == DiscordPublicationState.Open &&

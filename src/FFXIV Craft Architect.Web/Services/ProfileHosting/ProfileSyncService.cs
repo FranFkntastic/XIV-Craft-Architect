@@ -99,6 +99,10 @@ public sealed class ProfileSyncService
                     }
                     else
                     {
+                        await _localState.SaveHostedObjectProvenanceAsync(
+                            profileId,
+                            item.Collection,
+                            item.ObjectId);
                         await adapter.ApplyRemoteObjectAsync(item, ct);
                     }
 
@@ -181,6 +185,10 @@ public sealed class ProfileSyncService
             return;
         }
 
+        await _localState.SaveHostedObjectProvenanceAsync(
+            profileId,
+            collection,
+            objectId);
         await AddPendingSaveAsync(profileId, collection, objectId);
         var hostReachable = await TryPushPendingSaveAsync(
             settings,
@@ -317,6 +325,10 @@ public sealed class ProfileSyncService
                 }
                 else
                 {
+                    await _localState.SaveHostedObjectProvenanceAsync(
+                        profileId,
+                        item.Collection,
+                        item.ObjectId);
                     await adapter.ApplyRemoteObjectAsync(item, ct);
                 }
 
@@ -380,7 +392,15 @@ public sealed class ProfileSyncService
             var objects = new List<ProfileSyncObjectEnvelope>();
             foreach (var adapter in _adapters.Values.OrderBy(adapter => adapter.Collection, StringComparer.Ordinal))
             {
-                objects.AddRange(await adapter.LoadLocalObjectsAsync(ct));
+                var localObjects = await adapter.LoadLocalObjectsAsync(ct);
+                foreach (var item in localObjects)
+                {
+                    await _localState.SaveHostedObjectProvenanceAsync(
+                        profileId,
+                        item.Collection,
+                        item.ObjectId);
+                }
+                objects.AddRange(localObjects);
             }
 
             var response = await _client.UploadBootstrapAsync(
@@ -438,6 +458,10 @@ public sealed class ProfileSyncService
         var adapter = GetAdapter(conflict.Collection);
         using (SuppressNotifications())
         {
+            await _localState.SaveHostedObjectProvenanceAsync(
+                profileId,
+                conflict.Collection,
+                conflict.ObjectId);
             await adapter.ApplyRemoteObjectAsync(conflict.RemoteObject, ct);
             await _localState.SaveObjectRevisionAsync(
                 profileId,
@@ -587,6 +611,10 @@ public sealed class ProfileSyncService
             return false;
         }
 
+        await _localState.SaveHostedObjectProvenanceAsync(
+            profileId,
+            pending.Collection,
+            pending.ObjectId);
         var expectedRevision = await _localState.LoadObjectRevisionAsync(
             profileId,
             pending.Collection,

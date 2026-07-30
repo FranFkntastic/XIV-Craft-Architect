@@ -204,12 +204,15 @@ jobs:
         run: node tools/Discord/reconcile-guild.mjs
 
       - name: Write isolated Discord environment
+        env:
+          TRADE_COMPANY_ID: ${{ vars.CRAFT_ARCHITECT_TRADE_COMPANY_ID }}
         shell: bash
         run: |
           set -euo pipefail
           umask 077
           {
             printf 'Discord__Enabled=true\n'
+            printf 'Discord__CompanyId=%s\n' "$TRADE_COMPANY_ID"
             printf 'Discord__ApplicationId=%s\n' "$DISCORD_APPLICATION_ID"
             printf 'Discord__PublicKey=%s\n' "$DISCORD_PUBLIC_KEY"
             printf 'Discord__RuntimeBotToken=%s\n' "$DISCORD_BOT_TOKEN"

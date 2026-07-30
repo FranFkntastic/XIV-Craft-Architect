@@ -31,6 +31,14 @@ public sealed class SqliteDiscordCollaborationStore(
             await using var command = connection.CreateCommand();
             command.CommandText =
                 """
+                CREATE TABLE IF NOT EXISTS discord_company_installations (
+                    company_id TEXT PRIMARY KEY,
+                    application_id TEXT NOT NULL,
+                    guild_id TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS discord_publications (
                     publication_id TEXT PRIMARY KEY,
                     company_id TEXT NOT NULL,
@@ -97,12 +105,50 @@ public sealed class SqliteDiscordCollaborationStore(
                     ON discord_outbox(state, next_attempt_at_utc);
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
+            if (options.HasBootstrapInstallation)
+            {
+                await UpsertCompanyInstallationAsync(
+                    connection,
+                    new DiscordCompanyInstallationBinding(
+                        CompanyId.Parse(options.CompanyId),
+                        options.ApplicationId,
+                        options.AllowedGuildId,
+                        options.AllowedChannelId,
+                        DateTimeOffset.UtcNow),
+                    cancellationToken);
+            }
             _schemaReady = true;
         }
         finally
         {
             _schemaGate.Release();
         }
+    }
+
+    public async Task<DiscordCompanyInstallationBinding?> ResolveCompanyInstallationAsync(
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        return await LoadCompanyInstallationAsync(
+            connection,
+            companyId,
+            cancellationToken);
+    }
+
+    public async Task<bool> MatchesCurrentCompanyInstallationAsync(
+        CompanyId companyId,
+        string channelId,
+        CancellationToken cancellationToken = default)
+    {
+        var installation = await ResolveCompanyInstallationAsync(
+            companyId,
+            cancellationToken);
+        return installation != null &&
+            string.Equals(
+                installation.ChannelId,
+                channelId,
+                StringComparison.Ordinal);
     }
 
     public async Task<DiscordPublicationCreateResult> CreatePublicationAsync(
@@ -139,6 +185,24 @@ public sealed class SqliteDiscordCollaborationStore(
         await using var transaction = await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
+        var installation = await LoadCompanyInstallationAsync(
+            connection,
+            ownership.CompanyId,
+            cancellationToken,
+            (SqliteTransaction)transaction);
+        if (installation == null ||
+            !string.Equals(
+                installation.ChannelId,
+                channelId,
+                StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordPublicationCreateResult(
+                DiscordPublicationCreateStatus.Conflict,
+                null,
+                "The Discord destination does not match the server-owned company installation.");
+        }
+
         var replay = await LoadPublicationByIdempotencyAsync(
             connection,
             (SqliteTransaction)transaction,
@@ -252,6 +316,225 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Parameters.AddWithValue("$orderId", orderId.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
+    }
+
+    public async Task<DiscordPublicationRetryResult> RetryFailedPublicationAsync(
+        CompanyId companyId,
+        Guid publicationId,
+        string publicId,
+        DiscordPublicationState restoredState,
+        DateTimeOffset queuedAt,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
+        if (publicationId == Guid.Empty ||
+            restoredState is DiscordPublicationState.Failed or
+            DiscordPublicationState.ReconciliationRequired)
+        {
+            return new DiscordPublicationRetryResult(
+                DiscordPublicationRetryStatus.Conflict,
+                null,
+                "A failed Discord publication cannot be retried into another failure state.");
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        await using var select = connection.CreateCommand();
+        select.Transaction = (SqliteTransaction)transaction;
+        select.CommandText =
+            """
+            SELECT
+                p.publication_id,
+                p.company_id,
+                p.order_id,
+                p.source_order_revision,
+                p.public_id,
+                p.brief_version,
+                p.channel_id,
+                p.message_id,
+                p.action_token,
+                p.state,
+                p.desired_projection_revision,
+                p.idempotency_key,
+                p.created_at_utc,
+                p.updated_at_utc,
+                o.work_item_id,
+                o.operation,
+                o.channel_id,
+                o.message_id,
+                o.state
+            FROM discord_publications p
+            LEFT JOIN discord_outbox o ON o.publication_id = p.publication_id
+            WHERE p.company_id = $companyId
+              AND p.publication_id = $publicationId
+              AND p.public_id = $publicId
+            ORDER BY o.created_at_utc;
+            """;
+        select.Parameters.AddWithValue("$companyId", companyId.ToString());
+        select.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+        select.Parameters.AddWithValue("$publicId", publicId);
+
+        DiscordPublicationRecord? publication = null;
+        var failed = new List<(
+            Guid WorkItemId,
+            DiscordOutboxOperation Operation,
+            string ChannelId,
+            string? MessageId)>();
+        var hasUnsafeState = false;
+        await using (var reader = await select.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                publication ??= ReadPublication(reader);
+                if (reader.IsDBNull(14))
+                {
+                    continue;
+                }
+
+                var outboxState = (DiscordOutboxState)reader.GetInt32(18);
+                if (outboxState == DiscordOutboxState.Failed)
+                {
+                    failed.Add((
+                        Guid.Parse(reader.GetString(14)),
+                        (DiscordOutboxOperation)reader.GetInt32(15),
+                        reader.GetString(16),
+                        reader.IsDBNull(17) ? null : reader.GetString(17)));
+                }
+                else if (outboxState != DiscordOutboxState.Succeeded)
+                {
+                    hasUnsafeState = true;
+                }
+            }
+        }
+
+        if (publication == null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordPublicationRetryResult(
+                DiscordPublicationRetryStatus.Missing,
+                null,
+                "The Discord publication was not found for this company.");
+        }
+
+        var installation = await LoadCompanyInstallationAsync(
+            connection,
+            companyId,
+            cancellationToken,
+            (SqliteTransaction)transaction);
+        if (installation == null ||
+            !string.Equals(
+                installation.ChannelId,
+                publication.ChannelId,
+                StringComparison.Ordinal))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordPublicationRetryResult(
+                DiscordPublicationRetryStatus.Conflict,
+                publication,
+                "The failed publication no longer matches the server-owned company installation.");
+        }
+
+        if (publication.State != DiscordPublicationState.Failed ||
+            hasUnsafeState ||
+            failed.Count != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordPublicationRetryResult(
+                DiscordPublicationRetryStatus.Conflict,
+                publication,
+                "Only one unambiguous terminal Discord failure can be retried.");
+        }
+
+        var workItem = failed[0];
+        var validOperation = string.Equals(
+                publication.ChannelId,
+                workItem.ChannelId,
+                StringComparison.Ordinal) &&
+            (workItem.Operation switch
+            {
+                DiscordOutboxOperation.CreateMessage =>
+                    string.IsNullOrWhiteSpace(publication.MessageId) &&
+                    string.IsNullOrWhiteSpace(workItem.MessageId),
+                DiscordOutboxOperation.EditMessage =>
+                    !string.IsNullOrWhiteSpace(publication.MessageId) &&
+                    string.Equals(
+                        publication.MessageId,
+                        workItem.MessageId,
+                        StringComparison.Ordinal),
+                _ => false
+            });
+        if (!validOperation)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordPublicationRetryResult(
+                DiscordPublicationRetryStatus.Conflict,
+                publication,
+                "The failed Discord work item does not match the persisted message identity.");
+        }
+
+        await using var requeue = connection.CreateCommand();
+        requeue.Transaction = (SqliteTransaction)transaction;
+        requeue.CommandText =
+            """
+            UPDATE discord_outbox
+            SET
+                state = $pending,
+                attempt_count = 0,
+                next_attempt_at_utc = $queuedAt,
+                lease_id = NULL,
+                lease_expires_at_utc = NULL,
+                last_error = NULL,
+                updated_at_utc = $queuedAt
+            WHERE work_item_id = $workItemId
+              AND state = $failed;
+            """;
+        requeue.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+        requeue.Parameters.AddWithValue("$queuedAt", queuedAt.ToString("O"));
+        requeue.Parameters.AddWithValue("$workItemId", workItem.WorkItemId.ToString("D"));
+        requeue.Parameters.AddWithValue("$failed", (int)DiscordOutboxState.Failed);
+        if (await requeue.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordPublicationRetryResult(
+                DiscordPublicationRetryStatus.Conflict,
+                publication,
+                "The failed Discord work item changed before it could be requeued.");
+        }
+
+        await using var restore = connection.CreateCommand();
+        restore.Transaction = (SqliteTransaction)transaction;
+        restore.CommandText =
+            """
+            UPDATE discord_publications
+            SET state = $state, updated_at_utc = $queuedAt
+            WHERE publication_id = $publicationId
+              AND state = $failed;
+            """;
+        restore.Parameters.AddWithValue("$state", (int)restoredState);
+        restore.Parameters.AddWithValue("$queuedAt", queuedAt.ToString("O"));
+        restore.Parameters.AddWithValue(
+            "$publicationId",
+            publication.PublicationId.ToString("D"));
+        restore.Parameters.AddWithValue("$failed", (int)DiscordPublicationState.Failed);
+        if (await restore.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new DiscordPublicationRetryResult(
+                DiscordPublicationRetryStatus.Conflict,
+                publication,
+                "The Discord publication changed before its failed work item could be requeued.");
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new DiscordPublicationRetryResult(
+            DiscordPublicationRetryStatus.Queued,
+            publication with
+            {
+                State = restoredState,
+                UpdatedAt = queuedAt
+            });
     }
 
     public async Task<IReadOnlyList<DiscordInterestClaim>> LoadPendingClaimsAsync(
@@ -715,10 +998,19 @@ public sealed class SqliteDiscordCollaborationStore(
             (SqliteTransaction)transaction,
             interaction.ActionToken,
             cancellationToken);
+        var installation = publication == null
+            ? null
+            : await LoadCompanyInstallationAsync(
+                connection,
+                publication.CompanyId,
+                cancellationToken,
+                (SqliteTransaction)transaction);
         if (publication == null ||
+            installation == null ||
             publication.State != DiscordPublicationState.Open ||
-            !string.Equals(options.ApplicationId, interaction.ApplicationId, StringComparison.Ordinal) ||
-            !string.Equals(options.AllowedGuildId, interaction.GuildId, StringComparison.Ordinal) ||
+            !string.Equals(installation.ApplicationId, interaction.ApplicationId, StringComparison.Ordinal) ||
+            !string.Equals(installation.GuildId, interaction.GuildId, StringComparison.Ordinal) ||
+            !string.Equals(installation.ChannelId, interaction.ChannelId, StringComparison.Ordinal) ||
             !string.Equals(publication.ChannelId, interaction.ChannelId, StringComparison.Ordinal) ||
             !string.Equals(publication.MessageId, interaction.MessageId, StringComparison.Ordinal))
         {
@@ -782,22 +1074,25 @@ public sealed class SqliteDiscordCollaborationStore(
         select.CommandText =
             """
             SELECT
-                work_item_id,
-                operation,
-                channel_id,
-                message_id,
-                payload_json,
-                attempt_count
-            FROM discord_outbox
+                o.work_item_id,
+                p.company_id,
+                o.operation,
+                o.channel_id,
+                o.message_id,
+                o.payload_json,
+                o.attempt_count
+            FROM discord_outbox o
+            INNER JOIN discord_publications p
+                ON p.publication_id = o.publication_id
             WHERE (
-                    state IN ($pending, $retry)
-                    AND next_attempt_at_utc <= $now
+                    o.state IN ($pending, $retry)
+                    AND o.next_attempt_at_utc <= $now
                 )
                 OR (
-                    state = $inFlight
-                    AND lease_expires_at_utc <= $now
+                    o.state = $inFlight
+                    AND o.lease_expires_at_utc <= $now
                 )
-            ORDER BY created_at_utc
+            ORDER BY o.created_at_utc
             LIMIT $maximumCount;
             """;
         select.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
@@ -805,18 +1100,26 @@ public sealed class SqliteDiscordCollaborationStore(
         select.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
         select.Parameters.AddWithValue("$now", now.ToString("O"));
         select.Parameters.AddWithValue("$maximumCount", Math.Clamp(maximumCount, 1, 100));
-        var candidates = new List<(Guid Id, DiscordOutboxOperation Operation, string Channel, string? Message, string Payload, int Attempts)>();
+        var candidates = new List<(
+            Guid Id,
+            CompanyId CompanyId,
+            DiscordOutboxOperation Operation,
+            string Channel,
+            string? Message,
+            string Payload,
+            int Attempts)>();
         await using (var reader = await select.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
             {
                 candidates.Add((
                     Guid.Parse(reader.GetString(0)),
-                    (DiscordOutboxOperation)reader.GetInt32(1),
-                    reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3),
-                    reader.GetString(4),
-                    reader.GetInt32(5)));
+                    CompanyId.Parse(reader.GetString(1)),
+                    (DiscordOutboxOperation)reader.GetInt32(2),
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetString(5),
+                    reader.GetInt32(6)));
             }
         }
 
@@ -846,6 +1149,7 @@ public sealed class SqliteDiscordCollaborationStore(
             leased.Add(new DiscordOutboxWorkItem(
                 candidate.Id,
                 leaseId,
+                candidate.CompanyId,
                 candidate.Operation,
                 candidate.Channel,
                 candidate.Message,
@@ -1003,6 +1307,68 @@ public sealed class SqliteDiscordCollaborationStore(
             """;
         await pragma.ExecuteNonQueryAsync(cancellationToken);
         return connection;
+    }
+
+    private static async Task UpsertCompanyInstallationAsync(
+        SqliteConnection connection,
+        DiscordCompanyInstallationBinding installation,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO discord_company_installations (
+                company_id,
+                application_id,
+                guild_id,
+                channel_id,
+                updated_at_utc
+            )
+            VALUES (
+                $companyId,
+                $applicationId,
+                $guildId,
+                $channelId,
+                $updatedAt
+            )
+            ON CONFLICT(company_id) DO UPDATE SET
+                application_id = excluded.application_id,
+                guild_id = excluded.guild_id,
+                channel_id = excluded.channel_id,
+                updated_at_utc = excluded.updated_at_utc;
+            """;
+        command.Parameters.AddWithValue("$companyId", installation.CompanyId.ToString());
+        command.Parameters.AddWithValue("$applicationId", installation.ApplicationId);
+        command.Parameters.AddWithValue("$guildId", installation.GuildId);
+        command.Parameters.AddWithValue("$channelId", installation.ChannelId);
+        command.Parameters.AddWithValue("$updatedAt", installation.UpdatedAt.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<DiscordCompanyInstallationBinding?> LoadCompanyInstallationAsync(
+        SqliteConnection connection,
+        CompanyId companyId,
+        CancellationToken cancellationToken,
+        SqliteTransaction? transaction = null)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT application_id, guild_id, channel_id, updated_at_utc
+            FROM discord_company_installations
+            WHERE company_id = $companyId;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? new DiscordCompanyInstallationBinding(
+                companyId,
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                DateTimeOffset.Parse(reader.GetString(3)))
+            : null;
     }
 
     private static async Task EnsureCompatibleSchemaAsync(

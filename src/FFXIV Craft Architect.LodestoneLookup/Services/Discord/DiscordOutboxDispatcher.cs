@@ -1,4 +1,5 @@
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
@@ -11,6 +12,7 @@ public enum DiscordOutboxOperation
 public sealed record DiscordOutboxWorkItem(
     Guid WorkItemId,
     string LeaseId,
+    CompanyId CompanyId,
     DiscordOutboxOperation Operation,
     string ChannelId,
     string? MessageId,
@@ -69,6 +71,20 @@ public sealed class DiscordOutboxDispatcher(
         DiscordOutboxWorkItem workItem,
         CancellationToken cancellationToken)
     {
+        if (!await store.MatchesCurrentCompanyInstallationAsync(
+                workItem.CompanyId,
+                workItem.ChannelId,
+                cancellationToken))
+        {
+            await store.ExhaustAsync(
+                workItem.WorkItemId,
+                workItem.LeaseId,
+                "The persisted Discord destination no longer matches the server-owned company installation.",
+                timeProvider.GetUtcNow(),
+                cancellationToken);
+            return;
+        }
+
         JsonElement payload;
         try
         {

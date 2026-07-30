@@ -926,7 +926,7 @@
                                         </div>
                                     </section>
                                     <div class="trade-orders-published-link">
-                                        <code>@GetCommissionUrl(publication.PublicId)</code>
+                                        <code>@(publication.PublicUrl ?? $"Commission {publication.PublicId}")</code>
                                         <MudButton Variant="Variant.Outlined"
                                                    Color="Color.Secondary"
                                                    Size="Size.Small"

@@ -29,6 +29,7 @@ public sealed class DiscordPublicationService(
     SqliteCommissionBriefStore briefs,
     SqliteDiscordCollaborationStore collaboration,
     DiscordCommissionOptions options,
+    CommissionBriefOptions commissionBriefOptions,
     TimeProvider timeProvider)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -37,7 +38,7 @@ public sealed class DiscordPublicationService(
         TradeCompanyAccessContext access,
         string publicId,
         string idempotencyKey,
-        HostedTradeCompanyDiscordInstallation installation,
+        DiscordCompanyInstallationBinding installation,
         CancellationToken cancellationToken = default)
     {
         RequireOperator(access);
@@ -70,6 +71,16 @@ public sealed class DiscordPublicationService(
             return Conflict("The commission brief is not bound to the current Trade order revision.");
         }
 
+        if (!TryResolveCanonicalPublicUrl(publicId, out var publicUrl) ||
+            !string.Equals(
+                order.Order.CommissionPublication?.PublicUrl,
+                publicUrl,
+                StringComparison.Ordinal))
+        {
+            return Conflict(
+                "The commission brief URL does not match the canonical public page.");
+        }
+
         if (!options.CanPublishDirectly)
         {
             return Conflict("Discord direct publishing is not configured.");
@@ -78,9 +89,9 @@ public sealed class DiscordPublicationService(
         var now = timeProvider.GetUtcNow();
         var state = ResolvePublicationState(order.Order);
         var actionToken = SqliteDiscordCollaborationStore.CreateActionToken();
-        var initialPayload = DiscordCommissionMessage.Create(
+        var initialPayload = DiscordCommissionMessage.CreateWithPublicUrl(
             published,
-            options.CommissionBaseUrl,
+            publicUrl,
             state,
             state == DiscordPublicationState.Open ? actionToken : null);
         var created = await collaboration.CreatePublicationAsync(
@@ -134,6 +145,11 @@ public sealed class DiscordPublicationService(
         var expectedPublicId = SqliteCommissionBriefStore.CreateCompanyPublicId(
             ownership,
             idempotencyKey);
+        if (!TryResolveCanonicalPublicUrl(expectedPublicId, out var publicUrl))
+        {
+            return NewPublicationConflict(
+                "Discord and commission-link canonical URLs are not configured consistently.");
+        }
         var order = await orders.LoadOrderAsync(access, orderId, cancellationToken);
         if (order == null)
         {
@@ -156,8 +172,8 @@ public sealed class DiscordPublicationService(
                 "Discord direct publishing is not configured.");
         }
 
-        var installation = await companies.ResolveDiscordInstallationAsync(
-            access,
+        var installation = await collaboration.ResolveCompanyInstallationAsync(
+            access.CompanyId,
             cancellationToken);
         if (installation == null)
         {
@@ -179,6 +195,48 @@ public sealed class DiscordPublicationService(
             return NewPublicationConflict(exception.Message);
         }
 
+        TradeCompanyMutationResult ownershipMutation;
+        try
+        {
+            ownershipMutation = await companies.PutRecordAsync(
+                access,
+                TradeCompanyRecordKinds.Publication,
+                published.PublicId,
+                JsonSerializer.Serialize(ownership, JsonOptions),
+                CompanyRecordRevision.None,
+                $"publication:{idempotencyKey}",
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await DiscardUncommittedBriefAsync(
+                published,
+                ownership,
+                cancellationToken);
+            return new DiscordNewPublicationResult(
+                Conflict(
+                    $"Canonical publication ownership could not be recorded: {exception.Message}"),
+                published,
+                OrderCommitted: false);
+        }
+
+        if (!ownershipMutation.Success &&
+            await companies.ResolvePublicationOwnershipAsync(
+                published.PublicId,
+                cancellationToken) != ownership)
+        {
+            await DiscardUncommittedBriefAsync(
+                published,
+                ownership,
+                cancellationToken);
+            return new DiscordNewPublicationResult(
+                Conflict(
+                    ownershipMutation.ErrorMessage ??
+                    "Canonical publication ownership could not be recorded."),
+                published,
+                OrderCommitted: false);
+        }
+
         TradeCompanyMutationResult orderMutation;
         if (order.Envelope.RecordRevision == orderRevision)
         {
@@ -186,6 +244,7 @@ public sealed class DiscordPublicationService(
             publishedOrder.CommissionPublication = new TradeCommissionPublication
             {
                 PublicId = published.PublicId,
+                PublicUrl = publicUrl,
                 Version = published.Version,
                 PublishedAtUtc = published.PublishedAtUtc,
                 Ownership = ownership
@@ -261,57 +320,6 @@ public sealed class DiscordPublicationService(
                 OrderCommitted: false);
         }
 
-        var ownershipMutation = await companies.PutRecordAsync(
-            access,
-            TradeCompanyRecordKinds.Publication,
-            published.PublicId,
-            JsonSerializer.Serialize(ownership, JsonOptions),
-            CompanyRecordRevision.None,
-            $"publication:{idempotencyKey}",
-            cancellationToken);
-        if (!ownershipMutation.Success)
-        {
-            var existingOwnership = await companies.ResolvePublicationOwnershipAsync(
-                published.PublicId,
-                cancellationToken);
-            if (existingOwnership != ownership)
-            {
-                var current = await orders.LoadOrderAsync(
-                    access,
-                    orderId,
-                    cancellationToken);
-                if (string.Equals(
-                        current?.Order.CommissionPublication?.PublicId,
-                        published.PublicId,
-                        StringComparison.Ordinal))
-                {
-                    ownershipMutation = await companies.PutRecordAsync(
-                        access,
-                        TradeCompanyRecordKinds.Publication,
-                        published.PublicId,
-                        JsonSerializer.Serialize(ownership, JsonOptions),
-                        CompanyRecordRevision.None,
-                        $"publication-reconcile:{idempotencyKey}",
-                        cancellationToken);
-                    existingOwnership = ownershipMutation.Success
-                        ? ownership
-                        : await companies.ResolvePublicationOwnershipAsync(
-                            published.PublicId,
-                            cancellationToken);
-                }
-
-                if (existingOwnership != ownership)
-                {
-                    return new DiscordNewPublicationResult(
-                        Conflict(
-                            ownershipMutation.ErrorMessage ??
-                            "Canonical publication ownership could not be recorded."),
-                        published,
-                        OrderCommitted: true);
-                }
-            }
-        }
-
         var delivery = await PublishExistingBriefAsync(
             access,
             published.PublicId,
@@ -322,6 +330,90 @@ public sealed class DiscordPublicationService(
             delivery,
             published,
             OrderCommitted: true);
+    }
+
+    public async Task<DiscordPublicationRetryResult> RetryFailedAsync(
+        TradeCompanyAccessContext access,
+        string publicId,
+        CancellationToken cancellationToken = default)
+    {
+        RequireOperator(access);
+        ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
+
+        var published = await briefs.LoadAsync(publicId, cancellationToken);
+        if (published?.Ownership is not { } ownership ||
+            ownership.CompanyId != access.CompanyId)
+        {
+            return RetryMissing(
+                "The commission brief is not bound to the authenticated company.");
+        }
+
+        var canonicalOwnership = await companies.ResolvePublicationOwnershipAsync(
+            publicId,
+            cancellationToken);
+        var order = await orders.LoadOrderAsync(
+            access,
+            ownership.OrderId,
+            cancellationToken);
+        if (canonicalOwnership != ownership ||
+            order == null ||
+            !string.Equals(
+                order.Order.CommissionPublication?.PublicId,
+                publicId,
+                StringComparison.Ordinal) ||
+            order.Order.CommissionPublication?.Ownership != ownership)
+        {
+            return RetryConflict(
+                "The failed publication is not bound to the current canonical Trade order.");
+        }
+
+        if (!TryResolveCanonicalPublicUrl(publicId, out var publicUrl) ||
+            !string.Equals(
+                order.Order.CommissionPublication?.PublicUrl,
+                publicUrl,
+                StringComparison.Ordinal))
+        {
+            return RetryConflict(
+                "The failed publication URL no longer matches the canonical public page.");
+        }
+
+        var publication = await collaboration.LoadPublicationByPublicIdAsync(
+            publicId,
+            cancellationToken);
+        if (publication == null ||
+            publication.CompanyId != access.CompanyId ||
+            publication.OrderId != ownership.OrderId ||
+            publication.SourceOrderRevision != ownership.OrderRevision)
+        {
+            return RetryMissing(
+                "The failed Discord publication was not found for this company order.");
+        }
+
+        if (!options.CanPublishDirectly)
+        {
+            return RetryConflict("Discord direct publishing is not configured.");
+        }
+
+        var installation = await collaboration.ResolveCompanyInstallationAsync(
+            access.CompanyId,
+            cancellationToken);
+        if (installation == null ||
+            !string.Equals(
+                installation.ChannelId,
+                publication.ChannelId,
+                StringComparison.Ordinal))
+        {
+            return RetryConflict(
+                "The failed publication destination no longer matches the company's ready Discord installation.");
+        }
+
+        return await collaboration.RetryFailedPublicationAsync(
+            access.CompanyId,
+            publication.PublicationId,
+            publicId,
+            ResolvePublicationState(order.Order),
+            timeProvider.GetUtcNow(),
+            cancellationToken);
     }
 
     public async Task RevokeAsync(
@@ -383,9 +475,18 @@ public sealed class DiscordPublicationService(
         }
 
         var state = ResolvePublicationState(order.Order);
-        var payload = DiscordCommissionMessage.Create(
+        if (!TryResolveCanonicalPublicUrl(publication.PublicId, out var publicUrl) ||
+            !string.Equals(
+                order.Order.CommissionPublication?.PublicUrl,
+                publicUrl,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var payload = DiscordCommissionMessage.CreateWithPublicUrl(
             published,
-            options.CommissionBaseUrl,
+            publicUrl,
             state,
             state == DiscordPublicationState.Open ? publication.ActionToken : null,
             assignmentLabel);
@@ -447,4 +548,24 @@ public sealed class DiscordPublicationService(
 
     private static DiscordNewPublicationResult NewPublicationConflict(string error) =>
         new(Conflict(error), null);
+
+    private static DiscordPublicationRetryResult RetryConflict(string error) =>
+        new(DiscordPublicationRetryStatus.Conflict, null, error);
+
+    private static DiscordPublicationRetryResult RetryMissing(string error) =>
+        new(DiscordPublicationRetryStatus.Missing, null, error);
+
+    private bool TryResolveCanonicalPublicUrl(string publicId, out string publicUrl)
+    {
+        publicUrl = string.Empty;
+        if (!commissionBriefOptions.TryBuildPublicUrl(publicId, out var canonicalUrl) ||
+            !options.TryBuildCommissionUrl(publicId, out var discordUrl) ||
+            !string.Equals(canonicalUrl, discordUrl, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        publicUrl = canonicalUrl;
+        return true;
+    }
 }

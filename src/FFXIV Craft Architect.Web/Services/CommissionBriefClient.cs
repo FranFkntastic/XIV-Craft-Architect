@@ -50,7 +50,7 @@ public sealed class CommissionBriefClient
 
     public static PortableCommissionLink CreatePortableLink(
         CommissionBriefCreateResponse published) =>
-        ToPortableLink(
+        CreatePortableLink(
             published.PublicId,
             published.PublicUrl,
             published.Version,
@@ -58,6 +58,19 @@ public sealed class CommissionBriefClient
             string.IsNullOrWhiteSpace(published.EditorToken)
                 ? null
                 : published.EditorToken);
+
+    public static PortableCommissionLink CreatePortableLink(
+        string publicId,
+        string publicUrl,
+        int version,
+        DateTime publishedAtUtc,
+        string? editorToken = null) =>
+        ToPortableLink(
+            publicId,
+            publicUrl,
+            version,
+            publishedAtUtc,
+            editorToken);
 
     public async Task<PortableCommissionLink> ResolvePortableLinkAsync(
         string publicId,
