@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 
 namespace FFXIV_Craft_Architect.ContractTests;
@@ -69,6 +70,45 @@ public sealed class WorkshopHostContractTests
         Assert.Equal(0m, quote.EstimatedTotalCost);
         Assert.Equal("MissingEvidence", Assert.Single(quote.Materials).CostSource);
         Assert.Contains(quote.Warnings, warning => warning.Contains("missing price evidence", StringComparison.OrdinalIgnoreCase));
+        Assert.Same(plan, quote.Plan);
+    }
+
+    [Fact]
+    public async Task FreshMarketEvidence_IsReusedWithoutAnUpstreamRefresh()
+    {
+        var material = new PlanNode
+        {
+            ItemId = 2,
+            Name = "Fire Shard",
+            Quantity = 10,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+        };
+        var cache = new FixedMarketCache(new CachedMarketData
+        {
+            ItemId = 2,
+            DataCenter = "Aether",
+            DCAveragePrice = 80,
+            FetchedAt = DateTime.UtcNow,
+        });
+        var service = new CraftAppraisalPriceEvidenceService(
+            cache,
+            new FixedPlanBuilder(new CraftingPlan { RootItems = [material] }));
+
+        var result = await service.ApplyAsync(
+            new CraftingPlan { RootItems = [material] },
+            new CraftAppraisalRequest
+            {
+                ItemId = 2,
+                ItemName = "Fire Shard",
+                Quantity = 10,
+                Scope = new CraftAppraisalScope { DataCenter = "Aether" },
+            });
+
+        Assert.Equal(80m, material.MarketPrice);
+        Assert.Equal(0, cache.EnsureCalls);
+        Assert.Equal(0, cache.RefreshCalls);
+        Assert.Equal(1, result.MarketItemsPriced);
     }
 
     [Theory]
@@ -274,5 +314,55 @@ public sealed class WorkshopHostContractTests
             CraftAppraisalRequest request,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(CraftAppraisalPriceEvidenceResult.Empty);
+    }
+
+    private sealed class FixedMarketCache(CachedMarketData data) : IMarketCacheService
+    {
+        public int EnsureCalls { get; private set; }
+        public int RefreshCalls { get; private set; }
+
+        public Task<CachedMarketData?> GetAsync(int itemId, string dataCenter, TimeSpan? maxAge = null) =>
+            Task.FromResult<CachedMarketData?>(data);
+
+        public Task<(CachedMarketData? Data, bool IsStale)> GetWithStaleAsync(
+            int itemId,
+            string dataCenter,
+            TimeSpan? maxAge = null) =>
+            Task.FromResult<(CachedMarketData?, bool)>((data, false));
+
+        public Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyAsync(
+            IReadOnlyCollection<(int itemId, string dataCenter)> requests,
+            TimeSpan? maxAge = null) =>
+            Task.FromResult<IReadOnlyDictionary<(int, string), CachedMarketData>>(
+                requests.ToDictionary(request => request, _ => data));
+
+        public Task SetAsync(int itemId, string dataCenter, CachedMarketData value) => Task.CompletedTask;
+        public Task<bool> HasValidCacheAsync(int itemId, string dataCenter, TimeSpan? maxAge = null) =>
+            Task.FromResult(true);
+        public Task<List<(int itemId, string dataCenter)>> GetMissingAsync(
+            List<(int itemId, string dataCenter)> requests,
+            TimeSpan? maxAge = null) =>
+            Task.FromResult(new List<(int, string)>());
+        public Task<int> CleanupStaleAsync(TimeSpan maxAge) => Task.FromResult(0);
+        public Task<CacheStats> GetStatsAsync() => Task.FromResult(new CacheStats());
+
+        public Task<int> EnsurePopulatedAsync(
+            List<(int itemId, string dataCenter)> requests,
+            TimeSpan? maxAge = null,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default)
+        {
+            EnsureCalls++;
+            return Task.FromResult(0);
+        }
+
+        public Task<int> RefreshRequestedAsync(
+            List<(int itemId, string dataCenter)> requests,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default)
+        {
+            RefreshCalls++;
+            return Task.FromResult(0);
+        }
     }
 }

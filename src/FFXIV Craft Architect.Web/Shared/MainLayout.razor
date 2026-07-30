@@ -320,8 +320,10 @@
                 InitializeWorldDataAsync: _ => AppState.InitializeWorldDataAsync(
                     PackagedWorldDirectory,
                     UniversalisService)));
+            var openedAppraisalPlan = await TryOpenAppraisalPlanAsync();
             var restoredShell = WorkerProjections.Shell;
-            if (restoredShell.HasSession &&
+            if (!openedAppraisalPlan &&
+                restoredShell.HasSession &&
                 (restoredShell.MarketAnalysisCount == 0 ||
                  restoredShell.ShoppingPlanCount > 0 &&
                  !restoredShell.HasProcurementRoute))
@@ -729,6 +731,91 @@
         {
             Snackbar.Add($"Failed to rebuild plan: {ex.Message}", Severity.Warning);
         }
+    }
+
+    private async Task<bool> TryOpenAppraisalPlanAsync()
+    {
+        var uri = new Uri(NavigationManager.Uri);
+        var encodedPath = uri.Query
+            .TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Split('=', 2))
+            .Where(parts => parts.Length == 2)
+            .FirstOrDefault(parts => string.Equals(
+                Uri.UnescapeDataString(parts[0]),
+                "appraisalPlan",
+                StringComparison.Ordinal))?[1];
+        if (string.IsNullOrWhiteSpace(encodedPath))
+            return false;
+
+        var snapshotTarget = Uri.UnescapeDataString(encodedPath);
+        if (!IsValidAppraisalPlanSnapshotTarget(snapshotTarget))
+        {
+            Snackbar.Add("The appraisal plan link is invalid.", Severity.Error);
+            NavigationManager.NavigateTo("./", replace: true);
+            return true;
+        }
+
+        try
+        {
+            AppState.SetStatus("Opening the quoted Craft Architect plan...", busy: true);
+            var json = await Http.GetStringAsync(snapshotTarget);
+            var plan = RecipeService.DeserializePlan(json)
+                ?? throw new InvalidOperationException("The appraisal plan snapshot could not be parsed.");
+            await LoadNativePlanAsync(
+                plan,
+                $"Opened quoted plan '{plan.Name}'",
+                refreshPrices: false,
+                clearCurrentPlanId: true);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to open appraisal plan snapshot {Target}", snapshotTarget);
+            Snackbar.Add($"Failed to open appraisal plan: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            AppState.SetStatus("Ready", busy: false);
+            NavigationManager.NavigateTo("./", replace: true);
+        }
+
+        return true;
+    }
+
+    private static bool IsValidAppraisalPlanSnapshotTarget(string target)
+    {
+        const string marker = "/api/craft/plans/";
+        string path;
+        if (target.StartsWith("/", StringComparison.Ordinal))
+        {
+            if (target.Contains('?', StringComparison.Ordinal) ||
+                target.Contains('#', StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            path = target;
+        }
+        else
+        {
+            if (!Uri.TryCreate(target, UriKind.Absolute, out var absolute) ||
+                absolute.Scheme is not ("http" or "https") ||
+                !string.IsNullOrEmpty(absolute.UserInfo) ||
+                !string.IsNullOrEmpty(absolute.Query) ||
+                !string.IsNullOrEmpty(absolute.Fragment))
+            {
+                return false;
+            }
+
+            path = absolute.AbsolutePath;
+        }
+
+        var markerIndex = path.LastIndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+            return false;
+
+        var token = path[(markerIndex + marker.Length)..];
+        return token.Length == 32 && token.All(Uri.IsHexDigit);
     }
 
     private bool IsLocalBenchmarkWorkflowRequest()
