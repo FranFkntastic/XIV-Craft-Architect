@@ -125,7 +125,7 @@ public sealed class ExternalClientContractTests
         Assert.True(result.Conflict);
         Assert.Equal(12, result.RemoteObject?.Revision);
         Assert.Equal(HttpMethod.Put, handler.Method);
-        Assert.Equal("https://profile.test/profile-host/objects/plans/plan-1", handler.RequestUri?.AbsoluteUri);
+        Assert.Equal("https://profile.test/api/profile-host/objects/plans/plan-1", handler.RequestUri?.AbsoluteUri);
         Assert.Equal("cap_contract-key", Assert.Single(handler.Headers["X-Profile-Key"]));
         Assert.Equal("{\"payloadJson\":\"{}\",\"expectedRevision\":10}", handler.Body);
     }
@@ -149,7 +149,7 @@ public sealed class ExternalClientContractTests
         Assert.Equal(HttpStatusCode.Unauthorized, exception.StatusCode);
         Assert.Equal(HttpMethod.Delete, handler.Method);
         Assert.Equal(
-            "https://profile.test/profile-host/objects/plans/plan-1?expectedRevision=1",
+            "https://profile.test/api/profile-host/objects/plans/plan-1?expectedRevision=1",
             handler.RequestUri?.AbsoluteUri);
         Assert.Null(handler.Body);
         Assert.Equal("cap_wrong-key", Assert.Single(handler.Headers["X-Profile-Key"]));
