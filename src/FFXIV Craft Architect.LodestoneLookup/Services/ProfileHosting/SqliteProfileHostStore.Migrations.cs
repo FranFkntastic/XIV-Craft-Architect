@@ -686,6 +686,7 @@ public sealed partial class SqliteProfileHostStore
                 validator.Validate(identity);
             }
         }
+        validator.ValidatePayrollLinkage();
 
         var response = new ProfileHostMigrationPreflightResponse
         {
@@ -1736,25 +1737,10 @@ public sealed partial class SqliteProfileHostStore
                 var payrollIdentity = (
                     ProfileSyncCollections.TradePayrollDrafts,
                     order.PayrollDraftId);
-                if (!TryLoad(payrollIdentity, out TradePayrollWorkflowDraft? payroll))
+                if (objects.ContainsKey(payrollIdentity))
                 {
-                    AddMissingReference(
-                        identity,
-                        payrollIdentity,
-                        ProfileHostMigrationBlockerCodes.MissingPayrollDraft,
-                        "Trade order references a missing payroll draft.");
+                    Validate(payrollIdentity);
                 }
-                else if (payroll!.CompanyProfileId != order.CompanyProfileId ||
-                         payroll.OrderId != order.Id)
-                {
-                    AddReferenceMismatch(
-                        identity,
-                        payrollIdentity.Item1,
-                        payrollIdentity.Item2,
-                        "Trade order payroll reference belongs to another company or order.");
-                }
-
-                Validate(payrollIdentity);
             }
 
             if (!string.IsNullOrWhiteSpace(order.CraftPlanId))
@@ -1814,24 +1800,159 @@ public sealed partial class SqliteProfileHostStore
                 var orderIdentity = (
                     ProfileSyncCollections.TradeOrders,
                     orderId.ToString("D"));
-                if (!TryLoad(orderIdentity, out TradeOrder? order))
+                if (objects.ContainsKey(orderIdentity))
                 {
-                    AddMissingReference(
-                        identity,
-                        orderIdentity,
-                        ProfileHostMigrationBlockerCodes.MissingOrder,
-                        "Trade payroll draft references a missing order.");
+                    Validate(orderIdentity);
                 }
-                else if (order!.CompanyProfileId != payroll.CompanyProfileId)
+            }
+        }
+
+        public void ValidatePayrollLinkage()
+        {
+            var orders = new Dictionary<Guid, (
+                (string Collection, string ObjectId) Identity,
+                TradeOrder Order)>();
+            var payrolls = new Dictionary<string, (
+                (string Collection, string ObjectId) Identity,
+                TradePayrollWorkflowDraft Payroll)>(StringComparer.Ordinal);
+            foreach (var pair in objects)
+            {
+                try
                 {
-                    AddReferenceMismatch(
-                        identity,
-                        orderIdentity.Item1,
-                        orderIdentity.Item2,
-                        "Trade payroll order belongs to another company.");
+                    if (pair.Key.Collection == ProfileSyncCollections.TradeOrders)
+                    {
+                        var order = JsonSerializer.Deserialize<TradeOrder>(
+                            pair.Value,
+                            MigrationJsonOptions);
+                        if (order != null &&
+                            Guid.TryParse(pair.Key.ObjectId, out var orderObjectId))
+                        {
+                            orders[orderObjectId] = (pair.Key, order);
+                        }
+                    }
+                    else if (pair.Key.Collection ==
+                             ProfileSyncCollections.TradePayrollDrafts)
+                    {
+                        var payroll = JsonSerializer.Deserialize<TradePayrollWorkflowDraft>(
+                            pair.Value,
+                            MigrationJsonOptions);
+                        if (payroll != null)
+                        {
+                            payrolls[pair.Key.ObjectId] = (pair.Key, payroll);
+                        }
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Payload diagnostics belong to the ordinary typed validation path.
+                }
+            }
+
+            var payrollByOrder = new Dictionary<Guid, string>();
+            foreach (var payrollEntry in payrolls.Values)
+            {
+                var payroll = payrollEntry.Payroll;
+                if (payroll.OrderId is not { } orderId)
+                {
+                    continue;
                 }
 
-                Validate(orderIdentity);
+                if (payrollByOrder.TryGetValue(orderId, out var existingPayrollId) &&
+                    !string.Equals(
+                        existingPayrollId,
+                        payrollEntry.Identity.ObjectId,
+                        StringComparison.Ordinal))
+                {
+                    AddBlocker(
+                        blockers,
+                        ProfileHostMigrationBlockerCodes.DuplicatePayrollLink,
+                        "More than one payroll draft links to the same trade order.",
+                        payrollEntry.Identity.Collection,
+                        payrollEntry.Identity.ObjectId,
+                        ProfileSyncCollections.TradePayrollDrafts,
+                        existingPayrollId);
+                }
+                else
+                {
+                    payrollByOrder[orderId] = payrollEntry.Identity.ObjectId;
+                }
+
+                if (!orders.TryGetValue(orderId, out var orderEntry))
+                {
+                    AddMissingReference(
+                        payrollEntry.Identity,
+                        (ProfileSyncCollections.TradeOrders, orderId.ToString("D")),
+                        ProfileHostMigrationBlockerCodes.MissingOrder,
+                        "Trade payroll draft references a missing order.");
+                    continue;
+                }
+
+                if (orderEntry.Order.CompanyProfileId != payroll.CompanyProfileId ||
+                    !string.Equals(
+                        orderEntry.Order.PayrollDraftId,
+                        payrollEntry.Identity.ObjectId,
+                        StringComparison.Ordinal))
+                {
+                    AddReferenceMismatch(
+                        payrollEntry.Identity,
+                        orderEntry.Identity.Collection,
+                        orderEntry.Identity.ObjectId,
+                        "Trade payroll and order links are not reciprocal or cross company boundaries.",
+                        ProfileHostMigrationBlockerCodes.OrderReferenceMismatch);
+                }
+            }
+
+            var orderByPayroll = new Dictionary<string, Guid>(StringComparer.Ordinal);
+            foreach (var orderEntry in orders.Values)
+            {
+                var order = orderEntry.Order;
+                if (string.IsNullOrWhiteSpace(order.PayrollDraftId))
+                {
+                    continue;
+                }
+
+                var orderObjectId = Guid.Parse(orderEntry.Identity.ObjectId);
+                if (orderByPayroll.TryGetValue(
+                        order.PayrollDraftId,
+                        out var existingOrderId) &&
+                    existingOrderId != orderObjectId)
+                {
+                    AddBlocker(
+                        blockers,
+                        ProfileHostMigrationBlockerCodes.DuplicatePayrollLink,
+                        "More than one trade order references the same payroll draft.",
+                        orderEntry.Identity.Collection,
+                        orderEntry.Identity.ObjectId,
+                        ProfileSyncCollections.TradeOrders,
+                        existingOrderId.ToString("D"));
+                }
+                else
+                {
+                    orderByPayroll[order.PayrollDraftId] = orderObjectId;
+                }
+
+                if (!payrolls.TryGetValue(order.PayrollDraftId, out var payrollEntry))
+                {
+                    AddMissingReference(
+                        orderEntry.Identity,
+                        (
+                            ProfileSyncCollections.TradePayrollDrafts,
+                            order.PayrollDraftId),
+                        ProfileHostMigrationBlockerCodes.MissingPayrollDraft,
+                        "Trade order references a missing payroll draft.");
+                    continue;
+                }
+
+                if (payrollEntry.Payroll.CompanyProfileId != order.CompanyProfileId ||
+                    payrollEntry.Payroll.OrderId != orderObjectId)
+                {
+                    AddReferenceMismatch(
+                        orderEntry.Identity,
+                        payrollEntry.Identity.Collection,
+                        payrollEntry.Identity.ObjectId,
+                        "Trade order and payroll links are not reciprocal or cross company boundaries.",
+                        ProfileHostMigrationBlockerCodes.OrderReferenceMismatch);
+                }
             }
         }
 

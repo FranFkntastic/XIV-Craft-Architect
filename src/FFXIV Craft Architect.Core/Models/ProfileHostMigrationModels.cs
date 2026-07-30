@@ -27,6 +27,7 @@ public static class ProfileHostMigrationBlockerCodes
     public const string CompanyReferenceMismatch = "company_reference_mismatch";
     public const string OrderReferenceMismatch = "order_reference_mismatch";
     public const string PlanReferenceMismatch = "plan_reference_mismatch";
+    public const string DuplicatePayrollLink = "duplicate_payroll_link";
     public const string PreflightChanged = "preflight_changed";
     public const string MigrationIdConflict = "migration_id_conflict";
 }
