@@ -102,6 +102,13 @@ builder.Services.AddSingleton(_ =>
 });
 builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
 builder.Services.AddSingleton<TradeCompanyAuthorization>();
+builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();
+builder.Services.AddSingleton<HostedCompanyCommissionService>();
+builder.Services.AddSingleton<
+    ICompanyCommissionPostCommitSink,
+    DiscordCompanyCommissionPostCommitSink>();
+builder.Services.AddSingleton<CompanyCommissionMigrationDiagnostics>();
+builder.Services.AddHostedService<CompanyCommissionSchemaMigrationHostedService>();
 builder.Services.AddSingleton<DiscordRequestVerifier>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddSingleton<SqliteDiscordCollaborationStore>();
@@ -243,6 +250,7 @@ app.MapProfileHostEndpoints();
 app.MapCraftAppraisalEndpoints();
 app.MapCommissionBriefEndpoints();
 app.MapCompanyCommissionBriefEndpoints();
+app.MapCompanyCommissionEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
 

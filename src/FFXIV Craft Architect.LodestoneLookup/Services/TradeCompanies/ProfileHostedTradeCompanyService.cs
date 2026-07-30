@@ -62,7 +62,8 @@ public sealed class ProfileHostedTradeCompanyService(
         string payloadJson,
         CompanyRecordRevision expectedRevision,
         string idempotencyKey,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        CompanyRecordRevision? expectedCompanyRevision = null)
     {
         var hostProfileId = RequireHostProfile(access);
         if (!TradeCompanyRecordKinds.All.Contains(recordKind) ||
@@ -84,13 +85,15 @@ public sealed class ProfileHostedTradeCompanyService(
             cancellationToken,
             allowCompanyCollection: collection.StartsWith(
                 CompanyCollectionPrefix,
-                StringComparison.Ordinal));
+                StringComparison.Ordinal),
+            expectedServerRevision: expectedCompanyRevision?.Value);
         var current = put.Object ?? put.RemoteObject;
         if (put.Success && current != null)
         {
             return new TradeCompanyMutationResult(
                 TradeCompanyMutationStatus.Applied,
-                ToRecord(access.CompanyId, recordKind, recordId, current));
+                ToRecord(access.CompanyId, recordKind, recordId, current),
+                CompanyRevision: new CompanyRecordRevision(put.ServerRevision));
         }
 
         if (current != null &&
@@ -98,7 +101,8 @@ public sealed class ProfileHostedTradeCompanyService(
         {
             return new TradeCompanyMutationResult(
                 TradeCompanyMutationStatus.Replayed,
-                ToRecord(access.CompanyId, recordKind, recordId, current));
+                ToRecord(access.CompanyId, recordKind, recordId, current),
+                CompanyRevision: new CompanyRecordRevision(put.ServerRevision));
         }
 
         return new TradeCompanyMutationResult(
@@ -120,6 +124,133 @@ public sealed class ProfileHostedTradeCompanyService(
             publicId,
             cancellationToken);
         return found == null ? null : DeserializeOwnership(found.Object.PayloadJson);
+    }
+
+    public async Task<CompanyRecordRevision> LoadCompanyRevisionAsync(
+        TradeCompanyAccessContext access,
+        CancellationToken cancellationToken = default)
+    {
+        var profileId = RequireHostProfile(access);
+        var profile = await profiles.LoadProfileAsync(profileId, cancellationToken)
+            ?? throw new UnauthorizedAccessException(
+                "The hosted company profile is unavailable.");
+        return new CompanyRecordRevision(profile.ServerRevision);
+    }
+
+    public async Task<TradeCompanyProfile?> LoadCompanyProfileAsync(
+        TradeCompanyAccessContext access,
+        CancellationToken cancellationToken = default) =>
+        await LoadCompanyProfileAsync(
+            RequireHostProfile(access),
+            access.CompanyId,
+            cancellationToken);
+
+    public async Task<(TradeCompanyRecordEnvelope Envelope, TradeOrder Order)?> LoadPublicOrderAsync(
+        TradeCompanyPublicationOwnership ownership,
+        CancellationToken cancellationToken = default)
+    {
+        var found = await profiles.FindObjectAsync(
+            ProfileSyncCollections.TradeOrders,
+            ownership.OrderId.ToString("D"),
+            cancellationToken);
+        if (found is not { Object.Deleted: false })
+        {
+            return null;
+        }
+
+        try
+        {
+            var order = JsonSerializer.Deserialize<TradeOrder>(
+                found.Object.PayloadJson,
+                JsonOptions);
+            if (!OrderBelongsToCompany(order, ownership.CompanyId) ||
+                order!.CommissionPublication?.Ownership != ownership)
+            {
+                return null;
+            }
+
+            return (
+                ToRecord(
+                    ownership.CompanyId,
+                    TradeCompanyRecordKinds.Order,
+                    ownership.OrderId.ToString("D"),
+                    found.Object),
+                order);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    public async Task<TradeCompanyProfile?> LoadPublicCompanyProfileAsync(
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        var found = await profiles.FindObjectAsync(
+            ProfileSyncCollections.TradeCompanyProfiles,
+            companyId.ToString(),
+            cancellationToken);
+        if (found is not { Object.Deleted: false })
+        {
+            return null;
+        }
+
+        try
+        {
+            var profile = JsonSerializer.Deserialize<TradeCompanyProfile>(
+                found.Object.PayloadJson,
+                JsonOptions);
+            return profile?.Id == companyId.Value ? profile : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    public async Task<TradeCompanyAccessContext?> ResolvePublicAccessAsync(
+        TradeCompanyPublicationOwnership ownership,
+        CancellationToken cancellationToken = default)
+    {
+        var found = await profiles.FindObjectAsync(
+            ProfileSyncCollections.TradeOrders,
+            ownership.OrderId.ToString("D"),
+            cancellationToken);
+        if (found is not { Object.Deleted: false } ||
+            !Guid.TryParse(found.ProfileId, out var hostProfileId) ||
+            hostProfileId == Guid.Empty)
+        {
+            return null;
+        }
+
+        try
+        {
+            var order = JsonSerializer.Deserialize<TradeOrder>(
+                found.Object.PayloadJson,
+                JsonOptions);
+            if (!OrderBelongsToCompany(order, ownership.CompanyId) ||
+                order!.CommissionPublication?.Ownership != ownership)
+            {
+                return null;
+            }
+
+            var access = new TradeCompanyAccessContext(
+                ownership.CompanyId,
+                hostProfileId,
+                TradeCompanyRole.Owner,
+                hostProfileId);
+            return await LoadCompanyProfileAsync(
+                found.ProfileId,
+                ownership.CompanyId,
+                cancellationToken) == null
+                ? null
+                : access;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private async Task<TradeCompanyProfile?> LoadCompanyProfileAsync(
@@ -178,9 +309,14 @@ public sealed class ProfileHostedTradeCompanyService(
     }
 
     private static bool OrderBelongsToCompany(TradeOrder? order, CompanyId companyId) =>
-        order?.CompanyProfileId == companyId.Value &&
+        order != null &&
+        (order.CompanyCommission?.CompanyId == companyId ||
+         order.CompanyCommission == null &&
+         order.CompanyProfileId == companyId.Value) &&
         (order.History ?? [])
-            .All(item => item.CompanyProfileId == companyId.Value);
+            .All(item =>
+                order.CompanyCommission != null ||
+                item.CompanyProfileId == companyId.Value);
 
     private static TradeCompanyPublicationOwnership? DeserializeOwnership(string payloadJson)
     {

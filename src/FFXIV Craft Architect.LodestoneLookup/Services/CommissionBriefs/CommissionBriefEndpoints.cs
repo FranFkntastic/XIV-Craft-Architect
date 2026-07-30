@@ -73,6 +73,8 @@ public static class CommissionBriefEndpoints
                 string publicId,
                 CommissionBriefOptions options,
                 SqliteCommissionBriefStore store,
+                SqliteCompanyCommissionCapabilityStore capabilities,
+                HostedCompanyCommissionService commissions,
                 CancellationToken ct) =>
             {
                 if (!IsAvailable(context, options) || !IsValidPublicId(publicId))
@@ -81,7 +83,56 @@ public static class CommissionBriefEndpoints
                 }
 
                 var brief = await store.LoadAsync(publicId, ct);
-                return brief == null ? Results.NotFound() : Results.Ok(brief);
+                if (brief == null)
+                {
+                    return Results.NotFound();
+                }
+                if (brief.Ownership == null)
+                {
+                    return Results.Ok(brief);
+                }
+
+                try
+                {
+                    var participantToken = context.Request.Headers[
+                        "X-Commission-Participant"].ToString();
+                    if (!string.IsNullOrWhiteSpace(participantToken))
+                    {
+                        var capability = await capabilities.ResolveAsync(
+                            publicId,
+                            CompanyCommissionCapabilityKind.Participant,
+                            participantToken,
+                            ct);
+                        if (capability == null)
+                        {
+                            return Results.Unauthorized();
+                        }
+
+                        var participant = await commissions.LoadParticipantAsync(
+                            capability,
+                            ct);
+                        return participant == null
+                            ? Results.Unauthorized()
+                            : Results.Ok(participant);
+                    }
+
+                    var projection = await commissions.LoadPublicAsync(publicId, ct);
+                    return projection == null
+                        ? Results.Conflict(new
+                        {
+                            error = "canonical_commission_unavailable",
+                            message = "The company publication has not completed canonical migration."
+                        })
+                        : Results.Ok(projection);
+                }
+                catch (InvalidOperationException)
+                {
+                    return Results.Conflict(new
+                    {
+                        error = "canonical_commission_invalid",
+                        message = "The company publication has conflicting canonical ownership."
+                    });
+                }
             });
 
         group.MapGet(
@@ -169,6 +220,8 @@ public static class CommissionBriefEndpoints
                 TradeCompanyAuthorization authorization,
                 ProfileHostedTradeCompanyService companies,
                 SqliteCommissionBriefStore store,
+                SqliteCompanyCommissionCapabilityStore capabilities,
+                TimeProvider timeProvider,
                 CancellationToken ct) =>
             {
                 if (!options.Enabled)
@@ -330,11 +383,15 @@ public static class CommissionBriefEndpoints
                 }
 
                 TradeCompanyRecordEnvelope committedOrder = orderRecord;
+                string? claimUrl = null;
                 if (!PublicationMatches(
                         order.CommissionPublication,
                         published,
                         publicUrl,
-                        ownership))
+                        ownership) ||
+                    order.CompanyCommission == null ||
+                    order.CompanyCommission.PublicMetadata.ViewState !=
+                    CompanyCommissionPublicViewState.Published)
                 {
                     var publishedOrder = TradeOrderWorkflow.CopyOrder(order);
                     publishedOrder.CommissionPublication = new TradeCommissionPublication
@@ -361,6 +418,22 @@ public static class CommissionBriefEndpoints
                             .ToArray();
                     }
 
+                    publishedOrder = TradeCompanyCommissionMigrationService.BindPublishedBrief(
+                        publishedOrder,
+                        published,
+                        published.PublishedAtUtc);
+                    var canonicalCommission = publishedOrder.CompanyCommission!;
+                    if (canonicalCommission.ActiveClaimCapabilityRevision <= 0)
+                    {
+                        publishedOrder.CompanyCommission = canonicalCommission with
+                        {
+                            ActiveClaimCapabilityRevision = 1
+                        };
+                    }
+
+                    var expectedCompanyRevision = await companies.LoadCompanyRevisionAsync(
+                        access,
+                        ct);
                     var orderMutation = await companies.PutRecordAsync(
                         access,
                         TradeCompanyRecordKinds.Order,
@@ -368,7 +441,8 @@ public static class CommissionBriefEndpoints
                         JsonSerializer.Serialize(publishedOrder, JsonOptions),
                         orderRecord.RecordRevision,
                         $"portable-publication-order:{request.IdempotencyKey}",
-                        ct);
+                        ct,
+                        expectedCompanyRevision);
                     if (!orderMutation.Success || orderMutation.Record == null)
                     {
                         var current = await companies.LoadRecordAsync(
@@ -401,10 +475,36 @@ public static class CommissionBriefEndpoints
                     }
                 }
 
+                var committedCanonical = JsonSerializer.Deserialize<TradeOrder>(
+                        committedOrder.PayloadJson,
+                        JsonOptions)?.CompanyCommission
+                    ?? throw new InvalidOperationException(
+                        "The committed publication has no canonical commission.");
+                if (committedCanonical.ActiveClaim == null &&
+                    committedCanonical.PublicMetadata.ViewState ==
+                    CompanyCommissionPublicViewState.Published &&
+                    committedCanonical.ActiveClaimCapabilityRevision > 0)
+                {
+                    var issuedClaimCapability = await capabilities.IssueAsync(
+                        access.CompanyId,
+                        request.OrderId,
+                        published.PublicId,
+                        CompanyCommissionCapabilityKind.Claim,
+                        grantId: null,
+                        committedCanonical.ActiveClaimCapabilityRevision,
+                        timeProvider.GetUtcNow().UtcDateTime,
+                        ct);
+                    claimUrl = SqliteCompanyCommissionCapabilityStore.BuildFragmentUrl(
+                        publicUrl,
+                        "claim",
+                        issuedClaimCapability.PlaintextToken);
+                }
+
                 return Results.Ok(new CommissionBriefCreateResponse
                 {
                     PublicId = published.PublicId,
                     PublicUrl = publicUrl,
+                    ClaimUrl = claimUrl,
                     EditorToken = string.Empty,
                     Version = published.Version,
                     PublishedAtUtc = published.PublishedAtUtc,
@@ -419,7 +519,12 @@ public static class CommissionBriefEndpoints
                 string publicId,
                 HttpRequest request,
                 TradeCompanyAuthorization authorization,
+                ProfileHostedTradeCompanyService companies,
                 SqliteCommissionBriefStore store,
+                HostedCompanyCommissionService commissions,
+                SqliteCompanyCommissionCapabilityStore capabilities,
+                DiscordPublicationService discordPublications,
+                TimeProvider timeProvider,
                 CancellationToken ct) =>
             {
                 var access = await authorization.ResolveAsync(
@@ -439,12 +544,67 @@ public static class CommissionBriefEndpoints
                     return Results.NotFound();
                 }
 
-                return await store.RevokeCompanyOwnedAsync(
+                var ownership = await companies.ResolvePublicationOwnershipAsync(
                     publicId,
+                    ct);
+                if (ownership == null || ownership.CompanyId != access.CompanyId)
+                {
+                    return Results.NotFound();
+                }
+
+                var snapshot = await commissions.LoadOwnerAsync(
+                    access,
+                    ownership.OrderId,
+                    ct);
+                if (snapshot == null ||
+                    !string.Equals(
+                        snapshot.Order.CompanyCommission?.PublicMetadata.PublicBriefId,
+                        publicId,
+                        StringComparison.Ordinal))
+                {
+                    return Results.Conflict(new
+                    {
+                        error = "canonical_commission_unavailable",
+                        message = "The publication is not bound to one canonical commission."
+                    });
+                }
+
+                var commandId = Guid.NewGuid();
+                var context = new CompanyCommissionCommandContext(
                     access.CompanyId,
-                    ct)
-                    ? Results.NoContent()
-                    : Results.NotFound();
+                    ownership.OrderId,
+                    snapshot.Envelope.RecordRevision,
+                    snapshot.CompanyRevision,
+                    commandId,
+                    CompanyCommissionProtocol.Version1);
+                var mutation = await commissions.ExecuteCompanyAsync(
+                    access,
+                    new RevokeCompanyCommissionPublicationCommand(context),
+                    ct);
+                if (!mutation.Success)
+                {
+                    return mutation.Status == CompanyCommissionMutationStatus.Conflict
+                        ? Results.Conflict(new
+                        {
+                            error = mutation.ErrorCode,
+                            message = mutation.ErrorMessage
+                        })
+                        : Results.BadRequest(new
+                        {
+                            error = mutation.ErrorCode,
+                            message = mutation.ErrorMessage
+                        });
+                }
+
+                await capabilities.RevokeAllAsync(
+                    access.CompanyId,
+                    ownership.OrderId,
+                    CompanyCommissionCapabilityKind.Claim,
+                    timeProvider.GetUtcNow().UtcDateTime,
+                    ct);
+                await store.RevokeCompanyOwnedAsync(publicId, access.CompanyId, ct);
+                await discordPublications.RevokeAsync(publicId, ct);
+                return Results.NoContent();
             });
     }
 
@@ -453,7 +613,7 @@ public static class CommissionBriefEndpoints
         options.IsAllowedRequestHost(context.Request.Host.Host);
 
     private static bool IsValidPublicId(string value) =>
-        value.Length is >= 12 and <= 32 &&
+        value.Length is >= 8 and <= 128 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
     private static bool PublicationIdentityMatches(
@@ -497,7 +657,14 @@ public static class CommissionBriefEndpoints
                     order?.CommissionPublication,
                     published,
                     publicUrl,
-                    ownership))
+                    ownership) ||
+                order?.CompanyCommission is not { } commission ||
+                !string.Equals(
+                    commission.PublicMetadata.PublicBriefId,
+                    published.PublicId,
+                    StringComparison.Ordinal) ||
+                commission.PublicMetadata.ViewState !=
+                CompanyCommissionPublicViewState.Published)
             {
                 return false;
             }
