@@ -16,7 +16,7 @@ const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 22;
+const MODULE_REVISION = 23;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -1917,104 +1917,252 @@ async function getSpecializedStorageDiagnostics() {
     };
 }
 
+async function openExistingDatabaseReadOnly(name) {
+    if (typeof indexedDB.databases !== 'function') {
+        throw new Error('[IndexedDB] This browser cannot enumerate databases for read-only inventory.');
+    }
+    const databases = await indexedDB.databases();
+    if (!databases.some(database => database.name === name)) {
+        return null;
+    }
+
+    return await new Promise((resolve, reject) => {
+        let disappeared = false;
+        const request = indexedDB.open(name);
+        request.onupgradeneeded = event => {
+            disappeared = true;
+            event.target.transaction.abort();
+        };
+        request.onerror = () => reject(disappeared
+            ? new Error(`[IndexedDB] ${name} disappeared during read-only inventory.`)
+            : request.error);
+        request.onsuccess = () => {
+            request.result.onversionchange = () => request.result.close();
+            resolve(request.result);
+        };
+    });
+}
+
+async function readExistingStoreRecords(database, storeName) {
+    if (!database?.objectStoreNames.contains(storeName)) {
+        return [];
+    }
+    return await new Promise((resolve, reject) => {
+        const transaction = database.transaction(storeName, 'readonly');
+        const request = transaction.objectStore(storeName).getAll();
+        request.onsuccess = () => resolve(request.result || []);
+        request.onerror = () => reject(request.error);
+    });
+}
+
+async function materializeExistingPlan(database, record) {
+    if (!record || !isComponentStoredPlan(record)) {
+        return record || null;
+    }
+    if (!database?.objectStoreNames.contains(STORE_PLANS) ||
+        !database.objectStoreNames.contains(STORE_PLAN_COMPONENTS)) {
+        throw new Error('Saved plan component stores are unavailable.');
+    }
+    return await new Promise((resolve, reject) => {
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS],
+            'readonly');
+        let materialized = null;
+        materializeStoredPlanRecord(transaction, record, value => {
+            materialized = value;
+        });
+        transaction.oncomplete = () => resolve(materialized);
+        transaction.onerror = event => reject(transaction.error || event.target?.error);
+        transaction.onabort = event => reject(
+            transaction.error || event.target?.error || new Error('Saved plan is incomplete.'));
+    });
+}
+
 async function getCompanyMigrationSourceInventory() {
-    const companyDatabase = await initCompanyDatabase();
-    const knownCompanyStores = [
-        STORE_STORAGE_METADATA,
-        STORE_TRADE_COMPANY_PROFILES,
-        STORE_TRADE_CRAFTERS,
-        STORE_TRADE_ORDERS,
-        STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
-        STORE_TRADE_PAYROLL_DRAFTS
-    ];
-    const unsupportedStoreNames = Array.from(companyDatabase.objectStoreNames)
-        .filter(storeName => !knownCompanyStores.includes(storeName))
-        .sort((left, right) => left.localeCompare(right));
-    const [
-        diagnostics,
-        companyProfiles,
-        crafters,
-        orders,
-        orderCraftSnapshots,
-        payrollDrafts,
-        legacySnapshot,
-        unsupportedStores
-    ] = await Promise.all([
-        getSpecializedStorageDiagnostics(),
-        loadStoreRecords(STORE_TRADE_COMPANY_PROFILES),
-        loadStoreRecords(STORE_TRADE_CRAFTERS),
-        loadStoreRecords(STORE_TRADE_ORDERS),
-        loadStoreRecords(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS),
-        loadStoreRecords(STORE_TRADE_PAYROLL_DRAFTS),
-        loadLegacySnapshot(),
-        Promise.all(unsupportedStoreNames.map(async storeName => ({
-            storeName,
-            records: await loadStoreRecords(storeName)
-        })))
+    const [companyDatabase, personalDatabase, legacyDatabase] = await Promise.all([
+        openExistingDatabaseReadOnly(COMPANY_DB_NAME),
+        openExistingDatabaseReadOnly(PERSONAL_DB_NAME),
+        openExistingDatabaseReadOnly(LEGACY_DB_NAME)
     ]);
+    try {
+        const companyStoreNames = companyDatabase
+            ? Array.from(companyDatabase.objectStoreNames)
+            : [];
+        const knownCompanyStores = [
+            STORE_STORAGE_METADATA,
+            STORE_TRADE_COMPANY_PROFILES,
+            STORE_TRADE_CRAFTERS,
+            STORE_TRADE_ORDERS,
+            STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
+            STORE_TRADE_PAYROLL_DRAFTS
+        ];
+        const legacyInventoryStores = [
+            STORE_PLANS,
+            STORE_PLAN_COMPONENTS,
+            STORE_TRADE_COMPANY_PROFILES,
+            STORE_TRADE_CRAFTERS,
+            STORE_TRADE_ORDERS,
+            STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
+            STORE_TRADE_PAYROLL_DRAFTS
+        ];
+        const companyRecords = Object.fromEntries(await Promise.all(
+            companyStoreNames.map(async storeName => [
+                storeName,
+                await readExistingStoreRecords(companyDatabase, storeName)
+            ])));
+        const personalPlans = await readExistingStoreRecords(personalDatabase, STORE_PLANS);
+        const personalComponents = await readExistingStoreRecords(
+            personalDatabase,
+            STORE_PLAN_COMPONENTS);
+        const personalMarkers = await readExistingStoreRecords(
+            personalDatabase,
+            STORE_STORAGE_METADATA);
+        const legacyRecords = Object.fromEntries(await Promise.all(
+            legacyInventoryStores.map(async storeName => [
+                storeName,
+                await readExistingStoreRecords(legacyDatabase, storeName)
+            ])));
+        const companyOrders = companyRecords[STORE_TRADE_ORDERS] || [];
+        const legacyOrders = legacyRecords[STORE_TRADE_ORDERS] || [];
+        const personalRequiredIds = new Set(companyOrders
+            .map(order => order?.craftPlanId)
+            .filter(planId => typeof planId === 'string' && planId.length > 0));
+        const legacyRequiredIds = new Set(legacyOrders
+            .map(order => order?.craftPlanId)
+            .filter(planId => typeof planId === 'string' && planId.length > 0));
+        const linkedPlanIds = Array.from(new Set([
+            ...personalRequiredIds,
+            ...legacyRequiredIds
+        ])).sort((left, right) => left.localeCompare(right));
+        const materializeCandidates = async (
+            databaseRole,
+            database,
+            plans,
+            requiredIds) => await Promise.all(linkedPlanIds.flatMap(planId => {
+                const record = plans.find(plan => plan?.id === planId);
+                if (!record && !requiredIds.has(planId)) {
+                    return [];
+                }
+                return [(async () => {
+                    try {
+                        return {
+                            databaseRole,
+                            planId,
+                            requiredBySource: requiredIds.has(planId),
+                            payload: record
+                                ? await materializeExistingPlan(database, record)
+                                : null,
+                            error: record ? null : 'Saved plan is missing from this source database.'
+                        };
+                    } catch (error) {
+                        return {
+                            databaseRole,
+                            planId,
+                            requiredBySource: requiredIds.has(planId),
+                            payload: null,
+                            error: formatIndexedDbError(error)
+                        };
+                    }
+                })()];
+            }));
+        const linkedPlans = [
+            ...await materializeCandidates(
+                'personal',
+                personalDatabase,
+                personalPlans,
+                personalRequiredIds),
+            ...await materializeCandidates(
+                'legacy',
+                legacyDatabase,
+                legacyRecords[STORE_PLANS] || [],
+                legacyRequiredIds)
+        ];
+        const linkedPlanIdSet = new Set(linkedPlanIds);
+        const relevantPlans = plans => plans.filter(plan => linkedPlanIdSet.has(plan?.id));
+        const componentIds = plans => new Set(relevantPlans(plans).flatMap(plan =>
+            Object.values(plan?.componentRefs || {})
+                .filter(componentId => typeof componentId === 'string')));
+        const relevantComponents = (plans, components) => {
+            const ids = componentIds(plans);
+            return components.filter(component =>
+                ids.has(component?.id) || linkedPlanIdSet.has(component?.planId));
+        };
+        const databaseState = database => ({
+            exists: Boolean(database),
+            schemaVersion: database?.version ?? null,
+            storeNames: database ? Array.from(database.objectStoreNames) : []
+        });
 
-    const linkedPlanIds = Array.from(new Set([
-        ...orders,
-        ...legacySnapshot[STORE_TRADE_ORDERS]
-    ].flatMap(order => [
-        order?.craftPlanId,
-        order?.sourceSnapshot?.sourcePlanId
-    ]).filter(planId => typeof planId === 'string' && planId.length > 0)))
-        .sort((left, right) => left.localeCompare(right));
-    const linkedPlans = await Promise.all(linkedPlanIds.map(async planId => {
-        try {
-            return {
-                planId,
-                payload: await loadPlan(planId),
-                error: null
-            };
-        } catch (error) {
-            return {
-                planId,
-                payload: null,
-                error: formatIndexedDbError(error)
-            };
-        }
-    }));
-    const legacyPlanIds = new Set(linkedPlanIds);
-    const legacyPlans = legacySnapshot[STORE_PLANS]
-        .filter(plan => legacyPlanIds.has(plan?.id));
-    const legacyComponentIds = new Set(legacyPlans.flatMap(plan =>
-        Object.values(plan?.componentRefs || {})
-            .filter(componentId => typeof componentId === 'string')));
-
-    return {
-        formatVersion: 1,
-        capturedAtUtc: new Date().toISOString(),
-        origin: globalThis.location?.origin || null,
-        moduleRevision: MODULE_REVISION,
-        specializedStorage: diagnostics,
-        company: {
-            databaseName: COMPANY_DB_NAME,
-            schemaVersion: companyDatabase.version,
-            companyProfiles,
-            crafters,
-            orders,
-            orderCraftSnapshots,
-            payrollDrafts,
-            unsupportedStores
-        },
-        linkedPlans,
-        legacy: {
-            databaseName: LEGACY_DB_NAME,
-            schemaVersion: legacySnapshotSourceVersion,
-            companyProfiles: legacySnapshot[STORE_TRADE_COMPANY_PROFILES],
-            crafters: legacySnapshot[STORE_TRADE_CRAFTERS],
-            orders: legacySnapshot[STORE_TRADE_ORDERS],
-            orderCraftSnapshots: legacySnapshot[STORE_TRADE_ORDER_CRAFT_SNAPSHOTS],
-            payrollDrafts: legacySnapshot[STORE_TRADE_PAYROLL_DRAFTS],
-            linkedPlans: legacyPlans,
-            linkedPlanComponents: legacySnapshot[STORE_PLAN_COMPONENTS]
-                .filter(component =>
-                    legacyComponentIds.has(component?.id) ||
-                    legacyPlanIds.has(component?.planId))
-        }
-    };
+        return {
+            formatVersion: 2,
+            capturedAtUtc: new Date().toISOString(),
+            origin: globalThis.location?.origin || null,
+            moduleRevision: MODULE_REVISION,
+            specializedStorage: {
+                readOnlyCapture: true,
+                databaseNames: {
+                    personal: PERSONAL_DB_NAME,
+                    company: COMPANY_DB_NAME,
+                    legacy: LEGACY_DB_NAME
+                },
+                databases: {
+                    personal: databaseState(personalDatabase),
+                    company: databaseState(companyDatabase),
+                    legacy: databaseState(legacyDatabase)
+                },
+                migrations: {
+                    personal: personalMarkers.find(marker => marker?.id === LEGACY_MIGRATION_ID) || null,
+                    company: (companyRecords[STORE_STORAGE_METADATA] || [])
+                        .find(marker => marker?.id === LEGACY_MIGRATION_ID) || null
+                }
+            },
+            company: {
+                databaseName: COMPANY_DB_NAME,
+                exists: Boolean(companyDatabase),
+                schemaVersion: companyDatabase?.version ?? null,
+                companyProfiles: companyRecords[STORE_TRADE_COMPANY_PROFILES] || [],
+                crafters: companyRecords[STORE_TRADE_CRAFTERS] || [],
+                orders: companyOrders,
+                orderCraftSnapshots:
+                    companyRecords[STORE_TRADE_ORDER_CRAFT_SNAPSHOTS] || [],
+                payrollDrafts: companyRecords[STORE_TRADE_PAYROLL_DRAFTS] || [],
+                unsupportedStores: companyStoreNames
+                    .filter(storeName => !knownCompanyStores.includes(storeName))
+                    .sort((left, right) => left.localeCompare(right))
+                    .map(storeName => ({
+                        storeName,
+                        records: companyRecords[storeName]
+                    }))
+            },
+            personal: {
+                databaseName: PERSONAL_DB_NAME,
+                exists: Boolean(personalDatabase),
+                schemaVersion: personalDatabase?.version ?? null,
+                linkedPlans: relevantPlans(personalPlans),
+                linkedPlanComponents: relevantComponents(personalPlans, personalComponents)
+            },
+            linkedPlans,
+            legacy: {
+                databaseName: LEGACY_DB_NAME,
+                exists: Boolean(legacyDatabase),
+                schemaVersion: legacyDatabase?.version ?? null,
+                companyProfiles: legacyRecords[STORE_TRADE_COMPANY_PROFILES] || [],
+                crafters: legacyRecords[STORE_TRADE_CRAFTERS] || [],
+                orders: legacyOrders,
+                orderCraftSnapshots:
+                    legacyRecords[STORE_TRADE_ORDER_CRAFT_SNAPSHOTS] || [],
+                payrollDrafts: legacyRecords[STORE_TRADE_PAYROLL_DRAFTS] || [],
+                linkedPlans: relevantPlans(legacyRecords[STORE_PLANS] || []),
+                linkedPlanComponents: relevantComponents(
+                    legacyRecords[STORE_PLANS] || [],
+                    legacyRecords[STORE_PLAN_COMPONENTS] || [])
+            }
+        };
+    } finally {
+        companyDatabase?.close();
+        personalDatabase?.close();
+        legacyDatabase?.close();
+    }
 }
 
 // Export functions for Blazor interop
