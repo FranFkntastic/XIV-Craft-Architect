@@ -21,7 +21,8 @@ public static class DiscordCommissionMessage
         string publicUrl,
         DiscordPublicationState state,
         string? actionToken,
-        string? assignmentLabel = null)
+        string? assignmentLabel = null,
+        string? claimUrl = null)
     {
         var brief = published.Brief;
         var fields = new List<object>
@@ -69,7 +70,8 @@ public static class DiscordCommissionMessage
                 published,
                 publicUrl,
                 state,
-                actionToken),
+                actionToken,
+                claimUrl),
             allowed_mentions = new
             {
                 parse = Array.Empty<string>()
@@ -113,7 +115,8 @@ public static class DiscordCommissionMessage
         PublishedCommissionBrief published,
         string publicUrl,
         DiscordPublicationState state,
-        string? actionToken)
+        string? actionToken,
+        string? claimUrl)
     {
         var buttons = new List<object>
         {
@@ -126,18 +129,16 @@ public static class DiscordCommissionMessage
             }
         };
         if (state == DiscordPublicationState.Open &&
-            !string.IsNullOrWhiteSpace(actionToken) &&
-            actionToken.Length <= 100)
+            !string.IsNullOrWhiteSpace(claimUrl))
         {
             buttons.Add(new
             {
                 type = 2,
-                style = 1,
-                label = "Volunteer",
-                custom_id = actionToken
+                style = 5,
+                label = "Claim commission",
+                url = claimUrl
             });
         }
-
         return
         [
             new
@@ -167,7 +168,7 @@ public static class DiscordCommissionMessage
         DiscordPublicationState state) =>
         state switch
         {
-            DiscordPublicationState.Open => "Volunteer below or contact the operator",
+            DiscordPublicationState.Open => "Open the canonical brief to claim",
             DiscordPublicationState.Assigned => string.IsNullOrWhiteSpace(brief.AssignmentLabel)
                 ? "Assigned by the operator"
                 : brief.AssignmentLabel,

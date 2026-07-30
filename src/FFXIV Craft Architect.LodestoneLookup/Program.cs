@@ -102,12 +102,22 @@ builder.Services.AddSingleton(_ =>
 });
 builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
 builder.Services.AddSingleton<TradeCompanyAuthorization>();
+builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();
+builder.Services.AddSingleton<HostedCompanyCommissionService>();
+builder.Services.AddSingleton<
+    ICompanyCommissionPostCommitSink,
+    DiscordCompanyCommissionPostCommitSink>();
+builder.Services.AddSingleton<CompanyCommissionMigrationDiagnostics>();
+builder.Services.AddHostedService<CompanyCommissionSchemaMigrationHostedService>();
 builder.Services.AddSingleton<DiscordRequestVerifier>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddSingleton<SqliteDiscordCollaborationStore>();
+builder.Services.AddSingleton<SqliteDiscordNotificationStore>();
 builder.Services.AddScoped<DiscordCompanyOrderAdapter>();
 builder.Services.AddScoped<DiscordPublicationService>();
-builder.Services.AddScoped<DiscordClaimService>();
+builder.Services.AddScoped<CompanyCommissionDiscordDeliveryService>();
+builder.Services.AddScoped<ICompanyCommissionDiscordDelivery>(
+    services => services.GetRequiredService<CompanyCommissionDiscordDeliveryService>());
 builder.Services.AddHttpClient<IDiscordApiClient, DiscordApiClient>((services, client) =>
 {
     var options = services.GetRequiredService<DiscordCommissionOptions>();
@@ -119,6 +129,7 @@ builder.Services.AddHttpClient<IDiscordApiClient, DiscordApiClient>((services, c
     client.Timeout = TimeSpan.FromSeconds(15);
 });
 builder.Services.AddHostedService<DiscordOutboxDispatcher>();
+builder.Services.AddHostedService<DiscordNotificationOutboxDispatcher>();
 
 if (ProfileHostProvisioningCommand.TryParse(args) is { } profileHostCommand)
 {
@@ -243,8 +254,10 @@ app.MapProfileHostEndpoints();
 app.MapCraftAppraisalEndpoints();
 app.MapCommissionBriefEndpoints();
 app.MapCompanyCommissionBriefEndpoints();
+app.MapCompanyCommissionEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
+app.MapDiscordNotificationEndpoints();
 
 app.Run();
 

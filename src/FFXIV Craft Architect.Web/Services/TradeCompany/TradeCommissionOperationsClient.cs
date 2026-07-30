@@ -1,0 +1,196 @@
+using System.Net.Http.Json;
+using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
+
+namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
+
+public sealed class TradeCommissionOperationsClient(
+    HttpClient http,
+    ProfileSyncLocalStateService localState)
+{
+    private const string AccessKeyHeader = "X-Profile-Key";
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public async Task<CompanyCommissionOwnerProjection> LoadOwnerProjectionAsync(
+        Guid companyId,
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{companyId:D}/commissions/{commissionId:D}/owner",
+            content: null,
+            contentType: null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<CompanyCommissionOwnerProjection>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The authenticated commission owner endpoint returned an empty projection.");
+    }
+
+    public async Task<TradeCommissionOwnerMutationResponse> ExecuteAsync<TCommand>(
+        string route,
+        TCommand command,
+        CancellationToken cancellationToken = default)
+        where TCommand : ICompanyCommissionCommand
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(route);
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{command.Context.CompanyId}/commissions/" +
+            $"{command.Context.CommissionId:D}/commands/{route}",
+            command,
+            typeof(TCommand),
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<TradeCommissionOwnerMutationBody>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The commissioner command endpoint returned an empty mutation result.");
+        return new TradeCommissionOwnerMutationResponse(
+            new CompanyCommissionMutationResult(
+                result.Status,
+                result.Order,
+                result.Activity,
+                result.ErrorCode,
+                result.ErrorMessage),
+            result.ClaimUrl);
+    }
+
+    public async Task<TradeCommissionRecoveryResetResponse> ResetParticipantRecoveryAsync(
+        ResetCompanyCommissionParticipantRecoveryCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{command.Context.CompanyId}/commissions/" +
+            $"{command.Context.CommissionId:D}/commands/reset-participant-recovery",
+            command,
+            typeof(ResetCompanyCommissionParticipantRecoveryCommand),
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<TradeCommissionRecoveryResetResponse>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "Participant recovery reset returned an empty response.");
+    }
+
+    public async Task<TradeCommissionClaimLinkResponse> IssueClaimLinkAsync(
+        CompanyCommissionCommandContext context,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{context.CompanyId}/commissions/" +
+            $"{context.CommissionId:D}/commands/issue-claim-link",
+            new TradeCommissionClaimLinkRequest(context),
+            typeof(TradeCommissionClaimLinkRequest),
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<TradeCommissionClaimLinkResponse>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "Claim-link issuance returned an empty response.");
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(
+        HttpMethod method,
+        string relativePath,
+        object? content,
+        Type? contentType,
+        CancellationToken cancellationToken)
+    {
+        var connection = await localState.LoadConnectionSettingsAsync();
+        if (!connection.IsConfigured)
+        {
+            throw new InvalidOperationException(
+                "Connect Profile Hosting in Options before operating a company commission.");
+        }
+
+        var hostUri = new Uri(connection.HostUrl!.Trim().TrimEnd('/') + "/");
+        var apiBaseUri = hostUri.AbsolutePath.TrimEnd('/').EndsWith(
+            "/api",
+            StringComparison.OrdinalIgnoreCase)
+            ? hostUri
+            : new Uri(hostUri, "api/");
+        var request = new HttpRequestMessage(
+            method,
+            new Uri(apiBaseUri, relativePath.TrimStart('/')));
+        request.Headers.Add(AccessKeyHeader, connection.AccessKey);
+        if (content != null)
+        {
+            request.Content = JsonContent.Create(
+                content,
+                contentType ?? content.GetType(),
+                options: JsonOptions);
+        }
+
+        try
+        {
+            return await http.SendAsync(request, cancellationToken);
+        }
+        finally
+        {
+            request.Dispose();
+        }
+    }
+
+    private static async Task EnsureSuccessAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        CommissionOperationsProblem? problem = null;
+        try
+        {
+            problem = await response.Content.ReadFromJsonAsync<CommissionOperationsProblem>(
+                JsonOptions,
+                cancellationToken);
+        }
+        catch (JsonException)
+        {
+            // The HTTP status still fails closed below.
+        }
+
+        throw new InvalidOperationException(
+            problem?.Message ??
+            problem?.ErrorMessage ??
+            $"Company commission operations failed with HTTP {(int)response.StatusCode}.");
+    }
+
+    private sealed record CommissionOperationsProblem(
+        string? Error,
+        string? ErrorMessage,
+        string? Message);
+}
+
+public sealed record TradeCommissionRecoveryResetResponse(
+    CompanyCommissionMutationResult Mutation,
+    string RecoveryUrl);
+
+public sealed record TradeCommissionClaimLinkRequest(
+    CompanyCommissionCommandContext Context);
+
+public sealed record TradeCommissionClaimLinkResponse(string ClaimUrl);
+
+public sealed record TradeCommissionOwnerMutationResponse(
+    CompanyCommissionMutationResult Mutation,
+    string? ClaimUrl);
+
+internal sealed record TradeCommissionOwnerMutationBody(
+    CompanyCommissionMutationStatus Status,
+    TradeOrder? Order,
+    CompanyCommissionActivityEvent? Activity,
+    string? ErrorCode,
+    string? ErrorMessage,
+    string? ClaimUrl);

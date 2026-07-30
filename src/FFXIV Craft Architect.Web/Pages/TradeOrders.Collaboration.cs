@@ -114,6 +114,11 @@ public partial class TradeOrders
     {
         _commissionContact = _companyProfile?.CommissionContact ?? string.Empty;
         _commissionDeliveryInstructions = string.Empty;
+        if (order.CompanyCommission != null)
+        {
+            return;
+        }
+
         foreach (var claim in TradeCollaboration.GetPendingInterests(order.Id))
         {
             _interestCrafterSelections.TryAdd(claim.ClaimId, claim.MatchedCrafterId);
@@ -233,7 +238,7 @@ public partial class TradeOrders
                 orderToSave.CommissionPublication = new TradeCommissionPublication
                 {
                     PublicId = link.PublicId,
-                    PublicUrl = link.Url,
+                    PublicUrl = link.PublicUrl,
                     Version = link.Version,
                     PublishedAtUtc = link.PublishedAtUtc
                 };

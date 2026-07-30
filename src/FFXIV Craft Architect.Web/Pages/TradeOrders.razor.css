@@ -335,6 +335,16 @@
   grid-template-columns: minmax(160px, 1fr) 80px 48px;
 }
 
+.trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-header,
+.trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-row {
+  grid-template-columns: minmax(160px, 1fr) 72px 44px 82px 72px;
+}
+
+.trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-header span:nth-last-child(-n + 2),
+.trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-row span:nth-last-child(-n + 2) {
+  text-align: right;
+}
+
 .trade-orders-pipeline {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -639,6 +649,12 @@
 .trade-orders-material-table.is-compact .trade-orders-material-header,
 .trade-orders-material-table.is-compact .trade-orders-material-row {
   grid-template-columns: minmax(96px, 1fr) 48px 70px 84px minmax(96px, 112px) 84px;
+}
+
+.trade-orders-material-table.is-compact.has-commission-handoff .trade-orders-material-header,
+.trade-orders-material-table.is-compact.has-commission-handoff .trade-orders-material-row {
+  grid-template-columns:
+    minmax(96px, 1fr) 42px 48px 58px 70px 84px minmax(92px, 108px) 78px;
 }
 
 .trade-orders-material-table.is-compact .trade-orders-material-header span:nth-child(2),
@@ -1006,8 +1022,249 @@
   margin-top: 12px;
 }
 
+.trade-orders-commission-panel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #4f8f4f;
+  border-radius: 6px;
+  background: #1d281d;
+}
+
+.trade-orders-commission-claim,
+.trade-orders-commission-publication {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.trade-orders-commission-claim > div {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #354735;
+  border-radius: 4px;
+  background: #1b211b;
+}
+
+.trade-orders-commission-claim span,
+.trade-orders-commission-publication span {
+  display: block;
+  color: #aaa;
+  font-size: 0.68rem;
+}
+
+.trade-orders-commission-claim strong,
+.trade-orders-commission-publication strong {
+  display: block;
+  margin-top: 3px;
+  color: #f0f0f0;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.trade-orders-identity-review {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto minmax(170px, 1fr);
+  gap: 8px;
+  align-items: end;
+  padding-top: 8px;
+  border-top: 1px solid #354735;
+}
+
+.trade-orders-identity-review > .mud-checkbox {
+  grid-column: 1 / 3;
+}
+
+.trade-orders-delivery-review {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto auto;
+  gap: 8px;
+  align-items: end;
+  padding: 8px;
+  border: 1px solid #705b2e;
+  border-radius: 4px;
+  background: #2c2619;
+}
+
+.trade-orders-recovery-row,
+.trade-orders-shared-comment {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.trade-orders-recovery-row {
+  padding: 8px;
+  border: 1px solid #3d3d3d;
+  border-radius: 4px;
+  background: #202020;
+}
+
+.trade-orders-recovery-row span {
+  color: #b8b8b8;
+  font-size: 0.7rem;
+}
+
+.trade-orders-notification-diagnostics {
+  display: grid;
+  gap: 6px;
+}
+
+.trade-orders-notification-diagnostic {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #705b2e;
+  border-radius: 4px;
+  background: #2c2619;
+}
+
+.trade-orders-notification-diagnostic > div {
+  display: grid;
+  gap: 2px;
+}
+
+.trade-orders-notification-diagnostic span {
+  color: #c7b98f;
+  font-size: 0.7rem;
+}
+
+.trade-orders-shared-comment {
+  align-items: end;
+}
+
+.trade-orders-shared-comment > .mud-input-control {
+  flex: 1 1 auto;
+}
+
+.trade-orders-commission-activity {
+  display: grid;
+  gap: 0;
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid #354735;
+  padding-top: 8px;
+}
+
+.trade-orders-commission-activity > div {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.55fr) minmax(170px, 1fr);
+  gap: 2px 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid #303830;
+}
+
+.trade-orders-commission-activity span {
+  color: #aaa;
+  font-size: 0.68rem;
+  text-align: right;
+}
+
+.trade-orders-commission-activity p {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  color: #d4d4d4;
+  font-size: 0.74rem;
+}
+
 .trade-orders-history li {
   margin-bottom: 6px;
+}
+
+.trade-orders-commission-payment {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #4b4130;
+  border-radius: 6px;
+  background: #27231b;
+}
+
+.trade-orders-commission-payment-summary,
+.trade-orders-gate-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.trade-orders-commission-payment-summary > div,
+.trade-orders-gate-strip > span {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #3d382d;
+  border-radius: 4px;
+  background: #211f1a;
+}
+
+.trade-orders-commission-payment-summary span,
+.trade-orders-gate-strip span {
+  color: #aaa;
+  font-size: 0.68rem;
+}
+
+.trade-orders-commission-payment-summary strong,
+.trade-orders-gate-strip b {
+  display: block;
+  margin-top: 3px;
+  color: #f0f0f0;
+  font-size: 0.76rem;
+}
+
+.trade-orders-payment-request {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  padding-top: 8px;
+  border-top: 1px solid #40392d;
+}
+
+.trade-orders-payment-request > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.trade-orders-payment-request span {
+  color: #b8b8b8;
+  font-size: 0.7rem;
+}
+
+.trade-orders-payment-request span.is-error {
+  color: #f0a6a6;
+}
+
+.trade-orders-inline-actions,
+.trade-orders-observation-row,
+.trade-orders-material-handoff-action {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.trade-orders-observation-row {
+  align-items: end;
+}
+
+.trade-orders-observation-row > .mud-input-control {
+  flex: 1 1 auto;
+}
+
+.trade-orders-material-handoff-action {
+  justify-content: space-between;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #4b4130;
+  border-radius: 4px;
+  background: #27231b;
+}
+
+.trade-orders-material-handoff-action span {
+  color: #b8b8b8;
+  font-size: 0.72rem;
 }
 
 @media (max-width: 1450px) {
@@ -1049,7 +1306,16 @@
   .trade-orders-material-header,
   .trade-orders-material-row,
   .trade-orders-material-table.is-compact .trade-orders-material-header,
-  .trade-orders-material-table.is-compact .trade-orders-material-row {
+  .trade-orders-material-table.is-compact .trade-orders-material-row,
+  .trade-orders-material-table.is-compact.has-commission-handoff .trade-orders-material-header,
+  .trade-orders-material-table.is-compact.has-commission-handoff .trade-orders-material-row,
+  .trade-orders-commission-payment-summary,
+  .trade-orders-gate-strip,
+  .trade-orders-payment-request,
+  .trade-orders-commission-claim,
+  .trade-orders-commission-publication,
+  .trade-orders-identity-review,
+  .trade-orders-delivery-review {
     grid-template-columns: 1fr;
   }
 
@@ -1066,5 +1332,15 @@
   .trade-orders-workspace-card,
   .trade-orders-ops {
     min-height: auto;
+  }
+
+  .trade-orders-inline-actions,
+  .trade-orders-observation-row,
+  .trade-orders-material-handoff-action,
+  .trade-orders-recovery-row,
+  .trade-orders-notification-diagnostic,
+  .trade-orders-shared-comment {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

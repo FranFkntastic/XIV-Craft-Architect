@@ -6,6 +6,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Dialogs;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using FFXIV_Craft_Architect.Web.Shared.TablePrimitives;
 
 using Microsoft.AspNetCore.Components;
@@ -18,11 +19,16 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 
 public partial class TradeOrders
 {
-    private IReadOnlyList<TradeOrder> GetOrdersForStatus(TradeOrderStatus status)
+    private IReadOnlyList<OrderAttentionGroup> BuildAttentionGroups(
+        IEnumerable<TradeOrder> orders)
     {
-        return _orders
-            .Where(order => order.Status == status)
-            .OrderByDescending(order => order.CommissionedAtUtc)
+        return orders
+            .GroupBy(GetOrderAttentionKey)
+            .OrderBy(group => GetAttentionSort(group.Key))
+            .Select(group => new OrderAttentionGroup(
+                group.Key,
+                FormatAttentionGroup(group.Key),
+                group.OrderByDescending(order => order.CommissionedAtUtc).ToArray()))
             .ToArray();
     }
 
@@ -51,8 +57,29 @@ public partial class TradeOrders
         return $"{FormatAssignedCrafter(order)} - {order.CommissionedAtUtc.ToLocalTime():yyyy-MM-dd}";
     }
 
-    private static string FormatRailStatusChip(TradeOrder order)
+    private string FormatRailStatusChip(TradeOrder order)
     {
+        if (CommissionOperations.GetForOrder(order.Id) is { } projection)
+        {
+            return TradeCommissionOperationsPresentation.GetNextAction(projection) switch
+            {
+                "Review identity" => "Review",
+                "Review payment timing" => "Policy",
+                "Record payment" => "Pay",
+                "Prepare materials" => "Handoff",
+                "Awaiting receipt" => "Receipt",
+                "Review delivery" => "Accept",
+                "Record settlement" => "Settle",
+                "Awaiting claim" => "Open",
+                _ => "Work"
+            };
+        }
+
+        if (order.CompanyCommission != null)
+        {
+            return "Sync";
+        }
+
         return order.Status switch
         {
             TradeOrderStatus.ReadyToAssign => "New",
@@ -195,6 +222,7 @@ public partial class TradeOrders
         _selectedOrderOutputSearchResults = [];
         _manualNote = string.Empty;
         PrepareCommissionDraft(order);
+        PrepareCompanyCommissionEditor(order);
         AppState.SelectTradeOrder(order.Id);
         PersistSelectedOrderInNavigation(order.Id);
     }
@@ -239,16 +267,16 @@ public partial class TradeOrders
         SelectOrderAfterReload(orderId, "Linked Trade order could not be loaded.");
     }
 
-    private bool IsStatusGroupCollapsed(TradeOrderStatus status)
+    private bool IsAttentionGroupCollapsed(string key)
     {
-        return _collapsedStatuses.Contains(status);
+        return _collapsedAttentionGroups.Contains(key);
     }
 
-    private void ToggleStatusGroup(TradeOrderStatus status)
+    private void ToggleAttentionGroup(string key)
     {
-        if (!_collapsedStatuses.Add(status))
+        if (!_collapsedAttentionGroups.Add(key))
         {
-            _collapsedStatuses.Remove(status);
+            _collapsedAttentionGroups.Remove(key);
         }
     }
 
@@ -259,14 +287,75 @@ public partial class TradeOrders
 
     private void ExpandGroupForOrder(TradeOrder order)
     {
-        if (TradeOrderStatusWorkflow.IsArchived(order.Status))
+        if (IsOrderArchivedForAttention(order))
         {
             _isArchiveCollapsed = false;
             return;
         }
 
-        _collapsedStatuses.Remove(order.Status);
+        _collapsedAttentionGroups.Remove(GetOrderAttentionKey(order));
     }
+
+    private bool IsOrderArchivedForAttention(TradeOrder order)
+    {
+        if (CommissionOperations.GetForOrder(order.Id) is { } projection &&
+            projection.Order.CompanyCommission is { } commission)
+        {
+            return order.Status == TradeOrderStatus.Canceled ||
+                commission.IsClosed(projection.Order.Status);
+        }
+
+        if (order.CompanyCommission != null)
+        {
+            return false;
+        }
+
+        return TradeOrderStatusWorkflow.IsArchived(order.Status);
+    }
+
+    private string GetOrderAttentionKey(TradeOrder order)
+    {
+        if (CommissionOperations.GetForOrder(order.Id) is { } projection)
+        {
+            return TradeCommissionOperationsPresentation.GetAttentionGroup(projection);
+        }
+
+        if (order.CompanyCommission != null)
+        {
+            return TradeCommissionOperationsPresentation.SyncAttention;
+        }
+
+        return order.Status switch
+        {
+            TradeOrderStatus.ReadyToAssign => TradeCommissionOperationsPresentation.OpenAttention,
+            TradeOrderStatus.Assigned => TradeCommissionOperationsPresentation.PreWorkAttention,
+            TradeOrderStatus.InProgress => TradeCommissionOperationsPresentation.WorkAttention,
+            TradeOrderStatus.AwaitingDelivery => TradeCommissionOperationsPresentation.DeliveryAttention,
+            _ => TradeCommissionOperationsPresentation.OpenAttention
+        };
+    }
+
+    private static int GetAttentionSort(string key) =>
+        key switch
+        {
+            TradeCommissionOperationsPresentation.SyncAttention => 0,
+            TradeCommissionOperationsPresentation.ClaimAttention => 1,
+            TradeCommissionOperationsPresentation.PreWorkAttention => 2,
+            TradeCommissionOperationsPresentation.DeliveryAttention => 3,
+            TradeCommissionOperationsPresentation.WorkAttention => 4,
+            _ => 5
+        };
+
+    private static string FormatAttentionGroup(string key) =>
+        key switch
+        {
+            TradeCommissionOperationsPresentation.SyncAttention => "Needs Attention",
+            TradeCommissionOperationsPresentation.ClaimAttention => "Claim / Identity Review",
+            TradeCommissionOperationsPresentation.PreWorkAttention => "Pre-work Prerequisites",
+            TradeCommissionOperationsPresentation.DeliveryAttention => "Delivery / Settlement",
+            TradeCommissionOperationsPresentation.WorkAttention => "Work in Progress",
+            _ => "Open"
+        };
 
     private bool SelectOrderAfterReload(Guid orderId, string missingMessage)
     {

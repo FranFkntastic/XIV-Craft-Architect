@@ -27,6 +27,7 @@ public sealed class DiscordPublicationService(
     ProfileHostedTradeCompanyService companies,
     DiscordCompanyOrderAdapter orders,
     SqliteCommissionBriefStore briefs,
+    SqliteCompanyCommissionCapabilityStore capabilities,
     SqliteDiscordCollaborationStore collaboration,
     DiscordCommissionOptions options,
     CommissionBriefOptions commissionBriefOptions,
@@ -88,12 +89,18 @@ public sealed class DiscordPublicationService(
 
         var now = timeProvider.GetUtcNow();
         var state = ResolvePublicationState(order.Order);
+        var claimUrl = await IssueClaimUrlAsync(
+            order.Order,
+            publicUrl,
+            state,
+            cancellationToken);
         var actionToken = SqliteDiscordCollaborationStore.CreateActionToken();
         var initialPayload = DiscordCommissionMessage.CreateWithPublicUrl(
             published,
             publicUrl,
             state,
-            state == DiscordPublicationState.Open ? actionToken : null);
+            state == DiscordPublicationState.Open ? actionToken : null,
+            claimUrl: claimUrl);
         var created = await collaboration.CreatePublicationAsync(
             ownership,
             publicId,
@@ -261,6 +268,13 @@ public sealed class DiscordPublicationService(
                     CreatedAtUtc = published.PublishedAtUtc
                 })
                 .ToArray();
+            publishedOrder = TradeCompanyCommissionMigrationService.BindPublishedBrief(
+                publishedOrder,
+                published,
+                published.PublishedAtUtc);
+            var expectedCompanyRevision = await companies.LoadCompanyRevisionAsync(
+                access,
+                cancellationToken);
             orderMutation = await companies.PutRecordAsync(
                 access,
                 TradeCompanyRecordKinds.Order,
@@ -268,7 +282,8 @@ public sealed class DiscordPublicationService(
                 JsonSerializer.Serialize(publishedOrder, JsonOptions),
                 orderRevision,
                 $"publication-order:{idempotencyKey}",
-                cancellationToken);
+                cancellationToken,
+                expectedCompanyRevision);
             if (!orderMutation.Success)
             {
                 var current = await orders.LoadOrderAsync(
@@ -407,11 +422,26 @@ public sealed class DiscordPublicationService(
                 "The failed publication destination no longer matches the company's ready Discord installation.");
         }
 
+        var restoredState = ResolvePublicationState(order.Order);
+        var claimUrl = await IssueClaimUrlAsync(
+            order.Order,
+            publicUrl,
+            restoredState,
+            cancellationToken);
+        var payload = DiscordCommissionMessage.CreateWithPublicUrl(
+            published,
+            publicUrl,
+            restoredState,
+            restoredState == DiscordPublicationState.Open
+                ? publication.ActionToken
+                : null,
+            claimUrl: claimUrl);
         return await collaboration.RetryFailedPublicationAsync(
             access.CompanyId,
             publication.PublicationId,
             publicId,
-            ResolvePublicationState(order.Order),
+            restoredState,
+            JsonSerializer.Serialize(payload, JsonOptions),
             timeProvider.GetUtcNow(),
             cancellationToken);
     }
@@ -452,12 +482,50 @@ public sealed class DiscordPublicationService(
         Guid orderId,
         CancellationToken cancellationToken = default)
     {
+        var order = await orders.LoadOrderAsync(access, orderId, cancellationToken);
+        if (order == null)
+        {
+            return;
+        }
+
+        await RefreshOrderCoreAsync(
+            access,
+            order.Order,
+            order.Envelope.RecordRevision,
+            companyRevision: null,
+            cancellationToken);
+    }
+
+    public Task RefreshCommittedCommissionAsync(
+        TradeCompanyAccessContext access,
+        HostedCompanyCommissionSnapshot committed,
+        CancellationToken cancellationToken = default) =>
+        RefreshOrderCoreAsync(
+            access,
+            committed.Order,
+            committed.Envelope.RecordRevision,
+            committed.CompanyRevision,
+            cancellationToken);
+
+    private async Task RefreshOrderCoreAsync(
+        TradeCompanyAccessContext access,
+        TradeOrder order,
+        CompanyRecordRevision objectRevision,
+        CompanyRecordRevision? companyRevision,
+        CancellationToken cancellationToken)
+    {
+        if (objectRevision.Value <= 0 ||
+            companyRevision is { Value: <= 0 })
+        {
+            throw new InvalidOperationException(
+                "Discord commission projection requires authoritative hosted revisions.");
+        }
+
         var publication = await collaboration.LoadPublicationByOrderAsync(
             access.CompanyId,
-            orderId,
+            order.Id,
             cancellationToken);
-        var order = await orders.LoadOrderAsync(access, orderId, cancellationToken);
-        if (publication == null || order == null)
+        if (publication == null)
         {
             return;
         }
@@ -466,7 +534,7 @@ public sealed class DiscordPublicationService(
             ?? throw new InvalidOperationException(
                 "An active Discord publication no longer has immutable commission terms.");
         string? assignmentLabel = null;
-        if (order.Order.AssignedCrafterId is { } crafterId)
+        if (order.AssignedCrafterId is { } crafterId)
         {
             var crafter = await orders.LoadCrafterAsync(access, crafterId, cancellationToken);
             assignmentLabel = crafter == null
@@ -474,22 +542,28 @@ public sealed class DiscordPublicationService(
                 : $"Assigned to {crafter.Crafter.DisplayName}";
         }
 
-        var state = ResolvePublicationState(order.Order);
+        var state = ResolvePublicationState(order);
         if (!TryResolveCanonicalPublicUrl(publication.PublicId, out var publicUrl) ||
             !string.Equals(
-                order.Order.CommissionPublication?.PublicUrl,
+                order.CommissionPublication?.PublicUrl,
                 publicUrl,
                 StringComparison.Ordinal))
         {
             return;
         }
 
+        var claimUrl = await IssueClaimUrlAsync(
+            order,
+            publicUrl,
+            state,
+            cancellationToken);
         var payload = DiscordCommissionMessage.CreateWithPublicUrl(
             published,
             publicUrl,
             state,
             state == DiscordPublicationState.Open ? publication.ActionToken : null,
-            assignmentLabel);
+            assignmentLabel,
+            claimUrl);
         await collaboration.EnqueueProjectionAsync(
             publication.PublicationId,
             state,
@@ -497,6 +571,46 @@ public sealed class DiscordPublicationService(
             JsonSerializer.Serialize(payload, JsonOptions),
             timeProvider.GetUtcNow(),
             cancellationToken);
+    }
+
+    private async Task<string?> IssueClaimUrlAsync(
+        TradeOrder order,
+        string publicUrl,
+        DiscordPublicationState state,
+        CancellationToken cancellationToken)
+    {
+        var commission = order.CompanyCommission;
+        if (state != DiscordPublicationState.Open ||
+            commission == null ||
+            commission.ActiveClaim != null ||
+            commission.ActiveClaimCapabilityRevision <= 0 ||
+            commission.PublicMetadata.ViewState !=
+                CompanyCommissionPublicViewState.Published ||
+            !string.Equals(
+                commission.PublicMetadata.PublicBriefId,
+                order.CommissionPublication?.PublicId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                commission.PublicMetadata.PublicUrl,
+                publicUrl,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var issued = await capabilities.IssueAsync(
+            commission.CompanyId,
+            commission.CommissionId,
+            commission.PublicMetadata.PublicBriefId,
+            CompanyCommissionCapabilityKind.Claim,
+            grantId: null,
+            commission.ActiveClaimCapabilityRevision,
+            timeProvider.GetUtcNow().UtcDateTime,
+            cancellationToken);
+        return SqliteCompanyCommissionCapabilityStore.BuildFragmentUrl(
+            publicUrl,
+            "claim",
+            issued.PlaintextToken);
     }
 
     private async Task DiscardUncommittedBriefAsync(

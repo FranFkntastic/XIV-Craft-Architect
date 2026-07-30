@@ -60,6 +60,7 @@ public sealed class ProfileSyncPutResponse
 {
     public bool Success { get; set; }
     public bool Conflict { get; set; }
+    public long ServerRevision { get; set; }
     public ProfileSyncObjectEnvelope? Object { get; set; }
     public ProfileSyncObjectEnvelope? RemoteObject { get; set; }
     public string? ErrorCode { get; set; }

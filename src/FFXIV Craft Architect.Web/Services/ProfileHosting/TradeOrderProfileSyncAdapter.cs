@@ -40,7 +40,7 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             order.CompanyProfileId,
             "order",
             envelope.ObjectId);
-        if (!await _tradeOperations.SaveOrderAsync(order))
+        if (!await _tradeOperations.ApplyCanonicalOrderAsync(order))
         {
             throw new InvalidOperationException(
                 $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");

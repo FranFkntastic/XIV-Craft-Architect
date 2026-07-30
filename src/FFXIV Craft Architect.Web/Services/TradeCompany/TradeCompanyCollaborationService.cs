@@ -232,7 +232,7 @@ public sealed class TradeCompanyCollaborationService(
             order,
             expectedOwnership,
             published);
-        if (!await tradeOperations.SaveOrderAsync(hostedOrder))
+        if (!await tradeOperations.ApplyCanonicalOrderAsync(hostedOrder))
         {
             throw new InvalidOperationException(
                 "The company brief was attached by Profile Hosting, but browser storage could not apply the authoritative order.");
@@ -313,7 +313,7 @@ public sealed class TradeCompanyCollaborationService(
 
             if (receipt.UpdatedOrder != null)
             {
-                if (!await tradeOperations.SaveOrderAsync(receipt.UpdatedOrder))
+                if (!await tradeOperations.ApplyCanonicalOrderAsync(receipt.UpdatedOrder))
                 {
                     return Rejected(
                         "The hosted assignment was accepted, but the order could not be saved locally.");

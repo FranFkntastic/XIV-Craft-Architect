@@ -40,6 +40,16 @@ public interface IDiscordApiClient
         string channelId,
         string messageId,
         CancellationToken cancellationToken = default);
+
+    Task<DiscordApiResult> CreateNotificationMessageAsync(
+        string channelId,
+        object payload,
+        string? allowedMentionUserId,
+        CancellationToken cancellationToken = default);
+
+    Task<DiscordApiResult> ResolveDirectMessageChannelAsync(
+        string recipientUserId,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class DiscordApiClient(
@@ -60,6 +70,7 @@ public sealed class DiscordApiClient(
             messageId: null,
             payload,
             createOperation: true,
+            allowedMentionUserId: null,
             cancellationToken);
 
     public Task<DiscordApiResult> EditMessageAsync(
@@ -73,6 +84,7 @@ public sealed class DiscordApiClient(
             messageId,
             payload,
             createOperation: false,
+            allowedMentionUserId: null,
             cancellationToken);
 
     public Task<DiscordApiResult> GetMessageAsync(
@@ -85,7 +97,91 @@ public sealed class DiscordApiClient(
             messageId,
             payload: null,
             createOperation: false,
+            allowedMentionUserId: null,
             cancellationToken);
+
+    public Task<DiscordApiResult> CreateNotificationMessageAsync(
+        string channelId,
+        object payload,
+        string? allowedMentionUserId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync(
+            HttpMethod.Post,
+            channelId,
+            messageId: null,
+            payload,
+            createOperation: true,
+            allowedMentionUserId,
+            cancellationToken);
+
+    public async Task<DiscordApiResult> ResolveDirectMessageChannelAsync(
+        string recipientUserId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!options.CanPublishDirectly ||
+            !IsDiscordSnowflake(recipientUserId))
+        {
+            return new DiscordApiResult(
+                DiscordApiOutcome.TerminalFailure,
+                Error: "Discord DM delivery is disabled or has an invalid recipient.");
+        }
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "users/@me/channels")
+        {
+            Content = JsonContent.Create(new
+            {
+                recipient_id = recipientUserId
+            })
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bot", options.BotToken);
+        request.Headers.UserAgent.ParseAdd("FFXIV-Craft-Architect/1.0");
+        try
+        {
+            using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                var channelId = await ReadMessageIdAsync(response, cancellationToken);
+                return IsDiscordSnowflake(channelId ?? string.Empty)
+                    ? new DiscordApiResult(
+                        DiscordApiOutcome.Succeeded,
+                        channelId,
+                        response.StatusCode)
+                    : new DiscordApiResult(
+                        DiscordApiOutcome.RetryableFailure,
+                        StatusCode: response.StatusCode,
+                        Error: "Discord returned a DM channel without a valid identity.");
+            }
+
+            return (int)response.StatusCode >= 500 ||
+                response.StatusCode == HttpStatusCode.TooManyRequests
+                    ? new DiscordApiResult(
+                        DiscordApiOutcome.RetryableFailure,
+                        StatusCode: response.StatusCode,
+                        Error: await ReadErrorAsync(response, cancellationToken))
+                    : new DiscordApiResult(
+                        DiscordApiOutcome.TerminalFailure,
+                        StatusCode: response.StatusCode,
+                        Error: await ReadErrorAsync(response, cancellationToken));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new DiscordApiResult(
+                DiscordApiOutcome.RetryableFailure,
+                Error: "Discord DM channel resolution timed out.");
+        }
+        catch (HttpRequestException exception)
+        {
+            logger.LogWarning(exception, "Discord DM channel resolution failed before a response.");
+            return new DiscordApiResult(
+                DiscordApiOutcome.RetryableFailure,
+                Error: "Discord DM channel resolution failed before a response.");
+        }
+    }
 
     private async Task<DiscordApiResult> SendAsync(
         HttpMethod method,
@@ -93,12 +189,14 @@ public sealed class DiscordApiClient(
         string? messageId,
         object? payload,
         bool createOperation,
+        string? allowedMentionUserId,
         CancellationToken cancellationToken)
     {
         if (!options.CanPublishDirectly ||
             !IsDiscordSnowflake(channelId) ||
             (method != HttpMethod.Post && string.IsNullOrWhiteSpace(messageId)) ||
-            (payload != null && !HasMentionSuppression(payload)))
+            (payload != null &&
+                !HasSafeAllowedMentions(payload, allowedMentionUserId)))
         {
             return new DiscordApiResult(
                 DiscordApiOutcome.TerminalFailure,
@@ -225,15 +323,51 @@ public sealed class DiscordApiClient(
         value.Length is >= 17 and <= 20 &&
         value.All(char.IsAsciiDigit);
 
-    private static bool HasMentionSuppression(object payload)
+    private static bool HasSafeAllowedMentions(
+        object payload,
+        string? allowedMentionUserId)
     {
         try
         {
             var json = JsonSerializer.SerializeToElement(payload);
-            return json.TryGetProperty("allowed_mentions", out var allowedMentions) &&
-                allowedMentions.TryGetProperty("parse", out var parse) &&
-                parse.ValueKind == JsonValueKind.Array &&
-                parse.GetArrayLength() == 0;
+            if (!json.TryGetProperty("allowed_mentions", out var allowedMentions) ||
+                allowedMentions.ValueKind != JsonValueKind.Object ||
+                !allowedMentions.TryGetProperty("parse", out var parse) ||
+                parse.ValueKind != JsonValueKind.Array ||
+                parse.GetArrayLength() != 0 ||
+                allowedMentions.TryGetProperty("roles", out var roles) &&
+                (roles.ValueKind != JsonValueKind.Array || roles.GetArrayLength() != 0) ||
+                allowedMentions.TryGetProperty("replied_user", out var repliedUser) &&
+                repliedUser.ValueKind != JsonValueKind.False ||
+                allowedMentions.EnumerateObject().Any(property =>
+                    property.Name is not
+                        ("parse" or "users" or "roles" or "replied_user")))
+            {
+                return false;
+            }
+
+            if (!allowedMentions.TryGetProperty("users", out var users))
+            {
+                return string.IsNullOrWhiteSpace(allowedMentionUserId);
+            }
+
+            if (users.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(allowedMentionUserId))
+            {
+                return users.GetArrayLength() == 0;
+            }
+
+            return IsDiscordSnowflake(allowedMentionUserId) &&
+                users.GetArrayLength() == 1 &&
+                users[0].ValueKind == JsonValueKind.String &&
+                string.Equals(
+                    users[0].GetString(),
+                    allowedMentionUserId,
+                    StringComparison.Ordinal);
         }
         catch (Exception exception) when (exception is JsonException or NotSupportedException)
         {
