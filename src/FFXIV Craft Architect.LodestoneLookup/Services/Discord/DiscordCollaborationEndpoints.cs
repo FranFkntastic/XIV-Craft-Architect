@@ -19,45 +19,12 @@ public sealed record DiscordCompanyPublicationResponse(
     string DestinationLabel,
     string? Message);
 
-public sealed record DiscordAcceptInterestRequest(
-    Guid CrafterId,
-    string IdempotencyKey);
-
-public sealed record DiscordDeclineInterestRequest(string IdempotencyKey);
-
 public static class DiscordCollaborationEndpoints
 {
     public static RouteGroupBuilder MapDiscordCollaborationEndpoints(
         this IEndpointRouteBuilder routes)
     {
         var group = routes.MapGroup("/trade/v1/companies/{companyId}/discord");
-
-        group.MapGet(
-            "/claims",
-            async (
-                string companyId,
-                Guid? orderId,
-                HttpRequest request,
-                TradeCompanyAuthorization authorization,
-                DiscordClaimService claims,
-                CancellationToken cancellationToken) =>
-            {
-                var access = await ResolveAccessAsync(
-                    companyId,
-                    request,
-                    authorization,
-                    cancellationToken);
-                if (access == null)
-                {
-                    return Results.Unauthorized();
-                }
-
-                var pending = await claims.LoadPendingAsync(
-                    access,
-                    orderId,
-                    cancellationToken);
-                return Results.Ok(pending);
-            });
 
         group.MapPost(
             "/publications",
@@ -272,115 +239,6 @@ public static class DiscordCollaborationEndpoints
 
                 await publications.RevokeAsync(publicId, cancellationToken);
                 return Results.NoContent();
-            });
-
-        group.MapPost(
-            "/claims/{claimId:guid}/accept",
-            async (
-                string companyId,
-                Guid claimId,
-                DiscordAcceptInterestRequest body,
-                HttpRequest request,
-                TradeCompanyAuthorization authorization,
-                DiscordClaimService claims,
-                DiscordPublicationService publications,
-                CancellationToken cancellationToken) =>
-            {
-                var access = await ResolveAccessAsync(
-                    companyId,
-                    request,
-                    authorization,
-                    cancellationToken);
-                if (access == null)
-                {
-                    return Results.Unauthorized();
-                }
-
-                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
-                {
-                    return Results.Forbid();
-                }
-
-                if (body == null ||
-                    body.CrafterId == Guid.Empty ||
-                    string.IsNullOrWhiteSpace(body.IdempotencyKey))
-                {
-                    return Results.BadRequest(new
-                    {
-                        error = "invalid_acceptance",
-                        message = "An explicit crafter and idempotency key are required."
-                    });
-                }
-
-                var result = await claims.AcceptAsync(
-                    access,
-                    claimId,
-                    body.CrafterId,
-                    body.IdempotencyKey,
-                    cancellationToken);
-                if (result.Success && result.Claim != null)
-                {
-                    await publications.RefreshOrderAsync(
-                        access,
-                        result.Claim.OrderId,
-                        cancellationToken);
-                }
-                return result.Status switch
-                {
-                    DiscordOperatorClaimStatus.Applied or
-                    DiscordOperatorClaimStatus.Replayed => Results.Ok(result),
-                    DiscordOperatorClaimStatus.Missing => Results.NotFound(result),
-                    _ => Results.Conflict(result)
-                };
-            });
-
-        group.MapPost(
-            "/claims/{claimId:guid}/decline",
-            async (
-                string companyId,
-                Guid claimId,
-                DiscordDeclineInterestRequest body,
-                HttpRequest request,
-                TradeCompanyAuthorization authorization,
-                DiscordClaimService claims,
-                CancellationToken cancellationToken) =>
-            {
-                var access = await ResolveAccessAsync(
-                    companyId,
-                    request,
-                    authorization,
-                    cancellationToken);
-                if (access == null)
-                {
-                    return Results.Unauthorized();
-                }
-
-                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
-                {
-                    return Results.Forbid();
-                }
-
-                if (body == null || string.IsNullOrWhiteSpace(body.IdempotencyKey))
-                {
-                    return Results.BadRequest(new
-                    {
-                        error = "invalid_decline",
-                        message = "A decline idempotency key is required."
-                    });
-                }
-
-                var result = await claims.DeclineAsync(
-                    access,
-                    claimId,
-                    body.IdempotencyKey,
-                    cancellationToken);
-                return result.Status switch
-                {
-                    DiscordOperatorClaimStatus.Applied or
-                    DiscordOperatorClaimStatus.Replayed => Results.Ok(result),
-                    DiscordOperatorClaimStatus.Missing => Results.NotFound(result),
-                    _ => Results.Conflict(result)
-                };
             });
 
         return group;
