@@ -138,8 +138,14 @@ public sealed partial class SqliteProfileHostStore
                 {
                     Disposition: ProfileHostMigrationObjectDisposition.SameIdDifferentContent,
                     Resolution: ProfileHostMigrationConflictResolution.UseIncoming
+                } ||
+                assessment is
+                {
+                    Disposition: ProfileHostMigrationObjectDisposition.AuthoritativeTombstone,
+                    Resolution: ProfileHostMigrationConflictResolution.ResurrectIncoming
                 };
             long revision;
+            var deleted = false;
             if (shouldWrite)
             {
                 revision = await ReserveNextRevisionAsync(
@@ -158,18 +164,22 @@ public sealed partial class SqliteProfileHostStore
             }
             else
             {
-                revision = authoritative.TryGetValue(identity, out var current) &&
-                    !current.Deleted
-                        ? current.Revision
-                        : throw new InvalidOperationException(
-                            "A resolved hosted migration object lost its authoritative revision.");
+                if (!authoritative.TryGetValue(identity, out var current))
+                {
+                    throw new InvalidOperationException(
+                        "A resolved hosted migration object lost its authoritative revision.");
+                }
+
+                revision = current.Revision;
+                deleted = current.Deleted;
             }
 
             committed.Add(new ProfileHostMigrationAuthoritativeObject
             {
                 Collection = assessment.Collection,
                 ObjectId = assessment.ObjectId,
-                Revision = revision
+                Revision = revision,
+                Deleted = deleted
             });
         }
 
@@ -309,10 +319,14 @@ public sealed partial class SqliteProfileHostStore
 
             var disposition = ProfileHostMigrationObjectDisposition.Insert;
             long? authoritativeRevision = null;
+            var authoritativeDeleted = false;
+            DateTime? authoritativeDeletedAtUtc = null;
             string? authoritativeHash = null;
-            if (authoritative.TryGetValue(identity, out var current) && !current.Deleted)
+            if (authoritative.TryGetValue(identity, out var current))
             {
                 authoritativeRevision = current.Revision;
+                authoritativeDeleted = current.Deleted;
+                authoritativeDeletedAtUtc = current.DeletedAtUtc;
                 if (!TryCanonicalizeJson(
                         current.PayloadJson,
                         out var authoritativeCanonical,
@@ -322,28 +336,58 @@ public sealed partial class SqliteProfileHostStore
                     authoritativeHash = HashText(authoritativeCanonical);
                 }
 
-                disposition = string.Equals(
-                        canonical,
-                        authoritativeCanonical,
-                        StringComparison.Ordinal)
-                    ? ProfileHostMigrationObjectDisposition.Identical
-                    : ProfileHostMigrationObjectDisposition.SameIdDifferentContent;
+                disposition = current.Deleted
+                    ? ProfileHostMigrationObjectDisposition.AuthoritativeTombstone
+                    : string.Equals(
+                            canonical,
+                            authoritativeCanonical,
+                            StringComparison.Ordinal)
+                        ? ProfileHostMigrationObjectDisposition.Identical
+                        : ProfileHostMigrationObjectDisposition.SameIdDifferentContent;
             }
 
             resolutionMap.TryGetValue(identity, out var selectedResolution);
             ProfileHostMigrationConflictResolution? resolution =
                 resolutionMap.ContainsKey(identity) ? selectedResolution : null;
-            if (disposition == ProfileHostMigrationObjectDisposition.SameIdDifferentContent &&
-                resolution == null)
+            var requiresResolution = disposition is
+                ProfileHostMigrationObjectDisposition.SameIdDifferentContent or
+                ProfileHostMigrationObjectDisposition.AuthoritativeTombstone;
+            if (requiresResolution && resolution == null)
             {
                 AddBlocker(
                     blockers,
                     ProfileHostMigrationBlockerCodes.ResolutionRequired,
-                    "The same hosted object ID has different content and requires an explicit resolution.",
+                    disposition == ProfileHostMigrationObjectDisposition.AuthoritativeTombstone
+                        ? "The authoritative object is deleted. Explicitly keep the deletion or resurrect the incoming object."
+                        : "The same hosted object ID has different content and requires an explicit resolution.",
                     collection,
                     objectId);
             }
-            else if (disposition != ProfileHostMigrationObjectDisposition.SameIdDifferentContent &&
+            else if (disposition ==
+                         ProfileHostMigrationObjectDisposition.SameIdDifferentContent &&
+                     resolution == ProfileHostMigrationConflictResolution.ResurrectIncoming)
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.UnexpectedResolution,
+                    "Resurrection is only valid when the authoritative object is deleted.",
+                    collection,
+                    objectId);
+            }
+            else if (disposition ==
+                         ProfileHostMigrationObjectDisposition.AuthoritativeTombstone &&
+                     resolution == ProfileHostMigrationConflictResolution.UseIncoming)
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.UnexpectedResolution,
+                    "A deleted authoritative object requires the explicit resurrection resolution.",
+                    collection,
+                    objectId);
+            }
+            else if (disposition is not (
+                         ProfileHostMigrationObjectDisposition.SameIdDifferentContent or
+                         ProfileHostMigrationObjectDisposition.AuthoritativeTombstone) &&
                      resolution != null)
             {
                 AddBlocker(
@@ -361,6 +405,8 @@ public sealed partial class SqliteProfileHostStore
                 Disposition = disposition,
                 Resolution = resolution,
                 AuthoritativeRevision = authoritativeRevision,
+                AuthoritativeDeleted = authoritativeDeleted,
+                AuthoritativeDeletedAtUtc = authoritativeDeletedAtUtc,
                 IncomingContentHash = incomingHash,
                 AuthoritativeContentHash = authoritativeHash
             });
@@ -390,16 +436,23 @@ public sealed partial class SqliteProfileHostStore
         {
             var identity = (assessment.Collection, assessment.ObjectId);
             if (assessment.Disposition == ProfileHostMigrationObjectDisposition.Insert ||
-                assessment.Resolution == ProfileHostMigrationConflictResolution.UseIncoming)
+                assessment.Resolution is
+                    ProfileHostMigrationConflictResolution.UseIncoming or
+                    ProfileHostMigrationConflictResolution.ResurrectIncoming)
             {
                 finalObjects[identity] = inputs[identity].PayloadJson ?? string.Empty;
             }
         }
 
         var validator = new MigrationGraphValidator(finalObjects, blockers);
-        foreach (var identity in inputs.Keys)
+        foreach (var assessment in assessments)
         {
-            if (ProfileSyncCollections.All.Contains(identity.Collection))
+            var identity = (assessment.Collection, assessment.ObjectId);
+            if (ProfileSyncCollections.All.Contains(identity.Collection) &&
+                (assessment.Disposition !=
+                    ProfileHostMigrationObjectDisposition.AuthoritativeTombstone ||
+                 assessment.Resolution ==
+                    ProfileHostMigrationConflictResolution.ResurrectIncoming))
             {
                 validator.Validate(identity);
             }
@@ -611,6 +664,10 @@ public sealed partial class SqliteProfileHostStore
                 ? ((int)item.Resolution.Value).ToString()
                 : string.Empty);
             AppendHashPart(builder, item.AuthoritativeRevision?.ToString() ?? string.Empty);
+            AppendHashPart(builder, item.AuthoritativeDeleted ? "1" : "0");
+            AppendHashPart(
+                builder,
+                item.AuthoritativeDeletedAtUtc?.ToUniversalTime().ToString("O") ?? string.Empty);
             AppendHashPart(builder, item.IncomingContentHash);
             AppendHashPart(builder, item.AuthoritativeContentHash ?? string.Empty);
         }
@@ -641,6 +698,7 @@ public sealed partial class SqliteProfileHostStore
             AppendHashPart(builder, item.Collection);
             AppendHashPart(builder, item.ObjectId);
             AppendHashPart(builder, item.Revision.ToString());
+            AppendHashPart(builder, item.Deleted ? "1" : "0");
         }
 
         return HashText(builder.ToString());

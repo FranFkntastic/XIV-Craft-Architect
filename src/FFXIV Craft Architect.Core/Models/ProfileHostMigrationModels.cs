@@ -30,13 +30,15 @@ public enum ProfileHostMigrationObjectDisposition
 {
     Insert,
     Identical,
-    SameIdDifferentContent
+    SameIdDifferentContent,
+    AuthoritativeTombstone
 }
 
 public enum ProfileHostMigrationConflictResolution
 {
     KeepAuthoritative,
-    UseIncoming
+    UseIncoming,
+    ResurrectIncoming
 }
 
 public sealed class ProfileHostMigrationObjectInput
@@ -79,6 +81,8 @@ public sealed class ProfileHostMigrationObjectAssessment
     public ProfileHostMigrationObjectDisposition Disposition { get; set; }
     public ProfileHostMigrationConflictResolution? Resolution { get; set; }
     public long? AuthoritativeRevision { get; set; }
+    public bool AuthoritativeDeleted { get; set; }
+    public DateTime? AuthoritativeDeletedAtUtc { get; set; }
     public string IncomingContentHash { get; set; } = string.Empty;
     public string? AuthoritativeContentHash { get; set; }
 }
@@ -110,6 +114,7 @@ public sealed class ProfileHostMigrationAuthoritativeObject
     public string Collection { get; set; } = string.Empty;
     public string ObjectId { get; set; } = string.Empty;
     public long Revision { get; set; }
+    public bool Deleted { get; set; }
 }
 
 public sealed class ProfileHostMigrationCommitResponse
