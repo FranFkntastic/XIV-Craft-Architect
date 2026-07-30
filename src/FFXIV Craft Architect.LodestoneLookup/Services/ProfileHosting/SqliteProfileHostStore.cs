@@ -129,7 +129,7 @@ public sealed partial class SqliteProfileHostStore
 
             if (!keyMatches)
             {
-                var now = DateTime.UtcNow.ToString("O");
+                var reconciliationTimestamp = DateTime.UtcNow.ToString("O");
                 await using (var revokeKeys = connection.CreateCommand())
                 {
                     revokeKeys.Transaction = (SqliteTransaction)transaction;
@@ -140,7 +140,7 @@ public sealed partial class SqliteProfileHostStore
                         WHERE profile_id = $profileId AND revoked_at_utc IS NULL;
                         """;
                     revokeKeys.Parameters.AddWithValue("$profileId", profileId);
-                    revokeKeys.Parameters.AddWithValue("$revokedAtUtc", now);
+                    revokeKeys.Parameters.AddWithValue("$revokedAtUtc", reconciliationTimestamp);
                     await revokeKeys.ExecuteNonQueryAsync(ct);
                 }
 
@@ -154,7 +154,7 @@ public sealed partial class SqliteProfileHostStore
                 insertKey.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
                 insertKey.Parameters.AddWithValue("$profileId", profileId);
                 insertKey.Parameters.AddWithValue("$keyHash", hasher.Hash(plaintextKey));
-                insertKey.Parameters.AddWithValue("$createdAtUtc", now);
+                insertKey.Parameters.AddWithValue("$createdAtUtc", reconciliationTimestamp);
                 await insertKey.ExecuteNonQueryAsync(ct);
             }
 
