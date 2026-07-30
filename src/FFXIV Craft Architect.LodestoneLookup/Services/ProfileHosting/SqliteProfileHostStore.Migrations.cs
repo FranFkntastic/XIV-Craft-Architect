@@ -2,6 +2,7 @@ using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using FFXIV_Craft_Architect.Core.Models;
 using Microsoft.Data.Sqlite;
 
@@ -58,7 +59,8 @@ public sealed partial class SqliteProfileHostStore
         {
             MigrationId = request.MigrationId,
             Objects = request.Objects ?? Array.Empty<ProfileHostMigrationObjectInput>(),
-            Resolutions = request.Resolutions ?? Array.Empty<ProfileHostMigrationResolution>()
+            Resolutions = request.Resolutions ?? Array.Empty<ProfileHostMigrationResolution>(),
+            Mappings = request.Mappings ?? Array.Empty<ProfileHostMigrationCanonicalMapping>()
         };
         var requestHash = ComputeRequestHash(preflightRequest);
         var receipt = await LoadMigrationReceiptAsync(
@@ -116,9 +118,33 @@ public sealed partial class SqliteProfileHostStore
             return new ProfileHostMigrationCommitAttempt(null, preflight);
         }
 
+        var mappingMap = preflight.Mappings.ToDictionary(
+            item => (item.Collection, item.SourceObjectId),
+            item => item.TargetObjectId,
+            StringTupleComparer.Ordinal);
         var inputs = preflightRequest.Objects
             .Where(item => ProfileSyncCollections.All.Contains(item.Collection))
-            .ToDictionary(MigrationIdentity, StringTupleComparer.Ordinal);
+            .ToDictionary(
+                MigrationIdentity,
+                item =>
+                {
+                    var sourceIdentity = MigrationIdentity(item);
+                    var targetId = mappingMap.GetValueOrDefault(
+                        sourceIdentity,
+                        sourceIdentity.ObjectId);
+                    if (!TryRewriteMigrationInput(
+                            item,
+                            targetId,
+                            mappingMap,
+                            out var rewritten,
+                            out var error))
+                    {
+                        throw new InvalidOperationException(error);
+                    }
+
+                    return rewritten;
+                },
+                StringTupleComparer.Ordinal);
         var authoritative = await LoadMigrationObjectsAsync(
             connection,
             transaction,
@@ -131,7 +157,8 @@ public sealed partial class SqliteProfileHostStore
                      .OrderBy(item => item.Collection, StringComparer.Ordinal)
                      .ThenBy(item => item.ObjectId, StringComparer.Ordinal))
         {
-            var identity = (assessment.Collection, assessment.ObjectId);
+            var sourceIdentity = (assessment.Collection, assessment.ObjectId);
+            var identity = (assessment.Collection, assessment.CanonicalObjectId);
             var shouldWrite = ShouldWriteMigrationObject(assessment);
             long revision;
             var deleted = false;
@@ -146,7 +173,7 @@ public sealed partial class SqliteProfileHostStore
                     connection,
                     transaction,
                     profileId,
-                    inputs[identity],
+                    inputs[sourceIdentity],
                     revision,
                     now,
                     ct);
@@ -166,7 +193,8 @@ public sealed partial class SqliteProfileHostStore
             committed.Add(new ProfileHostMigrationAuthoritativeObject
             {
                 Collection = assessment.Collection,
-                ObjectId = assessment.ObjectId,
+                SourceObjectId = assessment.ObjectId,
+                ObjectId = assessment.CanonicalObjectId,
                 Revision = revision,
                 Deleted = deleted
             });
@@ -182,7 +210,8 @@ public sealed partial class SqliteProfileHostStore
             MigrationId = request.MigrationId,
             RequestHash = requestHash,
             ServerRevision = serverRevision,
-            Objects = committed
+            Objects = committed,
+            Mappings = preflight.Mappings
         };
         response.ReceiptHash = ComputeReceiptHash(profileId, response);
         var responseJson = JsonSerializer.Serialize(response, MigrationJsonOptions);
@@ -209,6 +238,7 @@ public sealed partial class SqliteProfileHostStore
         var assessments = new List<ProfileHostMigrationObjectAssessment>();
         var objects = request.Objects ?? Array.Empty<ProfileHostMigrationObjectInput>();
         var resolutions = request.Resolutions ?? Array.Empty<ProfileHostMigrationResolution>();
+        var mappings = request.Mappings ?? Array.Empty<ProfileHostMigrationCanonicalMapping>();
         var requestHash = ComputeRequestHash(request);
         if (request.MigrationId == Guid.Empty)
         {
@@ -306,8 +336,8 @@ public sealed partial class SqliteProfileHostStore
 
             if (!TryCanonicalizeJson(
                     input!.PayloadJson ?? string.Empty,
-                    out var canonical,
-                    out var incomingHash))
+                    out _,
+                    out _))
             {
                 AddBlocker(
                     blockers,
@@ -317,13 +347,176 @@ public sealed partial class SqliteProfileHostStore
                     objectId);
                 continue;
             }
+        }
+
+        var mappingMap = new Dictionary<
+            (string Collection, string ObjectId),
+            string>(StringTupleComparer.Ordinal);
+        foreach (var mapping in mappings)
+        {
+            var collection = mapping?.Collection ?? string.Empty;
+            var sourceObjectId = mapping?.SourceObjectId ?? string.Empty;
+            var targetObjectId = mapping?.TargetObjectId ?? string.Empty;
+            var sourceIdentity = (collection, sourceObjectId);
+            if (!ProfileSyncCollections.All.Contains(collection) ||
+                string.IsNullOrWhiteSpace(sourceObjectId) ||
+                string.IsNullOrWhiteSpace(targetObjectId) ||
+                string.Equals(sourceObjectId, targetObjectId, StringComparison.Ordinal))
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.InvalidCanonicalMapping,
+                    "A canonical mapping must name one supported collection and distinct non-empty source and target IDs.",
+                    collection,
+                    sourceObjectId,
+                    collection,
+                    targetObjectId);
+                continue;
+            }
+
+            if (IsGuidIdentityCollection(collection))
+            {
+                if (!Guid.TryParse(sourceObjectId, out var sourceGuid) ||
+                    sourceGuid == Guid.Empty ||
+                    !Guid.TryParse(targetObjectId, out var targetGuid) ||
+                    targetGuid == Guid.Empty)
+                {
+                    AddBlocker(
+                        blockers,
+                        ProfileHostMigrationBlockerCodes.InvalidCanonicalMapping,
+                        "Trade company, crafter, and order mappings require non-empty GUID source and target IDs.",
+                        collection,
+                        sourceObjectId,
+                        collection,
+                        targetObjectId);
+                    continue;
+                }
+
+                targetObjectId = targetGuid.ToString("D");
+            }
+
+            if (!inputs.ContainsKey(sourceIdentity))
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.InvalidCanonicalMapping,
+                    "A canonical mapping source does not identify an incoming object.",
+                    collection,
+                    sourceObjectId,
+                    collection,
+                    targetObjectId);
+                continue;
+            }
+
+            if (!mappingMap.TryAdd(sourceIdentity, targetObjectId))
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.InvalidCanonicalMapping,
+                    "An incoming object has more than one canonical target.",
+                    collection,
+                    sourceObjectId,
+                    collection,
+                    targetObjectId);
+            }
+        }
+
+        foreach (var mapping in mappingMap)
+        {
+            if (mappingMap.ContainsKey((mapping.Key.Collection, mapping.Value)))
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.InvalidCanonicalMapping,
+                    "Canonical mappings must be one hop; chains and cycles are not accepted.",
+                    mapping.Key.Collection,
+                    mapping.Key.ObjectId,
+                    mapping.Key.Collection,
+                    mapping.Value);
+            }
+        }
+
+        foreach (var group in inputs.Keys.GroupBy(
+                     identity => (
+                         identity.Collection,
+                         ObjectId: mappingMap.GetValueOrDefault(identity, identity.ObjectId)),
+                     StringTupleComparer.Ordinal))
+        {
+            if (group.Count() <= 1)
+            {
+                continue;
+            }
+
+            foreach (var source in group)
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.CanonicalTargetConflict,
+                    "Multiple incoming objects resolve to the same canonical identity.",
+                    source.Collection,
+                    source.ObjectId,
+                    group.Key.Collection,
+                    group.Key.ObjectId);
+            }
+        }
+
+        var canonicalInputs = new Dictionary<
+            (string Collection, string ObjectId),
+            ProfileHostMigrationObjectInput>(StringTupleComparer.Ordinal);
+        foreach (var pair in inputs)
+        {
+            var targetObjectId = mappingMap.GetValueOrDefault(
+                pair.Key,
+                pair.Key.ObjectId);
+            if (!TryRewriteMigrationInput(
+                    pair.Value,
+                    targetObjectId,
+                    mappingMap,
+                    out var rewritten,
+                    out var rewriteError))
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.InvalidPayload,
+                    rewriteError,
+                    pair.Key.Collection,
+                    pair.Key.ObjectId);
+                continue;
+            }
+
+            canonicalInputs[pair.Key] = rewritten;
+        }
+
+        foreach (var pair in canonicalInputs)
+        {
+            var sourceIdentity = pair.Key;
+            var targetIdentity = (pair.Key.Collection, pair.Value.ObjectId);
+            resolutionMap.TryGetValue(sourceIdentity, out var selectedResolution);
+            ProfileHostMigrationConflictResolution? resolution =
+                resolutionMap.ContainsKey(sourceIdentity) ? selectedResolution : null;
+            var classifyIdentity =
+                resolution == ProfileHostMigrationConflictResolution.KeepBothAsCopy
+                    ? sourceIdentity
+                    : targetIdentity;
+            var payloadForClassification =
+                resolution == ProfileHostMigrationConflictResolution.KeepBothAsCopy
+                    ? inputs[sourceIdentity].PayloadJson ?? string.Empty
+                    : pair.Value.PayloadJson ?? string.Empty;
+            TryCanonicalizeJson(
+                payloadForClassification,
+                out var canonicalForClassification,
+                out _);
+            TryCanonicalizeJson(
+                pair.Value.PayloadJson ?? string.Empty,
+                out _,
+                out var incomingHash);
 
             var disposition = ProfileHostMigrationObjectDisposition.Insert;
             long? authoritativeRevision = null;
             var authoritativeDeleted = false;
             DateTime? authoritativeDeletedAtUtc = null;
             string? authoritativeHash = null;
-            if (authoritative.TryGetValue(identity, out var current))
+            if (authoritative.TryGetValue(classifyIdentity, out var current))
             {
                 authoritativeRevision = current.Revision;
                 authoritativeDeleted = current.Deleted;
@@ -340,16 +533,48 @@ public sealed partial class SqliteProfileHostStore
                 disposition = current.Deleted
                     ? ProfileHostMigrationObjectDisposition.AuthoritativeTombstone
                     : string.Equals(
-                            canonical,
+                            canonicalForClassification,
                             authoritativeCanonical,
                             StringComparison.Ordinal)
                         ? ProfileHostMigrationObjectDisposition.Identical
                         : ProfileHostMigrationObjectDisposition.SameIdDifferentContent;
             }
 
-            resolutionMap.TryGetValue(identity, out var selectedResolution);
-            ProfileHostMigrationConflictResolution? resolution =
-                resolutionMap.ContainsKey(identity) ? selectedResolution : null;
+            if (resolution == ProfileHostMigrationConflictResolution.KeepBothAsCopy)
+            {
+                if (!mappingMap.ContainsKey(sourceIdentity))
+                {
+                    AddBlocker(
+                        blockers,
+                        ProfileHostMigrationBlockerCodes.InvalidCanonicalMapping,
+                        "Keeping both versions requires an explicit fresh target ID.",
+                        sourceIdentity.Collection,
+                        sourceIdentity.ObjectId);
+                }
+                else if (authoritative.ContainsKey(targetIdentity))
+                {
+                    AddBlocker(
+                        blockers,
+                        ProfileHostMigrationBlockerCodes.CanonicalTargetConflict,
+                        "The copy target already has authoritative state, including a deletion tombstone.",
+                        sourceIdentity.Collection,
+                        sourceIdentity.ObjectId,
+                        targetIdentity.Collection,
+                        targetIdentity.ObjectId);
+                }
+
+                if (disposition !=
+                    ProfileHostMigrationObjectDisposition.SameIdDifferentContent)
+                {
+                    AddBlocker(
+                        blockers,
+                        ProfileHostMigrationBlockerCodes.UnexpectedResolution,
+                        "Keeping both as copies is only valid for a live same-ID content conflict.",
+                        sourceIdentity.Collection,
+                        sourceIdentity.ObjectId);
+                }
+            }
+
             var requiresResolution = disposition is
                 ProfileHostMigrationObjectDisposition.SameIdDifferentContent or
                 ProfileHostMigrationObjectDisposition.AuthoritativeTombstone;
@@ -361,8 +586,8 @@ public sealed partial class SqliteProfileHostStore
                     disposition == ProfileHostMigrationObjectDisposition.AuthoritativeTombstone
                         ? "The authoritative object is deleted. Explicitly keep the deletion or resurrect the incoming object."
                         : "The same hosted object ID has different content and requires an explicit resolution.",
-                    collection,
-                    objectId);
+                    sourceIdentity.Collection,
+                    sourceIdentity.ObjectId);
             }
             else if (disposition ==
                          ProfileHostMigrationObjectDisposition.SameIdDifferentContent &&
@@ -372,19 +597,21 @@ public sealed partial class SqliteProfileHostStore
                     blockers,
                     ProfileHostMigrationBlockerCodes.UnexpectedResolution,
                     "Resurrection is only valid when the authoritative object is deleted.",
-                    collection,
-                    objectId);
+                    sourceIdentity.Collection,
+                    sourceIdentity.ObjectId);
             }
             else if (disposition ==
                          ProfileHostMigrationObjectDisposition.AuthoritativeTombstone &&
-                     resolution == ProfileHostMigrationConflictResolution.UseIncoming)
+                     resolution is
+                         ProfileHostMigrationConflictResolution.UseIncoming or
+                         ProfileHostMigrationConflictResolution.KeepBothAsCopy)
             {
                 AddBlocker(
                     blockers,
                     ProfileHostMigrationBlockerCodes.UnexpectedResolution,
                     "A deleted authoritative object requires the explicit resurrection resolution.",
-                    collection,
-                    objectId);
+                    sourceIdentity.Collection,
+                    sourceIdentity.ObjectId);
             }
             else if (disposition is not (
                          ProfileHostMigrationObjectDisposition.SameIdDifferentContent or
@@ -395,14 +622,15 @@ public sealed partial class SqliteProfileHostStore
                     blockers,
                     ProfileHostMigrationBlockerCodes.UnexpectedResolution,
                     "Only same-ID-different-content objects may carry a migration resolution.",
-                    collection,
-                    objectId);
+                    sourceIdentity.Collection,
+                    sourceIdentity.ObjectId);
             }
 
             assessments.Add(new ProfileHostMigrationObjectAssessment
             {
-                Collection = collection,
-                ObjectId = objectId,
+                Collection = sourceIdentity.Collection,
+                ObjectId = sourceIdentity.ObjectId,
+                CanonicalObjectId = targetIdentity.ObjectId,
                 Disposition = disposition,
                 Resolution = resolution,
                 AuthoritativeRevision = authoritativeRevision,
@@ -435,25 +663,25 @@ public sealed partial class SqliteProfileHostStore
                 StringTupleComparer.Ordinal);
         foreach (var assessment in assessments)
         {
-            var identity = (assessment.Collection, assessment.ObjectId);
+            var sourceIdentity = (assessment.Collection, assessment.ObjectId);
+            var identity = (assessment.Collection, assessment.CanonicalObjectId);
             if (assessment.Disposition == ProfileHostMigrationObjectDisposition.Insert ||
                 assessment.Resolution is
                     ProfileHostMigrationConflictResolution.UseIncoming or
-                    ProfileHostMigrationConflictResolution.ResurrectIncoming)
+                    ProfileHostMigrationConflictResolution.ResurrectIncoming or
+                    ProfileHostMigrationConflictResolution.KeepBothAsCopy)
             {
-                finalObjects[identity] = inputs[identity].PayloadJson ?? string.Empty;
+                finalObjects[identity] =
+                    canonicalInputs[sourceIdentity].PayloadJson ?? string.Empty;
             }
         }
 
         var validator = new MigrationGraphValidator(finalObjects, blockers);
         foreach (var assessment in assessments)
         {
-            var identity = (assessment.Collection, assessment.ObjectId);
+            var identity = (assessment.Collection, assessment.CanonicalObjectId);
             if (ProfileSyncCollections.All.Contains(identity.Collection) &&
-                (assessment.Disposition !=
-                    ProfileHostMigrationObjectDisposition.AuthoritativeTombstone ||
-                 assessment.Resolution ==
-                    ProfileHostMigrationConflictResolution.ResurrectIncoming))
+                finalObjects.ContainsKey(identity))
             {
                 validator.Validate(identity);
             }
@@ -466,6 +694,16 @@ public sealed partial class SqliteProfileHostStore
             Objects = assessments
                 .OrderBy(item => item.Collection, StringComparer.Ordinal)
                 .ThenBy(item => item.ObjectId, StringComparer.Ordinal)
+                .ToArray(),
+            Mappings = mappingMap
+                .OrderBy(item => item.Key.Collection, StringComparer.Ordinal)
+                .ThenBy(item => item.Key.ObjectId, StringComparer.Ordinal)
+                .Select(item => new ProfileHostMigrationCanonicalMapping
+                {
+                    Collection = item.Key.Collection,
+                    SourceObjectId = item.Key.ObjectId,
+                    TargetObjectId = item.Value
+                })
                 .ToArray(),
             Blockers = blockers
                 .OrderBy(item => item.Code, StringComparer.Ordinal)
@@ -490,6 +728,9 @@ public sealed partial class SqliteProfileHostStore
             (
                 ProfileHostMigrationObjectDisposition.SameIdDifferentContent,
                 ProfileHostMigrationConflictResolution.UseIncoming) => true,
+            (
+                ProfileHostMigrationObjectDisposition.SameIdDifferentContent,
+                ProfileHostMigrationConflictResolution.KeepBothAsCopy) => true,
             (
                 ProfileHostMigrationObjectDisposition.AuthoritativeTombstone,
                 ProfileHostMigrationConflictResolution.KeepAuthoritative) => false,
@@ -642,6 +883,478 @@ public sealed partial class SqliteProfileHostStore
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    private static bool TryRewriteMigrationInput(
+        ProfileHostMigrationObjectInput input,
+        string targetObjectId,
+        IReadOnlyDictionary<(string Collection, string ObjectId), string> mappings,
+        out ProfileHostMigrationObjectInput rewritten,
+        out string error)
+    {
+        rewritten = new ProfileHostMigrationObjectInput
+        {
+            Collection = input.Collection,
+            ObjectId = targetObjectId,
+            PayloadJson = input.PayloadJson
+        };
+        error = string.Empty;
+        var identityChanged = !string.Equals(
+            input.ObjectId,
+            targetObjectId,
+            StringComparison.Ordinal);
+        var mayContainMappedReferences =
+            mappings.Count > 0 &&
+            input.Collection is
+                ProfileSyncCollections.TradeCrafters or
+                ProfileSyncCollections.TradeOrders or
+                ProfileSyncCollections.TradePayrollDrafts or
+                ProfileSyncCollections.Plans;
+        if (!identityChanged && !mayContainMappedReferences)
+        {
+            return true;
+        }
+
+        JsonObject? payload;
+        try
+        {
+            payload = JsonNode.Parse(input.PayloadJson) as JsonObject;
+        }
+        catch (JsonException)
+        {
+            payload = null;
+        }
+
+        if (payload == null)
+        {
+            error = "The migration payload must be a JSON object before identity remapping.";
+            return false;
+        }
+
+        switch (input.Collection)
+        {
+            case ProfileSyncCollections.TradeCompanyProfiles:
+                if (!string.Equals(
+                        input.ObjectId,
+                        targetObjectId,
+                        StringComparison.Ordinal) &&
+                    !TryWriteGuidIdentity(payload, "id", targetObjectId, out error))
+                {
+                    return false;
+                }
+
+                break;
+            case ProfileSyncCollections.TradeCrafters:
+                if (!string.Equals(
+                        input.ObjectId,
+                        targetObjectId,
+                        StringComparison.Ordinal) &&
+                    !TryWriteGuidIdentity(payload, "id", targetObjectId, out error))
+                {
+                    return false;
+                }
+
+                if (
+                    !TryRewriteGuidReference(
+                        payload,
+                        "companyProfileId",
+                        ProfileSyncCollections.TradeCompanyProfiles,
+                        mappings,
+                        out error))
+                {
+                    return false;
+                }
+
+                break;
+            case ProfileSyncCollections.TradeOrders:
+                if (!string.Equals(
+                        input.ObjectId,
+                        targetObjectId,
+                        StringComparison.Ordinal) &&
+                    !TryWriteGuidIdentity(payload, "id", targetObjectId, out error))
+                {
+                    return false;
+                }
+
+                if (!TryRewriteOrderPayload(payload, mappings, out error))
+                {
+                    return false;
+                }
+
+                break;
+            case ProfileSyncCollections.TradePayrollDrafts:
+                if (!string.Equals(
+                        input.ObjectId,
+                        targetObjectId,
+                        StringComparison.Ordinal) &&
+                    !TryWriteStringIdentity(payload, "id", targetObjectId, out error))
+                {
+                    return false;
+                }
+
+                if (!TryRewriteGuidReference(
+                        payload,
+                        "companyProfileId",
+                        ProfileSyncCollections.TradeCompanyProfiles,
+                        mappings,
+                        out error) ||
+                    !TryRewriteGuidReference(
+                        payload,
+                        "orderId",
+                        ProfileSyncCollections.TradeOrders,
+                        mappings,
+                        out error) ||
+                    !TryRewriteGuidReference(
+                        payload,
+                        "assignedCrafterId",
+                        ProfileSyncCollections.TradeCrafters,
+                        mappings,
+                        out error))
+                {
+                    return false;
+                }
+
+                break;
+            case ProfileSyncCollections.Plans:
+                if (!string.Equals(
+                        input.ObjectId,
+                        targetObjectId,
+                        StringComparison.Ordinal) &&
+                    !TryWriteStringIdentity(payload, "id", targetObjectId, out error))
+                {
+                    return false;
+                }
+
+                if (!TryRewriteStringReference(
+                        payload,
+                        "sourcePlanId",
+                        ProfileSyncCollections.Plans,
+                        mappings,
+                        out error) ||
+                    !TryRewriteGuidReference(
+                        payload,
+                        "companyProfileId",
+                        ProfileSyncCollections.TradeCompanyProfiles,
+                        mappings,
+                        out error))
+                {
+                    return false;
+                }
+
+                break;
+        }
+
+        rewritten.PayloadJson = payload.ToJsonString(MigrationJsonOptions);
+        return true;
+    }
+
+    private static bool TryRewriteOrderPayload(
+        JsonObject payload,
+        IReadOnlyDictionary<(string Collection, string ObjectId), string> mappings,
+        out string error)
+    {
+        if (!TryRewriteGuidReference(
+                payload,
+                "companyProfileId",
+                ProfileSyncCollections.TradeCompanyProfiles,
+                mappings,
+                out error) ||
+            !TryRewriteGuidReference(
+                payload,
+                "assignedCrafterId",
+                ProfileSyncCollections.TradeCrafters,
+                mappings,
+                out error) ||
+            !TryRewriteStringReference(
+                payload,
+                "payrollDraftId",
+                ProfileSyncCollections.TradePayrollDrafts,
+                mappings,
+                out error) ||
+            !TryRewriteStringReference(
+                payload,
+                "craftPlanId",
+                ProfileSyncCollections.Plans,
+                mappings,
+                out error))
+        {
+            return false;
+        }
+
+        if (TryGetProperty(payload, "sourceSnapshot", out _, out var sourceNode) &&
+            sourceNode is JsonObject sourceSnapshot &&
+            !TryRewriteStringReference(
+                sourceSnapshot,
+                "sourcePlanId",
+                ProfileSyncCollections.Plans,
+                mappings,
+                out error))
+        {
+            return false;
+        }
+
+        if (TryGetProperty(payload, "history", out _, out var historyNode) &&
+            historyNode is JsonArray history)
+        {
+            foreach (var eventNode in history)
+            {
+                if (eventNode is not JsonObject historyEvent)
+                {
+                    error = "Trade order history must contain JSON objects.";
+                    return false;
+                }
+
+                if (!TryRewriteGuidReference(
+                        historyEvent,
+                        "companyProfileId",
+                        ProfileSyncCollections.TradeCompanyProfiles,
+                        mappings,
+                        out error) ||
+                    !TryRewriteGuidReference(
+                        historyEvent,
+                        "orderId",
+                        ProfileSyncCollections.TradeOrders,
+                        mappings,
+                        out error) ||
+                    !TryRewriteGuidReference(
+                        historyEvent,
+                        "crafterId",
+                        ProfileSyncCollections.TradeCrafters,
+                        mappings,
+                        out error))
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (TryGetProperty(
+                payload,
+                "commissionPublication",
+                out _,
+                out var publicationNode) &&
+            publicationNode is JsonObject publication &&
+            TryGetProperty(publication, "ownership", out _, out var ownershipNode) &&
+            ownershipNode is JsonObject ownership)
+        {
+            if (!TryRewriteGuidReference(
+                    ownership,
+                    "companyId",
+                    ProfileSyncCollections.TradeCompanyProfiles,
+                    mappings,
+                    out error) ||
+                !TryRewriteGuidReference(
+                    ownership,
+                    "orderId",
+                    ProfileSyncCollections.TradeOrders,
+                    mappings,
+                    out error))
+            {
+                return false;
+            }
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryWriteGuidIdentity(
+        JsonObject payload,
+        string propertyName,
+        string targetObjectId,
+        out string error)
+    {
+        if (!Guid.TryParse(targetObjectId, out var parsed) || parsed == Guid.Empty)
+        {
+            error = $"Canonical target '{targetObjectId}' must be a non-empty GUID.";
+            return false;
+        }
+
+        if (!TryGetProperty(payload, propertyName, out var actualName, out _))
+        {
+            error = $"Property '{propertyName}' is required for identity remapping.";
+            return false;
+        }
+
+        payload[actualName] = parsed.ToString("D");
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryWriteStringIdentity(
+        JsonObject payload,
+        string propertyName,
+        string targetObjectId,
+        out string error)
+    {
+        if (string.IsNullOrWhiteSpace(targetObjectId))
+        {
+            error = "Canonical target IDs cannot be empty.";
+            return false;
+        }
+
+        if (!TryGetProperty(payload, propertyName, out var actualName, out _))
+        {
+            error = $"Property '{propertyName}' is required for identity remapping.";
+            return false;
+        }
+
+        payload[actualName] = targetObjectId;
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryRewriteGuidReference(
+        JsonObject payload,
+        string propertyName,
+        string collection,
+        IReadOnlyDictionary<(string Collection, string ObjectId), string> mappings,
+        out string error)
+    {
+        if (!TryGetProperty(payload, propertyName, out var actualName, out var node) ||
+            node == null)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        if (!TryReadString(node, out var sourceId) ||
+            !Guid.TryParse(sourceId, out var parsed) ||
+            parsed == Guid.Empty)
+        {
+            error = $"Property '{propertyName}' must contain a non-empty GUID.";
+            return false;
+        }
+
+        if (!TryGetMappedId(mappings, collection, sourceId, out var canonical) &&
+            !TryGetMappedId(
+                mappings,
+                collection,
+                parsed.ToString("D"),
+                out canonical))
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        if (!Guid.TryParse(canonical, out var canonicalGuid) || canonicalGuid == Guid.Empty)
+        {
+            error = $"Canonical reference '{canonical}' for '{propertyName}' must be a non-empty GUID.";
+            return false;
+        }
+
+        payload[actualName] = canonicalGuid.ToString("D");
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryRewriteStringReference(
+        JsonObject payload,
+        string propertyName,
+        string collection,
+        IReadOnlyDictionary<(string Collection, string ObjectId), string> mappings,
+        out string error)
+    {
+        if (!TryGetProperty(payload, propertyName, out var actualName, out var node) ||
+            node == null)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        if (!TryReadString(node, out var sourceId) || string.IsNullOrWhiteSpace(sourceId))
+        {
+            error = $"Property '{propertyName}' must contain a non-empty string ID.";
+            return false;
+        }
+
+        if (TryGetMappedId(mappings, collection, sourceId, out var canonical))
+        {
+            payload[actualName] = canonical;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryGetMappedId(
+        IReadOnlyDictionary<(string Collection, string ObjectId), string> mappings,
+        string collection,
+        string sourceObjectId,
+        out string targetObjectId)
+    {
+        if (mappings.TryGetValue(
+                (collection, sourceObjectId),
+                out targetObjectId!))
+        {
+            return true;
+        }
+
+        if (!Guid.TryParse(sourceObjectId, out var sourceGuid))
+        {
+            return false;
+        }
+
+        foreach (var mapping in mappings)
+        {
+            if (string.Equals(
+                    mapping.Key.Collection,
+                    collection,
+                    StringComparison.Ordinal) &&
+                Guid.TryParse(mapping.Key.ObjectId, out var mappedSourceGuid) &&
+                mappedSourceGuid == sourceGuid)
+            {
+                targetObjectId = mapping.Value;
+                return true;
+            }
+        }
+
+        targetObjectId = string.Empty;
+        return false;
+    }
+
+    private static bool IsGuidIdentityCollection(string collection) =>
+        collection is
+            ProfileSyncCollections.TradeCompanyProfiles or
+            ProfileSyncCollections.TradeCrafters or
+            ProfileSyncCollections.TradeOrders;
+
+    private static bool TryGetProperty(
+        JsonObject payload,
+        string propertyName,
+        out string actualName,
+        out JsonNode? value)
+    {
+        foreach (var property in payload)
+        {
+            if (string.Equals(
+                    property.Key,
+                    propertyName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                actualName = property.Key;
+                value = property.Value;
+                return true;
+            }
+        }
+
+        actualName = propertyName;
+        value = null;
+        return false;
+    }
+
+    private static bool TryReadString(JsonNode node, out string value)
+    {
+        try
+        {
+            value = node.GetValue<string>();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            value = string.Empty;
+            return false;
+        }
+    }
+
     private static string ComputeRequestHash(ProfileHostMigrationPreflightRequest request)
     {
         var builder = new StringBuilder();
@@ -672,6 +1385,17 @@ public sealed partial class SqliteProfileHostStore
                     ProfileHostMigrationConflictResolution.KeepAuthoritative)).ToString());
         }
 
+        foreach (var mapping in (request.Mappings ??
+                                 Array.Empty<ProfileHostMigrationCanonicalMapping>())
+                     .OrderBy(item => item?.Collection, StringComparer.Ordinal)
+                     .ThenBy(item => item?.SourceObjectId, StringComparer.Ordinal)
+                     .ThenBy(item => item?.TargetObjectId, StringComparer.Ordinal))
+        {
+            AppendHashPart(builder, mapping?.Collection ?? string.Empty);
+            AppendHashPart(builder, mapping?.SourceObjectId ?? string.Empty);
+            AppendHashPart(builder, mapping?.TargetObjectId ?? string.Empty);
+        }
+
         return HashText(builder.ToString());
     }
 
@@ -683,6 +1407,7 @@ public sealed partial class SqliteProfileHostStore
         {
             AppendHashPart(builder, item.Collection);
             AppendHashPart(builder, item.ObjectId);
+            AppendHashPart(builder, item.CanonicalObjectId);
             AppendHashPart(builder, ((int)item.Disposition).ToString());
             AppendHashPart(builder, item.Resolution.HasValue
                 ? ((int)item.Resolution.Value).ToString()
@@ -694,6 +1419,13 @@ public sealed partial class SqliteProfileHostStore
                 item.AuthoritativeDeletedAtUtc?.ToUniversalTime().ToString("O") ?? string.Empty);
             AppendHashPart(builder, item.IncomingContentHash);
             AppendHashPart(builder, item.AuthoritativeContentHash ?? string.Empty);
+        }
+
+        foreach (var mapping in response.Mappings)
+        {
+            AppendHashPart(builder, mapping.Collection);
+            AppendHashPart(builder, mapping.SourceObjectId);
+            AppendHashPart(builder, mapping.TargetObjectId);
         }
 
         foreach (var blocker in response.Blockers)
@@ -720,9 +1452,17 @@ public sealed partial class SqliteProfileHostStore
         foreach (var item in response.Objects)
         {
             AppendHashPart(builder, item.Collection);
+            AppendHashPart(builder, item.SourceObjectId);
             AppendHashPart(builder, item.ObjectId);
             AppendHashPart(builder, item.Revision.ToString());
             AppendHashPart(builder, item.Deleted ? "1" : "0");
+        }
+
+        foreach (var mapping in response.Mappings)
+        {
+            AppendHashPart(builder, mapping.Collection);
+            AppendHashPart(builder, mapping.SourceObjectId);
+            AppendHashPart(builder, mapping.TargetObjectId);
         }
 
         return HashText(builder.ToString());
@@ -832,6 +1572,7 @@ public sealed partial class SqliteProfileHostStore
             MigrationId = response.MigrationId,
             RequestHash = response.RequestHash,
             Objects = response.Objects,
+            Mappings = response.Mappings,
             Blockers = response.Blockers
                 .Append(new ProfileHostMigrationBlocker
                 {

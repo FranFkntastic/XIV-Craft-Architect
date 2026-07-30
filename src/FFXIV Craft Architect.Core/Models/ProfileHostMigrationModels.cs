@@ -10,6 +10,8 @@ public static class ProfileHostMigrationBlockerCodes
     public const string InvalidMigrationId = "invalid_migration_id";
     public const string EmptyMigration = "empty_migration";
     public const string DuplicateObjectIdentity = "duplicate_object_identity";
+    public const string InvalidCanonicalMapping = "invalid_canonical_mapping";
+    public const string CanonicalTargetConflict = "canonical_target_conflict";
     public const string UnsupportedCollection = "unsupported_collection";
     public const string UnsupportedOrderCraftSnapshot = "unsupported_order_craft_snapshot";
     public const string InvalidPayload = "invalid_payload";
@@ -39,7 +41,8 @@ public enum ProfileHostMigrationConflictResolution
 {
     KeepAuthoritative,
     UseIncoming,
-    ResurrectIncoming
+    ResurrectIncoming,
+    KeepBothAsCopy
 }
 
 public sealed class ProfileHostMigrationObjectInput
@@ -56,6 +59,13 @@ public sealed class ProfileHostMigrationResolution
     public ProfileHostMigrationConflictResolution Resolution { get; set; }
 }
 
+public sealed class ProfileHostMigrationCanonicalMapping
+{
+    public string Collection { get; set; } = string.Empty;
+    public string SourceObjectId { get; set; } = string.Empty;
+    public string TargetObjectId { get; set; } = string.Empty;
+}
+
 public sealed class ProfileHostMigrationPreflightRequest
 {
     public Guid MigrationId { get; set; }
@@ -63,6 +73,8 @@ public sealed class ProfileHostMigrationPreflightRequest
         Array.Empty<ProfileHostMigrationObjectInput>();
     public IReadOnlyList<ProfileHostMigrationResolution> Resolutions { get; set; } =
         Array.Empty<ProfileHostMigrationResolution>();
+    public IReadOnlyList<ProfileHostMigrationCanonicalMapping> Mappings { get; set; } =
+        Array.Empty<ProfileHostMigrationCanonicalMapping>();
 }
 
 public sealed class ProfileHostMigrationCommitRequest
@@ -73,12 +85,15 @@ public sealed class ProfileHostMigrationCommitRequest
         Array.Empty<ProfileHostMigrationObjectInput>();
     public IReadOnlyList<ProfileHostMigrationResolution> Resolutions { get; set; } =
         Array.Empty<ProfileHostMigrationResolution>();
+    public IReadOnlyList<ProfileHostMigrationCanonicalMapping> Mappings { get; set; } =
+        Array.Empty<ProfileHostMigrationCanonicalMapping>();
 }
 
 public sealed class ProfileHostMigrationObjectAssessment
 {
     public string Collection { get; set; } = string.Empty;
     public string ObjectId { get; set; } = string.Empty;
+    public string CanonicalObjectId { get; set; } = string.Empty;
     public ProfileHostMigrationObjectDisposition Disposition { get; set; }
     public ProfileHostMigrationConflictResolution? Resolution { get; set; }
     public long? AuthoritativeRevision { get; set; }
@@ -106,6 +121,8 @@ public sealed class ProfileHostMigrationPreflightResponse
     public bool CanCommit { get; set; }
     public IReadOnlyList<ProfileHostMigrationObjectAssessment> Objects { get; set; } =
         Array.Empty<ProfileHostMigrationObjectAssessment>();
+    public IReadOnlyList<ProfileHostMigrationCanonicalMapping> Mappings { get; set; } =
+        Array.Empty<ProfileHostMigrationCanonicalMapping>();
     public IReadOnlyList<ProfileHostMigrationBlocker> Blockers { get; set; } =
         Array.Empty<ProfileHostMigrationBlocker>();
 }
@@ -113,6 +130,7 @@ public sealed class ProfileHostMigrationPreflightResponse
 public sealed class ProfileHostMigrationAuthoritativeObject
 {
     public string Collection { get; set; } = string.Empty;
+    public string SourceObjectId { get; set; } = string.Empty;
     public string ObjectId { get; set; } = string.Empty;
     public long Revision { get; set; }
     public bool Deleted { get; set; }
@@ -126,4 +144,6 @@ public sealed class ProfileHostMigrationCommitResponse
     public long ServerRevision { get; set; }
     public IReadOnlyList<ProfileHostMigrationAuthoritativeObject> Objects { get; set; } =
         Array.Empty<ProfileHostMigrationAuthoritativeObject>();
+    public IReadOnlyList<ProfileHostMigrationCanonicalMapping> Mappings { get; set; } =
+        Array.Empty<ProfileHostMigrationCanonicalMapping>();
 }
