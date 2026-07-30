@@ -16,7 +16,7 @@ const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 21;
+const MODULE_REVISION = 22;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -1917,6 +1917,106 @@ async function getSpecializedStorageDiagnostics() {
     };
 }
 
+async function getCompanyMigrationSourceInventory() {
+    const companyDatabase = await initCompanyDatabase();
+    const knownCompanyStores = [
+        STORE_STORAGE_METADATA,
+        STORE_TRADE_COMPANY_PROFILES,
+        STORE_TRADE_CRAFTERS,
+        STORE_TRADE_ORDERS,
+        STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
+        STORE_TRADE_PAYROLL_DRAFTS
+    ];
+    const unsupportedStoreNames = Array.from(companyDatabase.objectStoreNames)
+        .filter(storeName => !knownCompanyStores.includes(storeName))
+        .sort((left, right) => left.localeCompare(right));
+    const [
+        diagnostics,
+        companyProfiles,
+        crafters,
+        orders,
+        orderCraftSnapshots,
+        payrollDrafts,
+        legacySnapshot,
+        unsupportedStores
+    ] = await Promise.all([
+        getSpecializedStorageDiagnostics(),
+        loadStoreRecords(STORE_TRADE_COMPANY_PROFILES),
+        loadStoreRecords(STORE_TRADE_CRAFTERS),
+        loadStoreRecords(STORE_TRADE_ORDERS),
+        loadStoreRecords(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS),
+        loadStoreRecords(STORE_TRADE_PAYROLL_DRAFTS),
+        loadLegacySnapshot(),
+        Promise.all(unsupportedStoreNames.map(async storeName => ({
+            storeName,
+            records: await loadStoreRecords(storeName)
+        })))
+    ]);
+
+    const linkedPlanIds = Array.from(new Set([
+        ...orders,
+        ...legacySnapshot[STORE_TRADE_ORDERS]
+    ].flatMap(order => [
+        order?.craftPlanId,
+        order?.sourceSnapshot?.sourcePlanId
+    ]).filter(planId => typeof planId === 'string' && planId.length > 0)))
+        .sort((left, right) => left.localeCompare(right));
+    const linkedPlans = await Promise.all(linkedPlanIds.map(async planId => {
+        try {
+            return {
+                planId,
+                payload: await loadPlan(planId),
+                error: null
+            };
+        } catch (error) {
+            return {
+                planId,
+                payload: null,
+                error: formatIndexedDbError(error)
+            };
+        }
+    }));
+    const legacyPlanIds = new Set(linkedPlanIds);
+    const legacyPlans = legacySnapshot[STORE_PLANS]
+        .filter(plan => legacyPlanIds.has(plan?.id));
+    const legacyComponentIds = new Set(legacyPlans.flatMap(plan =>
+        Object.values(plan?.componentRefs || {})
+            .filter(componentId => typeof componentId === 'string')));
+
+    return {
+        formatVersion: 1,
+        capturedAtUtc: new Date().toISOString(),
+        origin: globalThis.location?.origin || null,
+        moduleRevision: MODULE_REVISION,
+        specializedStorage: diagnostics,
+        company: {
+            databaseName: COMPANY_DB_NAME,
+            schemaVersion: companyDatabase.version,
+            companyProfiles,
+            crafters,
+            orders,
+            orderCraftSnapshots,
+            payrollDrafts,
+            unsupportedStores
+        },
+        linkedPlans,
+        legacy: {
+            databaseName: LEGACY_DB_NAME,
+            schemaVersion: legacySnapshotSourceVersion,
+            companyProfiles: legacySnapshot[STORE_TRADE_COMPANY_PROFILES],
+            crafters: legacySnapshot[STORE_TRADE_CRAFTERS],
+            orders: legacySnapshot[STORE_TRADE_ORDERS],
+            orderCraftSnapshots: legacySnapshot[STORE_TRADE_ORDER_CRAFT_SNAPSHOTS],
+            payrollDrafts: legacySnapshot[STORE_TRADE_PAYROLL_DRAFTS],
+            linkedPlans: legacyPlans,
+            linkedPlanComponents: legacySnapshot[STORE_PLAN_COMPONENTS]
+                .filter(component =>
+                    legacyComponentIds.has(component?.id) ||
+                    legacyPlanIds.has(component?.planId))
+        }
+    };
+}
+
 // Export functions for Blazor interop
 window.IndexedDB = {
     moduleRevision: MODULE_REVISION,
@@ -1968,7 +2068,8 @@ window.IndexedDB = {
     loadTradePayrollDrafts,
     deleteTradePayrollDraft,
     getTradeStoreDiagnostics,
-    getSpecializedStorageDiagnostics
+    getSpecializedStorageDiagnostics,
+    getCompanyMigrationSourceInventory
 };
 
 console.log(
