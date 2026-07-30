@@ -3,130 +3,166 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Commission Brief — FFXIV Craft Architect</title>
+    <meta name="referrer" content="same-origin">
+    <title>Company Commission — FFXIV Craft Architect</title>
     <link rel="stylesheet" href="commission.css">
 </head>
 <body>
     <header class="brief-topbar">
-        <div class="brand">FFXIV Craft Architect <small>Commission brief</small></div>
+        <div class="brand">FFXIV Craft Architect <small>Company commission</small></div>
         <span class="status-chip" id="statusChip">Loading</span>
     </header>
 
     <main class="brief-shell" id="briefShell" hidden>
         <section class="brief-hero">
             <div>
-                <div class="eyebrow" id="companyName"></div>
+                <div class="eyebrow" id="briefIdentity"></div>
                 <h1 id="briefTitle"></h1>
-                <p class="brief-subtitle" id="publishedDate"></p>
-                <div class="brief-actions">
-                    <div class="copy-action">
-                        <button class="button primary" id="copyCommission">Copy full commission brief</button>
-                        <small>Delivery, materials, payment, evidence, contact, and link</small>
-                    </div>
-                    <div class="copy-action" id="copyContactAction">
-                        <button class="button" id="copyContact">Copy contact details</button>
-                        <small>Contact method and commission reference only</small>
-                    </div>
-                </div>
+                <p class="brief-subtitle" id="briefSubtitle"></p>
             </div>
             <div class="brief-total">
-                <span>Total payment</span>
+                <span>Agreed payment</span>
                 <strong id="totalPayment"></strong>
             </div>
         </section>
 
-        <div class="brief-grid">
+        <section class="notice" id="notice" role="alert" hidden>
+            <strong id="noticeTitle"></strong>
+            <span id="noticeBody"></span>
+        </section>
+
+        <section class="next-step" id="nextStep">
+            <div>
+                <h2 id="nextStepTitle"></h2>
+                <p id="nextStepBody"></p>
+            </div>
+            <div class="next-step-actions" id="nextStepActions"></div>
+            <div class="next-step-form" id="nextStepForm" hidden></div>
+        </section>
+
+        <div class="brief-layout">
             <div class="brief-main">
                 <section class="brief-section">
                     <div class="brief-section-head">
-                        <h2>Requested Delivery</h2>
-                        <span class="status-chip" id="assignmentStatus"></span>
+                        <h2>Work clearance</h2>
+                        <span id="clearanceSummary"></span>
                     </div>
-                    <div class="brief-section-body" id="outputs"></div>
+                    <div class="brief-section-body gate-grid" id="gates"></div>
                 </section>
 
                 <section class="brief-section">
                     <div class="brief-section-head">
-                        <h2>Material Responsibility</h2>
-                        <span>Published terms</span>
+                        <h2>Requested delivery</h2>
+                        <span>Complete delivery required</span>
                     </div>
-                    <div class="brief-section-body material-groups">
-                        <div class="material-group">
-                            <div class="material-group-heading">
-                                <strong>Crafter procures</strong>
-                                <span>Reimbursed at the frozen costs below</span>
-                            </div>
-                            <div class="material-list" id="crafterMaterials"></div>
+                    <form id="progressForm">
+                        <div class="output-grid output-grid-head" aria-hidden="true">
+                            <span>Output</span>
+                            <span>Required</span>
+                            <span>Completed</span>
+                            <span>Ready</span>
                         </div>
-                        <div class="material-group">
-                            <div class="material-group-heading">
+                        <div id="outputs"></div>
+                        <div class="section-actions" id="progressActions" hidden>
+                            <button class="button primary" type="submit">Save progress</button>
+                        </div>
+                    </form>
+                </section>
+
+                <section class="brief-section">
+                    <div class="brief-section-head">
+                        <h2>Material responsibility</h2>
+                        <span id="materialTermsVersion"></span>
+                    </div>
+                    <div class="material-group">
+                        <div class="material-group-heading">
+                            <div>
                                 <strong>Company provides</strong>
-                                <span>No purchase or reimbursement expected from the crafter</span>
+                                <span id="companyMaterialSummary"></span>
                             </div>
-                            <div class="material-list" id="companyMaterials"></div>
+                            <button class="button primary"
+                                    id="acknowledgeMaterials"
+                                    type="button"
+                                    hidden>
+                                I received the complete bundle
+                            </button>
                         </div>
+                        <div class="material-list" id="companyMaterials"></div>
+                    </div>
+                    <div class="material-group">
+                        <div class="material-group-heading">
+                            <div>
+                                <strong>Crafter procures</strong>
+                                <span>These terms affect reimbursement, not work clearance.</span>
+                            </div>
+                        </div>
+                        <div class="material-list" id="crafterMaterials"></div>
                     </div>
                 </section>
 
                 <section class="brief-section">
                     <div class="brief-section-head">
-                        <h2>Payment Breakdown</h2>
-                        <span id="paymentContract"></span>
+                        <h2>Operational update</h2>
+                        <span>Visible to crafter and commissioner</span>
                     </div>
-                    <div class="brief-section-body">
-                        <div id="paymentBreakdown"></div>
-                        <p class="payment-explanation" id="paymentExplanation"></p>
-                    </div>
+                    <form class="comment-form" id="commentForm">
+                        <label class="sr-only" for="commentText">Operational update</label>
+                        <textarea id="commentText"
+                                  maxlength="1000"
+                                  placeholder="Add a concise delivery, material, or scheduling update…"></textarea>
+                        <button class="button" type="submit">Post update</button>
+                    </form>
                 </section>
             </div>
 
             <aside class="brief-side">
                 <section class="brief-section">
-                    <div class="brief-section-head"><h2>Commission Terms</h2></div>
+                    <div class="brief-section-head">
+                        <h2>Commission terms</h2>
+                        <span id="termsVersion"></span>
+                    </div>
+                    <div class="brief-section-body terms" id="terms"></div>
+                    <div class="section-actions" id="paymentActions" hidden></div>
+                    <details class="terms-detail">
+                        <summary>Pricing evidence and instructions</summary>
+                        <div id="termsDetail"></div>
+                    </details>
+                </section>
+
+                <section class="brief-section">
+                    <div class="brief-section-head">
+                        <h2>Your access</h2>
+                        <span id="accessState"></span>
+                    </div>
                     <div class="brief-section-body">
-                        <div class="term-row"><span>Status</span><strong id="termStatus"></strong></div>
-                        <div class="term-row"><span>Assignment</span><strong id="termAssignment"></strong></div>
-                        <div class="term-row"><span>Payment basis</span><strong id="termPayment"></strong></div>
-                        <div class="term-row"><span>Brief version</span><strong id="termVersion"></strong></div>
-                        <div class="term-row"><span>Reference</span><strong id="termReference"></strong></div>
+                        <div class="access-note" id="accessNote"></div>
+                        <div class="section-actions" id="accessActions"></div>
                     </div>
                 </section>
 
                 <section class="brief-section">
-                    <div class="brief-section-head"><h2>Pricing Evidence</h2></div>
-                    <div class="brief-section-body evidence">
-                        <strong id="evidenceTime"></strong>
-                        <span id="evidenceLocation"></span>
-                        <span id="evidenceScope"></span>
-                        <span id="evidenceBasis"></span>
-                        <span>This evidence is frozen to this commission brief.</span>
+                    <div class="brief-section-head">
+                        <h2>Activity</h2>
+                        <span>Canonical history</span>
                     </div>
-                </section>
-
-                <section class="brief-section" id="contactSection">
-                    <div class="brief-section-head"><h2>Contact</h2></div>
-                    <div class="brief-section-body contact">
-                        <strong id="contactCompany"></strong>
-                        <span id="contactMethod"></span>
-                        <span id="contactReference"></span>
-                    </div>
+                    <div class="brief-section-body activity" id="activity"></div>
                 </section>
             </aside>
         </div>
 
         <section class="optional-ca">
-            <strong>Want planning help? Craft Architect is optional.</strong>
-            <p>You can accept and complete this commission using any workflow you prefer. Craft Architect remains available if you want recipe and procurement planning help.</p>
+            <strong>Craft Architect is optional.</strong>
+            <span>Use any crafting workflow you prefer; this brief remains the shared commission record.</span>
             <a class="button" href="/">Open Craft Architect</a>
         </section>
     </main>
 
     <main class="brief-shell brief-message" id="briefMessage">
-        <h1 id="messageTitle">Loading commission brief</h1>
-        <p id="messageBody">Retrieving the published terms.</p>
+        <h1 id="messageTitle">Loading company commission</h1>
+        <p id="messageBody">Retrieving the canonical brief.</p>
     </main>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="commission.js"></script>
+    <script type="module" src="commission.js"></script>
 </body>
 </html>
