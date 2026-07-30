@@ -40,7 +40,11 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             order.CompanyProfileId,
             "order",
             envelope.ObjectId);
-        await _tradeOperations.SaveOrderAsync(order);
+        if (!await _tradeOperations.SaveOrderAsync(order))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
+        }
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
@@ -50,7 +54,11 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             throw new InvalidOperationException($"Hosted Trade order id '{objectId}' is not a valid GUID.");
         }
 
-        await _tradeOperations.DeleteOrderAsync(orderId);
+        if (!await _tradeOperations.DeleteOrderAsync(orderId))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not delete hosted Trade order '{objectId}'.");
+        }
     }
 
     private static ProfileSyncObjectEnvelope ToEnvelope(TradeOrder order, DateTime updatedAtUtc)

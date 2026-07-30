@@ -37,16 +37,18 @@ public sealed class ProfileSyncService
     private readonly List<ProfileSyncPendingSave> _pendingSaves = [];
     private readonly List<ProfileSyncConflict> _conflicts = [];
     private int _suppressionDepth;
-    private bool _pendingSavesLoaded;
+    private string? _pendingSavesProfileId;
 
     public ProfileSyncService(
         ProfileHostClient client,
         ProfileSyncLocalStateService localState,
+        WebSettingsService settings,
         IEnumerable<IProfileSyncCollectionAdapter> adapters)
     {
         _client = client;
         _localState = localState;
         _adapters = adapters.ToDictionary(adapter => adapter.Collection, StringComparer.OrdinalIgnoreCase);
+        settings.PortableSettingSaved += QueuePortableSettingSaveAsync;
     }
 
     public event Action? StatusChanged;
@@ -173,8 +175,14 @@ public sealed class ProfileSyncService
         FirstConnectMode mode,
         CancellationToken ct = default)
     {
-        await EnsurePendingSavesLoadedAsync();
+        if (!settings.IsConfigured)
+        {
+            throw new InvalidOperationException(
+                "A verified hosted profile ID, host URL, and access key are required.");
+        }
+
         await _localState.SaveConnectionSettingsAsync(settings);
+        await EnsurePendingSavesLoadedAsync();
         if (mode == FirstConnectMode.UploadLocal)
         {
             var objects = new List<ProfileSyncObjectEnvelope>();
@@ -208,11 +216,10 @@ public sealed class ProfileSyncService
 
     public async Task DisconnectAsync(CancellationToken ct = default)
     {
-        await EnsurePendingSavesLoadedAsync();
         await _localState.SaveConnectionSettingsAsync(new HostedProfileConnectionSettings());
         _pendingSaves.Clear();
-        await PersistPendingSavesAsync();
         _conflicts.Clear();
+        _pendingSavesProfileId = null;
         SetStatus(ProfileSyncStatus.LocalOnly());
     }
 
@@ -280,13 +287,25 @@ public sealed class ProfileSyncService
 
     private async Task EnsurePendingSavesLoadedAsync()
     {
-        if (_pendingSavesLoaded)
+        var profileId = await _localState.LoadConnectedProfileScopeIdAsync();
+        if (string.Equals(
+                profileId,
+                _pendingSavesProfileId,
+                StringComparison.Ordinal) &&
+            profileId != null)
+        {
+            return;
+        }
+
+        _pendingSaves.Clear();
+        _conflicts.Clear();
+        _pendingSavesProfileId = null;
+        if (profileId == null)
         {
             return;
         }
 
         var persisted = await _localState.LoadPendingSavesAsync();
-        _pendingSaves.Clear();
         _pendingSaves.AddRange(
             persisted
                 .DistinctBy(
@@ -294,8 +313,11 @@ public sealed class ProfileSyncService
                     StringComparer.OrdinalIgnoreCase)
                 .OrderBy(pending => pending.Collection, StringComparer.Ordinal)
                 .ThenBy(pending => pending.ObjectId, StringComparer.Ordinal));
-        _pendingSavesLoaded = true;
+        _pendingSavesProfileId = profileId;
     }
+
+    private Task QueuePortableSettingSaveAsync(string key) =>
+        QueueLocalSaveAsync(ProfileSyncCollections.Settings, key);
 
     private async Task<bool> RetryPendingSavesAsync(
         HostedProfileConnectionSettings settings,

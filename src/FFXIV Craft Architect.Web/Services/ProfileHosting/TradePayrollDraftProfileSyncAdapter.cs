@@ -44,12 +44,20 @@ public sealed class TradePayrollDraftProfileSyncAdapter : IProfileSyncCollection
             draft.CompanyProfileId,
             "payroll draft",
             envelope.ObjectId);
-        await _tradePayrollPersistence.SaveDraftAsync(draft);
+        if (!await _tradePayrollPersistence.SaveDraftAsync(draft))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not apply hosted Trade payroll draft '{envelope.ObjectId}'.");
+        }
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
     {
-        await _tradePayrollPersistence.DeleteDraftAsync(objectId);
+        if (!await _tradePayrollPersistence.DeleteDraftAsync(objectId))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not delete hosted Trade payroll draft '{objectId}'.");
+        }
     }
 
     private static ProfileSyncObjectEnvelope ToEnvelope(TradePayrollWorkflowDraft draft, DateTime updatedAtUtc)

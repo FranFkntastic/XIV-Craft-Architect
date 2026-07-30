@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
@@ -5,8 +6,10 @@ namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 public sealed class ProfileSyncLocalStateService
 {
     private const string ConnectedProfileNameKey = "profileHost.connectedProfileName";
-    private const string ObjectRevisionPrefix = "profileHost.objectRevision.";
-    private const string PendingSavesKey = "profileHost.pendingSaves";
+    private const string ProfileStatePrefix = "profileHost.profile.";
+    private const string LastSyncRevisionSuffix = "lastSyncRevision";
+    private const string ObjectRevisionSuffix = "objectRevision.";
+    private const string PendingSavesSuffix = "pendingSaves";
     private static readonly IReadOnlySet<string> PortableSettingKeys = new HashSet<string>(
         [
             "market.default_datacenter",
@@ -57,54 +60,103 @@ public sealed class ProfileSyncLocalStateService
 
     public async Task SaveConnectionSettingsAsync(HostedProfileConnectionSettings settings)
     {
-        await _indexedDb.SaveSettingAsync(ProfileSyncSettingsKeys.HostUrl, settings.HostUrl ?? string.Empty);
-        await _indexedDb.SaveSettingAsync(
-            ProfileSyncSettingsKeys.AccessKey,
-            settings.RememberAccessKey ? settings.AccessKey ?? string.Empty : string.Empty);
-        await _indexedDb.SaveSettingAsync(ProfileSyncSettingsKeys.RememberAccessKey, settings.RememberAccessKey);
-        await _indexedDb.SaveSettingAsync(ProfileSyncSettingsKeys.ConnectedProfileId, settings.ConnectedProfileId ?? string.Empty);
-        await _indexedDb.SaveSettingAsync(ConnectedProfileNameKey, settings.ConnectedProfileName ?? string.Empty);
+        var serialized = new Dictionary<string, string>
+        {
+            [ProfileSyncSettingsKeys.HostUrl] =
+                JsonSerializer.Serialize(settings.HostUrl ?? string.Empty),
+            [ProfileSyncSettingsKeys.AccessKey] = JsonSerializer.Serialize(
+                settings.RememberAccessKey
+                    ? settings.AccessKey ?? string.Empty
+                    : string.Empty),
+            [ProfileSyncSettingsKeys.RememberAccessKey] =
+                JsonSerializer.Serialize(settings.RememberAccessKey),
+            [ProfileSyncSettingsKeys.ConnectedProfileId] =
+                JsonSerializer.Serialize(settings.ConnectedProfileId ?? string.Empty),
+            [ConnectedProfileNameKey] =
+                JsonSerializer.Serialize(settings.ConnectedProfileName ?? string.Empty)
+        };
+        if (!await _indexedDb.SaveSettingsBatchAsync(serialized))
+        {
+            throw new InvalidOperationException(
+                "Browser storage could not persist the hosted-profile connection.");
+        }
     }
 
     public async Task<long> LoadLastSyncRevisionAsync()
     {
-        return await _indexedDb.LoadSettingAsync(ProfileSyncSettingsKeys.LastSyncRevision, 0L);
+        return await _indexedDb.LoadSettingAsync(
+            await BuildProfileStateKeyAsync(LastSyncRevisionSuffix),
+            0L);
     }
 
     public async Task SaveLastSyncRevisionAsync(long revision)
     {
-        await _indexedDb.SaveSettingAsync(ProfileSyncSettingsKeys.LastSyncRevision, revision);
+        var key = await BuildProfileStateKeyAsync(LastSyncRevisionSuffix);
+        if (!await _indexedDb.SaveSettingAsync(key, revision))
+        {
+            throw new InvalidOperationException(
+                "Browser storage could not persist the hosted-profile sync cursor.");
+        }
     }
 
     public async Task<long> LoadObjectRevisionAsync(string collection, string objectId)
     {
-        return await _indexedDb.LoadSettingAsync(BuildObjectRevisionKey(collection, objectId), 0L);
+        return await _indexedDb.LoadSettingAsync(
+            await BuildObjectRevisionKeyAsync(collection, objectId),
+            0L);
     }
 
     public async Task SaveObjectRevisionAsync(string collection, string objectId, long revision)
     {
-        await _indexedDb.SaveSettingAsync(BuildObjectRevisionKey(collection, objectId), revision);
+        var key = await BuildObjectRevisionKeyAsync(collection, objectId);
+        if (!await _indexedDb.SaveSettingAsync(key, revision))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not persist the hosted revision for '{collection}/{objectId}'.");
+        }
     }
 
     public async Task<IReadOnlyList<ProfileSyncPendingSave>> LoadPendingSavesAsync()
     {
         return await _indexedDb.LoadSettingAsync(
-                   PendingSavesKey,
+                   await BuildProfileStateKeyAsync(PendingSavesSuffix),
                    Array.Empty<ProfileSyncPendingSave>())
                ?? Array.Empty<ProfileSyncPendingSave>();
     }
 
     public async Task SavePendingSavesAsync(IReadOnlyList<ProfileSyncPendingSave> pendingSaves)
     {
-        if (!await _indexedDb.SaveSettingAsync(PendingSavesKey, pendingSaves))
+        var key = await BuildProfileStateKeyAsync(PendingSavesSuffix);
+        if (!await _indexedDb.SaveSettingAsync(key, pendingSaves))
         {
             throw new InvalidOperationException(
                 "Browser storage could not persist pending hosted-profile writes.");
         }
     }
 
-    private static string BuildObjectRevisionKey(string collection, string objectId)
+    public async Task<string?> LoadConnectedProfileScopeIdAsync()
     {
-        return $"{ObjectRevisionPrefix}{collection}.{Uri.EscapeDataString(objectId)}";
+        var rawProfileId = await _indexedDb.LoadSettingAsync<string>(
+            ProfileSyncSettingsKeys.ConnectedProfileId);
+        return Guid.TryParse(rawProfileId, out var profileId) &&
+               profileId != Guid.Empty
+            ? profileId.ToString("D")
+            : null;
+    }
+
+    private async Task<string> BuildObjectRevisionKeyAsync(
+        string collection,
+        string objectId)
+    {
+        return await BuildProfileStateKeyAsync(
+            $"{ObjectRevisionSuffix}{collection}.{Uri.EscapeDataString(objectId)}");
+    }
+
+    private async Task<string> BuildProfileStateKeyAsync(string suffix)
+    {
+        var profileId = await LoadConnectedProfileScopeIdAsync()
+            ?? throw new InvalidOperationException(
+                "Hosted-profile sync state requires a connected profile ID.");
+        return $"{ProfileStatePrefix}{profileId}.{suffix}";
     }
 }

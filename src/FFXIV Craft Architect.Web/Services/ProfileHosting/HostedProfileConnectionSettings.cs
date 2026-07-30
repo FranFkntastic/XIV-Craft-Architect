@@ -10,5 +10,7 @@ public sealed class HostedProfileConnectionSettings
 
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(HostUrl) &&
-        !string.IsNullOrWhiteSpace(AccessKey);
+        !string.IsNullOrWhiteSpace(AccessKey) &&
+        Guid.TryParse(ConnectedProfileId, out var profileId) &&
+        profileId != Guid.Empty;
 }

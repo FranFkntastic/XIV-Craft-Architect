@@ -62,6 +62,7 @@ public class WebSettingsService : ISettingsService
     }
 
     public event Action? PortableSettingsApplied;
+    public event Func<string, Task>? PortableSettingSaved;
 
     private Task EnsureLoadedAsync()
     {
@@ -136,7 +137,7 @@ public class WebSettingsService : ISettingsService
     {
         // Sync wrapper - updates cache, fire-and-forget save
         _cache[keyPath] = value!;
-        _ = SaveToIndexedDb(keyPath, value, throwOnFailure: false);
+        _ = SaveAndQueueSettingAsync(keyPath, value);
     }
 
     public async Task<T?> GetAsync<T>(string keyPath, T? defaultValue = default)
@@ -171,6 +172,8 @@ public class WebSettingsService : ISettingsService
             }
             throw;
         }
+
+        await NotifyPortableSettingSavedAsync(keyPath);
     }
 
     public async Task ResetToDefaultsAsync()
@@ -180,6 +183,7 @@ public class WebSettingsService : ISettingsService
         {
             _cache[kvp.Key] = kvp.Value;
             await SaveToIndexedDb(kvp.Key, kvp.Value, throwOnFailure: true);
+            await NotifyPortableSettingSavedAsync(kvp.Key);
         }
         _logger?.LogInformation("[WebSettingsService] Reset all settings to defaults");
     }
@@ -225,6 +229,36 @@ public class WebSettingsService : ISettingsService
         }
 
         PortableSettingsApplied?.Invoke();
+    }
+
+    private async Task SaveAndQueueSettingAsync<T>(string key, T value)
+    {
+        try
+        {
+            await SaveToIndexedDb(key, value, throwOnFailure: true);
+            await NotifyPortableSettingSavedAsync(key);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(
+                ex,
+                "[WebSettingsService] Failed to persist or queue setting '{Key}'",
+                key);
+        }
+    }
+
+    private async Task NotifyPortableSettingSavedAsync(string key)
+    {
+        if (!ProfileSyncLocalStateService.IsSyncedSetting(key) ||
+            PortableSettingSaved == null)
+        {
+            return;
+        }
+
+        foreach (Func<string, Task> handler in PortableSettingSaved.GetInvocationList())
+        {
+            await handler(key);
+        }
     }
 
     private async Task SaveToIndexedDb<T>(string key, T value, bool throwOnFailure)

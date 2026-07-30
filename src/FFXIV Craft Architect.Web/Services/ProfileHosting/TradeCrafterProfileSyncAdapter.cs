@@ -40,7 +40,11 @@ public sealed class TradeCrafterProfileSyncAdapter : IProfileSyncCollectionAdapt
             crafter.CompanyProfileId,
             "crafter",
             envelope.ObjectId);
-        await _tradeOperations.SaveCrafterAsync(crafter);
+        if (!await _tradeOperations.SaveCrafterAsync(crafter))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not apply hosted Trade crafter '{envelope.ObjectId}'.");
+        }
     }
 
     public Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)

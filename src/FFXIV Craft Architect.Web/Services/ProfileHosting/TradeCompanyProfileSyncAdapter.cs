@@ -29,7 +29,11 @@ public sealed class TradeCompanyProfileSyncAdapter : IProfileSyncCollectionAdapt
             throw new InvalidOperationException($"Hosted Trade company profile payload '{envelope.ObjectId}' could not be deserialized.");
         }
 
-        await _tradeOperations.SaveCompanyProfileAsync(profile);
+        if (!await _tradeOperations.SaveCompanyProfileAsync(profile))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not apply hosted Trade company profile '{envelope.ObjectId}'.");
+        }
     }
 
     public Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)

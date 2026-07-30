@@ -42,11 +42,19 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
             throw new InvalidOperationException($"Hosted profile plan payload '{envelope.ObjectId}' could not be deserialized.");
         }
 
-        await _indexedDb.SavePlansBatchAsync([plan]);
+        if (!await _indexedDb.SavePlansBatchAsync([plan]))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not apply hosted plan '{envelope.ObjectId}'.");
+        }
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
     {
-        await _planPersistence.DeletePlanAsync(objectId);
+        if (!await _planPersistence.DeletePlanAsync(objectId))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not delete hosted plan '{objectId}'.");
+        }
     }
 }
