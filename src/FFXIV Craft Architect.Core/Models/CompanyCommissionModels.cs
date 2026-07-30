@@ -120,7 +120,9 @@ public sealed record CompanyCommissionPaymentTerms(
     decimal MaterialAdjustment,
     decimal CraftLabor,
     decimal Total,
-    string? CustomTerms = null);
+    string? CustomTerms = null,
+    int CraftSynthCount = 0,
+    decimal GilPerSynth = 0);
 
 public sealed record CompanyCommissionPricingEvidence(
     string CostBasis,

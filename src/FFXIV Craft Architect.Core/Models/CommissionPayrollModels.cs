@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace FFXIV_Craft_Architect.Core.Models;
 
 public enum CommissionCostBasis
@@ -59,47 +61,28 @@ public enum TradePaymentContractMode
     LaborStandard
 }
 
-public enum TradeLaborBenchmarkMode
+public sealed record LegacyTradeLaborStandard
 {
-    CobaltRivets,
-    Custom
-}
+    public decimal BenchmarkLaborPayout { get; init; }
 
-public sealed record TradeLaborStandard(
-    string Name,
-    int BenchmarkItemId,
-    string BenchmarkItemName,
-    int BenchmarkQuantity,
-    bool BenchmarkRequiresHq,
-    decimal BenchmarkLaborPayout,
-    int BenchmarkSynthCount,
-    DateTime EffectiveFromUtc,
-    TradeLaborBenchmarkMode BenchmarkMode = TradeLaborBenchmarkMode.CobaltRivets,
-    DateTime? CalibratedAtUtc = null,
-    string? CalibrationEvidence = null)
-{
-    public decimal GilPerSynth => BenchmarkSynthCount > 0
-        ? BenchmarkLaborPayout / BenchmarkSynthCount
-        : 0m;
-
-    public bool IsManagedCobaltRivets => BenchmarkMode == TradeLaborBenchmarkMode.CobaltRivets;
-
-    public bool IsCustomBenchmark => BenchmarkMode == TradeLaborBenchmarkMode.Custom;
+    public int BenchmarkSynthCount { get; init; }
 }
 
 public sealed record TradePaymentPolicy(
     TradePaymentContractMode ActiveContract,
     decimal LegacyCommissionPercent,
-    TradeLaborStandard? LaborStandard)
+    decimal LaborGilPerSynth)
 {
-    public const decimal DefaultLaborStandardMaterialBonusPercent = 10m;
+    public const decimal DefaultLaborGilPerSynth = 200m;
 
-    public decimal LaborStandardMaterialBonusPercent { get; init; } = DefaultLaborStandardMaterialBonusPercent;
+    [JsonPropertyName("LaborStandard")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LegacyTradeLaborStandard? LegacyLaborStandard { get; init; }
 
     public static TradePaymentPolicy LegacyDefault { get; } = new(
         TradePaymentContractMode.LegacyCommission,
         CommissionPayoutPolicy.Default.CommissionPercent,
-        null);
+        DefaultLaborGilPerSynth);
 }
 
 public sealed record TradePaymentMaterialInput(

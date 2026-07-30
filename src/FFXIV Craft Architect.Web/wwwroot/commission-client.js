@@ -447,7 +447,12 @@ function adaptPayment(value) {
         materialAdjustment: requiredNumber(value.materialAdjustment, "Material adjustment", 0),
         craftLabor: requiredNumber(value.craftLabor, "Craft labor", 0),
         total: requiredNumber(value.total, "Total payment", 0),
-        customTerms: optionalText(value.customTerms)
+        customTerms: optionalText(value.customTerms),
+        craftSynthCount: requiredInteger(
+            value.craftSynthCount ?? 0,
+            "Craft synth count",
+            0),
+        gilPerSynth: requiredNumber(value.gilPerSynth ?? 0, "Gil per synth", 0)
     };
 }
 

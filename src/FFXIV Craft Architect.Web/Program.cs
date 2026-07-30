@@ -48,8 +48,6 @@ builder.Services.AddScoped<IMarketEvidenceReconciliationService, MarketEvidenceR
 builder.Services.AddScoped<IProcurementRouteExecutionService, ProcurementRouteExecutionService>();
 builder.Services.AddScoped<CommissionCostBasisResolver>();
 builder.Services.AddScoped<CommissionPayrollService>();
-builder.Services.AddScoped<TradeLaborStandardCalibrationService>();
-builder.Services.AddScoped<ITradeLaborBenchmarkPlanBuilder, TradeLaborBenchmarkPlanBuilder>();
 builder.Services.AddWorkshopHostCraftAppraisal();
 builder.Services.AddScoped<IWorkshopHostAcquisitionClient>(provider =>
     new WorkshopHostAcquisitionClient(provider.GetRequiredService<HttpClient>()));
@@ -90,7 +88,6 @@ builder.Services.AddScoped<TradeCommissionOperationsClient>();
 builder.Services.AddScoped<TradeCommissionOperationsService>();
 builder.Services.AddScoped<CommissionBriefClient>();
 builder.Services.AddScoped<CommissionBriefLocalStateService>();
-builder.Services.AddScoped<TradeLaborBenchmarkCalibrationWorkflowService>();
 builder.Services.AddScoped<ProfileHostClient>();
 builder.Services.AddScoped<ProfileSyncLocalStateService>();
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, SettingsProfileSyncAdapter>();

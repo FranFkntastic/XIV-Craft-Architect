@@ -179,12 +179,29 @@ public static class DiscordCommissionMessage
             _ => "Unavailable"
         };
 
-    private static string PaymentSummary(CommissionBriefPayment payment) =>
-        $"**{FormatGil(payment.Total)} total**\n" +
-        $"{payment.ContractLabel}\n" +
-        $"Materials {FormatGil(payment.MaterialReimbursement)} + " +
-        $"bonus {FormatGil(payment.MaterialBonus)} + " +
-        $"labor {FormatGil(payment.CraftLabor)}";
+    private static string PaymentSummary(CommissionBriefPayment payment)
+    {
+        var components = new List<string>
+        {
+            $"materials {FormatGil(payment.MaterialReimbursement)}"
+        };
+        if (payment.MaterialBonus > 0)
+        {
+            components.Add($"bonus {FormatGil(payment.MaterialBonus)}");
+        }
+
+        if (payment.CraftLabor > 0)
+        {
+            var basis = payment.CraftSynthCount > 0 && payment.GilPerSynth > 0
+                ? $" ({payment.CraftSynthCount:N0} synths x {payment.GilPerSynth:N0} gil)"
+                : string.Empty;
+            components.Add($"labor {FormatGil(payment.CraftLabor)}{basis}");
+        }
+
+        return $"**{FormatGil(payment.Total)} total**\n" +
+            $"{payment.ContractLabel}\n" +
+            string.Join(" + ", components);
+    }
 
     private static string MaterialsSummary(CommissionBriefDocument brief) =>
         $"Crafter supplies **{FormatMaterialCount(brief.CrafterMaterials)}**\n" +

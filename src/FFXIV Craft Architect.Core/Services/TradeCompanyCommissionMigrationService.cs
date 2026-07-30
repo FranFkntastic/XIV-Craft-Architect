@@ -298,7 +298,9 @@ public static class TradeCompanyCommissionMigrationService
                 payment?.MaterialReimbursement ?? 0,
                 payment?.MaterialBonus ?? 0,
                 payment?.CraftLabor ?? 0,
-                payment?.Total ?? 0),
+                payment?.Total ?? 0,
+                CraftSynthCount: payment?.CraftSynthCount ?? 0,
+                GilPerSynth: payment?.GilPerSynth ?? 0),
             DeliveryInstructions = brief?.DeliveryInstructions ?? string.Empty,
             PricingEvidence = new CompanyCommissionPricingEvidence(
                 evidence?.CostBasis ?? order.SourceSnapshot.CostBasis?.ToString() ?? "Unspecified",

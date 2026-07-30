@@ -702,8 +702,18 @@ function renderTerms() {
     target.replaceChildren();
     appendTextRow(target, "Payment", formatPaymentSchedule(terms.payment.schedule));
     appendTextRow(target, "Material reimbursement", formatGil(terms.payment.materialReimbursement));
-    appendTextRow(target, "Adjustment", formatGil(terms.payment.materialAdjustment));
-    appendTextRow(target, "Craft labor", formatGil(terms.payment.craftLabor));
+    if (terms.payment.materialAdjustment > 0) {
+        appendTextRow(target, "Adjustment", formatGil(terms.payment.materialAdjustment));
+    }
+    if (terms.payment.craftLabor > 0) {
+        appendTextRow(target, "Craft labor", formatGil(terms.payment.craftLabor));
+    }
+    if (terms.payment.craftSynthCount > 0 && terms.payment.gilPerSynth > 0) {
+        appendTextRow(
+            target,
+            "Labor basis",
+            `${formatNumber(terms.payment.craftSynthCount)} synths x ${formatGil(terms.payment.gilPerSynth)}`);
+    }
     appendTextRow(target, "Total", formatGil(terms.payment.total));
     appendTextRow(target, "Settlement", formatWords(brief.settlementState));
     appendTextRow(target, "Reference", brief.reference);

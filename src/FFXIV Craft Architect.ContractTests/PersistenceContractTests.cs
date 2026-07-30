@@ -826,7 +826,10 @@ public sealed class PersistenceContractTests
             sourcePlanName: "Zero commission plan",
             assignedCrafterId: null,
             assignedCrafterDisplayName: null,
-            paymentPolicy: new TradePaymentPolicy(TradePaymentContractMode.LegacyCommission, 0m, null));
+            paymentPolicy: new TradePaymentPolicy(
+                TradePaymentContractMode.LegacyCommission,
+                0m,
+                TradePaymentPolicy.DefaultLaborGilPerSynth));
         var reloaded = Assert.Single(await new TradePayrollPersistenceService(store).LoadDraftsAsync(companyProfileId));
 
         Assert.Equal(0m, reloaded.CommissionPercent);

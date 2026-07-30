@@ -737,11 +737,14 @@
                                             <span>Estimate only</span>
                                             <strong>@FormatGilAllowZero(paymentSummary.ProvidedMaterialTotal)</strong>
                                         </div>
-                                        <div class="trade-orders-payment-breakdown-row">
-                                            <span>@FormatActiveMaterialAdjustmentLabel(paymentSummary.Active.Contract)</span>
-                                            <span>@paymentSummary.CommissionPercent.ToString("N0")% of procurement</span>
-                                            <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
-                                        </div>
+                                        @if (paymentSummary.Active.Contract == TradePaymentContractMode.LegacyCommission)
+                                        {
+                                            <div class="trade-orders-payment-breakdown-row">
+                                                <span>Legacy material commission</span>
+                                                <span>@paymentSummary.CommissionPercent.ToString("N0")% of procurement</span>
+                                                <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
+                                            </div>
+                                        }
                                         @if (paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
                                         {
                                             <div class="trade-orders-payment-breakdown-row">
@@ -775,7 +778,7 @@
                                         </div>
                                         <div class="trade-orders-policy-comparison-row">
                                             <span>Labor standard</span>
-                                            <span>Materials + @paymentSummary.LaborStandard.CommissionPercent.ToString("N0")% bonus + labor</span>
+                                            <span>Materials + synth labor</span>
                                             <strong>@FormatPaymentBreakdown(paymentSummary.LaborStandard)</strong>
                                             <span>@FormatPaymentDifference(paymentSummary.LaborStandard, paymentSummary.Legacy)</span>
                                         </div>
