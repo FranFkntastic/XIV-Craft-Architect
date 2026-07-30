@@ -34,11 +34,12 @@ public sealed partial class SqliteProfileHostStore
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             ct);
+        var normalizedRequest = NormalizeMigrationRequest(request);
         var response = await BuildMigrationPreflightAsync(
             connection,
             transaction,
             profileId,
-            request,
+            normalizedRequest,
             ct);
         await transaction.CommitAsync(ct);
         return response;
@@ -55,13 +56,13 @@ public sealed partial class SqliteProfileHostStore
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             ct);
-        var preflightRequest = new ProfileHostMigrationPreflightRequest
+        var preflightRequest = NormalizeMigrationRequest(new ProfileHostMigrationPreflightRequest
         {
             MigrationId = request.MigrationId,
             Objects = request.Objects ?? Array.Empty<ProfileHostMigrationObjectInput>(),
             Resolutions = request.Resolutions ?? Array.Empty<ProfileHostMigrationResolution>(),
             Mappings = request.Mappings ?? Array.Empty<ProfileHostMigrationCanonicalMapping>()
-        };
+        });
         var requestHash = ComputeRequestHash(preflightRequest);
         var receipt = await LoadMigrationReceiptAsync(
             connection,
@@ -289,7 +290,8 @@ public sealed partial class SqliteProfileHostStore
             connection,
             transaction,
             profileId,
-            ct);
+            ct,
+            blockers);
         var inputs = new Dictionary<
             (string Collection, string ObjectId),
             ProfileHostMigrationObjectInput>(StringTupleComparer.Ordinal);
@@ -749,7 +751,8 @@ public sealed partial class SqliteProfileHostStore
         SqliteConnection connection,
         SqliteTransaction transaction,
         string profileId,
-        CancellationToken ct)
+        CancellationToken ct,
+        ICollection<ProfileHostMigrationBlocker>? blockers = null)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -767,7 +770,23 @@ public sealed partial class SqliteProfileHostStore
         while (await reader.ReadAsync(ct))
         {
             var item = ReadObject(reader);
-            result[(item.Collection, item.ObjectId)] = item;
+            item.ObjectId = NormalizeMigrationObjectId(item.Collection, item.ObjectId);
+            var identity = (item.Collection, item.ObjectId);
+            if (!result.TryAdd(identity, item))
+            {
+                if (blockers == null)
+                {
+                    throw new InvalidOperationException(
+                        $"Authoritative migration identity '{identity.Collection}/{identity.ObjectId}' has aliases.");
+                }
+
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.DuplicateAuthoritativeIdentity,
+                    "Authoritative hosted state contains more than one spelling of the same logical GUID identity.",
+                    identity.Collection,
+                    identity.ObjectId);
+            }
         }
 
         return result;
@@ -1358,6 +1377,7 @@ public sealed partial class SqliteProfileHostStore
 
     private static string ComputeRequestHash(ProfileHostMigrationPreflightRequest request)
     {
+        request = NormalizeMigrationRequest(request);
         var builder = new StringBuilder();
         AppendHashPart(builder, request.MigrationId.ToString("D"));
         foreach (var item in (request.Objects ?? Array.Empty<ProfileHostMigrationObjectInput>())
@@ -1538,6 +1558,62 @@ public sealed partial class SqliteProfileHostStore
     private static (string Collection, string ObjectId) MigrationIdentity(
         ProfileHostMigrationObjectInput input) =>
         (input.Collection, input.ObjectId);
+
+    private static ProfileHostMigrationPreflightRequest NormalizeMigrationRequest(
+        ProfileHostMigrationPreflightRequest request) =>
+        new()
+        {
+            MigrationId = request.MigrationId,
+            Objects = (request.Objects ?? Array.Empty<ProfileHostMigrationObjectInput>())
+                .Select(item => item == null
+                    ? new ProfileHostMigrationObjectInput()
+                    : new ProfileHostMigrationObjectInput
+                    {
+                        Collection = item.Collection ?? string.Empty,
+                        ObjectId = NormalizeMigrationObjectId(
+                            item.Collection ?? string.Empty,
+                            item.ObjectId ?? string.Empty),
+                        PayloadJson = item.PayloadJson ?? string.Empty
+                    })
+                .ToArray(),
+            Resolutions = (request.Resolutions ??
+                           Array.Empty<ProfileHostMigrationResolution>())
+                .Select(item => item == null
+                    ? new ProfileHostMigrationResolution()
+                    : new ProfileHostMigrationResolution
+                    {
+                        Collection = item.Collection ?? string.Empty,
+                        ObjectId = NormalizeMigrationObjectId(
+                            item.Collection ?? string.Empty,
+                            item.ObjectId ?? string.Empty),
+                        Resolution = item.Resolution
+                    })
+                .ToArray(),
+            Mappings = (request.Mappings ??
+                        Array.Empty<ProfileHostMigrationCanonicalMapping>())
+                .Select(item => item == null
+                    ? new ProfileHostMigrationCanonicalMapping()
+                    : new ProfileHostMigrationCanonicalMapping
+                    {
+                        Collection = item.Collection ?? string.Empty,
+                        SourceObjectId = NormalizeMigrationObjectId(
+                            item.Collection ?? string.Empty,
+                            item.SourceObjectId ?? string.Empty),
+                        TargetObjectId = NormalizeMigrationObjectId(
+                            item.Collection ?? string.Empty,
+                            item.TargetObjectId ?? string.Empty)
+                    })
+                .ToArray()
+        };
+
+    private static string NormalizeMigrationObjectId(
+        string collection,
+        string objectId) =>
+        IsGuidIdentityCollection(collection) &&
+        Guid.TryParse(objectId, out var parsed) &&
+        parsed != Guid.Empty
+            ? parsed.ToString("D")
+            : objectId;
 
     private static ProfileHostMigrationPreflightResponse CreateCommitBlocker(
         Guid migrationId,

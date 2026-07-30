@@ -10,6 +10,7 @@ public static class ProfileHostMigrationBlockerCodes
     public const string InvalidMigrationId = "invalid_migration_id";
     public const string EmptyMigration = "empty_migration";
     public const string DuplicateObjectIdentity = "duplicate_object_identity";
+    public const string DuplicateAuthoritativeIdentity = "duplicate_authoritative_identity";
     public const string InvalidCanonicalMapping = "invalid_canonical_mapping";
     public const string CanonicalTargetConflict = "canonical_target_conflict";
     public const string UnsupportedCollection = "unsupported_collection";
