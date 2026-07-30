@@ -91,7 +91,7 @@ public partial class TradeOrders
         var quantity = GetSelectedCompanyMaterialQuantity(itemId, requiresHq);
         if (!quantity.HasValue)
         {
-            return "—";
+            return "-";
         }
 
         return SelectedCanonicalCommission?.Gates.CompanyMaterials.ReadyAtUtc.HasValue == true
@@ -106,7 +106,7 @@ public partial class TradeOrders
         var quantity = GetSelectedCompanyMaterialQuantity(itemId, requiresHq);
         if (!quantity.HasValue)
         {
-            return "—";
+            return "-";
         }
 
         return SelectedCanonicalCommission?.Gates.CompanyMaterials.ReceivedAtUtc.HasValue == true

@@ -613,7 +613,7 @@
                                             <div>
                                                 <MudText Typo="Typo.subtitle2">Commission Payment</MudText>
                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                    @commissionTerms.Payment.Schedule · terms v@commissionTerms.Version
+                                                    @commissionTerms.Payment.Schedule - terms v@commissionTerms.Version
                                                 </MudText>
                                             </div>
                                             <span class="@GetCommissionGateChipClass(canonicalCommission.Gates.Payment.State)">
@@ -1036,10 +1036,10 @@
                                         <div class="trade-orders-section-heading">
                                             <div>
                                                 <MudText Typo="Typo.subtitle2">
-                                                    @ownerCommission.Reference · Commission
+                                                    @ownerCommission.Reference - Commission
                                                 </MudText>
                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                    Terms v@ownerCommission.CurrentTermsVersion · owner revision @ownerProjection.ObjectRevision
+                                                    Terms v@ownerCommission.CurrentTermsVersion - owner revision @ownerProjection.ObjectRevision
                                                 </MudText>
                                             </div>
                                             <span class="trade-orders-publication-chip is-attention">
@@ -1063,7 +1063,7 @@
                                                 <strong>
                                                     @(provisional != null
                                                         ? $"{provisional.ContactMethod}: {provisional.ContactValue}"
-                                                        : "—")
+                                                        : "-")
                                                 </strong>
                                             </div>
                                             <div>
@@ -1220,7 +1220,7 @@
                                                     <strong>@FormatCommissionActivity(activity.Kind)</strong>
                                                     <span>
                                                         @activity.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-                                                        · @(activity.Actor.DisplayName ?? activity.Actor.Kind.ToString())
+                                                        - @(activity.Actor.DisplayName ?? activity.Actor.Kind.ToString())
                                                     </span>
                                                     @if (!string.IsNullOrWhiteSpace(activity.Comment))
                                                     {
