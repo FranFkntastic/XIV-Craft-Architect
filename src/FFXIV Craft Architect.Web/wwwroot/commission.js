@@ -304,12 +304,18 @@ function resolveNextStep() {
             tone: "blocked"
         };
     }
-    if (brief.closed || brief.status === "Canceled") {
+    if (brief.closed || brief.status === "Canceled" || brief.status === "Completed") {
         return {
-            title: brief.closed ? "Commission complete" : "Commission canceled",
-            body: brief.closed
-                ? "Delivery and settlement are complete. The accepted terms remain available for reference."
-                : "No further work can be reported.",
+            title: brief.status === "Canceled"
+                ? "Commission canceled"
+                : brief.closed
+                    ? "Commission complete"
+                    : "Delivery accepted",
+            body: brief.status === "Canceled"
+                ? "No further work can be reported."
+                : brief.closed
+                    ? "Delivery and settlement are complete. The accepted terms remain available for reference."
+                    : "The commissioner accepted delivery. Financial settlement remains separate, and ordinary crafter actions are now locked.",
             tone: "blocked"
         };
     }
@@ -460,6 +466,30 @@ function latestActivityRevision(projection, kind) {
         .reduce((latest, item) => Math.max(latest, item.commissionRevision), 0);
 }
 
+function canUseActiveParticipantMutations(projection) {
+    const brief = projection.public;
+    return projection.kind === "participant" &&
+        brief.viewState === "Published" &&
+        !brief.closed &&
+        brief.status !== "Canceled" &&
+        brief.status !== "Completed";
+}
+
+function canReleaseBeforeWork(projection) {
+    const brief = projection.public;
+    return canUseActiveParticipantMutations(projection) &&
+        !brief.clearedToWork &&
+        brief.status !== "InProgress" &&
+        brief.status !== "AwaitingDelivery" &&
+        brief.gates.payment !== "Satisfied" &&
+        brief.gates.companyMaterials !== "Satisfied" &&
+        !areCompanyMaterialsReady(projection) &&
+        brief.outputProgress.every(progress =>
+            progress.completedQuantity === 0 &&
+            progress.readyQuantity === 0 &&
+            progress.acceptedQuantity === 0);
+}
+
 function isCompleteAndReady(brief) {
     if (brief.terms.outputs.length === 0) return false;
     const progressByLine = new Map(brief.outputProgress.map(item => [item.lineId, item]));
@@ -528,10 +558,9 @@ function materialGateDetail(brief) {
 function renderOutputs() {
     const projection = state.projection;
     const brief = projection.public;
-    const canEdit = projection.kind === "participant" &&
+    const canEdit = canUseActiveParticipantMutations(projection) &&
         brief.clearedToWork &&
-        !brief.deliveryReadiness.isReady &&
-        !brief.closed;
+        !brief.deliveryReadiness.isReady;
     const progressByLine = new Map(brief.outputProgress.map(item => [item.lineId, item]));
     const target = byId("outputs");
     target.replaceChildren();
@@ -615,7 +644,7 @@ function renderMaterials() {
     renderMaterialList("crafterMaterials", crafter, false);
 
     const acknowledge = byId("acknowledgeMaterials");
-    acknowledge.hidden = !(projection.kind === "participant" &&
+    acknowledge.hidden = !(canUseActiveParticipantMutations(projection) &&
         brief.gates.companyMaterials === "Pending" &&
         areCompanyMaterialsReady(projection));
     acknowledge.onclick = acknowledge.hidden ? null : acknowledgeMaterials;
@@ -689,7 +718,7 @@ function renderTerms() {
 
     const paymentActions = byId("paymentActions");
     paymentActions.replaceChildren();
-    const canRequestWhileIdentityWaits = state.projection.kind === "participant" &&
+    const canRequestWhileIdentityWaits = canUseActiveParticipantMutations(state.projection) &&
         brief.gates.identity === "Pending" &&
         brief.gates.payment === "Pending" &&
         !brief.clearedToWork;
@@ -709,13 +738,21 @@ function renderAccess() {
     actions.replaceChildren();
 
     if (projection.kind === "participant") {
-        setText("accessState", "Saved locally");
+        const canMutate = canUseActiveParticipantMutations(projection);
+        setText("accessState", canMutate ? "Saved locally" : "Reference only");
         accessNote.append(
-            element("strong", null, "This browser can update the commission."),
+            element(
+                "strong",
+                null,
+                canMutate
+                    ? "This browser can update the commission."
+                    : "This participant access is retained for reference."),
             element(
                 "small",
                 null,
-                "The public URL is view-only. A commissioner-issued recovery link can reissue this access without replacing the commission or its progress.")
+                canMutate
+                    ? "The public URL is view-only. A commissioner-issued recovery link can reissue this access without replacing the commission or its progress."
+                    : "Canceled and fulfilled commissions do not accept ordinary participant mutations.")
         );
         if (projection.provisionalCrafter) {
             const crafter = projection.provisionalCrafter;
@@ -724,9 +761,7 @@ function renderAccess() {
                 null,
                 `${crafter.characterName} · ${crafter.homeWorld} · ${crafter.contactMethod}: ${crafter.contactValue}`));
         }
-        if (!projection.public.closed &&
-            projection.public.status !== "Canceled" &&
-            !projection.public.deliveryReadiness.isReady) {
+        if (canReleaseBeforeWork(projection)) {
             actions.append(createButton(
                 "Release commission",
                 openReleaseForm,
@@ -780,9 +815,7 @@ function renderActivity() {
 }
 
 function renderCommentForm() {
-    const allowed = state.projection.kind === "participant" &&
-        !state.projection.public.closed &&
-        state.projection.public.status !== "Canceled";
+    const allowed = canUseActiveParticipantMutations(state.projection);
     const form = byId("commentForm");
     form.hidden = !allowed;
     form.onsubmit = allowed ? submitComment : null;
@@ -1255,10 +1288,17 @@ async function declareReadiness() {
 }
 
 async function runParticipantCommand(command, payload, successMessage) {
-    if (state.projection.kind !== "participant" || !state.access?.participantSecret) {
+    if (!canUseActiveParticipantMutations(state.projection) ||
+        !state.access?.participantSecret) {
         showNotice(
-            "Participant access required",
-            "This browser does not hold the participant capability for that command.");
+            "Participant action unavailable",
+            "This browser lacks active participant authority, or the commission is no longer open to ordinary participant changes.");
+        return;
+    }
+    if (command === "release-claim" && !canReleaseBeforeWork(state.projection)) {
+        showNotice(
+            "Release requires commissioner reconciliation",
+            "Ordinary release is available only before payment, company-material receipt, work clearance, or progress begins.");
         return;
     }
     setBusy(true);
