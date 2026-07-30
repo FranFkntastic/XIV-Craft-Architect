@@ -37,6 +37,7 @@ public sealed class ProfileSyncService
     private readonly List<ProfileSyncPendingSave> _pendingSaves = [];
     private readonly List<ProfileSyncConflict> _conflicts = [];
     private int _suppressionDepth;
+    private bool _pendingSavesLoaded;
 
     public ProfileSyncService(
         ProfileHostClient client,
@@ -59,15 +60,17 @@ public sealed class ProfileSyncService
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
+        await EnsurePendingSavesLoadedAsync();
         await SyncNowAsync(ct);
     }
 
     public async Task SyncNowAsync(CancellationToken ct = default)
     {
+        await EnsurePendingSavesLoadedAsync();
         var settings = await _localState.LoadConnectionSettingsAsync();
         if (!settings.IsConfigured)
         {
-            SetStatus(ProfileSyncStatus.LocalOnly());
+            SetStatus(ProfileSyncStatus.LocalOnly() with { PendingCount = _pendingSaves.Count });
             return;
         }
 
@@ -79,6 +82,11 @@ public sealed class ProfileSyncService
             {
                 foreach (var item in changes.Objects)
                 {
+                    if (IsPending(item.Collection, item.ObjectId))
+                    {
+                        continue;
+                    }
+
                     var adapter = GetAdapter(item.Collection);
                     if (item.Deleted)
                     {
@@ -94,14 +102,19 @@ public sealed class ProfileSyncService
             }
 
             await _localState.SaveLastSyncRevisionAsync(changes.ServerRevision);
+            var hostReachable = await RetryPendingSavesAsync(settings, ct);
             SetStatus(new ProfileSyncStatus(
                 true,
-                true,
+                hostReachable,
                 changes.ServerRevision,
                 _pendingSaves.Count,
                 _conflicts.Count,
                 DateTime.UtcNow,
-                "Synced"));
+                _conflicts.Count > 0
+                    ? "Conflicts need review"
+                    : _pendingSaves.Count > 0
+                        ? "Local changes pending"
+                        : "Synced"));
         }
         catch (Exception ex)
         {
@@ -124,6 +137,7 @@ public sealed class ProfileSyncService
             return;
         }
 
+        await EnsurePendingSavesLoadedAsync();
         var settings = await _localState.LoadConnectionSettingsAsync();
         if (!settings.IsConfigured)
         {
@@ -137,49 +151,16 @@ public sealed class ProfileSyncService
             return;
         }
 
-        var expectedRevision = await _localState.LoadObjectRevisionAsync(collection, objectId);
-        try
-        {
-            var response = await _client.PutObjectAsync(
-                settings.HostUrl!,
-                settings.AccessKey!,
-                collection,
-                objectId,
-                new ProfileSyncPutRequest
-                {
-                    PayloadJson = localObject.PayloadJson,
-                    ExpectedRevision = expectedRevision
-                },
-                ct);
-
-            if (response.Conflict && response.RemoteObject != null)
-            {
-                _conflicts.RemoveAll(item => item.Collection == collection && item.ObjectId == objectId);
-                _conflicts.Add(new ProfileSyncConflict(
-                    collection,
-                    objectId,
-                    expectedRevision,
-                    response.RemoteObject.Revision,
-                    response.RemoteObject));
-            }
-            else if (response.Success && response.Object != null)
-            {
-                _pendingSaves.RemoveAll(item => item.Collection == collection && item.ObjectId == objectId);
-                await _localState.SaveObjectRevisionAsync(collection, objectId, response.Object.Revision);
-            }
-        }
-        catch
-        {
-            if (!_pendingSaves.Any(item => item.Collection == collection && item.ObjectId == objectId))
-            {
-                _pendingSaves.Add(new ProfileSyncPendingSave(collection, objectId));
-            }
-        }
+        await AddPendingSaveAsync(collection, objectId);
+        var hostReachable = await TryPushPendingSaveAsync(
+            settings,
+            new ProfileSyncPendingSave(collection, objectId),
+            ct);
 
         var lastRevision = await _localState.LoadLastSyncRevisionAsync();
         SetStatus(new ProfileSyncStatus(
             true,
-            CurrentStatus.HostReachable,
+            hostReachable,
             lastRevision,
             _pendingSaves.Count,
             _conflicts.Count,
@@ -192,11 +173,12 @@ public sealed class ProfileSyncService
         FirstConnectMode mode,
         CancellationToken ct = default)
     {
+        await EnsurePendingSavesLoadedAsync();
         await _localState.SaveConnectionSettingsAsync(settings);
         if (mode == FirstConnectMode.UploadLocal)
         {
             var objects = new List<ProfileSyncObjectEnvelope>();
-            foreach (var adapter in _adapters.Values)
+            foreach (var adapter in _adapters.Values.OrderBy(adapter => adapter.Collection, StringComparer.Ordinal))
             {
                 objects.AddRange(await adapter.LoadLocalObjectsAsync(ct));
             }
@@ -207,6 +189,8 @@ public sealed class ProfileSyncService
                 new ProfileHostBootstrapPayload { Objects = objects },
                 ct);
             await _localState.SaveLastSyncRevisionAsync(response.ServerRevision);
+            _pendingSaves.Clear();
+            await PersistPendingSavesAsync();
             SetStatus(new ProfileSyncStatus(
                 true,
                 true,
@@ -224,8 +208,10 @@ public sealed class ProfileSyncService
 
     public async Task DisconnectAsync(CancellationToken ct = default)
     {
+        await EnsurePendingSavesLoadedAsync();
         await _localState.SaveConnectionSettingsAsync(new HostedProfileConnectionSettings());
         _pendingSaves.Clear();
+        await PersistPendingSavesAsync();
         _conflicts.Clear();
         SetStatus(ProfileSyncStatus.LocalOnly());
     }
@@ -243,6 +229,7 @@ public sealed class ProfileSyncService
         }
 
         _conflicts.Remove(conflict);
+        await RemovePendingSaveAsync(conflict.Collection, conflict.ObjectId);
         RefreshStatusMessage("Remote version applied");
     }
 
@@ -280,6 +267,7 @@ public sealed class ProfileSyncService
                 conflict.ObjectId,
                 response.Object.Revision);
             _conflicts.Remove(conflict);
+            await RemovePendingSaveAsync(conflict.Collection, conflict.ObjectId);
             RefreshStatusMessage("Local version kept");
         }
     }
@@ -288,6 +276,166 @@ public sealed class ProfileSyncService
     {
         _suppressionDepth++;
         return new SuppressionLease(this);
+    }
+
+    private async Task EnsurePendingSavesLoadedAsync()
+    {
+        if (_pendingSavesLoaded)
+        {
+            return;
+        }
+
+        var persisted = await _localState.LoadPendingSavesAsync();
+        _pendingSaves.Clear();
+        _pendingSaves.AddRange(
+            persisted
+                .DistinctBy(
+                    pending => $"{pending.Collection}\0{pending.ObjectId}",
+                    StringComparer.OrdinalIgnoreCase)
+                .OrderBy(pending => pending.Collection, StringComparer.Ordinal)
+                .ThenBy(pending => pending.ObjectId, StringComparer.Ordinal));
+        _pendingSavesLoaded = true;
+    }
+
+    private async Task<bool> RetryPendingSavesAsync(
+        HostedProfileConnectionSettings settings,
+        CancellationToken ct)
+    {
+        var hostReachable = true;
+        foreach (var pending in _pendingSaves
+                     .OrderBy(item => item.Collection, StringComparer.Ordinal)
+                     .ThenBy(item => item.ObjectId, StringComparer.Ordinal)
+                     .ToArray())
+        {
+            if (!await TryPushPendingSaveAsync(settings, pending, ct))
+            {
+                hostReachable = false;
+            }
+        }
+
+        return hostReachable;
+    }
+
+    private async Task<bool> TryPushPendingSaveAsync(
+        HostedProfileConnectionSettings settings,
+        ProfileSyncPendingSave pending,
+        CancellationToken ct)
+    {
+        var adapter = GetAdapter(pending.Collection);
+        var localObject = (await adapter.LoadLocalObjectsAsync(ct))
+            .FirstOrDefault(item => string.Equals(
+                item.ObjectId,
+                pending.ObjectId,
+                StringComparison.Ordinal));
+        if (localObject == null)
+        {
+            return false;
+        }
+
+        var expectedRevision = await _localState.LoadObjectRevisionAsync(
+            pending.Collection,
+            pending.ObjectId);
+        ProfileSyncPutResponse response;
+        try
+        {
+            response = await _client.PutObjectAsync(
+                settings.HostUrl!,
+                settings.AccessKey!,
+                pending.Collection,
+                pending.ObjectId,
+                new ProfileSyncPutRequest
+                {
+                    PayloadJson = localObject.PayloadJson,
+                    ExpectedRevision = expectedRevision
+                },
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (response.Conflict && response.RemoteObject != null)
+        {
+            _conflicts.RemoveAll(item => IsSameIdentity(
+                item.Collection,
+                item.ObjectId,
+                pending.Collection,
+                pending.ObjectId));
+            _conflicts.Add(new ProfileSyncConflict(
+                pending.Collection,
+                pending.ObjectId,
+                expectedRevision,
+                response.RemoteObject.Revision,
+                response.RemoteObject));
+        }
+        else if (response.Success && response.Object != null)
+        {
+            await _localState.SaveObjectRevisionAsync(
+                pending.Collection,
+                pending.ObjectId,
+                response.Object.Revision);
+            await RemovePendingSaveAsync(pending.Collection, pending.ObjectId);
+        }
+
+        return true;
+    }
+
+    private async Task AddPendingSaveAsync(string collection, string objectId)
+    {
+        if (IsPending(collection, objectId))
+        {
+            return;
+        }
+
+        _pendingSaves.Add(new ProfileSyncPendingSave(collection, objectId));
+        await PersistPendingSavesAsync();
+    }
+
+    private async Task RemovePendingSaveAsync(string collection, string objectId)
+    {
+        if (_pendingSaves.RemoveAll(item => IsSameIdentity(
+                item.Collection,
+                item.ObjectId,
+                collection,
+                objectId)) == 0)
+        {
+            return;
+        }
+
+        await PersistPendingSavesAsync();
+    }
+
+    private Task PersistPendingSavesAsync()
+    {
+        var ordered = _pendingSaves
+            .OrderBy(item => item.Collection, StringComparer.Ordinal)
+            .ThenBy(item => item.ObjectId, StringComparer.Ordinal)
+            .ToArray();
+        return _localState.SavePendingSavesAsync(ordered);
+    }
+
+    private bool IsPending(string collection, string objectId)
+    {
+        return _pendingSaves.Any(item => IsSameIdentity(
+            item.Collection,
+            item.ObjectId,
+            collection,
+            objectId));
+    }
+
+    private static bool IsSameIdentity(
+        string leftCollection,
+        string leftObjectId,
+        string rightCollection,
+        string rightObjectId)
+    {
+        return string.Equals(leftCollection, rightCollection, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(leftObjectId, rightObjectId, StringComparison.Ordinal);
     }
 
     private IProfileSyncCollectionAdapter GetAdapter(string collection)

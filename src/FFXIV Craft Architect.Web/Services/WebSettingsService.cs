@@ -2,6 +2,7 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Web.Services.BrowserPersistence;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using Microsoft.Extensions.Logging;
 
 namespace FFXIV_Craft_Architect.Web.Services;
@@ -13,9 +14,6 @@ public class WebSettingsService : ISettingsService
 {
     private const string RegionalProcurementDefaultMigrationKey = "migration.regional_procurement_default";
     private readonly IndexedDbService _indexedDb;
-    private readonly TradeCompanyConnectionStore _companyConnections;
-    private readonly TradeOperationsPersistenceService _tradeOperations;
-    private readonly PortableOperatorSettingsStore _portableSettings;
     private readonly ILogger<WebSettingsService>? _logger;
     private readonly Dictionary<string, object> _cache = new();
     private readonly object _loadSync = new();
@@ -58,15 +56,9 @@ public class WebSettingsService : ISettingsService
 
     public WebSettingsService(
         IndexedDbService indexedDb,
-        TradeCompanyConnectionStore companyConnections,
-        TradeOperationsPersistenceService tradeOperations,
-        PortableOperatorSettingsStore portableSettings,
         ILogger<WebSettingsService>? logger = null)
     {
         _indexedDb = indexedDb;
-        _companyConnections = companyConnections;
-        _tradeOperations = tradeOperations;
-        _portableSettings = portableSettings;
         _logger = logger;
     }
 
@@ -239,6 +231,49 @@ public class WebSettingsService : ISettingsService
         PortableSettingsApplied?.Invoke();
     }
 
+    public async Task ApplyHostedSettingAsync(
+        string key,
+        string serialized,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await EnsureLoadedAsync();
+        if (!ProfileSyncLocalStateService.IsSyncedSetting(key))
+        {
+            throw new InvalidOperationException(
+                $"Browser-local setting '{key}' cannot be hydrated from hosted profile sync.");
+        }
+
+        if (!await _indexedDb.SaveSettingsBatchAsync(new Dictionary<string, string>
+            {
+                [key] = serialized
+            }))
+        {
+            throw new InvalidOperationException(
+                $"The browser could not persist hosted setting '{key}'.");
+        }
+
+        if (string.Equals(serialized, "null", StringComparison.OrdinalIgnoreCase))
+        {
+            if (DefaultSettings.TryGetValue(key, out var defaultValue))
+            {
+                _cache[key] = defaultValue;
+            }
+            else
+            {
+                _cache.Remove(key);
+            }
+        }
+        else
+        {
+            _cache[key] = JsonSerializer.Deserialize<object>(serialized)
+                ?? throw new InvalidOperationException(
+                    $"Hosted setting '{key}' contains an empty value.");
+        }
+
+        PortableSettingsApplied?.Invoke();
+    }
+
     private async Task SaveToIndexedDb<T>(string key, T value, bool throwOnFailure)
     {
         try
@@ -249,20 +284,6 @@ public class WebSettingsService : ISettingsService
                     $"Browser settings storage rejected '{key}'.");
             }
 
-            if (PortableOperatorSettingKeys.IsPortable(key))
-            {
-                var profile = await _tradeOperations.GetOrCreateActiveCompanyProfileAsync();
-                var connection = CompanyId.TryParse(profile.RemoteId, out var companyId)
-                    ? await _companyConnections.LoadAsync(companyId)
-                    : null;
-                if (connection is { Role: not TradeCompanyRole.ReadOnly })
-                {
-                    await _portableSettings.SetAsync(
-                        connection.Access,
-                        key,
-                        value);
-                }
-            }
             _logger?.LogDebug("[WebSettingsService] Saved setting '{Key}'", key);
         }
         catch (Exception ex)

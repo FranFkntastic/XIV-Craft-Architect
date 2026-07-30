@@ -16,8 +16,14 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var profile = await _tradeOperations.GetOrCreateActiveCompanyProfileAsync();
-        var orders = await _tradeOperations.LoadOrdersAsync(profile.Id);
+        var profiles = await _tradeOperations.LoadCompanyProfilesAsync();
+        var orders = new List<TradeOrder>();
+        foreach (var profile in profiles.OrderBy(profile => profile.Id))
+        {
+            ct.ThrowIfCancellationRequested();
+            orders.AddRange(await _tradeOperations.LoadOrdersAsync(profile.Id));
+        }
+
         var now = DateTime.UtcNow;
         return orders.Select(order => ToEnvelope(order, now)).ToArray();
     }
@@ -30,6 +36,10 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             throw new InvalidOperationException($"Hosted Trade order payload '{envelope.ObjectId}' could not be deserialized.");
         }
 
+        await _tradeOperations.RequireCompanyProfileAsync(
+            order.CompanyProfileId,
+            "order",
+            envelope.ObjectId);
         await _tradeOperations.SaveOrderAsync(order);
     }
 

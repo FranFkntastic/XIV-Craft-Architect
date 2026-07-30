@@ -6,6 +6,7 @@ public sealed class ProfileSyncLocalStateService
 {
     private const string ConnectedProfileNameKey = "profileHost.connectedProfileName";
     private const string ObjectRevisionPrefix = "profileHost.objectRevision.";
+    private const string PendingSavesKey = "profileHost.pendingSaves";
 
     private readonly IndexedDbService _indexedDb;
 
@@ -18,6 +19,7 @@ public sealed class ProfileSyncLocalStateService
     {
         return !ProfileSyncSettingsKeys.ConnectionSettingKeys.Contains(key) &&
                !string.Equals(key, ConnectedProfileNameKey, StringComparison.OrdinalIgnoreCase) &&
+               !string.Equals(key, PendingSavesKey, StringComparison.OrdinalIgnoreCase) &&
                !key.StartsWith(ObjectRevisionPrefix, StringComparison.OrdinalIgnoreCase) &&
                !key.StartsWith(CommissionBriefLocalStateService.SettingPrefix, StringComparison.OrdinalIgnoreCase);
     }
@@ -63,6 +65,23 @@ public sealed class ProfileSyncLocalStateService
     public async Task SaveObjectRevisionAsync(string collection, string objectId, long revision)
     {
         await _indexedDb.SaveSettingAsync(BuildObjectRevisionKey(collection, objectId), revision);
+    }
+
+    public async Task<IReadOnlyList<ProfileSyncPendingSave>> LoadPendingSavesAsync()
+    {
+        return await _indexedDb.LoadSettingAsync(
+                   PendingSavesKey,
+                   Array.Empty<ProfileSyncPendingSave>())
+               ?? Array.Empty<ProfileSyncPendingSave>();
+    }
+
+    public async Task SavePendingSavesAsync(IReadOnlyList<ProfileSyncPendingSave> pendingSaves)
+    {
+        if (!await _indexedDb.SaveSettingAsync(PendingSavesKey, pendingSaves))
+        {
+            throw new InvalidOperationException(
+                "Browser storage could not persist pending hosted-profile writes.");
+        }
     }
 
     private static string BuildObjectRevisionKey(string collection, string objectId)

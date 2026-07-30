@@ -72,6 +72,19 @@ public sealed class TradeOperationsPersistenceService
         return await _indexedDb.SaveTradeCompanyProfileAsync(profile);
     }
 
+    public async Task RequireCompanyProfileAsync(
+        Guid companyProfileId,
+        string childKind,
+        string childId)
+    {
+        var profiles = await LoadCompanyProfilesAsync();
+        if (profiles.All(profile => profile.Id != companyProfileId))
+        {
+            throw new InvalidOperationException(
+                $"Trade {childKind} '{childId}' references missing company profile '{companyProfileId:D}'.");
+        }
+    }
+
     public async Task<IReadOnlyList<TradeCrafterProfile>> LoadCraftersAsync(Guid companyProfileId)
     {
         return await _indexedDb.LoadTradeCraftersAsync(companyProfileId);

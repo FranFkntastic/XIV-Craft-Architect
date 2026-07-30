@@ -16,8 +16,14 @@ public sealed class TradeCrafterProfileSyncAdapter : IProfileSyncCollectionAdapt
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var profile = await _tradeOperations.GetOrCreateActiveCompanyProfileAsync();
-        var crafters = await _tradeOperations.LoadCraftersAsync(profile.Id);
+        var profiles = await _tradeOperations.LoadCompanyProfilesAsync();
+        var crafters = new List<TradeCrafterProfile>();
+        foreach (var profile in profiles.OrderBy(profile => profile.Id))
+        {
+            ct.ThrowIfCancellationRequested();
+            crafters.AddRange(await _tradeOperations.LoadCraftersAsync(profile.Id));
+        }
+
         var now = DateTime.UtcNow;
         return crafters.Select(crafter => ToEnvelope(crafter, now)).ToArray();
     }
@@ -30,6 +36,10 @@ public sealed class TradeCrafterProfileSyncAdapter : IProfileSyncCollectionAdapt
             throw new InvalidOperationException($"Hosted Trade crafter payload '{envelope.ObjectId}' could not be deserialized.");
         }
 
+        await _tradeOperations.RequireCompanyProfileAsync(
+            crafter.CompanyProfileId,
+            "crafter",
+            envelope.ObjectId);
         await _tradeOperations.SaveCrafterAsync(crafter);
     }
 

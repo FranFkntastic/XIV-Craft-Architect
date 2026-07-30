@@ -20,8 +20,14 @@ public sealed class TradePayrollDraftProfileSyncAdapter : IProfileSyncCollection
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var profile = await _tradeOperations.GetOrCreateActiveCompanyProfileAsync();
-        var drafts = await _tradePayrollPersistence.LoadDraftsAsync(profile.Id);
+        var profiles = await _tradeOperations.LoadCompanyProfilesAsync();
+        var drafts = new List<TradePayrollWorkflowDraft>();
+        foreach (var profile in profiles.OrderBy(profile => profile.Id))
+        {
+            ct.ThrowIfCancellationRequested();
+            drafts.AddRange(await _tradePayrollPersistence.LoadDraftsAsync(profile.Id));
+        }
+
         var now = DateTime.UtcNow;
         return drafts.Select(draft => ToEnvelope(draft, now)).ToArray();
     }
@@ -34,6 +40,10 @@ public sealed class TradePayrollDraftProfileSyncAdapter : IProfileSyncCollection
             throw new InvalidOperationException($"Hosted Trade payroll draft payload '{envelope.ObjectId}' could not be deserialized.");
         }
 
+        await _tradeOperations.RequireCompanyProfileAsync(
+            draft.CompanyProfileId,
+            "payroll draft",
+            envelope.ObjectId);
         await _tradePayrollPersistence.SaveDraftAsync(draft);
     }
 
