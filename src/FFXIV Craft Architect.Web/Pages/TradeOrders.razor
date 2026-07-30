@@ -911,7 +911,7 @@
                                         </div>
                                     </section>
                                 }
-                                @if (HasLiveCommissionPublication)
+                                @if (HasLiveCommissionPublication && !HasFailedCompanyPublication)
                                 {
                                     var publication = _selectedOrder.CommissionPublication!;
                                     <section class="trade-orders-collaboration-state is-live">
@@ -969,12 +969,20 @@
                                     <section class="trade-orders-collaboration-state">
                                         <div class="trade-orders-section-heading">
                                             <div>
-                                                <MudText Typo="Typo.subtitle2">Private order</MudText>
+                                                <MudText Typo="Typo.subtitle2">
+                                                    @(HasFailedCompanyPublication
+                                                        ? "Trade channel delivery needs attention"
+                                                        : "Private order")
+                                                </MudText>
                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                    Publish a crafter-facing brief without sharing this workspace, internal notes, or the mutable Craft Architect plan.
+                                                    @(HasFailedCompanyPublication
+                                                        ? "The crafter brief is fixed, but the configured channel did not accept it. Retry the same delivery without creating another commission."
+                                                        : "Publish a crafter-facing brief without sharing this workspace, internal notes, or the mutable Craft Architect plan.")
                                                 </MudText>
                                             </div>
-                                            <span class="trade-orders-publication-chip">Not published</span>
+                                            <span class="trade-orders-publication-chip">
+                                                @(HasFailedCompanyPublication ? "Not delivered" : "Not published")
+                                            </span>
                                         </div>
                                     </section>
                                     <div class="trade-orders-visibility">
@@ -985,29 +993,33 @@
                                         <div class="is-private"><strong>Internal notes</strong><span>Operator-only planning notes</span><b>Private</b></div>
                                         <div class="is-private"><strong>Full craft plan</strong><span>Never required for the crafter</span><b>Private</b></div>
                                     </div>
-                                    <div class="trade-orders-collaboration-fields">
-                                        <MudTextField @bind-Value="_commissionContact"
-                                                      id="commission-contact"
-                                                      Label="Commission contact"
-                                                      HelperText="Discord username or reply method shown to the crafter; defaults from company settings"
-                                                      Variant="Variant.Outlined"
-                                                      Margin="Margin.Dense"
-                                                      Immediate="true"
-                                                      MaxLength="240" />
-                                        <MudTextField @bind-Value="_commissionDeliveryInstructions"
-                                                      id="commission-delivery-instructions"
-                                                      Label="Crafter-facing delivery note"
-                                                      HelperText="Internal order notes remain private"
-                                                      Variant="Variant.Outlined"
-                                                      Margin="Margin.Dense"
-                                                      Immediate="true"
-                                                      Lines="2"
-                                                      MaxLength="1000" />
-                                    </div>
-                                    @if (!CanPublishCommission)
+                                    @if (!HasFailedCompanyPublication)
+                                    {
+                                        <div class="trade-orders-collaboration-fields">
+                                            <MudTextField @bind-Value="_commissionContact"
+                                                          id="commission-contact"
+                                                          Label="Commission contact"
+                                                          HelperText="Discord username or reply method shown to the crafter; defaults from company settings"
+                                                          Variant="Variant.Outlined"
+                                                          Margin="Margin.Dense"
+                                                          Immediate="true"
+                                                          MaxLength="240" />
+                                            <MudTextField @bind-Value="_commissionDeliveryInstructions"
+                                                          id="commission-delivery-instructions"
+                                                          Label="Crafter-facing delivery note"
+                                                          HelperText="Internal order notes remain private"
+                                                          Variant="Variant.Outlined"
+                                                          Margin="Margin.Dense"
+                                                          Immediate="true"
+                                                          Lines="2"
+                                                          MaxLength="1000" />
+                                        </div>
+                                    }
+                                    @if (!_isPublishingCommission &&
+                                         PublishCommissionUnavailableReason is { } unavailableReason)
                                     {
                                         <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
-                                            A publishable brief needs requested outputs and an available payment total from the current order evidence.
+                                            @unavailableReason
                                         </MudAlert>
                                     }
                                     <MudButton Variant="Variant.Filled"
