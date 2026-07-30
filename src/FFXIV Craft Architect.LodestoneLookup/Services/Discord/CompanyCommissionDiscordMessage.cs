@@ -62,7 +62,7 @@ public static class CompanyCommissionDiscordMessage
                     footer = new
                     {
                         text = DiscordProjectionSanitizer.Text(
-                            $"{commission.CompanyDisplayName} • Terms v{commission.Terms.Version}",
+                            $"{commission.CompanyDisplayName} | Terms v{commission.Terms.Version}",
                             2048)
                     },
                     timestamp = projection.CommittedAtUtc.ToUniversalTime().ToString("O")
@@ -105,7 +105,7 @@ public static class CompanyCommissionDiscordMessage
             {
                 new
                 {
-                    title = $"{AttentionLabel(attentionClass)} · " +
+                    title = $"{AttentionLabel(attentionClass)} - " +
                         DiscordProjectionSanitizer.Text(notification.Commission.Reference, 220),
                     description = DiscordProjectionSanitizer.Text(notification.Summary, 4096),
                     color = AttentionColor(attentionClass),
@@ -238,6 +238,6 @@ internal static class DiscordProjectionSanitizer
 
         return sanitized.Length <= maximumLength
             ? sanitized
-            : sanitized[..(maximumLength - 1)] + "…";
+            : sanitized[..(maximumLength - 3)] + "...";
     }
 }
