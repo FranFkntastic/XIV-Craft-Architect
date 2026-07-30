@@ -254,6 +254,76 @@ public static class ProfileHostEndpoints
                 return Results.Ok(new ProfileHostBootstrapPayload { Objects = changes.Objects });
             });
 
+        group.MapPost(
+            "/migrations/preflight",
+            async (
+                ProfileHostMigrationPreflightRequest migration,
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (profile == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                var preflight = await store.PreflightMigrationAsync(
+                    profile.ProfileId,
+                    migration,
+                    cancellationToken);
+                return Results.Ok(preflight);
+            });
+
+        group.MapPost(
+            "/migrations/commit",
+            async (
+                ProfileHostMigrationCommitRequest migration,
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (profile == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                var commit = await store.CommitMigrationAsync(
+                    profile.ProfileId,
+                    migration,
+                    cancellationToken);
+                return commit.Success
+                    ? Results.Ok(commit.Response)
+                    : Results.Conflict(commit.Conflict);
+            });
+
         return group;
     }
 

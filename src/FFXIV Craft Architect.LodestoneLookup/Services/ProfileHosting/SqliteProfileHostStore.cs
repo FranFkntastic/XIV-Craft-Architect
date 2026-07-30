@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
-public sealed class SqliteProfileHostStore
+public sealed partial class SqliteProfileHostStore
 {
     private readonly ProfileHostOptions _options;
 
@@ -625,6 +625,17 @@ public sealed class SqliteProfileHostStore
             create table if not exists profile_revisions (
                 profile_id text primary key,
                 revision integer not null,
+                foreign key(profile_id) references hosted_profiles(id)
+            );
+
+            create table if not exists profile_migration_receipts (
+                profile_id text not null,
+                migration_id text not null,
+                request_hash text not null,
+                receipt_hash text not null,
+                response_json text not null,
+                created_at_utc text not null,
+                primary key(profile_id, migration_id),
                 foreign key(profile_id) references hosted_profiles(id)
             );
 
