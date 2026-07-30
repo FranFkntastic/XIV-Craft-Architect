@@ -188,16 +188,24 @@ public partial class TradeOrders
     {
         _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
-        _opsPaneWidth = Math.Clamp(
-            await WebSettings.GetAsync(OpsPaneWidthSettingKey, DefaultOpsPaneWidth),
-            MinimumOpsPaneWidth,
-            MaximumOpsPaneWidth);
+        try
+        {
+            _opsPaneWidth = Math.Clamp(
+                await WebSettings.GetAsync(OpsPaneWidthSettingKey, DefaultOpsPaneWidth),
+                MinimumOpsPaneWidth,
+                MaximumOpsPaneWidth);
+        }
+        catch
+        {
+            _opsPaneWidth = DefaultOpsPaneWidth;
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await EnsureLiveProcurementSnapshotAsync();
-        if (firstRender)
+        if (_tradeOrdersLayoutRegistration == null &&
+            string.IsNullOrWhiteSpace(_loadError))
         {
             await RegisterTradeOrdersLayoutAsync();
         }
