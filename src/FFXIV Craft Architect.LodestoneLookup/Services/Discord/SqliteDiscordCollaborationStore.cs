@@ -6,9 +6,7 @@ using FFXIV_Craft_Architect.Core.Models;
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
 public sealed class SqliteDiscordCollaborationStore(
-    DiscordCommissionOptions options) :
-    IDiscordVolunteerInteractionService,
-    IDiscordOutboxLeaseStore
+    DiscordCommissionOptions options)
 {
     private readonly SemaphoreSlim _schemaGate = new(1, 1);
     private bool _schemaReady;
@@ -32,27 +30,6 @@ public sealed class SqliteDiscordCollaborationStore(
             await using var command = connection.CreateCommand();
             command.CommandText =
                 """
-                CREATE TABLE IF NOT EXISTS discord_schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at_utc TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS discord_installations (
-                    installation_id TEXT PRIMARY KEY,
-                    company_id TEXT NOT NULL,
-                    application_id TEXT NOT NULL,
-                    guild_id TEXT NOT NULL,
-                    channel_id TEXT NOT NULL,
-                    granted_permissions INTEGER NOT NULL,
-                    active INTEGER NOT NULL,
-                    verified_at_utc TEXT NOT NULL,
-                    UNIQUE (application_id, guild_id, channel_id)
-                );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_discord_installations_active_company
-                    ON discord_installations(company_id)
-                    WHERE active = 1;
-
                 CREATE TABLE IF NOT EXISTS discord_publications (
                     publication_id TEXT PRIMARY KEY,
                     company_id TEXT NOT NULL,
@@ -60,19 +37,14 @@ public sealed class SqliteDiscordCollaborationStore(
                     source_order_revision INTEGER NOT NULL,
                     public_id TEXT NOT NULL,
                     brief_version INTEGER NOT NULL,
-                    installation_id TEXT NOT NULL,
-                    application_id TEXT NOT NULL,
-                    guild_id TEXT NOT NULL,
                     channel_id TEXT NOT NULL,
                     message_id TEXT NULL,
                     action_token TEXT NOT NULL UNIQUE,
                     state INTEGER NOT NULL,
                     desired_projection_revision INTEGER NOT NULL,
-                    applied_projection_revision INTEGER NOT NULL,
                     idempotency_key TEXT NOT NULL UNIQUE,
                     created_at_utc TEXT NOT NULL,
-                    updated_at_utc TEXT NOT NULL,
-                    FOREIGN KEY (installation_id) REFERENCES discord_installations(installation_id)
+                    updated_at_utc TEXT NOT NULL
                 );
 
                 CREATE UNIQUE INDEX IF NOT EXISTS ux_discord_publications_active_order
@@ -80,7 +52,7 @@ public sealed class SqliteDiscordCollaborationStore(
                     WHERE state IN (0, 1);
 
                 CREATE UNIQUE INDEX IF NOT EXISTS ux_discord_publications_message
-                    ON discord_publications(application_id, channel_id, message_id)
+                    ON discord_publications(channel_id, message_id)
                     WHERE message_id IS NOT NULL;
 
                 CREATE TABLE IF NOT EXISTS discord_interest_claims (
@@ -98,13 +70,6 @@ public sealed class SqliteDiscordCollaborationStore(
                     resolved_at_utc TEXT NULL,
                     FOREIGN KEY (publication_id) REFERENCES discord_publications(publication_id),
                     UNIQUE (publication_id, discord_user_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS discord_interaction_receipts (
-                    interaction_id TEXT PRIMARY KEY,
-                    claim_id TEXT NOT NULL,
-                    created_at_utc TEXT NOT NULL,
-                    FOREIGN KEY (claim_id) REFERENCES discord_interest_claims(claim_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS discord_outbox (
@@ -129,11 +94,7 @@ public sealed class SqliteDiscordCollaborationStore(
 
                 CREATE INDEX IF NOT EXISTS ix_discord_outbox_due
                     ON discord_outbox(state, next_attempt_at_utc);
-
-                INSERT OR IGNORE INTO discord_schema_migrations(version, applied_at_utc)
-                VALUES (1, $now);
                 """;
-            command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
             await command.ExecuteNonQueryAsync(cancellationToken);
             _schemaReady = true;
         }
@@ -143,98 +104,7 @@ public sealed class SqliteDiscordCollaborationStore(
         }
     }
 
-    public async Task UpsertInstallationAsync(
-        DiscordCompanyInstallationBinding binding,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(binding);
-        ValidateInstallation(binding);
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(
-            IsolationLevel.Serializable,
-            cancellationToken);
-        if (binding.Active)
-        {
-            await using var deactivate = connection.CreateCommand();
-            deactivate.Transaction = (SqliteTransaction)transaction;
-            deactivate.CommandText =
-                """
-                UPDATE discord_installations
-                SET active = 0
-                WHERE company_id = $companyId AND installation_id <> $installationId;
-                """;
-            deactivate.Parameters.AddWithValue("$companyId", binding.CompanyId.ToString());
-            deactivate.Parameters.AddWithValue("$installationId", binding.InstallationId.ToString("D"));
-            await deactivate.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using var command = connection.CreateCommand();
-        command.Transaction = (SqliteTransaction)transaction;
-        command.CommandText =
-            """
-            INSERT INTO discord_installations (
-                installation_id,
-                company_id,
-                application_id,
-                guild_id,
-                channel_id,
-                granted_permissions,
-                active,
-                verified_at_utc
-            )
-            VALUES (
-                $installationId,
-                $companyId,
-                $applicationId,
-                $guildId,
-                $channelId,
-                $grantedPermissions,
-                $active,
-                $verifiedAtUtc
-            )
-            ON CONFLICT(installation_id) DO UPDATE SET
-                company_id = excluded.company_id,
-                application_id = excluded.application_id,
-                guild_id = excluded.guild_id,
-                channel_id = excluded.channel_id,
-                granted_permissions = excluded.granted_permissions,
-                active = excluded.active,
-                verified_at_utc = excluded.verified_at_utc;
-            """;
-        AddInstallationParameters(command, binding);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-    }
-
-    public async Task<DiscordCompanyInstallationBinding?> LoadInstallationAsync(
-        CompanyId companyId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            SELECT
-                installation_id,
-                company_id,
-                application_id,
-                guild_id,
-                channel_id,
-                granted_permissions,
-                active,
-                verified_at_utc
-            FROM discord_installations
-            WHERE company_id = $companyId AND active = 1;
-            """;
-        command.Parameters.AddWithValue("$companyId", companyId.ToString());
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken)
-            ? ReadInstallation(reader)
-            : null;
-    }
-
     public async Task<DiscordPublicationCreateResult> CreatePublicationAsync(
-        DiscordCompanyInstallationBinding installation,
         TradeCompanyPublicationOwnership ownership,
         string publicId,
         int briefVersion,
@@ -245,14 +115,11 @@ public sealed class SqliteDiscordCollaborationStore(
         DateTimeOffset createdAt,
         CancellationToken cancellationToken = default)
     {
-        ValidateInstallation(installation);
         ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(actionToken);
         ArgumentException.ThrowIfNullOrWhiteSpace(initialPayloadJson);
-        if (!installation.Active ||
-            !DiscordRuntimePermission.CanPublish(installation.GrantedPermissions) ||
-            installation.CompanyId != ownership.CompanyId ||
+        if (!options.CanPublishDirectly ||
             ownership.OrderId == Guid.Empty ||
             briefVersion <= 0 ||
             actionToken.Length > 100 ||
@@ -261,7 +128,7 @@ public sealed class SqliteDiscordCollaborationStore(
             return new DiscordPublicationCreateResult(
                 DiscordPublicationCreateStatus.Conflict,
                 null,
-                "The canonical ownership and active Discord installation do not match.");
+                "The canonical ownership and configured Discord destination do not match.");
         }
 
         await using var connection = await OpenAsync(cancellationToken);
@@ -297,15 +164,11 @@ public sealed class SqliteDiscordCollaborationStore(
             ownership.OrderRevision,
             publicId,
             briefVersion,
-            installation.InstallationId,
-            installation.ApplicationId,
-            installation.GuildId,
-            installation.ChannelId,
+            options.AllowedChannelId,
             null,
             actionToken,
             initialState,
             1,
-            0,
             idempotencyKey,
             createdAt,
             createdAt);
@@ -337,7 +200,7 @@ public sealed class SqliteDiscordCollaborationStore(
             return new DiscordPublicationCreateResult(
                 DiscordPublicationCreateStatus.Conflict,
                 null,
-                "An active Discord publication already owns this order or installation binding.");
+                "An active Discord publication already owns this order.");
         }
     }
 
@@ -736,23 +599,20 @@ public sealed class SqliteDiscordCollaborationStore(
             return;
         }
 
-        await using var supersede = connection.CreateCommand();
-        supersede.Transaction = (SqliteTransaction)transaction;
-        supersede.CommandText =
+        await using var discardStale = connection.CreateCommand();
+        discardStale.Transaction = (SqliteTransaction)transaction;
+        discardStale.CommandText =
             """
-            UPDATE discord_outbox
-            SET state = $superseded, updated_at_utc = $now
+            DELETE FROM discord_outbox
             WHERE publication_id = $publicationId
               AND state IN ($pending, $retry)
               AND desired_projection_revision < $desiredRevision;
             """;
-        supersede.Parameters.AddWithValue("$superseded", (int)DiscordOutboxState.Superseded);
-        supersede.Parameters.AddWithValue("$now", queuedAt.ToString("O"));
-        supersede.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
-        supersede.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
-        supersede.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
-        supersede.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
-        await supersede.ExecuteNonQueryAsync(cancellationToken);
+        discardStale.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+        discardStale.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+        discardStale.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
+        discardStale.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
+        await discardStale.ExecuteNonQueryAsync(cancellationToken);
 
         await using var update = connection.CreateCommand();
         update.Transaction = (SqliteTransaction)transaction;
@@ -821,8 +681,8 @@ public sealed class SqliteDiscordCollaborationStore(
             cancellationToken);
         if (publication == null ||
             publication.State != DiscordPublicationState.Open ||
-            !string.Equals(publication.ApplicationId, interaction.ApplicationId, StringComparison.Ordinal) ||
-            !string.Equals(publication.GuildId, interaction.GuildId, StringComparison.Ordinal) ||
+            !string.Equals(options.ApplicationId, interaction.ApplicationId, StringComparison.Ordinal) ||
+            !string.Equals(options.AllowedGuildId, interaction.GuildId, StringComparison.Ordinal) ||
             !string.Equals(publication.ChannelId, interaction.ChannelId, StringComparison.Ordinal) ||
             !string.Equals(publication.MessageId, interaction.MessageId, StringComparison.Ordinal))
         {
@@ -830,19 +690,6 @@ public sealed class SqliteDiscordCollaborationStore(
             return new DiscordVolunteerInteractionResult(
                 DiscordVolunteerInteractionStatus.NoLongerOpen,
                 "This commission is no longer accepting volunteers.");
-        }
-
-        var receiptClaim = await LoadClaimByInteractionAsync(
-            connection,
-            (SqliteTransaction)transaction,
-            interaction.InteractionId,
-            cancellationToken);
-        if (receiptClaim != null)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return new DiscordVolunteerInteractionResult(
-                DiscordVolunteerInteractionStatus.Replayed,
-                ClaimMessage(receiptClaim));
         }
 
         var existingClaim = await LoadClaimByUserAsync(
@@ -853,14 +700,7 @@ public sealed class SqliteDiscordCollaborationStore(
             cancellationToken);
         if (existingClaim != null)
         {
-            await InsertInteractionReceiptAsync(
-                connection,
-                (SqliteTransaction)transaction,
-                interaction.InteractionId,
-                existingClaim.ClaimId,
-                DateTimeOffset.UtcNow,
-                cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            await transaction.RollbackAsync(cancellationToken);
             return new DiscordVolunteerInteractionResult(
                 DiscordVolunteerInteractionStatus.Replayed,
                 ClaimMessage(existingClaim));
@@ -884,13 +724,6 @@ public sealed class SqliteDiscordCollaborationStore(
             connection,
             (SqliteTransaction)transaction,
             claim,
-            cancellationToken);
-        await InsertInteractionReceiptAsync(
-            connection,
-            (SqliteTransaction)transaction,
-            interaction.InteractionId,
-            claim.ClaimId,
-            now,
             cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new DiscordVolunteerInteractionResult(
@@ -1027,20 +860,14 @@ public sealed class SqliteDiscordCollaborationStore(
             UPDATE discord_publications
             SET
                 message_id = COALESCE($messageId, message_id),
-                applied_projection_revision = CASE
-                    WHEN $desiredRevision > applied_projection_revision
-                    THEN $desiredRevision
-                    ELSE applied_projection_revision
-                END,
                 updated_at_utc = $now
             WHERE publication_id = $publicationId;
             """;
         publication.Parameters.AddWithValue(
             "$messageId",
             string.IsNullOrWhiteSpace(messageId) ? DBNull.Value : messageId);
-        publication.Parameters.AddWithValue("$desiredRevision", metadata.Value.DesiredRevision);
         publication.Parameters.AddWithValue("$now", completedAt.ToString("O"));
-        publication.Parameters.AddWithValue("$publicationId", metadata.Value.PublicationId.ToString("D"));
+        publication.Parameters.AddWithValue("$publicationId", metadata.Value.ToString("D"));
         await publication.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
@@ -1134,15 +961,11 @@ public sealed class SqliteDiscordCollaborationStore(
                 source_order_revision,
                 public_id,
                 brief_version,
-                installation_id,
-                application_id,
-                guild_id,
                 channel_id,
                 message_id,
                 action_token,
                 state,
                 desired_projection_revision,
-                applied_projection_revision,
                 idempotency_key,
                 created_at_utc,
                 updated_at_utc
@@ -1154,15 +977,11 @@ public sealed class SqliteDiscordCollaborationStore(
                 $sourceOrderRevision,
                 $publicId,
                 $briefVersion,
-                $installationId,
-                $applicationId,
-                $guildId,
                 $channelId,
                 $messageId,
                 $actionToken,
                 $state,
                 $desiredProjectionRevision,
-                $appliedProjectionRevision,
                 $idempotencyKey,
                 $createdAt,
                 $updatedAt
@@ -1298,15 +1117,11 @@ public sealed class SqliteDiscordCollaborationStore(
                 source_order_revision,
                 public_id,
                 brief_version,
-                installation_id,
-                application_id,
-                guild_id,
                 channel_id,
                 message_id,
                 action_token,
                 state,
                 desired_projection_revision,
-                applied_projection_revision,
                 idempotency_key,
                 created_at_utc,
                 updated_at_utc
@@ -1323,43 +1138,14 @@ public sealed class SqliteDiscordCollaborationStore(
             new CompanyRecordRevision(reader.GetInt64(3)),
             reader.GetString(4),
             reader.GetInt32(5),
-            Guid.Parse(reader.GetString(6)),
-            reader.GetString(7),
+            reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
             reader.GetString(8),
-            reader.GetString(9),
-            reader.IsDBNull(10) ? null : reader.GetString(10),
+            (DiscordPublicationState)reader.GetInt32(9),
+            reader.GetInt64(10),
             reader.GetString(11),
-            (DiscordPublicationState)reader.GetInt32(12),
-            reader.GetInt64(13),
-            reader.GetInt64(14),
-            reader.GetString(15),
-            DateTimeOffset.Parse(reader.GetString(16)),
-            DateTimeOffset.Parse(reader.GetString(17)));
-
-    private static DiscordCompanyInstallationBinding ReadInstallation(SqliteDataReader reader) =>
-        new(
-            Guid.Parse(reader.GetString(0)),
-            CompanyId.Parse(reader.GetString(1)),
-            reader.GetString(2),
-            reader.GetString(3),
-            reader.GetString(4),
-            reader.GetInt64(5),
-            reader.GetInt32(6) != 0,
-            DateTimeOffset.Parse(reader.GetString(7)));
-
-    private static void AddInstallationParameters(
-        SqliteCommand command,
-        DiscordCompanyInstallationBinding binding)
-    {
-        command.Parameters.AddWithValue("$installationId", binding.InstallationId.ToString("D"));
-        command.Parameters.AddWithValue("$companyId", binding.CompanyId.ToString());
-        command.Parameters.AddWithValue("$applicationId", binding.ApplicationId);
-        command.Parameters.AddWithValue("$guildId", binding.GuildId);
-        command.Parameters.AddWithValue("$channelId", binding.ChannelId);
-        command.Parameters.AddWithValue("$grantedPermissions", binding.GrantedPermissions);
-        command.Parameters.AddWithValue("$active", binding.Active ? 1 : 0);
-        command.Parameters.AddWithValue("$verifiedAtUtc", binding.VerifiedAt.ToString("O"));
-    }
+            DateTimeOffset.Parse(reader.GetString(12)),
+            DateTimeOffset.Parse(reader.GetString(13)));
 
     private static void AddPublicationParameters(
         SqliteCommand command,
@@ -1371,9 +1157,6 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Parameters.AddWithValue("$sourceOrderRevision", publication.SourceOrderRevision.Value);
         command.Parameters.AddWithValue("$publicId", publication.PublicId);
         command.Parameters.AddWithValue("$briefVersion", publication.BriefVersion);
-        command.Parameters.AddWithValue("$installationId", publication.InstallationId.ToString("D"));
-        command.Parameters.AddWithValue("$applicationId", publication.ApplicationId);
-        command.Parameters.AddWithValue("$guildId", publication.GuildId);
         command.Parameters.AddWithValue("$channelId", publication.ChannelId);
         command.Parameters.AddWithValue(
             "$messageId",
@@ -1385,9 +1168,6 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Parameters.AddWithValue(
             "$desiredProjectionRevision",
             publication.DesiredProjectionRevision);
-        command.Parameters.AddWithValue(
-            "$appliedProjectionRevision",
-            publication.AppliedProjectionRevision);
         command.Parameters.AddWithValue("$idempotencyKey", publication.IdempotencyKey);
         command.Parameters.AddWithValue("$createdAt", publication.CreatedAt.ToString("O"));
         command.Parameters.AddWithValue("$updatedAt", publication.UpdatedAt.ToString("O"));
@@ -1404,38 +1184,6 @@ public sealed class SqliteDiscordCollaborationStore(
         command.CommandText += " WHERE company_id = $companyId AND claim_id = $claimId;";
         command.Parameters.AddWithValue("$companyId", companyId.ToString());
         command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? ReadClaim(reader) : null;
-    }
-
-    private static async Task<DiscordInterestClaim?> LoadClaimByInteractionAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        string interactionId,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
-            """
-            SELECT
-                c.claim_id,
-                c.publication_id,
-                c.company_id,
-                c.order_id,
-                c.discord_user_id,
-                c.discord_display_name,
-                c.state,
-                c.resolved_crafter_id,
-                c.accepted_order_revision,
-                c.resolution_idempotency_key,
-                c.created_at_utc,
-                c.resolved_at_utc
-            FROM discord_interaction_receipts r
-            JOIN discord_interest_claims c ON c.claim_id = r.claim_id
-            WHERE r.interaction_id = $interactionId;
-            """;
-        command.Parameters.AddWithValue("$interactionId", interactionId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadClaim(reader) : null;
     }
@@ -1544,31 +1292,6 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Parameters.AddWithValue("$discordDisplayName", claim.DiscordDisplayName);
         command.Parameters.AddWithValue("$state", (int)claim.State);
         command.Parameters.AddWithValue("$createdAt", claim.CreatedAt.ToString("O"));
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static async Task InsertInteractionReceiptAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        string interactionId,
-        Guid claimId,
-        DateTimeOffset createdAt,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
-            """
-            INSERT INTO discord_interaction_receipts(
-                interaction_id,
-                claim_id,
-                created_at_utc
-            )
-            VALUES($interactionId, $claimId, $createdAt);
-            """;
-        command.Parameters.AddWithValue("$interactionId", interactionId);
-        command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
-        command.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -1692,12 +1415,12 @@ public sealed class SqliteDiscordCollaborationStore(
             """;
         publication.Parameters.AddWithValue("$state", (int)publicationState);
         publication.Parameters.AddWithValue("$updatedAt", failedAt.ToString("O"));
-        publication.Parameters.AddWithValue("$publicationId", metadata.Value.PublicationId.ToString("D"));
+        publication.Parameters.AddWithValue("$publicationId", metadata.Value.ToString("D"));
         await publication.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
-    private static async Task<(Guid PublicationId, long DesiredRevision)?> LoadOutboxMetadataAsync(
+    private static async Task<Guid?> LoadOutboxMetadataAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         Guid workItemId,
@@ -1708,7 +1431,7 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Transaction = transaction;
         command.CommandText =
             """
-            SELECT publication_id, desired_projection_revision
+            SELECT publication_id
             FROM discord_outbox
             WHERE work_item_id = $workItemId
               AND lease_id = $leaseId
@@ -1719,7 +1442,7 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
-            ? (Guid.Parse(reader.GetString(0)), reader.GetInt64(1))
+            ? Guid.Parse(reader.GetString(0))
             : null;
     }
 
@@ -1757,19 +1480,6 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Parameters.AddWithValue("$leaseId", leaseId);
         command.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
         await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static void ValidateInstallation(DiscordCompanyInstallationBinding binding)
-    {
-        if (binding.InstallationId == Guid.Empty ||
-            binding.CompanyId == default ||
-            !IsDiscordSnowflake(binding.ApplicationId) ||
-            !IsDiscordSnowflake(binding.GuildId) ||
-            !IsDiscordSnowflake(binding.ChannelId) ||
-            binding.GrantedPermissions < 0)
-        {
-            throw new ArgumentException("Discord installation binding is incomplete.", nameof(binding));
-        }
     }
 
     private static bool IsDiscordSnowflake(string value) =>

@@ -2,38 +2,14 @@ using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
-public static class DiscordRuntimePermission
-{
-    public const long ViewChannel = 1L << 10;
-    public const long SendMessages = 1L << 11;
-    public const long EmbedLinks = 1L << 14;
-    public const long Required =
-        ViewChannel |
-        SendMessages |
-        EmbedLinks;
-
-    public static bool CanPublish(long permissions) =>
-        (permissions & Required) == Required;
-}
-
-public sealed record DiscordCompanyInstallationBinding(
-    Guid InstallationId,
-    CompanyId CompanyId,
-    string ApplicationId,
-    string GuildId,
-    string ChannelId,
-    long GrantedPermissions,
-    bool Active,
-    DateTimeOffset VerifiedAt);
-
 public enum DiscordPublicationState
 {
-    Open,
-    Assigned,
-    Closed,
-    Revoked,
-    ReconciliationRequired,
-    Failed
+    Open = 0,
+    Assigned = 1,
+    Closed = 2,
+    Revoked = 3,
+    ReconciliationRequired = 4,
+    Failed = 5
 }
 
 public sealed record DiscordPublicationRecord(
@@ -43,15 +19,11 @@ public sealed record DiscordPublicationRecord(
     CompanyRecordRevision SourceOrderRevision,
     string PublicId,
     int BriefVersion,
-    Guid InstallationId,
-    string ApplicationId,
-    string GuildId,
     string ChannelId,
     string? MessageId,
     string ActionToken,
     DiscordPublicationState State,
     long DesiredProjectionRevision,
-    long AppliedProjectionRevision,
     string IdempotencyKey,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
@@ -74,12 +46,10 @@ public sealed record DiscordPublicationCreateResult(
 
 public enum DiscordInterestClaimState
 {
-    Pending,
-    AssignmentPending,
-    Accepted,
-    Declined,
-    Withdrawn,
-    Superseded
+    Pending = 0,
+    AssignmentPending = 1,
+    Accepted = 2,
+    Declined = 3
 }
 
 public sealed record DiscordInterestClaim(
@@ -115,11 +85,10 @@ public sealed record DiscordClaimTransitionResult(
 
 public enum DiscordOutboxState
 {
-    Pending,
-    InFlight,
-    Retry,
-    Succeeded,
-    Superseded,
-    ReconciliationRequired,
-    Failed
+    Pending = 0,
+    InFlight = 1,
+    Retry = 2,
+    Succeeded = 3,
+    ReconciliationRequired = 5,
+    Failed = 6
 }

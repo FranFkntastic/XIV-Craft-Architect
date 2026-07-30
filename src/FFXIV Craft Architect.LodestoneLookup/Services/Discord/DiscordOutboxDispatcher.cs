@@ -17,87 +17,8 @@ public sealed record DiscordOutboxWorkItem(
     string PayloadJson,
     int AttemptCount);
 
-public interface IDiscordOutboxLeaseStore
-{
-    Task<IReadOnlyList<DiscordOutboxWorkItem>> LeaseDueAsync(
-        DateTimeOffset now,
-        TimeSpan leaseDuration,
-        int maximumCount,
-        CancellationToken cancellationToken = default);
-
-    Task CompleteAsync(
-        Guid workItemId,
-        string leaseId,
-        string? messageId,
-        DateTimeOffset completedAt,
-        CancellationToken cancellationToken = default);
-
-    Task RetryAsync(
-        Guid workItemId,
-        string leaseId,
-        DateTimeOffset nextAttemptAt,
-        string error,
-        CancellationToken cancellationToken = default);
-
-    Task RequireReconciliationAsync(
-        Guid workItemId,
-        string leaseId,
-        string error,
-        DateTimeOffset failedAt,
-        CancellationToken cancellationToken = default);
-
-    Task ExhaustAsync(
-        Guid workItemId,
-        string leaseId,
-        string error,
-        DateTimeOffset failedAt,
-        CancellationToken cancellationToken = default);
-}
-
-public sealed class EmptyDiscordOutboxLeaseStore : IDiscordOutboxLeaseStore
-{
-    public Task<IReadOnlyList<DiscordOutboxWorkItem>> LeaseDueAsync(
-        DateTimeOffset now,
-        TimeSpan leaseDuration,
-        int maximumCount,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult<IReadOnlyList<DiscordOutboxWorkItem>>([]);
-
-    public Task CompleteAsync(
-        Guid workItemId,
-        string leaseId,
-        string? messageId,
-        DateTimeOffset completedAt,
-        CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
-
-    public Task RetryAsync(
-        Guid workItemId,
-        string leaseId,
-        DateTimeOffset nextAttemptAt,
-        string error,
-        CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
-
-    public Task RequireReconciliationAsync(
-        Guid workItemId,
-        string leaseId,
-        string error,
-        DateTimeOffset failedAt,
-        CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
-
-    public Task ExhaustAsync(
-        Guid workItemId,
-        string leaseId,
-        string error,
-        DateTimeOffset failedAt,
-        CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
-}
-
 public sealed class DiscordOutboxDispatcher(
-    IDiscordOutboxLeaseStore store,
+    SqliteDiscordCollaborationStore store,
     IDiscordApiClient discord,
     DiscordCommissionOptions options,
     TimeProvider timeProvider,

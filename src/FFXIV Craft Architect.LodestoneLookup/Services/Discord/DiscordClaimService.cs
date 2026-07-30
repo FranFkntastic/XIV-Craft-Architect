@@ -24,7 +24,7 @@ public sealed record DiscordOperatorClaimResult(
 public sealed class DiscordClaimService(
     SqliteDiscordCollaborationStore collaboration,
     DiscordCompanyOrderAdapter orders,
-    TimeProvider timeProvider) : IDiscordVolunteerInteractionService
+    TimeProvider timeProvider)
 {
     public Task<DiscordVolunteerInteractionResult> RecordInterestAsync(
         DiscordVolunteerInteraction interaction,

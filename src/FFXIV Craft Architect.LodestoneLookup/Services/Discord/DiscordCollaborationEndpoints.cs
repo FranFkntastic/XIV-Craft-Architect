@@ -4,8 +4,6 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
-public sealed record DiscordPublishExistingBriefRequest(string IdempotencyKey);
-
 public sealed record DiscordCreatePublicationRequest(
     Guid OrderId,
     CompanyRecordRevision OrderRevision,
@@ -209,51 +207,6 @@ public static class DiscordCollaborationEndpoints
 
                 await publications.RevokeAsync(publicId, cancellationToken);
                 return Results.NoContent();
-            });
-
-        group.MapPost(
-            "/publications/{publicId}/post",
-            async (
-                string companyId,
-                string publicId,
-                DiscordPublishExistingBriefRequest body,
-                HttpRequest request,
-                TradeCompanyAuthorization authorization,
-                DiscordPublicationService publications,
-                CancellationToken cancellationToken) =>
-            {
-                var access = await ResolveAccessAsync(
-                    companyId,
-                    request,
-                    authorization,
-                    cancellationToken);
-                if (access == null)
-                {
-                    return Results.Unauthorized();
-                }
-
-                if (access.Role == TradeCompanyRole.ReadOnly)
-                {
-                    return Results.Forbid();
-                }
-
-                if (body == null || string.IsNullOrWhiteSpace(body.IdempotencyKey))
-                {
-                    return Results.BadRequest(new
-                    {
-                        error = "missing_idempotency_key",
-                        message = "A publication idempotency key is required."
-                    });
-                }
-
-                var result = await publications.PublishExistingBriefAsync(
-                    access,
-                    publicId,
-                    body.IdempotencyKey,
-                    cancellationToken);
-                return result.Success
-                    ? Results.Ok(result)
-                    : Results.Conflict(result);
             });
 
         group.MapPost(

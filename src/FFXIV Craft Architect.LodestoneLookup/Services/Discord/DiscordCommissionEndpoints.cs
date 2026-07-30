@@ -25,13 +25,6 @@ public sealed record DiscordVolunteerInteractionResult(
     DiscordVolunteerInteractionStatus Status,
     string Message);
 
-public interface IDiscordVolunteerInteractionService
-{
-    Task<DiscordVolunteerInteractionResult> RecordInterestAsync(
-        DiscordVolunteerInteraction interaction,
-        CancellationToken cancellationToken = default);
-}
-
 public static class DiscordCommissionEndpoints
 {
     private const int MaximumRequestBodyBytes = 128 * 1024;
@@ -64,7 +57,7 @@ public static class DiscordCommissionEndpoints
                 DiscordCommissionOptions options,
                 DiscordRequestVerifier verifier,
                 SqliteCommissionBriefStore store,
-                IDiscordVolunteerInteractionService volunteer,
+                DiscordClaimService volunteer,
                 CancellationToken ct) =>
             {
                 if (!options.CanVerifyInteractions)
@@ -181,7 +174,7 @@ public static class DiscordCommissionEndpoints
     private static async Task<IResult> HandleMessageComponentAsync(
         JsonElement interaction,
         DiscordCommissionOptions options,
-        IDiscordVolunteerInteractionService volunteerInteractions,
+        DiscordClaimService volunteerInteractions,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(options.ApplicationId) ||

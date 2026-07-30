@@ -33,7 +33,7 @@ public sealed class DiscordPublicationService(
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task<DiscordDirectPublicationResult> PublishExistingBriefAsync(
+    private async Task<DiscordDirectPublicationResult> PublishExistingBriefAsync(
         TradeCompanyAccessContext access,
         string publicId,
         string idempotencyKey,
@@ -69,12 +69,9 @@ public sealed class DiscordPublicationService(
             return Conflict("The commission brief is not bound to the current Trade order revision.");
         }
 
-        var installation = await collaboration.LoadInstallationAsync(
-            access.CompanyId,
-            cancellationToken);
-        if (!IsUsableInstallation(installation))
+        if (!options.CanPublishDirectly)
         {
-            return Conflict("The company does not have a healthy least-privilege Discord installation.");
+            return Conflict("Discord direct publishing is not configured.");
         }
 
         var now = timeProvider.GetUtcNow();
@@ -86,7 +83,6 @@ public sealed class DiscordPublicationService(
             state,
             state == DiscordPublicationState.Open ? actionToken : null);
         var created = await collaboration.CreatePublicationAsync(
-            installation!,
             ownership,
             publicId,
             published.Version,
@@ -152,13 +148,10 @@ public sealed class DiscordPublicationService(
                 "The Trade order changed before publication began.");
         }
 
-        var installation = await collaboration.LoadInstallationAsync(
-            access.CompanyId,
-            cancellationToken);
-        if (!IsUsableInstallation(installation))
+        if (!options.CanPublishDirectly)
         {
             return NewPublicationConflict(
-                "The company does not have a healthy least-privilege Discord installation.");
+                "Discord direct publishing is not configured.");
         }
 
         PublishedCommissionBrief published;
@@ -391,19 +384,6 @@ public sealed class DiscordPublicationService(
             JsonSerializer.Serialize(payload, JsonOptions),
             timeProvider.GetUtcNow(),
             cancellationToken);
-    }
-
-    private bool IsUsableInstallation(DiscordCompanyInstallationBinding? installation)
-    {
-        return installation is
-        {
-            Active: true
-        } &&
-            DiscordRuntimePermission.CanPublish(installation.GrantedPermissions) &&
-            string.Equals(installation.ApplicationId, options.ApplicationId, StringComparison.Ordinal) &&
-            string.Equals(installation.GuildId, options.AllowedGuildId, StringComparison.Ordinal) &&
-            string.Equals(installation.ChannelId, options.AllowedChannelId, StringComparison.Ordinal) &&
-            options.CanPublishDirectly;
     }
 
     private async Task DiscardUncommittedBriefAsync(
