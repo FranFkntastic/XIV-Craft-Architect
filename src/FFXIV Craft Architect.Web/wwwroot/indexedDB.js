@@ -16,7 +16,7 @@ const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 23;
+const MODULE_REVISION = 24;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -1985,8 +1985,22 @@ async function getCompanyMigrationSourceInventory() {
         openExistingDatabaseReadOnly(LEGACY_DB_NAME)
     ]);
     try {
+        for (const [database, name, supportedVersion] of [
+            [companyDatabase, COMPANY_DB_NAME, COMPANY_DB_VERSION],
+            [personalDatabase, PERSONAL_DB_NAME, PERSONAL_DB_VERSION],
+            [legacyDatabase, LEGACY_DB_NAME, LEGACY_DB_VERSION]
+        ]) {
+            if (database && database.version > supportedVersion) {
+                throw new Error(
+                    `[IndexedDB] ${name} schema v${database.version} exceeds ` +
+                    `the supported read-only inventory schema v${supportedVersion}.`);
+            }
+        }
         const companyStoreNames = companyDatabase
             ? Array.from(companyDatabase.objectStoreNames)
+            : [];
+        const legacyStoreNames = legacyDatabase
+            ? Array.from(legacyDatabase.objectStoreNames)
             : [];
         const knownCompanyStores = [
             STORE_STORAGE_METADATA,
@@ -2005,6 +2019,19 @@ async function getCompanyMigrationSourceInventory() {
             STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
             STORE_TRADE_PAYROLL_DRAFTS
         ];
+        const knownLegacyStores = new Set([
+            ...LEGACY_SNAPSHOT_STORES,
+            STORE_ENGINE_SESSION_MANIFESTS,
+            STORE_ENGINE_SESSION_REVISIONS,
+            STORE_ENGINE_SESSION_COMPONENTS
+        ]);
+        const unsupportedLegacyStoreNames = legacyStoreNames
+            .filter(storeName => !knownLegacyStores.has(storeName))
+            .sort((left, right) => left.localeCompare(right));
+        const legacyReadStoreNames = Array.from(new Set([
+            ...legacyInventoryStores,
+            ...unsupportedLegacyStoreNames
+        ]));
         const companyRecords = Object.fromEntries(await Promise.all(
             companyStoreNames.map(async storeName => [
                 storeName,
@@ -2018,7 +2045,7 @@ async function getCompanyMigrationSourceInventory() {
             personalDatabase,
             STORE_STORAGE_METADATA);
         const legacyRecords = Object.fromEntries(await Promise.all(
-            legacyInventoryStores.map(async storeName => [
+            legacyReadStoreNames.map(async storeName => [
                 storeName,
                 await readExistingStoreRecords(legacyDatabase, storeName)
             ])));
@@ -2155,7 +2182,11 @@ async function getCompanyMigrationSourceInventory() {
                 linkedPlans: relevantPlans(legacyRecords[STORE_PLANS] || []),
                 linkedPlanComponents: relevantComponents(
                     legacyRecords[STORE_PLANS] || [],
-                    legacyRecords[STORE_PLAN_COMPONENTS] || [])
+                    legacyRecords[STORE_PLAN_COMPONENTS] || []),
+                unsupportedStores: unsupportedLegacyStoreNames.map(storeName => ({
+                    storeName,
+                    records: legacyRecords[storeName]
+                }))
             }
         };
     } finally {
