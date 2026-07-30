@@ -60,7 +60,7 @@ public partial class TradeOrders
     private string? _loadError;
     private Guid? _pendingNavigationOrderId;
     private bool _isArchiveCollapsed = true;
-    private HashSet<TradeOrderStatus> _collapsedStatuses = [];
+    private HashSet<string> _collapsedAttentionGroups = new(StringComparer.Ordinal);
     private WorkerTradeProjection? _liveProcurementSnapshot;
     private LiveProcurementKey? _liveProcurementKey;
     private int _liveProcurementRefreshRequestId;
@@ -139,6 +139,7 @@ public partial class TradeOrders
 
     private bool CanEditSelectedOrderOutputs =>
         _selectedOrder != null &&
+        _selectedOrder.CompanyCommission == null &&
         TradeOrderWorkflow.CanEditRequestedOutputs(_selectedOrder);
 
     private bool HasSelectedOrderOutputChanges =>
@@ -151,22 +152,18 @@ public partial class TradeOrders
         _selectedOrderOutputEditors.Count > 0 &&
         !_isSavingSelectedOrderOutputs;
 
-    private IReadOnlyList<OrderStatusGroup> ActiveOrderGroups => TradeOrderStatusWorkflow.ActiveStatuses
-        .Where(status => status != TradeOrderStatus.Draft)
-        .Select(status => new OrderStatusGroup(status, GetOrdersForStatus(status)))
-        .Where(group => group.Orders.Count > 0)
-        .ToArray();
+    private IReadOnlyList<OrderAttentionGroup> ActiveOrderGroups =>
+        BuildAttentionGroups(_orders.Where(order => !IsOrderArchivedForAttention(order)));
 
     private IReadOnlyList<TradeOrder> ArchivedOrders => _orders
-        .Where(order => TradeOrderStatusWorkflow.IsArchived(order.Status))
+        .Where(IsOrderArchivedForAttention)
         .OrderByDescending(order => order.CommissionedAtUtc)
         .ToArray();
 
-    private IReadOnlyList<OrderStatusGroup> FilteredActiveOrderGroups => TradeOrderStatusWorkflow.ActiveStatuses
-        .Where(status => status != TradeOrderStatus.Draft)
-        .Select(status => new OrderStatusGroup(status, GetOrdersForStatus(status).Where(OrderMatchesSearch).ToArray()))
-        .Where(group => group.Orders.Count > 0)
-        .ToArray();
+    private IReadOnlyList<OrderAttentionGroup> FilteredActiveOrderGroups =>
+        BuildAttentionGroups(_orders
+            .Where(order => !IsOrderArchivedForAttention(order))
+            .Where(OrderMatchesSearch));
 
     private IReadOnlyList<TradeOrder> FilteredArchivedOrders => ArchivedOrders
         .Where(OrderMatchesSearch)
@@ -192,6 +189,10 @@ public partial class TradeOrders
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+            await CommissionOperations.RefreshCanonicalAsync(_orders);
+            _orders = _orders
+                .Select(order => CommissionOperations.GetForOrder(order.Id)?.Order ?? order)
+                .ToList();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
             SelectPendingNavigationOrder();
         }
