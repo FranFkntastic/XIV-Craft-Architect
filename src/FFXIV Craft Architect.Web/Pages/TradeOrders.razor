@@ -24,7 +24,7 @@
 @inject IJSRuntime JSRuntime
 @inject NavigationManager NavigationManager
 
-<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-orders-page">
+<div class="trade-orders-page">
     @if (!string.IsNullOrWhiteSpace(_loadError))
     {
         <MudAlert Severity="Severity.Error" Class="ma-4">
@@ -1569,7 +1569,7 @@
                 </aside>
         </div>
     }
-</MudContainer>
+</div>
 
 @code {
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementSourceCell => row => @<div class="trade-orders-source-cell">
