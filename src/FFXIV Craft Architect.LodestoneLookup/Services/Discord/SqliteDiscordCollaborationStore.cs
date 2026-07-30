@@ -1,7 +1,7 @@
 using System.Data;
 using System.Security.Cryptography;
-using Microsoft.Data.Sqlite;
 using FFXIV_Craft_Architect.Core.Models;
+using Microsoft.Data.Sqlite;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 

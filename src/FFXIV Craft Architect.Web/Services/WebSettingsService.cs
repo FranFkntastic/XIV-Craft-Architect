@@ -1,6 +1,6 @@
 using System.Text.Json;
-using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using Microsoft.Extensions.Logging;
 
@@ -202,9 +202,9 @@ public class WebSettingsService : ISettingsService
         }
 
         if (!await _indexedDb.SaveSettingsBatchAsync(new Dictionary<string, string>
-            {
-                [key] = serialized
-            }))
+        {
+            [key] = serialized
+        }))
         {
             throw new InvalidOperationException(
                 $"The browser could not persist hosted setting '{key}'.");
