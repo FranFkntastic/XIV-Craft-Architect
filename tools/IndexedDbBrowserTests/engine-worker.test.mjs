@@ -188,7 +188,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
         async function inspectDurableSession() {
           const database = await new Promise((resolve, reject) => {
-            const request = indexedDB.open('FFXIVCraftArchitect');
+            const request = indexedDB.open('FFXIVCraftArchitect.Engine');
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
           });
@@ -218,7 +218,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
         async function deleteSessionComponent(componentId) {
           const database = await new Promise((resolve, reject) => {
-            const request = indexedDB.open('FFXIVCraftArchitect');
+            const request = indexedDB.open('FFXIVCraftArchitect.Engine');
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
           });
