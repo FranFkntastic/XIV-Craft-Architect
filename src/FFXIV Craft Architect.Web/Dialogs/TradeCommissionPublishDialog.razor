@@ -4,70 +4,54 @@
 <MudDialog>
     <TitleContent>
         <div>
-            <MudText Typo="Typo.overline">Crafter-facing snapshot</MudText>
-            <MudText Typo="Typo.h6">Publish Commission</MudText>
+            <MudText Typo="Typo.overline">Crafter delivery</MudText>
+            <MudText Typo="Typo.h6">Choose Delivery</MudText>
         </div>
     </TitleContent>
     <DialogContent>
         <MudText Typo="Typo.body2">
-            This creates a read-only link. The crafter sees the agreed work and payment terms, but does not need a Craft Architect account or access to your company workspace.
+            Send the commission already shown on this order. Its crafter-facing terms are frozen when published; company notes and the mutable craft plan stay private.
         </MudText>
-        <div class="commission-publish-preview">
-            <div>
-                <span>Commission</span>
-                <strong>@Title</strong>
+        <MudRadioGroup T="TradeCommissionDestination"
+                       @bind-Value="_destination"
+                       Class="commission-delivery-choices">
+            <div class="commission-delivery-choice">
+                <MudRadio T="TradeCommissionDestination"
+                          Value="TradeCommissionDestination.PublicLink"
+                          Dense="true">
+                    Portable crafter link
+                </MudRadio>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    Create the read-only brief and copy its link for any chat or message.
+                </MudText>
             </div>
-            <div>
-                <span>Total payment</span>
-                <strong>@($"{Math.Round(TotalPayment, 0):N0}g")</strong>
+            <div class="@($"commission-delivery-choice{(DiscordAvailable ? string.Empty : " is-disabled")}")">
+                <MudRadio T="TradeCommissionDestination"
+                          Value="TradeCommissionDestination.DiscordChannel"
+                          Dense="true"
+                          Disabled="@(!DiscordAvailable)">
+                    Company trade channel
+                </MudRadio>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @(DiscordAvailable
+                        ? "Publish through the active company's configured Discord channel."
+                        : DiscordUnavailableReason)
+                </MudText>
             </div>
-        </div>
-        <ul class="commission-publish-checklist">
-            <li><strong>Delivery</strong><span>Item, quantity, and quality requirements</span></li>
-            <li><strong>Payment</strong><span>Reimbursement, bonus or labor, and total</span></li>
-            <li><strong>Responsibilities</strong><span>Which materials the crafter or company provides</span></li>
-            <li><strong>Evidence</strong><span>Cost basis, market scope, and snapshot time</span></li>
-            <li class="is-private"><strong>Private company data</strong><span>Operator notes, other orders, roster, and full plan stay hidden</span></li>
-        </ul>
-        <MudAlert Severity="Severity.Info" Dense="true">
-            Publishing freezes this crafter brief. Future order edits or repricing will not silently change the published terms.
-        </MudAlert>
-        <MudRadioGroup T="TradeCommissionDestination" @bind-Value="_destination" Class="mt-3">
-            <MudRadio T="TradeCommissionDestination"
-                      Value="TradeCommissionDestination.PublicLink"
-                      Dense="true">
-                Public link
-            </MudRadio>
-            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-8 mb-2">
-                Create a read-only brief you can share yourself.
-            </MudText>
-            <MudRadio T="TradeCommissionDestination"
-                      Value="TradeCommissionDestination.DiscordChannel"
-                      Dense="true"
-                      Disabled="@(!DiscordAvailable)">
-                Discord channel
-            </MudRadio>
-            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="ml-8">
-                @(DiscordAvailable
-                    ? "Queue the current company destination and keep delivery status on this order."
-                    : DiscordUnavailableReason)
-            </MudText>
         </MudRadioGroup>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Publish">
             @(_destination == TradeCommissionDestination.PublicLink
-                ? "Publish & Copy Link"
-                : "Publish to Discord")
+                ? "Create & Copy Link"
+                : "Publish to Trade Channel")
         </MudButton>
     </DialogActions>
 </MudDialog>
 
 @code {
     [CascadingParameter] private MudDialogInstance MudDialog { get; set; } = default!;
-    [Parameter] public string Title { get; set; } = string.Empty;
-    [Parameter] public decimal TotalPayment { get; set; }
     [Parameter] public bool DiscordAvailable { get; set; }
     [Parameter] public string DiscordUnavailableReason { get; set; } =
         "Refresh the canonical company order before publishing to Discord.";

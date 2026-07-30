@@ -49,29 +49,59 @@ public partial class TradeOrders
             TradeCommissionDeliveryState.Pending or
             TradeCommissionDeliveryState.Published;
 
-    private string PublishCommissionButtonLabel =>
-        SelectedCompanyPublication?.State == TradeCommissionDeliveryState.Failed
-            ? "Retry Publication"
-            : "Publish Commission";
+    private bool HasFailedCompanyPublication =>
+        SelectedCompanyPublication?.State == TradeCommissionDeliveryState.Failed;
 
-    private bool CanPublishCommission
+    private string PublishCommissionButtonLabel =>
+        HasFailedCompanyPublication
+            ? "Retry Trade Channel"
+            : "Choose Delivery";
+
+    private string? PublishCommissionUnavailableReason
     {
         get
         {
             if (_selectedOrder == null)
             {
-                return false;
+                return "Choose a commission first.";
+            }
+
+            if (HasLiveCommissionPublication && !HasFailedCompanyPublication)
+            {
+                return "This commission already has a live crafter brief.";
+            }
+
+            if (HasActiveCompanyPublication)
+            {
+                return "Trade channel delivery is already in progress.";
+            }
+
+            if (GetOrderRootItems(_selectedOrder).Count == 0)
+            {
+                return "Add at least one requested output before publishing.";
             }
 
             var payment = GetSelectedOrderPaymentSummary();
-            return !_isPublishingCommission &&
-                !HasLiveCommissionPublication &&
-                !HasActiveCompanyPublication &&
-                GetOrderRootItems(_selectedOrder).Count > 0 &&
-                payment.TotalPayment > 0 &&
-                payment.Active.IsAvailable;
+            if (payment.TotalPayment <= 0 || !payment.Active.IsAvailable)
+            {
+                return "Resolve the current payment evidence before publishing.";
+            }
+
+            if (HasFailedCompanyPublication &&
+                !TradeCollaboration.CanPerformExternalAction(
+                    _selectedOrder,
+                    out var retryReason))
+            {
+                return retryReason;
+            }
+
+            return null;
         }
     }
+
+    private bool CanPublishCommission =>
+        !_isPublishingCommission &&
+        PublishCommissionUnavailableReason == null;
 
     private void PrepareCommissionDraft(TradeOrder order)
     {
@@ -119,13 +149,26 @@ public partial class TradeOrders
         }
 
         var payment = GetSelectedOrderPaymentSummary();
+        if (HasFailedCompanyPublication)
+        {
+            _isPublishingCommission = true;
+            try
+            {
+                await PublishSelectedCommissionToDiscordAsync(payment);
+            }
+            finally
+            {
+                _isPublishingCommission = false;
+            }
+
+            return;
+        }
+
         var discordAvailable = TradeCollaboration.CanPerformExternalAction(
             _selectedOrder,
             out var discordUnavailableReason);
         var parameters = new DialogParameters
         {
-            [nameof(TradeCommissionPublishDialog.Title)] = _selectedOrder.Title,
-            [nameof(TradeCommissionPublishDialog.TotalPayment)] = payment.TotalPayment,
             [nameof(TradeCommissionPublishDialog.DiscordAvailable)] = discordAvailable,
             [nameof(TradeCommissionPublishDialog.DiscordUnavailableReason)] =
                 discordUnavailableReason
@@ -185,9 +228,11 @@ public partial class TradeOrders
             _activeOpsTab = 3;
             await CopyTextToClipboardAsync(GetCommissionUrl(response.PublicId), "Commission published and link copied");
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            Snackbar.Add("Commission publication failed. The order remains private.", Severity.Error);
+            Snackbar.Add(
+                $"Commission publication failed: {exception.Message}",
+                Severity.Error);
         }
         finally
         {
@@ -383,8 +428,8 @@ public partial class TradeOrders
     private static string FormatCompanyPublicationDestination(
         TradeCommissionPublicationProjection publication) =>
         publication.Destination == TradeCommissionDestination.DiscordChannel
-            ? $"Discord publication · {publication.DestinationLabel ?? "company channel"}"
-            : "Public commission link";
+            ? $"Trade channel — {publication.DestinationLabel ?? "company channel"}"
+            : "Portable crafter link";
 
     private async Task RevokeSelectedCommissionAsync()
     {
