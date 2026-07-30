@@ -236,7 +236,8 @@ jobs:
           archive="craftarchitect-lodestone-${{ steps.target.outputs.target }}-$release.tar.gz"
           tar -czf "$archive" -C dist/lodestone .
           archive_sha256="$(sha256sum "$archive" | cut -d' ' -f1)"
-          tar -tzf "$archive" | grep -q 'FFXIV Craft Architect.LodestoneLookup'
+          tar -tzf "$archive" > archive-contents.txt
+          grep -Fq 'FFXIV Craft Architect.LodestoneLookup' archive-contents.txt
           {
             echo "release=$release"
             echo "archive=$archive"
