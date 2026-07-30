@@ -13,6 +13,8 @@ public static class ProfileHostMigrationBlockerCodes
     public const string DuplicateAuthoritativeIdentity = "duplicate_authoritative_identity";
     public const string InvalidCanonicalMapping = "invalid_canonical_mapping";
     public const string CanonicalTargetConflict = "canonical_target_conflict";
+    public const string AuthoritativeSourceRequiresRetirement =
+        "authoritative_source_requires_retirement";
     public const string UnsupportedCollection = "unsupported_collection";
     public const string UnsupportedOrderCraftSnapshot = "unsupported_order_craft_snapshot";
     public const string InvalidPayload = "invalid_payload";

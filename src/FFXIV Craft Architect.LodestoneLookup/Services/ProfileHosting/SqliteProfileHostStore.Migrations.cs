@@ -496,6 +496,20 @@ public sealed partial class SqliteProfileHostStore
             resolutionMap.TryGetValue(sourceIdentity, out var selectedResolution);
             ProfileHostMigrationConflictResolution? resolution =
                 resolutionMap.ContainsKey(sourceIdentity) ? selectedResolution : null;
+            if (mappingMap.ContainsKey(sourceIdentity) &&
+                resolution != ProfileHostMigrationConflictResolution.KeepBothAsCopy &&
+                authoritative.ContainsKey(sourceIdentity))
+            {
+                AddBlocker(
+                    blockers,
+                    ProfileHostMigrationBlockerCodes.AuthoritativeSourceRequiresRetirement,
+                    "This canonical remap would leave its authoritative source beside the target. Atomic source retirement is required before merging an existing hosted identity.",
+                    sourceIdentity.Collection,
+                    sourceIdentity.ObjectId,
+                    targetIdentity.Collection,
+                    targetIdentity.ObjectId);
+            }
+
             var classifyIdentity =
                 resolution == ProfileHostMigrationConflictResolution.KeepBothAsCopy
                     ? sourceIdentity
