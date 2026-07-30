@@ -130,13 +130,34 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           return { worker, capability: await capabilityPromise };
         }
 
-        await IndexedDB.savePlan({
-          id: 'autosave',
-          name: 'Legacy autosave',
-          dataCenter: 'Aether',
-          projectItems: [{ id: 42, name: 'Worker item', iconId: 0, quantity: 2, mustBeHq: false }],
-          planJson: null,
-          savedAt: new Date().toISOString()
+        await new Promise((resolve, reject) => {
+          const request = indexedDB.open('FFXIVCraftArchitect', 15);
+          request.onerror = () => reject(request.error);
+          request.onupgradeneeded = () => {
+            if (!request.result.objectStoreNames.contains('plans')) {
+              request.result.createObjectStore('plans', { keyPath: 'id' });
+            }
+          };
+          request.onsuccess = () => {
+            const database = request.result;
+            const transaction = database.transaction('plans', 'readwrite');
+            transaction.objectStore('plans').put({
+              id: 'autosave',
+              name: 'Legacy autosave',
+              dataCenter: 'Aether',
+              projectItems: [
+                { id: 42, name: 'Worker item', iconId: 0, quantity: 2, mustBeHq: false }
+              ],
+              planJson: null,
+              savedAt: new Date().toISOString()
+            });
+            transaction.oncomplete = () => {
+              database.close();
+              resolve();
+            };
+            transaction.onerror = () => reject(transaction.error);
+            transaction.onabort = () => reject(transaction.error);
+          };
         });
 
         const active = await startWorker(1);
