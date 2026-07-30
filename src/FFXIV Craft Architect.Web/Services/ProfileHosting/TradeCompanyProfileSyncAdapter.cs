@@ -36,9 +36,20 @@ public sealed class TradeCompanyProfileSyncAdapter : IProfileSyncCollectionAdapt
         }
     }
 
-    public Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
+    public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
     {
-        throw new NotSupportedException("Deleting Trade company profiles through hosted sync is not supported in v1.");
+        ct.ThrowIfCancellationRequested();
+        if (!Guid.TryParse(objectId, out var companyProfileId))
+        {
+            throw new InvalidOperationException(
+                $"Hosted Trade company profile ID '{objectId}' is invalid.");
+        }
+
+        if (!await _tradeOperations.DeleteCompanyProfileAsync(companyProfileId))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not delete hosted Trade company profile '{objectId}'.");
+        }
     }
 
     private static ProfileSyncObjectEnvelope ToEnvelope(TradeCompanyProfile profile, DateTime updatedAtUtc)

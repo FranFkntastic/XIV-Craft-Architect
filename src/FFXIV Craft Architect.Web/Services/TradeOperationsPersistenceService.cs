@@ -84,6 +84,11 @@ public sealed class TradeOperationsPersistenceService
         return await _indexedDb.SaveTradeCompanyProfileAsync(profile);
     }
 
+    public Task<bool> DeleteCompanyProfileAsync(Guid companyProfileId)
+    {
+        return _indexedDb.DeleteTradeCompanyProfileAsync(companyProfileId);
+    }
+
     public async Task SelectCompanyProfileAsync(Guid companyProfileId)
     {
         var profiles = await _indexedDb.LoadTradeCompanyProfilesAsync();
@@ -118,6 +123,11 @@ public sealed class TradeOperationsPersistenceService
     {
         crafter.UpdatedAtUtc = DateTime.UtcNow;
         return await _indexedDb.SaveTradeCrafterAsync(crafter);
+    }
+
+    public Task<bool> DeleteCrafterAsync(Guid crafterId)
+    {
+        return _indexedDb.DeleteTradeCrafterAsync(crafterId);
     }
 
     public async Task<TradeCompanyProfilePackage> ExportActiveCompanyProfilePackageAsync(DateTime exportedAtUtc)

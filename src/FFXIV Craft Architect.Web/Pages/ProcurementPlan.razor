@@ -890,6 +890,31 @@
                 FullWidth = true
             });
         var result = await dialog.Result;
+        if (result?.Data is OptionsDialogResult { OpenCompanyMigration: true } migration)
+        {
+            var migrationParameters = new DialogParameters
+            {
+                [nameof(CompanyMigrationDialog.InitialHostUrl)] = migration.HostUrl ?? string.Empty,
+                [nameof(CompanyMigrationDialog.InitialAccessKey)] = migration.AccessKey ?? string.Empty
+            };
+            var migrationDialog = DialogService.Show<CompanyMigrationDialog>(
+                "Move companies to hosted storage",
+                migrationParameters,
+                new DialogOptions
+                {
+                    CloseOnEscapeKey = true,
+                    FullWidth = true,
+                    MaxWidth = MaxWidth.ExtraLarge
+                });
+            var migrationResult = await migrationDialog.Result;
+            if (migrationResult?.Data is ProfileHostMigrationCommitResponse)
+            {
+                NavigationManager.NavigateTo(
+                    NavigationManager.Uri,
+                    forceLoad: true);
+            }
+        }
+
         return result?.Canceled == false &&
                (await MarketMafiosoAcquisitionWorkflow.GetConfigurationAsync())
                .IsComplete;

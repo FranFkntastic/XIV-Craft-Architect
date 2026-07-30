@@ -47,9 +47,20 @@ public sealed class TradeCrafterProfileSyncAdapter : IProfileSyncCollectionAdapt
         }
     }
 
-    public Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
+    public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
     {
-        throw new NotSupportedException("Deleting Trade crafters through hosted sync is not supported in v1.");
+        ct.ThrowIfCancellationRequested();
+        if (!Guid.TryParse(objectId, out var crafterId))
+        {
+            throw new InvalidOperationException(
+                $"Hosted Trade crafter ID '{objectId}' is invalid.");
+        }
+
+        if (!await _tradeOperations.DeleteCrafterAsync(crafterId))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not delete hosted Trade crafter '{objectId}'.");
+        }
     }
 
     private static ProfileSyncObjectEnvelope ToEnvelope(TradeCrafterProfile crafter, DateTime updatedAtUtc)
