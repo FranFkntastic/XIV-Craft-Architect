@@ -115,18 +115,49 @@ public sealed partial class SqliteProfileHostStore
                 }
             }
 
-            if (!keyMatches)
+            var revision = await GetServerRevisionAsync(
+                connection,
+                profileId,
+                ct,
+                (SqliteTransaction)transaction);
+            if (!keyMatches && revision != 0)
             {
                 await transaction.RollbackAsync(ct);
                 throw new InvalidOperationException(
                     "The supplied access key does not authenticate the existing profile.");
             }
 
-            var revision = await GetServerRevisionAsync(
-                connection,
-                profileId,
-                ct,
-                (SqliteTransaction)transaction);
+            if (!keyMatches)
+            {
+                var now = DateTime.UtcNow.ToString("O");
+                await using (var revokeKeys = connection.CreateCommand())
+                {
+                    revokeKeys.Transaction = (SqliteTransaction)transaction;
+                    revokeKeys.CommandText =
+                        """
+                        UPDATE profile_access_keys
+                        SET revoked_at_utc = $revokedAtUtc
+                        WHERE profile_id = $profileId AND revoked_at_utc IS NULL;
+                        """;
+                    revokeKeys.Parameters.AddWithValue("$profileId", profileId);
+                    revokeKeys.Parameters.AddWithValue("$revokedAtUtc", now);
+                    await revokeKeys.ExecuteNonQueryAsync(ct);
+                }
+
+                await using var insertKey = connection.CreateCommand();
+                insertKey.Transaction = (SqliteTransaction)transaction;
+                insertKey.CommandText =
+                    """
+                    INSERT INTO profile_access_keys (id, profile_id, key_hash, created_at_utc)
+                    VALUES ($id, $profileId, $keyHash, $createdAtUtc);
+                    """;
+                insertKey.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
+                insertKey.Parameters.AddWithValue("$profileId", profileId);
+                insertKey.Parameters.AddWithValue("$keyHash", hasher.Hash(plaintextKey));
+                insertKey.Parameters.AddWithValue("$createdAtUtc", now);
+                await insertKey.ExecuteNonQueryAsync(ct);
+            }
+
             await transaction.CommitAsync(ct);
             return new ProfileHostEnsureResult(
                 new ProfileHostProfileResponse
