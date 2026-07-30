@@ -7,6 +7,29 @@ public sealed class ProfileSyncLocalStateService
     private const string ConnectedProfileNameKey = "profileHost.connectedProfileName";
     private const string ObjectRevisionPrefix = "profileHost.objectRevision.";
     private const string PendingSavesKey = "profileHost.pendingSaves";
+    private static readonly IReadOnlySet<string> PortableSettingKeys = new HashSet<string>(
+        [
+            "market.default_datacenter",
+            "market.region",
+            "market.comparison_region",
+            "market.home_world",
+            "market.default_search_scope",
+            "market.include_cross_world",
+            "market.exclude_congested_worlds",
+            "market.search_entire_region",
+            "market.analysis_evidence_overlay",
+            "procurement.search_entire_region",
+            "procurement.region",
+            "procurement.enable_split_world_purchases",
+            "procurement.travel_tolerance",
+            "procurement.world_exclusion_duration_minutes",
+            "procurement.start_from_home_data_center",
+            "procurement.travel_priority",
+            "ui.accent_color",
+            "ui.use_split_pane_market_view",
+            "planning.default_recommendation_mode"
+        ],
+        StringComparer.Ordinal);
 
     private readonly IndexedDbService _indexedDb;
 
@@ -17,11 +40,7 @@ public sealed class ProfileSyncLocalStateService
 
     public static bool IsSyncedSetting(string key)
     {
-        return !ProfileSyncSettingsKeys.ConnectionSettingKeys.Contains(key) &&
-               !string.Equals(key, ConnectedProfileNameKey, StringComparison.OrdinalIgnoreCase) &&
-               !string.Equals(key, PendingSavesKey, StringComparison.OrdinalIgnoreCase) &&
-               !key.StartsWith(ObjectRevisionPrefix, StringComparison.OrdinalIgnoreCase) &&
-               !key.StartsWith(CommissionBriefLocalStateService.SettingPrefix, StringComparison.OrdinalIgnoreCase);
+        return PortableSettingKeys.Contains(key);
     }
 
     public async Task<HostedProfileConnectionSettings> LoadConnectionSettingsAsync()

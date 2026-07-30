@@ -1,7 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.Web.Services.BrowserPersistence;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using Microsoft.Extensions.Logging;
 
@@ -183,52 +182,6 @@ public class WebSettingsService : ISettingsService
             await SaveToIndexedDb(kvp.Key, kvp.Value, throwOnFailure: true);
         }
         _logger?.LogInformation("[WebSettingsService] Reset all settings to defaults");
-    }
-
-    public async Task ApplyPortableSettingsAsync(
-        IReadOnlyDictionary<string, string> settings,
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        await EnsureLoadedAsync();
-        var invalidKey = settings.Keys.FirstOrDefault(
-            key => !PortableOperatorSettingKeys.IsPortable(key));
-        if (invalidKey != null)
-        {
-            throw new InvalidOperationException(
-                $"Browser-local setting '{invalidKey}' cannot be hydrated from company storage.");
-        }
-
-        if (!await _indexedDb.SaveSettingsBatchAsync(
-                settings.ToDictionary(pair => pair.Key, pair => pair.Value)))
-        {
-            throw new InvalidOperationException(
-                "The browser could not persist canonical operator settings.");
-        }
-
-        foreach (var key in PortableOperatorSettingKeys.All)
-        {
-            if (settings.ContainsKey(key))
-            {
-                continue;
-            }
-
-            if (DefaultSettings.TryGetValue(key, out var defaultValue))
-            {
-                _cache[key] = defaultValue;
-            }
-            else
-            {
-                _cache.Remove(key);
-            }
-        }
-        foreach (var (key, serialized) in settings)
-        {
-            _cache[key] = JsonSerializer.Deserialize<object>(serialized)
-                ?? throw new InvalidOperationException(
-                    $"Portable setting '{key}' contains an empty value.");
-        }
-        PortableSettingsApplied?.Invoke();
     }
 
     public async Task ApplyHostedSettingAsync(

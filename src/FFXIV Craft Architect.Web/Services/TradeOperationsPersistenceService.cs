@@ -7,6 +7,7 @@ public sealed class TradeOperationsPersistenceService
 {
     private const string DefaultCompanyProfileName = "FFXIV Trade Company";
     private const string PrototypeDefaultCommissionContact = "franfkntastic";
+    private const string SelectedCompanyProfileIdKey = "trade.selected_company_profile_id";
 
     private readonly IndexedDbService _indexedDb;
     private readonly TradeCompanyProfilePackageService _profilePackageService;
@@ -22,11 +23,21 @@ public sealed class TradeOperationsPersistenceService
     public async Task<TradeCompanyProfile> GetOrCreateActiveCompanyProfileAsync()
     {
         var profiles = await _indexedDb.LoadTradeCompanyProfilesAsync();
-        var profile = profiles
-            .OrderByDescending(profile => profile.UpdatedAtUtc)
+        var selectedProfileId = await LoadSelectedCompanyProfileIdAsync();
+        var profile = selectedProfileId.HasValue
+            ? profiles.FirstOrDefault(candidate => candidate.Id == selectedProfileId.Value)
+            : null;
+        profile ??= profiles
+            .OrderBy(candidate => candidate.CreatedAtUtc)
+            .ThenBy(candidate => candidate.Id)
             .FirstOrDefault();
         if (profile != null)
         {
+            if (selectedProfileId != profile.Id)
+            {
+                await SaveSelectedCompanyProfileIdAsync(profile.Id);
+            }
+
             if (NormalizeProfile(profile))
             {
                 profile.UpdatedAtUtc = DateTime.UtcNow;
@@ -51,6 +62,7 @@ public sealed class TradeOperationsPersistenceService
             throw new InvalidOperationException($"Failed to create the default Trade company profile. {diagnostics.ToDisplayMessage()}");
         }
 
+        await SaveSelectedCompanyProfileIdAsync(profile.Id);
         return profile;
     }
 
@@ -70,6 +82,18 @@ public sealed class TradeOperationsPersistenceService
         NormalizeProfile(profile);
         profile.UpdatedAtUtc = DateTime.UtcNow;
         return await _indexedDb.SaveTradeCompanyProfileAsync(profile);
+    }
+
+    public async Task SelectCompanyProfileAsync(Guid companyProfileId)
+    {
+        var profiles = await _indexedDb.LoadTradeCompanyProfilesAsync();
+        if (profiles.All(profile => profile.Id != companyProfileId))
+        {
+            throw new InvalidOperationException(
+                $"Trade company profile '{companyProfileId:D}' does not exist in browser storage.");
+        }
+
+        await SaveSelectedCompanyProfileIdAsync(companyProfileId);
     }
 
     public async Task RequireCompanyProfileAsync(
@@ -124,6 +148,7 @@ public sealed class TradeOperationsPersistenceService
             }
         }
 
+        await SaveSelectedCompanyProfileIdAsync(imported.Profile.Id);
         return imported;
     }
 
@@ -141,6 +166,25 @@ public sealed class TradeOperationsPersistenceService
     public async Task<bool> DeleteOrderAsync(Guid orderId)
     {
         return await _indexedDb.DeleteTradeOrderAsync(orderId);
+    }
+
+    private async Task<Guid?> LoadSelectedCompanyProfileIdAsync()
+    {
+        var serializedId = await _indexedDb.LoadSettingAsync<string>(SelectedCompanyProfileIdKey);
+        return Guid.TryParse(serializedId, out var selectedProfileId)
+            ? selectedProfileId
+            : null;
+    }
+
+    private async Task SaveSelectedCompanyProfileIdAsync(Guid companyProfileId)
+    {
+        if (!await _indexedDb.SaveSettingAsync(
+                SelectedCompanyProfileIdKey,
+                companyProfileId.ToString("D")))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not persist selected Trade company profile '{companyProfileId:D}'.");
+        }
     }
 
     private static bool NormalizeProfile(TradeCompanyProfile profile)
