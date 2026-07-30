@@ -111,6 +111,45 @@ public sealed class WorkshopHostContractTests
         Assert.Equal(1, result.MarketItemsPriced);
     }
 
+    [Fact]
+    public async Task RegionEvidenceFetchesScopesConcurrentlyAndRetainsPartialResults()
+    {
+        var material = new PlanNode
+        {
+            ItemId = 2,
+            Name = "Fire Shard",
+            Quantity = 10,
+            Source = AcquisitionSource.MarketBuyNq,
+            CanBuyFromMarket = true,
+        };
+        var cache = new PartialRegionMarketCache();
+        var service = new CraftAppraisalPriceEvidenceService(
+            cache,
+            new FixedPlanBuilder(new CraftingPlan { RootItems = [material] }),
+            TimeSpan.FromMilliseconds(100));
+
+        var result = await service.ApplyAsync(
+            new CraftingPlan { RootItems = [material] },
+            new CraftAppraisalRequest
+            {
+                ItemId = 2,
+                ItemName = "Fire Shard",
+                Quantity = 10,
+                Scope = new CraftAppraisalScope { Region = "North America" },
+            });
+
+        Assert.Equal(70m, material.MarketPrice);
+        Assert.Equal(1, result.MarketItemsPriced);
+        Assert.Equal(4, cache.EnsureCalls);
+        Assert.True(cache.MaximumConcurrentCalls > 1);
+        Assert.Contains(
+            result.Issues,
+            issue => issue.Message.Contains("Dynamis", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            result.Issues,
+            issue => issue.Message.Contains("Aether", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Theory]
     [InlineData(AcquisitionSource.MarketBuyNq, 25, 100, "MarketEvidence")]
     [InlineData(AcquisitionSource.VendorBuy, 15, 60, "VendorPrice")]
@@ -364,5 +403,123 @@ public sealed class WorkshopHostContractTests
             RefreshCalls++;
             return Task.FromResult(0);
         }
+    }
+
+    private sealed class PartialRegionMarketCache : IMarketCacheService
+    {
+        private readonly object gate = new();
+        private readonly Dictionary<(int itemId, string dataCenter), CachedMarketData> entries = [];
+        private int activeCalls;
+
+        public int EnsureCalls { get; private set; }
+        public int MaximumConcurrentCalls { get; private set; }
+
+        public Task<CachedMarketData?> GetAsync(int itemId, string dataCenter, TimeSpan? maxAge = null)
+        {
+            lock (gate)
+            {
+                return Task.FromResult(entries.GetValueOrDefault((itemId, dataCenter)));
+            }
+        }
+
+        public async Task<(CachedMarketData? Data, bool IsStale)> GetWithStaleAsync(
+            int itemId,
+            string dataCenter,
+            TimeSpan? maxAge = null) =>
+            (await GetAsync(itemId, dataCenter, maxAge), false);
+
+        public Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyAsync(
+            IReadOnlyCollection<(int itemId, string dataCenter)> requests,
+            TimeSpan? maxAge = null)
+        {
+            lock (gate)
+            {
+                return Task.FromResult<IReadOnlyDictionary<(int, string), CachedMarketData>>(
+                    requests
+                        .Where(entries.ContainsKey)
+                        .ToDictionary(request => request, request => entries[request]));
+            }
+        }
+
+        public Task SetAsync(int itemId, string dataCenter, CachedMarketData value)
+        {
+            lock (gate)
+            {
+                entries[(itemId, dataCenter)] = value;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public async Task<bool> HasValidCacheAsync(int itemId, string dataCenter, TimeSpan? maxAge = null) =>
+            await GetAsync(itemId, dataCenter, maxAge) != null;
+
+        public async Task<List<(int itemId, string dataCenter)>> GetMissingAsync(
+            List<(int itemId, string dataCenter)> requests,
+            TimeSpan? maxAge = null)
+        {
+            var present = await GetManyAsync(requests, maxAge);
+            return requests.Where(request => !present.ContainsKey(request)).ToList();
+        }
+
+        public Task<int> CleanupStaleAsync(TimeSpan maxAge) => Task.FromResult(0);
+        public Task<CacheStats> GetStatsAsync() => Task.FromResult(new CacheStats());
+
+        public async Task<int> EnsurePopulatedAsync(
+            List<(int itemId, string dataCenter)> requests,
+            TimeSpan? maxAge = null,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default)
+        {
+            lock (gate)
+            {
+                EnsureCalls++;
+                activeCalls++;
+                MaximumConcurrentCalls = Math.Max(MaximumConcurrentCalls, activeCalls);
+            }
+
+            try
+            {
+                var scope = Assert.Single(requests).dataCenter;
+                if (scope == "Dynamis")
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                }
+
+                await Task.Delay(20, ct);
+                var price = scope switch
+                {
+                    "Aether" => 90,
+                    "Primal" => 80,
+                    "Crystal" => 70,
+                    _ => 0,
+                };
+                foreach (var request in requests)
+                {
+                    await SetAsync(request.itemId, request.dataCenter, new CachedMarketData
+                    {
+                        ItemId = request.itemId,
+                        DataCenter = request.dataCenter,
+                        DCAveragePrice = price,
+                        FetchedAt = DateTime.UtcNow,
+                    });
+                }
+
+                return requests.Count;
+            }
+            finally
+            {
+                lock (gate)
+                {
+                    activeCalls--;
+                }
+            }
+        }
+
+        public Task<int> RefreshRequestedAsync(
+            List<(int itemId, string dataCenter)> requests,
+            IProgress<string>? progress = null,
+            CancellationToken ct = default) =>
+            EnsurePopulatedAsync(requests, null, progress, ct);
     }
 }
