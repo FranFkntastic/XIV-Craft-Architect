@@ -81,24 +81,29 @@ builder.Services.AddSingleton(_ =>
             60))
     };
 });
-builder.Services.AddSingleton(_ => new TradeCompanyOptions
+builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
+builder.Services.AddSingleton<TradeCompanyAuthorization>();
+builder.Services.AddSingleton<DiscordRequestVerifier>();
+builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
+builder.Services.AddSingleton<SqliteDiscordCollaborationStore>();
+builder.Services.AddSingleton<IDiscordVolunteerInteractionService>(
+    services => services.GetRequiredService<SqliteDiscordCollaborationStore>());
+builder.Services.AddSingleton<IDiscordOutboxLeaseStore>(
+    services => services.GetRequiredService<SqliteDiscordCollaborationStore>());
+builder.Services.AddScoped<DiscordCompanyOrderAdapter>();
+builder.Services.AddScoped<DiscordPublicationService>();
+builder.Services.AddScoped<DiscordClaimService>();
+builder.Services.AddHttpClient<IDiscordApiClient, DiscordApiClient>((services, client) =>
 {
-    Enabled = builder.Configuration.GetValue("TradeCompany:Enabled", false),
-    DatabasePath = builder.Configuration["TradeCompany:DatabasePath"]
-        ?? Path.Combine(AppContext.BaseDirectory, "trade-company.db"),
-    EnvironmentId = builder.Configuration["TradeCompany:EnvironmentId"] ?? "unconfigured",
-    ProvisioningKey = builder.Configuration["TradeCompany:ProvisioningKey"] ?? string.Empty
+    var options = services.GetRequiredService<DiscordCommissionOptions>();
+    client.BaseAddress = new Uri(
+        options.ApiBaseUrl.EndsWith("/", StringComparison.Ordinal)
+            ? options.ApiBaseUrl
+            : options.ApiBaseUrl + "/",
+        UriKind.Absolute);
+    client.Timeout = TimeSpan.FromSeconds(15);
 });
-builder.Services.AddSingleton<TradeCompanyAccessKeyHasher>();
-builder.Services.AddSingleton<SqliteTradeCompanyStore>();
-builder.Services.AddSingleton<ITradeCompanyStore>(
-    services => services.GetRequiredService<SqliteTradeCompanyStore>());
-builder.Services.AddSingleton<TradeCompanyService>();
-builder.Services.AddSingleton<ITradeCompanyService>(
-    services => services.GetRequiredService<TradeCompanyService>());
-builder.Services.AddDiscordCollaboration();
-builder.Services.AddDiscordCompanyAdapters();
-builder.Services.AddTradeCompanyDiscordAccess();
+builder.Services.AddHostedService<DiscordOutboxDispatcher>();
 
 if (ProfileHostProvisioningCommand.TryParse(args) is { } profileHostCommand)
 {
@@ -222,7 +227,6 @@ app.MapGet(
 app.MapProfileHostEndpoints();
 app.MapCommissionBriefEndpoints();
 app.MapDiscordCommissionEndpoints();
-app.MapTradeCompanyEndpoints();
 app.MapDiscordCollaborationEndpoints();
 
 app.Run();

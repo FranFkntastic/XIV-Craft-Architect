@@ -2,6 +2,7 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
@@ -23,7 +24,7 @@ public sealed record DiscordNewPublicationResult(
 }
 
 public sealed class DiscordPublicationService(
-    ITradeCompanyService companies,
+    ProfileHostedTradeCompanyService companies,
     DiscordCompanyOrderAdapter orders,
     SqliteCommissionBriefStore briefs,
     SqliteDiscordCollaborationStore collaboration,
@@ -59,7 +60,11 @@ public sealed class DiscordPublicationService(
 
         var order = await orders.LoadOrderAsync(access, ownership.OrderId, cancellationToken);
         if (order == null ||
-            order.Envelope.RecordRevision != ownership.OrderRevision)
+            !string.Equals(
+                order.Order.CommissionPublication?.PublicId,
+                publicId,
+                StringComparison.Ordinal) ||
+            order.Order.CommissionPublication?.Ownership != ownership)
         {
             return Conflict("The commission brief is not bound to the current Trade order revision.");
         }
@@ -124,12 +129,10 @@ public sealed class DiscordPublicationService(
             return NewPublicationConflict(validationError);
         }
 
-        var publishedOrderRevision = new CompanyRecordRevision(
-            checked(orderRevision.Value + 1));
         var ownership = new TradeCompanyPublicationOwnership(
             access.CompanyId,
             orderId,
-            publishedOrderRevision);
+            orderRevision);
         var expectedPublicId = SqliteCommissionBriefStore.CreateCompanyPublicId(
             ownership,
             idempotencyKey);
@@ -140,11 +143,10 @@ public sealed class DiscordPublicationService(
                 "The canonical Trade order is unavailable.");
         }
         if (order.Envelope.RecordRevision != orderRevision &&
-            !(order.Envelope.RecordRevision == publishedOrderRevision &&
-              string.Equals(
-                  order.Order.CommissionPublication?.PublicId,
-                  expectedPublicId,
-                  StringComparison.Ordinal)))
+            !string.Equals(
+                order.Order.CommissionPublication?.PublicId,
+                expectedPublicId,
+                StringComparison.Ordinal))
         {
             return NewPublicationConflict(
                 "The Trade order changed before publication began.");
@@ -196,33 +198,28 @@ public sealed class DiscordPublicationService(
                     CreatedAtUtc = published.PublishedAtUtc
                 })
                 .ToArray();
-            orderMutation = await companies.MutateAsync(
+            orderMutation = await companies.PutRecordAsync(
                 access,
-                new TradeCompanyMutationRequest(
-                    access.CompanyId,
-                    TradeCompanyRecordKinds.Order,
-                    orderId.ToString("D"),
-                    JsonSerializer.Serialize(publishedOrder, JsonOptions),
-                    orderRevision,
-                    order.CompanyRevision,
-                    $"publication-order:{idempotencyKey}"),
+                TradeCompanyRecordKinds.Order,
+                orderId.ToString("D"),
+                JsonSerializer.Serialize(publishedOrder, JsonOptions),
+                orderRevision,
+                $"publication-order:{idempotencyKey}",
                 cancellationToken);
-            if (!orderMutation.Success ||
-                orderMutation.Record?.RecordRevision != publishedOrderRevision)
+            if (!orderMutation.Success)
             {
                 var current = await orders.LoadOrderAsync(
                     access,
                     orderId,
                     cancellationToken);
-                if (current?.Envelope.RecordRevision == publishedOrderRevision &&
-                    string.Equals(
-                        current.Order.CommissionPublication?.PublicId,
+                if (string.Equals(
+                        current?.Order.CommissionPublication?.PublicId,
                         published.PublicId,
                         StringComparison.Ordinal))
                 {
                     orderMutation = new TradeCompanyMutationResult(
                         TradeCompanyMutationStatus.Replayed,
-                        current.Envelope);
+                        current!.Envelope);
                 }
                 else
                 {
@@ -239,8 +236,7 @@ public sealed class DiscordPublicationService(
                 }
             }
         }
-        else if (order.Envelope.RecordRevision == publishedOrderRevision &&
-                 string.Equals(
+        else if (string.Equals(
                      order.Order.CommissionPublication?.PublicId,
                      published.PublicId,
                      StringComparison.Ordinal))
@@ -261,16 +257,13 @@ public sealed class DiscordPublicationService(
                 OrderCommitted: false);
         }
 
-        var ownershipMutation = await companies.MutateAsync(
+        var ownershipMutation = await companies.PutRecordAsync(
             access,
-            new TradeCompanyMutationRequest(
-                access.CompanyId,
-                TradeCompanyRecordKinds.Publication,
-                published.PublicId,
-                JsonSerializer.Serialize(ownership, JsonOptions),
-                CompanyRecordRevision.None,
-                orderMutation.Record!.CompanyRevision,
-                $"publication:{idempotencyKey}"),
+            TradeCompanyRecordKinds.Publication,
+            published.PublicId,
+            JsonSerializer.Serialize(ownership, JsonOptions),
+            CompanyRecordRevision.None,
+            $"publication:{idempotencyKey}",
             cancellationToken);
         if (!ownershipMutation.Success)
         {
@@ -283,22 +276,18 @@ public sealed class DiscordPublicationService(
                     access,
                     orderId,
                     cancellationToken);
-                if (current?.Envelope.RecordRevision == publishedOrderRevision &&
-                    string.Equals(
-                        current.Order.CommissionPublication?.PublicId,
+                if (string.Equals(
+                        current?.Order.CommissionPublication?.PublicId,
                         published.PublicId,
                         StringComparison.Ordinal))
                 {
-                    ownershipMutation = await companies.MutateAsync(
+                    ownershipMutation = await companies.PutRecordAsync(
                         access,
-                        new TradeCompanyMutationRequest(
-                            access.CompanyId,
-                            TradeCompanyRecordKinds.Publication,
-                            published.PublicId,
-                            JsonSerializer.Serialize(ownership, JsonOptions),
-                            CompanyRecordRevision.None,
-                            current.CompanyRevision,
-                            $"publication-reconcile:{idempotencyKey}"),
+                        TradeCompanyRecordKinds.Publication,
+                        published.PublicId,
+                        JsonSerializer.Serialize(ownership, JsonOptions),
+                        CompanyRecordRevision.None,
+                        $"publication-reconcile:{idempotencyKey}",
                         cancellationToken);
                     existingOwnership = ownershipMutation.Success
                         ? ownership
@@ -328,6 +317,80 @@ public sealed class DiscordPublicationService(
             delivery,
             published,
             OrderCommitted: true);
+    }
+
+    public async Task RevokeAsync(
+        string publicId,
+        CancellationToken cancellationToken = default)
+    {
+        var publication = await collaboration.LoadPublicationByPublicIdAsync(
+            publicId,
+            cancellationToken);
+        if (publication == null ||
+            publication.State == DiscordPublicationState.Revoked)
+        {
+            return;
+        }
+
+        var payload = JsonSerializer.Serialize(
+            new
+            {
+                content = "This commission publication was revoked.",
+                embeds = Array.Empty<object>(),
+                components = Array.Empty<object>(),
+                allowed_mentions = new { parse = Array.Empty<string>() }
+            },
+            JsonOptions);
+        await collaboration.EnqueueProjectionAsync(
+            publication.PublicationId,
+            DiscordPublicationState.Revoked,
+            checked(publication.DesiredProjectionRevision + 1),
+            payload,
+            timeProvider.GetUtcNow(),
+            cancellationToken);
+    }
+
+    public async Task RefreshOrderAsync(
+        TradeCompanyAccessContext access,
+        Guid orderId,
+        CancellationToken cancellationToken = default)
+    {
+        var publication = await collaboration.LoadPublicationByOrderAsync(
+            access.CompanyId,
+            orderId,
+            cancellationToken);
+        var order = await orders.LoadOrderAsync(access, orderId, cancellationToken);
+        if (publication == null || order == null)
+        {
+            return;
+        }
+
+        var published = await briefs.LoadAsync(publication.PublicId, cancellationToken)
+            ?? throw new InvalidOperationException(
+                "An active Discord publication no longer has immutable commission terms.");
+        string? assignmentLabel = null;
+        if (order.Order.AssignedCrafterId is { } crafterId)
+        {
+            var crafter = await orders.LoadCrafterAsync(access, crafterId, cancellationToken);
+            assignmentLabel = crafter == null
+                ? "Assigned by the operator"
+                : $"Assigned to {crafter.Crafter.DisplayName}";
+        }
+
+        var state = ResolvePublicationState(order.Order);
+        var payload = DiscordCommissionMessage.Create(
+            published,
+            options.CommissionBaseUrl,
+            state,
+            state == DiscordPublicationState.Open ? publication.ActionToken : null,
+            assignmentLabel);
+        await collaboration.EnqueueProjectionAsync(
+            publication.PublicationId,
+            state,
+            checked(publication.DesiredProjectionRevision + 1),
+            JsonSerializer.Serialize(payload, JsonOptions),
+            timeProvider.GetUtcNow(),
+            cancellationToken);
     }
 
     private bool IsUsableInstallation(DiscordCompanyInstallationBinding? installation)

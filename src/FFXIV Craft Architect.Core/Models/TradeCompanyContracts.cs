@@ -177,7 +177,8 @@ public sealed record TradeCompanyIdentity(
 public sealed record TradeCompanyAccessContext(
     CompanyId CompanyId,
     Guid GrantId,
-    TradeCompanyRole Role);
+    TradeCompanyRole Role,
+    Guid? HostProfileId = null);
 
 public static class TradeCompanyRecordKinds
 {

@@ -113,13 +113,6 @@ public sealed record DiscordClaimTransitionResult(
         Status is DiscordClaimTransitionStatus.Applied or DiscordClaimTransitionStatus.Replayed;
 }
 
-public sealed record DiscordRosterIdentityBinding(
-    CompanyId CompanyId,
-    string DiscordUserId,
-    Guid CrafterId,
-    string DiscordDisplayName,
-    DateTimeOffset BoundAt);
-
 public enum DiscordOutboxState
 {
     Pending,

@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
@@ -39,14 +40,14 @@ public static class DiscordCollaborationEndpoints
                 string companyId,
                 Guid? orderId,
                 HttpRequest request,
-                IDiscordCompanyAccessResolver accessResolver,
+                TradeCompanyAuthorization authorization,
                 DiscordClaimService claims,
                 CancellationToken cancellationToken) =>
             {
                 var access = await ResolveAccessAsync(
                     companyId,
                     request,
-                    accessResolver,
+                    authorization,
                     cancellationToken);
                 if (access == null)
                 {
@@ -66,14 +67,14 @@ public static class DiscordCollaborationEndpoints
                 string companyId,
                 DiscordCreatePublicationRequest body,
                 HttpRequest request,
-                IDiscordCompanyAccessResolver accessResolver,
+                TradeCompanyAuthorization authorization,
                 DiscordPublicationService publications,
                 CancellationToken cancellationToken) =>
             {
                 var access = await ResolveAccessAsync(
                     companyId,
                     request,
-                    accessResolver,
+                    authorization,
                     cancellationToken);
                 if (access == null)
                 {
@@ -142,14 +143,14 @@ public static class DiscordCollaborationEndpoints
                 string companyId,
                 Guid orderId,
                 HttpRequest request,
-                IDiscordCompanyAccessResolver accessResolver,
+                TradeCompanyAuthorization authorization,
                 SqliteDiscordCollaborationStore collaboration,
                 CancellationToken cancellationToken) =>
             {
                 var access = await ResolveAccessAsync(
                     companyId,
                     request,
-                    accessResolver,
+                    authorization,
                     cancellationToken);
                 if (access == null)
                 {
@@ -178,15 +179,15 @@ public static class DiscordCollaborationEndpoints
                 string companyId,
                 string publicId,
                 HttpRequest request,
-                IDiscordCompanyAccessResolver accessResolver,
+                TradeCompanyAuthorization authorization,
                 SqliteCommissionBriefStore briefs,
-                IDiscordPublicationRevocationSink revocations,
+                DiscordPublicationService publications,
                 CancellationToken cancellationToken) =>
             {
                 var access = await ResolveAccessAsync(
                     companyId,
                     request,
-                    accessResolver,
+                    authorization,
                     cancellationToken);
                 if (access == null)
                 {
@@ -206,7 +207,7 @@ public static class DiscordCollaborationEndpoints
                     return Results.NotFound();
                 }
 
-                await revocations.RevokeAsync(publicId, cancellationToken);
+                await publications.RevokeAsync(publicId, cancellationToken);
                 return Results.NoContent();
             });
 
@@ -217,14 +218,14 @@ public static class DiscordCollaborationEndpoints
                 string publicId,
                 DiscordPublishExistingBriefRequest body,
                 HttpRequest request,
-                IDiscordCompanyAccessResolver accessResolver,
+                TradeCompanyAuthorization authorization,
                 DiscordPublicationService publications,
                 CancellationToken cancellationToken) =>
             {
                 var access = await ResolveAccessAsync(
                     companyId,
                     request,
-                    accessResolver,
+                    authorization,
                     cancellationToken);
                 if (access == null)
                 {
@@ -262,14 +263,15 @@ public static class DiscordCollaborationEndpoints
                 Guid claimId,
                 DiscordAcceptInterestRequest body,
                 HttpRequest request,
-                IDiscordCompanyAccessResolver accessResolver,
+                TradeCompanyAuthorization authorization,
                 DiscordClaimService claims,
+                DiscordPublicationService publications,
                 CancellationToken cancellationToken) =>
             {
                 var access = await ResolveAccessAsync(
                     companyId,
                     request,
-                    accessResolver,
+                    authorization,
                     cancellationToken);
                 if (access == null)
                 {
@@ -298,6 +300,13 @@ public static class DiscordCollaborationEndpoints
                     body.CrafterId,
                     body.IdempotencyKey,
                     cancellationToken);
+                if (result.Success && result.Claim != null)
+                {
+                    await publications.RefreshOrderAsync(
+                        access,
+                        result.Claim.OrderId,
+                        cancellationToken);
+                }
                 return result.Status switch
                 {
                     DiscordOperatorClaimStatus.Applied or
@@ -314,14 +323,14 @@ public static class DiscordCollaborationEndpoints
                 Guid claimId,
                 DiscordDeclineInterestRequest body,
                 HttpRequest request,
-                IDiscordCompanyAccessResolver accessResolver,
+                TradeCompanyAuthorization authorization,
                 DiscordClaimService claims,
                 CancellationToken cancellationToken) =>
             {
                 var access = await ResolveAccessAsync(
                     companyId,
                     request,
-                    accessResolver,
+                    authorization,
                     cancellationToken);
                 if (access == null)
                 {
@@ -356,54 +365,20 @@ public static class DiscordCollaborationEndpoints
                 };
             });
 
-        group.MapPost(
-            "/reconcile",
-            async (
-                string companyId,
-                HttpRequest request,
-                IDiscordCompanyAccessResolver accessResolver,
-                DiscordProjectionService projections,
-                CancellationToken cancellationToken) =>
-            {
-                var access = await ResolveAccessAsync(
-                    companyId,
-                    request,
-                    accessResolver,
-                    cancellationToken);
-                if (access == null)
-                {
-                    return Results.Unauthorized();
-                }
-
-                if (access.Role == TradeCompanyRole.ReadOnly)
-                {
-                    return Results.Forbid();
-                }
-
-                return Results.Ok(await projections.ReconcileAsync(
-                    access,
-                    cancellationToken));
-            });
-
         return group;
     }
 
     private static async Task<TradeCompanyAccessContext?> ResolveAccessAsync(
         string rawCompanyId,
         HttpRequest request,
-        IDiscordCompanyAccessResolver resolver,
+        TradeCompanyAuthorization authorization,
         CancellationToken cancellationToken)
     {
-        if (!CompanyId.TryParse(rawCompanyId, out var companyId))
-        {
-            return null;
-        }
-
-        var access = await resolver.ResolveAsync(
+        var access = await authorization.ResolveAsync(
             request,
-            companyId,
+            rawCompanyId,
             cancellationToken);
-        return access?.CompanyId == companyId &&
+        return access != null &&
             access.GrantId != Guid.Empty
                 ? access
                 : null;

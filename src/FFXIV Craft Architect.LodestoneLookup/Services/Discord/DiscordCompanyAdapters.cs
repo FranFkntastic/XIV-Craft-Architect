@@ -2,168 +2,12 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
-public interface IDiscordCompanyAccessResolver
-{
-    Task<TradeCompanyAccessContext?> ResolveAsync(
-        HttpRequest request,
-        CompanyId companyId,
-        CancellationToken cancellationToken = default);
-}
-
-public sealed class DenyDiscordCompanyAccessResolver : IDiscordCompanyAccessResolver
-{
-    public Task<TradeCompanyAccessContext?> ResolveAsync(
-        HttpRequest request,
-        CompanyId companyId,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return Task.FromResult<TradeCompanyAccessContext?>(null);
-    }
-}
-
-public sealed class TradeCompanyDiscordAccessResolver(
-    TradeCompanyOptions options,
-    SqliteTradeCompanyStore companies) : IDiscordCompanyAccessResolver
-{
-    private const string AccessKeyHeader = "X-Trade-Company-Key";
-
-    public async Task<TradeCompanyAccessContext?> ResolveAsync(
-        HttpRequest request,
-        CompanyId companyId,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (!options.IsReady)
-        {
-            return null;
-        }
-
-        var key = request.Headers[AccessKeyHeader].ToString();
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            return null;
-        }
-
-        var access = await companies.AuthenticateAsync(key, cancellationToken);
-        return access?.CompanyId == companyId ? access : null;
-    }
-}
-
-public sealed class UnavailableTradeCompanyService : ITradeCompanyService
-{
-    public Task<TradeCompanyIdentity?> GetCompanyAsync(
-        TradeCompanyAccessContext access,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult<TradeCompanyIdentity?>(null);
-
-    public Task<TradeCompanyChangeSet> GetChangesAsync(
-        TradeCompanyAccessContext access,
-        CompanyRevision afterRevision,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult(new TradeCompanyChangeSet(
-            access.CompanyId,
-            afterRevision,
-            Array.Empty<TradeCompanyRecordEnvelope>()));
-
-    public Task<TradeCompanyMutationResult> MutateAsync(
-        TradeCompanyAccessContext access,
-        TradeCompanyMutationRequest request,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult(new TradeCompanyMutationResult(
-            TradeCompanyMutationStatus.Rejected,
-            null,
-            ErrorCode: "company_service_unavailable",
-            ErrorMessage: "The canonical Trade company service is not configured."));
-
-    public Task<TradeCompanyPublicationOwnership?> ResolvePublicationOwnershipAsync(
-        string publicId,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult<TradeCompanyPublicationOwnership?>(null);
-}
-
-public sealed record DiscordInstallationDestination(
-    string InstallationId,
-    CompanyId CompanyId,
-    string ApplicationId,
-    string GuildId,
-    string ChannelId,
-    bool CanViewChannel,
-    bool CanSendMessages,
-    bool CanEmbedLinks,
-    bool Enabled)
-{
-    public bool CanPublish =>
-        Enabled &&
-        !string.IsNullOrWhiteSpace(InstallationId) &&
-        !string.IsNullOrWhiteSpace(ApplicationId) &&
-        !string.IsNullOrWhiteSpace(GuildId) &&
-        !string.IsNullOrWhiteSpace(ChannelId) &&
-        CanViewChannel &&
-        CanSendMessages &&
-        CanEmbedLinks;
-}
-
-public interface IDiscordInstallationRegistry
-{
-    Task<DiscordInstallationDestination?> ResolveAsync(
-        CompanyId companyId,
-        CancellationToken cancellationToken = default);
-}
-
-public interface IDiscordInstallationBindingWriter
-{
-    Task UpsertInstallationAsync(
-        DiscordCompanyInstallationBinding binding,
-        CancellationToken cancellationToken = default);
-}
-
-public sealed class DenyDiscordInstallationRegistry : IDiscordInstallationRegistry
-{
-    public Task<DiscordInstallationDestination?> ResolveAsync(
-        CompanyId companyId,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult<DiscordInstallationDestination?>(null);
-}
-
-public static class DiscordCompanyAdapterRegistrations
-{
-    public static IServiceCollection AddDiscordCompanyAdapters(this IServiceCollection services)
-    {
-        services.TryAddSingleton<ITradeCompanyService, UnavailableTradeCompanyService>();
-        services.TryAddSingleton<IDiscordCompanyAccessResolver, DenyDiscordCompanyAccessResolver>();
-        services.TryAddSingleton<SqliteDiscordCollaborationStore>();
-        services.Replace(ServiceDescriptor.Singleton<IDiscordInstallationRegistry>(
-            provider => provider.GetRequiredService<SqliteDiscordCollaborationStore>()));
-        services.Replace(ServiceDescriptor.Singleton<IDiscordInstallationBindingWriter>(
-            provider => provider.GetRequiredService<SqliteDiscordCollaborationStore>()));
-        services.Replace(ServiceDescriptor.Singleton<IDiscordVolunteerInteractionService>(
-            provider => provider.GetRequiredService<SqliteDiscordCollaborationStore>()));
-        services.Replace(ServiceDescriptor.Singleton<IDiscordOutboxLeaseStore>(
-            provider => provider.GetRequiredService<SqliteDiscordCollaborationStore>()));
-        services.TryAddScoped<DiscordCompanyOrderAdapter>();
-        services.TryAddScoped<DiscordPublicationService>();
-        services.TryAddScoped<DiscordClaimService>();
-        services.TryAddScoped<DiscordProjectionService>();
-        return services;
-    }
-
-    public static IServiceCollection AddTradeCompanyDiscordAccess(this IServiceCollection services)
-    {
-        services.Replace(ServiceDescriptor.Singleton<IDiscordCompanyAccessResolver,
-            TradeCompanyDiscordAccessResolver>());
-        return services;
-    }
-}
-
 public sealed record DiscordCanonicalOrderProjection(
     TradeOrder Order,
-    TradeCompanyRecordEnvelope Envelope,
-    CompanyRevision CompanyRevision);
+    TradeCompanyRecordEnvelope Envelope);
 
 public sealed record DiscordCanonicalCrafterProjection(
     TradeCrafterProfile Crafter,
@@ -181,9 +25,9 @@ public sealed record DiscordOrderAssignmentMutation(
 public sealed class DiscordCompanyOrderAdapter
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly ITradeCompanyService _companies;
+    private readonly ProfileHostedTradeCompanyService _companies;
 
-    public DiscordCompanyOrderAdapter(ITradeCompanyService companies)
+    public DiscordCompanyOrderAdapter(ProfileHostedTradeCompanyService companies)
     {
         _companies = companies;
     }
@@ -199,14 +43,12 @@ public sealed class DiscordCompanyOrderAdapter
             throw new ArgumentException("Order IDs cannot be empty.", nameof(orderId));
         }
 
-        var changes = await _companies.GetChangesAsync(
+        var envelope = await _companies.LoadRecordAsync(
             access,
-            CompanyRevision.None,
+            TradeCompanyRecordKinds.Order,
+            orderId.ToString("D"),
             cancellationToken);
-        ValidateChangeSet(access, changes);
-
-        var envelope = FindRecord(changes.Records, TradeCompanyRecordKinds.Order, orderId);
-        if (envelope == null || envelope.Deleted)
+        if (envelope == null)
         {
             return null;
         }
@@ -217,9 +59,7 @@ public sealed class DiscordCompanyOrderAdapter
             throw new InvalidOperationException(
                 "The canonical Trade order payload does not match its record identity.");
         }
-        NormalizeCompanyScope(order, access.CompanyId);
-
-        return new DiscordCanonicalOrderProjection(order, envelope, changes.CompanyRevision);
+        return new DiscordCanonicalOrderProjection(order, envelope);
     }
 
     public async Task<DiscordCanonicalCrafterProjection?> LoadCrafterAsync(
@@ -233,14 +73,12 @@ public sealed class DiscordCompanyOrderAdapter
             throw new ArgumentException("Crafter IDs cannot be empty.", nameof(crafterId));
         }
 
-        var changes = await _companies.GetChangesAsync(
+        var envelope = await _companies.LoadRecordAsync(
             access,
-            CompanyRevision.None,
+            TradeCompanyRecordKinds.Crafter,
+            crafterId.ToString("D"),
             cancellationToken);
-        ValidateChangeSet(access, changes);
-
-        var envelope = FindRecord(changes.Records, TradeCompanyRecordKinds.Crafter, crafterId);
-        if (envelope == null || envelope.Deleted)
+        if (envelope == null)
         {
             return null;
         }
@@ -251,8 +89,6 @@ public sealed class DiscordCompanyOrderAdapter
             throw new InvalidOperationException(
                 "The canonical Trade crafter payload does not match its record identity.");
         }
-        crafter.CompanyProfileId = access.CompanyId.Value;
-
         return new DiscordCanonicalCrafterProjection(crafter, envelope);
     }
 
@@ -312,34 +148,16 @@ public sealed class DiscordCompanyOrderAdapter
             "Assigned from operator-confirmed Discord interest.",
             confirmedAtUtc);
 
-        var mutation = await _companies.MutateAsync(
+        var mutation = await _companies.PutRecordAsync(
             access,
-            new TradeCompanyMutationRequest(
-                access.CompanyId,
-                TradeCompanyRecordKinds.Order,
-                current.Envelope.RecordId,
-                JsonSerializer.Serialize(updated, JsonOptions),
-                current.Envelope.RecordRevision,
-                current.CompanyRevision,
-                idempotencyKey),
+            TradeCompanyRecordKinds.Order,
+            current.Envelope.RecordId,
+            JsonSerializer.Serialize(updated, JsonOptions),
+            current.Envelope.RecordRevision,
+            idempotencyKey,
             cancellationToken);
 
         return new DiscordOrderAssignmentMutation(updated, mutation);
-    }
-
-    private static TradeCompanyRecordEnvelope? FindRecord(
-        IEnumerable<TradeCompanyRecordEnvelope> records,
-        string recordKind,
-        Guid recordId)
-    {
-        return records
-            .Where(record =>
-                string.Equals(record.RecordKind, recordKind, StringComparison.Ordinal) &&
-                Guid.TryParse(record.RecordId, out var parsedId) &&
-                parsedId == recordId)
-            .OrderByDescending(record => record.RecordRevision.Value)
-            .ThenByDescending(record => record.CompanyRevision.Value)
-            .FirstOrDefault();
     }
 
     private static T Deserialize<T>(
@@ -379,26 +197,4 @@ public sealed class DiscordCompanyOrderAdapter
         }
     }
 
-    private static void ValidateChangeSet(
-        TradeCompanyAccessContext access,
-        TradeCompanyChangeSet changes)
-    {
-        if (changes.CompanyId != access.CompanyId ||
-            changes.Records.Any(record => record.CompanyId != access.CompanyId))
-        {
-            throw new InvalidOperationException(
-                "The company service returned a cross-company change set.");
-        }
-    }
-
-    private static void NormalizeCompanyScope(
-        TradeOrder order,
-        CompanyId companyId)
-    {
-        order.CompanyProfileId = companyId.Value;
-        foreach (var history in order.History)
-        {
-            history.CompanyProfileId = companyId.Value;
-        }
-    }
 }

@@ -32,16 +32,6 @@ public interface IDiscordVolunteerInteractionService
         CancellationToken cancellationToken = default);
 }
 
-public sealed class DenyDiscordVolunteerInteractionService : IDiscordVolunteerInteractionService
-{
-    public Task<DiscordVolunteerInteractionResult> RecordInterestAsync(
-        DiscordVolunteerInteraction interaction,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult(new DiscordVolunteerInteractionResult(
-            DiscordVolunteerInteractionStatus.Rejected,
-            "Volunteer claims are not available for this installation."));
-}
-
 public static class DiscordCommissionEndpoints
 {
     private const int MaximumRequestBodyBytes = 128 * 1024;
@@ -74,6 +64,7 @@ public static class DiscordCommissionEndpoints
                 DiscordCommissionOptions options,
                 DiscordRequestVerifier verifier,
                 SqliteCommissionBriefStore store,
+                IDiscordVolunteerInteractionService volunteer,
                 CancellationToken ct) =>
             {
                 if (!options.CanVerifyInteractions)
@@ -128,8 +119,7 @@ public static class DiscordCommissionEndpoints
                             ? await HandleMessageComponentAsync(
                                 payload.RootElement,
                                 options,
-                                context.RequestServices.GetService<IDiscordVolunteerInteractionService>()
-                                    ?? new DenyDiscordVolunteerInteractionService(),
+                                volunteer,
                                 ct)
                             : InteractionError("Commission collaboration has not been connected to a channel yet."),
                         _ => InteractionError("This interaction is not supported by the prototype.")

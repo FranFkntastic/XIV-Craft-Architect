@@ -8,9 +8,7 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 public sealed class SqliteDiscordCollaborationStore(
     DiscordCommissionOptions options) :
     IDiscordVolunteerInteractionService,
-    IDiscordOutboxLeaseStore,
-    IDiscordInstallationRegistry,
-    IDiscordInstallationBindingWriter
+    IDiscordOutboxLeaseStore
 {
     private readonly SemaphoreSlim _schemaGate = new(1, 1);
     private bool _schemaReady;
@@ -109,15 +107,6 @@ public sealed class SqliteDiscordCollaborationStore(
                     FOREIGN KEY (claim_id) REFERENCES discord_interest_claims(claim_id)
                 );
 
-                CREATE TABLE IF NOT EXISTS discord_roster_bindings (
-                    company_id TEXT NOT NULL,
-                    discord_user_id TEXT NOT NULL,
-                    crafter_id TEXT NOT NULL,
-                    discord_display_name TEXT NOT NULL,
-                    bound_at_utc TEXT NOT NULL,
-                    PRIMARY KEY (company_id, discord_user_id)
-                );
-
                 CREATE TABLE IF NOT EXISTS discord_outbox (
                     work_item_id TEXT PRIMARY KEY,
                     publication_id TEXT NOT NULL,
@@ -140,12 +129,6 @@ public sealed class SqliteDiscordCollaborationStore(
 
                 CREATE INDEX IF NOT EXISTS ix_discord_outbox_due
                     ON discord_outbox(state, next_attempt_at_utc);
-
-                CREATE TABLE IF NOT EXISTS discord_reconciliation_cursors (
-                    company_id TEXT PRIMARY KEY,
-                    company_revision INTEGER NOT NULL,
-                    updated_at_utc TEXT NOT NULL
-                );
 
                 INSERT OR IGNORE INTO discord_schema_migrations(version, applied_at_utc)
                 VALUES (1, $now);
@@ -248,25 +231,6 @@ public sealed class SqliteDiscordCollaborationStore(
         return await reader.ReadAsync(cancellationToken)
             ? ReadInstallation(reader)
             : null;
-    }
-
-    public async Task<DiscordInstallationDestination?> ResolveAsync(
-        CompanyId companyId,
-        CancellationToken cancellationToken = default)
-    {
-        var binding = await LoadInstallationAsync(companyId, cancellationToken);
-        return binding is null
-            ? null
-            : new DiscordInstallationDestination(
-                binding.InstallationId.ToString("D"),
-                binding.CompanyId,
-                binding.ApplicationId,
-                binding.GuildId,
-                binding.ChannelId,
-                (binding.GrantedPermissions & DiscordRuntimePermission.ViewChannel) != 0,
-                (binding.GrantedPermissions & DiscordRuntimePermission.SendMessages) != 0,
-                (binding.GrantedPermissions & DiscordRuntimePermission.EmbedLinks) != 0,
-                binding.Active);
     }
 
     public async Task<DiscordPublicationCreateResult> CreatePublicationAsync(
@@ -624,16 +588,6 @@ public sealed class SqliteDiscordCollaborationStore(
         update.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
         await update.ExecuteNonQueryAsync(cancellationToken);
 
-        await UpsertRosterBindingAsync(
-            connection,
-            (SqliteTransaction)transaction,
-            new DiscordRosterIdentityBinding(
-                companyId,
-                claim.DiscordUserId,
-                crafterId,
-                claim.DiscordDisplayName,
-                resolvedAt),
-            cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new DiscordClaimTransitionResult(
             DiscordClaimTransitionStatus.Applied,
@@ -751,8 +705,7 @@ public sealed class SqliteDiscordCollaborationStore(
         long desiredProjectionRevision,
         string payloadJson,
         DateTimeOffset queuedAt,
-        CancellationToken cancellationToken = default,
-        CompanyRevision? sourceCompanyRevision = null)
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(payloadJson);
         if (desiredProjectionRevision <= 0)
@@ -836,83 +789,7 @@ public sealed class SqliteDiscordCollaborationStore(
             $"projection:{publicationId:N}:{desiredProjectionRevision}",
             queuedAt,
             cancellationToken);
-        if (sourceCompanyRevision.HasValue)
-        {
-            await AdvanceReconciliationCursorAsync(
-                connection,
-                (SqliteTransaction)transaction,
-                publication.CompanyId,
-                sourceCompanyRevision.Value,
-                queuedAt,
-                cancellationToken);
-        }
-
         await transaction.CommitAsync(cancellationToken);
-    }
-
-    public async Task<long> LoadReconciliationCursorAsync(
-        CompanyId companyId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            SELECT company_revision
-            FROM discord_reconciliation_cursors
-            WHERE company_id = $companyId;
-            """;
-        command.Parameters.AddWithValue("$companyId", companyId.ToString());
-        var value = await command.ExecuteScalarAsync(cancellationToken);
-        return value is long revision ? revision : 0;
-    }
-
-    public async Task AdvanceReconciliationCursorAsync(
-        CompanyId companyId,
-        CompanyRevision companyRevision,
-        DateTimeOffset updatedAt,
-        CancellationToken cancellationToken = default)
-    {
-        await using var connection = await OpenAsync(cancellationToken);
-        await AdvanceReconciliationCursorAsync(
-            connection,
-            transaction: null,
-            companyId,
-            companyRevision,
-            updatedAt,
-            cancellationToken);
-    }
-
-    private static async Task AdvanceReconciliationCursorAsync(
-        SqliteConnection connection,
-        SqliteTransaction? transaction,
-        CompanyId companyId,
-        CompanyRevision companyRevision,
-        DateTimeOffset updatedAt,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
-            """
-            INSERT INTO discord_reconciliation_cursors(
-                company_id,
-                company_revision,
-                updated_at_utc
-            )
-            VALUES($companyId, $companyRevision, $updatedAt)
-            ON CONFLICT(company_id) DO UPDATE SET
-                company_revision = CASE
-                    WHEN excluded.company_revision > company_revision
-                    THEN excluded.company_revision
-                    ELSE company_revision
-                END,
-                updated_at_utc = excluded.updated_at_utc;
-            """;
-        command.Parameters.AddWithValue("$companyId", companyId.ToString());
-        command.Parameters.AddWithValue("$companyRevision", companyRevision.Value);
-        command.Parameters.AddWithValue("$updatedAt", updatedAt.ToString("O"));
-        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<DiscordVolunteerInteractionResult> RecordInterestAsync(
@@ -1692,43 +1569,6 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Parameters.AddWithValue("$interactionId", interactionId);
         command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
         command.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static async Task UpsertRosterBindingAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        DiscordRosterIdentityBinding binding,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
-            """
-            INSERT INTO discord_roster_bindings (
-                company_id,
-                discord_user_id,
-                crafter_id,
-                discord_display_name,
-                bound_at_utc
-            )
-            VALUES (
-                $companyId,
-                $discordUserId,
-                $crafterId,
-                $discordDisplayName,
-                $boundAt
-            )
-            ON CONFLICT(company_id, discord_user_id) DO UPDATE SET
-                crafter_id = excluded.crafter_id,
-                discord_display_name = excluded.discord_display_name,
-                bound_at_utc = excluded.bound_at_utc;
-            """;
-        command.Parameters.AddWithValue("$companyId", binding.CompanyId.ToString());
-        command.Parameters.AddWithValue("$discordUserId", binding.DiscordUserId);
-        command.Parameters.AddWithValue("$crafterId", binding.CrafterId.ToString("D"));
-        command.Parameters.AddWithValue("$discordDisplayName", binding.DiscordDisplayName);
-        command.Parameters.AddWithValue("$boundAt", binding.BoundAt.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

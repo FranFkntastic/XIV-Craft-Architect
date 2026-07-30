@@ -39,6 +39,17 @@ public sealed class SqliteProfileHostStore
         };
     }
 
+    public async Task<ProfileSyncObjectEnvelope?> LoadObjectAsync(
+        string profileId,
+        string collection,
+        string objectId,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        return await LoadObjectAsync(connection, profileId, collection, objectId, ct);
+    }
+
     public async Task AddAccessKeyAsync(string profileId, string storedHash, CancellationToken ct)
     {
         await EnsureSchemaAsync(ct);
@@ -197,9 +208,13 @@ public sealed class SqliteProfileHostStore
         string objectId,
         string payloadJson,
         long expectedRevision,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowCompanyCollection = false)
     {
-        ValidateCollection(collection);
+        if (!allowCompanyCollection)
+        {
+            ValidateCollection(collection);
+        }
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
         var existing = await LoadObjectAsync(connection, profileId, collection, objectId, ct);
@@ -258,6 +273,59 @@ public sealed class SqliteProfileHostStore
                 UpdatedAtUtc = now
             }
         };
+    }
+
+    public async Task<HostedProfileObject?> FindObjectAsync(
+        string collection,
+        string objectId,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select o.profile_id,
+                   o.payload_json,
+                   o.revision,
+                   o.updated_at_utc,
+                   o.deleted,
+                   o.deleted_at_utc
+            from sync_objects o
+            inner join hosted_profiles p on p.id = o.profile_id
+            where p.disabled_at_utc is null
+              and o.collection = $collection
+              and o.object_id = $objectId
+              and o.deleted = 0
+            limit 1;
+            """;
+        command.Parameters.AddWithValue("$collection", collection);
+        command.Parameters.AddWithValue("$objectId", objectId);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            return null;
+        }
+
+        return new HostedProfileObject(
+            reader.GetString(0),
+            new ProfileSyncObjectEnvelope
+            {
+                Collection = collection,
+                ObjectId = objectId,
+                PayloadJson = reader.GetString(1),
+                Revision = reader.GetInt64(2),
+                UpdatedAtUtc = DateTime.Parse(
+                    reader.GetString(3),
+                    null,
+                    DateTimeStyles.RoundtripKind),
+                Deleted = reader.GetInt64(4) == 1,
+                DeletedAtUtc = reader.IsDBNull(5)
+                    ? null
+                    : DateTime.Parse(
+                        reader.GetString(5),
+                        null,
+                        DateTimeStyles.RoundtripKind)
+            });
     }
 
     public async Task<ProfileSyncPutResponse> DeleteObjectAsync(
@@ -468,3 +536,7 @@ public sealed class SqliteProfileHostStore
         return connection;
     }
 }
+
+public sealed record HostedProfileObject(
+    string ProfileId,
+    ProfileSyncObjectEnvelope Object);

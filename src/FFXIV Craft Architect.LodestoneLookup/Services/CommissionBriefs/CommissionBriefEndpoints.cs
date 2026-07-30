@@ -91,12 +91,9 @@ public static class CommissionBriefEndpoints
                     return Results.Unauthorized();
                 }
 
-                var revocations = context.RequestServices
-                    .GetService<IDiscordPublicationRevocationSink>();
-                if (revocations != null)
-                {
-                    await revocations.RevokeAsync(publicId, ct);
-                }
+                var publications = context.RequestServices
+                    .GetRequiredService<DiscordPublicationService>();
+                await publications.RevokeAsync(publicId, ct);
 
                 return Results.NoContent();
             });
