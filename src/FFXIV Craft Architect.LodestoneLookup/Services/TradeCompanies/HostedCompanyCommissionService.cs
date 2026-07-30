@@ -554,7 +554,7 @@ public sealed class HostedCompanyCommissionService(
             CompanyCommissionCapabilityKind.Recovery =>
                 recordedReplay ||
                 commission.RecoveryGrant is
-                    { RedeemedAtUtc: null, RevokedAtUtc: null } recovery &&
+                { RedeemedAtUtc: null, RevokedAtUtc: null } recovery &&
                 recovery.RecoveryGrantId == capability.GrantId &&
                 recovery.RecoveryRevision == capability.CapabilityRevision,
             _ => false

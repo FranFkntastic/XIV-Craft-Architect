@@ -506,29 +506,29 @@ public static class CompanyCommissionEndpoints
         switch (route)
         {
             case "claim":
-            {
-                var payload = Deserialize<ClaimPayload>(body);
-                var provisional = payload.ProvisionalCrafter == null
-                    ? null
-                    : SanitizeProvisionalCrafter(
-                        payload.ProvisionalCrafter);
-                return (
-                    new ClaimCompanyCommissionCommand(
-                        context,
-                        payload.TermsVersion,
-                        provisional,
-                        payload.ExistingCrafterId),
-                    payload.NewParticipantCredential);
-            }
+                {
+                    var payload = Deserialize<ClaimPayload>(body);
+                    var provisional = payload.ProvisionalCrafter == null
+                        ? null
+                        : SanitizeProvisionalCrafter(
+                            payload.ProvisionalCrafter);
+                    return (
+                        new ClaimCompanyCommissionCommand(
+                            context,
+                            payload.TermsVersion,
+                            provisional,
+                            payload.ExistingCrafterId),
+                        payload.NewParticipantCredential);
+                }
             case "redeem-participant-recovery":
-            {
-                var payload = Deserialize<RecoveryPayload>(body);
-                return (
-                    new RedeemCompanyCommissionParticipantRecoveryCommand(
-                        context,
-                        payload.RecoveryGrantId),
-                    payload.NewParticipantCredential);
-            }
+                {
+                    var payload = Deserialize<RecoveryPayload>(body);
+                    return (
+                        new RedeemCompanyCommissionParticipantRecoveryCommand(
+                            context,
+                            payload.RecoveryGrantId),
+                        payload.NewParticipantCredential);
+                }
             case "release-claim":
                 return (
                     new ReleaseCompanyCommissionClaimCommand(
@@ -536,24 +536,24 @@ public static class CompanyCommissionEndpoints
                         Deserialize<ReasonPayload>(body).Reason),
                     null);
             case "submit-identity":
-            {
-                var provisional = SanitizeProvisionalCrafter(
-                    Deserialize<IdentityPayload>(body).ProvisionalCrafter);
-                return (
-                    new SubmitCompanyCommissionIdentityCommand(context, provisional),
-                    null);
-            }
+                {
+                    var provisional = SanitizeProvisionalCrafter(
+                        Deserialize<IdentityPayload>(body).ProvisionalCrafter);
+                    return (
+                        new SubmitCompanyCommissionIdentityCommand(context, provisional),
+                        null);
+                }
             case "request-payment-policy-change":
-            {
-                var payload = Deserialize<PaymentPolicyPayload>(body);
-                return (
-                    new RequestCompanyCommissionPaymentPolicyChangeCommand(
-                        context,
-                        payload.RequestedSchedule,
-                        payload.RequestedCustomTerms,
-                        payload.Reason),
-                    null);
-            }
+                {
+                    var payload = Deserialize<PaymentPolicyPayload>(body);
+                    return (
+                        new RequestCompanyCommissionPaymentPolicyChangeCommand(
+                            context,
+                            payload.RequestedSchedule,
+                            payload.RequestedCustomTerms,
+                            payload.Reason),
+                        null);
+                }
             case "acknowledge-terms":
                 return (
                     new AcknowledgeCompanyCommissionTermsCommand(
@@ -567,15 +567,15 @@ public static class CompanyCommissionEndpoints
                         Deserialize<MaterialsPayload>(body).Quantities),
                     null);
             case "report-progress":
-            {
-                var payload = Deserialize<ProgressPayload>(body);
-                return (
-                    new ReportCompanyCommissionProgressCommand(
-                        context,
-                        payload.Outputs,
-                        payload.Comment),
-                    null);
-            }
+                {
+                    var payload = Deserialize<ProgressPayload>(body);
+                    return (
+                        new ReportCompanyCommissionProgressCommand(
+                            context,
+                            payload.Outputs,
+                            payload.Comment),
+                        null);
+                }
             case "add-comment":
                 return (
                     new AddCompanyCommissionCommentCommand(
