@@ -46,7 +46,9 @@ builder.Services.AddSingleton(_ => new CommissionBriefOptions
 {
     Enabled = builder.Configuration.GetValue("CommissionBriefs:Enabled", true),
     DatabasePath = builder.Configuration["CommissionBriefs:DatabasePath"]
-        ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(profileDatabasePath))!, "commission-briefs.db")
+        ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(profileDatabasePath))!, "commission-briefs.db"),
+    PublicPageUrl = builder.Configuration["CommissionBriefs:PublicPageUrl"]
+        ?? "http://localhost:5000/commission.html"
 });
 builder.Services.AddSingleton<SqliteCommissionBriefStore>();
 builder.Services.AddSingleton(_ =>
@@ -223,6 +225,7 @@ app.MapGet(
 
 app.MapProfileHostEndpoints();
 app.MapCommissionBriefEndpoints();
+app.MapCompanyCommissionBriefEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
 
