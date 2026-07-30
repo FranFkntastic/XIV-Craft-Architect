@@ -146,6 +146,70 @@ public sealed class RecipePlanDiagnosticContractTests
     }
 
     [Fact]
+    public void AppraisalPlan_ImportsBeforeBackgroundMarketAndProcurementDerivation()
+    {
+        var root = LocateRepositoryRoot();
+        var layout = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Shared",
+            "MainLayout.razor"));
+        var start = layout.IndexOf(
+            "private async Task<bool> TryOpenAppraisalPlanAsync()",
+            StringComparison.Ordinal);
+        var end = layout.IndexOf(
+            "private bool IsLocalBenchmarkWorkflowRequest",
+            start,
+            StringComparison.Ordinal);
+        var appraisalLoader = layout[start..end];
+
+        Assert.Contains(
+            "await LoadNativePlanAsync(",
+            appraisalLoader,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "derivation: PlanDerivationDispatch.Background",
+            appraisalLoader,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "derivation: PlanDerivationDispatch.Deferred",
+            appraisalLoader,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PlanJson = System.Text.Json.JsonSerializer.Serialize(plan)",
+            layout,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "PlanJson = RecipeService.SerializePlan(plan)",
+            layout,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "plan.DataCenter = planDataCenter;",
+            layout,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "MarketFetchScopeResolver.ResolveValidDataCenter(",
+            layout,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AppraisalPlan_AcceptsContentAddressedSha256SnapshotTargets()
+    {
+        var planId = new string('a', 64);
+
+        Assert.True(AppraisalPlanSnapshotTargetValidator.IsValid(
+            $"/api/craft/plans/{planId}"));
+        Assert.True(AppraisalPlanSnapshotTargetValidator.IsValid(
+            $"https://dev.xivcraftarchitect.com/api/craft/plans/{planId}"));
+        Assert.False(AppraisalPlanSnapshotTargetValidator.IsValid(
+            $"/api/craft/plans/{new string('a', 32)}"));
+        Assert.False(AppraisalPlanSnapshotTargetValidator.IsValid(
+            $"https://dev.xivcraftarchitect.com/api/craft/plans/{planId}?replace=true"));
+    }
+
+    [Fact]
     public void Architecture_AppStateCannotBecomeASecondDomainAuthority()
     {
         var root = LocateRepositoryRoot();

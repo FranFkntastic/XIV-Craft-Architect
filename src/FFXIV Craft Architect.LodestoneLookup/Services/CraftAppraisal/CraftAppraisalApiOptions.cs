@@ -52,12 +52,19 @@ public sealed record CraftAppraisalApiOptions
     public void Validate()
     {
         if (!Enabled)
+        {
             return;
+        }
 
         if (string.IsNullOrWhiteSpace(PublicAppOrigin))
+        {
             throw new InvalidOperationException("CraftAppraisal:PublicAppOrigin is required when craft appraisal is enabled.");
+        }
+
         if (string.IsNullOrWhiteSpace(PublicApiOrigin))
+        {
             throw new InvalidOperationException("CraftAppraisal:PublicApiOrigin is required when craft appraisal is enabled.");
+        }
     }
 
     private static string NormalizeOrigin(string? value) =>

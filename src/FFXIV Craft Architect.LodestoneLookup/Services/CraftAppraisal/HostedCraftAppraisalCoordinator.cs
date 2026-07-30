@@ -43,11 +43,15 @@ public sealed class HostedCraftAppraisalCoordinator : IHostedCraftAppraisalCoord
         CancellationToken cancellationToken)
     {
         if (!IsAvailable)
+        {
             throw new InvalidOperationException("Hosted craft appraisal is disabled.");
+        }
 
         var key = QuoteKey.From(request);
         if (cache.TryGetValue(key, out CraftAppraisalQuote? cached) && cached != null)
+        {
             return cached;
+        }
 
         var pending = inFlight.GetOrAdd(
             key,
@@ -82,7 +86,9 @@ public sealed class HostedCraftAppraisalCoordinator : IHostedCraftAppraisalCoord
         try
         {
             if (cache.TryGetValue(key, out CraftAppraisalQuote? cached) && cached != null)
+            {
                 return cached;
+            }
 
             using var scope = scopeFactory.CreateScope();
             var appraisal = scope.ServiceProvider.GetRequiredService<ICraftAppraisalService>();

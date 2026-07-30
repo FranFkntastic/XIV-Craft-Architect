@@ -372,11 +372,17 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                 reportStatus?.Invoke("Gathering available purchase options...", 65);
                 try
                 {
+                    var procurementRegion =
+                        market?.SelectedRegion ?? _settings.SelectedRegion;
+                    var procurementDataCenter =
+                        MarketFetchScopeResolver.ResolveValidDataCenter(
+                            procurementRegion,
+                            market?.SelectedDataCenter ?? _settings.SelectedDataCenter);
                     var outcome = await _worker.RunProcurementAsync(
                         new WorkerProcurementRequest(
                             requestedScope,
-                            market?.SelectedDataCenter ?? _settings.SelectedDataCenter,
-                            market?.SelectedRegion ?? _settings.SelectedRegion,
+                            procurementDataCenter,
+                            procurementRegion,
                             market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
                             _settings.ProcurementTravelTolerance,
                             _settings.ProcurementEnableSplitWorldPurchases,
