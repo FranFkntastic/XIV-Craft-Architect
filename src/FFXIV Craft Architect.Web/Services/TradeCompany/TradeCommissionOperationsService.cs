@@ -8,6 +8,7 @@ namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
 
 public sealed class TradeCommissionOperationsService(
     TradeCommissionOperationsClient client,
+    TradeCompanyCollaborationClient collaborationClient,
     TradeOperationsPersistenceService tradeOperations,
     ProfileSyncLocalStateService localState,
     ProfileSyncService profileSync,
@@ -16,12 +17,22 @@ public sealed class TradeCommissionOperationsService(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly Dictionary<Guid, CompanyCommissionOwnerProjection> _projections = [];
     private readonly Dictionary<Guid, string> _errors = [];
+    private readonly Dictionary<Guid, IReadOnlyList<TradeDiscordNotificationDiagnostic>>
+        _notificationDiagnostics = [];
+    private readonly Dictionary<Guid, string> _notificationErrors = [];
 
     public CompanyCommissionOwnerProjection? GetForOrder(Guid orderId) =>
         _projections.GetValueOrDefault(orderId);
 
     public string? GetErrorForOrder(Guid orderId) =>
         _errors.GetValueOrDefault(orderId);
+
+    public IReadOnlyList<TradeDiscordNotificationDiagnostic>
+        GetNotificationDiagnostics(Guid orderId) =>
+        _notificationDiagnostics.GetValueOrDefault(orderId) ?? [];
+
+    public string? GetNotificationError(Guid orderId) =>
+        _notificationErrors.GetValueOrDefault(orderId);
 
     public async Task RefreshCanonicalAsync(
         IEnumerable<TradeOrder> orders,
@@ -30,7 +41,20 @@ public sealed class TradeCommissionOperationsService(
         var canonical = orders
             .Where(order => order.CompanyCommission != null)
             .ToArray();
-        await Task.WhenAll(canonical.Select(order => RefreshAsync(order, cancellationToken)));
+        foreach (var order in canonical)
+        {
+            await RefreshAsync(order, cancellationToken);
+        }
+
+        foreach (var company in canonical
+                     .Select(order => order.CompanyCommission!.CompanyId)
+                     .Distinct())
+        {
+            await RefreshNotificationDiagnosticsAsync(
+                company,
+                canonical,
+                cancellationToken);
+        }
     }
 
     public async Task RefreshAsync(
@@ -127,21 +151,6 @@ public sealed class TradeCommissionOperationsService(
                 request.Error ?? "The payment-policy request is incomplete."));
         }
 
-        var commission = RequireCommission(current);
-        var acceptedTerms = accepted
-            ? commission.CurrentTerms with
-            {
-                Version = commission.CurrentTermsVersion + 1,
-                CreatedAtUtc = DateTime.UtcNow,
-                CreatedBy = Commissioner(current),
-                Payment = commission.CurrentTerms.Payment with
-                {
-                    Schedule = request.RequestedSchedule.Value,
-                    CustomTerms = request.RequestedCustomTerms
-                },
-                ChangeSummary = $"Payment timing changed to {request.RequestedSchedule.Value}."
-            }
-            : null;
         return ExecuteAsync(
             current,
             "decide-payment-policy",
@@ -150,13 +159,13 @@ public sealed class TradeCommissionOperationsService(
                 request.EventId,
                 Accepted = accepted,
                 Reason = reason.Trim(),
-                AcceptedSchedule = acceptedTerms?.Payment.Schedule
+                RequestedSchedule = request.RequestedSchedule,
+                request.RequestedCustomTerms
             },
             context => new DecideCompanyCommissionPaymentPolicyChangeCommand(
                 context,
                 accepted,
-                reason.Trim(),
-                acceptedTerms),
+                reason.Trim()),
             cancellationToken);
     }
 
@@ -320,7 +329,7 @@ public sealed class TradeCommissionOperationsService(
                     "Participant recovery reset did not return an active one-time recovery grant.");
             }
 
-            ValidateRecoveryUrl(updated, response.RecoveryUrl);
+            ValidateCapabilityUrl(updated, response.RecoveryUrl, "recover");
             await ApplyProjectionAsync(updated);
             return new TradeCommissionOperatorResult(
                 true,
@@ -331,6 +340,64 @@ public sealed class TradeCommissionOperationsService(
         {
             _errors[current.Order.Id] = exception.Message;
             return Rejected(current, exception.Message);
+        }
+    }
+
+    public async Task<TradeCommissionOperatorResult> IssueClaimLinkAsync(
+        CompanyCommissionOwnerProjection current,
+        CancellationToken cancellationToken = default)
+    {
+        if (!CanPerformExternalAction(current.Order, out var reason))
+        {
+            return Rejected(current, reason);
+        }
+
+        try
+        {
+            ValidateProjection(current.Order, current);
+            var response = await client.IssueClaimLinkAsync(
+                CreateContext(current, "issue-claim-link", payload: null),
+                cancellationToken);
+            ValidateCapabilityUrl(current, response.ClaimUrl, "claim");
+            _errors.Remove(current.Order.Id);
+            return new TradeCommissionOperatorResult(
+                true,
+                current,
+                ClaimUrl: response.ClaimUrl);
+        }
+        catch (Exception exception)
+        {
+            _errors[current.Order.Id] = exception.Message;
+            return Rejected(current, exception.Message);
+        }
+    }
+
+    public async Task<string?> RetryNotificationDiagnosticAsync(
+        CompanyCommissionOwnerProjection current,
+        Guid diagnosticId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!CanPerformExternalAction(current.Order, out var reason))
+        {
+            return reason;
+        }
+
+        try
+        {
+            var companyId = RequireCommission(current).CompanyId;
+            await collaborationClient.RetryNotificationDiagnosticAsync(
+                companyId.Value,
+                diagnosticId,
+                cancellationToken);
+            await RefreshNotificationDiagnosticsAsync(
+                companyId,
+                [current.Order],
+                cancellationToken);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception.Message;
         }
     }
 
@@ -351,10 +418,11 @@ public sealed class TradeCommissionOperationsService(
         {
             ValidateProjection(current.Order, current);
             var context = CreateContext(current, route, payload);
-            var mutation = await client.ExecuteAsync(
+            var response = await client.ExecuteAsync(
                 route,
                 createCommand(context),
                 cancellationToken);
+            var mutation = response.Mutation;
             if (!mutation.Success)
             {
                 return Rejected(
@@ -374,8 +442,15 @@ public sealed class TradeCommissionOperationsService(
                     "The commissioner command did not advance the authoritative order revision.");
             }
 
+            if (!string.IsNullOrWhiteSpace(response.ClaimUrl))
+            {
+                ValidateCapabilityUrl(updated, response.ClaimUrl, "claim");
+            }
             await ApplyProjectionAsync(updated);
-            return new TradeCommissionOperatorResult(true, updated);
+            return new TradeCommissionOperatorResult(
+                true,
+                updated,
+                ClaimUrl: response.ClaimUrl);
         }
         catch (Exception exception)
         {
@@ -386,7 +461,7 @@ public sealed class TradeCommissionOperationsService(
 
     private async Task ApplyProjectionAsync(CompanyCommissionOwnerProjection projection)
     {
-        if (!await tradeOperations.SaveOrderAsync(projection.Order))
+        if (!await tradeOperations.ApplyCanonicalOrderAsync(projection.Order))
         {
             throw new InvalidOperationException(
                 "The owner projection was authoritative, but browser storage could not apply its Trade order.");
@@ -399,6 +474,38 @@ public sealed class TradeCommissionOperationsService(
         _projections[projection.Order.Id] = projection;
         _errors.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
+    }
+
+    private async Task RefreshNotificationDiagnosticsAsync(
+        CompanyId companyId,
+        IReadOnlyList<TradeOrder> companyOrders,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var diagnostics = await collaborationClient.LoadNotificationDiagnosticsAsync(
+                companyId.Value,
+                cancellationToken);
+            foreach (var order in companyOrders.Where(
+                         order => order.CompanyCommission?.CompanyId == companyId))
+            {
+                var commissionId = order.CompanyCommission!.CommissionId;
+                _notificationDiagnostics[order.Id] = diagnostics
+                    .Where(item => item.CommissionId == commissionId)
+                    .OrderByDescending(item => item.UpdatedAt)
+                    .ToArray();
+                _notificationErrors.Remove(order.Id);
+            }
+        }
+        catch (Exception exception)
+        {
+            foreach (var order in companyOrders.Where(
+                         order => order.CompanyCommission?.CompanyId == companyId))
+            {
+                _notificationErrors[order.Id] =
+                    $"Discord diagnostics unavailable: {exception.Message}";
+            }
+        }
     }
 
     private bool CanPerformExternalAction(TradeOrder order, out string reason)
@@ -454,20 +561,7 @@ public sealed class TradeCommissionOperationsService(
             current.ObjectRevision,
             current.CompanyRevision,
             new Guid(commandIdBytes),
-            fingerprint,
-            CompanyCommissionProtocol.Version1,
-            Commissioner(current),
-            CompanyCommissionSourceSurface.TradeArchitect);
-    }
-
-    private static CompanyCommissionActor Commissioner(
-        CompanyCommissionOwnerProjection projection)
-    {
-        var commission = RequireCommission(projection);
-        return new CompanyCommissionActor(
-            commission.CommissionerActorId,
-            CompanyCommissionActorKind.Commissioner,
-            "Commissioner");
+            CompanyCommissionProtocol.Version1);
     }
 
     private static void ValidateProjection(
@@ -503,19 +597,20 @@ public sealed class TradeCommissionOperationsService(
         string message) =>
         new(false, current, message);
 
-    private static void ValidateRecoveryUrl(
+    private static void ValidateCapabilityUrl(
         CompanyCommissionOwnerProjection projection,
-        string recoveryUrl)
+        string capabilityUrl,
+        string fragmentName)
     {
         var publicUrl = RequireCommission(projection).PublicMetadata.PublicUrl;
         if (string.IsNullOrWhiteSpace(publicUrl) ||
-            string.IsNullOrWhiteSpace(recoveryUrl) ||
-            !recoveryUrl.StartsWith(
-                publicUrl.Split('#')[0] + "#recover=",
+            string.IsNullOrWhiteSpace(capabilityUrl) ||
+            !capabilityUrl.StartsWith(
+                publicUrl.Split('#')[0] + $"#{fragmentName}=",
                 StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "Participant recovery reset returned an invalid one-time #recover link.");
+                $"The hosted service returned an invalid #{fragmentName} capability link.");
         }
     }
 }
@@ -524,4 +619,5 @@ public sealed record TradeCommissionOperatorResult(
     bool Success,
     CompanyCommissionOwnerProjection? Projection,
     string? Message = null,
-    string? RecoveryUrl = null);
+    string? RecoveryUrl = null,
+    string? ClaimUrl = null);

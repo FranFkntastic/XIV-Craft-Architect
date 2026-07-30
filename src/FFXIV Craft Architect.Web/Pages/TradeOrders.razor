@@ -1180,6 +1180,23 @@
                                                 </MudButton>
                                             </div>
                                         }
+                                        else if (ownerCommission.PublicMetadata.ViewState ==
+                                                     CompanyCommissionPublicViewState.Published &&
+                                                 ownerProjection.Order.Status is not
+                                                     (TradeOrderStatus.Completed or TradeOrderStatus.Canceled))
+                                        {
+                                            <div class="trade-orders-recovery-row">
+                                                <span>
+                                                    One claim slot is open. Fresh links share this canonical commission.
+                                                </span>
+                                                <MudButton Variant="Variant.Outlined"
+                                                           Color="Color.Secondary"
+                                                           Disabled="@_isCommissionCommandRunning"
+                                                           OnClick="CopyCommissionClaimLinkAsync">
+                                                    Copy Claim Link
+                                                </MudButton>
+                                            </div>
+                                        }
 
                                         <div class="trade-orders-commission-publication">
                                             <span>Published</span>
@@ -1191,6 +1208,41 @@
                                             <span>Discord bindings</span>
                                             <strong>@ownerCommission.PublicMetadata.DiscordBindings.Count.ToString("N0")</strong>
                                         </div>
+
+                                        @if (!string.IsNullOrWhiteSpace(SelectedCommissionNotificationError))
+                                        {
+                                            <MudAlert Severity="Severity.Warning" Dense="true">
+                                                @SelectedCommissionNotificationError
+                                            </MudAlert>
+                                        }
+
+                                        @if (SelectedCommissionNotificationDiagnostics.Count > 0)
+                                        {
+                                            <div class="trade-orders-notification-diagnostics">
+                                                @foreach (var diagnostic in SelectedCommissionNotificationDiagnostics)
+                                                {
+                                                    <div class="trade-orders-notification-diagnostic"
+                                                         @key="diagnostic.DiagnosticId">
+                                                        <div>
+                                                            <strong>@diagnostic.Summary</strong>
+                                                            <span>@diagnostic.RecommendedAction</span>
+                                                        </div>
+                                                        @if (diagnostic.CanRetry)
+                                                        {
+                                                            <MudButton Variant="Variant.Text"
+                                                                       Color="Color.Warning"
+                                                                       Size="Size.Small"
+                                                                       Disabled="@(_retryingCommissionDiagnosticId.HasValue)"
+                                                                       OnClick="@(() => RetryCommissionNotificationAsync(diagnostic))">
+                                                                @(_retryingCommissionDiagnosticId == diagnostic.DiagnosticId
+                                                                    ? "Requeuing"
+                                                                    : "Retry")
+                                                            </MudButton>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
 
                                         <div class="trade-orders-shared-comment">
                                             <MudTextField @bind-Value="_commissionSharedComment"

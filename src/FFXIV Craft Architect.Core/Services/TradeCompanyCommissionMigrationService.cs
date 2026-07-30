@@ -62,6 +62,9 @@ public static class TradeCompanyCommissionMigrationService
             CurrentTermsVersion = publishedBrief.Version,
             TermsVersions = [terms with { Version = publishedBrief.Version }],
             PublicMetadata = CreatePublicMetadata(copy, publishedBrief),
+            ActiveClaimCapabilityRevision = Math.Max(
+                commission.ActiveClaimCapabilityRevision,
+                1),
             Gates = commission.Gates with
             {
                 Payment = terms.Payment.Schedule == CompanyCommissionPaymentSchedule.Advance &&
@@ -161,7 +164,7 @@ public static class TradeCompanyCommissionMigrationService
             CurrentTermsVersion = terms.Version,
             TermsVersions = [terms],
             PublicMetadata = CreatePublicMetadata(copy, publishedBrief),
-            ActiveClaimCapabilityRevision = 0,
+            ActiveClaimCapabilityRevision = publishedBrief == null ? 0 : 1,
             Gates = new CompanyCommissionGateState(
                 new CompanyCommissionIdentityClearance(
                     identitySatisfied

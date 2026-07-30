@@ -200,6 +200,16 @@ public static class CompanyCommissionCommandWorkflow
     {
         RequireClaim(commission);
         RequireReason(reason);
+        Require(
+            source.Status == TradeOrderStatus.Assigned &&
+            commission.Gates.Payment.State != CompanyCommissionClearanceState.Satisfied &&
+            commission.Gates.CompanyMaterials.ReadyAtUtc == null &&
+            commission.Gates.CompanyMaterials.ReceivedAtUtc == null &&
+            commission.OutputProgress.All(item =>
+                item.CompletedQuantity == 0 &&
+                item.ReadyQuantity == 0 &&
+                item.AcceptedQuantity == 0),
+            "A claim can be released or rejected only before payment, material handoff, or work begins.");
         var participant = commission.ParticipantGrant ??
             throw new InvalidOperationException(
                 "The active claim has no participant grant.");
@@ -275,6 +285,13 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             !string.IsNullOrWhiteSpace(command.LodestoneCharacterId),
             "A verified Lodestone character is required.");
+        Require(
+            commission.ProvisionalCrafter is { } provisional &&
+            string.Equals(
+                provisional.LodestoneCharacterId,
+                command.LodestoneCharacterId,
+                StringComparison.Ordinal),
+            "Commissioner confirmation must match the submitted Lodestone candidate.");
         var updated = Copy(source);
         updated.AssignedCrafterId = command.CrafterId;
         return Transition(
@@ -430,6 +447,9 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             !string.IsNullOrWhiteSpace(command.Note),
             "A truthful payment observation note is required.");
+        Require(
+            commission.Gates.Payment.State == CompanyCommissionClearanceState.Pending,
+            "This commission has no pending advance-payment gate.");
         return Transition(
             source,
             commission with
@@ -483,6 +503,10 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             commission.Gates.CompanyMaterials.ReadyAtUtc != null,
             "The commissioner has not marked the complete material bundle ready.");
+        Require(
+            commission.Gates.CompanyMaterials.State ==
+            CompanyCommissionClearanceState.Pending,
+            "The commissioner-provided material bundle was already acknowledged.");
         RequireExactMaterials(commission, command.Quantities);
         return Transition(
             source,
@@ -666,6 +690,9 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             source.Status == TradeOrderStatus.Completed,
             "Settlement can close only a fulfilled commission.");
+        Require(
+            commission.SettlementState == CompanyCommissionSettlementState.Pending,
+            "This commission has no pending settlement.");
         RequireReason(command.Note);
         return Transition(
             source,

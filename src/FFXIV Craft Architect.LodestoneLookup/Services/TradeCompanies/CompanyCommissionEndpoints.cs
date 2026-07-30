@@ -189,6 +189,9 @@ public static class CompanyCommissionEndpoints
                 var canonical = mutation.Order?.CompanyCommission
                     ?? throw new InvalidOperationException(
                         "The applied command did not return its canonical commission.");
+                using var committedWork = new CancellationTokenSource(
+                    TimeSpan.FromSeconds(15));
+                var committedCancellationToken = committedWork.Token;
                 var now = timeProvider.GetUtcNow().UtcDateTime;
                 if (command is ResetCompanyCommissionParticipantRecoveryCommand)
                 {
@@ -208,7 +211,7 @@ public static class CompanyCommissionEndpoints
                         recovery.RecoveryGrantId,
                         recovery.RecoveryRevision,
                         now,
-                        cancellationToken);
+                        committedCancellationToken);
                     var recoveryUrl =
                         SqliteCompanyCommissionCapabilityStore.BuildFragmentUrl(
                             canonical.PublicMetadata.PublicUrl,
@@ -225,12 +228,12 @@ public static class CompanyCommissionEndpoints
                         capabilities,
                         canonical,
                         now,
-                        cancellationToken);
+                        committedCancellationToken);
                     var claimUrl = await IssueClaimUrlAsync(
                         canonical,
                         capabilities,
                         timeProvider,
-                        cancellationToken);
+                        committedCancellationToken);
                     return Results.Ok(ToOwnerResponse(mutation, claimUrl));
                 }
                 else if (command is CancelCompanyCommissionCommand or
@@ -243,7 +246,7 @@ public static class CompanyCommissionEndpoints
                             canonical.CommissionId,
                             kind,
                             now,
-                            cancellationToken);
+                            committedCancellationToken);
                     }
                 }
 
@@ -309,9 +312,8 @@ public static class CompanyCommissionEndpoints
                         envelope.RecoveryCapability,
                     _ => envelope.ParticipantCapability
                 };
-                if (string.IsNullOrWhiteSpace(plaintextCapability) ||
-                    plaintextCapability.Length >
-                    SqliteCompanyCommissionCapabilityStore.MaximumCapabilityLength)
+                if (!SqliteCompanyCommissionCapabilityStore.IsValidCapability(
+                        plaintextCapability))
                 {
                     return Results.Unauthorized();
                 }
@@ -319,7 +321,7 @@ public static class CompanyCommissionEndpoints
                 var capability = await capabilities.ResolveForCommandAsync(
                     publicId,
                     capabilityKind.Value,
-                    plaintextCapability,
+                    plaintextCapability!,
                     envelope.CommandId,
                     cancellationToken);
                 if (capability == null)
@@ -357,6 +359,13 @@ public static class CompanyCommissionEndpoints
                 {
                     return InvalidCommand(exception.Message);
                 }
+                if ((command is ClaimCompanyCommissionCommand or
+                         RedeemCompanyCommissionParticipantRecoveryCommand) &&
+                    !IsValidParticipantCredential(newParticipantCredential))
+                {
+                    return InvalidCommand(
+                        "A bounded browser-generated participant credential is required.");
+                }
 
                 var mutation = await commissions.ExecuteCapabilityAsync(
                     capability,
@@ -370,30 +379,27 @@ public static class CompanyCommissionEndpoints
                 var canonical = mutation.Order?.CompanyCommission
                     ?? throw new InvalidOperationException(
                         "The applied public command did not return its canonical commission.");
+                using var committedWork = new CancellationTokenSource(
+                    TimeSpan.FromSeconds(15));
+                var committedCancellationToken = committedWork.Token;
                 var now = timeProvider.GetUtcNow().UtcDateTime;
                 CompanyCommissionCapabilityResolution participantResolution = capability;
                 if (command is ClaimCompanyCommissionCommand or
                     RedeemCompanyCommissionParticipantRecoveryCommand)
                 {
-                    if (!IsValidParticipantCredential(newParticipantCredential))
-                    {
-                        return InvalidCommand(
-                            "A bounded browser-generated participant credential is required.");
-                    }
-
                     var participant = canonical.ParticipantGrant
                         ?? throw new InvalidOperationException(
                             "The authority exchange did not create an active participant grant.");
                     participantResolution =
                         await capabilities.FinalizeAuthorityExchangeAsync(
                             capability,
-                            plaintextCapability,
+                            plaintextCapability!,
                             envelope.CommandId,
                             participant.GrantId,
                             participant.CapabilityRevision,
                             newParticipantCredential!,
                             now,
-                            cancellationToken);
+                            committedCancellationToken);
                 }
 
                 if (command is ReleaseCompanyCommissionClaimCommand)
@@ -402,10 +408,10 @@ public static class CompanyCommissionEndpoints
                         capabilities,
                         canonical,
                         now,
-                        cancellationToken);
+                        committedCancellationToken);
                     var publicProjection = await commissions.LoadPublicAsync(
                         publicId,
-                        cancellationToken);
+                        committedCancellationToken);
                     return publicProjection == null
                         ? CanonicalCommissionConflict()
                         : Results.Ok(publicProjection);
@@ -413,7 +419,7 @@ public static class CompanyCommissionEndpoints
 
                 var participantProjection = await commissions.LoadParticipantAsync(
                     participantResolution,
-                    cancellationToken);
+                    committedCancellationToken);
                 return participantProjection == null
                     ? CanonicalCommissionConflict()
                     : Results.Ok(participantProjection);
@@ -629,9 +635,7 @@ public static class CompanyCommissionEndpoints
         ?? throw new JsonException("The command body is empty.");
 
     private static bool IsValidParticipantCredential(string? credential) =>
-        !string.IsNullOrWhiteSpace(credential) &&
-        credential.Length is >= 32 and <=
-            SqliteCompanyCommissionCapabilityStore.MaximumCapabilityLength;
+        SqliteCompanyCommissionCapabilityStore.IsValidCapability(credential);
 
     private static CompanyCommissionProvisionalCrafter SanitizeProvisionalCrafter(
         CompanyCommissionProvisionalCrafter supplied)

@@ -122,3 +122,29 @@ public sealed record TradeDiscordNotificationRouteSaveResult(
 {
     public bool Success => Status == TradeDiscordNotificationRouteSaveStatus.Saved;
 }
+
+public enum TradeDiscordNotificationDestinationKind
+{
+    CommissionerDirectMessage,
+    UpdateChannel
+}
+
+public enum TradeDiscordNotificationDiagnosticState
+{
+    Failed,
+    ReconciliationRequired
+}
+
+public sealed record TradeDiscordNotificationDiagnostic(
+    Guid DiagnosticId,
+    Guid CommissionId,
+    Guid EventId,
+    long DesiredProjectionRevision,
+    TradeDiscordNotificationDestinationKind Destination,
+    TradeDiscordNotificationDiagnosticState State,
+    string Summary,
+    string Detail,
+    string RecommendedAction,
+    bool CanRetry,
+    bool FallbackQueued,
+    DateTimeOffset UpdatedAt);

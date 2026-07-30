@@ -272,6 +272,9 @@ public sealed class DiscordPublicationService(
                 publishedOrder,
                 published,
                 published.PublishedAtUtc);
+            var expectedCompanyRevision = await companies.LoadCompanyRevisionAsync(
+                access,
+                cancellationToken);
             orderMutation = await companies.PutRecordAsync(
                 access,
                 TradeCompanyRecordKinds.Order,
@@ -279,7 +282,8 @@ public sealed class DiscordPublicationService(
                 JsonSerializer.Serialize(publishedOrder, JsonOptions),
                 orderRevision,
                 $"publication-order:{idempotencyKey}",
-                cancellationToken);
+                cancellationToken,
+                expectedCompanyRevision);
             if (!orderMutation.Success)
             {
                 var current = await orders.LoadOrderAsync(

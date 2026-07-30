@@ -16,6 +16,7 @@ public partial class TradeOrders
     private string _commissionSettlementObservation = string.Empty;
     private string _commissionSharedComment = string.Empty;
     private Guid? _commissionIdentityCrafterId;
+    private Guid? _retryingCommissionDiagnosticId;
     private bool _isCommissionCommandRunning;
 
     private CompanyCommissionOwnerProjection? SelectedCommissionOwner =>
@@ -27,6 +28,17 @@ public partial class TradeOrders
         _selectedOrder == null
             ? null
             : CommissionOperations.GetErrorForOrder(_selectedOrder.Id);
+
+    private IReadOnlyList<TradeDiscordNotificationDiagnostic>
+        SelectedCommissionNotificationDiagnostics =>
+        _selectedOrder == null
+            ? []
+            : CommissionOperations.GetNotificationDiagnostics(_selectedOrder.Id);
+
+    private string? SelectedCommissionNotificationError =>
+        _selectedOrder == null
+            ? null
+            : CommissionOperations.GetNotificationError(_selectedOrder.Id);
 
     private TradeCompanyCommission? SelectedCanonicalCommission =>
         SelectedCommissionOwner?.Order.CompanyCommission;
@@ -167,7 +179,8 @@ public partial class TradeOrders
                 owner,
                 _commissionIdentityRejectionReason,
                 _blockRejectedCommissionContact),
-            "Claim rejected and released");
+            "Claim rejected and released",
+            copyClaimUrl: true);
 
     private Task DecideCommissionPaymentPolicyAsync(bool accepted)
     {
@@ -232,10 +245,42 @@ public partial class TradeOrders
             "One-time recovery link issued",
             copyRecoveryUrl: true);
 
+    private Task CopyCommissionClaimLinkAsync() =>
+        RunCommissionCommandAsync(
+            owner => CommissionOperations.IssueClaimLinkAsync(owner),
+            "Fresh claim link issued",
+            copyClaimUrl: true);
+
+    private async Task RetryCommissionNotificationAsync(
+        TradeDiscordNotificationDiagnostic diagnostic)
+    {
+        var owner = SelectedCommissionOwner;
+        if (owner == null || !diagnostic.CanRetry)
+        {
+            return;
+        }
+
+        _retryingCommissionDiagnosticId = diagnostic.DiagnosticId;
+        try
+        {
+            var error = await CommissionOperations.RetryNotificationDiagnosticAsync(
+                owner,
+                diagnostic.DiagnosticId);
+            Snackbar.Add(
+                error ?? "Discord notification requeued",
+                error == null ? Severity.Success : Severity.Error);
+        }
+        finally
+        {
+            _retryingCommissionDiagnosticId = null;
+        }
+    }
+
     private async Task RunCommissionCommandAsync(
         Func<CompanyCommissionOwnerProjection, Task<TradeCommissionOperatorResult>> command,
         string successMessage,
-        bool copyRecoveryUrl = false)
+        bool copyRecoveryUrl = false,
+        bool copyClaimUrl = false)
     {
         var owner = SelectedCommissionOwner;
         if (owner == null || _isCommissionCommandRunning)
@@ -255,6 +300,14 @@ public partial class TradeOrders
                 await CopyTextToClipboardAsync(
                     result.RecoveryUrl,
                     "One-time recovery link copied");
+            }
+            if (result.Success &&
+                copyClaimUrl &&
+                !string.IsNullOrWhiteSpace(result.ClaimUrl))
+            {
+                await CopyTextToClipboardAsync(
+                    result.ClaimUrl,
+                    "Claim link copied");
             }
         }
         finally

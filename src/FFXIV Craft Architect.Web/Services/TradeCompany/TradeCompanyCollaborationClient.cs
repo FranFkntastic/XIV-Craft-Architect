@@ -121,6 +121,38 @@ public sealed class TradeCompanyCollaborationClient(
             "Discord notification route save returned an unexpected response.");
     }
 
+    public async Task<IReadOnlyList<TradeDiscordNotificationDiagnostic>>
+        LoadNotificationDiagnosticsAsync(
+            Guid companyProfileId,
+            CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{companyProfileId:D}/discord/notifications/diagnostics",
+            content: null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<
+                TradeDiscordNotificationDiagnostic[]>(
+                JsonOptions,
+                cancellationToken)
+            ?? [];
+    }
+
+    public async Task RetryNotificationDiagnosticAsync(
+        Guid companyProfileId,
+        Guid diagnosticId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{companyProfileId:D}/discord/notifications/" +
+            $"diagnostics/{diagnosticId:D}/retry",
+            content: null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+    }
+
     public async Task<TradeCommissionPublicationProjection> PublishAsync(
         Guid companyProfileId,
         Guid orderId,

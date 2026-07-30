@@ -173,6 +173,9 @@ public sealed class TradeOperationsPersistenceService
         return await _indexedDb.SaveTradeOrderAsync(order);
     }
 
+    public Task<bool> ApplyCanonicalOrderAsync(TradeOrder order) =>
+        _indexedDb.SaveTradeOrderAsync(order);
+
     public async Task<bool> DeleteOrderAsync(Guid orderId)
     {
         return await _indexedDb.DeleteTradeOrderAsync(orderId);

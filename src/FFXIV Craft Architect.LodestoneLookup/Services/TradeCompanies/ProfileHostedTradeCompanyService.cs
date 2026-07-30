@@ -92,7 +92,8 @@ public sealed class ProfileHostedTradeCompanyService(
         {
             return new TradeCompanyMutationResult(
                 TradeCompanyMutationStatus.Applied,
-                ToRecord(access.CompanyId, recordKind, recordId, current));
+                ToRecord(access.CompanyId, recordKind, recordId, current),
+                CompanyRevision: new CompanyRecordRevision(put.ServerRevision));
         }
 
         if (current != null &&
@@ -100,7 +101,8 @@ public sealed class ProfileHostedTradeCompanyService(
         {
             return new TradeCompanyMutationResult(
                 TradeCompanyMutationStatus.Replayed,
-                ToRecord(access.CompanyId, recordKind, recordId, current));
+                ToRecord(access.CompanyId, recordKind, recordId, current),
+                CompanyRevision: new CompanyRecordRevision(put.ServerRevision));
         }
 
         return new TradeCompanyMutationResult(

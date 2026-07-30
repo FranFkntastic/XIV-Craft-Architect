@@ -1106,6 +1106,32 @@
   font-size: 0.7rem;
 }
 
+.trade-orders-notification-diagnostics {
+  display: grid;
+  gap: 6px;
+}
+
+.trade-orders-notification-diagnostic {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #705b2e;
+  border-radius: 4px;
+  background: #2c2619;
+}
+
+.trade-orders-notification-diagnostic > div {
+  display: grid;
+  gap: 2px;
+}
+
+.trade-orders-notification-diagnostic span {
+  color: #c7b98f;
+  font-size: 0.7rem;
+}
+
 .trade-orders-shared-comment {
   align-items: end;
 }
@@ -1312,6 +1338,7 @@
   .trade-orders-observation-row,
   .trade-orders-material-handoff-action,
   .trade-orders-recovery-row,
+  .trade-orders-notification-diagnostic,
   .trade-orders-shared-comment {
     align-items: stretch;
     flex-direction: column;

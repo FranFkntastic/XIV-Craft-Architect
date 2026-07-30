@@ -31,7 +31,7 @@ public sealed class TradeCommissionOperationsClient(
                 "The authenticated commission owner endpoint returned an empty projection.");
     }
 
-    public async Task<CompanyCommissionMutationResult> ExecuteAsync<TCommand>(
+    public async Task<TradeCommissionOwnerMutationResponse> ExecuteAsync<TCommand>(
         string route,
         TCommand command,
         CancellationToken cancellationToken = default)
@@ -46,11 +46,19 @@ public sealed class TradeCommissionOperationsClient(
             typeof(TCommand),
             cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<CompanyCommissionMutationResult>(
+        var result = await response.Content.ReadFromJsonAsync<TradeCommissionOwnerMutationBody>(
             JsonOptions,
             cancellationToken)
             ?? throw new InvalidOperationException(
                 "The commissioner command endpoint returned an empty mutation result.");
+        return new TradeCommissionOwnerMutationResponse(
+            new CompanyCommissionMutationResult(
+                result.Status,
+                result.Order,
+                result.Activity,
+                result.ErrorCode,
+                result.ErrorMessage),
+            result.ClaimUrl);
     }
 
     public async Task<TradeCommissionRecoveryResetResponse> ResetParticipantRecoveryAsync(
@@ -70,6 +78,25 @@ public sealed class TradeCommissionOperationsClient(
             cancellationToken)
             ?? throw new InvalidOperationException(
                 "Participant recovery reset returned an empty response.");
+    }
+
+    public async Task<TradeCommissionClaimLinkResponse> IssueClaimLinkAsync(
+        CompanyCommissionCommandContext context,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{context.CompanyId}/commissions/" +
+            $"{context.CommissionId:D}/commands/issue-claim-link",
+            new TradeCommissionClaimLinkRequest(context),
+            typeof(TradeCommissionClaimLinkRequest),
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<TradeCommissionClaimLinkResponse>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "Claim-link issuance returned an empty response.");
     }
 
     private async Task<HttpResponseMessage> SendAsync(
@@ -150,3 +177,20 @@ public sealed class TradeCommissionOperationsClient(
 public sealed record TradeCommissionRecoveryResetResponse(
     CompanyCommissionMutationResult Mutation,
     string RecoveryUrl);
+
+public sealed record TradeCommissionClaimLinkRequest(
+    CompanyCommissionCommandContext Context);
+
+public sealed record TradeCommissionClaimLinkResponse(string ClaimUrl);
+
+public sealed record TradeCommissionOwnerMutationResponse(
+    CompanyCommissionMutationResult Mutation,
+    string? ClaimUrl);
+
+internal sealed record TradeCommissionOwnerMutationBody(
+    CompanyCommissionMutationStatus Status,
+    TradeOrder? Order,
+    CompanyCommissionActivityEvent? Activity,
+    string? ErrorCode,
+    string? ErrorMessage,
+    string? ClaimUrl);

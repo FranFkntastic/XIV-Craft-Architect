@@ -29,7 +29,8 @@ public interface ICompanyCommissionPostCommitSink
 public sealed class HostedCompanyCommissionService(
     ProfileHostedTradeCompanyService companies,
     TimeProvider timeProvider,
-    IEnumerable<ICompanyCommissionPostCommitSink> postCommitSinks)
+    IEnumerable<ICompanyCommissionPostCommitSink> postCommitSinks,
+    ILogger<HostedCompanyCommissionService> logger)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -468,9 +469,9 @@ public sealed class HostedCompanyCommissionService(
             var committed = new HostedCompanyCommissionSnapshot(
                 committedEnvelope,
                 updated,
-                await companies.LoadCompanyRevisionAsync(
-                    access,
-                    cancellationToken),
+                mutation.CompanyRevision
+                ?? throw new InvalidOperationException(
+                    "The hosted commission mutation returned no committed company revision."),
                 snapshot.CompanyDisplayName);
             var result = new CompanyCommissionMutationResult(
                 CompanyCommissionMutationStatus.Applied,
@@ -509,15 +510,30 @@ public sealed class HostedCompanyCommissionService(
         TradeCompanyAccessContext access,
         HostedCompanyCommissionSnapshot committed,
         CompanyCommissionActivityEvent activity,
-        CancellationToken cancellationToken)
+        CancellationToken requestCancellationToken)
     {
+        using var committedWork = new CancellationTokenSource(
+            TimeSpan.FromSeconds(15));
         foreach (var sink in postCommitSinks)
         {
-            await sink.OnCommittedAsync(
-                access,
-                committed,
-                activity,
-                cancellationToken);
+            try
+            {
+                await sink.OnCommittedAsync(
+                    access,
+                    committed,
+                    activity,
+                    committedWork.Token);
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(
+                    exception,
+                    "Commission post-commit projection failed for company {CompanyId}, " +
+                    "commission {CommissionId}, event {EventId}. The canonical command remains committed.",
+                    access.CompanyId,
+                    activity.CommissionId,
+                    activity.EventId);
+            }
         }
     }
 

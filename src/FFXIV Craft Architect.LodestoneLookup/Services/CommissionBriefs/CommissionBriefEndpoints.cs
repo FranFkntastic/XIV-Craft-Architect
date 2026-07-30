@@ -77,6 +77,9 @@ public static class CommissionBriefEndpoints
                 HostedCompanyCommissionService commissions,
                 CancellationToken ct) =>
             {
+                context.Response.Headers.CacheControl = "private, no-store";
+                context.Response.Headers.Vary = "X-Commission-Participant";
+
                 if (!IsAvailable(context, options) || !IsValidPublicId(publicId))
                 {
                     return Results.NotFound();
@@ -383,7 +386,6 @@ public static class CommissionBriefEndpoints
                 }
 
                 TradeCompanyRecordEnvelope committedOrder = orderRecord;
-                IssuedCompanyCommissionCapability? issuedClaimCapability = null;
                 string? claimUrl = null;
                 if (!PublicationMatches(
                         order.CommissionPublication,
@@ -426,23 +428,10 @@ public static class CommissionBriefEndpoints
                     var canonicalCommission = publishedOrder.CompanyCommission!;
                     if (canonicalCommission.ActiveClaimCapabilityRevision <= 0)
                     {
-                        issuedClaimCapability = await capabilities.IssueAsync(
-                            access.CompanyId,
-                            publishedOrder.Id,
-                            published.PublicId,
-                            CompanyCommissionCapabilityKind.Claim,
-                            grantId: null,
-                            capabilityRevision: 1,
-                            published.PublishedAtUtc,
-                            ct);
                         publishedOrder.CompanyCommission = canonicalCommission with
                         {
                             ActiveClaimCapabilityRevision = 1
                         };
-                        claimUrl = SqliteCompanyCommissionCapabilityStore.BuildFragmentUrl(
-                            publicUrl,
-                            "claim",
-                            issuedClaimCapability.PlaintextToken);
                     }
 
                     var expectedCompanyRevision = await companies.LoadCompanyRevisionAsync(
@@ -471,13 +460,6 @@ public static class CommissionBriefEndpoints
                                 ownership,
                                 out committedOrder))
                         {
-                            if (issuedClaimCapability != null)
-                            {
-                                await capabilities.RevokeAsync(
-                                    issuedClaimCapability.Resolution,
-                                    timeProvider.GetUtcNow().UtcDateTime,
-                                    ct);
-                            }
                             await store.DiscardCompanyOwnedAsync(
                                 published.PublicId,
                                 ownership,
@@ -494,6 +476,31 @@ public static class CommissionBriefEndpoints
                     {
                         committedOrder = orderMutation.Record;
                     }
+                }
+
+                var committedCanonical = JsonSerializer.Deserialize<TradeOrder>(
+                        committedOrder.PayloadJson,
+                        JsonOptions)?.CompanyCommission
+                    ?? throw new InvalidOperationException(
+                        "The committed publication has no canonical commission.");
+                if (committedCanonical.ActiveClaim == null &&
+                    committedCanonical.PublicMetadata.ViewState ==
+                    CompanyCommissionPublicViewState.Published &&
+                    committedCanonical.ActiveClaimCapabilityRevision > 0)
+                {
+                    var issuedClaimCapability = await capabilities.IssueAsync(
+                        access.CompanyId,
+                        request.OrderId,
+                        published.PublicId,
+                        CompanyCommissionCapabilityKind.Claim,
+                        grantId: null,
+                        committedCanonical.ActiveClaimCapabilityRevision,
+                        timeProvider.GetUtcNow().UtcDateTime,
+                        ct);
+                    claimUrl = SqliteCompanyCommissionCapabilityStore.BuildFragmentUrl(
+                        publicUrl,
+                        "claim",
+                        issuedClaimCapability.PlaintextToken);
                 }
 
                 return Results.Ok(new CommissionBriefCreateResponse
@@ -609,7 +616,7 @@ public static class CommissionBriefEndpoints
         options.IsAllowedRequestHost(context.Request.Host.Host);
 
     private static bool IsValidPublicId(string value) =>
-        value.Length is >= 12 and <= 32 &&
+        value.Length is >= 8 and <= 128 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
     private static bool PublicationIdentityMatches(

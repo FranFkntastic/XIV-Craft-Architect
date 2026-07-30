@@ -203,7 +203,16 @@ async function load() {
     const loadSecret = state.access?.pending || !hasAuthorityFragment
         ? state.access?.participantSecret ?? null
         : null;
-    state.projection = await state.client.load(loadSecret);
+    try {
+        state.projection = await state.client.load(loadSecret);
+    } catch (caught) {
+        const pendingAuthorityIsNotInstalled =
+            caught instanceof CommissionClientError &&
+            caught.status === 401 &&
+            Boolean(loadSecret && state.access?.pending);
+        if (!pendingAuthorityIsNotInstalled) throw caught;
+        state.projection = await state.client.load();
+    }
 
     if (state.projection.public.publicBriefId !== publicId) {
         throw new CommissionClientError(

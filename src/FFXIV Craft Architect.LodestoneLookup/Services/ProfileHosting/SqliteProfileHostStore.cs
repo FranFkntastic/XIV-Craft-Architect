@@ -403,13 +403,13 @@ public sealed class SqliteProfileHostStore
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             ct);
+        var currentServerRevision = await GetServerRevisionAsync(
+            connection,
+            profileId,
+            ct,
+            transaction);
         if (expectedServerRevision is { } expectedCompanyRevision)
         {
-            var currentServerRevision = await GetServerRevisionAsync(
-                connection,
-                profileId,
-                ct,
-                transaction);
             if (currentServerRevision != expectedCompanyRevision)
             {
                 await transaction.RollbackAsync(ct);
@@ -417,6 +417,7 @@ public sealed class SqliteProfileHostStore
                 {
                     Success = false,
                     Conflict = true,
+                    ServerRevision = currentServerRevision,
                     ErrorCode = "company_revision_conflict",
                     ErrorMessage = "The hosted company changed before the write completed."
                 };
@@ -439,6 +440,7 @@ public sealed class SqliteProfileHostStore
             {
                 Success = false,
                 Conflict = true,
+                ServerRevision = currentServerRevision,
                 RemoteObject = existing
             };
         }
@@ -450,6 +452,7 @@ public sealed class SqliteProfileHostStore
             {
                 Success = false,
                 Conflict = true,
+                ServerRevision = currentServerRevision,
                 ErrorCode = "missing_remote_object",
                 ErrorMessage = "Remote object does not exist."
             };
@@ -483,6 +486,7 @@ public sealed class SqliteProfileHostStore
             {
                 Success = false,
                 Conflict = true,
+                ServerRevision = currentServerRevision,
                 RemoteObject = existing,
                 ErrorCode = "revision_conflict",
                 ErrorMessage = "Remote object changed before the hosted write completed."
@@ -493,6 +497,7 @@ public sealed class SqliteProfileHostStore
         return new ProfileSyncPutResponse
         {
             Success = true,
+            ServerRevision = revision,
             Object = new ProfileSyncObjectEnvelope
             {
                 Collection = collection,

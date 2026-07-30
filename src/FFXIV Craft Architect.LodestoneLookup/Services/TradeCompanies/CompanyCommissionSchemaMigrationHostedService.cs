@@ -100,10 +100,11 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
                 : await briefs.LoadIncludingRevokedAsync(
                     order.CommissionPublication.PublicId,
                     cancellationToken);
+            companyId = published?.Ownership?.CompanyId ?? companyId;
             var migrated = TradeCompanyCommissionMigrationService.ConvertLegacyOrder(
                 order,
                 published,
-                published?.Ownership?.CompanyId ?? companyId,
+                companyId,
                 initialCommissionRevision: 0,
                 timeProvider.GetUtcNow().UtcDateTime);
             if (!Guid.TryParse(hosted.ProfileId, out var hostProfileId) ||

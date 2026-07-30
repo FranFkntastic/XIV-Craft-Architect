@@ -213,8 +213,7 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
     {
         if (string.IsNullOrWhiteSpace(publicBriefId) ||
             publicBriefId.Length > MaximumPublicBriefIdLength ||
-            string.IsNullOrWhiteSpace(plaintextToken) ||
-            plaintextToken.Length > MaximumCapabilityLength)
+            !IsValidCapability(plaintextToken))
         {
             return null;
         }
@@ -289,11 +288,8 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
             commandId == Guid.Empty ||
             participantGrantId == Guid.Empty ||
             participantCapabilityRevision <= 0 ||
-            string.IsNullOrWhiteSpace(authorityPlaintextToken) ||
-            authorityPlaintextToken.Length > MaximumCapabilityLength ||
-            string.IsNullOrWhiteSpace(newParticipantPlaintextToken) ||
-            newParticipantPlaintextToken.Length < 32 ||
-            newParticipantPlaintextToken.Length > MaximumCapabilityLength)
+            !IsValidCapability(authorityPlaintextToken) ||
+            !IsValidCapability(newParticipantPlaintextToken))
         {
             throw new ArgumentException("A valid authority exchange is required.");
         }
@@ -343,6 +339,59 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
         }
 
         var participantTokenHash = HashToken(newParticipantPlaintextToken);
+        await using (var replay = connection.CreateCommand())
+        {
+            replay.Transaction = transaction;
+            replay.CommandText = """
+                SELECT grant_id,
+                       capability_revision,
+                       token_hash
+                FROM company_commission_capabilities
+                WHERE company_id = $companyId
+                  AND commission_id = $commissionId
+                  AND capability_kind = $participantKind
+                  AND consumed_by_command_id = $commandId
+                ORDER BY capability_id
+                LIMIT 2;
+                """;
+            replay.Parameters.AddWithValue("$companyId", authority.CompanyId.ToString());
+            replay.Parameters.AddWithValue("$commissionId", authority.CommissionId.ToString("D"));
+            replay.Parameters.AddWithValue(
+                "$participantKind",
+                CompanyCommissionCapabilityKind.Participant.ToString());
+            replay.Parameters.AddWithValue("$commandId", commandId.ToString("D"));
+            await using var reader = await replay.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                var installedGrantId = Guid.Parse(reader.GetString(0));
+                var installedRevision = reader.GetInt64(1);
+                var installedHash = reader.GetString(2);
+                if (await reader.ReadAsync(cancellationToken))
+                {
+                    throw new InvalidOperationException(
+                        "The authority command installed more than one participant credential.");
+                }
+                if (!string.Equals(
+                        installedHash,
+                        participantTokenHash,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "The authority command was replayed with different participant secret material.");
+                }
+
+                await reader.DisposeAsync();
+                await transaction.CommitAsync(cancellationToken);
+                return new CompanyCommissionCapabilityResolution(
+                    authority.CompanyId,
+                    authority.CommissionId,
+                    authority.PublicBriefId,
+                    CompanyCommissionCapabilityKind.Participant,
+                    installedGrantId,
+                    installedRevision);
+            }
+        }
+
         await using (var inspectParticipant = connection.CreateCommand())
         {
             inspectParticipant.Transaction = transaction;
@@ -410,7 +459,8 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                         grant_id,
                         capability_revision,
                         token_hash,
-                        issued_at_utc
+                        issued_at_utc,
+                        consumed_by_command_id
                     )
                 VALUES
                     (
@@ -422,7 +472,8 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                         $participantGrantId,
                         $participantRevision,
                         $participantTokenHash,
-                        $finalizedAtUtc
+                        $finalizedAtUtc,
+                        $commandId
                     );
                 """;
             insertParticipant.Parameters.AddWithValue("$capabilityId", Guid.NewGuid().ToString("D"));
@@ -436,6 +487,7 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
             insertParticipant.Parameters.AddWithValue("$participantRevision", participantCapabilityRevision);
             insertParticipant.Parameters.AddWithValue("$participantTokenHash", participantTokenHash);
             insertParticipant.Parameters.AddWithValue("$finalizedAtUtc", finalizedAtUtc.ToString("O"));
+            insertParticipant.Parameters.AddWithValue("$commandId", commandId.ToString("D"));
             await insertParticipant.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -666,6 +718,13 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
 
     private static string HashToken(string token) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+    public static bool IsValidCapability(string? token) =>
+        !string.IsNullOrWhiteSpace(token) &&
+        token.Length is >= 32 and <= MaximumCapabilityLength &&
+        token.All(character =>
+            char.IsAsciiLetterOrDigit(character) ||
+            character is '-' or '_');
 
     private static bool TokenMatches(string token, string storedHash)
     {
