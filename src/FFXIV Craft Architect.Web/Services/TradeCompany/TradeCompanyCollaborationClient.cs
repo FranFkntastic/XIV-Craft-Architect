@@ -24,6 +24,11 @@ public sealed class TradeCompanyCollaborationClient(
             $"trade/v1/companies/{companyProfileId:D}/discord/claims?orderId={orderId:D}",
             content: null,
             cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return [];
+        }
+
         response.EnsureSuccessStatusCode();
         var claims = await response.Content.ReadFromJsonAsync<DiscordInterestClaimDto[]>(
             JsonOptions,
