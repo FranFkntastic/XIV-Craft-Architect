@@ -25,7 +25,9 @@ builder.Services.AddCors(options =>
                 "http://localhost:5000",
                 "http://localhost:5001",
                 "https://localhost:5001",
-                "https://franfkntastic.github.io")
+                "https://franfkntastic.github.io",
+                "https://dev.xivcraftarchitect.com",
+                "https://xivcraftarchitect.com")
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
@@ -53,6 +55,7 @@ builder.Services.AddSingleton(_ => new ProfileHostOptions
         ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db")
 });
 builder.Services.AddSingleton<ProfileAccessKeyHasher>();
+builder.Services.AddSingleton<ProfilePairingCodeService>();
 builder.Services.AddSingleton<ProfileAuthenticationGate>();
 builder.Services.AddSingleton<SqliteProfileHostStore>();
 var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]

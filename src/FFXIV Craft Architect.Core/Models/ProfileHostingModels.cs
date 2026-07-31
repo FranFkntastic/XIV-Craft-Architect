@@ -90,4 +90,24 @@ public sealed class ProfileHostHealthResponse
     public string Service { get; set; } = "FFXIV Craft Architect Private Backend";
     public string Status { get; set; } = "ready";
     public bool ProfileHostEnabled { get; set; }
+    public int ProtocolVersion { get; set; } = 1;
+}
+
+public sealed class ProfileHostPairingCodeResponse
+{
+    public string PairingCode { get; set; } = string.Empty;
+    public DateTime ExpiresAtUtc { get; set; }
+    public string ProfileId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+}
+
+public sealed class ProfileHostPairingRedeemRequest
+{
+    public string PairingCode { get; set; } = string.Empty;
+}
+
+public sealed class ProfileHostPairingRedeemResponse
+{
+    public string AccessKey { get; set; } = string.Empty;
+    public ProfileHostProfileResponse Profile { get; set; } = new();
 }

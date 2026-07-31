@@ -240,6 +240,133 @@ public sealed class SqliteProfileHostStore
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task CreatePairingCodeAsync(
+        string profileId,
+        string tokenHash,
+        DateTime expiresAtUtc,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        var now = DateTime.UtcNow;
+
+        await using var connection = await OpenAsync(ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+        await using (var cleanup = connection.CreateCommand())
+        {
+            cleanup.Transaction = transaction;
+            cleanup.CommandText = """
+                delete from profile_pairing_codes
+                where expires_at_utc <= $nowUtc or redeemed_at_utc is not null;
+                """;
+            cleanup.Parameters.AddWithValue("$nowUtc", now.ToString("O"));
+            await cleanup.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                insert into profile_pairing_codes (
+                    token_hash,
+                    profile_id,
+                    created_at_utc,
+                    expires_at_utc)
+                values ($tokenHash, $profileId, $createdAtUtc, $expiresAtUtc);
+                """;
+            insert.Parameters.AddWithValue("$tokenHash", tokenHash);
+            insert.Parameters.AddWithValue("$profileId", profileId);
+            insert.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
+            insert.Parameters.AddWithValue("$expiresAtUtc", expiresAtUtc.ToString("O"));
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+
+        await transaction.CommitAsync(ct);
+    }
+
+    public async Task<ProfileHostProfileResponse?> RedeemPairingCodeAsync(
+        string tokenHash,
+        string accessKeyHash,
+        DateTime nowUtc,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+
+        string? profileId = null;
+        string? displayName = null;
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = """
+                select p.id, p.display_name
+                from profile_pairing_codes c
+                inner join hosted_profiles p on p.id = c.profile_id
+                where c.token_hash = $tokenHash
+                  and c.redeemed_at_utc is null
+                  and c.expires_at_utc > $nowUtc
+                  and p.disabled_at_utc is null;
+                """;
+            select.Parameters.AddWithValue("$tokenHash", tokenHash);
+            select.Parameters.AddWithValue("$nowUtc", nowUtc.ToString("O"));
+            await using var reader = await select.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                profileId = reader.GetString(0);
+                displayName = reader.GetString(1);
+            }
+        }
+
+        if (profileId == null || displayName == null)
+        {
+            await transaction.RollbackAsync(ct);
+            return null;
+        }
+
+        await using (var redeem = connection.CreateCommand())
+        {
+            redeem.Transaction = transaction;
+            redeem.CommandText = """
+                update profile_pairing_codes
+                set redeemed_at_utc = $redeemedAtUtc
+                where token_hash = $tokenHash and redeemed_at_utc is null;
+                """;
+            redeem.Parameters.AddWithValue("$tokenHash", tokenHash);
+            redeem.Parameters.AddWithValue("$redeemedAtUtc", nowUtc.ToString("O"));
+            if (await redeem.ExecuteNonQueryAsync(ct) != 1)
+            {
+                await transaction.RollbackAsync(ct);
+                return null;
+            }
+        }
+
+        await using (var insertKey = connection.CreateCommand())
+        {
+            insertKey.Transaction = transaction;
+            insertKey.CommandText = """
+                insert into profile_access_keys (id, profile_id, key_hash, created_at_utc)
+                values ($id, $profileId, $keyHash, $createdAtUtc);
+                """;
+            insertKey.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
+            insertKey.Parameters.AddWithValue("$profileId", profileId);
+            insertKey.Parameters.AddWithValue("$keyHash", accessKeyHash);
+            insertKey.Parameters.AddWithValue("$createdAtUtc", nowUtc.ToString("O"));
+            await insertKey.ExecuteNonQueryAsync(ct);
+        }
+
+        await transaction.CommitAsync(ct);
+        return new ProfileHostProfileResponse
+        {
+            ProfileId = profileId,
+            DisplayName = displayName,
+            ServerRevision = await GetServerRevisionAsync(connection, profileId, ct)
+        };
+    }
+
     public async Task<ProfileHostProfileResponse?> LoadProfileAsync(string profileId, CancellationToken ct)
     {
         await EnsureSchemaAsync(ct);
@@ -870,6 +997,15 @@ public sealed class SqliteProfileHostStore
                 created_at_utc text not null,
                 last_used_at_utc text null,
                 revoked_at_utc text null,
+                foreign key(profile_id) references hosted_profiles(id)
+            );
+
+            create table if not exists profile_pairing_codes (
+                token_hash text primary key,
+                profile_id text not null,
+                created_at_utc text not null,
+                expires_at_utc text not null,
+                redeemed_at_utc text null,
                 foreign key(profile_id) references hosted_profiles(id)
             );
 

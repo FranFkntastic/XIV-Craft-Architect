@@ -29,6 +29,11 @@ public sealed record ProfileSyncConflict(
     long RemoteRevision,
     ProfileSyncObjectEnvelope RemoteObject);
 
+public sealed record ProfileSyncBootstrapPreview(
+    int LocalObjectCount,
+    int RemoteObjectCount,
+    bool ContentsMatch);
+
 public sealed class ProfileSyncService
 {
     private readonly ProfileHostClient _client;
@@ -219,6 +224,28 @@ public sealed class ProfileSyncService
             ct);
     }
 
+    public async Task<ProfileSyncBootstrapPreview> PreviewFirstConnectAsync(
+        HostedProfileConnectionSettings settings,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!settings.IsConfigured)
+        {
+            throw new InvalidOperationException(
+                "A verified hosted profile ID, host URL, and access key are required.");
+        }
+
+        var local = await LoadLocalBootstrapObjectsAsync(ct);
+        var remote = await _client.ExportBootstrapAsync(
+            settings.HostUrl!,
+            settings.AccessKey!,
+            ct);
+        return new ProfileSyncBootstrapPreview(
+            local.Count,
+            remote.Objects.Count,
+            BootstrapContentsMatch(local, remote.Objects));
+    }
+
     private async Task ConnectCoreAsync(
         HostedProfileConnectionSettings settings,
         FirstConnectMode mode,
@@ -235,18 +262,13 @@ public sealed class ProfileSyncService
         await EnsurePendingSavesLoadedAsync(profileId);
         if (mode == FirstConnectMode.UploadLocal)
         {
-            var objects = new List<ProfileSyncObjectEnvelope>();
-            foreach (var adapter in _adapters.Values.OrderBy(adapter => adapter.Collection, StringComparer.Ordinal))
+            var objects = await LoadLocalBootstrapObjectsAsync(ct);
+            foreach (var item in objects)
             {
-                var localObjects = await adapter.LoadLocalObjectsAsync(ct);
-                foreach (var item in localObjects)
-                {
-                    await _localState.SaveHostedObjectProvenanceAsync(
-                        profileId,
-                        item.Collection,
-                        item.ObjectId);
-                }
-                objects.AddRange(localObjects);
+                await _localState.SaveHostedObjectProvenanceAsync(
+                    profileId,
+                    item.Collection,
+                    item.ObjectId);
             }
 
             var response = await _client.UploadBootstrapAsync(
@@ -272,6 +294,38 @@ public sealed class ProfileSyncService
         {
             await SyncNowCoreAsync(ct);
         }
+    }
+
+    private async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalBootstrapObjectsAsync(
+        CancellationToken ct)
+    {
+        var objects = new List<ProfileSyncObjectEnvelope>();
+        foreach (var adapter in _adapters.Values.OrderBy(adapter => adapter.Collection, StringComparer.Ordinal))
+        {
+            objects.AddRange(await adapter.LoadLocalObjectsAsync(ct));
+        }
+
+        return objects;
+    }
+
+    private static bool BootstrapContentsMatch(
+        IReadOnlyList<ProfileSyncObjectEnvelope> local,
+        IReadOnlyList<ProfileSyncObjectEnvelope> remote)
+    {
+        if (local.Count != remote.Count)
+        {
+            return false;
+        }
+
+        var remoteByIdentity = remote.ToDictionary(
+            item => $"{item.Collection}\0{item.ObjectId}",
+            StringComparer.Ordinal);
+        return local.All(item =>
+            remoteByIdentity.TryGetValue(
+                $"{item.Collection}\0{item.ObjectId}",
+                out var remoteItem) &&
+            item.Deleted == remoteItem.Deleted &&
+            string.Equals(item.PayloadJson, remoteItem.PayloadJson, StringComparison.Ordinal));
     }
 
     public Task DisconnectAsync(CancellationToken ct = default) =>
