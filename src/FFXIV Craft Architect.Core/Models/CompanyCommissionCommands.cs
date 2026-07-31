@@ -137,6 +137,17 @@ public sealed record RecordCompanyCommissionSettlementCommand(
     CompanyCommissionCommandContext Context,
     string Note) : ICompanyCommissionCompanyCommand;
 
+public sealed record ConfirmCompanyCommissionSettlementReceivedCommand(
+    CompanyCommissionCommandContext Context,
+    int TermsVersion,
+    string Note) : ICompanyCommissionParticipantCommand;
+
+public sealed record RetractCompanyCommissionSettlementAttestationCommand(
+    CompanyCommissionCommandContext Context,
+    string Reason) :
+    ICompanyCommissionCompanyCommand,
+    ICompanyCommissionParticipantCommand;
+
 public sealed record ResetCompanyCommissionParticipantRecoveryCommand(
     CompanyCommissionCommandContext Context) : ICompanyCommissionCompanyCommand;
 

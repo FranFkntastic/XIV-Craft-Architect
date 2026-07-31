@@ -92,7 +92,10 @@ public enum CompanyCommissionActivityKind
     TermsAmended,
     PaymentSentRecorded,
     PaymentReceivedConfirmed,
-    PaymentAttestationRetracted
+    PaymentAttestationRetracted,
+    SettlementPaymentSentRecorded,
+    SettlementPaymentReceivedConfirmed,
+    SettlementPaymentAttestationRetracted
 }
 
 public enum CompanyCommissionActivityVisibility
@@ -216,6 +219,18 @@ public sealed record CompanyCommissionPaymentClearance(
         (CrafterReceived == null ? 0 : 1);
 }
 
+public sealed record CompanyCommissionSettlementConfirmation(
+    int TermsVersion = 0,
+    CompanyCommissionPaymentAttestation? CommissionerSent = null,
+    CompanyCommissionPaymentAttestation? CrafterReceived = null)
+{
+    public int ConfirmationCount =>
+        (CommissionerSent == null ? 0 : 1) +
+        (CrafterReceived == null ? 0 : 1);
+
+    public bool IsSatisfied => CommissionerSent != null && CrafterReceived != null;
+}
+
 public sealed record CompanyCommissionPaymentPolicyChangeRequest(
     Guid RequestId,
     int RequestedAgainstTermsVersion,
@@ -294,6 +309,7 @@ public sealed record CompanyCommissionPublicMetadata
     public required string PublicBriefId { get; init; }
     public string? PublicUrl { get; init; }
     public required CompanyCommissionPublicViewState ViewState { get; init; }
+    public bool IsTestFixture { get; init; }
     public DateTime? PublishedAtUtc { get; init; }
     public DateTime? RevokedAtUtc { get; init; }
     public TradeCompanyPublicationOwnership? LegacyOwnership { get; init; }
@@ -331,6 +347,7 @@ public sealed record TradeCompanyCommission
     public IReadOnlyList<CompanyCommissionOutputProgress> OutputProgress { get; init; } = [];
     public required CompanyCommissionDeliveryReadiness DeliveryReadiness { get; init; }
     public required CompanyCommissionSettlementState SettlementState { get; init; }
+    public CompanyCommissionSettlementConfirmation SettlementPayment { get; init; } = new();
     public IReadOnlyList<CompanyCommissionActivityEvent> Activity { get; init; } = [];
     public IReadOnlyList<CompanyCommissionProcessedCommand> ProcessedCommands { get; init; } = [];
 
@@ -352,6 +369,7 @@ public sealed record CompanyCommissionPublicBrief
     public required string CompanyDisplayName { get; init; }
     public required string Reference { get; init; }
     public required CompanyCommissionPublicViewState ViewState { get; init; }
+    public bool IsTestFixture { get; init; }
     public required CompanyCommissionPublicTerms Terms { get; init; }
     public required TradeOrderStatus Status { get; init; }
     public required CompanyCommissionPublicGateState Gates { get; init; }
@@ -411,6 +429,7 @@ public sealed record CompanyCommissionParticipantBrief
     public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
     public required long ParticipantCapabilityRevision { get; init; }
     public required CompanyCommissionPaymentClearance Payment { get; init; }
+    public CompanyCommissionSettlementConfirmation SettlementPayment { get; init; } = new();
     public IReadOnlyList<CompanyCommissionParticipantActivity> Activity { get; init; } = [];
 }
 

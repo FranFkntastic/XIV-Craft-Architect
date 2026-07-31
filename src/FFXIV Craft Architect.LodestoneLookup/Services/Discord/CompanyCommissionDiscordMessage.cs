@@ -36,8 +36,15 @@ public static class CompanyCommissionDiscordMessage
             {
                 new
                 {
-                    title = DiscordProjectionSanitizer.Text(commission.Title, 256),
+                    title = DiscordProjectionSanitizer.Text(
+                        commission.IsTestFixture
+                            ? $"TEST COMMISSION - {commission.Title}"
+                            : commission.Title,
+                        256),
                     description = DiscordProjectionSanitizer.Text(
+                        (commission.IsTestFixture
+                            ? "**TEST FIXTURE - CLAIMING DISABLED**\n"
+                            : string.Empty) +
                         $"**{lifecycle}**\n{OutputSummary(commission)}",
                         4096),
                     color = SapphireColor,
@@ -185,6 +192,10 @@ public static class CompanyCommissionDiscordMessage
             return commission.SettlementState == CompanyCommissionSettlementState.Satisfied
                 ? "COMPLETED"
                 : "DELIVERY ACCEPTED - SETTLEMENT PENDING";
+        }
+        if (commission.IsTestFixture)
+        {
+            return "TEST COMMISSION - NOT CLAIMABLE";
         }
         if (commission.Status == TradeOrderStatus.AwaitingDelivery)
         {
@@ -347,6 +358,11 @@ public static class CompanyCommissionDiscordMessage
             TradeOrderStatusWorkflow.IsArchived(commission.Status))
         {
             return DiscordPublicationState.Closed;
+        }
+
+        if (commission.IsTestFixture)
+        {
+            return DiscordPublicationState.TestFixture;
         }
 
         return commission.IsClaimed

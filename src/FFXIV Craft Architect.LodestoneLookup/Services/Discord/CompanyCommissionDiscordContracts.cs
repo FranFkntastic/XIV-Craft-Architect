@@ -184,11 +184,18 @@ public static class CompanyCommissionNotificationPolicy
             CompanyCommissionActivityKind.PaymentPolicyChangeRefused or
             CompanyCommissionActivityKind.TermsAcknowledged or
             CompanyCommissionActivityKind.PaymentClearanceRecorded or
+            CompanyCommissionActivityKind.PaymentSentRecorded or
+            CompanyCommissionActivityKind.PaymentReceivedConfirmed or
+            CompanyCommissionActivityKind.PaymentAttestationRetracted or
             CompanyCommissionActivityKind.CompanyMaterialsReady or
             CompanyCommissionActivityKind.WorkClearanceAchieved or
             CompanyCommissionActivityKind.DeliveryReadinessWithdrawn or
             CompanyCommissionActivityKind.DeliveryAccepted or
             CompanyCommissionActivityKind.SettlementRecorded or
+            CompanyCommissionActivityKind.SettlementPaymentSentRecorded or
+            CompanyCommissionActivityKind.SettlementPaymentReceivedConfirmed or
+            CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted or
+            CompanyCommissionActivityKind.TermsAmended or
             CompanyCommissionActivityKind.CommissionOpened or
             CompanyCommissionActivityKind.CommissionClosed or
             CompanyCommissionActivityKind.ParticipantRecoveryRedeemed or

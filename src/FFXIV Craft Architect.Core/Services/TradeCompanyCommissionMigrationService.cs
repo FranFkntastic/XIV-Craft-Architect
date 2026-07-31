@@ -89,9 +89,9 @@ public static class TradeCompanyCommissionMigrationService
             CurrentTermsVersion = publishedBrief.Version,
             TermsVersions = [terms with { Version = publishedBrief.Version }],
             PublicMetadata = CreatePublicMetadata(copy, publishedBrief),
-            ActiveClaimCapabilityRevision = Math.Max(
-                commission.ActiveClaimCapabilityRevision,
-                1),
+            ActiveClaimCapabilityRevision = publishedBrief.Brief.IsTestFixture
+                ? 0
+                : Math.Max(commission.ActiveClaimCapabilityRevision, 1),
             Gates = commission.Gates with
             {
                 Payment = terms.Payment.Schedule == CompanyCommissionPaymentSchedule.Advance &&
@@ -193,7 +193,10 @@ public static class TradeCompanyCommissionMigrationService
             CurrentTermsVersion = terms.Version,
             TermsVersions = [terms],
             PublicMetadata = CreatePublicMetadata(copy, publishedBrief),
-            ActiveClaimCapabilityRevision = publishedBrief == null ? 0 : 1,
+            ActiveClaimCapabilityRevision = publishedBrief == null ||
+                                            publishedBrief.Brief.IsTestFixture
+                ? 0
+                : 1,
             Gates = new CompanyCommissionGateState(
                 new CompanyCommissionIdentityClearance(
                     identitySatisfied
@@ -368,6 +371,7 @@ public static class TradeCompanyCommissionMigrationService
         {
             PublicBriefId = publication.PublicId,
             PublicUrl = publication.PublicUrl,
+            IsTestFixture = publishedBrief.Brief.IsTestFixture,
             ViewState = publication.RevokedAtUtc == null
                 ? CompanyCommissionPublicViewState.Published
                 : CompanyCommissionPublicViewState.Revoked,

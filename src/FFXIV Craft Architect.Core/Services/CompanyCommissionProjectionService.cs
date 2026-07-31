@@ -21,6 +21,7 @@ public static class CompanyCommissionProjectionService
             CompanyDisplayName = companyDisplayName,
             Reference = commission.Reference,
             ViewState = commission.PublicMetadata.ViewState,
+            IsTestFixture = commission.PublicMetadata.IsTestFixture,
             Terms = CreatePublicTerms(commission.CurrentTerms),
             Status = order.Status,
             Gates = new CompanyCommissionPublicGateState(
@@ -63,6 +64,7 @@ public static class CompanyCommissionProjectionService
             ProvisionalCrafter = commission.ProvisionalCrafter,
             ParticipantCapabilityRevision = commission.ParticipantGrant?.CapabilityRevision ?? 0,
             Payment = commission.Gates.Payment,
+            SettlementPayment = commission.SettlementPayment,
             Activity = commission.Activity
                 .Where(item =>
                     item.Visibility == CompanyCommissionActivityVisibility.Shared)

@@ -403,6 +403,7 @@ public static class CommissionBriefEndpoints
                         PublicUrl = publicUrl,
                         Version = published.Version,
                         PublishedAtUtc = published.PublishedAtUtc,
+                        IsTestFixture = published.Brief.IsTestFixture,
                         Ownership = ownership
                     };
                     if (!alreadyBound)
@@ -426,7 +427,8 @@ public static class CommissionBriefEndpoints
                         published,
                         published.PublishedAtUtc);
                     var canonicalCommission = publishedOrder.CompanyCommission!;
-                    if (canonicalCommission.ActiveClaimCapabilityRevision <= 0)
+                    if (!canonicalCommission.PublicMetadata.IsTestFixture &&
+                        canonicalCommission.ActiveClaimCapabilityRevision <= 0)
                     {
                         publishedOrder.CompanyCommission = canonicalCommission with
                         {
@@ -484,6 +486,7 @@ public static class CommissionBriefEndpoints
                     ?? throw new InvalidOperationException(
                         "The committed publication has no canonical commission.");
                 if (committedCanonical.ActiveClaim == null &&
+                    !committedCanonical.PublicMetadata.IsTestFixture &&
                     committedCanonical.PublicMetadata.ViewState ==
                     CompanyCommissionPublicViewState.Published &&
                     committedCanonical.ActiveClaimCapabilityRevision > 0)

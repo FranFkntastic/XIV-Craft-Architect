@@ -457,6 +457,8 @@ public static class CompanyCommissionEndpoints
                 Deserialize<AcceptCompanyCommissionDeliveryCommand>(body),
             "record-settlement" =>
                 Deserialize<RecordCompanyCommissionSettlementCommand>(body),
+            "retract-settlement" =>
+                Deserialize<RetractCompanyCommissionSettlementAttestationCommand>(body),
             "reset-participant-recovery" =>
                 Deserialize<ResetCompanyCommissionParticipantRecoveryCommand>(body),
             "cancel" => Deserialize<CancelCompanyCommissionCommand>(body),
@@ -496,6 +498,8 @@ public static class CompanyCommissionEndpoints
             AcceptCompanyCommissionDeliveryCommand value =>
                 value with { Context = context },
             RecordCompanyCommissionSettlementCommand value =>
+                value with { Context = context },
+            RetractCompanyCommissionSettlementAttestationCommand value =>
                 value with { Context = context },
             ResetCompanyCommissionParticipantRecoveryCommand value =>
                 value with { Context = context },
@@ -587,6 +591,22 @@ public static class CompanyCommissionEndpoints
                         context,
                         Deserialize<ReasonPayload>(body).Reason),
                     null);
+            case "confirm-settlement-received":
+                {
+                    var payload = Deserialize<PaymentReceiptPayload>(body);
+                    return (
+                        new ConfirmCompanyCommissionSettlementReceivedCommand(
+                            context,
+                            payload.TermsVersion,
+                            payload.Note),
+                        null);
+                }
+            case "retract-settlement":
+                return (
+                    new RetractCompanyCommissionSettlementAttestationCommand(
+                        context,
+                        Deserialize<ReasonPayload>(body).Reason),
+                    null);
             case "acknowledge-company-materials":
                 return (
                     new AcknowledgeCompanyCommissionMaterialsCommand(
@@ -638,6 +658,8 @@ public static class CompanyCommissionEndpoints
             "acknowledge-terms" or
             "confirm-payment-received" or
             "retract-payment" or
+            "confirm-settlement-received" or
+            "retract-settlement" or
             "acknowledge-company-materials" or
             "report-progress" or
             "add-comment" or
@@ -754,6 +776,7 @@ public static class CompanyCommissionEndpoints
     {
         if (commission.PublicMetadata.ViewState !=
                 CompanyCommissionPublicViewState.Published ||
+            commission.PublicMetadata.IsTestFixture ||
             string.IsNullOrWhiteSpace(commission.PublicMetadata.PublicUrl) ||
             commission.ActiveClaimCapabilityRevision <= 0)
         {

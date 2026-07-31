@@ -56,9 +56,11 @@ public sealed class SqliteDiscordCollaborationStore(
                     updated_at_utc TEXT NOT NULL
                 );
 
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_discord_publications_active_order
+                DROP INDEX IF EXISTS ux_discord_publications_active_order;
+
+                CREATE UNIQUE INDEX ux_discord_publications_active_order
                     ON discord_publications(company_id, order_id)
-                    WHERE state IN (0, 1);
+                    WHERE state IN (0, 1, 6);
 
                 CREATE UNIQUE INDEX IF NOT EXISTS ux_discord_publications_message
                     ON discord_publications(channel_id, message_id)

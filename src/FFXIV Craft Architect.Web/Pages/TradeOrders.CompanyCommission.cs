@@ -18,6 +18,7 @@ public partial class TradeOrders
     private string _commissionCancellationReason = string.Empty;
     private string _commissionReturnReason = string.Empty;
     private string _commissionSettlementObservation = string.Empty;
+    private string _commissionSettlementRetractionReason = string.Empty;
     private string _commissionSharedComment = string.Empty;
     private Guid? _commissionIdentityCrafterId;
     private Guid? _retryingCommissionDiagnosticId;
@@ -65,6 +66,12 @@ public partial class TradeOrders
 
     private int SharingTabIndex => HasCanonicalCommission ? 4 : 3;
 
+    private static string GetSettlementChipClass(
+        CompanyCommissionSettlementState state) =>
+        state == CompanyCommissionSettlementState.Satisfied
+            ? "trade-orders-publication-chip is-live"
+            : "trade-orders-publication-chip is-attention";
+
     private void ShowCommissionTermsRevision()
     {
         _showCommissionTermsRevision = true;
@@ -82,6 +89,7 @@ public partial class TradeOrders
         _commissionCancellationReason = string.Empty;
         _commissionReturnReason = string.Empty;
         _commissionSettlementObservation = string.Empty;
+        _commissionSettlementRetractionReason = string.Empty;
         _commissionSharedComment = string.Empty;
         _showCommissionTermsRevision = false;
         var provisional = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ProvisionalCrafter;
@@ -321,7 +329,14 @@ public partial class TradeOrders
             owner => CommissionOperations.RecordSettlementAsync(
                 owner,
                 _commissionSettlementObservation),
-            "Settlement observation recorded");
+            "Final payment marked sent");
+
+    private Task RetractCommissionSettlementAsync() =>
+        RunCommissionCommandAsync(
+            owner => CommissionOperations.RetractSettlementAsync(
+                owner,
+                _commissionSettlementRetractionReason),
+            "Final-payment confirmation retracted");
 
     private Task CancelCanonicalCommissionAsync() =>
         RunCommissionCommandAsync(
@@ -680,6 +695,9 @@ public partial class TradeOrders
             CompanyCommissionActivityKind.DeliveryReturnedToWork => "Returned to work",
             CompanyCommissionActivityKind.DeliveryAccepted => "Delivery accepted",
             CompanyCommissionActivityKind.SettlementRecorded => "Settlement recorded",
+            CompanyCommissionActivityKind.SettlementPaymentSentRecorded => "Final payment sent",
+            CompanyCommissionActivityKind.SettlementPaymentReceivedConfirmed => "Final payment received",
+            CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted => "Final-payment confirmation retracted",
             CompanyCommissionActivityKind.CommentAdded => "Comment",
             CompanyCommissionActivityKind.CommissionCanceled => "Commission canceled",
             CompanyCommissionActivityKind.CommissionClosed => "Commission closed",

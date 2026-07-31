@@ -32,6 +32,7 @@ public sealed record CommissionBriefEvidence(
 
 public sealed class CommissionBriefDocument
 {
+    public bool IsTestFixture { get; set; }
     public string CompanyName { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string StatusLabel { get; set; } = "Open for assignment";
@@ -99,5 +100,6 @@ public sealed class TradeCommissionPublication
     public int Version { get; set; }
     public DateTime PublishedAtUtc { get; set; }
     public DateTime? RevokedAtUtc { get; set; }
+    public bool IsTestFixture { get; set; }
     public TradeCompanyPublicationOwnership? Ownership { get; set; }
 }

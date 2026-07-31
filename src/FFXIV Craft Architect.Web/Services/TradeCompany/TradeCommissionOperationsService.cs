@@ -364,6 +364,28 @@ public sealed class TradeCommissionOperationsService(
             cancellationToken);
     }
 
+    public Task<TradeCommissionOperatorResult> RetractSettlementAsync(
+        CompanyCommissionOwnerProjection current,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return Task.FromResult(Rejected(
+                current,
+                "A final-payment retraction reason is required."));
+        }
+
+        return ExecuteAsync(
+            current,
+            "retract-settlement",
+            new { Reason = reason.Trim() },
+            context => new RetractCompanyCommissionSettlementAttestationCommand(
+                context,
+                reason.Trim()),
+            cancellationToken);
+    }
+
     public Task<TradeCommissionOperatorResult> CancelAsync(
         CompanyCommissionOwnerProjection current,
         string reason,
@@ -498,6 +520,13 @@ public sealed class TradeCommissionOperationsService(
         if (!CanPerformExternalAction(current.Order, out var reason))
         {
             return Rejected(current, reason);
+        }
+
+        if (RequireCommission(current).PublicMetadata.IsTestFixture)
+        {
+            return Rejected(
+                current,
+                "This test commission is intentionally unclaimable.");
         }
 
         try
