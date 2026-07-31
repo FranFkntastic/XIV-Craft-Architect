@@ -22,6 +22,23 @@ public static class TradeCommissionOperationsPresentation
             return DeliveryAttention;
         }
 
+        if (order.Status == TradeOrderStatus.AwaitingDelivery)
+        {
+            return DeliveryAttention;
+        }
+
+        if (order.Status == TradeOrderStatus.InProgress)
+        {
+            return WorkAttention;
+        }
+
+        if (order.Status == TradeOrderStatus.Assigned &&
+            order.AssignedCrafterId.HasValue &&
+            commission.ActiveClaim == null)
+        {
+            return ReadyAttention;
+        }
+
         if (commission.ActiveClaim == null)
         {
             return OpenAttention;
@@ -57,6 +74,23 @@ public static class TradeCommissionOperationsPresentation
     {
         var order = projection.Order;
         var commission = RequireCommission(projection);
+        if (order.Status == TradeOrderStatus.AwaitingDelivery)
+        {
+            return "Review delivery";
+        }
+
+        if (order.Status == TradeOrderStatus.InProgress)
+        {
+            return "Work in progress";
+        }
+
+        if (order.Status == TradeOrderStatus.Assigned &&
+            order.AssignedCrafterId.HasValue &&
+            commission.ActiveClaim == null)
+        {
+            return "Ready to work";
+        }
+
         if (commission.ActiveClaim == null)
         {
             return "Awaiting claim";

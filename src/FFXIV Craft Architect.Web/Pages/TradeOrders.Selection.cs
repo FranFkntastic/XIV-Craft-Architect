@@ -59,6 +59,16 @@ public partial class TradeOrders
 
     private string FormatRailStatusChip(TradeOrder order)
     {
+        if (order.Status == TradeOrderStatus.InProgress)
+        {
+            return "Work";
+        }
+
+        if (order.Status == TradeOrderStatus.AwaitingDelivery)
+        {
+            return "Deliver";
+        }
+
         if (CommissionOperations.GetForOrder(order.Id) is { } projection)
         {
             return TradeCommissionOperationsPresentation.GetNextAction(projection) switch

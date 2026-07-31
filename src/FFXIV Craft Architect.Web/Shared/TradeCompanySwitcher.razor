@@ -1,8 +1,11 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Web.Services
+@using FFXIV_Craft_Architect.Web.Services.ProfileHosting
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject ProfileSyncService ProfileSync
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
+@implements IDisposable
 
 @if (_activeCompany != null)
 {
@@ -44,10 +47,35 @@
 @code {
     private TradeCompanyProfile? _activeCompany;
     private IReadOnlyList<TradeCompanyProfile> _companies = [];
+    private bool _refreshQueued;
+    private bool _disposed;
 
     protected override async Task OnInitializedAsync()
     {
+        ProfileSync.StatusChanged += OnProfileSyncStatusChanged;
         await LoadCompaniesAsync();
+    }
+
+    private void OnProfileSyncStatusChanged()
+    {
+        if (_disposed || _refreshQueued)
+        {
+            return;
+        }
+
+        _refreshQueued = true;
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await LoadCompaniesAsync();
+                StateHasChanged();
+            }
+            finally
+            {
+                _refreshQueued = false;
+            }
+        });
     }
 
     private async Task LoadCompaniesAsync()
@@ -88,5 +116,11 @@
 
     private static string FormatCompanyId(Guid companyId) =>
         companyId.ToString("N")[..6].ToUpperInvariant();
+
+    public void Dispose()
+    {
+        _disposed = true;
+        ProfileSync.StatusChanged -= OnProfileSyncStatusChanged;
+    }
 
 }
