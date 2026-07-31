@@ -6,7 +6,7 @@ namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
 {
     private static readonly JsonSerializerOptions JsonOptions =
-        new(JsonSerializerDefaults.Web);
+        ProfileSyncJson.CreateOptions();
     private readonly TradeOperationsPersistenceService _tradeOperations;
 
     public TradeOrderProfileSyncAdapter(TradeOperationsPersistenceService tradeOperations)

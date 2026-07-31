@@ -87,10 +87,8 @@ public sealed class ProfileSyncPlanProjectItem
 
 public static class ProfileSyncPlanPayloadCodec
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        PropertyNameCaseInsensitive = true
-    };
+    private static readonly JsonSerializerOptions JsonOptions =
+        ProfileSyncJson.CreateOptions();
 
     public static string CompactIfPlan(
         string collection,
