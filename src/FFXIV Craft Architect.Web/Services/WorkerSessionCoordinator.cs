@@ -489,6 +489,18 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             _projections.Shell.Revision,
             includeCraftLabor,
             cancellationToken);
+        if (string.Equals(
+                result.RejectionCode,
+                "stale-revision",
+                StringComparison.Ordinal))
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            result = await _engineHost.GetTradeProjectionAsync(
+                _projections.Shell.Revision,
+                includeCraftLabor,
+                cancellationToken);
+        }
+
         if (!result.Accepted)
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
