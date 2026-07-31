@@ -71,6 +71,7 @@ public partial class TradeOrders
                 "Review delivery" => "Accept",
                 "Record settlement" => "Settle",
                 "Awaiting claim" => "Open",
+                "Ready to work" => "Ready",
                 _ => "Work"
             };
         }
@@ -341,9 +342,10 @@ public partial class TradeOrders
             TradeCommissionOperationsPresentation.SyncAttention => 0,
             TradeCommissionOperationsPresentation.ClaimAttention => 1,
             TradeCommissionOperationsPresentation.PreWorkAttention => 2,
-            TradeCommissionOperationsPresentation.DeliveryAttention => 3,
-            TradeCommissionOperationsPresentation.WorkAttention => 4,
-            _ => 5
+            TradeCommissionOperationsPresentation.ReadyAttention => 3,
+            TradeCommissionOperationsPresentation.DeliveryAttention => 4,
+            TradeCommissionOperationsPresentation.WorkAttention => 5,
+            _ => 6
         };
 
     private static string FormatAttentionGroup(string key) =>
@@ -352,6 +354,7 @@ public partial class TradeOrders
             TradeCommissionOperationsPresentation.SyncAttention => "Needs Attention",
             TradeCommissionOperationsPresentation.ClaimAttention => "Claim / Identity Review",
             TradeCommissionOperationsPresentation.PreWorkAttention => "Pre-work Prerequisites",
+            TradeCommissionOperationsPresentation.ReadyAttention => "Ready to Work",
             TradeCommissionOperationsPresentation.DeliveryAttention => "Delivery / Settlement",
             TradeCommissionOperationsPresentation.WorkAttention => "Work in Progress",
             _ => "Open"

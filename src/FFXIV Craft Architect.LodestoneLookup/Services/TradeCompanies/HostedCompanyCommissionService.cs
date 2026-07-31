@@ -431,6 +431,7 @@ public sealed class HostedCompanyCommissionService(
             SourceSurface = sourceSurface,
             CreatedAtUtc = now,
             Kind = application.ActivityKind,
+            Visibility = application.Visibility,
             TermsVersion = commission.CurrentTermsVersion,
             Comment = application.Comment,
             PayloadJson = application.PayloadJson

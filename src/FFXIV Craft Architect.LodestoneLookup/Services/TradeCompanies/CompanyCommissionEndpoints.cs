@@ -435,6 +435,7 @@ public static class CompanyCommissionEndpoints
         ICompanyCommissionCompanyCommand command = route switch
         {
             "update-draft" => Deserialize<UpdateCompanyCommissionDraftCommand>(body),
+            "amend-terms" => Deserialize<AmendCompanyCommissionTermsCommand>(body),
             "open" => Deserialize<OpenCompanyCommissionCommand>(body),
             "reject-claim" => Deserialize<RejectCompanyCommissionClaimCommand>(body),
             "confirm-identity" =>
@@ -443,9 +444,13 @@ public static class CompanyCommissionEndpoints
                 Deserialize<DecideCompanyCommissionPaymentPolicyChangeCommand>(body),
             "record-payment" =>
                 Deserialize<RecordCompanyCommissionPaymentCommand>(body),
+            "retract-payment" =>
+                Deserialize<RetractCompanyCommissionPaymentAttestationCommand>(body),
             "mark-company-materials-ready" =>
                 Deserialize<MarkCompanyCommissionMaterialsReadyCommand>(body),
             "add-comment" => Deserialize<AddCompanyCommissionCommentCommand>(body),
+            "add-private-note" =>
+                Deserialize<AddCompanyCommissionPrivateNoteCommand>(body),
             "return-to-work" =>
                 Deserialize<ReturnCompanyCommissionToWorkCommand>(body),
             "accept-delivery" =>
@@ -467,6 +472,8 @@ public static class CompanyCommissionEndpoints
         {
             UpdateCompanyCommissionDraftCommand value =>
                 value with { Context = context },
+            AmendCompanyCommissionTermsCommand value =>
+                value with { Context = context },
             OpenCompanyCommissionCommand value => value with { Context = context },
             RejectCompanyCommissionClaimCommand value =>
                 value with { Context = context },
@@ -476,9 +483,13 @@ public static class CompanyCommissionEndpoints
                 value with { Context = context },
             RecordCompanyCommissionPaymentCommand value =>
                 value with { Context = context },
+            RetractCompanyCommissionPaymentAttestationCommand value =>
+                value with { Context = context },
             MarkCompanyCommissionMaterialsReadyCommand value =>
                 value with { Context = context },
             AddCompanyCommissionCommentCommand value =>
+                value with { Context = context },
+            AddCompanyCommissionPrivateNoteCommand value =>
                 value with { Context = context },
             ReturnCompanyCommissionToWorkCommand value =>
                 value with { Context = context },
@@ -560,6 +571,22 @@ public static class CompanyCommissionEndpoints
                         context,
                         Deserialize<TermsPayload>(body).TermsVersion),
                     null);
+            case "confirm-payment-received":
+                {
+                    var payload = Deserialize<PaymentReceiptPayload>(body);
+                    return (
+                        new ConfirmCompanyCommissionPaymentReceivedCommand(
+                            context,
+                            payload.TermsVersion,
+                            payload.Note),
+                        null);
+                }
+            case "retract-payment":
+                return (
+                    new RetractCompanyCommissionPaymentAttestationCommand(
+                        context,
+                        Deserialize<ReasonPayload>(body).Reason),
+                    null);
             case "acknowledge-company-materials":
                 return (
                     new AcknowledgeCompanyCommissionMaterialsCommand(
@@ -609,6 +636,8 @@ public static class CompanyCommissionEndpoints
             "submit-identity" or
             "request-payment-policy-change" or
             "acknowledge-terms" or
+            "confirm-payment-received" or
+            "retract-payment" or
             "acknowledge-company-materials" or
             "report-progress" or
             "add-comment" or
@@ -814,6 +843,8 @@ public static class CompanyCommissionEndpoints
         string Reason);
 
     private sealed record TermsPayload(int TermsVersion);
+
+    private sealed record PaymentReceiptPayload(int TermsVersion, string Note);
 
     private sealed record MaterialsPayload(
         IReadOnlyList<CompanyCommissionMaterialQuantity> Quantities);

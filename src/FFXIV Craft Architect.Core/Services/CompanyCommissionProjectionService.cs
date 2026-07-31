@@ -62,7 +62,11 @@ public static class CompanyCommissionProjectionService
             Public = CreatePublicBrief(order, companyDisplayName),
             ProvisionalCrafter = commission.ProvisionalCrafter,
             ParticipantCapabilityRevision = commission.ParticipantGrant?.CapabilityRevision ?? 0,
-            Activity = commission.Activity.Select(item => new CompanyCommissionParticipantActivity(
+            Payment = commission.Gates.Payment,
+            Activity = commission.Activity
+                .Where(item =>
+                    item.Visibility == CompanyCommissionActivityVisibility.Shared)
+                .Select(item => new CompanyCommissionParticipantActivity(
                 item.EventId,
                 item.CommissionRevision,
                 item.Actor.Kind,
@@ -71,7 +75,8 @@ public static class CompanyCommissionProjectionService
                 item.CreatedAtUtc,
                 item.Kind,
                 item.TermsVersion,
-                item.Comment)).ToArray()
+                item.Comment))
+                .ToArray()
         };
     }
 

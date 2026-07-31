@@ -95,20 +95,98 @@ public sealed class TradeCommissionOperationsService(
         }
     }
 
-    public Task<TradeCommissionOperatorResult> ConfirmIdentityAsync(
+    public async Task<TradeCommissionOperatorResult> ConfirmIdentityAsync(
         CompanyCommissionOwnerProjection current,
-        Guid crafterId,
+        TradeCrafterProfile crafter,
         string lodestoneCharacterId,
-        CancellationToken cancellationToken = default) =>
-        ExecuteAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (crafter.Id == Guid.Empty ||
+            crafter.CompanyProfileId != current.Order.CompanyProfileId ||
+            !string.Equals(
+                crafter.LodestoneCharacterId,
+                lodestoneCharacterId,
+                StringComparison.Ordinal))
+        {
+            return Rejected(
+                current,
+                "The confirmed company crafter must match the submitted Lodestone identity.");
+        }
+
+        try
+        {
+            if (!await tradeOperations.SaveCrafterAsync(crafter))
+            {
+                return Rejected(
+                    current,
+                    "Browser storage could not create or update the company crafter.");
+            }
+
+            await profileSync.QueueLocalSaveAsync(
+                ProfileSyncCollections.TradeCrafters,
+                crafter.Id.ToString("D"));
+            await profileSync.SyncNowAsync(cancellationToken);
+            var crafterConflict = profileSync.Conflicts.FirstOrDefault(item =>
+                string.Equals(
+                    item.Collection,
+                    ProfileSyncCollections.TradeCrafters,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    item.ObjectId,
+                    crafter.Id.ToString("D"),
+                    StringComparison.OrdinalIgnoreCase));
+            if (crafterConflict != null)
+            {
+                return Rejected(
+                    current,
+                    "The company crafter changed on the hosted profile. Resolve that roster conflict before confirming identity.");
+            }
+
+            var commission = RequireCommission(current);
+            var fresh = await client.LoadOwnerProjectionAsync(
+                commission.CompanyId.Value,
+                commission.CommissionId,
+                cancellationToken);
+            ValidateProjection(current.Order, fresh);
+            await ApplyProjectionAsync(fresh);
+            return await ExecuteAsync(
+                fresh,
+                "confirm-identity",
+                new { crafterId = crafter.Id, lodestoneCharacterId },
+                context => new ConfirmCompanyCommissionIdentityCommand(
+                    context,
+                    crafter.Id,
+                    lodestoneCharacterId),
+                cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            _errors[current.Order.Id] = exception.Message;
+            return Rejected(current, exception.Message);
+        }
+    }
+
+    public Task<TradeCommissionOperatorResult> AmendTermsAsync(
+        CompanyCommissionOwnerProjection current,
+        CompanyCommissionTermsVersion terms,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return Task.FromResult(Rejected(current, "Describe why the terms changed."));
+        }
+
+        return ExecuteAsync(
             current,
-            "confirm-identity",
-            new { crafterId, lodestoneCharacterId },
-            context => new ConfirmCompanyCommissionIdentityCommand(
+            "amend-terms",
+            new { Terms = terms, Reason = reason.Trim() },
+            context => new AmendCompanyCommissionTermsCommand(
                 context,
-                crafterId,
-                lodestoneCharacterId),
+                terms,
+                reason.Trim()),
             cancellationToken);
+    }
 
     public Task<TradeCommissionOperatorResult> RejectClaimAsync(
         CompanyCommissionOwnerProjection current,
@@ -189,6 +267,28 @@ public sealed class TradeCommissionOperationsService(
             cancellationToken);
     }
 
+    public Task<TradeCommissionOperatorResult> RetractPaymentAsync(
+        CompanyCommissionOwnerProjection current,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return Task.FromResult(Rejected(
+                current,
+                "Explain why the payment confirmation is being retracted."));
+        }
+
+        return ExecuteAsync(
+            current,
+            "retract-payment",
+            new { Reason = reason.Trim() },
+            context => new RetractCompanyCommissionPaymentAttestationCommand(
+                context,
+                reason.Trim()),
+            cancellationToken);
+    }
+
     public Task<TradeCommissionOperatorResult> MarkCompanyMaterialsReadyAsync(
         CompanyCommissionOwnerProjection current,
         CancellationToken cancellationToken = default)
@@ -264,6 +364,34 @@ public sealed class TradeCommissionOperationsService(
             cancellationToken);
     }
 
+    public Task<TradeCommissionOperatorResult> CancelAsync(
+        CompanyCommissionOwnerProjection current,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return Task.FromResult(Rejected(current, "A cancellation reason is required."));
+        }
+
+        return ExecuteAsync(
+            current,
+            "cancel",
+            new { Reason = reason.Trim() },
+            context => new CancelCompanyCommissionCommand(context, reason.Trim()),
+            cancellationToken);
+    }
+
+    public Task<TradeCommissionOperatorResult> RevokePublicationAsync(
+        CompanyCommissionOwnerProjection current,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(
+            current,
+            "revoke-publication",
+            payload: null,
+            context => new RevokeCompanyCommissionPublicationCommand(context),
+            cancellationToken);
+
     public Task<TradeCommissionOperatorResult> AddCommentAsync(
         CompanyCommissionOwnerProjection current,
         string comment,
@@ -279,6 +407,26 @@ public sealed class TradeCommissionOperationsService(
             "add-comment",
             new { Comment = comment.Trim() },
             context => new AddCompanyCommissionCommentCommand(context, comment.Trim()),
+            cancellationToken);
+    }
+
+    public Task<TradeCommissionOperatorResult> AddPrivateNoteAsync(
+        CompanyCommissionOwnerProjection current,
+        string comment,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(comment))
+        {
+            return Task.FromResult(Rejected(current, "A company-only note is required."));
+        }
+
+        return ExecuteAsync(
+            current,
+            "add-private-note",
+            new { Comment = comment.Trim() },
+            context => new AddCompanyCommissionPrivateNoteCommand(
+                context,
+                comment.Trim()),
             cancellationToken);
     }
 

@@ -88,7 +88,17 @@ public enum CompanyCommissionActivityKind
     ParticipantRecoveryIssued,
     ParticipantRecoveryRedeemed,
     MigratedFromTradeOrder,
-    MigratedTradeOrderHistory
+    MigratedTradeOrderHistory,
+    TermsAmended,
+    PaymentSentRecorded,
+    PaymentReceivedConfirmed,
+    PaymentAttestationRetracted
+}
+
+public enum CompanyCommissionActivityVisibility
+{
+    Shared,
+    CompanyOnly
 }
 
 public sealed record CompanyCommissionActor(
@@ -186,11 +196,25 @@ public sealed record CompanyCommissionIdentityClearance(
     DateTime? OwnershipConfirmedAtUtc = null,
     string? ConfirmedByActorId = null);
 
+public sealed record CompanyCommissionPaymentAttestation(
+    int TermsVersion,
+    DateTime RecordedAtUtc,
+    string RecordedByActorId,
+    string Note);
+
 public sealed record CompanyCommissionPaymentClearance(
     CompanyCommissionClearanceState State,
     DateTime? RecordedAtUtc = null,
     string? RecordedByActorId = null,
-    string? Note = null);
+    string? Note = null,
+    int TermsVersion = 0,
+    CompanyCommissionPaymentAttestation? CommissionerSent = null,
+    CompanyCommissionPaymentAttestation? CrafterReceived = null)
+{
+    public int ConfirmationCount =>
+        (CommissionerSent == null ? 0 : 1) +
+        (CrafterReceived == null ? 0 : 1);
+}
 
 public sealed record CompanyCommissionPaymentPolicyChangeRequest(
     Guid RequestId,
@@ -252,6 +276,8 @@ public sealed record CompanyCommissionActivityEvent
     public required CompanyCommissionSourceSurface SourceSurface { get; init; }
     public required DateTime CreatedAtUtc { get; init; }
     public required CompanyCommissionActivityKind Kind { get; init; }
+    public CompanyCommissionActivityVisibility Visibility { get; init; } =
+        CompanyCommissionActivityVisibility.Shared;
     public required int TermsVersion { get; init; }
     public string? Comment { get; init; }
     public string? PayloadJson { get; init; }
@@ -384,6 +410,7 @@ public sealed record CompanyCommissionParticipantBrief
     public required CompanyCommissionPublicBrief Public { get; init; }
     public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
     public required long ParticipantCapabilityRevision { get; init; }
+    public required CompanyCommissionPaymentClearance Payment { get; init; }
     public IReadOnlyList<CompanyCommissionParticipantActivity> Activity { get; init; } = [];
 }
 

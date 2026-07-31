@@ -258,6 +258,10 @@ public partial class TradeOrders
 
     private async Task LoadAsync()
     {
+        Guid? selectedCanonicalOrderId =
+            _selectedOrder?.CompanyCommission == null ? null : _selectedOrder.Id;
+        var selectedTab = _activeOpsTab;
+        var hadPendingNavigation = _pendingNavigationOrderId.HasValue;
         try
         {
             _loadError = null;
@@ -271,6 +275,17 @@ public partial class TradeOrders
                 .ToList();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
             SelectPendingNavigationOrder();
+            if (!hadPendingNavigation &&
+                selectedCanonicalOrderId.HasValue)
+            {
+                var refreshed = _orders.FirstOrDefault(
+                    order => order.Id == selectedCanonicalOrderId.Value);
+                if (refreshed != null)
+                {
+                    SelectOrder(refreshed);
+                    _activeOpsTab = selectedTab;
+                }
+            }
         }
         catch (Exception ex)
         {

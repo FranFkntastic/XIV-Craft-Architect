@@ -27,6 +27,11 @@ public sealed record UpdateCompanyCommissionDraftCommand(
     CompanyCommissionCommandContext Context,
     CompanyCommissionTermsVersion Terms) : ICompanyCommissionCompanyCommand;
 
+public sealed record AmendCompanyCommissionTermsCommand(
+    CompanyCommissionCommandContext Context,
+    CompanyCommissionTermsVersion Terms,
+    string Reason) : ICompanyCommissionCompanyCommand;
+
 public sealed record OpenCompanyCommissionCommand(
     CompanyCommissionCommandContext Context) : ICompanyCommissionCompanyCommand;
 
@@ -73,6 +78,17 @@ public sealed record RecordCompanyCommissionPaymentCommand(
     CompanyCommissionCommandContext Context,
     string Note) : ICompanyCommissionCompanyCommand;
 
+public sealed record ConfirmCompanyCommissionPaymentReceivedCommand(
+    CompanyCommissionCommandContext Context,
+    int TermsVersion,
+    string Note) : ICompanyCommissionParticipantCommand;
+
+public sealed record RetractCompanyCommissionPaymentAttestationCommand(
+    CompanyCommissionCommandContext Context,
+    string Reason) :
+    ICompanyCommissionCompanyCommand,
+    ICompanyCommissionParticipantCommand;
+
 public sealed record MarkCompanyCommissionMaterialsReadyCommand(
     CompanyCommissionCommandContext Context,
     IReadOnlyList<CompanyCommissionMaterialQuantity> Quantities) : ICompanyCommissionCompanyCommand;
@@ -97,6 +113,10 @@ public sealed record AddCompanyCommissionCommentCommand(
     string Comment) :
     ICompanyCommissionCompanyCommand,
     ICompanyCommissionParticipantCommand;
+
+public sealed record AddCompanyCommissionPrivateNoteCommand(
+    CompanyCommissionCommandContext Context,
+    string Comment) : ICompanyCommissionCompanyCommand;
 
 public sealed record DeclareCompanyCommissionReadinessCommand(
     CompanyCommissionCommandContext Context,

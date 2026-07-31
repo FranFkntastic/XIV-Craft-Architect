@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using FFXIV_Craft_Architect.Core.Models;
 
@@ -13,6 +14,7 @@ public static class CompanyCommissionDiscordMessage
     {
         var commission = projection.Commission;
         var state = ResolveProjectionState(commission);
+        var lifecycle = ResolveLifecycleLabel(commission);
         var buttons = new List<object>
         {
             LinkButton("View commission", projection.PublicViewUrl.AbsoluteUri)
@@ -35,29 +37,30 @@ public static class CompanyCommissionDiscordMessage
                 new
                 {
                     title = DiscordProjectionSanitizer.Text(commission.Title, 256),
-                    description = DiscordProjectionSanitizer.Text(projection.Summary, 4096),
+                    description = DiscordProjectionSanitizer.Text(
+                        $"**{lifecycle}**\n{OutputSummary(commission)}",
+                        4096),
                     color = SapphireColor,
-                    fields = new[]
+                    fields = new List<object>
                     {
-                        new
-                        {
-                            name = "Status",
-                            value = state switch
-                            {
-                                DiscordPublicationState.Open => "Open for one exclusive claim",
-                                DiscordPublicationState.Assigned => "Assigned",
-                                DiscordPublicationState.Closed => "Closed",
-                                DiscordPublicationState.Revoked => "Publication revoked",
-                                _ => "Unavailable"
-                            },
-                            inline = true
-                        },
-                        new
-                        {
-                            name = "Reference",
-                            value = DiscordProjectionSanitizer.Text(commission.Reference, 1024),
-                            inline = true
-                        }
+                        Field("Payment", PaymentSummary(commission.Terms.Payment), false),
+                        Field(
+                            "Crafter gets",
+                            MaterialsSummary(
+                                commission.Terms.Materials,
+                                CommissionMaterialResponsibility.Crafter),
+                            false),
+                        Field(
+                            "Company provides",
+                            MaterialsSummary(
+                                commission.Terms.Materials,
+                                CommissionMaterialResponsibility.Provided),
+                            false),
+                        Field("Work clearance", GateSummary(commission), true),
+                        Field(
+                            "Reference",
+                            DiscordProjectionSanitizer.Text(commission.Reference, 1024),
+                            true)
                     },
                     footer = new
                     {
@@ -159,6 +162,144 @@ public static class CompanyCommissionDiscordMessage
         label,
         url
     };
+
+    private static object Field(string name, string value, bool inline) => new
+    {
+        name,
+        value = string.IsNullOrWhiteSpace(value) ? "None" : value,
+        inline
+    };
+
+    private static string ResolveLifecycleLabel(CompanyCommissionPublicBrief commission)
+    {
+        if (commission.ViewState == CompanyCommissionPublicViewState.Revoked)
+        {
+            return "PUBLICATION REVOKED";
+        }
+        if (commission.Status == TradeOrderStatus.Canceled)
+        {
+            return "CANCELED";
+        }
+        if (commission.Status == TradeOrderStatus.Completed)
+        {
+            return commission.SettlementState == CompanyCommissionSettlementState.Satisfied
+                ? "COMPLETED"
+                : "DELIVERY ACCEPTED - SETTLEMENT PENDING";
+        }
+        if (commission.Status == TradeOrderStatus.AwaitingDelivery)
+        {
+            return "AWAITING DELIVERY";
+        }
+        if (commission.Status == TradeOrderStatus.InProgress)
+        {
+            return "IN PROGRESS";
+        }
+        if (!commission.IsClaimed)
+        {
+            return "OPEN - ONE CLAIM SLOT";
+        }
+        if (commission.Gates.Identity == CompanyCommissionClearanceState.Pending)
+        {
+            return "CLAIMED - IDENTITY REVIEW";
+        }
+        return commission.ClearedToWork
+            ? "READY TO WORK"
+            : "ASSIGNED - PRE-WORK";
+    }
+
+    private static string OutputSummary(CompanyCommissionPublicBrief commission)
+    {
+        var lines = commission.Terms.Outputs
+            .Take(20)
+            .Select(output =>
+                $"- **{EscapeMarkdown(output.Name)}** x{output.RequiredQuantity:N0}" +
+                (output.MustBeHq ? " HQ" : string.Empty))
+            .ToList();
+        if (commission.Terms.Outputs.Count > lines.Count)
+        {
+            lines.Add(
+                $"- {commission.Terms.Outputs.Count - lines.Count:N0} more output lines in the full brief");
+        }
+
+        return string.Join('\n', lines);
+    }
+
+    private static string PaymentSummary(CompanyCommissionPaymentTerms payment)
+    {
+        var timing = payment.Schedule switch
+        {
+            CompanyCommissionPaymentSchedule.Advance => "Payment up front",
+            CompanyCommissionPaymentSchedule.OnDelivery => "Payment on delivery",
+            CompanyCommissionPaymentSchedule.Custom =>
+                payment.CustomTerms ?? "Custom payment timing",
+            _ => "Payment timing unavailable"
+        };
+        var labor = payment.CraftSynthCount > 0 && payment.GilPerSynth > 0
+            ? $"\nLabor: {FormatGil(payment.CraftLabor)} " +
+              $"({payment.CraftSynthCount:N0} synths x {payment.GilPerSynth:N0} gil)"
+            : payment.CraftLabor > 0
+                ? $"\nLabor: {FormatGil(payment.CraftLabor)}"
+                : string.Empty;
+
+        return $"**{FormatGil(payment.Total)} total**\n{timing} | {payment.ContractLabel}" +
+            $"\nMaterials: {FormatGil(payment.MaterialReimbursement)}{labor}";
+    }
+
+    private static string MaterialsSummary(
+        IReadOnlyList<CompanyCommissionMaterialTerm> materials,
+        CommissionMaterialResponsibility responsibility)
+    {
+        var selected = materials
+            .Where(material => material.Responsibility == responsibility)
+            .ToArray();
+        if (selected.Length == 0)
+        {
+            return "None";
+        }
+
+        var lines = selected
+            .Take(12)
+            .Select(material =>
+            {
+                var quality = material.RequiresHq ? " HQ" : string.Empty;
+                var cost = material.UnitCost > 0
+                    ? $" @ {FormatGil(material.UnitCost)} = {FormatGil(material.TotalCost)}"
+                    : string.Empty;
+                return $"- {EscapeMarkdown(material.Name)} x{material.Quantity:N0}{quality}{cost}";
+            })
+            .ToList();
+        if (selected.Length > lines.Count)
+        {
+            lines.Add($"- {selected.Length - lines.Count:N0} more lines in the full brief");
+        }
+
+        return DiscordProjectionSanitizer.Text(string.Join('\n', lines), 1024);
+    }
+
+    private static string GateSummary(CompanyCommissionPublicBrief commission) =>
+        commission.ClearedToWork
+            ? "Cleared to start"
+            : $"Identity: {GateLabel(commission.Gates.Identity)}\n" +
+              $"Payment: {GateLabel(commission.Gates.Payment)}\n" +
+              $"Company materials: {GateLabel(commission.Gates.CompanyMaterials)}";
+
+    private static string GateLabel(CompanyCommissionClearanceState state) =>
+        state switch
+        {
+            CompanyCommissionClearanceState.Satisfied => "cleared",
+            CompanyCommissionClearanceState.NotRequired => "not required",
+            _ => "pending"
+        };
+
+    private static string FormatGil(decimal value) =>
+        $"{value.ToString("N0", CultureInfo.InvariantCulture)} gil";
+
+    private static string EscapeMarkdown(string value) =>
+        value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("*", "\\*", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal)
+            .Replace("`", "\\`", StringComparison.Ordinal);
 
     private static object NoMentions() => new
     {

@@ -7,6 +7,33 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public static class TradeCompanyCommissionMigrationService
 {
+    public static CompanyCommissionTermsVersion CreateTermsRevision(
+        TradeOrder source,
+        CommissionBriefDocument brief,
+        int version,
+        string reason,
+        DateTime createdAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(brief);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (version <= 1)
+        {
+            throw new InvalidOperationException(
+                "A published terms revision must be version 2 or later.");
+        }
+
+        var actor = new CompanyCommissionActor(
+            "trade-architect",
+            CompanyCommissionActorKind.Commissioner,
+            "Trade Architect");
+        return CreateTerms(source, brief, actor, createdAtUtc) with
+        {
+            Version = version,
+            ChangeSummary = reason.Trim()
+        };
+    }
+
     public static TradeOrder BindPublishedBrief(
         TradeOrder source,
         PublishedCommissionBrief publishedBrief,
@@ -70,9 +97,11 @@ public static class TradeCompanyCommissionMigrationService
                 Payment = terms.Payment.Schedule == CompanyCommissionPaymentSchedule.Advance &&
                           terms.Payment.Total > 0
                     ? new CompanyCommissionPaymentClearance(
-                        CompanyCommissionClearanceState.Pending)
+                        CompanyCommissionClearanceState.Pending,
+                        TermsVersion: terms.Version)
                     : new CompanyCommissionPaymentClearance(
-                        CompanyCommissionClearanceState.NotRequired),
+                        CompanyCommissionClearanceState.NotRequired,
+                        TermsVersion: terms.Version),
                 CompanyMaterials = new CompanyCommissionMaterialClearance(
                     companyMaterials.Length == 0
                         ? CompanyCommissionClearanceState.NotRequired
@@ -186,7 +215,8 @@ public static class TradeCompanyCommissionMigrationService
                     RecordedByActorId: paymentSatisfied ? migrationActor.ActorId : null,
                     Note: paymentSatisfied
                         ? "Converted from a legacy lifecycle that had already entered work."
-                        : null),
+                        : null,
+                    TermsVersion: terms.Version),
                 new CompanyCommissionMaterialClearance(
                     !hasCompanyMaterials
                         ? CompanyCommissionClearanceState.NotRequired
