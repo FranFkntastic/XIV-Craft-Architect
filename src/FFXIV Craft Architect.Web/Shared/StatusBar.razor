@@ -2,7 +2,6 @@
 @inject AppState AppState
 @inject WorkerProjectionStore WorkerProjections
 @inject NavigationManager NavigationManager
-@inject TradeOperationsPersistenceService TradeOperationsPersistence
 @implements IDisposable
 
 <div class="status-bar">
@@ -22,12 +21,9 @@
     </div>
     
     <div class="status-center">
-        @if (IsTradeRoute && !string.IsNullOrWhiteSpace(_tradeCompanyName))
+        @if (IsTradeRoute)
         {
-            <span class="status-badge trade-company-badge">
-                <MudIcon Icon="@Icons.Material.Filled.Business" Size="Size.Small" />
-                @_tradeCompanyName
-            </span>
+            <TradeCompanySwitcher @key="NavigationManager.Uri" />
         }
         @if (!string.IsNullOrEmpty(SelectedRegion))
         {
@@ -141,11 +137,6 @@
         color: #90EE90;
     }
 
-    .status-badge.trade-company-badge {
-        background: #2e3f2a;
-        color: #b6d7a8;
-    }
-    
     .status-right {
         display: flex;
         align-items: center;
@@ -162,7 +153,6 @@
 </style>
 
 @code {
-    private string? _tradeCompanyName;
     private bool IsBusy =>
         AppState.IsBusy ||
         WorkerProjections.Operation?.IsActive == true;
@@ -202,11 +192,6 @@
         NavigationManager.LocationChanged += OnLocationChanged;
     }
 
-    protected override async Task OnInitializedAsync()
-    {
-        await LoadTradeCompanyNameAsync();
-    }
-    
     private void OnStatusChanged()
     {
         InvokeAsync(StateHasChanged);
@@ -222,30 +207,7 @@
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
-        _ = InvokeAsync(async () =>
-        {
-            await LoadTradeCompanyNameAsync();
-            StateHasChanged();
-        });
-    }
-
-    private async Task LoadTradeCompanyNameAsync()
-    {
-        if (!IsTradeRoute)
-        {
-            _tradeCompanyName = null;
-            return;
-        }
-
-        try
-        {
-            var profile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
-            _tradeCompanyName = profile.Name;
-        }
-        catch
-        {
-            _tradeCompanyName = null;
-        }
+        InvokeAsync(StateHasChanged);
     }
     
     public void Dispose()

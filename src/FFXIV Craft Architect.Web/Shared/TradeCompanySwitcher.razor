@@ -1,0 +1,92 @@
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Web.Services
+@inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject NavigationManager NavigationManager
+@inject ISnackbar Snackbar
+
+@if (_activeCompany != null)
+{
+    <MudMenu Dense="true"
+             AnchorOrigin="Origin.TopCenter"
+             TransformOrigin="Origin.BottomCenter"
+             Class="trade-company-switcher">
+        <ActivatorContent>
+            <MudButton Variant="Variant.Text"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Business"
+                       EndIcon="@Icons.Material.Filled.KeyboardArrowDown"
+                       Class="trade-company-switcher-button"
+                       aria-label="Switch active Trade company">
+                <span class="trade-company-switcher-name">@_activeCompany.Name</span>
+                <span class="trade-company-switcher-id">@FormatCompanyId(_activeCompany.Id)</span>
+            </MudButton>
+        </ActivatorContent>
+        <ChildContent>
+            <div class="trade-company-switcher-heading">Active Trade company</div>
+            @foreach (var company in _companies)
+            {
+                <MudMenuItem OnClick="@(() => SelectCompanyAsync(company))"
+                             Icon="@(company.Id == _activeCompany.Id
+                                 ? Icons.Material.Filled.Check
+                                 : Icons.Material.Filled.BusinessCenter)">
+                    <span class="trade-company-switcher-option">
+                        <span class="trade-company-switcher-option-name">@company.Name</span>
+                        <span class="trade-company-switcher-option-meta">
+                            ID @FormatCompanyId(company.Id)
+                        </span>
+                    </span>
+                </MudMenuItem>
+            }
+        </ChildContent>
+    </MudMenu>
+}
+
+@code {
+    private TradeCompanyProfile? _activeCompany;
+    private IReadOnlyList<TradeCompanyProfile> _companies = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadCompaniesAsync();
+    }
+
+    private async Task LoadCompaniesAsync()
+    {
+        try
+        {
+            _activeCompany = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            _companies = (await TradeOperationsPersistence.LoadCompanyProfilesAsync())
+                .OrderBy(company => company.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(company => company.Id)
+                .ToArray();
+        }
+        catch (Exception exception)
+        {
+            _activeCompany = null;
+            _companies = [];
+            Snackbar.Add($"Trade companies could not be loaded: {exception.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SelectCompanyAsync(TradeCompanyProfile company)
+    {
+        if (_activeCompany?.Id == company.Id)
+        {
+            return;
+        }
+
+        try
+        {
+            await TradeOperationsPersistence.SelectCompanyProfileAsync(company.Id);
+            NavigationManager.NavigateTo(NavigationManager.Uri, forceLoad: true);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add($"Trade company could not be switched: {exception.Message}", Severity.Error);
+        }
+    }
+
+    private static string FormatCompanyId(Guid companyId) =>
+        companyId.ToString("N")[..6].ToUpperInvariant();
+
+}
