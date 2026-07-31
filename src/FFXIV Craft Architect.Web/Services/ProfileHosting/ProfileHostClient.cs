@@ -212,9 +212,14 @@ public sealed class ProfileHostClient
         string hostUrl,
         string accessKey,
         long sinceRevision,
+        int limit,
         CancellationToken ct)
     {
-        using var request = CreateRequest(HttpMethod.Get, hostUrl, $"/profile-host/changes?sinceRevision={sinceRevision}", accessKey);
+        using var request = CreateRequest(
+            HttpMethod.Get,
+            hostUrl,
+            $"/profile-host/changes?sinceRevision={sinceRevision}&limit={limit}",
+            accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ProfileSyncChangesResponse>(cancellationToken: ct))!;
