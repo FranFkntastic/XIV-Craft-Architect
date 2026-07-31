@@ -285,9 +285,8 @@ public partial class TradeOrders
                 return;
             }
 
-            if (!await LoadStoredPlanIntoWorkerAsync(_selectedOrder.CraftPlanId!))
+            if (!await LoadOrRebuildOrderPlanAsync(_selectedOrder))
             {
-                Snackbar.Add("Linked Craft Architect plan could not be loaded.", Severity.Warning);
                 return;
             }
 
@@ -348,9 +347,8 @@ public partial class TradeOrders
             return false;
         }
 
-        if (!await LoadStoredPlanIntoWorkerAsync(_selectedOrder.CraftPlanId!))
+        if (!await LoadOrRebuildOrderPlanAsync(_selectedOrder))
         {
-            Snackbar.Add("Linked Craft Architect plan could not be loaded.", Severity.Warning);
             return false;
         }
 
@@ -497,18 +495,29 @@ public partial class TradeOrders
         return true;
     }
 
-    private async Task<bool> LoadStoredPlanIntoWorkerAsync(string planId)
+    private async Task<bool> LoadOrRebuildOrderPlanAsync(TradeOrder order)
     {
-        var stored = await PlanPersistence.LoadPlanPayloadAsync(planId);
-        if (stored == null)
+        var stored = await PlanPersistence.LoadPlanPayloadAsync(order.CraftPlanId!);
+        if (stored != null)
         {
-            return false;
+            await PlanLifecycle.ReplaceStoredPlanAsync(
+                stored,
+                trackStoredPlanIdentity: true);
+            return true;
         }
 
-        await PlanLifecycle.ReplaceStoredPlanAsync(
-            stored,
-            trackStoredPlanIdentity: true);
-        return true;
+        var result = await TradeOrderPricingWorkflow.RebuildPlanCacheAsync(
+            order,
+            new TradeOrderPricingWorkflowOptions(
+                GetOrderDataCenter(order),
+                order.SourceSnapshot.World ?? string.Empty,
+                ForceRefreshMarketData: false));
+        if (!result.Ready)
+        {
+            Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
+        }
+
+        return result.Ready;
     }
 
     private string GetOrderDataCenter(TradeOrder order)

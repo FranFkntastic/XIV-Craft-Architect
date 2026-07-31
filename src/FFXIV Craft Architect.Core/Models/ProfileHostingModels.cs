@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace FFXIV_Craft_Architect.Core.Models;
 
 public static class ProfileSyncCollections
@@ -48,6 +50,93 @@ public sealed class ProfileSyncObjectEnvelope
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     public bool Deleted { get; set; }
     public DateTime? DeletedAtUtc { get; set; }
+}
+
+public sealed class ProfileSyncPlanSnapshot
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = "Saved Plan";
+    public DateTime CreatedAt { get; set; }
+    public DateTime ModifiedAt { get; set; }
+    public DateTime SavedAt { get; set; }
+    public string DataCenter { get; set; } = "Aether";
+    public List<ProfileSyncPlanProjectItem> ProjectItems { get; set; } = [];
+    public string? PlanJson { get; set; }
+    public string? PlanStateJson { get; set; }
+    public int? ProcurementTravelTolerance { get; set; }
+    public string? MarketAnalysisScopeSnapshotJson { get; set; }
+    public RecommendationMode SavedRecommendationMode { get; set; } =
+        RecommendationMode.MinimizeTotalCost;
+    public MarketAcquisitionLens SavedMarketAnalysisLens { get; set; } =
+        MarketAcquisitionLens.MinimumUpfrontCost;
+    public string? SourcePlanId { get; set; }
+    public string? SourcePlanName { get; set; }
+}
+
+public sealed class ProfileSyncPlanProjectItem
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public int IconId { get; set; }
+    public int Quantity { get; set; }
+    public bool MustBeHq { get; set; }
+}
+
+public static class ProfileSyncPlanPayloadCodec
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    public static string CompactIfPlan(
+        string collection,
+        string objectId,
+        string payloadJson)
+    {
+        return string.Equals(
+                collection,
+                ProfileSyncCollections.Plans,
+                StringComparison.OrdinalIgnoreCase)
+            ? Serialize(Deserialize(payloadJson, objectId))
+            : payloadJson;
+    }
+
+    public static ProfileSyncPlanSnapshot Deserialize(
+        string payloadJson,
+        string expectedObjectId)
+    {
+        var snapshot = JsonSerializer.Deserialize<ProfileSyncPlanSnapshot>(
+                payloadJson,
+                JsonOptions)
+            ?? throw new InvalidOperationException(
+                $"Hosted plan payload '{expectedObjectId}' could not be deserialized.");
+        if (string.IsNullOrWhiteSpace(snapshot.Id) ||
+            !string.Equals(snapshot.Id, expectedObjectId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Hosted plan payload '{expectedObjectId}' does not match its object identity.");
+        }
+
+        if (snapshot.SchemaVersion > ProfileSyncPlanSnapshot.CurrentSchemaVersion)
+        {
+            throw new InvalidOperationException(
+                $"Hosted plan '{expectedObjectId}' uses unsupported compact schema version {snapshot.SchemaVersion}.");
+        }
+
+        snapshot.SchemaVersion = ProfileSyncPlanSnapshot.CurrentSchemaVersion;
+        snapshot.ProjectItems ??= [];
+        return snapshot;
+    }
+
+    public static string Serialize(ProfileSyncPlanSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return JsonSerializer.Serialize(snapshot, JsonOptions);
+    }
 }
 
 public sealed class ProfileSyncPutRequest

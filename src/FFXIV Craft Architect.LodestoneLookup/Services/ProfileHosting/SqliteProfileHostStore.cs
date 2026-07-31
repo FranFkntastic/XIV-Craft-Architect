@@ -548,6 +548,10 @@ public sealed class SqliteProfileHostStore
         {
             ValidateCollection(collection);
         }
+        payloadJson = ProfileSyncPlanPayloadCodec.CompactIfPlan(
+            collection,
+            objectId,
+            payloadJson);
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
@@ -735,7 +739,11 @@ public sealed class SqliteProfileHostStore
                 {
                     Collection = collection,
                     ObjectId = reader.GetString(1),
-                    PayloadJson = reader.GetString(2),
+                    PayloadJson = NormalizePortablePayload(
+                        collection,
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.GetInt64(5) == 1),
                     Revision = reader.GetInt64(3),
                     UpdatedAtUtc = DateTime.Parse(
                         reader.GetString(4),
@@ -879,7 +887,11 @@ public sealed class SqliteProfileHostStore
         {
             Collection = collection,
             ObjectId = objectId,
-            PayloadJson = reader.GetString(0),
+            PayloadJson = NormalizePortablePayload(
+                collection,
+                objectId,
+                reader.GetString(0),
+                reader.GetInt64(3) == 1),
             Revision = reader.GetInt64(1),
             UpdatedAtUtc = DateTime.Parse(reader.GetString(2), null, DateTimeStyles.RoundtripKind),
             Deleted = reader.GetInt64(3) == 1,
@@ -899,14 +911,21 @@ public sealed class SqliteProfileHostStore
 
     private static ProfileSyncObjectEnvelope ReadObject(SqliteDataReader reader)
     {
+        var collection = reader.GetString(0);
+        var objectId = reader.GetString(1);
+        var deleted = reader.GetInt64(5) == 1;
         return new ProfileSyncObjectEnvelope
         {
-            Collection = reader.GetString(0),
-            ObjectId = reader.GetString(1),
-            PayloadJson = reader.GetString(2),
+            Collection = collection,
+            ObjectId = objectId,
+            PayloadJson = NormalizePortablePayload(
+                collection,
+                objectId,
+                reader.GetString(2),
+                deleted),
             Revision = reader.GetInt64(3),
             UpdatedAtUtc = DateTime.Parse(reader.GetString(4), null, DateTimeStyles.RoundtripKind),
-            Deleted = reader.GetInt64(5) == 1,
+            Deleted = deleted,
             DeletedAtUtc = reader.IsDBNull(6)
                 ? null
                 : DateTime.Parse(reader.GetString(6), null, DateTimeStyles.RoundtripKind)
@@ -916,20 +935,26 @@ public sealed class SqliteProfileHostStore
     private static HostedProfileObject ReadHostedObject(
         SqliteDataReader reader,
         string collection,
-        string objectId) =>
-        new(
+        string objectId)
+    {
+        var deleted = reader.GetInt64(4) == 1;
+        return new HostedProfileObject(
             reader.GetString(0),
             new ProfileSyncObjectEnvelope
             {
                 Collection = collection,
                 ObjectId = objectId,
-                PayloadJson = reader.GetString(1),
+                PayloadJson = NormalizePortablePayload(
+                    collection,
+                    objectId,
+                    reader.GetString(1),
+                    deleted),
                 Revision = reader.GetInt64(2),
                 UpdatedAtUtc = DateTime.Parse(
                     reader.GetString(3),
                     null,
                     DateTimeStyles.RoundtripKind),
-                Deleted = reader.GetInt64(4) == 1,
+                Deleted = deleted,
                 DeletedAtUtc = reader.IsDBNull(5)
                     ? null
                     : DateTime.Parse(
@@ -937,6 +962,21 @@ public sealed class SqliteProfileHostStore
                         null,
                         DateTimeStyles.RoundtripKind)
             });
+    }
+
+    private static string NormalizePortablePayload(
+        string collection,
+        string objectId,
+        string payloadJson,
+        bool deleted)
+    {
+        return deleted
+            ? payloadJson
+            : ProfileSyncPlanPayloadCodec.CompactIfPlan(
+                collection,
+                objectId,
+                payloadJson);
+    }
 
     private static async Task TouchAccessKeyAsync(SqliteConnection connection, string keyId, CancellationToken ct)
     {
