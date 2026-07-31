@@ -83,13 +83,11 @@ public sealed class TradeCompanyCollaborationService(
             throw new InvalidOperationException(reason);
         }
 
-        var revision = await localState.LoadObjectRevisionAsync(
-            ProfileSyncCollections.TradeOrders,
-            order.Id.ToString("D"));
+        var revision = await ResolveHostedOrderRevisionAsync(order);
         if (revision <= 0)
         {
             throw new InvalidOperationException(
-                "Sync this order through Profile Hosting before publishing its company-owned link.");
+                "The hosted order differs from this browser and needs conflict review before publishing.");
         }
 
         return new TradeCompanyPublicationOwnership(
@@ -132,12 +130,13 @@ public sealed class TradeCompanyCollaborationService(
             return Rejected(reason);
         }
 
-        var revision = await localState.LoadObjectRevisionAsync(
-            ProfileSyncCollections.TradeOrders,
-            order.Id.ToString("D"));
+        var revision = await ResolveHostedOrderRevisionAsync(
+            order,
+            cancellationToken);
         if (revision <= 0)
         {
-            return Rejected("Sync this order through Profile Hosting before publishing it.");
+            return Rejected(
+                "The hosted order differs from this browser and needs conflict review before publishing.");
         }
 
         try
@@ -208,13 +207,13 @@ public sealed class TradeCompanyCollaborationService(
             throw new InvalidOperationException(reason);
         }
 
-        var revision = await localState.LoadObjectRevisionAsync(
-            ProfileSyncCollections.TradeOrders,
-            order.Id.ToString("D"));
+        var revision = await ResolveHostedOrderRevisionAsync(
+            order,
+            cancellationToken);
         if (revision <= 0)
         {
             throw new InvalidOperationException(
-                "Sync this order through Profile Hosting before publishing its company-owned link.");
+                "The hosted order differs from this browser and needs conflict review before publishing.");
         }
 
         var published = await client.PublishPortableLinkAsync(
@@ -341,6 +340,22 @@ public sealed class TradeCompanyCollaborationService(
         {
             return Rejected(exception.Message);
         }
+    }
+
+    private async Task<long> ResolveHostedOrderRevisionAsync(
+        TradeOrder order,
+        CancellationToken cancellationToken = default)
+    {
+        var objectId = order.Id.ToString("D");
+        var revision = await localState.LoadObjectRevisionAsync(
+            ProfileSyncCollections.TradeOrders,
+            objectId);
+        return revision > 0
+            ? revision
+            : await profileSync.EnsureHostedObjectRevisionAsync(
+                ProfileSyncCollections.TradeOrders,
+                objectId,
+                cancellationToken);
     }
 
     private static TradeCommissionWorkflowResult Rejected(string message) =>
