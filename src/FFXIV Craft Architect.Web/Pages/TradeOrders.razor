@@ -627,7 +627,7 @@
                                             <div>
                                                 <MudText Typo="Typo.subtitle2">Commission Payment</MudText>
                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                    @commissionTerms.Payment.Schedule - terms v@commissionTerms.Version
+                                                    @($"{commissionTerms.Payment.Schedule} - terms v{commissionTerms.Version}")
                                                 </MudText>
                                             </div>
                                             <span class="@GetCommissionGateChipClass(canonicalCommission.Gates.Payment.State)">
@@ -1318,8 +1318,8 @@
                                             </strong>
                                             <span>Public brief</span>
                                             <strong>@(ownerCommission.PublicMetadata.PublicUrl ?? ownerCommission.PublicMetadata.PublicBriefId)</strong>
-                                            <span>Discord bindings</span>
-                                            <strong>@ownerCommission.PublicMetadata.DiscordBindings.Count.ToString("N0")</strong>
+                                            <span>Trade channel</span>
+                                            <strong>@(SelectedCompanyPublication?.State.ToString() ?? "Not delivered")</strong>
                                         </div>
 
                                         @if (!string.IsNullOrWhiteSpace(SelectedCommissionNotificationError))
