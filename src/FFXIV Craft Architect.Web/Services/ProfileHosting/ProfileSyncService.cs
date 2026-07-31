@@ -72,6 +72,102 @@ public sealed class ProfileSyncService
     public Task SyncNowAsync(CancellationToken ct = default) =>
         RunSerializedAsync(() => SyncNowCoreAsync(ct), ct);
 
+    public Task<long> EnsureHostedObjectRevisionAsync(
+        string collection,
+        string objectId,
+        CancellationToken ct = default) =>
+        RunSerializedAsync(
+            () => EnsureHostedObjectRevisionCoreAsync(collection, objectId, ct),
+            ct);
+
+    private async Task<long> EnsureHostedObjectRevisionCoreAsync(
+        string collection,
+        string objectId,
+        CancellationToken ct)
+    {
+        var settings = await _localState.LoadConnectionSettingsAsync();
+        var profileId = settings.ProfileScopeId;
+        await EnsurePendingSavesLoadedAsync(profileId);
+        if (!settings.IsConfigured || profileId == null)
+        {
+            return 0;
+        }
+
+        var knownRevision = await _localState.LoadObjectRevisionAsync(
+            profileId,
+            collection,
+            objectId);
+        if (knownRevision > 0)
+        {
+            return knownRevision;
+        }
+
+        var adapter = GetAdapter(collection);
+        var localObject = (await adapter.LoadLocalObjectsAsync(ct))
+            .FirstOrDefault(item => string.Equals(
+                item.ObjectId,
+                objectId,
+                StringComparison.Ordinal));
+        if (localObject == null)
+        {
+            return 0;
+        }
+
+        var remoteBootstrap = await _client.ExportBootstrapAsync(
+            settings.HostUrl!,
+            settings.AccessKey!,
+            ct);
+        var remoteObject = remoteBootstrap.Objects.FirstOrDefault(item =>
+            string.Equals(item.Collection, collection, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(item.ObjectId, objectId, StringComparison.Ordinal));
+        if (remoteObject == null)
+        {
+            await QueueLocalSaveCoreAsync(collection, objectId, ct);
+            return await _localState.LoadObjectRevisionAsync(
+                profileId,
+                collection,
+                objectId);
+        }
+
+        await _localState.SaveHostedObjectProvenanceAsync(
+            profileId,
+            collection,
+            objectId);
+        if (remoteObject.Deleted != localObject.Deleted ||
+            !string.Equals(
+                remoteObject.PayloadJson,
+                localObject.PayloadJson,
+                StringComparison.Ordinal))
+        {
+            await AddPendingSaveAsync(profileId, collection, objectId);
+            _conflicts.RemoveAll(item => IsSameIdentity(
+                item.Collection,
+                item.ObjectId,
+                collection,
+                objectId));
+            _conflicts.Add(new ProfileSyncConflict(
+                collection,
+                objectId,
+                0,
+                remoteObject.Revision,
+                remoteObject));
+            SetStatus(CurrentStatus with
+            {
+                ConflictCount = _conflicts.Count,
+                PendingCount = _pendingSaves.Count,
+                Message = "Conflicts need review"
+            });
+            return 0;
+        }
+
+        await _localState.SaveObjectRevisionAsync(
+            profileId,
+            collection,
+            objectId,
+            remoteObject.Revision);
+        return remoteObject.Revision;
+    }
+
     private async Task SyncNowCoreAsync(CancellationToken ct)
     {
         var settings = await _localState.LoadConnectionSettingsAsync();
@@ -650,6 +746,21 @@ public sealed class ProfileSyncService
         try
         {
             await operation();
+        }
+        finally
+        {
+            _operationGate.Release();
+        }
+    }
+
+    private async Task<T> RunSerializedAsync<T>(
+        Func<Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        await _operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await operation();
         }
         finally
         {

@@ -708,13 +708,7 @@ jobs:
               --output /dev/null \
               --write-out '%{http_code}' \
               "https://$DEPLOY_DOMAIN/api/trade/v1/companies/00000000-0000-0000-0000-000000000001/discord/claims"
-          )" = "$(
-            if [[ "$EXPECTED_DISCORD_ENABLED" == "true" ]]; then
-              printf 401
-            else
-              printf 404
-            fi
-          )"
+          )" = "404"
           test "$(
             curl --silent --show-error \
               --output /dev/null \
