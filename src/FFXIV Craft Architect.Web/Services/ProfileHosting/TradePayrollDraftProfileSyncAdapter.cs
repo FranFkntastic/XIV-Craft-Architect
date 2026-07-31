@@ -5,6 +5,8 @@ namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 public sealed class TradePayrollDraftProfileSyncAdapter : IProfileSyncCollectionAdapter
 {
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
     private readonly TradeOperationsPersistenceService _tradeOperations;
     private readonly TradePayrollPersistenceService _tradePayrollPersistence;
 
@@ -34,7 +36,9 @@ public sealed class TradePayrollDraftProfileSyncAdapter : IProfileSyncCollection
 
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
     {
-        var draft = JsonSerializer.Deserialize<TradePayrollWorkflowDraft>(envelope.PayloadJson);
+        var draft = JsonSerializer.Deserialize<TradePayrollWorkflowDraft>(
+            envelope.PayloadJson,
+            JsonOptions);
         if (draft == null)
         {
             throw new InvalidOperationException($"Hosted Trade payroll draft payload '{envelope.ObjectId}' could not be deserialized.");
@@ -66,7 +70,7 @@ public sealed class TradePayrollDraftProfileSyncAdapter : IProfileSyncCollection
         {
             Collection = ProfileSyncCollections.TradePayrollDrafts,
             ObjectId = draft.Id,
-            PayloadJson = JsonSerializer.Serialize(draft),
+            PayloadJson = JsonSerializer.Serialize(draft, JsonOptions),
             UpdatedAtUtc = updatedAtUtc
         };
     }
