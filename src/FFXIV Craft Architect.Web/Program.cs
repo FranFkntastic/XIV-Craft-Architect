@@ -88,6 +88,10 @@ builder.Services.AddScoped<TradeCommissionOperationsClient>();
 builder.Services.AddScoped<TradeCommissionOperationsService>();
 builder.Services.AddScoped<CommissionBriefClient>();
 builder.Services.AddScoped<CommissionBriefLocalStateService>();
+builder.Services.AddSingleton(new ProfileHostClientOptions(
+    ResolveProfileHostBaseAddress(
+        builder.Configuration["ProfileHost:BaseAddress"],
+        builder.HostEnvironment.BaseAddress)));
 builder.Services.AddScoped<ProfileHostClient>();
 builder.Services.AddScoped<ProfileSyncLocalStateService>();
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, SettingsProfileSyncAdapter>();
@@ -130,4 +134,12 @@ static Uri ResolveLodestoneLookupBaseAddress(string? configuredBaseAddress, stri
     return Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri)
         ? absoluteUri
         : new Uri(new Uri(hostBaseAddress), trimmed);
+}
+
+static string ResolveProfileHostBaseAddress(string? configuredBaseAddress, string hostBaseAddress)
+{
+    var candidate = string.IsNullOrWhiteSpace(configuredBaseAddress)
+        ? new Uri(new Uri(hostBaseAddress), "api/").AbsoluteUri
+        : configuredBaseAddress;
+    return ProfileHostClient.NormalizeHostUrl(candidate);
 }

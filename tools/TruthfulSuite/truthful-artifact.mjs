@@ -307,6 +307,9 @@ function assertEffectiveConfiguration(files, buildManifest) {
   if (parsed?.LodestoneLookup?.BaseAddress !== expectedBaseAddress) {
     throw new Error(`Effective Lodestone base address is not ${expectedBaseAddress}`);
   }
+  if (parsed?.ProfileHost?.BaseAddress !== expectedBaseAddress) {
+    throw new Error(`Effective profile host base address is not ${expectedBaseAddress}`);
+  }
   const expectedTarget = targetConfiguration(buildManifest.target.slot);
   if (parsed?.ProcurementRoutes?.GenerationEnabled !== expectedTarget.procurementRoutesGenerationEnabled ||
       parsed?.EngineRewrite?.ExecutionEnabled !== expectedTarget.engineRewriteExecutionEnabled ||
@@ -386,6 +389,7 @@ async function writeEffectiveConfiguration(root, domain, slot) {
   const target = targetConfiguration(slot);
   const config = {
     LodestoneLookup: { BaseAddress: `https://${domain}/api/` },
+    ProfileHost: { BaseAddress: `https://${domain}/api/` },
     ProcurementRoutes: { GenerationEnabled: target.procurementRoutesGenerationEnabled },
     EngineRewrite: { ExecutionEnabled: target.engineRewriteExecutionEnabled },
     EngineAcceptance: { Enabled: false, UseDeterministicEvidence: false }
