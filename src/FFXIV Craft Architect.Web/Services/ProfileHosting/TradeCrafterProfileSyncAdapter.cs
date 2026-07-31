@@ -5,6 +5,8 @@ namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 public sealed class TradeCrafterProfileSyncAdapter : IProfileSyncCollectionAdapter
 {
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
     private readonly TradeOperationsPersistenceService _tradeOperations;
 
     public TradeCrafterProfileSyncAdapter(TradeOperationsPersistenceService tradeOperations)
@@ -30,7 +32,9 @@ public sealed class TradeCrafterProfileSyncAdapter : IProfileSyncCollectionAdapt
 
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
     {
-        var crafter = JsonSerializer.Deserialize<TradeCrafterProfile>(envelope.PayloadJson);
+        var crafter = JsonSerializer.Deserialize<TradeCrafterProfile>(
+            envelope.PayloadJson,
+            JsonOptions);
         if (crafter == null)
         {
             throw new InvalidOperationException($"Hosted Trade crafter payload '{envelope.ObjectId}' could not be deserialized.");
@@ -69,7 +73,7 @@ public sealed class TradeCrafterProfileSyncAdapter : IProfileSyncCollectionAdapt
         {
             Collection = ProfileSyncCollections.TradeCrafters,
             ObjectId = crafter.Id.ToString("D"),
-            PayloadJson = JsonSerializer.Serialize(crafter),
+            PayloadJson = JsonSerializer.Serialize(crafter, JsonOptions),
             UpdatedAtUtc = updatedAtUtc
         };
     }
