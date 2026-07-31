@@ -51,6 +51,10 @@ const activityLabels = {
     PaymentPolicyChangeRefused: "Payment change refused",
     TermsAcknowledged: "Updated terms accepted",
     PaymentClearanceRecorded: "Payment recorded",
+    TermsAmended: "Commission terms revised",
+    PaymentSentRecorded: "Commissioner marked payment sent",
+    PaymentReceivedConfirmed: "Crafter confirmed payment received",
+    PaymentAttestationRetracted: "Payment confirmation retracted",
     CompanyMaterialsReady: "Company materials ready",
     CompanyMaterialsReceived: "Company materials received",
     WorkClearanceAchieved: "Work cleared",
@@ -276,9 +280,15 @@ function buildSubtitle(projection) {
 }
 
 function formatStatus(brief) {
-    if (brief.closed) return "CLOSED";
     if (brief.viewState === "Revoked") return "REVOKED";
-    return brief.status.replace(/([a-z])([A-Z])/g, "$1 $2").toUpperCase();
+    if (brief.status === "Canceled") return "CANCELED";
+    if (brief.closed) return "COMPLETED";
+    if (brief.status === "Completed") return "DELIVERY ACCEPTED";
+    if (brief.status === "AwaitingDelivery") return "AWAITING DELIVERY";
+    if (brief.status === "InProgress") return "IN PROGRESS";
+    if (!brief.isClaimed) return "OPEN - ONE CLAIM SLOT";
+    if (brief.gates.identity === "Pending") return "CLAIMED - IDENTITY REVIEW";
+    return brief.clearedToWork ? "READY TO WORK" : "ASSIGNED - PRE-WORK";
 }
 
 function renderNextStep() {
@@ -398,14 +408,32 @@ function resolveNextStep() {
         };
     }
     if (brief.gates.payment === "Pending") {
+        const participantPayment = projection.payment;
+        if (participantPayment && !participantPayment.crafterReceived) {
+            return {
+                title: "Confirm advance payment",
+                body: `Confirm receipt of ${formatGil(brief.terms.payment.total)} against terms v${brief.terms.version}. Work unlocks only after both parties record the same exchange.`,
+                tone: "waiting",
+                actions: [{
+                    label: `I received ${formatGil(brief.terms.payment.total)}`,
+                    primary: true,
+                    run: openPaymentReceiptForm
+                }, {
+                    label: "Request schedule change",
+                    run: openPaymentRequestForm
+                }]
+            };
+        }
         return {
-            title: "Advance payment is still required",
-            body: "The accepted schedule requires payment before work. You may request a different schedule and explain why; totals remain commissioner-owned.",
+            title: "Waiting for commissioner confirmation",
+            body: "You confirmed receipt. Work unlocks when the commissioner records that the same advance payment was sent.",
             tone: "waiting",
             actions: [{
                 label: "Request schedule change",
-                primary: true,
                 run: openPaymentRequestForm
+            }, {
+                label: "Retract my confirmation",
+                run: openPaymentRetractionForm
             }]
         };
     }
@@ -459,7 +487,9 @@ function resolveNextStep() {
 }
 
 function requiresTermsAcknowledgement(projection) {
-    const accepted = latestActivityRevision(projection, "PaymentPolicyChangeAccepted");
+    const accepted = Math.max(
+        latestActivityRevision(projection, "PaymentPolicyChangeAccepted"),
+        latestActivityRevision(projection, "TermsAmended"));
     const acknowledged = latestActivityRevision(projection, "TermsAcknowledged");
     return accepted > acknowledged;
 }
@@ -511,7 +541,8 @@ function isCompleteAndReady(brief) {
 }
 
 function renderGates() {
-    const brief = state.projection.public;
+    const projection = state.projection;
+    const brief = projection.public;
     setText(
         "clearanceSummary",
         brief.clearedToWork ? "All prerequisites satisfied" : "Work commands remain locked");
@@ -519,7 +550,7 @@ function renderGates() {
     target.replaceChildren();
     target.append(
         createGate("Identity", brief.gates.identity, identityGateDetail(brief)),
-        createGate("Payment", brief.gates.payment, paymentGateDetail(brief)),
+        createGate("Payment", brief.gates.payment, paymentGateDetail(projection)),
         createGate("Company materials", brief.gates.companyMaterials, materialGateDetail(brief))
     );
 }
@@ -542,15 +573,20 @@ function identityGateDetail(brief) {
     return "Lodestone existence is separate from commissioner ownership confirmation.";
 }
 
-function paymentGateDetail(brief) {
+function paymentGateDetail(projection) {
+    const brief = projection.public;
     const schedule = formatPaymentSchedule(brief.terms.payment.schedule);
     if (brief.gates.payment === "NotRequired") {
         return `${schedule}; no advance payment gate applies.`;
     }
     if (brief.gates.payment === "Satisfied") {
-        return "Commissioner-recorded payment observation; not game-verified evidence.";
+        return "Commissioner and crafter both confirmed the same terms-version payment.";
     }
-    return `${schedule} must be recorded before work begins.`;
+    const count = projection.payment
+        ? Number(Boolean(projection.payment.commissionerSent)) +
+            Number(Boolean(projection.payment.crafterReceived))
+        : 0;
+    return `${schedule}; ${count} of 2 party confirmations recorded.`;
 }
 
 function materialGateDetail(brief) {
@@ -1185,6 +1221,48 @@ function openPaymentRequestForm() {
         }
     });
     showActionForm(form);
+}
+
+function openPaymentReceiptForm() {
+    const brief = state.projection.public;
+    const form = element("form", "action-form");
+    const note = createTextarea("note", {
+        required: true,
+        maxLength: 500,
+        placeholder: "Where or how was the payment received?"
+    });
+    form.append(
+        element(
+            "p",
+            "form-help",
+            `Confirm ${formatGil(brief.terms.payment.total)} received for terms v${brief.terms.version}. This is your attestation, not automated in-game evidence.`),
+        createField("Receipt note", note)
+    );
+    addFormFooter(form, "Confirm receipt");
+    form.addEventListener("submit", async event => {
+        event.preventDefault();
+        try {
+            await runParticipantCommand(
+                "confirm-payment-received",
+                {
+                    termsVersion: brief.terms.version,
+                    note: requiredUserText(note.value, "Receipt note")
+                },
+                "Payment receipt confirmed.");
+        } catch (caught) {
+            showNotice("Payment confirmation unavailable", caught.message);
+        }
+    });
+    showActionForm(form);
+}
+
+function openPaymentRetractionForm() {
+    openReasonForm(
+        "Retract payment confirmation",
+        "Explain what was incorrect. Work remains locked until both parties confirm the corrected exchange.",
+        "Retract confirmation",
+        "retract-payment",
+        "Payment confirmation retracted.");
 }
 
 function paymentScheduleValue(schedule) {

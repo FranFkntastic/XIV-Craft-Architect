@@ -7,7 +7,9 @@ public sealed record CompanyCommissionDomainTransition(
     TradeOrder UpdatedOrder,
     CompanyCommissionActivityKind ActivityKind,
     string? Comment = null,
-    string? PayloadJson = null);
+    string? PayloadJson = null,
+    CompanyCommissionActivityVisibility Visibility =
+        CompanyCommissionActivityVisibility.Shared);
 
 public static class CompanyCommissionCommandWorkflow
 {
@@ -26,6 +28,8 @@ public static class CompanyCommissionCommandWorkflow
         {
             UpdateCompanyCommissionDraftCommand update =>
                 UpdateDraft(source, commission, update, nowUtc),
+            AmendCompanyCommissionTermsCommand amend =>
+                AmendTerms(source, commission, amend, nowUtc, actor),
             OpenCompanyCommissionCommand =>
                 Open(source, commission),
             ClaimCompanyCommissionCommand claim =>
@@ -46,6 +50,10 @@ public static class CompanyCommissionCommandWorkflow
                 AcknowledgeTerms(source, commission, acknowledge),
             RecordCompanyCommissionPaymentCommand payment =>
                 RecordPayment(source, commission, payment, nowUtc, actor),
+            ConfirmCompanyCommissionPaymentReceivedCommand payment =>
+                ConfirmPaymentReceived(source, commission, payment, nowUtc, actor),
+            RetractCompanyCommissionPaymentAttestationCommand payment =>
+                RetractPaymentAttestation(source, commission, payment, actor),
             MarkCompanyCommissionMaterialsReadyCommand ready =>
                 MarkMaterialsReady(source, commission, ready, nowUtc),
             AcknowledgeCompanyCommissionMaterialsCommand received =>
@@ -54,6 +62,8 @@ public static class CompanyCommissionCommandWorkflow
                 ReportProgress(source, commission, progress, nowUtc, actor),
             AddCompanyCommissionCommentCommand comment =>
                 AddComment(source, commission, comment),
+            AddCompanyCommissionPrivateNoteCommand note =>
+                AddPrivateNote(source, commission, note),
             DeclareCompanyCommissionReadinessCommand ready =>
                 DeclareReadiness(source, commission, ready, nowUtc),
             WithdrawCompanyCommissionReadinessCommand withdraw =>
@@ -104,6 +114,72 @@ public static class CompanyCommissionCommandWorkflow
             },
             CompanyCommissionActivityKind.CommentAdded,
             "Updated draft commission terms.");
+    }
+
+    private static CompanyCommissionDomainTransition AmendTerms(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        AmendCompanyCommissionTermsCommand command,
+        DateTime nowUtc,
+        CompanyCommissionActor actor)
+    {
+        Require(
+            commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published,
+            "Only a published commission can create a terms revision.");
+        Require(
+            !TradeOrderStatusWorkflow.IsArchived(source.Status),
+            "Closed commission terms cannot be revised.");
+        RequireReason(command.Reason);
+        ValidateTerms(command.Terms);
+        Require(
+            command.Terms.Version == checked(commission.CurrentTermsVersion + 1),
+            "A terms revision must advance the canonical version exactly once.");
+        Require(
+            commission.OutputProgress.All(item =>
+                item.CompletedQuantity == 0 &&
+                item.ReadyQuantity == 0 &&
+                item.AcceptedQuantity == 0) &&
+            !commission.DeliveryReadiness.IsReady,
+            "Terms cannot be revised after production progress begins.");
+
+        var terms = command.Terms with
+        {
+            CreatedAtUtc = nowUtc,
+            CreatedBy = actor,
+            ChangeSummary = command.Reason.Trim()
+        };
+        var materialGate = CreateMaterialGate(terms);
+        return Transition(
+            source,
+            commission with
+            {
+                CurrentTermsVersion = terms.Version,
+                TermsVersions = commission.TermsVersions
+                    .Append(terms)
+                    .OrderBy(item => item.Version)
+                    .ToArray(),
+                ParticipantAcknowledgedTermsVersion = null,
+                PaymentPolicyChangeRequest = null,
+                Gates = commission.Gates with
+                {
+                    Payment = CreatePaymentGate(terms),
+                    CompanyMaterials = materialGate
+                },
+                OutputProgress = terms.Outputs.Select(output =>
+                    new CompanyCommissionOutputProgress(
+                        output.LineId,
+                        output.ItemId,
+                        output.RequiredQuantity,
+                        0,
+                        0,
+                        0,
+                        nowUtc,
+                        actor)).ToArray(),
+                DeliveryReadiness = new CompanyCommissionDeliveryReadiness(false),
+                SettlementState = CompanyCommissionSettlementState.NotDue
+            },
+            CompanyCommissionActivityKind.TermsAmended,
+            command.Reason);
     }
 
     private static CompanyCommissionDomainTransition Open(
@@ -391,13 +467,7 @@ public static class CompanyCommissionCommandWorkflow
             },
             ChangeSummary = "Accepted participant payment-timing request."
         };
-        var paymentGate =
-            nextTerms.Payment.Schedule == CompanyCommissionPaymentSchedule.Advance &&
-            nextTerms.Payment.Total > 0
-                ? new CompanyCommissionPaymentClearance(
-                    CompanyCommissionClearanceState.Pending)
-                : new CompanyCommissionPaymentClearance(
-                    CompanyCommissionClearanceState.NotRequired);
+        var paymentGate = CreatePaymentGate(nextTerms);
         return Transition(
             source,
             commission with
@@ -450,6 +520,22 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             commission.Gates.Payment.State == CompanyCommissionClearanceState.Pending,
             "This commission has no pending advance-payment gate.");
+        Require(
+            commission.Gates.Payment.TermsVersion is 0 ||
+            commission.Gates.Payment.TermsVersion == commission.CurrentTermsVersion,
+            "The payment gate belongs to an earlier terms version.");
+        Require(
+            commission.Gates.Payment.CommissionerSent == null,
+            "The commissioner has already recorded payment sent.");
+        var sent = new CompanyCommissionPaymentAttestation(
+            commission.CurrentTermsVersion,
+            nowUtc,
+            actor.ActorId,
+            command.Note.Trim());
+        var received = commission.Gates.Payment.CrafterReceived;
+        var state = received == null
+            ? CompanyCommissionClearanceState.Pending
+            : CompanyCommissionClearanceState.Satisfied;
         return Transition(
             source,
             commission with
@@ -457,15 +543,127 @@ public static class CompanyCommissionCommandWorkflow
                 Gates = commission.Gates with
                 {
                     Payment = new CompanyCommissionPaymentClearance(
-                        CompanyCommissionClearanceState.Satisfied,
-                        nowUtc,
-                        actor.ActorId,
-                        command.Note.Trim())
+                        state,
+                        RecordedAtUtc:
+                        state == CompanyCommissionClearanceState.Satisfied ? nowUtc : null,
+                        RecordedByActorId:
+                        state == CompanyCommissionClearanceState.Satisfied ? actor.ActorId : null,
+                        Note:
+                        state == CompanyCommissionClearanceState.Satisfied
+                            ? "Both parties confirmed the advance payment."
+                            : null,
+                        TermsVersion: commission.CurrentTermsVersion,
+                        CommissionerSent: sent,
+                        CrafterReceived: received)
                 },
-                SettlementState = CompanyCommissionSettlementState.Satisfied
+                SettlementState =
+                    state == CompanyCommissionClearanceState.Satisfied
+                        ? CompanyCommissionSettlementState.Satisfied
+                        : commission.SettlementState
             },
-            CompanyCommissionActivityKind.PaymentClearanceRecorded,
+            CompanyCommissionActivityKind.PaymentSentRecorded,
             command.Note);
+    }
+
+    private static CompanyCommissionDomainTransition ConfirmPaymentReceived(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        ConfirmCompanyCommissionPaymentReceivedCommand command,
+        DateTime nowUtc,
+        CompanyCommissionActor actor)
+    {
+        RequireClaim(commission);
+        RequireReason(command.Note);
+        Require(
+            command.TermsVersion == commission.CurrentTermsVersion,
+            "Payment receipt must confirm the current terms version.");
+        Require(
+            commission.Gates.Payment.State == CompanyCommissionClearanceState.Pending,
+            "This commission has no pending advance-payment gate.");
+        Require(
+            commission.Gates.Payment.CrafterReceived == null,
+            "The crafter has already confirmed payment received.");
+
+        var received = new CompanyCommissionPaymentAttestation(
+            commission.CurrentTermsVersion,
+            nowUtc,
+            actor.ActorId,
+            command.Note.Trim());
+        var sent = commission.Gates.Payment.CommissionerSent;
+        var state = sent == null
+            ? CompanyCommissionClearanceState.Pending
+            : CompanyCommissionClearanceState.Satisfied;
+        return Transition(
+            source,
+            commission with
+            {
+                Gates = commission.Gates with
+                {
+                    Payment = new CompanyCommissionPaymentClearance(
+                        state,
+                        RecordedAtUtc:
+                        state == CompanyCommissionClearanceState.Satisfied ? nowUtc : null,
+                        RecordedByActorId:
+                        state == CompanyCommissionClearanceState.Satisfied ? actor.ActorId : null,
+                        Note:
+                        state == CompanyCommissionClearanceState.Satisfied
+                            ? "Both parties confirmed the advance payment."
+                            : null,
+                        TermsVersion: commission.CurrentTermsVersion,
+                        CommissionerSent: sent,
+                        CrafterReceived: received)
+                },
+                SettlementState =
+                    state == CompanyCommissionClearanceState.Satisfied
+                        ? CompanyCommissionSettlementState.Satisfied
+                        : commission.SettlementState
+            },
+            CompanyCommissionActivityKind.PaymentReceivedConfirmed,
+            command.Note);
+    }
+
+    private static CompanyCommissionDomainTransition RetractPaymentAttestation(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        RetractCompanyCommissionPaymentAttestationCommand command,
+        CompanyCommissionActor actor)
+    {
+        RequireClaim(commission);
+        RequireReason(command.Reason);
+        Require(
+            source.Status == TradeOrderStatus.Assigned,
+            "Payment confirmation can be retracted only before work begins.");
+        var payment = commission.Gates.Payment;
+        var commissioner = actor.Kind == CompanyCommissionActorKind.Commissioner;
+        Require(
+            commissioner
+                ? payment.CommissionerSent != null
+                : payment.CrafterReceived != null,
+            commissioner
+                ? "The commissioner has no payment-sent confirmation to retract."
+                : "The crafter has no payment-received confirmation to retract.");
+        return Transition(
+            source,
+            commission with
+            {
+                Gates = commission.Gates with
+                {
+                    Payment = payment with
+                    {
+                        State = CompanyCommissionClearanceState.Pending,
+                        RecordedAtUtc = null,
+                        RecordedByActorId = null,
+                        Note = null,
+                        CommissionerSent =
+                            commissioner ? null : payment.CommissionerSent,
+                        CrafterReceived =
+                            commissioner ? payment.CrafterReceived : null
+                    }
+                },
+                SettlementState = CompanyCommissionSettlementState.NotDue
+            },
+            CompanyCommissionActivityKind.PaymentAttestationRetracted,
+            command.Reason);
     }
 
     private static CompanyCommissionDomainTransition MarkMaterialsReady(
@@ -587,6 +785,21 @@ public static class CompanyCommissionCommandWorkflow
             commission,
             CompanyCommissionActivityKind.CommentAdded,
             command.Comment);
+    }
+
+    private static CompanyCommissionDomainTransition AddPrivateNote(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        AddCompanyCommissionPrivateNoteCommand command)
+    {
+        RequireReason(command.Comment);
+        Require(command.Comment.Length <= 2000, "Notes cannot exceed 2,000 characters.");
+        return Transition(
+            source,
+            commission,
+            CompanyCommissionActivityKind.CommentAdded,
+            command.Comment,
+            visibility: CompanyCommissionActivityVisibility.CompanyOnly);
     }
 
     private static CompanyCommissionDomainTransition DeclareReadiness(
@@ -858,17 +1071,41 @@ public static class CompanyCommissionCommandWorkflow
                 OwnershipConfirmedAtUtc:
                 identityState == CompanyCommissionClearanceState.Satisfied ? nowUtc : null,
                 ConfirmedByActorId: confirmedBy),
-            terms.Payment.Schedule == CompanyCommissionPaymentSchedule.Advance &&
-            terms.Payment.Total > 0
-                ? new CompanyCommissionPaymentClearance(
-                    CompanyCommissionClearanceState.Pending)
-                : new CompanyCommissionPaymentClearance(
-                    CompanyCommissionClearanceState.NotRequired),
+            CreatePaymentGate(terms),
             new CompanyCommissionMaterialClearance(
                 companyMaterials.Length == 0
                     ? CompanyCommissionClearanceState.NotRequired
                     : CompanyCommissionClearanceState.Pending,
                 companyMaterials));
+    }
+
+    private static CompanyCommissionPaymentClearance CreatePaymentGate(
+        CompanyCommissionTermsVersion terms) =>
+        terms.Payment.Schedule == CompanyCommissionPaymentSchedule.Advance &&
+        terms.Payment.Total > 0
+            ? new CompanyCommissionPaymentClearance(
+                CompanyCommissionClearanceState.Pending,
+                TermsVersion: terms.Version)
+            : new CompanyCommissionPaymentClearance(
+                CompanyCommissionClearanceState.NotRequired,
+                TermsVersion: terms.Version);
+
+    private static CompanyCommissionMaterialClearance CreateMaterialGate(
+        CompanyCommissionTermsVersion terms)
+    {
+        var quantities = terms.Materials
+            .Where(item =>
+                item.Responsibility == CommissionMaterialResponsibility.Provided)
+            .Select(item => new CompanyCommissionMaterialQuantity(
+                item.LineId,
+                item.ItemId,
+                item.Quantity))
+            .ToArray();
+        return new CompanyCommissionMaterialClearance(
+            quantities.Length == 0
+                ? CompanyCommissionClearanceState.NotRequired
+                : CompanyCommissionClearanceState.Pending,
+            quantities);
     }
 
     private static void RequireCanWork(TradeCompanyCommission commission)
@@ -958,7 +1195,9 @@ public static class CompanyCommissionCommandWorkflow
         TradeCompanyCommission commission,
         CompanyCommissionActivityKind activityKind,
         string? comment = null,
-        string? payloadJson = null)
+        string? payloadJson = null,
+        CompanyCommissionActivityVisibility visibility =
+            CompanyCommissionActivityVisibility.Shared)
     {
         var updated = Copy(source);
         updated.CompanyCommission = commission;
@@ -966,6 +1205,7 @@ public static class CompanyCommissionCommandWorkflow
             updated,
             activityKind,
             comment,
-            payloadJson);
+            payloadJson,
+            visibility);
     }
 }

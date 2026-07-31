@@ -112,8 +112,11 @@ public partial class TradeOrders
 
     private void PrepareCommissionDraft(TradeOrder order)
     {
-        _commissionContact = _companyProfile?.CommissionContact ?? string.Empty;
-        _commissionDeliveryInstructions = string.Empty;
+        var terms = order.CompanyCommission?.CurrentTerms;
+        _commissionContact = terms?.ContactInstructions ??
+            _companyProfile?.CommissionContact ??
+            string.Empty;
+        _commissionDeliveryInstructions = terms?.DeliveryInstructions ?? string.Empty;
         if (order.CompanyCommission == null)
         {
             foreach (var claim in TradeCollaboration.GetPendingInterests(order.Id))
@@ -263,7 +266,7 @@ public partial class TradeOrders
             AppState.NotifyTradeOperationsDataChanged();
             await LoadAsync();
             SelectOrderAfterReload(orderId, "The brief was published, but the order could not be reloaded.");
-            _activeOpsTab = 3;
+            _activeOpsTab = SharingTabIndex;
             await CopyTextToClipboardAsync(
                 link.Url,
                 "Commission published and link copied");
@@ -283,7 +286,7 @@ public partial class TradeOrders
                 SelectOrderAfterReload(
                     publicationOrderId,
                     "The publication may be attached remotely, but the order could not be reloaded.");
-                _activeOpsTab = 3;
+                _activeOpsTab = SharingTabIndex;
             }
 
             Snackbar.Add(
@@ -320,7 +323,7 @@ public partial class TradeOrders
                 SelectOrderAfterReload(
                     orderId,
                     "The commission terms were committed, but the order could not be reloaded.");
-                _activeOpsTab = 3;
+                _activeOpsTab = SharingTabIndex;
             }
             Snackbar.Add(
                 result.Publication?.Message ??
@@ -335,7 +338,7 @@ public partial class TradeOrders
 
         await LoadAsync();
         SelectOrderAfterReload(orderId, "The publication was accepted, but the order could not be reloaded.");
-        _activeOpsTab = 3;
+        _activeOpsTab = SharingTabIndex;
         Snackbar.Add(
             result.Publication?.State == TradeCommissionDeliveryState.Published
                 ? "Commission published to Discord"
@@ -462,7 +465,7 @@ public partial class TradeOrders
 
             await LoadAsync();
             SelectOrderAfterReload(orderId, "The assignment was accepted, but the order could not be reloaded.");
-            _activeOpsTab = 3;
+            _activeOpsTab = SharingTabIndex;
             Snackbar.Add("Crafter interest accepted and order assigned", Severity.Success);
         }
         finally
@@ -495,7 +498,7 @@ public partial class TradeOrders
 
             await LoadAsync();
             SelectOrderAfterReload(orderId, "The interest was declined, but the order could not be reloaded.");
-            _activeOpsTab = 3;
+            _activeOpsTab = SharingTabIndex;
             Snackbar.Add("Crafter interest declined", Severity.Success);
         }
         finally
@@ -530,7 +533,7 @@ public partial class TradeOrders
             SelectOrderAfterReload(
                 orderId.Value,
                 "The hosted version was applied, but the order could not be reloaded.");
-            _activeOpsTab = 3;
+            _activeOpsTab = SharingTabIndex;
         }
 
         AppState.NotifyTradeOperationsDataChanged();
@@ -613,7 +616,7 @@ public partial class TradeOrders
 
             await LoadAsync();
             SelectOrderAfterReload(orderId, "The link was revoked, but the order could not be reloaded.");
-            _activeOpsTab = 3;
+            _activeOpsTab = SharingTabIndex;
             Snackbar.Add("Commission link revoked", Severity.Success);
         }
         catch (Exception)

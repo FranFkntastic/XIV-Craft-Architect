@@ -43,7 +43,11 @@ const enumMaps = {
         "ParticipantRecoveryIssued",
         "ParticipantRecoveryRedeemed",
         "MigratedFromTradeOrder",
-        "MigratedTradeOrderHistory"
+        "MigratedTradeOrderHistory",
+        "TermsAmended",
+        "PaymentSentRecorded",
+        "PaymentReceivedConfirmed",
+        "PaymentAttestationRetracted"
     ]
 };
 
@@ -310,6 +314,7 @@ export function adaptBriefProjection(payload) {
             public: publicBrief,
             provisionalCrafter: null,
             participantCapabilityRevision: null,
+            payment: null,
             activity: []
         };
     }
@@ -324,7 +329,30 @@ export function adaptBriefProjection(payload) {
             payload.participantCapabilityRevision,
             "Participant capability revision",
             0),
+        payment: adaptParticipantPayment(
+            requiredObject(payload.payment, "Participant payment state")),
         activity: requiredArray(payload.activity, "Participant activity").map(adaptParticipantActivity)
+    };
+}
+
+function adaptParticipantPayment(value) {
+    return {
+        state: requiredEnum(value.state, enumMaps.clearance, "Payment clearance"),
+        termsVersion: requiredInteger(value.termsVersion ?? 0, "Payment terms version", 0),
+        commissionerSent: value.commissionerSent
+            ? adaptPaymentAttestation(value.commissionerSent, "Commissioner payment")
+            : null,
+        crafterReceived: value.crafterReceived
+            ? adaptPaymentAttestation(value.crafterReceived, "Crafter payment")
+            : null
+    };
+}
+
+function adaptPaymentAttestation(value, label) {
+    return {
+        termsVersion: requiredInteger(value.termsVersion, `${label} terms version`, 1),
+        recordedAtUtc: requiredDate(value.recordedAtUtc, `${label} time`),
+        note: requiredText(value.note, `${label} note`)
     };
 }
 

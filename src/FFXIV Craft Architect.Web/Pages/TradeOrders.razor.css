@@ -1479,6 +1479,340 @@
   font-size: 0.72rem;
 }
 
+.trade-orders-commission-identity-strip,
+.trade-orders-operations-summary,
+.trade-orders-prerequisite-list,
+.trade-orders-sharing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 10px 0;
+  overflow: hidden;
+  border: 1px solid #3d3d3d;
+  border-radius: 5px;
+  background: #3d3d3d;
+}
+
+.trade-orders-commission-identity-strip > div,
+.trade-orders-operations-summary > div,
+.trade-orders-prerequisite-list > div,
+.trade-orders-sharing-grid > div {
+  min-width: 0;
+  padding: 9px 10px;
+  background: #292929;
+}
+
+.trade-orders-commission-identity-strip span,
+.trade-orders-operations-summary span,
+.trade-orders-prerequisite-list span,
+.trade-orders-sharing-grid span,
+.trade-orders-payment-attestation > span {
+  display: block;
+  color: #9d9d9d;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.trade-orders-commission-identity-strip strong,
+.trade-orders-operations-summary strong,
+.trade-orders-prerequisite-list strong,
+.trade-orders-sharing-grid strong {
+  display: block;
+  margin-top: 3px;
+  color: #f0f0f0;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.trade-orders-prerequisite-list small,
+.trade-orders-sharing-grid small {
+  display: block;
+  margin-top: 2px;
+  color: #aaa;
+  font-size: 0.68rem;
+}
+
+.trade-orders-authority-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid #485d42;
+  border-radius: 4px;
+  background: #252d23;
+  color: #c8d5c4;
+  font-size: 0.72rem;
+}
+
+.trade-orders-authority-note .mud-icon-root {
+  color: #83bd77;
+}
+
+.trade-orders-operation-card,
+.trade-orders-sharing-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #3d3d3d;
+  border-radius: 6px;
+  background: #262626;
+}
+
+.trade-orders-operation-card.is-attention {
+  border-color: #73572d;
+  background: #2c271d;
+}
+
+.trade-orders-operation-card.is-revision {
+  border-color: #65527a;
+  background: #29242f;
+}
+
+.trade-orders-operation-card-heading,
+.trade-orders-payment-handshake-heading,
+.trade-orders-timeline-item-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.trade-orders-identity-evidence {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.trade-orders-identity-evidence > div {
+  padding: 8px;
+  border: 1px solid #453f32;
+  border-radius: 4px;
+  background: #24221d;
+}
+
+.trade-orders-identity-evidence span,
+.trade-orders-identity-evidence small {
+  display: block;
+  color: #a9a9a9;
+  font-size: 0.68rem;
+}
+
+.trade-orders-identity-evidence strong {
+  display: block;
+  margin: 3px 0;
+}
+
+.trade-orders-exception-disclosure {
+  padding-top: 7px;
+  border-top: 1px solid #3d3d3d;
+}
+
+.trade-orders-exception-disclosure summary {
+  margin-bottom: 8px;
+  color: #b7b7b7;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.trade-orders-payment-handshake {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.trade-orders-payment-attestation {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #67502d;
+  border-radius: 5px;
+  background: #30291e;
+}
+
+.trade-orders-payment-attestation.is-complete {
+  border-color: #49704d;
+  background: #233025;
+}
+
+.trade-orders-payment-attestation.is-waiting {
+  border-color: #4a4a4a;
+  background: #262626;
+}
+
+.trade-orders-payment-attestation strong,
+.trade-orders-payment-attestation p,
+.trade-orders-payment-attestation small {
+  display: block;
+}
+
+.trade-orders-payment-attestation strong {
+  margin: 5px 0;
+  font-size: 0.86rem;
+}
+
+.trade-orders-payment-attestation p {
+  min-height: 34px;
+  margin: 0 0 7px;
+  color: #c4c4c4;
+  font-size: 0.72rem;
+}
+
+.trade-orders-payment-attestation small {
+  color: #9f9f9f;
+  font-size: 0.67rem;
+}
+
+.trade-orders-payment-handshake-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #d8b13d;
+}
+
+.trade-orders-payment-clearance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #70572e;
+  border-radius: 4px;
+  background: #32291c;
+}
+
+.trade-orders-payment-clearance.is-complete {
+  border-color: #49704d;
+  background: #233025;
+}
+
+.trade-orders-payment-clearance span {
+  color: #b9b9b9;
+  font-size: 0.7rem;
+  text-align: right;
+}
+
+.trade-orders-timeline-toolbar {
+  margin-bottom: 8px;
+}
+
+.trade-orders-timeline-filters,
+.trade-orders-timeline-visibility {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.trade-orders-timeline-filter,
+.trade-orders-timeline-visibility button {
+  padding: 4px 9px;
+  border: 1px solid #4a4a4a;
+  border-radius: 999px;
+  background: #292929;
+  color: #c8c8c8;
+  font-size: 0.66rem;
+  cursor: pointer;
+}
+
+.trade-orders-timeline-filter.is-active {
+  border-color: #d8b13d;
+  background: #d8b13d;
+  color: #1b180f;
+}
+
+.trade-orders-timeline-visibility button.is-active {
+  border-color: #7d6396;
+  background: #3a2e46;
+  color: #dbc2ef;
+}
+
+.trade-orders-timeline {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid #383838;
+  border-radius: 5px 5px 0 0;
+  background: #242424;
+}
+
+.trade-orders-timeline-item {
+  display: grid;
+  grid-template-columns: 76px 12px minmax(0, 1fr);
+  gap: 9px;
+  padding: 10px;
+  border-bottom: 1px solid #333;
+}
+
+.trade-orders-timeline-item time {
+  color: #999;
+  font-size: 0.65rem;
+  text-align: right;
+}
+
+.trade-orders-timeline-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: #69a8d4;
+  box-shadow: 0 0 0 3px #243846;
+}
+
+.trade-orders-timeline-item.is-private .trade-orders-timeline-dot {
+  background: #b18ad3;
+  box-shadow: 0 0 0 3px #392d44;
+}
+
+.trade-orders-timeline-item.is-planning .trade-orders-timeline-dot {
+  background: #8d938c;
+  box-shadow: 0 0 0 3px #343634;
+}
+
+.trade-orders-timeline-item-heading span {
+  padding: 2px 6px;
+  border: 1px solid #4b4b4b;
+  border-radius: 999px;
+  color: #aaa;
+  font-size: 0.61rem;
+}
+
+.trade-orders-timeline-item p {
+  margin: 3px 0;
+  color: #c8c8c8;
+  font-size: 0.72rem;
+}
+
+.trade-orders-timeline-item small {
+  color: #919191;
+  font-size: 0.65rem;
+}
+
+.trade-orders-timeline-composer {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #383838;
+  border-top: 0;
+  border-radius: 0 0 5px 5px;
+  background: #292929;
+}
+
+.trade-orders-timeline-composer-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.trade-orders-sharing-card {
+  margin-top: 0;
+  margin-bottom: 10px;
+}
+
+.trade-orders-sharing-grid {
+  margin: 0;
+}
+
 @media (max-width: 1740px) {
   .trade-orders-page {
     height: auto;
@@ -1536,12 +1870,23 @@
   .trade-orders-material-table.is-compact.has-commission-handoff .trade-orders-material-row,
   .trade-orders-commission-payment-summary,
   .trade-orders-gate-strip,
+  .trade-orders-commission-identity-strip,
+  .trade-orders-operations-summary,
+  .trade-orders-prerequisite-list,
+  .trade-orders-sharing-grid,
+  .trade-orders-payment-handshake,
   .trade-orders-payment-request,
   .trade-orders-commission-claim,
   .trade-orders-commission-publication,
+  .trade-orders-identity-evidence,
   .trade-orders-identity-review,
   .trade-orders-delivery-review {
     grid-template-columns: 1fr;
+  }
+
+  .trade-orders-payment-handshake-mark {
+    min-height: 28px;
+    transform: rotate(90deg);
   }
 
   .trade-orders-payment-policy {

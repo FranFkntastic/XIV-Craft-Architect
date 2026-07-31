@@ -8,6 +8,7 @@ public static class TradeCommissionOperationsPresentation
     public const string OpenAttention = "open";
     public const string ClaimAttention = "claim";
     public const string PreWorkAttention = "prework";
+    public const string ReadyAttention = "ready";
     public const string WorkAttention = "work";
     public const string DeliveryAttention = "delivery";
     public const string SyncAttention = "sync";
@@ -42,6 +43,11 @@ public static class TradeCommissionOperationsPresentation
             commission.SettlementState != CompanyCommissionSettlementState.Satisfied)
         {
             return DeliveryAttention;
+        }
+
+        if (order.Status == TradeOrderStatus.Assigned)
+        {
+            return ReadyAttention;
         }
 
         return WorkAttention;
@@ -90,7 +96,14 @@ public static class TradeCommissionOperationsPresentation
             return "Record settlement";
         }
 
-        return commission.ClearedToWork ? "Work in progress" : "Clear prerequisites";
+        if (!commission.ClearedToWork)
+        {
+            return "Clear prerequisites";
+        }
+
+        return order.Status == TradeOrderStatus.Assigned
+            ? "Ready to work"
+            : "Work in progress";
     }
 
     public static PendingPaymentPolicyRequest? GetPendingPaymentPolicyRequest(

@@ -178,7 +178,7 @@ public partial class TradeOrders
         {
             if (SelectOrderAfterReload(orderId, "Payment policy was saved, but the order could not be loaded."))
             {
-                _activeOpsTab = 0;
+                _activeOpsTab = PaymentTabIndex;
             }
         }
     }
