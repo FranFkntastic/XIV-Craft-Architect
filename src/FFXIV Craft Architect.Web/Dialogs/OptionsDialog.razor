@@ -296,9 +296,26 @@
                 }
                 else
                 {
-                    <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
-                        Configure the active local Trade company profile and its default payment policy.
-                    </MudText>
+                    <MudPaper Variant="Variant.Outlined" Class="pa-3 mb-4">
+                        <div class="d-flex align-center justify-space-between gap-3">
+                            <div>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Active Trade company | @FormatCompanyReference(_companyProfile.Id) | @_companyCrafterCount.ToString("N0") crafters
+                                </MudText>
+                                <MudText Typo="Typo.subtitle2">@_companyName</MudText>
+                            </div>
+                            <MudButton Variant="Variant.Text"
+                                       Color="Color.Secondary"
+                                       Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.CloudSync"
+                                       OnClick="@(() => SelectTab(OptionsPanel.Hosting))">
+                                Browser sync
+                            </MudButton>
+                        </div>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
+                            Company settings, crafters, orders, and payroll history travel with the connected browser profile.
+                        </MudText>
+                    </MudPaper>
 
                     <MudTextField @bind-Value="_companyName"
                                   id="company-name"
@@ -363,9 +380,9 @@
 
                     <MudDivider Class="my-4" />
 
-                    <MudText Typo="Typo.subtitle2" Class="mb-2">Profile Transfer</MudText>
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Manual company backup</MudText>
                     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
-                        Exports the active company profile, payment policy, and crafter roster. Orders and payroll drafts are not included.
+                        Export the active company settings and crafter roster for recovery or an offline handoff. Orders and payroll history are carried by browser-profile sync instead of being duplicated in this file.
                     </MudText>
                     <div style="display: flex; gap: 12px; flex-wrap: wrap;">
                         <MudButton Variant="Variant.Outlined"
@@ -373,7 +390,7 @@
                                    StartIcon="@Icons.Material.Filled.Download"
                                    OnClick="ExportCompanyProfileAsync"
                                    Disabled="_companyIsBusy">
-                            Export Profile
+                            Export Company
                         </MudButton>
                         <InputFile id="tradeCompanyPackageInput"
                                    OnChange="ImportCompanyProfileAsync"
@@ -385,7 +402,7 @@
                                        StartIcon="@Icons.Material.Filled.UploadFile"
                                        Disabled="_companyIsBusy"
                                        Style="pointer-events: none;">
-                                Import Profile
+                                Import Company
                             </MudButton>
                         </label>
                     </div>
@@ -407,10 +424,11 @@
                 <MudPaper Variant="Variant.Outlined" Class="pa-4">
                     <div class="d-flex align-center justify-space-between gap-3">
                         <div>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Browser profile</MudText>
                             <MudText Typo="Typo.h6">
                                 @(ProfileSync.CurrentStatus.IsConnected
                                     ? GetProfileHostConnectionLabel()
-                                    : "Craft Architect Hosted Profiles")
+                                    : "Craft Architect browser profile")
                             </MudText>
                             <MudText Typo="Typo.caption" Color="Color.Secondary">
                                 @(ProfileSync.CurrentStatus.IsConnected
@@ -505,6 +523,29 @@
                     }
                     else
                     {
+                        @if (_companyProfile != null)
+                        {
+                            <MudDivider Class="my-4" />
+                            <div class="d-flex align-center justify-space-between gap-3">
+                                <div>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        Active Trade company | @FormatCompanyReference(_companyProfile.Id)
+                                    </MudText>
+                                    <MudText Typo="Typo.subtitle2">@_companyName</MudText>
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        Company settings, crafters, orders, and payroll history are included in this browser profile.
+                                    </MudText>
+                                </div>
+                                <MudButton Variant="Variant.Text"
+                                           Color="Color.Secondary"
+                                           Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.Business"
+                                           OnClick="@(() => SelectTab(OptionsPanel.Company))">
+                                    Manage company
+                                </MudButton>
+                            </div>
+                        }
+
                         <div class="d-flex flex-wrap gap-2 mt-4">
                             <MudButton Variant="Variant.Outlined"
                                        Color="Color.Secondary"
@@ -1641,9 +1682,8 @@
             await ProfileSync.SyncNowAsync();
             if (!ProfileSync.CurrentStatus.HostReachable)
             {
-                throw new ProfileHostConnectionException(
-                    ProfileHostConnectionFailure.HostUnavailable,
-                    "The profile host could not be reached.");
+                SetProfileHostStatus(GetProfileSyncFailureMessage(), Color.Error);
+                return;
             }
 
             SetProfileHostStatus("Profile synced.", Color.Success);
@@ -1750,7 +1790,7 @@
     {
         if (!ProfileSync.CurrentStatus.HostReachable)
         {
-            return "Connection needs attention; browser data remains available";
+            return "Browser-profile sync is paused; browser data remains available";
         }
 
         if (ProfileSync.CurrentStatus.ConflictCount > 0 ||
@@ -1761,6 +1801,23 @@
 
         return "Available in this browser and synced to the hosted profile";
     }
+
+    private string GetProfileSyncFailureMessage()
+    {
+        const string prefix = "Host unreachable: ";
+        var message = ProfileSync.CurrentStatus.Message;
+        if (message?.StartsWith(prefix, StringComparison.Ordinal) == true)
+        {
+            message = message[prefix.Length..];
+        }
+
+        return string.IsNullOrWhiteSpace(message)
+            ? "Browser-profile sync could not complete."
+            : $"Browser-profile sync stopped: {message}";
+    }
+
+    private static string FormatCompanyReference(Guid companyId) =>
+        companyId.ToString("N")[..6].ToUpperInvariant();
 
     private string GetProfileHostConnectionStateLabel()
     {
