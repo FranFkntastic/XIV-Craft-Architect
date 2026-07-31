@@ -345,6 +345,7 @@
                     {
                         <MudDivider Class="my-4" />
                         <CompanyDiscordNotificationRouteEditor
+                            @ref="_companyNotificationRouteEditor"
                             CompanyProfileId="_companyProfile.Id" />
                     }
 
@@ -1065,6 +1066,7 @@
     private int _companyCrafterCount;
     private string? _companyLoadError;
     private bool _companyIsBusy;
+    private CompanyDiscordNotificationRouteEditor? _companyNotificationRouteEditor;
     private TradePaymentContractMode _companyPaymentContract = TradePaymentContractMode.LegacyCommission;
     private decimal _companyLegacyCommissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
     private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
@@ -1956,6 +1958,13 @@
 
             var paymentPolicy = BuildCompanyPaymentPolicy();
             if (paymentPolicy == null)
+            {
+                return;
+            }
+
+            if (_activePanel == OptionsPanel.Company &&
+                _companyNotificationRouteEditor != null &&
+                !await _companyNotificationRouteEditor.SavePendingChangesAsync())
             {
                 return;
             }
