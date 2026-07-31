@@ -167,7 +167,7 @@ public static class ProfileHostEndpoints
                 }
 
                 var changes = await store.LoadChangesAsync(profile.ProfileId, sinceRevision ?? 0, cancellationToken);
-                return Results.Ok(changes);
+                return Results.Ok(ToPortableChanges(changes));
             });
 
         group.MapPut(
@@ -321,7 +321,7 @@ public static class ProfileHostEndpoints
                 }
 
                 var changes = await store.LoadChangesAsync(profile.ProfileId, 0, cancellationToken);
-                return Results.Ok(changes);
+                return Results.Ok(ToPortableChanges(changes));
             });
 
         group.MapGet(
@@ -351,11 +351,28 @@ public static class ProfileHostEndpoints
                 }
 
                 var changes = await store.LoadChangesAsync(profile.ProfileId, 0, cancellationToken);
-                return Results.Ok(new ProfileHostBootstrapPayload { Objects = changes.Objects });
+                return Results.Ok(new ProfileHostBootstrapPayload
+                {
+                    Objects = PortableObjects(changes.Objects)
+                });
             });
 
         return group;
     }
+
+    private static ProfileSyncChangesResponse ToPortableChanges(
+        ProfileSyncChangesResponse changes) =>
+        new()
+        {
+            ServerRevision = changes.ServerRevision,
+            Objects = PortableObjects(changes.Objects)
+        };
+
+    private static IReadOnlyList<ProfileSyncObjectEnvelope> PortableObjects(
+        IReadOnlyList<ProfileSyncObjectEnvelope> objects) =>
+        objects
+            .Where(item => ProfileSyncCollections.All.Contains(item.Collection))
+            .ToArray();
 
     private static async Task<ProfileHostProfileResponse?> AuthenticateAsync(
         HttpRequest request,
