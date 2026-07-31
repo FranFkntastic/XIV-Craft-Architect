@@ -107,7 +107,7 @@ public sealed class ProfileHostContractTests
         var visibleChanges = await secondaryClient.GetFromJsonAsync<ProfileSyncChangesResponse>(
             $"/profile-host/changes?sinceRevision=0&profileId={fixture.ProfileId}");
         using var attemptedCrossProfileMutation = await secondaryClient.PutAsJsonAsync(
-            $"/profile-host/objects/plans/plan-1?profileId={fixture.ProfileId}",
+            $"/profile-host/objects/settings/test-setting?profileId={fixture.ProfileId}",
             new ProfileSyncPutRequest { PayloadJson = "{\"owner\":\"secondary\"}", ExpectedRevision = 0 });
         var primaryChanges = await fixture.Store.LoadChangesAsync(
             fixture.ProfileId,
@@ -233,7 +233,7 @@ public sealed class ProfileHostContractTests
         var first = await PutAsync(client, "{\"name\":\"Workshop Restock\"}", expectedRevision: 0);
 
         using var conflictResponse = await client.PutAsJsonAsync(
-            "/profile-host/objects/plans/plan-1",
+            "/profile-host/objects/settings/test-setting",
             new ProfileSyncPutRequest
             {
                 PayloadJson = "{\"name\":\"Stale Copy\"}",
@@ -257,7 +257,7 @@ public sealed class ProfileHostContractTests
         var first = await PutAsync(client, "{\"name\":\"Workshop Restock\"}", expectedRevision: 0);
 
         using var deleteResponse = await client.DeleteAsync(
-            $"/profile-host/objects/plans/plan-1?expectedRevision={first.Object!.Revision}");
+            $"/profile-host/objects/settings/test-setting?expectedRevision={first.Object!.Revision}");
         var deleted = Assert.IsType<ProfileSyncPutResponse>(
             await deleteResponse.Content.ReadFromJsonAsync<ProfileSyncPutResponse>());
         var changes = await client.GetFromJsonAsync<ProfileSyncChangesResponse>(
@@ -277,7 +277,7 @@ public sealed class ProfileHostContractTests
         long expectedRevision)
     {
         using var response = await client.PutAsJsonAsync(
-            "/profile-host/objects/plans/plan-1",
+            "/profile-host/objects/settings/test-setting",
             new ProfileSyncPutRequest { PayloadJson = payload, ExpectedRevision = expectedRevision });
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ProfileSyncPutResponse>())!;

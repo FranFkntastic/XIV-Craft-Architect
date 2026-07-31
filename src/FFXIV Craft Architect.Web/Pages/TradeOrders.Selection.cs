@@ -168,7 +168,7 @@ public partial class TradeOrders
             return order.CraftPlanName;
         }
 
-        return HasLinkedCraftPlan(order) ? "Saved craft plan" : "No linked plan";
+        return HasLinkedCraftPlan(order) ? "Linked craft plan" : "No linked plan";
     }
 
     private static string GetProcurementEvidenceLabel(TradeOrder order)
