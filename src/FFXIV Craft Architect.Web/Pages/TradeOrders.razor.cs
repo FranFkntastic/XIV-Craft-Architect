@@ -21,6 +21,11 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 
 public partial class TradeOrders
 {
+    private const string OpsPaneWidthSettingKey = "ui.trade_orders_ops_pane_width";
+    private const int DefaultOpsPaneWidth = 820;
+    private const int MinimumOpsPaneWidth = 720;
+    private const int MaximumOpsPaneWidth = 860;
+
     private TradeCompanyProfile? _companyProfile;
     private List<TradeCrafterProfile> _crafters = [];
     private List<TradeOrder> _orders = [];
@@ -43,6 +48,8 @@ public partial class TradeOrders
     private bool _isSavingSelectedOrderCraftPlan;
     private bool _isRefreshingLiveProcurement;
     private int _activeOpsTab;
+    private int _opsPaneWidth = DefaultOpsPaneWidth;
+    private TradeOrderProcurementFilter _procurementFilter = TradeOrderProcurementFilter.All;
     private WebTableSortState<TradeOrderProcurementColumn> _procurementSortState =
         WebTableSortState<TradeOrderProcurementColumn>.Unsorted;
     private List<GarlandSearchResult> _requestedOrderSearchResults = [];
@@ -60,10 +67,15 @@ public partial class TradeOrders
     private string? _loadError;
     private Guid? _pendingNavigationOrderId;
     private bool _isArchiveCollapsed = true;
-    private HashSet<TradeOrderStatus> _collapsedStatuses = [];
+    private HashSet<string> _collapsedAttentionGroups = new(StringComparer.Ordinal);
     private WorkerTradeProjection? _liveProcurementSnapshot;
     private LiveProcurementKey? _liveProcurementKey;
     private int _liveProcurementRefreshRequestId;
+    private ElementReference _boardElement;
+    private ElementReference _opsSplitterElement;
+    private IJSObjectReference? _tradeOrdersLayoutModule;
+    private IJSObjectReference? _tradeOrdersLayoutRegistration;
+    private DotNetObjectReference<TradeOrders>? _tradeOrdersReference;
 
     private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
     [
@@ -139,6 +151,7 @@ public partial class TradeOrders
 
     private bool CanEditSelectedOrderOutputs =>
         _selectedOrder != null &&
+        _selectedOrder.CompanyCommission == null &&
         TradeOrderWorkflow.CanEditRequestedOutputs(_selectedOrder);
 
     private bool HasSelectedOrderOutputChanges =>
@@ -151,22 +164,21 @@ public partial class TradeOrders
         _selectedOrderOutputEditors.Count > 0 &&
         !_isSavingSelectedOrderOutputs;
 
-    private IReadOnlyList<OrderStatusGroup> ActiveOrderGroups => TradeOrderStatusWorkflow.ActiveStatuses
-        .Where(status => status != TradeOrderStatus.Draft)
-        .Select(status => new OrderStatusGroup(status, GetOrdersForStatus(status)))
-        .Where(group => group.Orders.Count > 0)
-        .ToArray();
+    private string TradeOrdersBoardStyle =>
+        $"--trade-orders-ops-width: {_opsPaneWidth.ToString(System.Globalization.CultureInfo.InvariantCulture)}px";
+
+    private IReadOnlyList<OrderAttentionGroup> ActiveOrderGroups =>
+        BuildAttentionGroups(_orders.Where(order => !IsOrderArchivedForAttention(order)));
 
     private IReadOnlyList<TradeOrder> ArchivedOrders => _orders
-        .Where(order => TradeOrderStatusWorkflow.IsArchived(order.Status))
+        .Where(IsOrderArchivedForAttention)
         .OrderByDescending(order => order.CommissionedAtUtc)
         .ToArray();
 
-    private IReadOnlyList<OrderStatusGroup> FilteredActiveOrderGroups => TradeOrderStatusWorkflow.ActiveStatuses
-        .Where(status => status != TradeOrderStatus.Draft)
-        .Select(status => new OrderStatusGroup(status, GetOrdersForStatus(status).Where(OrderMatchesSearch).ToArray()))
-        .Where(group => group.Orders.Count > 0)
-        .ToArray();
+    private IReadOnlyList<OrderAttentionGroup> FilteredActiveOrderGroups =>
+        BuildAttentionGroups(_orders
+            .Where(order => !IsOrderArchivedForAttention(order))
+            .Where(OrderMatchesSearch));
 
     private IReadOnlyList<TradeOrder> FilteredArchivedOrders => ArchivedOrders
         .Where(OrderMatchesSearch)
@@ -176,15 +188,80 @@ public partial class TradeOrders
     {
         _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
+        try
+        {
+            _opsPaneWidth = Math.Clamp(
+                await WebSettings.GetAsync(OpsPaneWidthSettingKey, DefaultOpsPaneWidth),
+                MinimumOpsPaneWidth,
+                MaximumOpsPaneWidth);
+        }
+        catch
+        {
+            _opsPaneWidth = DefaultOpsPaneWidth;
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await EnsureLiveProcurementSnapshotAsync();
+        if (_tradeOrdersLayoutRegistration == null &&
+            string.IsNullOrWhiteSpace(_loadError))
+        {
+            await RegisterTradeOrdersLayoutAsync();
+        }
+    }
+
+    private async Task RegisterTradeOrdersLayoutAsync()
+    {
+        _tradeOrdersLayoutModule = await JSRuntime.InvokeAsync<IJSObjectReference>(
+            "import",
+            "./tradeOrdersLayout.js");
+        _tradeOrdersReference = DotNetObjectReference.Create(this);
+        _tradeOrdersLayoutRegistration =
+            await _tradeOrdersLayoutModule.InvokeAsync<IJSObjectReference>(
+                "registerTradeOrdersLayout",
+                _boardElement,
+                _opsSplitterElement,
+                _tradeOrdersReference,
+                _opsPaneWidth,
+                MinimumOpsPaneWidth,
+                MaximumOpsPaneWidth);
+    }
+
+    [JSInvokable]
+    public async Task SaveTradeOrdersOpsPaneWidthAsync(double width)
+    {
+        var nextWidth = Math.Clamp(
+            (int)Math.Round(width),
+            MinimumOpsPaneWidth,
+            MaximumOpsPaneWidth);
+        _opsPaneWidth = nextWidth;
+        await WebSettings.SetAsync(OpsPaneWidthSettingKey, nextWidth);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_tradeOrdersLayoutRegistration != null)
+        {
+            await _tradeOrdersLayoutRegistration.InvokeVoidAsync("dispose");
+            await _tradeOrdersLayoutRegistration.DisposeAsync();
+        }
+
+        if (_tradeOrdersLayoutModule != null)
+        {
+            await _tradeOrdersLayoutModule.DisposeAsync();
+        }
+
+        _tradeOrdersReference?.Dispose();
     }
 
     private async Task LoadAsync()
     {
+        Guid? selectedCanonicalOrderId =
+            _selectedOrder?.CompanyCommission == null ? null : _selectedOrder.Id;
+        var selectedTab = _activeOpsTab;
+        var hadPendingNavigation = _pendingNavigationOrderId.HasValue;
         try
         {
             _loadError = null;
@@ -192,8 +269,23 @@ public partial class TradeOrders
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+            await CommissionOperations.RefreshCanonicalAsync(_orders);
+            _orders = _orders
+                .Select(order => CommissionOperations.GetForOrder(order.Id)?.Order ?? order)
+                .ToList();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
             SelectPendingNavigationOrder();
+            if (!hadPendingNavigation &&
+                selectedCanonicalOrderId.HasValue)
+            {
+                var refreshed = _orders.FirstOrDefault(
+                    order => order.Id == selectedCanonicalOrderId.Value);
+                if (refreshed != null)
+                {
+                    SelectOrder(refreshed);
+                    _activeOpsTab = selectedTab;
+                }
+            }
         }
         catch (Exception ex)
         {

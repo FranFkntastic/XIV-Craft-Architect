@@ -80,10 +80,9 @@ public sealed class TradePayrollPersistenceService
             ActivePaymentContract = paymentPolicy?.ActiveContract ?? TradePaymentContractMode.LegacyCommission,
             CommissionPercent = paymentPolicy?.LegacyCommissionPercent
                 ?? CommissionPayoutPolicy.Default.CommissionPercent,
-            LaborStandardMaterialBonusPercent = paymentPolicy == null || paymentPolicy.LaborStandardMaterialBonusPercent < 0
-                ? TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent
-                : paymentPolicy.LaborStandardMaterialBonusPercent,
-            LaborStandard = paymentPolicy?.LaborStandard,
+            LaborGilPerSynth = paymentPolicy?.LaborGilPerSynth > 0
+                ? paymentPolicy.LaborGilPerSynth
+                : TradePaymentPolicy.DefaultLaborGilPerSynth,
             CreatedAtUtc = now,
             UpdatedAtUtc = now
         };

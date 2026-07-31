@@ -149,13 +149,35 @@ public sealed class SqliteCommissionBriefStore
             editorToken);
     }
 
-    public async Task<PublishedCommissionBrief?> LoadAsync(string publicId, CancellationToken ct)
+    public Task<PublishedCommissionBrief?> LoadAsync(string publicId, CancellationToken ct) =>
+        LoadAsync(publicId, includeRevoked: false, ct);
+
+    public Task<PublishedCommissionBrief?> LoadIncludingRevokedAsync(
+        string publicId,
+        CancellationToken ct) =>
+        LoadAsync(publicId, includeRevoked: true, ct);
+
+    private async Task<PublishedCommissionBrief?> LoadAsync(
+        string publicId,
+        bool includeRevoked,
+        CancellationToken ct)
     {
         await using var connection = await OpenAsync(ct);
         await EnsureSchemaAsync(connection, ct);
         await using var command = connection.CreateCommand();
-        command.CommandText =
+        command.CommandText = includeRevoked
+            ? """
+            SELECT
+                version,
+                payload_json,
+                published_at_utc,
+                company_id,
+                order_id,
+                order_revision
+            FROM commission_briefs
+            WHERE public_id = $publicId;
             """
+            : """
             SELECT
                 version,
                 payload_json,

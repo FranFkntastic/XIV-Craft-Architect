@@ -5,6 +5,8 @@ namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
 {
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
     private readonly TradeOperationsPersistenceService _tradeOperations;
 
     public TradeOrderProfileSyncAdapter(TradeOperationsPersistenceService tradeOperations)
@@ -30,7 +32,9 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
     {
-        var order = JsonSerializer.Deserialize<TradeOrder>(envelope.PayloadJson);
+        var order = JsonSerializer.Deserialize<TradeOrder>(
+            envelope.PayloadJson,
+            JsonOptions);
         if (order == null)
         {
             throw new InvalidOperationException($"Hosted Trade order payload '{envelope.ObjectId}' could not be deserialized.");
@@ -40,7 +44,7 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             order.CompanyProfileId,
             "order",
             envelope.ObjectId);
-        if (!await _tradeOperations.SaveOrderAsync(order))
+        if (!await _tradeOperations.ApplyCanonicalOrderAsync(order))
         {
             throw new InvalidOperationException(
                 $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
@@ -67,7 +71,7 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
         {
             Collection = ProfileSyncCollections.TradeOrders,
             ObjectId = order.Id.ToString("D"),
-            PayloadJson = JsonSerializer.Serialize(order),
+            PayloadJson = JsonSerializer.Serialize(order, JsonOptions),
             UpdatedAtUtc = updatedAtUtc
         };
     }

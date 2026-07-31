@@ -157,7 +157,8 @@ public sealed record TradeCompanyMutationResult(
     TradeCompanyRecordEnvelope? Record,
     TradeCompanyRecordEnvelope? CurrentRecord = null,
     string? ErrorCode = null,
-    string? ErrorMessage = null)
+    string? ErrorMessage = null,
+    CompanyRecordRevision? CompanyRevision = null)
 {
     public bool Success => Status is TradeCompanyMutationStatus.Applied or TradeCompanyMutationStatus.Replayed;
 }

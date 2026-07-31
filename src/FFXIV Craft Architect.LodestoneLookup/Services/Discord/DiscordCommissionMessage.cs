@@ -21,7 +21,8 @@ public static class DiscordCommissionMessage
         string publicUrl,
         DiscordPublicationState state,
         string? actionToken,
-        string? assignmentLabel = null)
+        string? assignmentLabel = null,
+        string? claimUrl = null)
     {
         var brief = published.Brief;
         var fields = new List<object>
@@ -69,7 +70,8 @@ public static class DiscordCommissionMessage
                 published,
                 publicUrl,
                 state,
-                actionToken),
+                actionToken,
+                claimUrl),
             allowed_mentions = new
             {
                 parse = Array.Empty<string>()
@@ -113,7 +115,8 @@ public static class DiscordCommissionMessage
         PublishedCommissionBrief published,
         string publicUrl,
         DiscordPublicationState state,
-        string? actionToken)
+        string? actionToken,
+        string? claimUrl)
     {
         var buttons = new List<object>
         {
@@ -126,18 +129,16 @@ public static class DiscordCommissionMessage
             }
         };
         if (state == DiscordPublicationState.Open &&
-            !string.IsNullOrWhiteSpace(actionToken) &&
-            actionToken.Length <= 100)
+            !string.IsNullOrWhiteSpace(claimUrl))
         {
             buttons.Add(new
             {
                 type = 2,
-                style = 1,
-                label = "Volunteer",
-                custom_id = actionToken
+                style = 5,
+                label = "Claim commission",
+                url = claimUrl
             });
         }
-
         return
         [
             new
@@ -167,7 +168,7 @@ public static class DiscordCommissionMessage
         DiscordPublicationState state) =>
         state switch
         {
-            DiscordPublicationState.Open => "Volunteer below or contact the operator",
+            DiscordPublicationState.Open => "Open the canonical brief to claim",
             DiscordPublicationState.Assigned => string.IsNullOrWhiteSpace(brief.AssignmentLabel)
                 ? "Assigned by the operator"
                 : brief.AssignmentLabel,
@@ -178,26 +179,70 @@ public static class DiscordCommissionMessage
             _ => "Unavailable"
         };
 
-    private static string PaymentSummary(CommissionBriefPayment payment) =>
-        $"**{FormatGil(payment.Total)} total**\n" +
-        $"{payment.ContractLabel}\n" +
-        $"Materials {FormatGil(payment.MaterialReimbursement)} + " +
-        $"bonus {FormatGil(payment.MaterialBonus)} + " +
-        $"labor {FormatGil(payment.CraftLabor)}";
+    private static string PaymentSummary(CommissionBriefPayment payment)
+    {
+        var components = new List<string>
+        {
+            $"materials {FormatGil(payment.MaterialReimbursement)}"
+        };
+        if (payment.MaterialBonus > 0)
+        {
+            components.Add($"bonus {FormatGil(payment.MaterialBonus)}");
+        }
 
-    private static string MaterialsSummary(CommissionBriefDocument brief) =>
-        $"Crafter supplies **{FormatMaterialCount(brief.CrafterMaterials)}**\n" +
-        $"Company supplies **{FormatMaterialCount(brief.CompanyMaterials)}**";
+        if (payment.CraftLabor > 0)
+        {
+            var basis = payment.CraftSynthCount > 0 && payment.GilPerSynth > 0
+                ? $" ({payment.CraftSynthCount:N0} synths x {payment.GilPerSynth:N0} gil)"
+                : string.Empty;
+            components.Add($"labor {FormatGil(payment.CraftLabor)}{basis}");
+        }
+
+        return $"**{FormatGil(payment.Total)} total**\n" +
+            $"{payment.ContractLabel}\n" +
+            string.Join(" + ", components);
+    }
+
+    private static string MaterialsSummary(CommissionBriefDocument brief)
+    {
+        var summary =
+            FormatMaterialResponsibility("Crafter gets", brief.CrafterMaterials) +
+            "\n" +
+            FormatMaterialResponsibility("Company provides", brief.CompanyMaterials);
+        return Truncate(summary, 1024);
+    }
 
     private static string EvidenceSummary(CommissionBriefEvidence evidence) =>
         $"{evidence.CostBasis}\n" +
         $"{evidence.MarketScope} • {evidence.Location}\n" +
         $"Captured <t:{new DateTimeOffset(evidence.CapturedAtUtc.ToUniversalTime()).ToUnixTimeSeconds()}:R>";
 
-    private static string FormatMaterialCount(IReadOnlyList<CommissionBriefMaterial> materials)
+    private static string FormatMaterialResponsibility(
+        string heading,
+        IReadOnlyList<CommissionBriefMaterial> materials)
     {
-        var quantity = materials.Sum(material => (long)material.Quantity);
-        return $"{quantity:N0} units across {materials.Count:N0} items";
+        if (materials.Count == 0)
+        {
+            return $"**{heading}:** none";
+        }
+
+        var lines = materials
+            .Take(12)
+            .Select(material =>
+            {
+                var quality = material.RequiresHq ? " HQ" : string.Empty;
+                var cost = material.UnitCost > 0
+                    ? $" @ {FormatGil(material.UnitCost)} = {FormatGil(material.TotalCost)}"
+                    : string.Empty;
+                return $"- {EscapeMarkdown(material.Name)} x{material.Quantity:N0}{quality}{cost}";
+            })
+            .ToList();
+        if (materials.Count > lines.Count)
+        {
+            lines.Add($"- {materials.Count - lines.Count:N0} more material lines in the full brief");
+        }
+
+        return $"**{heading}:**\n{string.Join('\n', lines)}";
     }
 
     private static string FormatGil(decimal value) =>

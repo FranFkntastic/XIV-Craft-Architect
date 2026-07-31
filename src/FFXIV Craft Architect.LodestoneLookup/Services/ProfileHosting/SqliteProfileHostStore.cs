@@ -240,6 +240,133 @@ public sealed class SqliteProfileHostStore
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task CreatePairingCodeAsync(
+        string profileId,
+        string tokenHash,
+        DateTime expiresAtUtc,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        var now = DateTime.UtcNow;
+
+        await using var connection = await OpenAsync(ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+        await using (var cleanup = connection.CreateCommand())
+        {
+            cleanup.Transaction = transaction;
+            cleanup.CommandText = """
+                delete from profile_pairing_codes
+                where expires_at_utc <= $nowUtc or redeemed_at_utc is not null;
+                """;
+            cleanup.Parameters.AddWithValue("$nowUtc", now.ToString("O"));
+            await cleanup.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                insert into profile_pairing_codes (
+                    token_hash,
+                    profile_id,
+                    created_at_utc,
+                    expires_at_utc)
+                values ($tokenHash, $profileId, $createdAtUtc, $expiresAtUtc);
+                """;
+            insert.Parameters.AddWithValue("$tokenHash", tokenHash);
+            insert.Parameters.AddWithValue("$profileId", profileId);
+            insert.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
+            insert.Parameters.AddWithValue("$expiresAtUtc", expiresAtUtc.ToString("O"));
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+
+        await transaction.CommitAsync(ct);
+    }
+
+    public async Task<ProfileHostProfileResponse?> RedeemPairingCodeAsync(
+        string tokenHash,
+        string accessKeyHash,
+        DateTime nowUtc,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+
+        string? profileId = null;
+        string? displayName = null;
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = """
+                select p.id, p.display_name
+                from profile_pairing_codes c
+                inner join hosted_profiles p on p.id = c.profile_id
+                where c.token_hash = $tokenHash
+                  and c.redeemed_at_utc is null
+                  and c.expires_at_utc > $nowUtc
+                  and p.disabled_at_utc is null;
+                """;
+            select.Parameters.AddWithValue("$tokenHash", tokenHash);
+            select.Parameters.AddWithValue("$nowUtc", nowUtc.ToString("O"));
+            await using var reader = await select.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                profileId = reader.GetString(0);
+                displayName = reader.GetString(1);
+            }
+        }
+
+        if (profileId == null || displayName == null)
+        {
+            await transaction.RollbackAsync(ct);
+            return null;
+        }
+
+        await using (var redeem = connection.CreateCommand())
+        {
+            redeem.Transaction = transaction;
+            redeem.CommandText = """
+                update profile_pairing_codes
+                set redeemed_at_utc = $redeemedAtUtc
+                where token_hash = $tokenHash and redeemed_at_utc is null;
+                """;
+            redeem.Parameters.AddWithValue("$tokenHash", tokenHash);
+            redeem.Parameters.AddWithValue("$redeemedAtUtc", nowUtc.ToString("O"));
+            if (await redeem.ExecuteNonQueryAsync(ct) != 1)
+            {
+                await transaction.RollbackAsync(ct);
+                return null;
+            }
+        }
+
+        await using (var insertKey = connection.CreateCommand())
+        {
+            insertKey.Transaction = transaction;
+            insertKey.CommandText = """
+                insert into profile_access_keys (id, profile_id, key_hash, created_at_utc)
+                values ($id, $profileId, $keyHash, $createdAtUtc);
+                """;
+            insertKey.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
+            insertKey.Parameters.AddWithValue("$profileId", profileId);
+            insertKey.Parameters.AddWithValue("$keyHash", accessKeyHash);
+            insertKey.Parameters.AddWithValue("$createdAtUtc", nowUtc.ToString("O"));
+            await insertKey.ExecuteNonQueryAsync(ct);
+        }
+
+        await transaction.CommitAsync(ct);
+        return new ProfileHostProfileResponse
+        {
+            ProfileId = profileId,
+            DisplayName = displayName,
+            ServerRevision = await GetServerRevisionAsync(connection, profileId, ct)
+        };
+    }
+
     public async Task<ProfileHostProfileResponse?> LoadProfileAsync(string profileId, CancellationToken ct)
     {
         await EnsureSchemaAsync(ct);
@@ -391,7 +518,8 @@ public sealed class SqliteProfileHostStore
         string payloadJson,
         long expectedRevision,
         CancellationToken ct,
-        bool allowCompanyCollection = false)
+        bool allowCompanyCollection = false,
+        long? expectedServerRevision = null)
     {
         if (!allowCompanyCollection)
         {
@@ -402,6 +530,27 @@ public sealed class SqliteProfileHostStore
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             ct);
+        var currentServerRevision = await GetServerRevisionAsync(
+            connection,
+            profileId,
+            ct,
+            transaction);
+        if (expectedServerRevision is { } expectedCompanyRevision)
+        {
+            if (currentServerRevision != expectedCompanyRevision)
+            {
+                await transaction.RollbackAsync(ct);
+                return new ProfileSyncPutResponse
+                {
+                    Success = false,
+                    Conflict = true,
+                    ServerRevision = currentServerRevision,
+                    ErrorCode = "company_revision_conflict",
+                    ErrorMessage = "The hosted company changed before the write completed."
+                };
+            }
+        }
+
         var revision = await ReserveNextRevisionAsync(connection, transaction, profileId, ct);
         var existing = await LoadObjectAsync(
             connection,
@@ -418,6 +567,7 @@ public sealed class SqliteProfileHostStore
             {
                 Success = false,
                 Conflict = true,
+                ServerRevision = currentServerRevision,
                 RemoteObject = existing
             };
         }
@@ -429,6 +579,7 @@ public sealed class SqliteProfileHostStore
             {
                 Success = false,
                 Conflict = true,
+                ServerRevision = currentServerRevision,
                 ErrorCode = "missing_remote_object",
                 ErrorMessage = "Remote object does not exist."
             };
@@ -462,6 +613,7 @@ public sealed class SqliteProfileHostStore
             {
                 Success = false,
                 Conflict = true,
+                ServerRevision = currentServerRevision,
                 RemoteObject = existing,
                 ErrorCode = "revision_conflict",
                 ErrorMessage = "Remote object changed before the hosted write completed."
@@ -472,6 +624,7 @@ public sealed class SqliteProfileHostStore
         return new ProfileSyncPutResponse
         {
             Success = true,
+            ServerRevision = revision,
             Object = new ProfileSyncObjectEnvelope
             {
                 Collection = collection,
@@ -504,7 +657,8 @@ public sealed class SqliteProfileHostStore
               and o.collection = $collection
               and o.object_id = $objectId
               and o.deleted = 0
-            limit 1;
+            order by o.profile_id
+            limit 2;
             """;
         command.Parameters.AddWithValue("$collection", collection);
         command.Parameters.AddWithValue("$objectId", objectId);
@@ -514,26 +668,67 @@ public sealed class SqliteProfileHostStore
             return null;
         }
 
-        return new HostedProfileObject(
-            reader.GetString(0),
-            new ProfileSyncObjectEnvelope
-            {
-                Collection = collection,
-                ObjectId = objectId,
-                PayloadJson = reader.GetString(1),
-                Revision = reader.GetInt64(2),
-                UpdatedAtUtc = DateTime.Parse(
-                    reader.GetString(3),
-                    null,
-                    DateTimeStyles.RoundtripKind),
-                Deleted = reader.GetInt64(4) == 1,
-                DeletedAtUtc = reader.IsDBNull(5)
-                    ? null
-                    : DateTime.Parse(
-                        reader.GetString(5),
+        var found = ReadHostedObject(reader, collection, objectId);
+        if (await reader.ReadAsync(ct))
+        {
+            throw new InvalidOperationException(
+                $"Hosted object identity '{collection}/{objectId}' is duplicated across active profiles.");
+        }
+
+        return found;
+    }
+
+    public async Task<IReadOnlyList<HostedProfileObject>> LoadObjectsAsync(
+        string collection,
+        CancellationToken ct)
+    {
+        ValidateCollection(collection);
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select o.profile_id,
+                   o.object_id,
+                   o.payload_json,
+                   o.revision,
+                   o.updated_at_utc,
+                   o.deleted,
+                   o.deleted_at_utc
+            from sync_objects o
+            inner join hosted_profiles p on p.id = o.profile_id
+            where p.disabled_at_utc is null
+              and o.collection = $collection
+              and o.deleted = 0
+            order by o.profile_id, o.object_id;
+            """;
+        command.Parameters.AddWithValue("$collection", collection);
+        var found = new List<HostedProfileObject>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            found.Add(new HostedProfileObject(
+                reader.GetString(0),
+                new ProfileSyncObjectEnvelope
+                {
+                    Collection = collection,
+                    ObjectId = reader.GetString(1),
+                    PayloadJson = reader.GetString(2),
+                    Revision = reader.GetInt64(3),
+                    UpdatedAtUtc = DateTime.Parse(
+                        reader.GetString(4),
                         null,
-                        DateTimeStyles.RoundtripKind)
-            });
+                        DateTimeStyles.RoundtripKind),
+                    Deleted = reader.GetInt64(5) == 1,
+                    DeletedAtUtc = reader.IsDBNull(6)
+                        ? null
+                        : DateTime.Parse(
+                            reader.GetString(6),
+                            null,
+                            DateTimeStyles.RoundtripKind)
+                }));
+        }
+
+        return found;
     }
 
     public async Task<ProfileSyncPutResponse> DeleteObjectAsync(
@@ -695,6 +890,31 @@ public sealed class SqliteProfileHostStore
         };
     }
 
+    private static HostedProfileObject ReadHostedObject(
+        SqliteDataReader reader,
+        string collection,
+        string objectId) =>
+        new(
+            reader.GetString(0),
+            new ProfileSyncObjectEnvelope
+            {
+                Collection = collection,
+                ObjectId = objectId,
+                PayloadJson = reader.GetString(1),
+                Revision = reader.GetInt64(2),
+                UpdatedAtUtc = DateTime.Parse(
+                    reader.GetString(3),
+                    null,
+                    DateTimeStyles.RoundtripKind),
+                Deleted = reader.GetInt64(4) == 1,
+                DeletedAtUtc = reader.IsDBNull(5)
+                    ? null
+                    : DateTime.Parse(
+                        reader.GetString(5),
+                        null,
+                        DateTimeStyles.RoundtripKind)
+            });
+
     private static async Task TouchAccessKeyAsync(SqliteConnection connection, string keyId, CancellationToken ct)
     {
         await using var command = connection.CreateCommand();
@@ -777,6 +997,15 @@ public sealed class SqliteProfileHostStore
                 created_at_utc text not null,
                 last_used_at_utc text null,
                 revoked_at_utc text null,
+                foreign key(profile_id) references hosted_profiles(id)
+            );
+
+            create table if not exists profile_pairing_codes (
+                token_hash text primary key,
+                profile_id text not null,
+                created_at_utc text not null,
+                expires_at_utc text not null,
+                redeemed_at_utc text null,
                 foreign key(profile_id) references hosted_profiles(id)
             );
 

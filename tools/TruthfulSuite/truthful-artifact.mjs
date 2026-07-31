@@ -307,6 +307,9 @@ function assertEffectiveConfiguration(files, buildManifest) {
   if (parsed?.LodestoneLookup?.BaseAddress !== expectedBaseAddress) {
     throw new Error(`Effective Lodestone base address is not ${expectedBaseAddress}`);
   }
+  if (parsed?.ProfileHost?.BaseAddress !== expectedBaseAddress) {
+    throw new Error(`Effective profile host base address is not ${expectedBaseAddress}`);
+  }
   const expectedTarget = targetConfiguration(buildManifest.target.slot);
   if (parsed?.ProcurementRoutes?.GenerationEnabled !== expectedTarget.procurementRoutesGenerationEnabled ||
       parsed?.EngineRewrite?.ExecutionEnabled !== expectedTarget.engineRewriteExecutionEnabled ||
@@ -370,8 +373,8 @@ function validateBuildManifest(manifest) {
       JSON.stringify(requiredOutcomes(manifest.target.slot))) {
     throw new Error('Build manifest required outcomes are incomplete or reordered.');
   }
-  if (manifest?.acceptance?.dotnet?.specTestCases !== 58 ||
-      manifest?.acceptance?.dotnet?.contractTestCases !== 102) {
+  if (manifest?.acceptance?.dotnet?.specTestCases !== 56 ||
+      manifest?.acceptance?.dotnet?.contractTestCases !== 108) {
     throw new Error('Build manifest .NET test inventory is incomplete.');
   }
   if (JSON.stringify(manifest?.acceptance?.worker) !== JSON.stringify(expectedTarget.worker)) {
@@ -386,6 +389,7 @@ async function writeEffectiveConfiguration(root, domain, slot) {
   const target = targetConfiguration(slot);
   const config = {
     LodestoneLookup: { BaseAddress: `https://${domain}/api/` },
+    ProfileHost: { BaseAddress: `https://${domain}/api/` },
     ProcurementRoutes: { GenerationEnabled: target.procurementRoutesGenerationEnabled },
     EngineRewrite: { ExecutionEnabled: target.engineRewriteExecutionEnabled },
     EngineAcceptance: { Enabled: false, UseDeterministicEvidence: false }
@@ -569,7 +573,7 @@ export async function createArtifact(options, behavior = {}) {
       harnessTreeSha256: harnessTreeSha,
       fixtureTreeSha256: fixtureTreeSha,
       requiredOutcomes: requiredOutcomes(slot),
-      dotnet: { specTestCases: 58, contractTestCases: 102 },
+      dotnet: { specTestCases: 56, contractTestCases: 108 },
       worker: target.worker
     }
   };

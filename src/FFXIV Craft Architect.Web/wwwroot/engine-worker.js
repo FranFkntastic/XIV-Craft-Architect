@@ -290,7 +290,7 @@ async function bootstrapSession(host, requestMessage) {
     if (repairPatch && durable.storedPlan) {
         const repairedState = applyDurablePatch(durable.storedPlan, repairPatch);
         await commitDurableSession(
-            durable.revision,
+            durable.migratedFromLegacy ? 0 : durable.revision,
             result.payload.revision,
             repairedState,
             repairPatch,

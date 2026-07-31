@@ -40,24 +40,20 @@ public sealed class CommissionBriefClient
         CancellationToken ct = default)
     {
         var published = await PublishAsync(brief, ownership: null, ct);
-        return ToPortableLink(
-            published.PublicId,
-            published.PublicUrl,
-            published.Version,
-            published.PublishedAtUtc,
-            published.EditorToken);
+        return CreatePortableLink(published);
     }
 
     public static PortableCommissionLink CreatePortableLink(
         CommissionBriefCreateResponse published) =>
-        CreatePortableLink(
+        ToPortableLink(
             published.PublicId,
             published.PublicUrl,
             published.Version,
             published.PublishedAtUtc,
             string.IsNullOrWhiteSpace(published.EditorToken)
                 ? null
-                : published.EditorToken);
+                : published.EditorToken,
+            published.ClaimUrl);
 
     public static PortableCommissionLink CreatePortableLink(
         string publicId,
@@ -70,7 +66,8 @@ public sealed class CommissionBriefClient
             publicUrl,
             version,
             publishedAtUtc,
-            editorToken);
+            editorToken,
+            claimUrl: null);
 
     public async Task<PortableCommissionLink> ResolvePortableLinkAsync(
         string publicId,
@@ -90,7 +87,8 @@ public sealed class CommissionBriefClient
             link.PublicUrl,
             link.Version,
             link.PublishedAtUtc,
-            editorToken: null);
+            editorToken: null,
+            claimUrl: null);
     }
 
     public async Task<bool> RevokeAsync(
@@ -115,16 +113,17 @@ public sealed class CommissionBriefClient
         string publicUrl,
         int version,
         DateTime publishedAtUtc,
-        string? editorToken)
+        string? editorToken,
+        string? claimUrl)
     {
         if (string.IsNullOrWhiteSpace(publicId) ||
-            !Uri.TryCreate(publicUrl, UriKind.Absolute, out var uri) ||
-            uri.Scheme is not ("https" or "http") ||
-            uri.Scheme == "http" && !uri.IsLoopback ||
-            !string.IsNullOrEmpty(uri.UserInfo) ||
-            !string.IsNullOrEmpty(uri.Fragment) ||
+            !Uri.TryCreate(publicUrl, UriKind.Absolute, out var publicUri) ||
+            publicUri.Scheme is not ("https" or "http") ||
+            publicUri.Scheme == "http" && !publicUri.IsLoopback ||
+            !string.IsNullOrEmpty(publicUri.UserInfo) ||
+            !string.IsNullOrEmpty(publicUri.Fragment) ||
             !string.Equals(
-                uri.Query,
+                publicUri.Query,
                 $"?id={Uri.EscapeDataString(publicId)}",
                 StringComparison.Ordinal))
         {
@@ -132,18 +131,71 @@ public sealed class CommissionBriefClient
                 "Commission publication returned an unsafe public URL.");
         }
 
+        var selectedUri = publicUri;
+        if (claimUrl is not null)
+        {
+            if (!Uri.TryCreate(claimUrl, UriKind.Absolute, out var claimUri) ||
+                !string.IsNullOrEmpty(claimUri.UserInfo) ||
+                !HasSamePublicLocation(publicUri, claimUri) ||
+                !HasValidClaimFragment(claimUri.Fragment))
+            {
+                throw new InvalidOperationException(
+                    "Commission publication returned an unsafe claim URL.");
+            }
+
+            selectedUri = claimUri;
+        }
+
         return new PortableCommissionLink(
             publicId,
-            uri.AbsoluteUri,
+            selectedUri.AbsoluteUri,
+            publicUri.AbsoluteUri,
             version,
             publishedAtUtc,
             editorToken);
+    }
+
+    private static bool HasSamePublicLocation(Uri publicUri, Uri claimUri) =>
+        string.Equals(publicUri.Scheme, claimUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(publicUri.IdnHost, claimUri.IdnHost, StringComparison.OrdinalIgnoreCase) &&
+        publicUri.Port == claimUri.Port &&
+        string.Equals(publicUri.AbsolutePath, claimUri.AbsolutePath, StringComparison.Ordinal) &&
+        string.Equals(publicUri.Query, claimUri.Query, StringComparison.Ordinal);
+
+    private static bool HasValidClaimFragment(string fragment)
+    {
+        const string prefix = "#claim=";
+        const int minimumCapabilityLength = 32;
+        const int maximumCapabilityLength = 512;
+
+        if (!fragment.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var capability = fragment.AsSpan(prefix.Length);
+        if (capability.Length is < minimumCapabilityLength or > maximumCapabilityLength)
+        {
+            return false;
+        }
+
+        foreach (var character in capability)
+        {
+            if (!char.IsAsciiLetterOrDigit(character) &&
+                character is not '-' and not '_')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
 
 public sealed record PortableCommissionLink(
     string PublicId,
     string Url,
+    string PublicUrl,
     int Version,
     DateTime PublishedAtUtc,
     string? EditorToken);

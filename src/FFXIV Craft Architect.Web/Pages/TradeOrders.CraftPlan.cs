@@ -55,7 +55,7 @@ public partial class TradeOrders
             if (string.IsNullOrWhiteSpace(_loadError) &&
                 SelectOrderAfterReload(orderId, "Requested outputs were saved, but the order could not be loaded."))
             {
-                _activeOpsTab = 0;
+                _activeOpsTab = PaymentTabIndex;
             }
 
             Snackbar.Add("Requested outputs saved. Rebuild the linked craft plan before using payment totals.", Severity.Success);
@@ -74,6 +74,14 @@ public partial class TradeOrders
     {
         if (_selectedOrder == null)
         {
+            return;
+        }
+
+        if (_selectedOrder.CompanyCommission != null)
+        {
+            Snackbar.Add(
+                "Published commission details are projection-driven. Use commission operations to revise terms.",
+                Severity.Warning);
             return;
         }
 
@@ -159,7 +167,7 @@ public partial class TradeOrders
         {
             if (SelectOrderAfterReload(orderId, "Trade order note was saved, but the order could not be loaded."))
             {
-                _activeOpsTab = 2;
+                _activeOpsTab = TimelineTabIndex;
             }
         }
     }
@@ -375,6 +383,7 @@ public partial class TradeOrders
 
         _isRepricingSelectedOrder = true;
         var orderId = _selectedOrder.Id;
+        var activeOpsTab = _activeOpsTab;
 
         try
         {
@@ -409,7 +418,7 @@ public partial class TradeOrders
             {
                 if (SelectOrderAfterReload(orderId, "Order pricing was saved, but the order could not be loaded."))
                 {
-                    _activeOpsTab = 0;
+                    _activeOpsTab = activeOpsTab;
                 }
             }
 

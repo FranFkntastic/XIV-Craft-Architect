@@ -51,13 +51,6 @@ public partial class TradeOrders
         return TradeOrderPaymentCopyFormatter.FormatPaymentBreakdown(breakdown);
     }
 
-    private static string FormatActiveMaterialAdjustmentLabel(TradePaymentContractMode contract)
-    {
-        return contract == TradePaymentContractMode.LaborStandard
-            ? "Labor material value bonus"
-            : "Legacy material commission";
-    }
-
     private static string FormatPaymentDifference(
         TradePaymentContractBreakdown laborStandard,
         TradePaymentContractBreakdown legacy)
@@ -128,7 +121,10 @@ public partial class TradeOrders
         }
     }
 
-    private sealed record OrderStatusGroup(TradeOrderStatus Status, IReadOnlyList<TradeOrder> Orders);
+    private sealed record OrderAttentionGroup(
+        string Key,
+        string Label,
+        IReadOnlyList<TradeOrder> Orders);
 
     private readonly record struct LiveProcurementKey(
         Guid OrderId,
@@ -140,9 +136,16 @@ public partial class TradeOrders
         Item,
         Quantity,
         Source,
-        Unit,
-        EstimatedCost,
+        Cost,
         Responsibility
+    }
+
+    private enum TradeOrderProcurementFilter
+    {
+        All,
+        Attention,
+        Crafter,
+        Company
     }
 
     private sealed class RequestedOrderOutputEditor

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Core.Services;
@@ -32,14 +33,31 @@ public static class TradeOrderWorkflow
                 : new TradeCommissionPublication
                 {
                     PublicId = order.CommissionPublication.PublicId,
+                    PublicUrl = order.CommissionPublication.PublicUrl,
                     Version = order.CommissionPublication.Version,
                     PublishedAtUtc = order.CommissionPublication.PublishedAtUtc,
                     RevokedAtUtc = order.CommissionPublication.RevokedAtUtc,
+                    IsTestFixture = order.CommissionPublication.IsTestFixture,
                     Ownership = order.CommissionPublication.Ownership
                 },
+            CompanyCommission = CopyCompanyCommission(order.CompanyCommission),
             RemoteId = order.RemoteId,
             SyncState = order.SyncState
         };
+    }
+
+    private static TradeCompanyCommission? CopyCompanyCommission(
+        TradeCompanyCommission? commission)
+    {
+        if (commission == null)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<TradeCompanyCommission>(
+                JsonSerializer.Serialize(commission))
+            ?? throw new InvalidOperationException(
+                "The canonical company commission could not be cloned.");
     }
 
     public static TradeOrder WithPaymentPolicyOverride(TradeOrder order, TradePaymentPolicy policy)
@@ -48,7 +66,7 @@ public static class TradeOrderWorkflow
         ArgumentNullException.ThrowIfNull(policy);
 
         var copy = CopyOrder(order);
-        copy.PaymentPolicyOverride = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(policy);
+        copy.PaymentPolicyOverride = TradePaymentPolicyNormalizer.Normalize(policy);
         copy.UpdatedAtUtc = DateTime.UtcNow;
         return copy;
     }
@@ -68,7 +86,7 @@ public static class TradeOrderWorkflow
         ArgumentNullException.ThrowIfNull(order);
 
         var policy = order.PaymentPolicyOverride ?? companyPolicy ?? TradePaymentPolicy.LegacyDefault;
-        return TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(policy);
+        return TradePaymentPolicyNormalizer.Normalize(policy);
     }
 
     public static bool CanEditRequestedOutputs(TradeOrder order)
@@ -195,7 +213,7 @@ public static class TradeOrderWorkflow
             AssignedCrafterDisplayName = draft.AssignedCrafterDisplayName,
             CommissionPercent = draft.CommissionPercent,
             ActivePaymentContract = draft.ActivePaymentContract,
-            LaborStandard = draft.LaborStandard,
+            LaborGilPerSynth = draft.LaborGilPerSynth,
             Responsibilities = (draft.Responsibilities ?? Array.Empty<TradePayrollResponsibilityLine>()).ToArray(),
             RemoteId = draft.RemoteId,
             SyncState = draft.SyncState,

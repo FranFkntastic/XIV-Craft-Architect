@@ -34,6 +34,7 @@ public partial class TradeOrders
         }
 
         var orderId = _selectedOrder.Id;
+        var activeOpsTab = _activeOpsTab;
         var currentDraft = await GetOrCreatePayrollDraftForOrderAsync(_selectedOrder);
         var draftToSave = TradeOrderWorkflow.WithMaterialResponsibility(
             currentDraft,
@@ -68,7 +69,10 @@ public partial class TradeOrders
         await LoadAsync();
         if (string.IsNullOrWhiteSpace(_loadError))
         {
-            SelectOrderAfterReload(orderId, "Payment responsibility was saved, but the order could not be loaded.");
+            if (SelectOrderAfterReload(orderId, "Payment responsibility was saved, but the order could not be loaded."))
+            {
+                _activeOpsTab = activeOpsTab;
+            }
         }
     }
 
@@ -174,7 +178,7 @@ public partial class TradeOrders
         {
             if (SelectOrderAfterReload(orderId, "Payment policy was saved, but the order could not be loaded."))
             {
-                _activeOpsTab = 0;
+                _activeOpsTab = PaymentTabIndex;
             }
         }
     }

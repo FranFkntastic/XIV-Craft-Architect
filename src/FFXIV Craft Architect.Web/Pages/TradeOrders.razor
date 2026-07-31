@@ -1,6 +1,8 @@
 @page "/trade/orders"
+@implements IAsyncDisposable
 @using System.Text
 @using FFXIV_Craft_Architect.Core.Helpers
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
 @inject AppState AppState
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
@@ -11,7 +13,9 @@
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradePayrollPersistenceService TradePayrollPersistence
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncService ProfileSync
+@inject WebSettingsService WebSettings
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyCollaborationService TradeCollaboration
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCommissionOperationsService CommissionOperations
 @inject CommissionBriefClient CommissionBriefs
 @inject CommissionBriefLocalStateService CommissionBriefLocalState
 @inject WebPlanPersistenceService PlanPersistence
@@ -20,7 +24,7 @@
 @inject IJSRuntime JSRuntime
 @inject NavigationManager NavigationManager
 
-<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-orders-page">
+<div class="trade-orders-page">
     @if (!string.IsNullOrWhiteSpace(_loadError))
     {
         <MudAlert Severity="Severity.Error" Class="ma-4">
@@ -36,7 +40,9 @@
     }
     else
     {
-        <div class="trade-orders-board">
+        <div class="trade-orders-board"
+             @ref="_boardElement"
+             style="@TradeOrdersBoardStyle">
                 <aside class="trade-orders-rail">
                     <div class="trade-orders-rail-header">
                         <MudText Typo="Typo.subtitle1">Orders</MudText>
@@ -68,15 +74,15 @@
                             <section class="trade-orders-rail-group">
                                 <button type="button"
                                         class="trade-orders-rail-group-title"
-                                        @onclick="@(() => ToggleStatusGroup(group.Status))"
-                                        aria-expanded="@(!IsStatusGroupCollapsed(group.Status))">
+                                        @onclick="@(() => ToggleAttentionGroup(group.Key))"
+                                        aria-expanded="@(!IsAttentionGroupCollapsed(group.Key))">
                                     <span>
-                                        <MudIcon Icon="@(IsStatusGroupCollapsed(group.Status) ? Icons.Material.Filled.ChevronRight : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
-                                        @FormatStatus(group.Status)
+                                        <MudIcon Icon="@(IsAttentionGroupCollapsed(group.Key) ? Icons.Material.Filled.ChevronRight : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
+                                        @group.Label
                                     </span>
                                     <span class="trade-orders-count-chip">@group.Orders.Count.ToString("N0")</span>
                                 </button>
-                                @if (!IsStatusGroupCollapsed(group.Status))
+                                @if (!IsAttentionGroupCollapsed(group.Key))
                                 {
                                     <div class="trade-orders-rail-list">
                                         @foreach (var order in group.Orders)
@@ -304,38 +310,80 @@
                     {
                         <section class="trade-orders-workspace-card">
                             <div class="trade-orders-workspace-header">
-                                <div>
-                                    <MudText Typo="Typo.overline">Selected Order</MudText>
-                                    <MudText Typo="Typo.h6">@_selectedOrder.Title</MudText>
-                                </div>
-                                <MudButton Variant="Variant.Filled"
-                                           Color="Color.Primary"
-                                           OnClick="SaveSelectedOrderAsync"
-                                           Disabled="@(IsSelectedOrderArchived || string.IsNullOrWhiteSpace(_detailTitle))">
-                                    Save Order
-                                </MudButton>
-                            </div>
-                            <div class="trade-orders-editor-grid">
-                                <MudTextField @bind-Value="_detailTitle"
-                                              id="selected-order-title"
-                                              Label="Order title"
-                                              Variant="Variant.Outlined"
-                                              Margin="Margin.Dense"
-                                              Immediate="true"
-                                              Disabled="@IsSelectedOrderArchived" />
-                                <CompactSelectField Id="selected-order-crafter"
-                                                    Label="Assigned crafter"
-                                                    @bind-Value="DetailCrafterValue"
-                                                    Options="GetCrafterOptions()"
-                                                    Disabled="@IsSelectedOrderArchived" />
-                                <MudTextField @bind-Value="_detailNotes"
-                                              id="selected-order-notes"
-                                              Label="Notes"
-                                              Variant="Variant.Outlined"
-                                              Margin="Margin.Dense"
-                                              Lines="1"
-                                              Disabled="@IsSelectedOrderArchived" />
-                            </div>
+                                 <div>
+                                     <MudText Typo="Typo.overline">
+                                         @(HasCanonicalCommission ? "Selected Commission" : "Selected Order")
+                                     </MudText>
+                                     <MudText Typo="Typo.h6">@_selectedOrder.Title</MudText>
+                                 </div>
+                                 @if (HasCanonicalCommission)
+                                 {
+                                     <MudButton Variant="Variant.Outlined"
+                                                Color="Color.Primary"
+                                                StartIcon="@Icons.Material.Filled.EditNote"
+                                                OnClick="ShowCommissionTermsRevision"
+                                                Disabled="@IsSelectedOrderArchived">
+                                         Revise Terms
+                                     </MudButton>
+                                 }
+                                 else
+                                 {
+                                     <MudButton Variant="Variant.Filled"
+                                                Color="Color.Primary"
+                                                OnClick="SaveSelectedOrderAsync"
+                                                Disabled="@(IsSelectedOrderArchived || string.IsNullOrWhiteSpace(_detailTitle))">
+                                         Save Order
+                                     </MudButton>
+                                 }
+                             </div>
+                             @if (SelectedCanonicalCommission is { } centerCommission)
+                             {
+                                 <div class="trade-orders-commission-identity-strip">
+                                     <div>
+                                         <span>Claimant</span>
+                                         <strong>@FormatCanonicalCommissionClaimant(centerCommission)</strong>
+                                     </div>
+                                     <div>
+                                         <span>Company crafter</span>
+                                         <strong>@FormatCanonicalCommissionCrafter(_selectedOrder, centerCommission)</strong>
+                                     </div>
+                                     <div>
+                                         <span>Commission state</span>
+                                         <strong>@FormatCanonicalCommissionState(_selectedOrder, centerCommission)</strong>
+                                     </div>
+                                 </div>
+                                 <div class="trade-orders-authority-note">
+                                     <MudIcon Icon="@Icons.Material.Filled.VerifiedUser" Size="Size.Small" />
+                                     <span>
+                                         Assignment and lifecycle are derived from the canonical commission.
+                                         Plan and price here; operate the external agreement in the right pane.
+                                     </span>
+                                 </div>
+                             }
+                             else
+                             {
+                                 <div class="trade-orders-editor-grid">
+                                     <MudTextField @bind-Value="_detailTitle"
+                                                   id="selected-order-title"
+                                                   Label="Order title"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Immediate="true"
+                                                   Disabled="@IsSelectedOrderArchived" />
+                                     <CompactSelectField Id="selected-order-crafter"
+                                                         Label="Assigned crafter"
+                                                         @bind-Value="DetailCrafterValue"
+                                                         Options="GetCrafterOptions()"
+                                                         Disabled="@IsSelectedOrderArchived" />
+                                     <MudTextField @bind-Value="_detailNotes"
+                                                   id="selected-order-notes"
+                                                   Label="Notes"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Lines="1"
+                                                   Disabled="@IsSelectedOrderArchived" />
+                                 </div>
+                             }
                             <section class="trade-orders-work-section">
                                 <div class="trade-orders-section-heading">
                                     <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
@@ -426,19 +474,41 @@
                                 }
                                 else
                                 {
-                                    <div class="trade-orders-breakdown-table">
+                                    <div class="@($"trade-orders-breakdown-table{(SelectedCommissionOwner != null ? " has-commission-progress" : string.Empty)}")">
                                         <div class="trade-orders-breakdown-header">
                                             <span>Item</span>
                                             <span>Qty</span>
                                             <span>HQ</span>
+                                            @if (SelectedCommissionOwner != null)
+                                            {
+                                                <span>Completed</span>
+                                                <span>Ready</span>
+                                            }
                                         </div>
-                                        @foreach (var item in GetOrderRootItems(_selectedOrder))
+                                        @if (SelectedCanonicalCommission is { } outputCommission)
                                         {
-                                            <div class="trade-orders-breakdown-row">
-                                                <span>@item.Name</span>
-                                                <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
-                                                <span>@FormatHq(item.MustBeHq)</span>
-                                            </div>
+                                            @foreach (var output in outputCommission.CurrentTerms.Outputs)
+                                            {
+                                                var progress = GetSelectedOutputProgress(output.LineId);
+                                                <div class="trade-orders-breakdown-row" @key="output.LineId">
+                                                    <span>@output.Name</span>
+                                                    <span>@TradeDisplayFormatter.FormatQuantity(output.RequiredQuantity)</span>
+                                                    <span>@FormatHq(output.MustBeHq)</span>
+                                                    <span>@((progress?.CompletedQuantity ?? 0).ToString("N0"))</span>
+                                                    <span>@((progress?.ReadyQuantity ?? 0).ToString("N0"))</span>
+                                                </div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            @foreach (var item in GetOrderRootItems(_selectedOrder))
+                                            {
+                                                <div class="trade-orders-breakdown-row">
+                                                    <span>@item.Name</span>
+                                                    <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
+                                                    <span>@FormatHq(item.MustBeHq)</span>
+                                                </div>
+                                            }
                                         }
                                     </div>
                                 }
@@ -535,6 +605,16 @@
                     }
                 </main>
 
+                <div class="trade-orders-ops-splitter"
+                     @ref="_opsSplitterElement"
+                     role="separator"
+                     aria-label="Resize order operations pane"
+                     aria-orientation="vertical"
+                     aria-valuemin="@MinimumOpsPaneWidth"
+                     aria-valuemax="@MaximumOpsPaneWidth"
+                     aria-valuenow="@_opsPaneWidth"
+                     tabindex="0"></div>
+
                 <aside class="trade-orders-ops">
                     @if (_selectedOrder == null)
                     {
@@ -551,9 +631,264 @@
                                 <MudText Typo="Typo.subtitle1">@_selectedOrder.Title</MudText>
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@GetLatestHistoryCue(_selectedOrder)</MudText>
                             </div>
-                        </div>
-                        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="trade-orders-tab-panel" @bind-ActivePanelIndex="_activeOpsTab">
-                            <MudTabPanel Text="Payment">
+                         </div>
+                         <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="trade-orders-tab-panel" @bind-ActivePanelIndex="_activeOpsTab">
+                             @if (SelectedCommissionOwner is { } operationsOwner &&
+                                  operationsOwner.Order.CompanyCommission is { } operationsCommission)
+                             {
+                                 var operationsProvisional = operationsCommission.ProvisionalCrafter;
+                                 <MudTabPanel Text="Operations">
+                                     @if (operationsCommission.PublicMetadata.IsTestFixture)
+                                     {
+                                         <MudAlert Severity="Severity.Warning" Dense="true" Class="trade-orders-test-commission-banner">
+                                             <MudText Typo="Typo.subtitle2">Test commission - claiming disabled</MudText>
+                                             <MudText Typo="Typo.body2">Use this record to verify publication, projection updates, and timeline density. It cannot assign work.</MudText>
+                                         </MudAlert>
+                                     }
+                                     <div class="trade-orders-operations-summary">
+                                         <div>
+                                             <span>State</span>
+                                             <strong>@FormatCanonicalCommissionState(operationsOwner.Order, operationsCommission)</strong>
+                                         </div>
+                                         <div>
+                                             <span>Next action</span>
+                                             <strong>@TradeCommissionOperationsPresentation.GetNextAction(operationsOwner)</strong>
+                                         </div>
+                                         <div>
+                                             <span>Work clearance</span>
+                                             <strong>@(operationsCommission.ClearedToWork ? "Cleared" : "Locked")</strong>
+                                         </div>
+                                     </div>
+
+                                     @if (operationsProvisional != null &&
+                                          operationsCommission.Gates.Identity.State ==
+                                          CompanyCommissionClearanceState.Pending)
+                                     {
+                                         <section class="trade-orders-operation-card is-attention">
+                                             <div class="trade-orders-operation-card-heading">
+                                                 <div>
+                                                     <MudText Typo="Typo.subtitle2">Claimant Identity</MudText>
+                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                         Claim reserved; assignment waits for a company roster identity.
+                                                     </MudText>
+                                                 </div>
+                                                 <span class="trade-orders-publication-chip is-attention">Review</span>
+                                             </div>
+                                             <div class="trade-orders-identity-evidence">
+                                                 <div>
+                                                     <span>Character</span>
+                                                     <strong>@($"{operationsProvisional.CharacterName} @ {operationsProvisional.HomeWorld}")</strong>
+                                                     <small>
+                                                         @(string.IsNullOrWhiteSpace(operationsProvisional.LodestoneCharacterId)
+                                                             ? "Lodestone verification missing"
+                                                             : $"Lodestone {operationsProvisional.LodestoneCharacterId}")
+                                                     </small>
+                                                 </div>
+                                                 <div>
+                                                     <span>Contact</span>
+                                                     <strong>@operationsProvisional.ContactMethod</strong>
+                                                     <small>@operationsProvisional.ContactValue</small>
+                                                 </div>
+                                             </div>
+                                             <div class="trade-orders-identity-review">
+                                                 <CompactSelectField Id="commission-identity-crafter"
+                                                                     Label="Company crafter"
+                                                                     Tooltip="Link an existing matching crafter or create one from this confirmed identity."
+                                                                     @bind-Value="CommissionIdentityCrafterValue"
+                                                                     Options="GetCommissionCrafterOptions()"
+                                                                     Disabled="@_isCommissionCommandRunning" />
+                                                 <MudButton Variant="Variant.Filled"
+                                                            Color="Color.Primary"
+                                                            Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(operationsProvisional.LodestoneCharacterId))"
+                                                            OnClick="ConfirmCommissionIdentityAsync">
+                                                     Confirm + Assign
+                                                 </MudButton>
+                                             </div>
+                                             <details class="trade-orders-exception-disclosure">
+                                                 <summary>Reject or release this claim</summary>
+                                                 <MudTextField @bind-Value="_commissionIdentityRejectionReason"
+                                                               id="commission-identity-rejection-reason"
+                                                               Label="Rejection reason"
+                                                               Variant="Variant.Outlined"
+                                                               Margin="Margin.Dense"
+                                                               Immediate="true"
+                                                               MaxLength="500" />
+                                                 <MudCheckBox T="bool"
+                                                              @bind-Value="_blockRejectedCommissionContact"
+                                                              Dense="true"
+                                                              Color="Color.Warning"
+                                                              Label="Block this contact from reclaiming" />
+                                                 <MudButton Variant="Variant.Outlined"
+                                                            Color="Color.Error"
+                                                            Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionIdentityRejectionReason))"
+                                                            OnClick="RejectCommissionClaimAsync">
+                                                     Reject + Release
+                                                 </MudButton>
+                                             </details>
+                                         </section>
+                                     }
+
+                                     <section class="trade-orders-operation-card">
+                                         <div class="trade-orders-operation-card-heading">
+                                             <div>
+                                                 <MudText Typo="Typo.subtitle2">Prerequisites</MudText>
+                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                     Every applicable gate must clear before progress can begin.
+                                                 </MudText>
+                                             </div>
+                                             <span class="@GetCommissionGateChipClass(
+                                                 operationsCommission.ClearedToWork
+                                                     ? CompanyCommissionClearanceState.Satisfied
+                                                     : CompanyCommissionClearanceState.Pending)">
+                                                 @(operationsCommission.ClearedToWork ? "Ready" : "Waiting")
+                                             </span>
+                                         </div>
+                                         <div class="trade-orders-prerequisite-list">
+                                             <div>
+                                                 <span>Identity</span>
+                                                 <strong>@FormatCommissionGate(operationsCommission.Gates.Identity.State)</strong>
+                                                 <small>
+                                                     @(operationsCommission.Gates.Identity.State ==
+                                                       CompanyCommissionClearanceState.Pending
+                                                         ? "Commissioner confirmation required"
+                                                         : "Company roster identity linked")
+                                                 </small>
+                                             </div>
+                                             <div>
+                                                 <span>Payment</span>
+                                                 <strong>@FormatPaymentConfirmationProgress(operationsCommission.Gates.Payment)</strong>
+                                                 <small>@FormatCommissionPaymentSchedule(operationsCommission.CurrentTerms.Payment)</small>
+                                             </div>
+                                             <div>
+                                                 <span>Company materials</span>
+                                                 <strong>@FormatCommissionGate(operationsCommission.Gates.CompanyMaterials.State)</strong>
+                                                 <small>
+                                                     @(operationsCommission.Gates.CompanyMaterials.State ==
+                                                       CompanyCommissionClearanceState.NotRequired
+                                                         ? "No company-provided bundle"
+                                                         : "Complete bundle only in v1")
+                                                 </small>
+                                             </div>
+                                         </div>
+                                     </section>
+
+                                     @if (_showCommissionTermsRevision)
+                                     {
+                                         <section class="trade-orders-operation-card is-revision">
+                                             <div class="trade-orders-operation-card-heading">
+                                                 <div>
+                                                     <MudText Typo="Typo.subtitle2">
+                                                         Create Terms v@(operationsCommission.CurrentTermsVersion + 1)
+                                                     </MudText>
+                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                         Snapshot the current outputs, pricing, responsibilities, delivery note, and contact instructions.
+                                                     </MudText>
+                                                 </div>
+                                                 <span class="trade-orders-publication-chip">Draft revision</span>
+                                             </div>
+                                             <MudTextField @bind-Value="_commissionTermsRevisionReason"
+                                                           id="commission-terms-revision-reason"
+                                                           Label="What changed?"
+                                                           HelperText="The crafter must acknowledge this immutable revision before work continues."
+                                                           Variant="Variant.Outlined"
+                                                           Margin="Margin.Dense"
+                                                           Immediate="true"
+                                                           Lines="2"
+                                                           MaxLength="500" />
+                                             <div class="trade-orders-inline-actions">
+                                                 <MudButton Variant="Variant.Text"
+                                                            Color="Color.Secondary"
+                                                            OnClick="@(() => _showCommissionTermsRevision = false)">
+                                                     Cancel
+                                                 </MudButton>
+                                                 <MudButton Variant="Variant.Filled"
+                                                            Color="Color.Primary"
+                                                            Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionTermsRevisionReason))"
+                                                            OnClick="AmendCommissionTermsAsync">
+                                                     Create Revision
+                                                 </MudButton>
+                                             </div>
+                                         </section>
+                                     }
+
+                                     @if (operationsCommission.DeliveryReadiness.IsReady)
+                                     {
+                                         <section class="trade-orders-operation-card is-attention">
+                                             <div class="trade-orders-operation-card-heading">
+                                                 <div>
+                                                     <MudText Typo="Typo.subtitle2">Delivery Ready</MudText>
+                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                         The crafter declared every requested output ready.
+                                                     </MudText>
+                                                 </div>
+                                                 <span class="trade-orders-publication-chip is-attention">Review</span>
+                                             </div>
+                                             <MudTextField @bind-Value="_commissionReturnReason"
+                                                           id="commission-return-to-work-reason"
+                                                           Label="Return-to-work reason"
+                                                           Variant="Variant.Outlined"
+                                                           Margin="Margin.Dense"
+                                                           Immediate="true"
+                                                           MaxLength="500" />
+                                             <div class="trade-orders-inline-actions">
+                                                 <MudButton Variant="Variant.Outlined"
+                                                            Color="Color.Warning"
+                                                            Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionReturnReason))"
+                                                            OnClick="ReturnCommissionToWorkAsync">
+                                                     Return to Work
+                                                 </MudButton>
+                                                 <MudButton Variant="Variant.Filled"
+                                                            Color="Color.Success"
+                                                            Disabled="@_isCommissionCommandRunning"
+                                                            OnClick="AcceptCommissionDeliveryAsync">
+                                                     Accept Complete Delivery
+                                                 </MudButton>
+                                             </div>
+                                         </section>
+                                     }
+
+                                     @if (operationsOwner.Order.Status == TradeOrderStatus.Completed &&
+                                          operationsCommission.SettlementState != CompanyCommissionSettlementState.Satisfied)
+                                     {
+                                         <section class="trade-orders-operation-card is-attention">
+                                             <MudText Typo="Typo.subtitle2">Settlement Required</MudText>
+                                             <MudText Typo="Typo.body2">
+                                                 Final payment needs independent commissioner-sent and crafter-received confirmations.
+                                             </MudText>
+                                             <MudButton Variant="Variant.Outlined"
+                                                        Color="Color.Primary"
+                                                        OnClick="@(() => _activeOpsTab = PaymentTabIndex)">
+                                                 Review Payment
+                                             </MudButton>
+                                         </section>
+                                     }
+
+                                     @if (operationsOwner.Order.Status is not
+                                         (TradeOrderStatus.Completed or TradeOrderStatus.Canceled))
+                                     {
+                                         <details class="trade-orders-exception-disclosure trade-orders-operation-danger">
+                                             <summary>Cancel this commission</summary>
+                                             <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                 Cancellation closes the claim and keeps the commission record and timeline.
+                                             </MudText>
+                                             <MudTextField @bind-Value="_commissionCancellationReason"
+                                                           id="commission-cancellation-reason"
+                                                           Label="Cancellation reason"
+                                                           Variant="Variant.Outlined"
+                                                           Margin="Margin.Dense"
+                                                           Immediate="true"
+                                                           MaxLength="500" />
+                                             <MudButton Variant="Variant.Outlined"
+                                                        Color="Color.Error"
+                                                        Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionCancellationReason))"
+                                                        OnClick="CancelCanonicalCommissionAsync">
+                                                 Cancel Commission
+                                             </MudButton>
+                                         </details>
+                                     }
+                                 </MudTabPanel>
+                             }
+                             <MudTabPanel Text="Payment">
                                 <div class="trade-orders-payment-metrics">
                                     <div class="trade-orders-payment-metric">
                                         <span>Payment amount</span>
@@ -580,26 +915,285 @@
                                 {
                                     <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">Material lines are captured, but pricing evidence is missing. Run market analysis from the linked craft plan before using payment totals.</MudAlert>
                                 }
-                                <div class="trade-orders-payment-policy">
-                                    <div>
-                                        <span>Payment policy</span>
-                                        <strong>@GetSelectedOrderPaymentPolicyLabel()</strong>
+                                @if (SelectedCanonicalCommission is { } canonicalCommission)
+                                {
+                                     var commissionTerms = canonicalCommission.CurrentTerms;
+                                     var paymentRequest = SelectedPaymentPolicyRequest;
+                                     <section class="trade-orders-commission-payment">
+                                         <div class="trade-orders-payment-handshake-heading">
+                                             <div>
+                                                 <MudText Typo="Typo.subtitle2">
+                                                     @($"{FormatCommissionPaymentSchedule(commissionTerms.Payment)} Payment - {FormatGil(commissionTerms.Payment.Total)}")
+                                                 </MudText>
+                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                     Both parties attest independently against terms v@(commissionTerms.Version).
+                                                 </MudText>
+                                             </div>
+                                             <span class="@GetCommissionGateChipClass(canonicalCommission.Gates.Payment.State)">
+                                                 @FormatPaymentConfirmationProgress(canonicalCommission.Gates.Payment)
+                                             </span>
+                                         </div>
+                                         @if (canonicalCommission.Gates.Payment.State !=
+                                              CompanyCommissionClearanceState.NotRequired)
+                                         {
+                                             <div class="trade-orders-payment-handshake">
+                                                 <div class="@($"trade-orders-payment-attestation{(canonicalCommission.Gates.Payment.CommissionerSent != null ? " is-complete" : string.Empty)}")">
+                                                     <span>Commissioner</span>
+                                                     @if (canonicalCommission.Gates.Payment.CommissionerSent is { } sent)
+                                                     {
+                                                         <strong>Payment marked sent</strong>
+                                                         <p>@sent.Note</p>
+                                                         <small>@sent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(sent.TermsVersion)</small>
+                                                     }
+                                                     else
+                                                     {
+                                                         <strong>Mark payment sent</strong>
+                                                         <p>Record your side of the exchange; the crafter confirms receipt separately.</p>
+                                                         <MudTextField @bind-Value="_commissionPaymentObservation"
+                                                                       id="commission-payment-observation"
+                                                                       Label="Payment note"
+                                                                       Variant="Variant.Outlined"
+                                                                       Margin="Margin.Dense"
+                                                                       Immediate="true"
+                                                                       MaxLength="500" />
+                                                         <MudButton Variant="Variant.Filled"
+                                                                    Color="Color.Primary"
+                                                                    FullWidth="true"
+                                                                    Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionPaymentObservation))"
+                                                                    OnClick="RecordCommissionPaymentAsync">
+                                                             Mark Sent
+                                                         </MudButton>
+                                                     }
+                                                 </div>
+                                                 <div class="trade-orders-payment-handshake-mark">
+                                                     <MudIcon Icon="@Icons.Material.Filled.SyncAlt" />
+                                                 </div>
+                                                 <div class="@($"trade-orders-payment-attestation{(canonicalCommission.Gates.Payment.CrafterReceived != null ? " is-complete" : " is-waiting")}")">
+                                                     <span>Crafter</span>
+                                                     @if (canonicalCommission.Gates.Payment.CrafterReceived is { } received)
+                                                     {
+                                                         <strong>Receipt confirmed</strong>
+                                                         <p>@received.Note</p>
+                                                         <small>@received.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(received.TermsVersion)</small>
+                                                     }
+                                                     else
+                                                     {
+                                                         <strong>Awaiting receipt</strong>
+                                                         <p>The participant brief shows the exact amount and current terms version.</p>
+                                                         <small>Either party may record first; clearance waits for both.</small>
+                                                     }
+                                                 </div>
+                                             </div>
+                                             @if (canonicalCommission.Gates.Payment.CommissionerSent != null &&
+                                                  _selectedOrder.Status == TradeOrderStatus.Assigned)
+                                             {
+                                                 <details class="trade-orders-exception-disclosure">
+                                                     <summary>Retract commissioner confirmation</summary>
+                                                     <MudTextField @bind-Value="_commissionPaymentRetractionReason"
+                                                                   id="commission-payment-retraction-reason"
+                                                                   Label="Retraction reason"
+                                                                   Variant="Variant.Outlined"
+                                                                   Margin="Margin.Dense"
+                                                                   Immediate="true"
+                                                                   MaxLength="500" />
+                                                     <MudButton Variant="Variant.Outlined"
+                                                                Color="Color.Warning"
+                                                                Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionPaymentRetractionReason))"
+                                                                OnClick="RetractCommissionPaymentAsync">
+                                                         Retract Confirmation
+                                                     </MudButton>
+                                                 </details>
+                                             }
+                                             <div class="@($"trade-orders-payment-clearance{(canonicalCommission.Gates.Payment.State == CompanyCommissionClearanceState.Satisfied ? " is-complete" : string.Empty)}")">
+                                                 <strong>
+                                                     @(canonicalCommission.Gates.Payment.State ==
+                                                       CompanyCommissionClearanceState.Satisfied
+                                                         ? "Payment clearance satisfied"
+                                                         : "Work clearance remains locked")
+                                                 </strong>
+                                                 <span>
+                                                     @(canonicalCommission.Gates.Payment.State ==
+                                                       CompanyCommissionClearanceState.Satisfied
+                                                         ? "Both parties confirmed the same terms-version exchange."
+                                                         : $"{canonicalCommission.Gates.Payment.ConfirmationCount} of 2 confirmations recorded.")
+                                                 </span>
+                                             </div>
+                                         }
+                                         @if (paymentRequest != null)
+                                         {
+                                            <div class="trade-orders-payment-request">
+                                                <div>
+                                                    <strong>Crafter requested @FormatPaymentRequestSchedule(paymentRequest)</strong>
+                                                    <span>@(paymentRequest.Reason ?? "No reason supplied.")</span>
+                                                    @if (!string.IsNullOrWhiteSpace(paymentRequest.Error))
+                                                    {
+                                                        <span class="is-error">@paymentRequest.Error</span>
+                                                    }
+                                                </div>
+                                                <MudTextField @bind-Value="_commissionPaymentDecisionReason"
+                                                              id="commission-payment-decision-reason"
+                                                              Label="Decision reason"
+                                                              Variant="Variant.Outlined"
+                                                              Margin="Margin.Dense"
+                                                              Immediate="true"
+                                                              MaxLength="500" />
+                                                <div class="trade-orders-inline-actions">
+                                                    <MudButton Variant="Variant.Filled"
+                                                               Color="Color.Primary"
+                                                               Size="Size.Small"
+                                                               Disabled="@(_isCommissionCommandRunning || paymentRequest.RequestedSchedule == null || string.IsNullOrWhiteSpace(_commissionPaymentDecisionReason))"
+                                                               OnClick="@(() => DecideCommissionPaymentPolicyAsync(true))">
+                                                        Accept Timing
+                                                    </MudButton>
+                                                    <MudButton Variant="Variant.Outlined"
+                                                               Color="Color.Secondary"
+                                                               Size="Size.Small"
+                                                               Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionPaymentDecisionReason))"
+                                                               OnClick="@(() => DecideCommissionPaymentPolicyAsync(false))">
+                                                        Refuse
+                                                    </MudButton>
+                                                </div>
+                                            </div>
+                                        }
+                                     </section>
+                                     @if (_selectedOrder.Status == TradeOrderStatus.Completed &&
+                                          commissionTerms.Payment.Total > 0 &&
+                                          commissionTerms.Payment.Schedule != CompanyCommissionPaymentSchedule.Advance)
+                                     {
+                                         var settlement = canonicalCommission.SettlementPayment;
+                                         var legacySettlement =
+                                             canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied &&
+                                             settlement.ConfirmationCount == 0;
+                                         <section class="trade-orders-commission-payment is-settlement">
+                                             <div class="trade-orders-payment-handshake-heading">
+                                                 <div>
+                                                     <MudText Typo="Typo.subtitle2">
+                                                         @($"Final Payment - {FormatGil(commissionTerms.Payment.Total)}")
+                                                     </MudText>
+                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                         Delivery is accepted. Both parties confirm settlement independently against terms v@(commissionTerms.Version).
+                                                     </MudText>
+                                                 </div>
+                                                 <span class="@GetSettlementChipClass(canonicalCommission.SettlementState)">
+                                                     @(legacySettlement
+                                                         ? "Legacy settlement"
+                                                         : $"{settlement.ConfirmationCount} of 2 confirmed")
+                                                 </span>
+                                             </div>
+                                             @if (legacySettlement)
+                                             {
+                                                 <div class="trade-orders-payment-clearance is-complete">
+                                                     <strong>Settlement preserved</strong>
+                                                     <span>This commission was completed before two-party settlement attestations were introduced.</span>
+                                                 </div>
+                                             }
+                                             else
+                                             {
+                                               <div class="trade-orders-payment-handshake">
+                                                 <div class="@($"trade-orders-payment-attestation{(settlement.CommissionerSent != null ? " is-complete" : string.Empty)}")">
+                                                     <span>Commissioner</span>
+                                                     @if (settlement.CommissionerSent is { } sent)
+                                                     {
+                                                         <strong>Final payment marked sent</strong>
+                                                         <p>@sent.Note</p>
+                                                         <small>@sent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(sent.TermsVersion)</small>
+                                                     }
+                                                     else
+                                                     {
+                                                         <strong>Mark final payment sent</strong>
+                                                         <p>The crafter confirms receipt separately from their brief.</p>
+                                                         <MudTextField @bind-Value="_commissionSettlementObservation"
+                                                                       id="commission-settlement-observation"
+                                                                       Label="Payment note"
+                                                                       Variant="Variant.Outlined"
+                                                                       Margin="Margin.Dense"
+                                                                       Immediate="true"
+                                                                       MaxLength="500" />
+                                                         <MudButton Variant="Variant.Filled"
+                                                                    Color="Color.Primary"
+                                                                    FullWidth="true"
+                                                                    Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementObservation))"
+                                                                    OnClick="RecordCommissionSettlementAsync">
+                                                             Mark Sent
+                                                         </MudButton>
+                                                     }
+                                                 </div>
+                                                 <div class="trade-orders-payment-handshake-mark">
+                                                     <MudIcon Icon="@Icons.Material.Filled.SyncAlt" />
+                                                 </div>
+                                                 <div class="@($"trade-orders-payment-attestation{(settlement.CrafterReceived != null ? " is-complete" : " is-waiting")}")">
+                                                     <span>Crafter</span>
+                                                     @if (settlement.CrafterReceived is { } received)
+                                                     {
+                                                         <strong>Final payment received</strong>
+                                                         <p>@received.Note</p>
+                                                         <small>@received.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(received.TermsVersion)</small>
+                                                     }
+                                                     else
+                                                     {
+                                                         <strong>Awaiting receipt</strong>
+                                                         <p>The participant brief shows the exact amount and accepted terms.</p>
+                                                     }
+                                                 </div>
+                                               </div>
+                                               @if (settlement.CommissionerSent != null)
+                                               {
+                                                   <details class="trade-orders-exception-disclosure">
+                                                     <summary>Retract commissioner confirmation</summary>
+                                                     <MudTextField @bind-Value="_commissionSettlementRetractionReason"
+                                                                   id="commission-settlement-retraction-reason"
+                                                                   Label="Retraction reason"
+                                                                   Variant="Variant.Outlined"
+                                                                   Margin="Margin.Dense"
+                                                                   Immediate="true"
+                                                                   MaxLength="500" />
+                                                     <MudButton Variant="Variant.Outlined"
+                                                                Color="Color.Warning"
+                                                                Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementRetractionReason))"
+                                                                OnClick="RetractCommissionSettlementAsync">
+                                                         Retract Confirmation
+                                                     </MudButton>
+                                                   </details>
+                                               }
+                                               <div class="@($"trade-orders-payment-clearance{(canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied ? " is-complete" : string.Empty)}")">
+                                                 <strong>
+                                                     @(canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied
+                                                         ? "Settlement complete"
+                                                         : "Settlement remains open")
+                                                 </strong>
+                                                 <span>
+                                                     @(canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied
+                                                         ? "Both parties confirmed the final payment against the accepted terms."
+                                                         : $"{settlement.ConfirmationCount} of 2 confirmations recorded.")
+                                                 </span>
+                                               </div>
+                                             }
+                                         </section>
+                                     }
+                                }
+                                @if (!HasCanonicalCommission)
+                                {
+                                    <div class="trade-orders-payment-policy">
+                                        <div>
+                                            <span>Payment policy</span>
+                                            <strong>@GetSelectedOrderPaymentPolicyLabel()</strong>
+                                        </div>
+                                        <div class="trade-orders-payment-policy-controls">
+                                            <MudSwitch T="bool"
+                                                       Value="@SelectedOrderUsesCompanyPaymentPolicy"
+                                                       ValueChanged="SetSelectedOrderUseCompanyPolicyAsync"
+                                                       Color="Color.Primary"
+                                                       Dense="true"
+                                                       Label="Use company default" />
+                                            <CompactSelectField Id="selected-order-payment-contract"
+                                                                Label="Payment contract"
+                                                                Value="@SelectedOrderPaymentContract.ToString()"
+                                                                ValueChanged="SetSelectedOrderPaymentContractValueAsync"
+                                                                Options="PaymentContractOptions"
+                                                                Disabled="@SelectedOrderUsesCompanyPaymentPolicy" />
+                                        </div>
                                     </div>
-                                    <div class="trade-orders-payment-policy-controls">
-                                        <MudSwitch T="bool"
-                                                   Value="@SelectedOrderUsesCompanyPaymentPolicy"
-                                                   ValueChanged="SetSelectedOrderUseCompanyPolicyAsync"
-                                                   Color="Color.Primary"
-                                                   Dense="true"
-                                                   Label="Use company default" />
-                                        <CompactSelectField Id="selected-order-payment-contract"
-                                                            Label="Payment contract"
-                                                            Value="@SelectedOrderPaymentContract.ToString()"
-                                                            ValueChanged="SetSelectedOrderPaymentContractValueAsync"
-                                                            Options="PaymentContractOptions"
-                                                            Disabled="@SelectedOrderUsesCompanyPaymentPolicy" />
-                                    </div>
-                                </div>
+                                }
                                 @if (paymentSummary.Materials.Count > 0)
                                 {
                                     <div class="trade-orders-payment-table">
@@ -622,11 +1216,14 @@
                                             <span>Estimate only</span>
                                             <strong>@FormatGilAllowZero(paymentSummary.ProvidedMaterialTotal)</strong>
                                         </div>
-                                        <div class="trade-orders-payment-breakdown-row">
-                                            <span>@FormatActiveMaterialAdjustmentLabel(paymentSummary.Active.Contract)</span>
-                                            <span>@paymentSummary.CommissionPercent.ToString("N0")% of procurement</span>
-                                            <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
-                                        </div>
+                                        @if (paymentSummary.Active.Contract == TradePaymentContractMode.LegacyCommission)
+                                        {
+                                            <div class="trade-orders-payment-breakdown-row">
+                                                <span>Legacy material commission</span>
+                                                <span>@paymentSummary.CommissionPercent.ToString("N0")% of procurement</span>
+                                                <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
+                                            </div>
+                                        }
                                         @if (paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
                                         {
                                             <div class="trade-orders-payment-breakdown-row">
@@ -660,7 +1257,7 @@
                                         </div>
                                         <div class="trade-orders-policy-comparison-row">
                                             <span>Labor standard</span>
-                                            <span>Materials + @paymentSummary.LaborStandard.CommissionPercent.ToString("N0")% bonus + labor</span>
+                                            <span>Materials + synth labor</span>
                                             <strong>@FormatPaymentBreakdown(paymentSummary.LaborStandard)</strong>
                                             <span>@FormatPaymentDifference(paymentSummary.LaborStandard, paymentSummary.Legacy)</span>
                                         </div>
@@ -684,10 +1281,15 @@
                                             </MudButton>
                                         </div>
                                     </div>
-                                    <div class="trade-orders-material-table is-compact">
+                                    <div class="@($"trade-orders-material-table is-compact{(SelectedCommissionOwner != null ? " has-commission-handoff" : string.Empty)}")">
                                         <div class="trade-orders-material-header">
                                             <span>Item</span>
                                             <span>Qty</span>
+                                            @if (SelectedCommissionOwner != null)
+                                            {
+                                                <span>Ready</span>
+                                                <span>Received</span>
+                                            }
                                             <span>Unit cost</span>
                                             <span>Total cost</span>
                                             <span>Resp.</span>
@@ -704,6 +1306,11 @@
                                                     }
                                                 </span>
                                                 <span>@TradeDisplayFormatter.FormatQuantity(material.Quantity)</span>
+                                                @if (SelectedCommissionOwner != null)
+                                                {
+                                                    <span>@FormatCompanyMaterialReadyQuantity(material.ItemId, material.RequiresHq)</span>
+                                                    <span>@FormatCompanyMaterialReceivedQuantity(material.ItemId, material.RequiresHq)</span>
+                                                }
                                                 <span>@FormatMaterialUnitCost(material)</span>
                                                 <span>@FormatMaterialCost(material)</span>
                                                 <CompactSelectField Id="@($"order-material-responsibility-{material.ItemId}")"
@@ -711,69 +1318,118 @@
                                                                     Value="@material.Responsibility.ToString()"
                                                                     ValueChanged="value => SetOrderMaterialResponsibilityValueAsync(material, value)"
                                                                     Options="MaterialResponsibilityOptions"
-                                                                    Disabled="@IsSelectedOrderArchived" />
+                                                                    Disabled="@(IsSelectedOrderArchived || HasCanonicalCommission)" />
                                                 <span>@FormatMaterialPaymentImpact(material)</span>
                                             </div>
                                         }
                                     </div>
+                                    @if (SelectedCanonicalCommission is { } materialCommission &&
+                                         materialCommission.Gates.CompanyMaterials.State == CompanyCommissionClearanceState.Pending &&
+                                         materialCommission.Gates.CompanyMaterials.ReadyAtUtc == null)
+                                    {
+                                        <div class="trade-orders-material-handoff-action">
+                                            <span>
+                                                Marking ready covers the complete promised company-material bundle; v1 does not record partial handoff.
+                                            </span>
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Primary"
+                                                       Disabled="@_isCommissionCommandRunning"
+                                                       OnClick="MarkCommissionMaterialsReadyAsync">
+                                                Mark Full Bundle Ready
+                                            </MudButton>
+                                        </div>
+                                    }
                                 }
                                 else
                                 {
                                     <MudAlert Severity="Severity.Info" Dense="true">Create a linked craft plan, then run market analysis to populate payment evidence.</MudAlert>
                                 }
-                                <section class="trade-orders-status-panel">
-                                    <MudText Typo="Typo.subtitle2">Status</MudText>
-                                    @if (IsSelectedOrderArchived)
-                                    {
-                                        <MudText Typo="Typo.body2" Color="Color.Secondary">Archived as @FormatStatus(_selectedOrder.Status).</MudText>
-                                    }
-                                    else
-                                    {
-                                        <CompactSelectField Id="selected-order-status"
-                                                            Label="Order status"
-                                                            @bind-Value="DetailStatusValue"
-                                                            Options="GetActiveStatusOptions()" />
-                                        <MudButton Variant="Variant.Filled"
-                                                   Color="Color.Primary"
-                                                   FullWidth="true"
-                                                   OnClick="SaveSelectedOrderAsync"
-                                                   Disabled="@(string.IsNullOrWhiteSpace(_detailTitle))">
-                                            Save Status
-                                        </MudButton>
-                                    }
-                                </section>
-                                <section class="trade-orders-close-panel">
-                                    <MudText Typo="Typo.subtitle2">Close Order</MudText>
-                                    @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
-                                    {
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Secondary"
-                                                   FullWidth="true"
-                                                   OnClick="ReopenSelectedOrderAsync">
-                                            Reopen Order
-                                        </MudButton>
-                                    }
-                                    else
-                                    {
-                                        <MudButton Variant="Variant.Filled"
-                                                   Color="Color.Success"
-                                                   FullWidth="true"
-                                                   OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Completed))">
-                                            Complete Order
-                                        </MudButton>
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Error"
-                                                   FullWidth="true"
-                                                   OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
-                                            Cancel Order
-                                        </MudButton>
-                                    }
-                                </section>
+                                @if (HasCanonicalCommission)
+                                {
+                                    <section class="trade-orders-status-panel">
+                                        @if (SelectedCanonicalCommission is { } workflowCommission)
+                                        {
+                                            <div class="trade-orders-section-heading">
+                                                <div>
+                                                    <MudText Typo="Typo.subtitle2">Workflow Status</MudText>
+                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                        Hosted commission commands derive this state.
+                                                    </MudText>
+                                                </div>
+                                                <span class="trade-orders-publication-chip">@FormatStatus(_selectedOrder.Status)</span>
+                                            </div>
+                                            <div class="trade-orders-gate-strip">
+                                                <span>Identity <b>@FormatCommissionGate(workflowCommission.Gates.Identity.State)</b></span>
+                                                <span>Payment <b>@FormatCommissionGate(workflowCommission.Gates.Payment.State)</b></span>
+                                                <span>Company materials <b>@FormatCommissionGate(workflowCommission.Gates.CompanyMaterials.State)</b></span>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <MudText Typo="Typo.subtitle2">Workflow Status</MudText>
+                                            <MudText Typo="Typo.body2" Color="Color.Error">
+                                                Canonical status is unavailable until the authenticated owner projection reloads.
+                                            </MudText>
+                                        }
+                                    </section>
+                                }
+                                else
+                                {
+                                    <section class="trade-orders-status-panel">
+                                        <MudText Typo="Typo.subtitle2">Status</MudText>
+                                        @if (IsSelectedOrderArchived)
+                                        {
+                                            <MudText Typo="Typo.body2" Color="Color.Secondary">Archived as @FormatStatus(_selectedOrder.Status).</MudText>
+                                        }
+                                        else
+                                        {
+                                            <CompactSelectField Id="selected-order-status"
+                                                                Label="Order status"
+                                                                @bind-Value="DetailStatusValue"
+                                                                Options="GetActiveStatusOptions()" />
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Primary"
+                                                       FullWidth="true"
+                                                       OnClick="SaveSelectedOrderAsync"
+                                                       Disabled="@(string.IsNullOrWhiteSpace(_detailTitle))">
+                                                Save Status
+                                            </MudButton>
+                                        }
+                                    </section>
+                                    <section class="trade-orders-close-panel">
+                                        <MudText Typo="Typo.subtitle2">Close Order</MudText>
+                                        @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+                                        {
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Secondary"
+                                                       FullWidth="true"
+                                                       OnClick="ReopenSelectedOrderAsync">
+                                                Reopen Order
+                                            </MudButton>
+                                        }
+                                        else
+                                        {
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Success"
+                                                       FullWidth="true"
+                                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Completed))">
+                                                Complete Order
+                                            </MudButton>
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Error"
+                                                       FullWidth="true"
+                                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
+                                                Cancel Order
+                                            </MudButton>
+                                        }
+                                    </section>
+                                }
                             </MudTabPanel>
                             <MudTabPanel Text="Procurement">
-                                <MudText Typo="Typo.subtitle2">Procurement Evidence</MudText>
                                 @{
-                                    var procurementRows = GetSelectedOrderProcurementRows();
+                                    var allProcurementRows = GetSelectedOrderProcurementRows();
+                                    var procurementRows = GetActiveProcurementRows(allProcurementRows);
+                                    var visibleProcurementRows = GetFilteredProcurementRows(procurementRows);
                                 }
                                 @if (procurementRows.Count == 0)
                                 {
@@ -781,17 +1437,88 @@
                                 }
                                 else
                                 {
+                                    <section class="trade-orders-procurement-context">
+                                        <div>
+                                            <span>Output route</span>
+                                            <strong>@FormatProcurementOutputSummary(_selectedOrder)</strong>
+                                            <small>@FormatProcurementRouteSummary(_selectedOrder, procurementRows.Count)</small>
+                                        </div>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.OpenInNew"
+                                                   OnClick="OpenSelectedOrderCraftPlanAsync"
+                                                   Disabled="@(_isOpeningSelectedOrderCraftPlan || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isOpeningSelectedOrderCraftPlan ? "Opening..." : "Open Craft Plan")
+                                        </MudButton>
+                                    </section>
+
+                                    <section class="trade-orders-procurement-summary">
+                                        <div class="trade-orders-procurement-total">
+                                            <span>Estimated procurement</span>
+                                            <strong>@FormatGil(GetProcurementEstimatedTotal(procurementRows))</strong>
+                                        </div>
+                                        <div class="trade-orders-procurement-health">
+                                            <strong>@GetProcurementHealthLabel(procurementRows)</strong>
+                                            <span>@FormatProcurementEvidenceContext(_selectedOrder)</span>
+                                        </div>
+                                        <MudButton Variant="Variant.Filled"
+                                                   Color="Color.Primary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.Refresh"
+                                                   OnClick="RepriceSelectedOrderAsync"
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isRepricingSelectedOrder ? "Refreshing..." : "Refresh Prices")
+                                        </MudButton>
+                                    </section>
+
+                                    <div class="trade-orders-procurement-filters" role="group" aria-label="Filter procurement materials">
+                                        <button type="button"
+                                                class="@GetProcurementFilterClass(TradeOrderProcurementFilter.All)"
+                                                aria-pressed="@(_procurementFilter == TradeOrderProcurementFilter.All)"
+                                                @onclick="@(() => SetProcurementFilter(TradeOrderProcurementFilter.All))">
+                                            All <span>@procurementRows.Count.ToString("N0")</span>
+                                        </button>
+                                        <button type="button"
+                                                class="@GetProcurementFilterClass(TradeOrderProcurementFilter.Attention)"
+                                                aria-pressed="@(_procurementFilter == TradeOrderProcurementFilter.Attention)"
+                                                @onclick="@(() => SetProcurementFilter(TradeOrderProcurementFilter.Attention))">
+                                            Needs attention <span>@CountProcurementRows(procurementRows, TradeOrderProcurementFilter.Attention).ToString("N0")</span>
+                                        </button>
+                                        <button type="button"
+                                                class="@GetProcurementFilterClass(TradeOrderProcurementFilter.Crafter)"
+                                                aria-pressed="@(_procurementFilter == TradeOrderProcurementFilter.Crafter)"
+                                                @onclick="@(() => SetProcurementFilter(TradeOrderProcurementFilter.Crafter))">
+                                            Crafter supplies <span>@CountProcurementRows(procurementRows, TradeOrderProcurementFilter.Crafter).ToString("N0")</span>
+                                        </button>
+                                        <button type="button"
+                                                class="@GetProcurementFilterClass(TradeOrderProcurementFilter.Company)"
+                                                aria-pressed="@(_procurementFilter == TradeOrderProcurementFilter.Company)"
+                                                @onclick="@(() => SetProcurementFilter(TradeOrderProcurementFilter.Company))">
+                                            Company supplies <span>@CountProcurementRows(procurementRows, TradeOrderProcurementFilter.Company).ToString("N0")</span>
+                                        </button>
+                                    </div>
+
                                     <WebGridTable TItem="TradeOrderProcurementRow"
                                                   TColumnId="TradeOrderProcurementColumn"
                                                   CssClass="trade-orders-procurement-grid"
-                                                  Items="@GetOrderedProcurementRows(procurementRows)"
+                                                  Items="@GetOrderedProcurementRows(visibleProcurementRows)"
                                                   Columns="@GetProcurementColumns()"
                                                   GetRowKey="row => row.RowKey"
                                                   GetRowClass="GetProcurementRowClass"
                                                   SortState="@_procurementSortState"
                                                   SortChanged="OnProcurementSortChanged"
-                                                  ColumnGapPx="4"
-                                                  HorizontalPaddingPx="8" />
+                                                  FitToContainer="true"
+                                                  ColumnGapPx="8"
+                                                  HorizontalPaddingPx="8">
+                                        <EmptyContent>
+                                            <div class="trade-orders-procurement-empty">@GetProcurementFilterEmptyMessage()</div>
+                                        </EmptyContent>
+                                    </WebGridTable>
+                                    <div class="trade-orders-procurement-footer">
+                                        <span>@FormatProcurementFooter(procurementRows)</span>
+                                        <strong>@FormatGil(GetProcurementEstimatedTotal(procurementRows))</strong>
+                                    </div>
                                     @if (paymentSummary.Warnings.Count > 0)
                                     {
                                         <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
@@ -805,29 +1532,114 @@
                                     }
                                 }
                             </MudTabPanel>
-                            <MudTabPanel Text="History">
-                                <div class="trade-orders-note-row">
-                                    <MudTextField @bind-Value="_manualNote"
-                                                  id="selected-order-history-note"
-                                                  Label="Add Note"
-                                                  Variant="Variant.Outlined"
-                                                  Margin="Margin.Dense"
-                                                  Lines="2" />
-                                    <MudButton Variant="Variant.Outlined"
-                                               Color="Color.Secondary"
-                                               OnClick="AddManualNoteAsync"
-                                               Disabled="@string.IsNullOrWhiteSpace(_manualNote)">
-                                        Add Note
-                                    </MudButton>
-                                </div>
-                                <ul class="trade-orders-history">
-                                    @foreach (var item in _selectedOrder.History.OrderByDescending(item => item.CreatedAtUtc))
-                                    {
-                                        <li><strong>@FormatHistoryKind(item.Kind)</strong> @item.Note</li>
-                                    }
-                                </ul>
-                            </MudTabPanel>
-                            <MudTabPanel Text="Collaboration">
+                             <MudTabPanel Text="Timeline">
+                                 @{ var timelineSummary = GetSelectedTimelineSummary(); }
+                                 <div class="trade-orders-timeline-toolbar">
+                                     <div class="trade-orders-timeline-filters" role="group" aria-label="Filter commission timeline">
+                                         @foreach (var filter in Enum.GetValues<CommissionTimelineFilter>())
+                                         {
+                                             <button type="button"
+                                                     class="@GetTimelineFilterClass(filter)"
+                                                     aria-pressed="@(_timelineFilter == filter)"
+                                                     @onclick="@(() => SetTimelineFilter(filter))">
+                                                 @(filter == CommissionTimelineFilter.CompanyOnly
+                                                     ? "Company only"
+                                                     : filter.ToString())
+                                             </button>
+                                         }
+                                     </div>
+                                     <div class="trade-orders-timeline-summary" aria-label="Timeline event summary">
+                                         @if (timelineSummary.Attention > 0)
+                                         {
+                                             <span class="is-attention">@timelineSummary.Attention need attention</span>
+                                         }
+                                         @if (timelineSummary.Human > 0)
+                                         {
+                                             <span class="is-human">@timelineSummary.Human conversations</span>
+                                         }
+                                         <span>@timelineSummary.Milestone milestones</span>
+                                         <span>@timelineSummary.Routine routine</span>
+                                     </div>
+                                 </div>
+                                 <div class="trade-orders-timeline">
+                                     @foreach (var group in GetSelectedTimelineGroups())
+                                     {
+                                         @if (group.IsRoutineCluster)
+                                         {
+                                             <details class="trade-orders-timeline-routine-group" @key="group.Items[0].Id">
+                                                 <summary>
+                                                     <span>@group.Items.Count routine updates</span>
+                                                     <small>@group.Items[^1].CreatedAtUtc.ToLocalTime().ToString("MMM d") - @group.Items[0].CreatedAtUtc.ToLocalTime().ToString("MMM d")</small>
+                                                 </summary>
+                                                 @foreach (var routineItem in group.Items)
+                                                 {
+                                                     <article class="@GetTimelineItemClass(routineItem)" @key="routineItem.Id">
+                                                         <time>@routineItem.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt")</time>
+                                                         <span class="trade-orders-timeline-dot"></span>
+                                                         <div>
+                                                             <div class="trade-orders-timeline-item-heading">
+                                                                 <strong>@routineItem.Title</strong>
+                                                                 <span>@FormatTimelineVisibility(routineItem.Visibility)</span>
+                                                             </div>
+                                                             <p>@routineItem.Detail</p>
+                                                             <small>@routineItem.Actor</small>
+                                                         </div>
+                                                     </article>
+                                                 }
+                                             </details>
+                                         }
+                                         else
+                                         {
+                                             var item = group.Items[0];
+                                             <article class="@GetTimelineItemClass(item)" @key="item.Id">
+                                                 <time>@item.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt")</time>
+                                                 <span class="trade-orders-timeline-dot"></span>
+                                                 <div>
+                                                     <div class="trade-orders-timeline-item-heading">
+                                                         <strong>@item.Title</strong>
+                                                         <span>@FormatTimelineImportance(item.Importance) - @FormatTimelineVisibility(item.Visibility)</span>
+                                                     </div>
+                                                     <p>@item.Detail</p>
+                                                     <small>@item.Actor</small>
+                                                 </div>
+                                             </article>
+                                         }
+                                     }
+                                 </div>
+                                 <div class="trade-orders-timeline-composer">
+                                     @if (HasCanonicalCommission)
+                                     {
+                                         <div class="trade-orders-timeline-visibility">
+                                             <button type="button"
+                                                     class="@(_timelineComposerVisibility == CommissionTimelineVisibility.CompanyOnly ? "is-active" : string.Empty)"
+                                                     @onclick="@(() => _timelineComposerVisibility = CommissionTimelineVisibility.CompanyOnly)">
+                                                 Company only
+                                             </button>
+                                             <button type="button"
+                                                     class="@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared ? "is-active" : string.Empty)"
+                                                     @onclick="@(() => _timelineComposerVisibility = CommissionTimelineVisibility.Shared)">
+                                                 Share with crafter
+                                             </button>
+                                         </div>
+                                     }
+                                     <MudTextField @bind-Value="_timelineComment"
+                                                   id="selected-order-timeline-comment"
+                                                   Label="@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared ? "Crafter update" : "Company note")"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Lines="2"
+                                                   MaxLength="2000" />
+                                     <div class="trade-orders-timeline-composer-actions">
+                                         <MudButton Variant="Variant.Filled"
+                                                    Color="Color.Primary"
+                                                    OnClick="AddTimelineEntryAsync"
+                                                    Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_timelineComment))">
+                                             Add to Timeline
+                                         </MudButton>
+                                     </div>
+                                 </div>
+                             </MudTabPanel>
+                             <MudTabPanel Text="Sharing">
                                 @if (SelectedOrderConflict is not null)
                                 {
                                     <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
@@ -845,7 +1657,431 @@
                                         </div>
                                     </MudAlert>
                                 }
-                                @if (SelectedPendingInterests.Count > 0)
+                                @if (HasCanonicalCommission && SelectedCommissionOwner == null)
+                                {
+                                    <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
+                                        <MudText Typo="Typo.subtitle2">Company commission operations are unavailable.</MudText>
+                                        <MudText Typo="Typo.body2">
+                                            @(SelectedCommissionOperationsError ??
+                                              "The authenticated owner projection could not be loaded.")
+                                        </MudText>
+                                    </MudAlert>
+                                }
+                                 @if (SelectedCommissionOwner is { } sharingOwner &&
+                                      sharingOwner.Order.CompanyCommission is { } sharingCommission)
+                                 {
+                                     @if (sharingCommission.PublicMetadata.IsTestFixture)
+                                     {
+                                         <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3 trade-orders-test-commission-banner">
+                                             <MudText Typo="Typo.subtitle2">Test commission - claiming disabled</MudText>
+                                             <MudText Typo="Typo.body2">This projection exercises publication and update delivery without assigning work to a crafter.</MudText>
+                                         </MudAlert>
+                                     }
+                                     <section class="trade-orders-sharing-card">
+                                         <div class="trade-orders-operation-card-heading">
+                                             <div>
+                                                 <MudText Typo="Typo.subtitle2">Canonical Brief</MudText>
+                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                     Terms v@(sharingCommission.CurrentTermsVersion) - owner revision @sharingOwner.ObjectRevision
+                                                 </MudText>
+                                             </div>
+                                             <span class="@GetCompanyCommissionSharingChipClass(sharingOwner.Order, sharingCommission)">
+                                                 @FormatCanonicalCommissionState(sharingOwner.Order, sharingCommission)
+                                             </span>
+                                         </div>
+                                         <div class="trade-orders-sharing-grid">
+                                             <div>
+                                                 <span>Public brief</span>
+                                                 <strong>@(sharingCommission.PublicMetadata.PublicUrl ?? sharingCommission.PublicMetadata.PublicBriefId)</strong>
+                                                 <small>@sharingCommission.PublicMetadata.ViewState</small>
+                                             </div>
+                                             <div>
+                                                 <span>Claim slot</span>
+                                                 <strong>@(sharingCommission.PublicMetadata.IsTestFixture
+                                                     ? "Disabled for testing"
+                                                     : sharingCommission.ActiveClaim == null ? "Open" : "Reserved")</strong>
+                                                 <small>
+                                                     @(sharingCommission.PublicMetadata.IsTestFixture
+                                                         ? "No claim capability can be issued"
+                                                         : sharingCommission.ActiveClaim == null
+                                                         ? "One crafter may claim"
+                                                         : FormatCanonicalCommissionClaimant(sharingCommission))
+                                                 </small>
+                                             </div>
+                                             <div>
+                                                 <span>Trade channel</span>
+                                                 <strong>@(SelectedCompanyPublication?.State.ToString() ?? "Not delivered")</strong>
+                                                 <small>@(SelectedCompanyPublication?.DestinationLabel ?? "Company routing")</small>
+                                             </div>
+                                         </div>
+                                         <div class="trade-orders-collaboration-actions">
+                                             <MudButton Variant="Variant.Filled"
+                                                        Color="Color.Primary"
+                                                        StartIcon="@Icons.Material.Filled.OpenInNew"
+                                                        OnClick="OpenCommissionBriefAsync">
+                                                 View Brief
+                                             </MudButton>
+                                             <MudButton Variant="Variant.Outlined"
+                                                        Color="Color.Secondary"
+                                                        StartIcon="@Icons.Material.Filled.ContentCopy"
+                                                        OnClick="CopyCommissionLinkAsync">
+                                                 Copy Public Link
+                                             </MudButton>
+                                             @if (!sharingCommission.PublicMetadata.IsTestFixture &&
+                                                  sharingCommission.ActiveClaim == null &&
+                                                  sharingCommission.PublicMetadata.ViewState ==
+                                                  CompanyCommissionPublicViewState.Published &&
+                                                  sharingOwner.Order.Status is not
+                                                      (TradeOrderStatus.Completed or TradeOrderStatus.Canceled))
+                                             {
+                                                 <MudButton Variant="Variant.Outlined"
+                                                            Color="Color.Secondary"
+                                                            Disabled="@_isCommissionCommandRunning"
+                                                            OnClick="CopyCommissionClaimLinkAsync">
+                                                     Copy Claim Link
+                                                 </MudButton>
+                                             }
+                                             else if (sharingCommission.ActiveClaim != null)
+                                             {
+                                                 <MudButton Variant="Variant.Outlined"
+                                                            Color="Color.Secondary"
+                                                            Disabled="@_isCommissionCommandRunning"
+                                                            OnClick="RecoverCommissionParticipantAsync">
+                                                     Issue Recovery Link
+                                                 </MudButton>
+                                             }
+                                             @if (sharingCommission.PublicMetadata.ViewState ==
+                                                  CompanyCommissionPublicViewState.Published)
+                                             {
+                                                 <MudButton Variant="Variant.Text"
+                                                            Color="Color.Error"
+                                                            Disabled="@_isCommissionCommandRunning"
+                                                            OnClick="RevokeCanonicalCommissionPublicationAsync">
+                                                     Revoke Public Access
+                                                 </MudButton>
+                                             }
+                                         </div>
+                                     </section>
+
+                                     @if (!string.IsNullOrWhiteSpace(SelectedCommissionNotificationError))
+                                     {
+                                         <MudAlert Severity="Severity.Warning" Dense="true">
+                                             @SelectedCommissionNotificationError
+                                         </MudAlert>
+                                     }
+
+                                     @if (SelectedCommissionNotificationDiagnostics.Count > 0)
+                                     {
+                                         <section class="trade-orders-sharing-card">
+                                             <MudText Typo="Typo.subtitle2">Delivery Diagnostics</MudText>
+                                             <div class="trade-orders-notification-diagnostics">
+                                                 @foreach (var diagnostic in SelectedCommissionNotificationDiagnostics)
+                                                 {
+                                                     <div class="trade-orders-notification-diagnostic"
+                                                          @key="diagnostic.DiagnosticId">
+                                                         <div>
+                                                             <strong>@diagnostic.Summary</strong>
+                                                             <span>@diagnostic.RecommendedAction</span>
+                                                         </div>
+                                                         @if (diagnostic.CanRetry)
+                                                         {
+                                                             <MudButton Variant="Variant.Text"
+                                                                        Color="Color.Warning"
+                                                                        Size="Size.Small"
+                                                                        Disabled="@(_retryingCommissionDiagnosticId.HasValue)"
+                                                                        OnClick="@(() => RetryCommissionNotificationAsync(diagnostic))">
+                                                                 @(_retryingCommissionDiagnosticId == diagnostic.DiagnosticId
+                                                                     ? "Requeuing"
+                                                                     : "Retry")
+                                                             </MudButton>
+                                                         }
+                                                     </div>
+                                                 }
+                                             </div>
+                                         </section>
+                                     }
+                                 }
+                                 @if (SelectedCommissionOwner is { } ownerProjection &&
+                                      false &&
+                                      ownerProjection.Order.CompanyCommission is { } ownerCommission)
+                                {
+                                    var provisional = ownerCommission.ProvisionalCrafter;
+                                    <section class="trade-orders-commission-panel">
+                                        <div class="trade-orders-section-heading">
+                                            <div>
+                                                <MudText Typo="Typo.subtitle2">
+                                                    @ownerCommission.Reference - Commission
+                                                </MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                    Terms v@(ownerCommission.CurrentTermsVersion) - owner revision @ownerProjection.ObjectRevision
+                                                </MudText>
+                                            </div>
+                                            <span class="trade-orders-publication-chip is-attention">
+                                                @TradeCommissionOperationsPresentation.GetNextAction(ownerProjection)
+                                            </span>
+                                        </div>
+
+                                        <div class="trade-orders-commission-claim">
+                                            <div>
+                                                <span>Claimant</span>
+                                                <strong>
+                                                    @(provisional != null
+                                                        ? $"{provisional.CharacterName} @ {provisional.HomeWorld}"
+                                                        : ownerCommission.ActiveClaim != null
+                                                            ? FormatAssignedCrafter(ownerProjection.Order)
+                                                            : "Open claim slot")
+                                                </strong>
+                                            </div>
+                                            <div>
+                                                <span>Contact</span>
+                                                <strong>
+                                                    @(provisional != null
+                                                        ? $"{provisional.ContactMethod}: {provisional.ContactValue}"
+                                                        : "-")
+                                                </strong>
+                                            </div>
+                                            <div>
+                                                <span>Character evidence</span>
+                                                <strong>
+                                                    @(string.IsNullOrWhiteSpace(provisional?.LodestoneCharacterId)
+                                                        ? "Not verified"
+                                                        : $"Lodestone {provisional.LodestoneCharacterId}")
+                                                </strong>
+                                            </div>
+                                        </div>
+
+                                        <div class="trade-orders-gate-strip">
+                                            <span>Identity <b>@FormatCommissionGate(ownerCommission.Gates.Identity.State)</b></span>
+                                            <span>Payment <b>@FormatCommissionGate(ownerCommission.Gates.Payment.State)</b></span>
+                                            <span>Company materials <b>@FormatCommissionGate(ownerCommission.Gates.CompanyMaterials.State)</b></span>
+                                        </div>
+
+                                        @if (provisional != null &&
+                                             ownerCommission.Gates.Identity.State == CompanyCommissionClearanceState.Pending)
+                                        {
+                                            <div class="trade-orders-identity-review">
+                                                <CompactSelectField Id="commission-identity-crafter"
+                                                                    Label="Company crafter"
+                                                                    Tooltip="Choose an existing crafter, or create one from this provisional identity."
+                                                                    @bind-Value="CommissionIdentityCrafterValue"
+                                                                    Options="GetCommissionCrafterOptions()"
+                                                                    Disabled="@_isCommissionCommandRunning" />
+                                                <MudButton Variant="Variant.Filled"
+                                                           Color="Color.Primary"
+                                                           Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(provisional.LodestoneCharacterId))"
+                                                           OnClick="ConfirmCommissionIdentityAsync">
+                                                    Confirm Identity
+                                                </MudButton>
+                                                <MudTextField @bind-Value="_commissionIdentityRejectionReason"
+                                                              id="commission-identity-rejection-reason"
+                                                              Label="Rejection reason"
+                                                              Variant="Variant.Outlined"
+                                                              Margin="Margin.Dense"
+                                                              Immediate="true"
+                                                              MaxLength="500" />
+                                                <MudCheckBox T="bool"
+                                                             @bind-Value="_blockRejectedCommissionContact"
+                                                             Dense="true"
+                                                             Color="Color.Warning"
+                                                             Label="Block this contact from reclaiming" />
+                                                <MudButton Variant="Variant.Outlined"
+                                                           Color="Color.Error"
+                                                           Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionIdentityRejectionReason))"
+                                                           OnClick="RejectCommissionClaimAsync">
+                                                    Reject & Release
+                                                </MudButton>
+                                            </div>
+                                        }
+
+                                        @if (ownerCommission.DeliveryReadiness.IsReady)
+                                        {
+                                            <div class="trade-orders-delivery-review">
+                                                <MudTextField @bind-Value="_commissionReturnReason"
+                                                              id="commission-return-to-work-reason"
+                                                              Label="Return-to-work reason"
+                                                              Variant="Variant.Outlined"
+                                                              Margin="Margin.Dense"
+                                                              Immediate="true"
+                                                              MaxLength="500" />
+                                                <MudButton Variant="Variant.Outlined"
+                                                           Color="Color.Warning"
+                                                           Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionReturnReason))"
+                                                           OnClick="ReturnCommissionToWorkAsync">
+                                                    Return to Work
+                                                </MudButton>
+                                                <MudButton Variant="Variant.Filled"
+                                                           Color="Color.Success"
+                                                           Disabled="@_isCommissionCommandRunning"
+                                                           OnClick="AcceptCommissionDeliveryAsync">
+                                                    Accept Complete Delivery
+                                                </MudButton>
+                                            </div>
+                                        }
+
+                                        @if (ownerProjection.Order.Status == TradeOrderStatus.Completed &&
+                                             ownerCommission.SettlementState != CompanyCommissionSettlementState.Satisfied)
+                                        {
+                                            <div class="trade-orders-observation-row">
+                                                <MudTextField @bind-Value="_commissionSettlementObservation"
+                                                              id="commission-settlement-observation"
+                                                              Label="Settlement observation"
+                                                              HelperText="Describe what was observed; this is not automated gil evidence"
+                                                              Variant="Variant.Outlined"
+                                                              Margin="Margin.Dense"
+                                                              Immediate="true"
+                                                              MaxLength="500" />
+                                                <MudButton Variant="Variant.Outlined"
+                                                           Color="Color.Primary"
+                                                           Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementObservation))"
+                                                           OnClick="RecordCommissionSettlementAsync">
+                                                    Record Settlement
+                                                </MudButton>
+                                            </div>
+                                        }
+
+                                        @if (ownerCommission.ActiveClaim != null)
+                                        {
+                                            <div class="trade-orders-recovery-row">
+                                                <span>
+                                                    Participant access revision @ownerCommission.ParticipantGrant?.CapabilityRevision.
+                                                    Issue a recovery link only after browser-data loss or device change.
+                                                </span>
+                                                <MudButton Variant="Variant.Outlined"
+                                                           Color="Color.Secondary"
+                                                           Disabled="@_isCommissionCommandRunning"
+                                                           OnClick="RecoverCommissionParticipantAsync">
+                                                    Issue Recovery Link
+                                                </MudButton>
+                                            </div>
+                                        }
+                                        else if (ownerCommission.PublicMetadata.ViewState ==
+                                                     CompanyCommissionPublicViewState.Published &&
+                                                 ownerProjection.Order.Status is not
+                                                     (TradeOrderStatus.Completed or TradeOrderStatus.Canceled))
+                                        {
+                                            <div class="trade-orders-recovery-row">
+                                                <span>
+                                                    One claim slot is open. Fresh links share this canonical commission.
+                                                </span>
+                                                <MudButton Variant="Variant.Outlined"
+                                                           Color="Color.Secondary"
+                                                           Disabled="@_isCommissionCommandRunning"
+                                                           OnClick="CopyCommissionClaimLinkAsync">
+                                                    Copy Claim Link
+                                                </MudButton>
+                                            </div>
+                                        }
+
+                                        @if (ownerCommission.PublicMetadata.ViewState !=
+                                                 CompanyCommissionPublicViewState.Published)
+                                        {
+                                            @if (!_isPublishingCommission &&
+                                                 PublishCommissionUnavailableReason is { } unavailableReason)
+                                            {
+                                                <MudAlert Severity="Severity.Info" Dense="true">
+                                                    @unavailableReason
+                                                </MudAlert>
+                                            }
+                                            <div class="trade-orders-collaboration-actions">
+                                                <MudButton Variant="Variant.Filled"
+                                                           Color="Color.Primary"
+                                                           FullWidth="true"
+                                                           StartIcon="@Icons.Material.Filled.Share"
+                                                           Disabled="@(!CanPublishCommission)"
+                                                           OnClick="PublishSelectedCommissionAsync">
+                                                    @(_isPublishingCommission
+                                                        ? "Publishing..."
+                                                        : PublishCommissionButtonLabel)
+                                                </MudButton>
+                                            </div>
+                                        }
+
+                                        <div class="trade-orders-commission-publication">
+                                            <span>Published</span>
+                                            <strong>
+                                                @(ownerCommission.PublicMetadata.PublishedAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "Not published")
+                                            </strong>
+                                            <span>Public brief</span>
+                                            <strong>@(ownerCommission.PublicMetadata.PublicUrl ?? ownerCommission.PublicMetadata.PublicBriefId)</strong>
+                                            <span>Trade channel</span>
+                                            <strong>@(SelectedCompanyPublication?.State.ToString() ?? "Not delivered")</strong>
+                                        </div>
+
+                                        @if (!string.IsNullOrWhiteSpace(SelectedCommissionNotificationError))
+                                        {
+                                            <MudAlert Severity="Severity.Warning" Dense="true">
+                                                @SelectedCommissionNotificationError
+                                            </MudAlert>
+                                        }
+
+                                        @if (SelectedCommissionNotificationDiagnostics.Count > 0)
+                                        {
+                                            <div class="trade-orders-notification-diagnostics">
+                                                @foreach (var diagnostic in SelectedCommissionNotificationDiagnostics)
+                                                {
+                                                    <div class="trade-orders-notification-diagnostic"
+                                                         @key="diagnostic.DiagnosticId">
+                                                        <div>
+                                                            <strong>@diagnostic.Summary</strong>
+                                                            <span>@diagnostic.RecommendedAction</span>
+                                                        </div>
+                                                        @if (diagnostic.CanRetry)
+                                                        {
+                                                            <MudButton Variant="Variant.Text"
+                                                                       Color="Color.Warning"
+                                                                       Size="Size.Small"
+                                                                       Disabled="@(_retryingCommissionDiagnosticId.HasValue)"
+                                                                       OnClick="@(() => RetryCommissionNotificationAsync(diagnostic))">
+                                                                @(_retryingCommissionDiagnosticId == diagnostic.DiagnosticId
+                                                                    ? "Requeuing"
+                                                                    : "Retry")
+                                                            </MudButton>
+                                                        }
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+
+                                        <div class="trade-orders-shared-comment">
+                                            <MudTextField @bind-Value="_commissionSharedComment"
+                                                          id="commission-shared-comment"
+                                                          Label="Shared commission comment"
+                                                          HelperText="Visible in commission activity; internal History notes stay private"
+                                                          Variant="Variant.Outlined"
+                                                          Margin="Margin.Dense"
+                                                          Immediate="true"
+                                                          Lines="2"
+                                                          MaxLength="1000" />
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Secondary"
+                                                       Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSharedComment))"
+                                                       OnClick="AddCommissionCommentAsync">
+                                                Add Shared Comment
+                                            </MudButton>
+                                        </div>
+
+                                        <div class="trade-orders-commission-activity">
+                                            <MudText Typo="Typo.subtitle2">Commission Activity</MudText>
+                                            @foreach (var activity in ownerCommission.Activity
+                                                .OrderByDescending(item => item.CreatedAtUtc)
+                                                .Take(30))
+                                            {
+                                                <div>
+                                                    <strong>@FormatCommissionActivity(activity.Kind)</strong>
+                                                    <span>
+                                                        @activity.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                                                        - @(activity.Actor.DisplayName ?? activity.Actor.Kind.ToString())
+                                                    </span>
+                                                    @if (!string.IsNullOrWhiteSpace(activity.Comment))
+                                                    {
+                                                        <p>@activity.Comment</p>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    </section>
+                                }
+                                @if (SelectedCommissionOwner == null && SelectedPendingInterests.Count > 0)
                                 {
                                     <section class="trade-orders-interest-list">
                                         <div class="trade-orders-section-heading">
@@ -892,7 +2128,8 @@
                                         }
                                     </section>
                                 }
-                                @if (SelectedCompanyPublication is { } companyPublication)
+                                @if (SelectedCommissionOwner == null &&
+                                     SelectedCompanyPublication is { } companyPublication)
                                 {
                                     <section class="@GetCompanyPublicationClass(companyPublication)">
                                         <div class="trade-orders-section-heading">
@@ -911,9 +2148,18 @@
                                         </div>
                                     </section>
                                 }
-                                @if (HasLiveCommissionPublication && !HasFailedCompanyPublication)
+                                @if (SelectedCommissionOwner == null &&
+                                     HasLiveCommissionPublication &&
+                                     !HasFailedCompanyPublication)
                                 {
                                     var publication = _selectedOrder.CommissionPublication!;
+                                    @if (publication.IsTestFixture)
+                                    {
+                                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3 trade-orders-test-commission-banner">
+                                            <MudText Typo="Typo.subtitle2">Test commission - claiming disabled</MudText>
+                                            <MudText Typo="Typo.body2">This brief verifies publication rendering only. It cannot be claimed or assigned.</MudText>
+                                        </MudAlert>
+                                    }
                                     <section class="trade-orders-collaboration-state is-live">
                                         <div class="trade-orders-section-heading">
                                             <div>
@@ -938,7 +2184,7 @@
                                         <div><strong>Published</strong><span>@publication.PublishedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span><b>v@(publication.Version)</b></div>
                                         <div><strong>Payment snapshot</strong><span>@FormatGil(paymentSummary.TotalPayment)</span><b>Locked</b></div>
                                         <div><strong>Pricing evidence</strong><span>@FormatCommissionLocation(_selectedOrder.SourceSnapshot)</span><b>Locked</b></div>
-                                        <div><strong>Crafter access</strong><span>No account or CA workflow required</span><b>Open link</b></div>
+                                        <div><strong>Crafter access</strong><span>@(publication.IsTestFixture ? "Read-only test brief" : "No account or CA workflow required")</span><b>@(publication.IsTestFixture ? "No claims" : "Open link")</b></div>
                                     </div>
                                     <MudAlert Severity="Severity.Success" Dense="true" Class="mt-3">
                                         Repricing this order will not silently alter the published terms. Publish a replacement only when both sides agree to new terms.
@@ -964,7 +2210,8 @@
                                         </MudButton>
                                     </div>
                                 }
-                                else if (!HasActiveCompanyPublication)
+                                else if (SelectedCommissionOwner == null &&
+                                         !HasActiveCompanyPublication)
                                 {
                                     <section class="trade-orders-collaboration-state">
                                         <div class="trade-orders-section-heading">
@@ -1038,45 +2285,61 @@
                 </aside>
         </div>
     }
-</MudContainer>
+</div>
 
 @code {
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementSourceCell => row => @<div class="trade-orders-source-cell">
-        <div class="trade-orders-source-primary">
-            <button type="button"
-                    class="trade-orders-link-button"
-                    @onclick="@(() => OpenAcquisitionEvaluationForProcurementRowAsync(row))">
-                @row.SourceLabel
-            </button>
-            @if (CanEditProcurementSource(row))
-            {
-                <MudMenu Icon="@Icons.Material.Filled.KeyboardArrowDown"
-                         Dense="true"
-                         Size="Size.Small"
-                         AnchorOrigin="Origin.BottomRight"
-                         TransformOrigin="Origin.TopRight"
-                         Class="trade-orders-source-menu">
-                    @foreach (var source in GetProcurementSourceOptions())
-                    {
-                        <MudMenuItem OnClick="@(() => ChangeProcurementRowSourceAsync(row, source))">
-                            @RecipePlanDisplayHelpers.GetSourceDisplayName(source)
-                        </MudMenuItem>
-                    }
-                </MudMenu>
-            }
-            else if (row.IsLiveAcquisitionRow)
-            {
-                <span class="trade-orders-source-locked">locked</span>
-            }
-        </div>
-        @if (!string.IsNullOrWhiteSpace(row.EvidenceSource) &&
-            !string.Equals(row.EvidenceSource, row.SourceLabel, StringComparison.OrdinalIgnoreCase))
+        @if (CanEditProcurementSource(row))
         {
-            <span class="trade-orders-source-evidence" title="@row.UnitCostExplanation">@row.EvidenceSource</span>
+            <select class="trade-orders-procurement-select"
+                    aria-label="@($"{row.ItemName} procurement route")"
+                    value="@row.Source.ToString()"
+                    @onchange="args => ChangeProcurementRowSourceValueAsync(row, args.Value?.ToString())">
+                @foreach (var source in GetProcurementSourceOptions())
+                {
+                    <option value="@source.ToString()"
+                            selected="@(source == row.Source)">@RecipePlanDisplayHelpers.GetSourceDisplayName(source)</option>
+                }
+            </select>
         }
-        @if (!string.IsNullOrWhiteSpace(row.WarningSummary))
+        else
         {
-            <span class="trade-orders-source-warning">@row.WarningSummary</span>
+            <strong class="trade-orders-source-locked">@row.SourceLabel</strong>
+        }
+        <div class="trade-orders-procurement-route-actions">
+            <button type="button"
+                    @onclick="@(() => OpenMarketAnalysisForProcurementRowAsync(row))">
+                Market
+            </button>
+            <button type="button"
+                    @onclick="@(() => OpenAcquisitionEvaluationForProcurementRowAsync(row))">
+                Compare routes
+            </button>
+        </div>
+    </div>;
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => @<div class="trade-orders-procurement-cost-cell">
+        <strong>@FormatGil(row.TotalCost)</strong>
+        <span>@(row.UnitCost > 0 ? $"{FormatGil(row.UnitCost)} each" : row.UnitCostExplanation)</span>
+    </div>;
+
+    private RenderFragment<TradeOrderProcurementRow> RenderProcurementResponsibilityCell => row => @<div class="trade-orders-procurement-responsibility-cell">
+        @if (HasCanonicalCommission)
+        {
+            <strong title="Published commission responsibility is changed through commission terms.">@FormatResponsibility(row.Responsibility)</strong>
+        }
+        else
+        {
+            <select class="trade-orders-procurement-select"
+                    aria-label="@($"{row.ItemName} responsibility")"
+                    value="@row.Responsibility.ToString()"
+                    disabled="@IsSelectedOrderArchived"
+                    @onchange="args => ChangeProcurementRowResponsibilityValueAsync(row, args.Value?.ToString())">
+                <option value="@CommissionMaterialResponsibility.Crafter.ToString()"
+                        selected="@(row.Responsibility == CommissionMaterialResponsibility.Crafter)">Crafter supplies</option>
+                <option value="@CommissionMaterialResponsibility.Provided.ToString()"
+                        selected="@(row.Responsibility == CommissionMaterialResponsibility.Provided)">Company supplies</option>
+            </select>
         }
     </div>;
 }

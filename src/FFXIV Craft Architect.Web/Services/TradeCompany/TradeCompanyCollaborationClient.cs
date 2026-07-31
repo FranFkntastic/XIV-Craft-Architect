@@ -24,6 +24,11 @@ public sealed class TradeCompanyCollaborationClient(
             $"trade/v1/companies/{companyProfileId:D}/discord/claims?orderId={orderId:D}",
             content: null,
             cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return [];
+        }
+
         response.EnsureSuccessStatusCode();
         var claims = await response.Content.ReadFromJsonAsync<DiscordInterestClaimDto[]>(
             JsonOptions,
@@ -53,6 +58,104 @@ public sealed class TradeCompanyCollaborationClient(
             ?? throw new InvalidOperationException(
                 "The Discord publication endpoint returned an empty response.");
         return ToPublication(publication);
+    }
+
+    public async Task<TradeDiscordNotificationRoute?> LoadNotificationRouteAsync(
+        Guid companyProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{companyProfileId:D}/discord/notifications/route",
+            content: null,
+            cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken);
+        var route = await response.Content.ReadFromJsonAsync<DiscordNotificationRouteDto>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The Discord notification route endpoint returned an empty response.");
+        return ToNotificationRoute(route);
+    }
+
+    public async Task<TradeDiscordNotificationRouteSaveResult> SaveNotificationRouteAsync(
+        Guid companyProfileId,
+        TradeDiscordNotificationRouteUpdate update,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Put,
+            $"trade/v1/companies/{companyProfileId:D}/discord/notifications/route",
+            update,
+            cancellationToken);
+        if (response.IsSuccessStatusCode)
+        {
+            var route = await response.Content.ReadFromJsonAsync<DiscordNotificationRouteDto>(
+                JsonOptions,
+                cancellationToken)
+                ?? throw new InvalidOperationException(
+                    "The Discord notification route endpoint returned an empty response.");
+            return new TradeDiscordNotificationRouteSaveResult(
+                TradeDiscordNotificationRouteSaveStatus.Saved,
+                ToNotificationRoute(route));
+        }
+
+        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.BadRequest)
+        {
+            var problem =
+                await response.Content.ReadFromJsonAsync<DiscordNotificationRouteProblemDto>(
+                    JsonOptions,
+                    cancellationToken);
+            return new TradeDiscordNotificationRouteSaveResult(
+                response.StatusCode == HttpStatusCode.Conflict
+                    ? TradeDiscordNotificationRouteSaveStatus.Conflict
+                    : TradeDiscordNotificationRouteSaveStatus.Invalid,
+                problem?.Current == null
+                    ? null
+                    : ToNotificationRoute(problem.Current),
+                problem?.Message);
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken);
+        throw new InvalidOperationException(
+            "Discord notification route save returned an unexpected response.");
+    }
+
+    public async Task<IReadOnlyList<TradeDiscordNotificationDiagnostic>>
+        LoadNotificationDiagnosticsAsync(
+            Guid companyProfileId,
+            CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{companyProfileId:D}/discord/notifications/diagnostics",
+            content: null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<
+                TradeDiscordNotificationDiagnostic[]>(
+                JsonOptions,
+                cancellationToken)
+            ?? [];
+    }
+
+    public async Task RetryNotificationDiagnosticAsync(
+        Guid companyProfileId,
+        Guid diagnosticId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{companyProfileId:D}/discord/notifications/" +
+            $"diagnostics/{diagnosticId:D}/retry",
+            content: null,
+            cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken);
     }
 
     public async Task<TradeCommissionPublicationProjection> PublishAsync(
@@ -335,6 +438,18 @@ public sealed class TradeCompanyCollaborationClient(
             publication.PublishedAtUtc,
             publication.Message);
 
+    private static TradeDiscordNotificationRoute ToNotificationRoute(
+        DiscordNotificationRouteDto route) =>
+        new(
+            route.CommissionerDiscordUserId,
+            route.DestinationMode,
+            route.UpdateChannelId,
+            route.DirectMessageFallback,
+            route.RoutineBehavior,
+            route.ActionRequiredBehavior,
+            route.CriticalExceptionBehavior,
+            route.Revision);
+
     private sealed record DiscordCreatePublicationBody(
         Guid OrderId,
         CompanyRecordRevision OrderRevision,
@@ -383,6 +498,22 @@ public sealed class TradeCompanyCollaborationClient(
         string? Error);
 
     private sealed record DiscordProblemDto(string? Error, string? Message);
+    private sealed record DiscordNotificationRouteDto(
+        CompanyId CompanyId,
+        string CommissionerDiscordUserId,
+        TradeDiscordNotificationDestinationMode DestinationMode,
+        string? UpdateChannelId,
+        TradeDiscordDirectMessageFallback DirectMessageFallback,
+        TradeDiscordNotificationBehavior RoutineBehavior,
+        TradeDiscordNotificationBehavior ActionRequiredBehavior,
+        TradeDiscordNotificationBehavior CriticalExceptionBehavior,
+        long Revision,
+        DateTimeOffset UpdatedAt);
+
+    private sealed record DiscordNotificationRouteProblemDto(
+        string? Error,
+        string? Message,
+        DiscordNotificationRouteDto? Current);
 }
 
 public sealed record TradeCompanyPortablePublication(

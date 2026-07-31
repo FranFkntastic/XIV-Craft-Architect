@@ -325,6 +325,7 @@ jobs:
             const config = JSON.parse(await readFile("deployed-appsettings.json", "utf8"));
             const enabled = true;
             if (config?.LodestoneLookup?.BaseAddress !== "https://" + process.env.DEPLOY_DOMAIN + "/api/") process.exit(1);
+            if (config?.ProfileHost?.BaseAddress !== "https://" + process.env.DEPLOY_DOMAIN + "/api/") process.exit(1);
             if (config?.ProcurementRoutes?.GenerationEnabled !== enabled) process.exit(1);
             if (config?.EngineRewrite?.ExecutionEnabled !== enabled) process.exit(1);
             if (config?.EngineAcceptance?.Enabled !== false) process.exit(1);

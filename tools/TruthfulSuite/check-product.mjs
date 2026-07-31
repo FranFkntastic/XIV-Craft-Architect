@@ -11,6 +11,7 @@ if (!root || !domain || !['main', 'local-dev'].includes(slot) ||
 const config = JSON.parse(await readFile(path.join(root, 'appsettings.json'), 'utf8'));
 const enabled = true;
 assert.equal(config?.LodestoneLookup?.BaseAddress, `https://${domain}/api/`);
+assert.equal(config?.ProfileHost?.BaseAddress, `https://${domain}/api/`);
 assert.equal(config?.ProcurementRoutes?.GenerationEnabled, enabled);
 assert.equal(config?.EngineRewrite?.ExecutionEnabled, enabled);
 assert.equal(config?.EngineAcceptance?.Enabled, false);

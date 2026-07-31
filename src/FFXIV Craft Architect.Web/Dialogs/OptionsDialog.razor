@@ -8,9 +8,7 @@
 @inject AppState AppState
 @inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
-@inject GarlandService GarlandService
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
-@inject TradeLaborBenchmarkCalibrationWorkflowService LaborBenchmarkCalibrationWorkflow
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService ProfileSyncLocalState
 @inject ProfileSyncService ProfileSync
@@ -326,6 +324,13 @@
                                   MaxLength="240"
                                   Class="my-2" />
 
+                    @if (ProfileSync.CurrentStatus.IsConnected)
+                    {
+                        <MudDivider Class="my-4" />
+                        <CompanyDiscordNotificationRouteEditor
+                            CompanyProfileId="_companyProfile.Id" />
+                    }
+
                     <MudDivider Class="my-4" />
 
                     <CompactSelectField Id="options-payment-contract"
@@ -344,204 +349,17 @@
                                      Max="100m"
                                      Class="my-2" />
                     <MudNumericField T="decimal"
-                                     id="labor-material-value-bonus-percent"
-                                     @bind-Value="_companyLaborMaterialBonusPercent"
-                                     Label="Labor material value bonus percent"
+                                     id="labor-gil-per-synth"
+                                     @bind-Value="_companyLaborGilPerSynth"
+                                     Label="Labor pay per synth"
+                                     HelperText="Applied to every active craft synth. Materials supplied by the crafter are reimbursed separately."
                                      Variant="Variant.Outlined"
                                      Margin="Margin.Dense"
                                      HideSpinButtons="true"
-                                     Min="0m"
-                                     Max="100m"
+                                     Min="1m"
+                                     Adornment="Adornment.End"
+                                     AdornmentText="gil"
                                      Class="my-2" />
-
-                    <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Labor Standard</MudText>
-                    <MudSwitch T="bool"
-                               Value="_useCustomLaborBenchmark"
-                               ValueChanged="OnCustomLaborBenchmarkChanged"
-                               Label="Use custom benchmark"
-                               Color="Color.Primary"
-                               Class="my-2" />
-                    @if (!_useCustomLaborBenchmark)
-                    {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
-                            Managed Cobalt Rivets benchmark. Recalculate uses fresh market evidence when available and refreshes only when needed.
-                        </MudText>
-                        <MudButton Variant="Variant.Outlined"
-                                   Color="Color.Secondary"
-                                   StartIcon="@Icons.Material.Filled.Calculate"
-                                   OnClick="RecalculateLaborBenchmarkAsync"
-                                   Disabled="_companyIsBusy || _laborBenchmarkIsRecalculating">
-                            @if (_laborBenchmarkIsRecalculating)
-                            {
-                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                            }
-                            Recalculate Benchmark
-                        </MudButton>
-                        <MudButton Variant="Variant.Text"
-                                   Color="Color.Secondary"
-                                   StartIcon="@Icons.Material.Filled.AccountTree"
-                                   OnClick="ToggleLaborBenchmarkPlanPreviewAsync"
-                                   Disabled="_companyIsBusy || _laborBenchmarkPlanPreviewIsLoading"
-                                   Class="ml-2">
-                            @if (_laborBenchmarkPlanPreviewIsLoading)
-                            {
-                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                            }
-                            @(_laborBenchmarkPlanPreviewIsLoading
-                                ? "Loading Plan"
-                                : _showLaborBenchmarkPlanPreview ? "Hide Plan" : "View Plan")
-                        </MudButton>
-                    }
-                    @if (!string.IsNullOrWhiteSpace(_laborBenchmarkStatus))
-                    {
-                        <MudText Typo="Typo.caption" Color="@_laborBenchmarkStatusColor" Class="mt-2 mb-2 d-block">
-                            @_laborBenchmarkStatus
-                        </MudText>
-                    }
-                    @if (_useCustomLaborBenchmark)
-                    {
-                        <MudTextField @bind-Value="_laborStandardName"
-                                      id="labor-standard-name"
-                                      Label="Benchmark name"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Class="my-2" />
-                        <div style="display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end;">
-                            <MudTextField @bind-Value="_laborBenchmarkItemSearchQuery"
-                                          id="labor-benchmark-item-search"
-                                          Label="Find benchmark item"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense" />
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       StartIcon="@Icons.Material.Filled.Search"
-                                       OnClick="SearchLaborBenchmarkItemsAsync"
-                                       Disabled="_laborBenchmarkItemSearchIsSearching">
-                                @if (_laborBenchmarkItemSearchIsSearching)
-                                {
-                                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                                }
-                                Search
-                            </MudButton>
-                        </div>
-                        @if (_laborBenchmarkItemSearchResults.Count > 0)
-                        {
-                            <MudSimpleTable Dense="true" Hover="true" Class="mb-2">
-                                <thead>
-                                    <tr>
-                                        <th>Item</th>
-                                        <th class="text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    @foreach (var result in _laborBenchmarkItemSearchResults)
-                                    {
-                                        <tr>
-                                            <td>@result.Object.Name</td>
-                                            <td class="text-right">
-                                                <MudButton Variant="Variant.Text"
-                                                           Color="Color.Secondary"
-                                                           Size="Size.Small"
-                                                           OnClick="() => SelectLaborBenchmarkItem(result)">
-                                                    Select
-                                                </MudButton>
-                                            </td>
-                                        </tr>
-                                    }
-                                </tbody>
-                            </MudSimpleTable>
-                        }
-                        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
-                            <MudTextField @bind-Value="_laborBenchmarkItemName"
-                                          id="labor-benchmark-item-name"
-                                          Label="Selected benchmark item"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          ReadOnly="true" />
-                            <MudNumericField T="int"
-                                             id="labor-benchmark-quantity"
-                                             @bind-Value="_laborBenchmarkQuantity"
-                                             Label="Benchmark quantity"
-                                             Variant="Variant.Outlined"
-                                             Margin="Margin.Dense"
-                                             HideSpinButtons="true"
-                                             Min="1" />
-                            <MudNumericField T="int"
-                                             id="labor-benchmark-synths"
-                                             @bind-Value="_laborBenchmarkSynthCount"
-                                             Label="Benchmark synths"
-                                             Variant="Variant.Outlined"
-                                             Margin="Margin.Dense"
-                                             HideSpinButtons="true"
-                                             Min="1" />
-                            <MudNumericField T="decimal"
-                                             id="labor-benchmark-payout"
-                                             @bind-Value="_laborBenchmarkPayout"
-                                             Label="Benchmark payout"
-                                             Variant="Variant.Outlined"
-                                             Margin="Margin.Dense"
-                                             HideSpinButtons="true"
-                                             Min="0m" />
-                            <MudTextField Value="@FormatGilPerSynth()"
-                                          id="labor-benchmark-derived-rate"
-                                          Label="Derived rate"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          ReadOnly="true" />
-                        </div>
-                        <MudSwitch @bind-Value="_laborBenchmarkRequiresHq"
-                                   Label="Benchmark requires HQ"
-                                   Color="Color.Primary"
-                                   Class="my-2" />
-                    }
-                    else
-                    {
-                        <div class="d-flex flex-wrap gap-2 my-2">
-                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">@_laborBenchmarkItemName</MudChip>
-                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">x@_laborBenchmarkQuantity.ToString("N0")</MudChip>
-                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">@_laborBenchmarkSynthCount.ToString("N0") synths</MudChip>
-                            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined">@FormatGilPerSynth()</MudChip>
-                        </div>
-                    }
-                    @if (_showLaborBenchmarkPlanPreview)
-                    {
-                        <MudPaper Variant="Variant.Outlined" Class="pa-3 my-3">
-                            @if (_laborBenchmarkPlanPreview == null)
-                            {
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                    @_laborBenchmarkPlanPreviewStatus
-                                </MudText>
-                            }
-                            else
-                            {
-                                <MudText Typo="Typo.subtitle2">@_laborBenchmarkPlanPreview.Title</MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
-                                    Data center: @_laborBenchmarkPlanPreview.DataCenter
-                                </MudText>
-                                <MudSimpleTable Dense="true" Hover="true">
-                                    <thead>
-                                        <tr>
-                                            <th>Item</th>
-                                            <th class="text-right">Qty</th>
-                                            <th>Source</th>
-                                            <th>Role</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        @foreach (var item in _laborBenchmarkPlanPreview.Items)
-                                        {
-                                            <tr>
-                                                <td style="@($"padding-left: {item.Depth * 18}px;")">@item.Name</td>
-                                                <td class="text-right">@item.Quantity.ToString("N0")</td>
-                                                <td>@RecipePlanDisplayHelpers.GetSourceDisplayName(item.Source)</td>
-                                                <td>@(item.IsActiveProcurement ? "Procure" : "Craft tree")</td>
-                                            </tr>
-                                        }
-                                    </tbody>
-                                </MudSimpleTable>
-                            }
-                        </MudPaper>
-                    }
 
                     <MudDivider Class="my-4" />
 
@@ -586,110 +404,201 @@
 
             else if (_activePanel == OptionsPanel.Hosting)
             {
-                <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
-                    Connect this browser profile to a private Craft Architect profile host.
-                </MudText>
+                <MudPaper Variant="Variant.Outlined" Class="pa-4">
+                    <div class="d-flex align-center justify-space-between gap-3">
+                        <div>
+                            <MudText Typo="Typo.h6">
+                                @(ProfileSync.CurrentStatus.IsConnected
+                                    ? GetProfileHostConnectionLabel()
+                                    : "Craft Architect Hosted Profiles")
+                            </MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                @(ProfileSync.CurrentStatus.IsConnected
+                                    ? GetConnectedProfileHostSummary()
+                                    : "Secure profile service selected for this release")
+                            </MudText>
+                        </div>
+                        <MudChip T="string"
+                                 Size="Size.Small"
+                                 Variant="Variant.Outlined"
+                                 Color="@GetProfileHostConnectionColor()">
+                            @GetProfileHostConnectionStateLabel()
+                        </MudChip>
+                    </div>
 
-                <MudGrid Spacing="2">
-                    <MudItem xs="12" md="7">
-                        <MudTextField @bind-Value="_profileHostUrl"
-                                      id="profile-host-url"
-                                      Label="Host URL"
-                                      Placeholder="https://craft.example.com"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Immediate="true"
-                                      Disabled="_profileHostIsBusy" />
-                    </MudItem>
-                    <MudItem xs="12" md="5">
+                    @if (!ProfileSync.CurrentStatus.IsConnected)
+                    {
                         <MudTextField @bind-Value="_profileHostAccessKey"
                                       id="profile-host-access-key"
                                       Label="Access key"
+                                      HelperText="Paste an access key, or pair this browser from one that is already connected."
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
                                       Immediate="true"
                                       InputType="InputType.Password"
-                                      Disabled="_profileHostIsBusy" />
-                    </MudItem>
-                </MudGrid>
+                                      Disabled="_profileHostIsBusy"
+                                      Class="mt-4" />
 
-                <MudRadioGroup T="FirstConnectMode" @bind-Value="_profileHostFirstConnectMode" Class="my-2">
-                    <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.UploadLocal" Color="Color.Primary">
-                        Upload this browser first
-                    </MudRadio>
-                    <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.DownloadRemote" Color="Color.Primary">
-                        Download server profile first
-                    </MudRadio>
-                </MudRadioGroup>
+                        <div class="d-flex flex-wrap gap-2 mt-3">
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.CloudSync"
+                                       OnClick="ConnectProfileHostAsync"
+                                       Disabled="_profileHostIsBusy">
+                                Connect
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Secondary"
+                                       StartIcon="@Icons.Material.Filled.Devices"
+                                       OnClick="ToggleProfileHostPairingMode"
+                                       Disabled="_profileHostIsBusy">
+                                Pair This Browser
+                            </MudButton>
+                        </div>
 
-                <div class="d-flex flex-wrap gap-2 my-3">
-                    <MudButton Variant="Variant.Outlined"
-                               Color="Color.Secondary"
-                               StartIcon="@Icons.Material.Filled.WifiTethering"
-                               OnClick="TestProfileHostConnectionAsync"
-                               Disabled="_profileHostIsBusy">
-                        Test
-                    </MudButton>
-                    <MudButton Variant="Variant.Filled"
-                               Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.CloudSync"
-                               OnClick="ConnectProfileHostAsync"
-                               Disabled="_profileHostIsBusy">
-                        Connect
-                    </MudButton>
-                    <MudButton Variant="Variant.Outlined"
-                               Color="Color.Secondary"
-                               StartIcon="@Icons.Material.Filled.Sync"
-                               OnClick="SyncProfileHostNowAsync"
-                               Disabled="_profileHostIsBusy || !ProfileSync.CurrentStatus.IsConnected">
-                        Sync Now
-                    </MudButton>
-                    <MudButton Variant="Variant.Text"
-                               Color="Color.Error"
-                               StartIcon="@Icons.Material.Filled.LinkOff"
-                               OnClick="DisconnectProfileHostAsync"
-                               Disabled="_profileHostIsBusy || !ProfileSync.CurrentStatus.IsConnected">
-                        Disconnect
-                    </MudButton>
-                </div>
+                        @if (_profileHostPairingMode)
+                        {
+                            <MudPaper Variant="Variant.Outlined" Class="pa-3 mt-3">
+                                <MudText Typo="Typo.subtitle2">Pair from a connected browser</MudText>
+                                <MudTextField @bind-Value="_profileHostPairingCode"
+                                              id="profile-host-pairing-code"
+                                              Label="One-time pairing code"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              Immediate="true"
+                                              Disabled="_profileHostIsBusy"
+                                              Class="mt-2" />
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.Link"
+                                           OnClick="RedeemProfileHostPairingCodeAsync"
+                                           Disabled="_profileHostIsBusy"
+                                           Class="mt-2">
+                                    Connect With Code
+                                </MudButton>
+                            </MudPaper>
+                        }
 
-                @if (_profileHostIsBusy)
-                {
-                    <MudProgressLinear Indeterminate="true" Class="my-3" />
-                    <MudText Typo="Typo.caption" Align="Align.Center" Class="d-block">
-                        Updating hosted profile...
-                    </MudText>
-                }
+                        <MudButton Variant="Variant.Text"
+                                   Color="Color.Secondary"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.SettingsEthernet"
+                                   OnClick="ToggleCustomProfileHost"
+                                   Disabled="_profileHostIsBusy"
+                                   Class="mt-3">
+                            @(_profileHostUseCustomHost ? "Use Release Host" : "Advanced: Use Custom Host")
+                        </MudButton>
 
-                <MudPaper Variant="Variant.Outlined" Class="pa-3 my-3">
-                    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px;">
-                        <div>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Connection</MudText>
-                            <MudText Typo="Typo.body2">@GetProfileHostConnectionLabel()</MudText>
+                        @if (_profileHostUseCustomHost)
+                        {
+                            <MudTextField @bind-Value="_profileHostUrl"
+                                          id="profile-host-url"
+                                          Label="Profile host API URL"
+                                          HelperText="Use the full API base address supplied by the host."
+                                          Placeholder="https://craft.example.com/api/"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          Immediate="true"
+                                          Disabled="_profileHostIsBusy"
+                                          Class="mt-2" />
+                        }
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-wrap gap-2 mt-4">
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Secondary"
+                                       StartIcon="@Icons.Material.Filled.Sync"
+                                       OnClick="SyncProfileHostNowAsync"
+                                       Disabled="_profileHostIsBusy">
+                                Sync Now
+                            </MudButton>
+                            <MudButton Variant="Variant.Outlined"
+                                       Color="Color.Secondary"
+                                       StartIcon="@Icons.Material.Filled.Devices"
+                                       OnClick="CreateProfileHostPairingCodeAsync"
+                                       Disabled="_profileHostIsBusy">
+                                Connect Another Browser
+                            </MudButton>
+                            <MudButton Variant="Variant.Text"
+                                       Color="Color.Error"
+                                       StartIcon="@Icons.Material.Filled.LinkOff"
+                                       OnClick="DisconnectProfileHostAsync"
+                                       Disabled="_profileHostIsBusy">
+                                Disconnect
+                            </MudButton>
                         </div>
-                        <div>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Host</MudText>
-                            <MudText Typo="Typo.body2">@GetProfileHostReachabilityLabel()</MudText>
+
+                        @if (!string.IsNullOrWhiteSpace(_profileHostGeneratedPairingCode))
+                        {
+                            <MudPaper Variant="Variant.Outlined" Class="pa-3 mt-3">
+                                <MudText Typo="Typo.subtitle2">One-time pairing code</MudText>
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    Use this on the other browser before @_profileHostPairingExpiresAtUtc?.ToLocalTime().ToString("t").
+                                </MudText>
+                                <div class="d-flex align-center gap-2 mt-2">
+                                    <MudTextField Value="@_profileHostGeneratedPairingCode"
+                                                  ReadOnly="true"
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense"
+                                                  Class="flex-grow-1" />
+                                    <MudButton Variant="Variant.Outlined"
+                                               StartIcon="@Icons.Material.Filled.ContentCopy"
+                                               OnClick="CopyProfileHostPairingCodeAsync">
+                                        Copy
+                                    </MudButton>
+                                </div>
+                            </MudPaper>
+                        }
+                    }
+
+                    @if (_profileHostBootstrapPreview != null && _profileHostPendingSettings != null)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-4">
+                            Both this browser and the hosted profile contain data. Choose which side initializes this connection.
+                        </MudAlert>
+                        <MudRadioGroup T="FirstConnectMode" @bind-Value="_profileHostFirstConnectMode" Class="my-2">
+                            <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.UploadLocal" Color="Color.Primary">
+                                Keep this browser (@_profileHostBootstrapPreview.LocalObjectCount.ToString("N0") objects)
+                            </MudRadio>
+                            <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.DownloadRemote" Color="Color.Primary">
+                                Use hosted profile (@_profileHostBootstrapPreview.RemoteObjectCount.ToString("N0") objects)
+                            </MudRadio>
+                        </MudRadioGroup>
+                        <div class="d-flex gap-2">
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       OnClick="CompleteProfileHostConnectionAsync"
+                                       Disabled="_profileHostIsBusy">
+                                Continue
+                            </MudButton>
+                            <MudButton Variant="Variant.Text"
+                                       OnClick="CancelPendingProfileHostConnection"
+                                       Disabled="_profileHostIsBusy">
+                                Cancel
+                            </MudButton>
                         </div>
-                        <div>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Revision</MudText>
-                            <MudText Typo="Typo.body2">@ProfileSync.CurrentStatus.LastSyncRevision.ToString("N0")</MudText>
-                        </div>
-                        <div>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Queued / conflicts</MudText>
-                            <MudText Typo="Typo.body2">@ProfileSync.CurrentStatus.PendingCount.ToString("N0") / @ProfileSync.CurrentStatus.ConflictCount.ToString("N0")</MudText>
-                        </div>
-                    </div>
+                    }
+
+                    @if (_profileHostIsBusy)
+                    {
+                        <MudProgressLinear Indeterminate="true" Class="mt-4" />
+                        <MudText Typo="Typo.caption" Align="Align.Center" Class="mt-2 d-block">
+                            @_profileHostBusyMessage
+                        </MudText>
+                    }
+
                     @if (!string.IsNullOrWhiteSpace(_profileHostStatus))
                     {
-                        <MudText Typo="Typo.caption" Color="@_profileHostStatusColor" Class="mt-2 d-block">
+                        <MudText Typo="Typo.caption" Color="@_profileHostStatusColor" Class="mt-3 d-block">
                             @_profileHostStatus
                         </MudText>
                     }
-                    else if (!string.IsNullOrWhiteSpace(ProfileSync.CurrentStatus.Message))
+                    else if (ProfileSync.CurrentStatus.ConflictCount > 0 ||
+                             ProfileSync.CurrentStatus.PendingCount > 0)
                     {
-                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
-                            @ProfileSync.CurrentStatus.Message
+                        <MudText Typo="Typo.caption" Color="Color.Warning" Class="mt-3 d-block">
+                            @GetProfileHostAttentionSummary()
                         </MudText>
                     }
                 </MudPaper>
@@ -1117,27 +1026,7 @@
     private bool _companyIsBusy;
     private TradePaymentContractMode _companyPaymentContract = TradePaymentContractMode.LegacyCommission;
     private decimal _companyLegacyCommissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
-    private decimal _companyLaborMaterialBonusPercent = TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent;
-    private string _laborStandardName = "Cobalt Rivets benchmark";
-    private int _laborBenchmarkItemId = TradeLaborStandardCalibrationService.CobaltRivetsItemId;
-    private string _laborBenchmarkItemName = TradeLaborStandardCalibrationService.CobaltRivetsItemName;
-    private int _laborBenchmarkQuantity = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity;
-    private bool _laborBenchmarkRequiresHq = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq;
-    private decimal _laborBenchmarkPayout = 120_000m;
-    private int _laborBenchmarkSynthCount = 200;
-    private bool _useCustomLaborBenchmark;
-    private bool _laborBenchmarkIsRecalculating;
-    private bool _showLaborBenchmarkPlanPreview;
-    private bool _laborBenchmarkPlanPreviewIsLoading;
-    private string? _laborBenchmarkStatus;
-    private Color _laborBenchmarkStatusColor = Color.Secondary;
-    private DateTime? _laborBenchmarkCalibratedAtUtc;
-    private string? _laborBenchmarkCalibrationEvidence;
-    private TradeLaborBenchmarkPlanPreview? _laborBenchmarkPlanPreview;
-    private string? _laborBenchmarkPlanPreviewStatus;
-    private string _laborBenchmarkItemSearchQuery = string.Empty;
-    private bool _laborBenchmarkItemSearchIsSearching;
-    private readonly List<GarlandSearchResult> _laborBenchmarkItemSearchResults = [];
+    private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
     private string _profileHostUrl = string.Empty;
     private string _profileHostAccessKey = string.Empty;
     private string? _profileHostProfileName;
@@ -1145,6 +1034,14 @@
     private FirstConnectMode _profileHostFirstConnectMode = FirstConnectMode.UploadLocal;
     private string? _profileHostStatus;
     private Color _profileHostStatusColor = Color.Secondary;
+    private string _profileHostBusyMessage = "Connecting...";
+    private bool _profileHostPairingMode;
+    private string _profileHostPairingCode = string.Empty;
+    private bool _profileHostUseCustomHost;
+    private string? _profileHostGeneratedPairingCode;
+    private DateTime? _profileHostPairingExpiresAtUtc;
+    private ProfileSyncBootstrapPreview? _profileHostBootstrapPreview;
+    private HostedProfileConnectionSettings? _profileHostPendingSettings;
     private bool _diagnosticsBusy;
     private bool _diagnosticSnapshotReady;
     private bool _prepareDiagnosticAttachment;
@@ -1418,32 +1315,11 @@
         _companyName = profile.Name;
         _companyDescription = profile.Description;
         _companyCommissionContact = profile.CommissionContact;
-        var policy = TradeLaborStandardCalibrationService.NormalizeManagedCobaltRivetsBenchmark(
+        var policy = TradePaymentPolicyNormalizer.Normalize(
             profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
         _companyPaymentContract = policy.ActiveContract;
         _companyLegacyCommissionPercent = policy.LegacyCommissionPercent;
-        _companyLaborMaterialBonusPercent = policy.LaborStandardMaterialBonusPercent;
-
-        if (policy.LaborStandard != null)
-        {
-            _laborStandardName = policy.LaborStandard.Name;
-            _laborBenchmarkItemId = policy.LaborStandard.BenchmarkItemId;
-            _laborBenchmarkItemName = policy.LaborStandard.BenchmarkItemName;
-            _laborBenchmarkQuantity = policy.LaborStandard.BenchmarkQuantity;
-            _laborBenchmarkRequiresHq = policy.LaborStandard.BenchmarkRequiresHq;
-            _laborBenchmarkPayout = policy.LaborStandard.BenchmarkLaborPayout;
-            _laborBenchmarkSynthCount = policy.LaborStandard.BenchmarkSynthCount;
-            _useCustomLaborBenchmark = policy.LaborStandard.IsCustomBenchmark;
-            _laborBenchmarkCalibratedAtUtc = policy.LaborStandard.CalibratedAtUtc;
-            _laborBenchmarkCalibrationEvidence = policy.LaborStandard.CalibrationEvidence;
-        }
-        else
-        {
-            RestoreManagedLaborBenchmarkFields(keepCurrentRate: true);
-            _laborBenchmarkCalibratedAtUtc = null;
-            _laborBenchmarkCalibrationEvidence = null;
-            _useCustomLaborBenchmark = false;
-        }
+        _companyLaborGilPerSynth = policy.LaborGilPerSynth;
     }
 
     private TradePaymentPolicy? BuildCompanyPaymentPolicy()
@@ -1454,258 +1330,16 @@
             return null;
         }
 
-        if (_companyLaborMaterialBonusPercent < 0 || _companyLaborMaterialBonusPercent > 100)
+        if (_companyLaborGilPerSynth <= 0)
         {
-            Snackbar.Add("Labor material value bonus percent must be between 0 and 100.", Severity.Error);
-            return null;
-        }
-
-        var laborStandard = BuildLaborStandard();
-        if (_companyPaymentContract == TradePaymentContractMode.LaborStandard && laborStandard == null)
-        {
-            Snackbar.Add("Labor standard requires a benchmark name, item, payout, and synth count.", Severity.Error);
+            Snackbar.Add("Labor pay per synth must be greater than zero.", Severity.Error);
             return null;
         }
 
         return new TradePaymentPolicy(
             _companyPaymentContract,
             _companyLegacyCommissionPercent,
-            laborStandard)
-        {
-            LaborStandardMaterialBonusPercent = _companyLaborMaterialBonusPercent
-        };
-    }
-
-    private TradeLaborStandard? BuildLaborStandard()
-    {
-        if (string.IsNullOrWhiteSpace(_laborStandardName) ||
-            string.IsNullOrWhiteSpace(_laborBenchmarkItemName) ||
-            _laborBenchmarkItemId <= 0 ||
-            _laborBenchmarkQuantity <= 0 ||
-            _laborBenchmarkPayout <= 0 ||
-            _laborBenchmarkSynthCount <= 0)
-        {
-            return null;
-        }
-
-        return new TradeLaborStandard(
-            _laborStandardName.Trim(),
-            _laborBenchmarkItemId,
-            _laborBenchmarkItemName.Trim(),
-            _laborBenchmarkQuantity,
-            _laborBenchmarkRequiresHq,
-            _laborBenchmarkPayout,
-            _laborBenchmarkSynthCount,
-            _laborBenchmarkCalibratedAtUtc ?? DateTime.UtcNow,
-            _useCustomLaborBenchmark
-                ? TradeLaborBenchmarkMode.Custom
-                : TradeLaborBenchmarkMode.CobaltRivets,
-            _laborBenchmarkCalibratedAtUtc,
-            _laborBenchmarkCalibrationEvidence);
-    }
-
-    private string FormatGilPerSynth()
-    {
-        return _laborBenchmarkSynthCount <= 0
-            ? "Unavailable"
-            : $"{_laborBenchmarkPayout / _laborBenchmarkSynthCount:N2} gil/synth";
-    }
-
-    private void OnCustomLaborBenchmarkChanged(bool useCustomBenchmark)
-    {
-        _useCustomLaborBenchmark = useCustomBenchmark;
-        _laborBenchmarkStatus = null;
-        _showLaborBenchmarkPlanPreview = false;
-        _laborBenchmarkPlanPreview = null;
-        _laborBenchmarkPlanPreviewStatus = null;
-        _laborBenchmarkItemSearchResults.Clear();
-        if (!useCustomBenchmark)
-        {
-            RestoreManagedLaborBenchmarkFields(keepCurrentRate: true);
-        }
-        else
-        {
-            _laborBenchmarkCalibratedAtUtc = DateTime.UtcNow;
-            _laborBenchmarkCalibrationEvidence = "Custom company benchmark.";
-            _laborBenchmarkItemSearchQuery = _laborBenchmarkItemName;
-        }
-    }
-
-    private void RestoreManagedLaborBenchmarkFields(bool keepCurrentRate)
-    {
-        _laborStandardName = "Cobalt Rivets benchmark";
-        _laborBenchmarkItemId = TradeLaborStandardCalibrationService.CobaltRivetsItemId;
-        _laborBenchmarkItemName = TradeLaborStandardCalibrationService.CobaltRivetsItemName;
-        _laborBenchmarkQuantity = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkQuantity;
-        _laborBenchmarkRequiresHq = TradeLaborStandardCalibrationService.CobaltRivetsBenchmarkRequiresHq;
-        if (!keepCurrentRate)
-        {
-            _laborBenchmarkPayout = 120_000m;
-            _laborBenchmarkSynthCount = 200;
-        }
-
-        _laborBenchmarkCalibrationEvidence ??= "Managed Cobalt Rivets benchmark.";
-    }
-
-    private async Task ToggleLaborBenchmarkPlanPreviewAsync()
-    {
-        if (_showLaborBenchmarkPlanPreview)
-        {
-            _showLaborBenchmarkPlanPreview = false;
-            return;
-        }
-
-        _showLaborBenchmarkPlanPreview = true;
-        if (_laborBenchmarkPlanPreview != null)
-        {
-            return;
-        }
-
-        _laborBenchmarkPlanPreviewIsLoading = true;
-        _laborBenchmarkPlanPreviewStatus = "Loading Cobalt Rivets benchmark craft plan...";
-        try
-        {
-            _laborBenchmarkPlanPreview = await LaborBenchmarkCalibrationWorkflow.BuildManagedCobaltRivetsPlanPreviewAsync(_defaultDataCenter);
-            _laborBenchmarkPlanPreviewStatus = null;
-        }
-        catch (Exception ex)
-        {
-            _laborBenchmarkPlanPreview = null;
-            _laborBenchmarkPlanPreviewStatus = $"Could not load benchmark plan: {ex.Message}";
-            Snackbar.Add(_laborBenchmarkPlanPreviewStatus, Severity.Error);
-        }
-        finally
-        {
-            _laborBenchmarkPlanPreviewIsLoading = false;
-        }
-    }
-
-    private async Task SearchLaborBenchmarkItemsAsync()
-    {
-        if (string.IsNullOrWhiteSpace(_laborBenchmarkItemSearchQuery))
-        {
-            Snackbar.Add("Enter an item name to search.", Severity.Warning);
-            return;
-        }
-
-        _laborBenchmarkItemSearchIsSearching = true;
-        _laborBenchmarkItemSearchResults.Clear();
-        try
-        {
-            var results = await GarlandService.SearchAsync(_laborBenchmarkItemSearchQuery);
-            _laborBenchmarkItemSearchResults.AddRange(results.Take(25));
-            if (_laborBenchmarkItemSearchResults.Count == 0)
-            {
-                Snackbar.Add("No matching items found.", Severity.Warning);
-            }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Benchmark item search failed: {ex.Message}", Severity.Error);
-        }
-        finally
-        {
-            _laborBenchmarkItemSearchIsSearching = false;
-        }
-    }
-
-    private void SelectLaborBenchmarkItem(GarlandSearchResult result)
-    {
-        if (result.Id <= 0 || string.IsNullOrWhiteSpace(result.Object.Name))
-        {
-            Snackbar.Add("Selected benchmark item did not include a usable item identity.", Severity.Error);
-            return;
-        }
-
-        _laborBenchmarkItemId = result.Id;
-        _laborBenchmarkItemName = result.Object.Name;
-        _laborBenchmarkItemSearchQuery = result.Object.Name;
-        _laborBenchmarkItemSearchResults.Clear();
-        _laborBenchmarkCalibratedAtUtc = DateTime.UtcNow;
-        _laborBenchmarkCalibrationEvidence = "Custom company benchmark.";
-    }
-
-    private async Task RecalculateLaborBenchmarkAsync()
-    {
-        if (_companyProfile == null)
-        {
-            return;
-        }
-
-        if (_laborBenchmarkSynthCount <= 0)
-        {
-            Snackbar.Add("Benchmark synth count must be greater than zero.", Severity.Error);
-            return;
-        }
-
-        _companyIsBusy = true;
-        _laborBenchmarkIsRecalculating = true;
-        _laborBenchmarkStatus = "Recalculating Cobalt Rivets benchmark...";
-        _laborBenchmarkStatusColor = Color.Secondary;
-        try
-        {
-            var result = await LaborBenchmarkCalibrationWorkflow.RecalculateManagedCobaltRivetsAsync(
-                new TradeLaborBenchmarkCalibrationRequest(
-                    _defaultDataCenter,
-                    _selectedRegion,
-                    _companyLegacyCommissionPercent,
-                    _laborBenchmarkSynthCount));
-
-            if (result.LaborStandard == null)
-            {
-                _laborBenchmarkStatus = result.Message;
-                _laborBenchmarkStatusColor = Color.Error;
-                Snackbar.Add(result.Message, Severity.Error);
-                return;
-            }
-
-            ApplyLaborStandardFields(result.LaborStandard);
-            _useCustomLaborBenchmark = false;
-            _companyProfile.PaymentPolicy = new TradePaymentPolicy(
-                _companyPaymentContract,
-                _companyLegacyCommissionPercent,
-                result.LaborStandard)
-            {
-                LaborStandardMaterialBonusPercent = _companyLaborMaterialBonusPercent
-            };
-
-            var saved = await SaveCompanyProfileAsync(_companyProfile);
-            if (!saved)
-            {
-                _laborBenchmarkStatus = "Benchmark recalculated but company profile save failed.";
-                _laborBenchmarkStatusColor = Color.Error;
-                Snackbar.Add(_laborBenchmarkStatus, Severity.Error);
-                return;
-            }
-
-            _laborBenchmarkStatus = result.Message;
-            _laborBenchmarkStatusColor = Color.Success;
-            Snackbar.Add(result.Message, Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            _laborBenchmarkStatus = $"Benchmark recalculation failed: {ex.Message}";
-            _laborBenchmarkStatusColor = Color.Error;
-            Snackbar.Add(_laborBenchmarkStatus, Severity.Error);
-        }
-        finally
-        {
-            _laborBenchmarkIsRecalculating = false;
-            _companyIsBusy = false;
-        }
-    }
-
-    private void ApplyLaborStandardFields(TradeLaborStandard laborStandard)
-    {
-        _laborStandardName = laborStandard.Name;
-        _laborBenchmarkItemId = laborStandard.BenchmarkItemId;
-        _laborBenchmarkItemName = laborStandard.BenchmarkItemName;
-        _laborBenchmarkQuantity = laborStandard.BenchmarkQuantity;
-        _laborBenchmarkRequiresHq = laborStandard.BenchmarkRequiresHq;
-        _laborBenchmarkPayout = laborStandard.BenchmarkLaborPayout;
-        _laborBenchmarkSynthCount = laborStandard.BenchmarkSynthCount;
-        _laborBenchmarkCalibratedAtUtc = laborStandard.CalibratedAtUtc;
-        _laborBenchmarkCalibrationEvidence = laborStandard.CalibrationEvidence;
+            _companyLaborGilPerSynth);
     }
 
     private async Task ExportCompanyProfileAsync()
@@ -1779,42 +1413,15 @@
     private async Task LoadProfileHostSettingsAsync()
     {
         var settings = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
-        _profileHostUrl = settings.HostUrl ?? string.Empty;
+        _profileHostUrl = string.IsNullOrWhiteSpace(settings.HostUrl)
+            ? ProfileHostClient.DefaultHostUrl
+            : settings.HostUrl;
         _profileHostAccessKey = settings.AccessKey ?? string.Empty;
         _profileHostProfileName = settings.ConnectedProfileName;
+        _profileHostUseCustomHost = !ProfileHostAddressesMatch(
+            _profileHostUrl,
+            ProfileHostClient.DefaultHostUrl);
         await ProfileSync.InitializeAsync();
-    }
-
-    private async Task TestProfileHostConnectionAsync()
-    {
-        var settings = BuildProfileHostConnectionSettings();
-        if (settings == null)
-        {
-            return;
-        }
-
-        _profileHostIsBusy = true;
-        try
-        {
-            var health = await ProfileHostClient.GetHealthAsync(settings.HostUrl!, CancellationToken.None);
-            if (!health.ProfileHostEnabled)
-            {
-                SetProfileHostStatus("Profile hosting is not enabled on that server.", Color.Error);
-                return;
-            }
-
-            var profile = await ProfileHostClient.GetProfileAsync(settings.HostUrl!, settings.AccessKey!, CancellationToken.None);
-            _profileHostProfileName = profile.DisplayName;
-            SetProfileHostStatus($"Connected to {profile.DisplayName} at revision {profile.ServerRevision:N0}.", Color.Success);
-        }
-        catch (Exception ex)
-        {
-            SetProfileHostStatus($"Profile host check failed: {ex.Message}", Color.Error);
-        }
-        finally
-        {
-            _profileHostIsBusy = false;
-        }
     }
 
     private async Task ConnectProfileHostAsync()
@@ -1826,18 +1433,33 @@
         }
 
         _profileHostIsBusy = true;
+        _profileHostBusyMessage = "Checking profile host...";
+        ClearPendingProfileHostConnection();
         try
         {
+            var health = await ProfileHostClient.GetHealthAsync(
+                settings.HostUrl!,
+                CancellationToken.None);
+            if (!health.ProfileHostEnabled)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.ProfileHostingDisabled,
+                    "Profile hosting is not enabled on that server.");
+            }
+            if (health.ProtocolVersion != 1)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.IncompatibleHost,
+                    "This profile host uses an unsupported connection protocol.");
+            }
+
+            _profileHostBusyMessage = "Authorizing this browser...";
             var profile = await ProfileHostClient.GetProfileAsync(settings.HostUrl!, settings.AccessKey!, CancellationToken.None);
-            settings.ConnectedProfileId = profile.ProfileId;
-            settings.ConnectedProfileName = profile.DisplayName;
-            await ProfileSync.ConnectAsync(settings, _profileHostFirstConnectMode);
-            _profileHostProfileName = profile.DisplayName;
-            SetProfileHostStatus($"Hosted profile connected: {profile.DisplayName}.", Color.Success);
+            await PrepareVerifiedProfileHostConnectionAsync(settings, profile);
         }
         catch (Exception ex)
         {
-            SetProfileHostStatus($"Hosted profile connection failed: {ex.Message}", Color.Error);
+            SetProfileHostFailure(ex);
         }
         finally
         {
@@ -1845,17 +1467,190 @@
         }
     }
 
-    private async Task SyncProfileHostNowAsync()
+    private async Task RedeemProfileHostPairingCodeAsync()
     {
+        if (string.IsNullOrWhiteSpace(_profileHostPairingCode))
+        {
+            SetProfileHostStatus("Enter the one-time pairing code from the connected browser.", Color.Error);
+            return;
+        }
+
         _profileHostIsBusy = true;
+        _profileHostBusyMessage = "Pairing this browser...";
+        ClearPendingProfileHostConnection();
         try
         {
-            await ProfileSync.SyncNowAsync();
-            SetProfileHostStatus(ProfileSync.CurrentStatus.Message ?? "Sync complete.", Color.Success);
+            var hostUrl = GetSelectedProfileHostUrl();
+            var health = await ProfileHostClient.GetHealthAsync(hostUrl, CancellationToken.None);
+            if (!health.ProfileHostEnabled || health.ProtocolVersion != 1)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.IncompatibleHost,
+                    "This server is not a compatible Craft Architect profile host.");
+            }
+
+            var redeemed = await ProfileHostClient.RedeemPairingCodeAsync(
+                hostUrl,
+                _profileHostPairingCode.Trim(),
+                CancellationToken.None);
+            _profileHostAccessKey = redeemed.AccessKey;
+            _profileHostPairingCode = string.Empty;
+            var settings = new HostedProfileConnectionSettings
+            {
+                HostUrl = hostUrl,
+                AccessKey = redeemed.AccessKey,
+                RememberAccessKey = true,
+                ConnectedProfileId = redeemed.Profile.ProfileId,
+                ConnectedProfileName = redeemed.Profile.DisplayName
+            };
+            await PrepareVerifiedProfileHostConnectionAsync(settings, redeemed.Profile);
         }
         catch (Exception ex)
         {
-            SetProfileHostStatus($"Sync failed: {ex.Message}", Color.Error);
+            SetProfileHostFailure(ex);
+        }
+        finally
+        {
+            _profileHostIsBusy = false;
+        }
+    }
+
+    private async Task PrepareVerifiedProfileHostConnectionAsync(
+        HostedProfileConnectionSettings settings,
+        ProfileHostProfileResponse profile)
+    {
+        settings.ConnectedProfileId = profile.ProfileId;
+        settings.ConnectedProfileName = profile.DisplayName;
+        _profileHostProfileName = profile.DisplayName;
+        _profileHostBusyMessage = "Comparing browser and hosted data...";
+        var preview = await ProfileSync.PreviewFirstConnectAsync(settings);
+
+        if (preview.LocalObjectCount > 0 &&
+            preview.RemoteObjectCount > 0 &&
+            !preview.ContentsMatch)
+        {
+            _profileHostBootstrapPreview = preview;
+            _profileHostPendingSettings = settings.Snapshot();
+            _profileHostFirstConnectMode = FirstConnectMode.DownloadRemote;
+            _profileHostStatus = null;
+            return;
+        }
+
+        var mode = preview.RemoteObjectCount == 0 && preview.LocalObjectCount > 0
+            ? FirstConnectMode.UploadLocal
+            : FirstConnectMode.DownloadRemote;
+        await ConnectVerifiedProfileHostAsync(settings, mode);
+    }
+
+    private async Task CompleteProfileHostConnectionAsync()
+    {
+        if (_profileHostPendingSettings == null)
+        {
+            return;
+        }
+
+        _profileHostIsBusy = true;
+        _profileHostBusyMessage = "Connecting and reconciling data...";
+        try
+        {
+            await ConnectVerifiedProfileHostAsync(
+                _profileHostPendingSettings,
+                _profileHostFirstConnectMode);
+        }
+        catch (Exception ex)
+        {
+            SetProfileHostFailure(ex);
+        }
+        finally
+        {
+            _profileHostIsBusy = false;
+        }
+    }
+
+    private async Task ConnectVerifiedProfileHostAsync(
+        HostedProfileConnectionSettings settings,
+        FirstConnectMode mode)
+    {
+        await ProfileSync.ConnectAsync(settings, mode);
+        _profileHostUrl = settings.HostUrl ?? ProfileHostClient.DefaultHostUrl;
+        _profileHostAccessKey = settings.AccessKey ?? string.Empty;
+        _profileHostProfileName = settings.ConnectedProfileName;
+        _profileHostPairingMode = false;
+        ClearPendingProfileHostConnection();
+        SetProfileHostStatus($"Connected to {_profileHostProfileName ?? "hosted profile"}.", Color.Success);
+    }
+
+    private async Task CreateProfileHostPairingCodeAsync()
+    {
+        _profileHostIsBusy = true;
+        _profileHostBusyMessage = "Creating a one-time pairing code...";
+        try
+        {
+            var settings = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+            if (!settings.IsConfigured)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.AccessKeyRejected,
+                    "Reconnect this browser before pairing another one.");
+            }
+
+            var pairing = await ProfileHostClient.CreatePairingCodeAsync(
+                settings.HostUrl!,
+                settings.AccessKey!,
+                CancellationToken.None);
+            _profileHostGeneratedPairingCode = pairing.PairingCode;
+            _profileHostPairingExpiresAtUtc = pairing.ExpiresAtUtc;
+            SetProfileHostStatus("One-time pairing code ready.", Color.Success);
+        }
+        catch (Exception ex)
+        {
+            SetProfileHostFailure(ex);
+        }
+        finally
+        {
+            _profileHostIsBusy = false;
+        }
+    }
+
+    private async Task CopyProfileHostPairingCodeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_profileHostGeneratedPairingCode))
+        {
+            return;
+        }
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync(
+                "navigator.clipboard.writeText",
+                _profileHostGeneratedPairingCode);
+            Snackbar.Add("Pairing code copied.", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("The pairing code could not be copied.", Severity.Error);
+        }
+    }
+
+    private async Task SyncProfileHostNowAsync()
+    {
+        _profileHostIsBusy = true;
+        _profileHostBusyMessage = "Syncing profile...";
+        try
+        {
+            await ProfileSync.SyncNowAsync();
+            if (!ProfileSync.CurrentStatus.HostReachable)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.HostUnavailable,
+                    "The profile host could not be reached.");
+            }
+
+            SetProfileHostStatus("Profile synced.", Color.Success);
+        }
+        catch (Exception ex)
+        {
+            SetProfileHostFailure(ex);
         }
         finally
         {
@@ -1866,11 +1661,15 @@
     private async Task DisconnectProfileHostAsync()
     {
         _profileHostIsBusy = true;
+        _profileHostBusyMessage = "Disconnecting...";
         try
         {
             await ProfileSync.DisconnectAsync();
             _profileHostAccessKey = string.Empty;
             _profileHostProfileName = null;
+            _profileHostGeneratedPairingCode = null;
+            _profileHostPairingExpiresAtUtc = null;
+            ClearPendingProfileHostConnection();
             SetProfileHostStatus("Hosted profile disconnected. Local data was not deleted.", Color.Info);
         }
         finally
@@ -1917,25 +1716,27 @@
 
     private HostedProfileConnectionSettings? BuildProfileHostConnectionSettings()
     {
-        if (string.IsNullOrWhiteSpace(_profileHostUrl))
-        {
-            SetProfileHostStatus("Host URL is required.", Color.Error);
-            return null;
-        }
-
         if (string.IsNullOrWhiteSpace(_profileHostAccessKey))
         {
-            SetProfileHostStatus("Access key is required.", Color.Error);
+            SetProfileHostStatus("Enter the access key for this hosted profile.", Color.Error);
             return null;
         }
 
-        return new HostedProfileConnectionSettings
+        try
         {
-            HostUrl = _profileHostUrl.Trim(),
-            AccessKey = _profileHostAccessKey.Trim(),
-            RememberAccessKey = true,
-            ConnectedProfileName = _profileHostProfileName
-        };
+            return new HostedProfileConnectionSettings
+            {
+                HostUrl = GetSelectedProfileHostUrl(),
+                AccessKey = _profileHostAccessKey.Trim(),
+                RememberAccessKey = true,
+                ConnectedProfileName = _profileHostProfileName
+            };
+        }
+        catch (Exception ex)
+        {
+            SetProfileHostFailure(ex);
+            return null;
+        }
     }
 
     private string GetProfileHostConnectionLabel()
@@ -1945,14 +1746,109 @@
             : "Local only";
     }
 
-    private string GetProfileHostReachabilityLabel()
+    private string GetConnectedProfileHostSummary()
+    {
+        if (!ProfileSync.CurrentStatus.HostReachable)
+        {
+            return "Connection needs attention; browser data remains available";
+        }
+
+        if (ProfileSync.CurrentStatus.ConflictCount > 0 ||
+            ProfileSync.CurrentStatus.PendingCount > 0)
+        {
+            return GetProfileHostAttentionSummary();
+        }
+
+        return "Available in this browser and synced to the hosted profile";
+    }
+
+    private string GetProfileHostConnectionStateLabel()
     {
         if (!ProfileSync.CurrentStatus.IsConnected)
         {
             return "Not connected";
         }
 
-        return ProfileSync.CurrentStatus.HostReachable ? "Reachable" : "Offline";
+        return ProfileSync.CurrentStatus.HostReachable ? "Connected" : "Needs attention";
+    }
+
+    private Color GetProfileHostConnectionColor()
+    {
+        if (!ProfileSync.CurrentStatus.IsConnected)
+        {
+            return Color.Secondary;
+        }
+
+        return ProfileSync.CurrentStatus.HostReachable ? Color.Success : Color.Warning;
+    }
+
+    private string GetProfileHostAttentionSummary()
+    {
+        if (ProfileSync.CurrentStatus.ConflictCount > 0)
+        {
+            return $"{ProfileSync.CurrentStatus.ConflictCount:N0} conflicts need review.";
+        }
+
+        return $"{ProfileSync.CurrentStatus.PendingCount:N0} local changes are waiting to sync.";
+    }
+
+    private string GetSelectedProfileHostUrl()
+    {
+        var selected = _profileHostUseCustomHost
+            ? _profileHostUrl
+            : ProfileHostClient.DefaultHostUrl;
+        return ProfileHostClient.NormalizeHostUrl(selected);
+    }
+
+    private void ToggleProfileHostPairingMode()
+    {
+        _profileHostPairingMode = !_profileHostPairingMode;
+        _profileHostStatus = null;
+    }
+
+    private void ToggleCustomProfileHost()
+    {
+        _profileHostUseCustomHost = !_profileHostUseCustomHost;
+        if (!_profileHostUseCustomHost)
+        {
+            _profileHostUrl = ProfileHostClient.DefaultHostUrl;
+        }
+        _profileHostStatus = null;
+    }
+
+    private void CancelPendingProfileHostConnection()
+    {
+        ClearPendingProfileHostConnection();
+        SetProfileHostStatus("Connection canceled. Browser data was not changed.", Color.Info);
+    }
+
+    private void ClearPendingProfileHostConnection()
+    {
+        _profileHostBootstrapPreview = null;
+        _profileHostPendingSettings = null;
+    }
+
+    private static bool ProfileHostAddressesMatch(string first, string second)
+    {
+        try
+        {
+            return string.Equals(
+                ProfileHostClient.NormalizeHostUrl(first),
+                ProfileHostClient.NormalizeHostUrl(second),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void SetProfileHostFailure(Exception exception)
+    {
+        var message = exception is ProfileHostConnectionException
+            ? exception.Message
+            : "The profile host could not complete the request. Try again in a moment.";
+        SetProfileHostStatus(message, Color.Error);
     }
 
     private void SetProfileHostStatus(string message, Color color)

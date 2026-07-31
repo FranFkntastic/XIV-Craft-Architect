@@ -1,9 +1,11 @@
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.LodestoneLookup.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.CraftAppraisal;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -22,8 +24,11 @@ builder.Services.AddCors(options =>
             .WithOrigins(
                 "http://localhost:5000",
                 "http://localhost:5001",
+                "http://127.0.0.1:5001",
                 "https://localhost:5001",
-                "https://franfkntastic.github.io")
+                "https://franfkntastic.github.io",
+                "https://dev.xivcraftarchitect.com",
+                "https://xivcraftarchitect.com")
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
@@ -31,6 +36,19 @@ builder.Services.AddCors(options =>
 builder.Services.AddSingleton<ILodestoneCrafterLookupService, NetStoneLodestoneCrafterLookupService>();
 builder.Services.AddHttpClient<IGarlandService, GarlandService>();
 builder.Services.AddSingleton<IXivItemDataProvider, GarlandXivItemDataProvider>();
+var craftAppraisalOptions = CraftAppraisalApiOptions.FromConfiguration(
+    builder.Configuration,
+    builder.Environment.ContentRootPath);
+craftAppraisalOptions.Validate();
+builder.Services.AddSingleton(craftAppraisalOptions);
+builder.Services.AddMemoryCache();
+builder.Services.AddWorkshopHostCraftAppraisal();
+builder.Services.AddSingleton<IMarketCacheService>(services =>
+    new JsonFileMarketCacheService(
+        services.GetRequiredService<UniversalisService>(),
+        craftAppraisalOptions.CacheDirectory));
+builder.Services.AddSingleton<CraftAppraisalPlanStore>();
+builder.Services.AddSingleton<IHostedCraftAppraisalCoordinator, HostedCraftAppraisalCoordinator>();
 builder.Services.AddSingleton(_ => new ProfileHostOptions
 {
     Enabled = builder.Configuration.GetValue("ProfileHost:Enabled", false),
@@ -38,6 +56,7 @@ builder.Services.AddSingleton(_ => new ProfileHostOptions
         ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db")
 });
 builder.Services.AddSingleton<ProfileAccessKeyHasher>();
+builder.Services.AddSingleton<ProfilePairingCodeService>();
 builder.Services.AddSingleton<ProfileAuthenticationGate>();
 builder.Services.AddSingleton<SqliteProfileHostStore>();
 var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
@@ -87,12 +106,22 @@ builder.Services.AddSingleton(_ =>
 });
 builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
 builder.Services.AddSingleton<TradeCompanyAuthorization>();
+builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();
+builder.Services.AddSingleton<HostedCompanyCommissionService>();
+builder.Services.AddSingleton<
+    ICompanyCommissionPostCommitSink,
+    DiscordCompanyCommissionPostCommitSink>();
+builder.Services.AddSingleton<CompanyCommissionMigrationDiagnostics>();
+builder.Services.AddHostedService<CompanyCommissionSchemaMigrationHostedService>();
 builder.Services.AddSingleton<DiscordRequestVerifier>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddSingleton<SqliteDiscordCollaborationStore>();
+builder.Services.AddSingleton<SqliteDiscordNotificationStore>();
 builder.Services.AddScoped<DiscordCompanyOrderAdapter>();
 builder.Services.AddScoped<DiscordPublicationService>();
-builder.Services.AddScoped<DiscordClaimService>();
+builder.Services.AddScoped<CompanyCommissionDiscordDeliveryService>();
+builder.Services.AddScoped<ICompanyCommissionDiscordDelivery>(
+    services => services.GetRequiredService<CompanyCommissionDiscordDeliveryService>());
 builder.Services.AddHttpClient<IDiscordApiClient, DiscordApiClient>((services, client) =>
 {
     var options = services.GetRequiredService<DiscordCommissionOptions>();
@@ -104,6 +133,7 @@ builder.Services.AddHttpClient<IDiscordApiClient, DiscordApiClient>((services, c
     client.Timeout = TimeSpan.FromSeconds(15);
 });
 builder.Services.AddHostedService<DiscordOutboxDispatcher>();
+builder.Services.AddHostedService<DiscordNotificationOutboxDispatcher>();
 
 if (ProfileHostProvisioningCommand.TryParse(args) is { } profileHostCommand)
 {
@@ -225,10 +255,13 @@ app.MapGet(
     });
 
 app.MapProfileHostEndpoints();
+app.MapCraftAppraisalEndpoints();
 app.MapCommissionBriefEndpoints();
 app.MapCompanyCommissionBriefEndpoints();
+app.MapCompanyCommissionEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
+app.MapDiscordNotificationEndpoints();
 
 app.Run();
 

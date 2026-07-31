@@ -12,7 +12,8 @@ public static class ProfileHostEndpoints
 
         group.MapGet("/health", (ProfileHostOptions options) => Results.Ok(new ProfileHostHealthResponse
         {
-            ProfileHostEnabled = options.Enabled
+            ProfileHostEnabled = options.Enabled,
+            ProtocolVersion = 1
         }));
 
         group.MapGet(
@@ -37,6 +38,105 @@ public static class ProfileHostEndpoints
                     hasher,
                     cancellationToken);
                 return profile == null ? Results.Unauthorized() : Results.Ok(profile);
+            });
+
+        group.MapPost(
+            "/pairing/create",
+            async (
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                ProfilePairingCodeService pairingCodes,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (profile == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                var pairingCode = pairingCodes.Create();
+                var expiresAtUtc = DateTime.UtcNow.AddMinutes(10);
+                await store.CreatePairingCodeAsync(
+                    profile.ProfileId,
+                    pairingCode.TokenHash,
+                    expiresAtUtc,
+                    cancellationToken);
+                return Results.Ok(new ProfileHostPairingCodeResponse
+                {
+                    PairingCode = pairingCode.Plaintext,
+                    ExpiresAtUtc = expiresAtUtc,
+                    ProfileId = profile.ProfileId,
+                    DisplayName = profile.DisplayName
+                });
+            });
+
+        group.MapPost(
+            "/pairing/redeem",
+            async (
+                ProfileHostPairingRedeemRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                ProfilePairingCodeService pairingCodes,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var plaintext = request.PairingCode?.Trim() ?? string.Empty;
+                if (plaintext.Length != 37 ||
+                    !plaintext.StartsWith("pair_", StringComparison.Ordinal))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "invalid_or_expired_pairing_code",
+                        message = "The pairing code is invalid or has expired."
+                    });
+                }
+
+                CreatedProfileAccessKey? accessKey = null;
+                var profile = await authentication.ExecuteAsync(
+                    plaintext,
+                    async ct =>
+                    {
+                        accessKey = hasher.CreateAccessKey();
+                        return await store.RedeemPairingCodeAsync(
+                            pairingCodes.Hash(plaintext),
+                            accessKey.StoredHash,
+                            DateTime.UtcNow,
+                            ct);
+                    },
+                    cancellationToken);
+                if (profile == null || accessKey == null)
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "invalid_or_expired_pairing_code",
+                        message = "The pairing code is invalid or has expired."
+                    });
+                }
+
+                return Results.Ok(new ProfileHostPairingRedeemResponse
+                {
+                    AccessKey = accessKey.PlaintextKey,
+                    Profile = profile
+                });
             });
 
         group.MapGet(
@@ -67,7 +167,7 @@ public static class ProfileHostEndpoints
                 }
 
                 var changes = await store.LoadChangesAsync(profile.ProfileId, sinceRevision ?? 0, cancellationToken);
-                return Results.Ok(changes);
+                return Results.Ok(ToPortableChanges(changes));
             });
 
         group.MapPut(
@@ -221,7 +321,7 @@ public static class ProfileHostEndpoints
                 }
 
                 var changes = await store.LoadChangesAsync(profile.ProfileId, 0, cancellationToken);
-                return Results.Ok(changes);
+                return Results.Ok(ToPortableChanges(changes));
             });
 
         group.MapGet(
@@ -251,11 +351,28 @@ public static class ProfileHostEndpoints
                 }
 
                 var changes = await store.LoadChangesAsync(profile.ProfileId, 0, cancellationToken);
-                return Results.Ok(new ProfileHostBootstrapPayload { Objects = changes.Objects });
+                return Results.Ok(new ProfileHostBootstrapPayload
+                {
+                    Objects = PortableObjects(changes.Objects)
+                });
             });
 
         return group;
     }
+
+    private static ProfileSyncChangesResponse ToPortableChanges(
+        ProfileSyncChangesResponse changes) =>
+        new()
+        {
+            ServerRevision = changes.ServerRevision,
+            Objects = PortableObjects(changes.Objects)
+        };
+
+    private static IReadOnlyList<ProfileSyncObjectEnvelope> PortableObjects(
+        IReadOnlyList<ProfileSyncObjectEnvelope> objects) =>
+        objects
+            .Where(item => ProfileSyncCollections.All.Contains(item.Collection))
+            .ToArray();
 
     private static async Task<ProfileHostProfileResponse?> AuthenticateAsync(
         HttpRequest request,

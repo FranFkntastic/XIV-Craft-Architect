@@ -549,7 +549,7 @@
                 await LoadNativePlanAsync(
                     importResult.NativePlan,
                     $"Imported native plan '{importResult.NativePlan.Name}' with {items.Count} {(items.Count == 1 ? "item" : "items")}",
-                    refreshPrices: true,
+                    derivation: PlanDerivationDispatch.Background,
                     clearCurrentPlanId: true);
             }
             else
@@ -630,7 +630,7 @@
             await LoadNativePlanAsync(
                 plan,
                 $"Loaded dev craftplan '{devPlanPath}'",
-                refreshPrices: false,
+                derivation: PlanDerivationDispatch.Deferred,
                 clearCurrentPlanId: true);
 
             NavigationManager.NavigateTo("./");
@@ -692,18 +692,23 @@
     private async Task LoadNativePlanAsync(
         CraftingPlan plan,
         string successMessage,
-        bool refreshPrices,
+        PlanDerivationDispatch derivation,
         bool clearCurrentPlanId)
     {
         try
         {
+            var planRegion = MarketFetchScopeResolver.ResolveRegionForDataCenter(
+                plan.DataCenter,
+                AppState.SelectedRegion);
+            var planDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
+                planRegion,
+                plan.DataCenter);
+            plan.DataCenter = planDataCenter;
             var stored = new StoredPlan
             {
                 Id = "import",
                 Name = plan.Name,
-                DataCenter = string.IsNullOrWhiteSpace(plan.DataCenter)
-                    ? WorkerProjections.Shell.SelectedDataCenter
-                    : plan.DataCenter,
+                DataCenter = planDataCenter,
                 ProjectItems = CraftPlanStateMapper.GetRootProjectItems(plan)
                     .Select(item => new StoredProjectItem
                     {
@@ -714,16 +719,16 @@
                         MustBeHq = item.MustBeHq
                     })
                     .ToList(),
-                PlanJson = RecipeService.SerializePlan(plan),
+                // StoredPlan is the Worker session carrier, not the external
+                // normalized .craftplan codec consumed by RecipeService.
+                PlanJson = System.Text.Json.JsonSerializer.Serialize(plan),
                 SavedAt = DateTime.UtcNow,
                 ModifiedAt = DateTime.UtcNow
             };
             await PlanLifecycle.ReplaceStoredPlanAsync(
                 stored,
                 trackStoredPlanIdentity: !clearCurrentPlanId,
-                derivation: refreshPrices
-                    ? PlanDerivationDispatch.Background
-                    : PlanDerivationDispatch.Deferred);
+                derivation: derivation);
 
             Snackbar.Add(successMessage, Severity.Success);
         }
@@ -749,7 +754,7 @@
             return false;
 
         var snapshotTarget = Uri.UnescapeDataString(encodedPath);
-        if (!IsValidAppraisalPlanSnapshotTarget(snapshotTarget))
+        if (!AppraisalPlanSnapshotTargetValidator.IsValid(snapshotTarget))
         {
             Snackbar.Add("The appraisal plan link is invalid.", Severity.Error);
             NavigationManager.NavigateTo("./", replace: true);
@@ -765,7 +770,9 @@
             await LoadNativePlanAsync(
                 plan,
                 $"Opened quoted plan '{plan.Name}'",
-                refreshPrices: false,
+                // MMF already has the useful quote. Derive its richer market and
+                // procurement state asynchronously after the browser imports it.
+                derivation: PlanDerivationDispatch.Background,
                 clearCurrentPlanId: true);
         }
         catch (Exception ex)
@@ -780,42 +787,6 @@
         }
 
         return true;
-    }
-
-    private static bool IsValidAppraisalPlanSnapshotTarget(string target)
-    {
-        const string marker = "/api/craft/plans/";
-        string path;
-        if (target.StartsWith("/", StringComparison.Ordinal))
-        {
-            if (target.Contains('?', StringComparison.Ordinal) ||
-                target.Contains('#', StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            path = target;
-        }
-        else
-        {
-            if (!Uri.TryCreate(target, UriKind.Absolute, out var absolute) ||
-                absolute.Scheme is not ("http" or "https") ||
-                !string.IsNullOrEmpty(absolute.UserInfo) ||
-                !string.IsNullOrEmpty(absolute.Query) ||
-                !string.IsNullOrEmpty(absolute.Fragment))
-            {
-                return false;
-            }
-
-            path = absolute.AbsolutePath;
-        }
-
-        var markerIndex = path.LastIndexOf(marker, StringComparison.Ordinal);
-        if (markerIndex < 0)
-            return false;
-
-        var token = path[(markerIndex + marker.Length)..];
-        return token.Length == 32 && token.All(Uri.IsHexDigit);
     }
 
     private bool IsLocalBenchmarkWorkflowRequest()

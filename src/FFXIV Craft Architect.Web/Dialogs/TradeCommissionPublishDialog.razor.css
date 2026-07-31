@@ -20,3 +20,18 @@
 .commission-delivery-choice.is-disabled {
   opacity: 0.72;
 }
+
+.commission-delivery-test-mode {
+  display: grid;
+  gap: 2px;
+  margin-top: 14px;
+  border: 1px solid #76591e;
+  border-radius: 6px;
+  background: #292517;
+  padding: 10px 12px;
+}
+
+.commission-delivery-test-mode ::deep .mud-typography-caption {
+  margin-left: 32px;
+  line-height: 1.45;
+}

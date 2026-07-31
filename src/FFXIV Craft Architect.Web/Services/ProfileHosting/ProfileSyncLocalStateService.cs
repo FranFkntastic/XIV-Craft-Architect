@@ -31,6 +31,7 @@ public sealed class ProfileSyncLocalStateService
             "procurement.travel_priority",
             "ui.accent_color",
             "ui.use_split_pane_market_view",
+            "ui.trade_orders_ops_pane_width",
             "planning.default_recommendation_mode"
         ],
         StringComparer.Ordinal);

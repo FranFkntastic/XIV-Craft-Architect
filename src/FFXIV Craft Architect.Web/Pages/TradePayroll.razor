@@ -638,12 +638,9 @@
                 : new TradePaymentPolicy(
                     _workflowDraft.ActivePaymentContract,
                     _workflowDraft.CommissionPercent,
-                    _workflowDraft.LaborStandard)
-                {
-                    LaborStandardMaterialBonusPercent = _workflowDraft.LaborStandardMaterialBonusPercent >= 0
-                        ? _workflowDraft.LaborStandardMaterialBonusPercent
-                        : TradePaymentPolicy.DefaultLaborStandardMaterialBonusPercent
-                };
+                    _workflowDraft.LaborGilPerSynth > 0
+                        ? _workflowDraft.LaborGilPerSynth
+                        : TradePaymentPolicy.DefaultLaborGilPerSynth);
         }
 
         return TradeOrderWorkflow.ResolvePaymentPolicy(_linkedOrder, _companyProfile?.PaymentPolicy);
@@ -656,9 +653,7 @@
             return FormatGil(breakdown.Total);
         }
 
-        return breakdown.Warnings.Any(warning => warning.Contains("policy", StringComparison.OrdinalIgnoreCase))
-            ? "Needs labor standard"
-            : "Needs reprice";
+        return "Needs reprice";
     }
 
     private string FormatAssignedCrafterName()
