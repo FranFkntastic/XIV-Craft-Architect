@@ -303,9 +303,7 @@ public sealed class ProfileHostClient
             Fragment = string.Empty,
             Path = uri.AbsolutePath.TrimEnd('/') + "/"
         };
-        if (builder.Path == "/" &&
-            (builder.Host.Equals("xivcraftarchitect.com", StringComparison.OrdinalIgnoreCase) ||
-             builder.Host.EndsWith(".xivcraftarchitect.com", StringComparison.OrdinalIgnoreCase)))
+        if (builder.Path == "/")
         {
             builder.Path = "/api/";
         }
