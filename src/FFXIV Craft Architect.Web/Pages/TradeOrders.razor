@@ -1128,7 +1128,7 @@
                                                     @ownerCommission.Reference - Commission
                                                 </MudText>
                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                    Terms v@ownerCommission.CurrentTermsVersion - owner revision @ownerProjection.ObjectRevision
+                                                    Terms v@(ownerCommission.CurrentTermsVersion) - owner revision @ownerProjection.ObjectRevision
                                                 </MudText>
                                             </div>
                                             <span class="trade-orders-publication-chip is-attention">
@@ -1283,6 +1283,30 @@
                                                            Disabled="@_isCommissionCommandRunning"
                                                            OnClick="CopyCommissionClaimLinkAsync">
                                                     Copy Claim Link
+                                                </MudButton>
+                                            </div>
+                                        }
+
+                                        @if (ownerCommission.PublicMetadata.ViewState !=
+                                                 CompanyCommissionPublicViewState.Published)
+                                        {
+                                            @if (!_isPublishingCommission &&
+                                                 PublishCommissionUnavailableReason is { } unavailableReason)
+                                            {
+                                                <MudAlert Severity="Severity.Info" Dense="true">
+                                                    @unavailableReason
+                                                </MudAlert>
+                                            }
+                                            <div class="trade-orders-collaboration-actions">
+                                                <MudButton Variant="Variant.Filled"
+                                                           Color="Color.Primary"
+                                                           FullWidth="true"
+                                                           StartIcon="@Icons.Material.Filled.Share"
+                                                           Disabled="@(!CanPublishCommission)"
+                                                           OnClick="PublishSelectedCommissionAsync">
+                                                    @(_isPublishingCommission
+                                                        ? "Publishing..."
+                                                        : PublishCommissionButtonLabel)
                                                 </MudButton>
                                             </div>
                                         }
