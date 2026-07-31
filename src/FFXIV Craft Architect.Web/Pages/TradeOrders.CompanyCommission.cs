@@ -15,7 +15,6 @@ public partial class TradeOrders
     private string _commissionPaymentObservation = string.Empty;
     private string _commissionPaymentRetractionReason = string.Empty;
     private string _commissionTermsRevisionReason = string.Empty;
-    private string _commissionCancellationReason = string.Empty;
     private string _commissionReturnReason = string.Empty;
     private string _commissionSettlementObservation = string.Empty;
     private string _commissionSettlementRetractionReason = string.Empty;
@@ -86,7 +85,6 @@ public partial class TradeOrders
         _commissionPaymentObservation = string.Empty;
         _commissionPaymentRetractionReason = string.Empty;
         _commissionTermsRevisionReason = string.Empty;
-        _commissionCancellationReason = string.Empty;
         _commissionReturnReason = string.Empty;
         _commissionSettlementObservation = string.Empty;
         _commissionSettlementRetractionReason = string.Empty;
@@ -337,13 +335,6 @@ public partial class TradeOrders
                 owner,
                 _commissionSettlementRetractionReason),
             "Final-payment confirmation retracted");
-
-    private Task CancelCanonicalCommissionAsync() =>
-        RunCommissionCommandAsync(
-            owner => CommissionOperations.CancelAsync(
-                owner,
-                _commissionCancellationReason),
-            "Commission canceled");
 
     private Task RevokeCanonicalCommissionPublicationAsync() =>
         RunCommissionCommandAsync(

@@ -46,6 +46,7 @@ public partial class TradeOrders
     private bool _isOpeningSelectedOrderCraftPlan;
     private bool _isRepricingSelectedOrder;
     private bool _isSavingSelectedOrderCraftPlan;
+    private bool _isDeletingSelectedOrder;
     private bool _isRefreshingLiveProcurement;
     private int _activeOpsTab;
     private int _opsPaneWidth = DefaultOpsPaneWidth;

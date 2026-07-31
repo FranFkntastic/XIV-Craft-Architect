@@ -36,6 +36,11 @@ public interface IDiscordApiClient
         object payload,
         CancellationToken cancellationToken = default);
 
+    Task<DiscordApiResult> DeleteMessageAsync(
+        string channelId,
+        string messageId,
+        CancellationToken cancellationToken = default);
+
     Task<DiscordApiResult> GetMessageAsync(
         string channelId,
         string messageId,
@@ -83,6 +88,19 @@ public sealed class DiscordApiClient(
             channelId,
             messageId,
             payload,
+            createOperation: false,
+            allowedMentionUserId: null,
+            cancellationToken);
+
+    public Task<DiscordApiResult> DeleteMessageAsync(
+        string channelId,
+        string messageId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync(
+            HttpMethod.Delete,
+            channelId,
+            messageId,
+            payload: null,
             createOperation: false,
             allowedMentionUserId: null,
             cancellationToken);
@@ -247,6 +265,14 @@ public sealed class DiscordApiClient(
             {
                 if (response.IsSuccessStatusCode)
                 {
+                    if (method == HttpMethod.Delete)
+                    {
+                        return new DiscordApiResult(
+                            DiscordApiOutcome.Succeeded,
+                            messageId,
+                            response.StatusCode);
+                    }
+
                     var id = await ReadMessageIdAsync(response, cancellationToken);
                     return method == HttpMethod.Get || !string.IsNullOrWhiteSpace(id)
                         ? new DiscordApiResult(DiscordApiOutcome.Succeeded, id, response.StatusCode)
@@ -256,6 +282,14 @@ public sealed class DiscordApiClient(
                                 : DiscordApiOutcome.RetryableFailure,
                             StatusCode: response.StatusCode,
                             Error: "Discord returned success without a message identity.");
+                }
+
+                if (method == HttpMethod.Delete && response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    return new DiscordApiResult(
+                        DiscordApiOutcome.Succeeded,
+                        messageId,
+                        response.StatusCode);
                 }
 
                 var error = await ReadErrorAsync(response, cancellationToken);

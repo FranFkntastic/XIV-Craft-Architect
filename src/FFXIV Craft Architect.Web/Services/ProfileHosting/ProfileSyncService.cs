@@ -282,6 +282,110 @@ public sealed class ProfileSyncService
             ct);
     }
 
+    public Task DeleteObjectAsync(
+        string collection,
+        string objectId,
+        CancellationToken ct = default) =>
+        DeleteObjectsAsync([(collection, objectId)], ct);
+
+    public Task DeleteObjectsAsync(
+        IReadOnlyList<(string Collection, string ObjectId)> objects,
+        CancellationToken ct = default) =>
+        RunSerializedAsync(
+            () => DeleteObjectsCoreAsync(objects, ct),
+            ct);
+
+    private async Task DeleteObjectsCoreAsync(
+        IReadOnlyList<(string Collection, string ObjectId)> objects,
+        CancellationToken ct)
+    {
+        if (objects.Count == 0)
+        {
+            return;
+        }
+
+        var distinct = objects
+            .DistinctBy(item => $"{item.Collection}\0{item.ObjectId}", StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        foreach (var item in distinct)
+        {
+            _ = GetAdapter(item.Collection);
+        }
+
+        var settings = await _localState.LoadConnectionSettingsAsync();
+        var profileId = settings.ProfileScopeId;
+        if (!settings.IsConfigured || profileId == null)
+        {
+            foreach (var item in distinct)
+            {
+                if (await _localState.HasKnownHostedObjectAsync(
+                        item.Collection,
+                        item.ObjectId))
+                {
+                    throw new InvalidOperationException(
+                        "Reconnect this browser to its hosted profile before deleting hosted data.");
+                }
+            }
+
+            foreach (var item in distinct)
+            {
+                await GetAdapter(item.Collection).DeleteLocalObjectAsync(item.ObjectId, ct);
+            }
+            return;
+        }
+
+        await EnsurePendingSavesLoadedAsync(profileId);
+        var remote = await _client.ExportBootstrapAsync(
+            settings.HostUrl!,
+            settings.AccessKey!,
+            ct);
+        foreach (var item in distinct)
+        {
+            var remoteObject = remote.Objects.FirstOrDefault(candidate =>
+                string.Equals(candidate.Collection, item.Collection, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(candidate.ObjectId, item.ObjectId, StringComparison.Ordinal));
+            if (remoteObject == null)
+            {
+                continue;
+            }
+
+            var response = await _client.DeleteObjectAsync(
+                settings.HostUrl!,
+                settings.AccessKey!,
+                item.Collection,
+                item.ObjectId,
+                remoteObject.Revision,
+                ct);
+            if (response.Conflict)
+            {
+                throw new InvalidOperationException(
+                    $"Hosted {item.Collection}/{item.ObjectId} changed while it was being deleted. Try the action again.");
+            }
+            if (!response.Success || response.Object == null)
+            {
+                throw new InvalidOperationException(
+                    $"The hosted profile did not confirm deletion of {item.Collection}/{item.ObjectId}.");
+            }
+
+            await _localState.SaveObjectRevisionAsync(
+                profileId,
+                item.Collection,
+                item.ObjectId,
+                response.Object.Revision);
+        }
+
+        foreach (var item in distinct)
+        {
+            await GetAdapter(item.Collection).DeleteLocalObjectAsync(item.ObjectId, ct);
+            await RemovePendingSaveAsync(profileId, item.Collection, item.ObjectId);
+            _conflicts.RemoveAll(conflict => IsSameIdentity(
+                conflict.Collection,
+                conflict.ObjectId,
+                item.Collection,
+                item.ObjectId));
+        }
+    }
+
     private async Task QueueLocalSaveCoreAsync(
         string collection,
         string objectId,

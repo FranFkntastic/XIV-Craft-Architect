@@ -240,6 +240,22 @@ public sealed class IndexedDbService
             $"delete Trade order {orderId}",
             orderId);
 
+    public Task<List<JsonElement>> LoadAllTradeOrderCraftSnapshotsAsync() =>
+        InvokeRequiredAsync<List<JsonElement>>(
+            "IndexedDB.loadAllTradeOrderCraftSnapshots",
+            "load legacy Trade order craft snapshots");
+
+    public Task<int> DeleteTradeOrderCraftSnapshotsForOrderAsync(Guid orderId) =>
+        InvokeRequiredAsync<int>(
+            "IndexedDB.deleteTradeOrderCraftSnapshotsForOrder",
+            $"delete legacy craft snapshots for Trade order {orderId}",
+            orderId);
+
+    public Task<bool> ClearTradeOrderCraftSnapshotsAsync() =>
+        InvokeRequiredAsync<bool>(
+            "IndexedDB.clearTradeOrderCraftSnapshots",
+            "clear legacy Trade order craft snapshots");
+
     public Task<bool> SaveTradePayrollDraftAsync(
         TradePayrollWorkflowDraft draft) =>
         InvokeOrDefaultAsync(

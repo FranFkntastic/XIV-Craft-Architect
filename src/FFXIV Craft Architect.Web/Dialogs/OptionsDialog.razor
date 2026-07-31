@@ -9,6 +9,7 @@
 @inject ISettingsService Settings
 @inject IndexedDbService IndexedDb
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeOrderLifecycleService OrderLifecycle
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService ProfileSyncLocalState
 @inject ProfileSyncService ProfileSync
@@ -22,6 +23,7 @@
 @inject GitHubIssueReportService GitHubIssueReportService
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 
 <MudDialog Class="options-dialog" Style="width: min(800px, calc(100vw - 32px)); max-width: 800px;">
     <DialogContent>
@@ -851,6 +853,27 @@
                         <div class="diagnostics-error">@_diagnosticStorageError</div>
                     }
                 </section>
+
+                <section class="diagnostics-card diagnostics-card-wide">
+                    <div class="diagnostics-action-row">
+                        <div>
+                            <strong>Reset commission workspace</strong>
+                            <span>Export a recovery copy, then permanently remove every order, payroll draft, order-generated plan, legacy craft snapshot, and linked Discord publication. Companies, crafters, policies, and hosting stay intact.</span>
+                        </div>
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Error"
+                                   Size="Size.Small"
+                                   StartIcon="@Icons.Material.Filled.DeleteSweep"
+                                   Disabled="@(_diagnosticsBusy || _isPurgingCommissions)"
+                                   OnClick="PurgeCommissionWorkspaceAsync">
+                            @(_isPurgingCommissions ? "Resetting..." : "Reset commissions")
+                        </MudButton>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_commissionPurgeStatus))
+                    {
+                        <div class="diagnostics-message">@_commissionPurgeStatus</div>
+                    }
+                </section>
             }
 
             else if (_activePanel == OptionsPanel.About)
@@ -1092,7 +1115,10 @@
     private TradeIndexedDbDiagnostics? _tradeStorageDiagnostics;
     private CacheStats? _marketCacheStats;
     private string? _diagnosticStorageError;
+    private bool _isPurgingCommissions;
+    private string? _commissionPurgeStatus;
     private const string DiagnosticSnapshotSaveKey = "options-diagnostic-snapshot";
+    private const string CommissionResetBackupSaveKey = "options-commission-reset-backup";
 
     private static readonly JsonSerializerOptions CompanyPackageJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -2126,6 +2152,63 @@
         finally
         {
             _diagnosticsBusy = false;
+        }
+    }
+
+    private async Task PurgeCommissionWorkspaceAsync()
+    {
+        if (_isPurgingCommissions)
+        {
+            return;
+        }
+
+        _isPurgingCommissions = true;
+        _commissionPurgeStatus = "Preparing recovery export...";
+        try
+        {
+            var backup = await OrderLifecycle.CreateResetBackupAsync();
+            var confirmed = await DialogService.ShowMessageBox(
+                "Reset Commission Workspace",
+                $"Permanently delete {backup.Orders.Count:N0} orders and {backup.PayrollDrafts.Count:N0} payroll drafts across every company? A recovery JSON file will be saved first. Companies and crafters are preserved.",
+                yesText: "Export and Reset",
+                cancelText: "Keep Everything");
+            if (confirmed != true)
+            {
+                _commissionPurgeStatus = null;
+                return;
+            }
+
+            var exportedAt = DateTime.UtcNow;
+            var fileName = $"craft-architect-commission-reset-{exportedAt:yyyyMMdd-HHmmss}.json";
+            var saved = await BrowserFileExportService.SaveTextFileAsync(
+                CommissionResetBackupSaveKey,
+                fileName,
+                JsonSerializer.Serialize(backup, CompanyPackageJsonOptions),
+                "application/json");
+            if (!saved.Completed)
+            {
+                _commissionPurgeStatus = "Reset canceled because the recovery export was not saved.";
+                return;
+            }
+
+            _commissionPurgeStatus = "Retracting Discord posts and deleting commission data...";
+            var result = await OrderLifecycle.PurgeAllAsync(backup);
+            _commissionPurgeStatus =
+                $"Reset complete: {result.OrdersDeleted:N0} orders, " +
+                $"{result.PayrollDraftsDeleted:N0} drafts, " +
+                $"{result.GeneratedPlansDeleted:N0} generated plans, and " +
+                $"{result.LegacyCraftSnapshotsDeleted:N0} legacy snapshots deleted. " +
+                $"{result.DiscordPublicationsRetracted:N0} Discord publications retracted.";
+            Snackbar.Add("Commission workspace reset complete.", Severity.Success);
+        }
+        catch (Exception exception)
+        {
+            _commissionPurgeStatus = $"Reset failed without discarding the recovery path: {exception.Message}";
+            Snackbar.Add($"Could not reset commissions: {exception.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isPurgingCommissions = false;
         }
     }
 
