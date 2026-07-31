@@ -145,6 +145,7 @@ public static class ProfileHostEndpoints
                 HttpRequest request,
                 ProfileHostOptions options,
                 long? sinceRevision,
+                int? limit,
                 ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
@@ -166,7 +167,20 @@ public static class ProfileHostEndpoints
                     return Results.Unauthorized();
                 }
 
-                var changes = await store.LoadChangesAsync(profile.ProfileId, sinceRevision ?? 0, cancellationToken);
+                if (limit is <= 0 or > 50)
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "invalid_page_limit",
+                        message = "The changes page limit must be between 1 and 50."
+                    });
+                }
+
+                var changes = await store.LoadChangesAsync(
+                    profile.ProfileId,
+                    sinceRevision ?? 0,
+                    cancellationToken,
+                    limit);
                 return Results.Ok(ToPortableChanges(changes));
             });
 
@@ -365,6 +379,7 @@ public static class ProfileHostEndpoints
         new()
         {
             ServerRevision = changes.ServerRevision,
+            HasMore = changes.HasMore,
             Objects = PortableObjects(changes.Objects)
         };
 
