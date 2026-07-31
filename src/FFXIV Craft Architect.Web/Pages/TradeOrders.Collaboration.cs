@@ -114,15 +114,14 @@ public partial class TradeOrders
     {
         _commissionContact = _companyProfile?.CommissionContact ?? string.Empty;
         _commissionDeliveryInstructions = string.Empty;
-        if (order.CompanyCommission != null)
+        if (order.CompanyCommission == null)
         {
-            return;
+            foreach (var claim in TradeCollaboration.GetPendingInterests(order.Id))
+            {
+                _interestCrafterSelections.TryAdd(claim.ClaimId, claim.MatchedCrafterId);
+            }
         }
 
-        foreach (var claim in TradeCollaboration.GetPendingInterests(order.Id))
-        {
-            _interestCrafterSelections.TryAdd(claim.ClaimId, claim.MatchedCrafterId);
-        }
         _ = RefreshCollaborationAsync(order);
     }
 
