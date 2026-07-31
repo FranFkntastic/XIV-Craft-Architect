@@ -89,19 +89,6 @@
                                     Class="options-select" />
             </div>
 
-            <MudButton Variant="Variant.Outlined"
-                       Color="Color.Secondary"
-                       Size="Size.Small"
-                       StartIcon="@Icons.Material.Filled.Notifications"
-                       Disabled="_isBusy || _requiresReload"
-                       OnClick="SaveAsync"
-                       Class="mt-2">
-                @if (_isBusy)
-                {
-                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
-                }
-                Save routing
-            </MudButton>
         }
     }
 </section>
@@ -139,6 +126,7 @@
     private string? _error;
     private string? _saveFingerprint;
     private string? _saveIdempotencyKey;
+    private string? _persistedRouteFingerprint;
     private long _revision;
     private string _commissionerDiscordUserId = string.Empty;
     private string? _updateChannelId;
@@ -244,6 +232,7 @@
             }
 
             _hasLoaded = true;
+            _persistedRouteFingerprint = BuildRouteFingerprint();
             ResetSaveIdentity();
         }
         catch (Exception exception)
@@ -256,12 +245,31 @@
         }
     }
 
-    private async Task SaveAsync()
+    public async Task<bool> SavePendingChangesAsync()
     {
+        if (!_hasLoaded)
+        {
+            _error ??= "Commission notification routing is still loading.";
+            return false;
+        }
+
+        if (_requiresReload)
+        {
+            return false;
+        }
+
+        if (string.Equals(
+                BuildRouteFingerprint(),
+                _persistedRouteFingerprint,
+                StringComparison.Ordinal))
+        {
+            return true;
+        }
+
         _error = Validate();
         if (_error != null)
         {
-            return;
+            return false;
         }
 
         _isBusy = true;
@@ -292,8 +300,9 @@
             {
                 Apply(result.Route);
                 _error = null;
+                _persistedRouteFingerprint = BuildRouteFingerprint();
                 ResetSaveIdentity();
-                return;
+                return true;
             }
 
             _error = result.Status == TradeDiscordNotificationRouteSaveStatus.Conflict
@@ -301,11 +310,13 @@
                 : result.Error ?? "The notification route was rejected.";
             _requiresReload =
                 result.Status == TradeDiscordNotificationRouteSaveStatus.Conflict;
+            return false;
         }
         catch (Exception exception)
         {
             _requiresReload = false;
             _error = exception.Message;
+            return false;
         }
         finally
         {
@@ -329,6 +340,11 @@
         string.Join(
             "|",
             _revision,
+            BuildRouteFingerprint());
+
+    private string BuildRouteFingerprint() =>
+        string.Join(
+            "|",
             _commissionerDiscordUserId.Trim(),
             _destination,
             RequiresUpdateChannel ? _updateChannelId?.Trim() : null,
