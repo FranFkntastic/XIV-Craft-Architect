@@ -524,7 +524,7 @@
                                     </div>
                                     <div class="@GetPipelineStageClass(HasLinkedCraftPlan(_selectedOrder), !HasLinkedCraftPlan(_selectedOrder))">
                                         <span>2 - Craft plan</span>
-                                        <strong>@(HasLinkedCraftPlan(_selectedOrder) ? "Linked plan saved" : "Craft plan missing")</strong>
+                                        <strong>@(HasLinkedCraftPlan(_selectedOrder) ? "Plan available" : "Craft plan missing")</strong>
                                     </div>
                                     <div class="@GetPipelineStageClass(HasProcurementEvidence(_selectedOrder), HasMaterialBreakdown(_selectedOrder) && !HasProcurementEvidence(_selectedOrder))">
                                         <span>3 - Procurement evidence</span>
