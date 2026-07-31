@@ -87,7 +87,8 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
                 hosted.Object.ObjectId);
             return;
         }
-        if (order.CompanyCommission != null)
+        if (order.CompanyCommission != null &&
+            !TradeCompanyCommissionMigrationService.RequiresAssignedClaimRepair(order))
         {
             return;
         }
@@ -140,7 +141,7 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
 
             diagnostics.Clear(companyId, order.Id);
             logger.LogInformation(
-                "Migrated hosted Trade order {OrderId} to company commission schema {SchemaVersion}.",
+                "Migrated or repaired hosted Trade order {OrderId} at company commission schema {SchemaVersion}.",
                 order.Id,
                 TradeCompanyCommission.CurrentSchemaVersion);
         }

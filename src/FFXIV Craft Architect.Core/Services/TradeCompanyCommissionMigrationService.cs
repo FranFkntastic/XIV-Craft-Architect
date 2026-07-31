@@ -147,7 +147,32 @@ public static class TradeCompanyCommissionMigrationService
                     "The hosted Trade order contains an incompatible company commission aggregate.");
             }
 
-            return TradeOrderWorkflow.CopyOrder(source);
+            var existingCopy = TradeOrderWorkflow.CopyOrder(source);
+            if (!RequiresAssignedClaimRepair(existingCopy))
+            {
+                return existingCopy;
+            }
+
+            var claimId = CreateDeterministicGuid(source.Id, "legacy-assigned-claim");
+            existingCopy.CompanyCommission = existing with
+            {
+                UpdatedAtUtc = migratedAtUtc,
+                ActiveClaim = new CompanyCommissionClaim(
+                    claimId,
+                    existing.CurrentTermsVersion,
+                    migratedAtUtc,
+                    source.AssignedCrafterId,
+                    null),
+                ParticipantGrant = new CompanyCommissionParticipantGrant(
+                    CreateDeterministicGuid(source.Id, "legacy-participant-grant"),
+                    claimId,
+                    existing.CurrentTermsVersion,
+                    1,
+                    migratedAtUtc),
+                ParticipantAcknowledgedTermsVersion = existing.CurrentTermsVersion
+            };
+            existingCopy.UpdatedAtUtc = migratedAtUtc;
+            return existingCopy;
         }
 
         ValidatePublicationOwnership(source, publishedBrief, canonicalCompanyId);
@@ -172,6 +197,15 @@ public static class TradeCompanyCommissionMigrationService
         var identitySatisfied = copy.AssignedCrafterId.HasValue;
         var paymentSatisfied = paymentRequiredBeforeWork && lifecycleProvesWorkBegan;
         var companyMaterialsSatisfied = hasCompanyMaterials && lifecycleProvesWorkBegan;
+        var hasAssignedClaim = copy.AssignedCrafterId.HasValue &&
+            copy.Status is
+                TradeOrderStatus.Assigned or
+                TradeOrderStatus.InProgress or
+                TradeOrderStatus.AwaitingDelivery or
+                TradeOrderStatus.Completed;
+        var assignedClaimId = hasAssignedClaim
+            ? CreateDeterministicGuid(copy.Id, "legacy-assigned-claim")
+            : Guid.Empty;
 
         var activity = ConvertHistory(
             copy,
@@ -197,6 +231,25 @@ public static class TradeCompanyCommissionMigrationService
                                             publishedBrief.Brief.IsTestFixture
                 ? 0
                 : 1,
+            ActiveClaim = hasAssignedClaim
+                ? new CompanyCommissionClaim(
+                    assignedClaimId,
+                    terms.Version,
+                    migratedAtUtc,
+                    copy.AssignedCrafterId,
+                    null)
+                : null,
+            ParticipantGrant = hasAssignedClaim
+                ? new CompanyCommissionParticipantGrant(
+                    CreateDeterministicGuid(copy.Id, "legacy-participant-grant"),
+                    assignedClaimId,
+                    terms.Version,
+                    1,
+                    migratedAtUtc)
+                : null,
+            ParticipantAcknowledgedTermsVersion = hasAssignedClaim
+                ? terms.Version
+                : null,
             Gates = new CompanyCommissionGateState(
                 new CompanyCommissionIdentityClearance(
                     identitySatisfied
@@ -250,6 +303,15 @@ public static class TradeCompanyCommissionMigrationService
 
         return copy;
     }
+
+    public static bool RequiresAssignedClaimRepair(TradeOrder order) =>
+        order.CompanyCommission is { ActiveClaim: null } &&
+        order.AssignedCrafterId.HasValue &&
+        order.Status is
+            TradeOrderStatus.Assigned or
+            TradeOrderStatus.InProgress or
+            TradeOrderStatus.AwaitingDelivery or
+            TradeOrderStatus.Completed;
 
     private static CompanyCommissionTermsVersion CreateTerms(
         TradeOrder order,
