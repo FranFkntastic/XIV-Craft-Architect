@@ -30,7 +30,8 @@ public partial class TradeOrders
                 ? CommissionTimelineVisibility.CompanyOnly
                 : CommissionTimelineVisibility.Shared,
             CommissionTimelineSource.Commission,
-            item.Actor.DisplayName ?? FormatCommissionActor(item.Actor.Kind)));
+            item.Actor.DisplayName ?? FormatCommissionActor(item.Actor.Kind),
+            ResolveTimelineImportance(item.Kind)));
         var planning = (_selectedOrder.History ?? [])
             .Where(item => !activityIds.Contains(item.Id))
             .Select(item => new CommissionTimelineItem(
@@ -42,13 +43,58 @@ public partial class TradeOrders
                     ? CommissionTimelineVisibility.CompanyOnly
                     : CommissionTimelineVisibility.Planning,
                 CommissionTimelineSource.Planning,
-                "Trade Architect"));
+                "Trade Architect",
+                item.Kind == TradeOrderHistoryEventKind.ManualNote
+                    ? CommissionTimelineImportance.Human
+                    : CommissionTimelineImportance.Routine));
         return canonical
             .Concat(planning)
             .Where(MatchesTimelineFilter)
             .OrderByDescending(item => item.CreatedAtUtc)
             .ThenByDescending(item => item.Id)
             .ToArray();
+    }
+
+    private IReadOnlyList<CommissionTimelineGroup> GetSelectedTimelineGroups()
+    {
+        var groups = new List<CommissionTimelineGroup>();
+        var routine = new List<CommissionTimelineItem>();
+
+        void FlushRoutine()
+        {
+            if (routine.Count == 0)
+            {
+                return;
+            }
+
+            groups.Add(new CommissionTimelineGroup(routine.ToArray()));
+            routine.Clear();
+        }
+
+        foreach (var item in GetSelectedTimelineItems())
+        {
+            if (item.Importance == CommissionTimelineImportance.Routine)
+            {
+                routine.Add(item);
+                continue;
+            }
+
+            FlushRoutine();
+            groups.Add(new CommissionTimelineGroup([item]));
+        }
+
+        FlushRoutine();
+        return groups;
+    }
+
+    private CommissionTimelineSummary GetSelectedTimelineSummary()
+    {
+        var items = GetSelectedTimelineItems();
+        return new CommissionTimelineSummary(
+            items.Count(item => item.Importance == CommissionTimelineImportance.Attention),
+            items.Count(item => item.Importance == CommissionTimelineImportance.Human),
+            items.Count(item => item.Importance == CommissionTimelineImportance.Milestone),
+            items.Count(item => item.Importance == CommissionTimelineImportance.Routine));
     }
 
     private bool MatchesTimelineFilter(CommissionTimelineItem item) =>
@@ -73,14 +119,56 @@ public partial class TradeOrders
             ? "trade-orders-timeline-filter is-active"
             : "trade-orders-timeline-filter";
 
-    private string GetTimelineItemClass(CommissionTimelineItem item) =>
-        item.Visibility switch
+    private string GetTimelineItemClass(CommissionTimelineItem item)
+    {
+        var visibilityClass = item.Visibility switch
         {
             CommissionTimelineVisibility.CompanyOnly =>
-                "trade-orders-timeline-item is-private",
+                "is-private",
             CommissionTimelineVisibility.Planning =>
-                "trade-orders-timeline-item is-planning",
-            _ => "trade-orders-timeline-item is-shared"
+                "is-planning",
+            _ => "is-shared"
+        };
+        var importanceClass = item.Importance switch
+        {
+            CommissionTimelineImportance.Attention => "is-attention",
+            CommissionTimelineImportance.Human => "is-human",
+            CommissionTimelineImportance.Milestone => "is-milestone",
+            _ => "is-routine"
+        };
+        return $"trade-orders-timeline-item {visibilityClass} {importanceClass}";
+    }
+
+    private static string FormatTimelineImportance(CommissionTimelineImportance importance) =>
+        importance switch
+        {
+            CommissionTimelineImportance.Attention => "Needs attention",
+            CommissionTimelineImportance.Human => "Conversation",
+            CommissionTimelineImportance.Milestone => "Milestone",
+            _ => "Routine"
+        };
+
+    private static CommissionTimelineImportance ResolveTimelineImportance(
+        CompanyCommissionActivityKind kind) =>
+        kind switch
+        {
+            CompanyCommissionActivityKind.ClaimRejected or
+            CompanyCommissionActivityKind.ClaimReleased or
+            CompanyCommissionActivityKind.ProvisionalIdentityRejected or
+            CompanyCommissionActivityKind.PaymentPolicyChangeRefused or
+            CompanyCommissionActivityKind.PaymentAttestationRetracted or
+            CompanyCommissionActivityKind.DeliveryReadinessWithdrawn or
+            CompanyCommissionActivityKind.DeliveryReturnedToWork or
+            CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted or
+            CompanyCommissionActivityKind.CommissionCanceled or
+            CompanyCommissionActivityKind.CommissionPublicationRevoked =>
+                CommissionTimelineImportance.Attention,
+            CompanyCommissionActivityKind.CommentAdded =>
+                CommissionTimelineImportance.Human,
+            CompanyCommissionActivityKind.ProgressReported or
+            CompanyCommissionActivityKind.MigratedTradeOrderHistory =>
+                CommissionTimelineImportance.Routine,
+            _ => CommissionTimelineImportance.Milestone
         };
 
     private static string FormatTimelineVisibility(CommissionTimelineVisibility visibility) =>
@@ -180,6 +268,12 @@ public partial class TradeOrders
                 "The crafter confirmed receipt against the current terms.",
             CompanyCommissionActivityKind.PaymentAttestationRetracted =>
                 "A party withdrew its payment confirmation.",
+            CompanyCommissionActivityKind.SettlementPaymentSentRecorded =>
+                "The commissioner marked the final payment sent.",
+            CompanyCommissionActivityKind.SettlementPaymentReceivedConfirmed =>
+                "The crafter confirmed receipt of the final payment.",
+            CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted =>
+                "A party withdrew its final-payment confirmation.",
             _ => "Commission state updated."
         };
 }
@@ -206,6 +300,14 @@ public enum CommissionTimelineSource
     Planning
 }
 
+public enum CommissionTimelineImportance
+{
+    Attention,
+    Human,
+    Milestone,
+    Routine
+}
+
 public sealed record CommissionTimelineItem(
     Guid Id,
     DateTime CreatedAtUtc,
@@ -213,4 +315,19 @@ public sealed record CommissionTimelineItem(
     string Detail,
     CommissionTimelineVisibility Visibility,
     CommissionTimelineSource Source,
-    string Actor);
+    string Actor,
+    CommissionTimelineImportance Importance);
+
+public sealed record CommissionTimelineGroup(
+    IReadOnlyList<CommissionTimelineItem> Items)
+{
+    public bool IsRoutineCluster =>
+        Items.Count > 1 &&
+        Items.All(item => item.Importance == CommissionTimelineImportance.Routine);
+}
+
+public sealed record CommissionTimelineSummary(
+    int Attention,
+    int Human,
+    int Milestone,
+    int Routine);

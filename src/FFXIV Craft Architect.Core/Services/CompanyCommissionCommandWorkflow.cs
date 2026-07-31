@@ -73,7 +73,11 @@ public static class CompanyCommissionCommandWorkflow
             AcceptCompanyCommissionDeliveryCommand =>
                 AcceptDelivery(source, commission, nowUtc, actor),
             RecordCompanyCommissionSettlementCommand settlement =>
-                RecordSettlement(source, commission, settlement, nowUtc),
+                RecordSettlement(source, commission, settlement, nowUtc, actor),
+            ConfirmCompanyCommissionSettlementReceivedCommand settlement =>
+                ConfirmSettlementReceived(source, commission, settlement, nowUtc, actor),
+            RetractCompanyCommissionSettlementAttestationCommand settlement =>
+                RetractSettlementAttestation(source, commission, settlement, actor),
             ResetCompanyCommissionParticipantRecoveryCommand reset =>
                 ResetRecovery(source, commission, reset, nowUtc),
             RedeemCompanyCommissionParticipantRecoveryCommand redeem =>
@@ -208,6 +212,9 @@ public static class CompanyCommissionCommandWorkflow
         DateTime nowUtc)
     {
         Require(source.Status == TradeOrderStatus.ReadyToAssign, "The commission is not open.");
+        Require(
+            !commission.PublicMetadata.IsTestFixture,
+            "This test commission is intentionally unclaimable.");
         Require(commission.ActiveClaim == null, "The commission claim slot is unavailable.");
         Require(
             command.TermsVersion == commission.CurrentTermsVersion,
@@ -888,7 +895,11 @@ public static class CompanyCommissionCommandWorkflow
             commission with
             {
                 OutputProgress = progress,
-                SettlementState = settlement
+                SettlementState = settlement,
+                SettlementPayment = settlement == CompanyCommissionSettlementState.Pending
+                    ? new CompanyCommissionSettlementConfirmation(
+                        commission.CurrentTermsVersion)
+                    : commission.SettlementPayment
             },
             CompanyCommissionActivityKind.DeliveryAccepted,
             "Accepted the complete delivery.");
@@ -898,23 +909,133 @@ public static class CompanyCommissionCommandWorkflow
         TradeOrder source,
         TradeCompanyCommission commission,
         RecordCompanyCommissionSettlementCommand command,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        CompanyCommissionActor actor)
     {
         Require(
             source.Status == TradeOrderStatus.Completed,
             "Settlement can close only a fulfilled commission.");
         Require(
+            actor.Kind == CompanyCommissionActorKind.Commissioner,
+            "Only the commissioner can record settlement payment sent.");
+        Require(
             commission.SettlementState == CompanyCommissionSettlementState.Pending,
             "This commission has no pending settlement.");
         RequireReason(command.Note);
+        Require(
+            commission.SettlementPayment.CommissionerSent == null,
+            "The commissioner has already recorded settlement payment sent.");
+        var sent = new CompanyCommissionPaymentAttestation(
+            commission.CurrentTermsVersion,
+            nowUtc,
+            actor.ActorId,
+            command.Note.Trim());
+        var confirmation = commission.SettlementPayment with
+        {
+            TermsVersion = commission.CurrentTermsVersion,
+            CommissionerSent = sent
+        };
         return Transition(
             source,
             commission with
             {
-                SettlementState = CompanyCommissionSettlementState.Satisfied
+                SettlementState = confirmation.IsSatisfied
+                    ? CompanyCommissionSettlementState.Satisfied
+                    : CompanyCommissionSettlementState.Pending,
+                SettlementPayment = confirmation
             },
-            CompanyCommissionActivityKind.SettlementRecorded,
+            CompanyCommissionActivityKind.SettlementPaymentSentRecorded,
             command.Note);
+    }
+
+    private static CompanyCommissionDomainTransition ConfirmSettlementReceived(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        ConfirmCompanyCommissionSettlementReceivedCommand command,
+        DateTime nowUtc,
+        CompanyCommissionActor actor)
+    {
+        RequireClaim(commission);
+        Require(
+            actor.Kind == CompanyCommissionActorKind.Crafter,
+            "Only the assigned crafter can confirm settlement payment received.");
+        Require(
+            source.Status == TradeOrderStatus.Completed,
+            "Settlement receipt can be confirmed only after delivery is accepted.");
+        Require(
+            commission.SettlementState == CompanyCommissionSettlementState.Pending,
+            "This commission has no pending settlement.");
+        Require(
+            command.TermsVersion == commission.CurrentTermsVersion,
+            "Settlement receipt must confirm the current terms version.");
+        RequireReason(command.Note);
+        Require(
+            commission.SettlementPayment.CrafterReceived == null,
+            "The crafter has already confirmed settlement payment received.");
+        var received = new CompanyCommissionPaymentAttestation(
+            commission.CurrentTermsVersion,
+            nowUtc,
+            actor.ActorId,
+            command.Note.Trim());
+        var confirmation = commission.SettlementPayment with
+        {
+            TermsVersion = commission.CurrentTermsVersion,
+            CrafterReceived = received
+        };
+        return Transition(
+            source,
+            commission with
+            {
+                SettlementState = confirmation.IsSatisfied
+                    ? CompanyCommissionSettlementState.Satisfied
+                    : CompanyCommissionSettlementState.Pending,
+                SettlementPayment = confirmation
+            },
+            CompanyCommissionActivityKind.SettlementPaymentReceivedConfirmed,
+            command.Note);
+    }
+
+    private static CompanyCommissionDomainTransition RetractSettlementAttestation(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        RetractCompanyCommissionSettlementAttestationCommand command,
+        CompanyCommissionActor actor)
+    {
+        RequireClaim(commission);
+        Require(
+            actor.Kind is CompanyCommissionActorKind.Commissioner or
+                CompanyCommissionActorKind.Crafter,
+            "Only a commission party can retract a settlement confirmation.");
+        Require(
+            source.Status == TradeOrderStatus.Completed,
+            "Settlement confirmation can be retracted only after delivery is accepted.");
+        RequireReason(command.Reason);
+        var commissioner = actor.Kind == CompanyCommissionActorKind.Commissioner;
+        var confirmation = commission.SettlementPayment;
+        Require(
+            commissioner
+                ? confirmation.CommissionerSent != null
+                : confirmation.CrafterReceived != null,
+            commissioner
+                ? "The commissioner has no settlement payment confirmation to retract."
+                : "The crafter has no settlement receipt confirmation to retract.");
+        return Transition(
+            source,
+            commission with
+            {
+                SettlementState = CompanyCommissionSettlementState.Pending,
+                SettlementPayment = confirmation with
+                {
+                    CommissionerSent = commissioner
+                        ? null
+                        : confirmation.CommissionerSent,
+                    CrafterReceived = commissioner
+                        ? confirmation.CrafterReceived
+                        : null
+                }
+            },
+            CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted,
+            command.Reason);
     }
 
     private static CompanyCommissionDomainTransition ResetRecovery(
@@ -1017,6 +1138,7 @@ public static class CompanyCommissionCommandWorkflow
             Version = publication.Version,
             PublishedAtUtc = publication.PublishedAtUtc,
             RevokedAtUtc = nowUtc,
+            IsTestFixture = publication.IsTestFixture,
             Ownership = publication.Ownership
         };
         return Transition(

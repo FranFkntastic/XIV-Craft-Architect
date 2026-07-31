@@ -39,6 +39,16 @@
                 </MudText>
             </div>
         </MudRadioGroup>
+        <div class="commission-delivery-test-mode">
+            <MudCheckBox T="bool"
+                         @bind-Value="_isTestFixture"
+                         Dense="true"
+                         Color="Color.Warning"
+                         Label="Testing only - disable every claim path" />
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                Marks every brief and Discord projection as a test commission. The server rejects claims even if someone retains an old capability URL.
+            </MudText>
+        </div>
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
@@ -57,7 +67,8 @@
         "Refresh the canonical company order before publishing to Discord.";
 
     private TradeCommissionDestination _destination = TradeCommissionDestination.PublicLink;
+    private bool _isTestFixture;
     private void Cancel() => MudDialog.Cancel();
     private void Publish() => MudDialog.Close(DialogResult.Ok(
-        new TradeCommissionPublishDialogResult(_destination)));
+        new TradeCommissionPublishDialogResult(_destination, _isTestFixture)));
 }

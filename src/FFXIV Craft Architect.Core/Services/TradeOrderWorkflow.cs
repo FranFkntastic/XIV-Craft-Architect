@@ -37,6 +37,7 @@ public static class TradeOrderWorkflow
                     Version = order.CommissionPublication.Version,
                     PublishedAtUtc = order.CommissionPublication.PublishedAtUtc,
                     RevokedAtUtc = order.CommissionPublication.RevokedAtUtc,
+                    IsTestFixture = order.CommissionPublication.IsTestFixture,
                     Ownership = order.CommissionPublication.Ownership
                 },
             CompanyCommission = CopyCompanyCommission(order.CompanyCommission),

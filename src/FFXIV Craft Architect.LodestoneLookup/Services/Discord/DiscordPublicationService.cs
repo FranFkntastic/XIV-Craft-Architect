@@ -95,12 +95,14 @@ public sealed class DiscordPublicationService(
             state,
             cancellationToken);
         var actionToken = SqliteDiscordCollaborationStore.CreateActionToken();
-        var initialPayload = DiscordCommissionMessage.CreateWithPublicUrl(
-            published,
+        var projection = await CreateCanonicalProjectionAsync(
+            access,
+            order.Order,
+            order.Envelope.RecordRevision,
             publicUrl,
-            state,
-            state == DiscordPublicationState.Open ? actionToken : null,
-            claimUrl: claimUrl);
+            claimUrl,
+            cancellationToken);
+        var initialPayload = CompanyCommissionDiscordMessage.CreatePublication(projection);
         var created = await collaboration.CreatePublicationAsync(
             ownership,
             publicId,
@@ -254,6 +256,7 @@ public sealed class DiscordPublicationService(
                 PublicUrl = publicUrl,
                 Version = published.Version,
                 PublishedAtUtc = published.PublishedAtUtc,
+                IsTestFixture = published.Brief.IsTestFixture,
                 Ownership = ownership
             };
             publishedOrder.UpdatedAtUtc = published.PublishedAtUtc;
@@ -428,14 +431,14 @@ public sealed class DiscordPublicationService(
             publicUrl,
             restoredState,
             cancellationToken);
-        var payload = DiscordCommissionMessage.CreateWithPublicUrl(
-            published,
+        var projection = await CreateCanonicalProjectionAsync(
+            access,
+            order.Order,
+            order.Envelope.RecordRevision,
             publicUrl,
-            restoredState,
-            restoredState == DiscordPublicationState.Open
-                ? publication.ActionToken
-                : null,
-            claimUrl: claimUrl);
+            claimUrl,
+            cancellationToken);
+        var payload = CompanyCommissionDiscordMessage.CreatePublication(projection);
         return await collaboration.RetryFailedPublicationAsync(
             access.CompanyId,
             publication.PublicationId,
@@ -533,15 +536,6 @@ public sealed class DiscordPublicationService(
         var published = await briefs.LoadAsync(publication.PublicId, cancellationToken)
             ?? throw new InvalidOperationException(
                 "An active Discord publication no longer has immutable commission terms.");
-        string? assignmentLabel = null;
-        if (order.AssignedCrafterId is { } crafterId)
-        {
-            var crafter = await orders.LoadCrafterAsync(access, crafterId, cancellationToken);
-            assignmentLabel = crafter == null
-                ? "Assigned by the operator"
-                : $"Assigned to {crafter.Crafter.DisplayName}";
-        }
-
         var state = ResolvePublicationState(order);
         if (!TryResolveCanonicalPublicUrl(publication.PublicId, out var publicUrl) ||
             !string.Equals(
@@ -557,13 +551,14 @@ public sealed class DiscordPublicationService(
             publicUrl,
             state,
             cancellationToken);
-        var payload = DiscordCommissionMessage.CreateWithPublicUrl(
-            published,
+        var projection = await CreateCanonicalProjectionAsync(
+            access,
+            order,
+            objectRevision,
             publicUrl,
-            state,
-            state == DiscordPublicationState.Open ? publication.ActionToken : null,
-            assignmentLabel,
-            claimUrl);
+            claimUrl,
+            cancellationToken);
+        var payload = CompanyCommissionDiscordMessage.CreatePublication(projection);
         await collaboration.EnqueueProjectionAsync(
             publication.PublicationId,
             state,
@@ -571,6 +566,44 @@ public sealed class DiscordPublicationService(
             JsonSerializer.Serialize(payload, JsonOptions),
             timeProvider.GetUtcNow(),
             cancellationToken);
+    }
+
+    private async Task<CommittedCompanyCommissionDiscordProjection>
+        CreateCanonicalProjectionAsync(
+            TradeCompanyAccessContext access,
+            TradeOrder order,
+            CompanyRecordRevision objectRevision,
+            string publicUrl,
+            string? claimUrl,
+            CancellationToken cancellationToken)
+    {
+        var commission = order.CompanyCommission ??
+            throw new InvalidOperationException(
+                "Discord publication requires a canonical company commission.");
+        var activity = commission.Activity.LastOrDefault() ??
+            throw new InvalidOperationException(
+                "Discord publication requires committed commission activity.");
+        var profile = await companies.LoadCompanyProfileAsync(access, cancellationToken) ??
+            throw new InvalidOperationException(
+                "Discord publication requires the canonical company profile.");
+        if (!Uri.TryCreate(publicUrl, UriKind.Absolute, out var publicUri) ||
+            claimUrl != null && !Uri.TryCreate(claimUrl, UriKind.Absolute, out _))
+        {
+            throw new InvalidOperationException(
+                "Discord publication requires canonical public URLs.");
+        }
+
+        return new CommittedCompanyCommissionDiscordProjection(
+            access.CompanyId,
+            CompanyCommissionProjectionService.CreatePublicBrief(order, profile.Name),
+            objectRevision,
+            activity.EventId,
+            activity.CommissionRevision,
+            activity.Kind,
+            activity.CreatedAtUtc,
+            activity.Comment ?? activity.Kind.ToString(),
+            publicUri,
+            claimUrl == null ? null : new Uri(claimUrl, UriKind.Absolute));
     }
 
     private async Task<string?> IssueClaimUrlAsync(
@@ -582,6 +615,7 @@ public sealed class DiscordPublicationService(
         var commission = order.CompanyCommission;
         if (state != DiscordPublicationState.Open ||
             commission == null ||
+            commission.PublicMetadata.IsTestFixture ||
             commission.ActiveClaim != null ||
             commission.ActiveClaimCapabilityRevision <= 0 ||
             commission.PublicMetadata.ViewState !=
@@ -640,6 +674,11 @@ public sealed class DiscordPublicationService(
         if (TradeOrderStatusWorkflow.IsArchived(order.Status))
         {
             return DiscordPublicationState.Closed;
+        }
+
+        if (order.CompanyCommission?.PublicMetadata.IsTestFixture == true)
+        {
+            return DiscordPublicationState.TestFixture;
         }
 
         return order.AssignedCrafterId.HasValue

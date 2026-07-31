@@ -47,7 +47,10 @@ const enumMaps = {
         "TermsAmended",
         "PaymentSentRecorded",
         "PaymentReceivedConfirmed",
-        "PaymentAttestationRetracted"
+        "PaymentAttestationRetracted",
+        "SettlementPaymentSentRecorded",
+        "SettlementPaymentReceivedConfirmed",
+        "SettlementPaymentAttestationRetracted"
     ]
 };
 
@@ -315,6 +318,7 @@ export function adaptBriefProjection(payload) {
             provisionalCrafter: null,
             participantCapabilityRevision: null,
             payment: null,
+            settlementPayment: null,
             activity: []
         };
     }
@@ -331,7 +335,27 @@ export function adaptBriefProjection(payload) {
             0),
         payment: adaptParticipantPayment(
             requiredObject(payload.payment, "Participant payment state")),
+        settlementPayment: adaptSettlementPayment(
+            requiredObject(payload.settlementPayment, "Participant settlement state")),
         activity: requiredArray(payload.activity, "Participant activity").map(adaptParticipantActivity)
+    };
+}
+
+function adaptSettlementPayment(value) {
+    const settlement = {
+        termsVersion: requiredInteger(value.termsVersion ?? 0, "Settlement terms version", 0),
+        commissionerSent: value.commissionerSent
+            ? adaptPaymentAttestation(value.commissionerSent, "Commissioner settlement payment")
+            : null,
+        crafterReceived: value.crafterReceived
+            ? adaptPaymentAttestation(value.crafterReceived, "Crafter settlement payment")
+            : null
+    };
+    return {
+        ...settlement,
+        confirmationCount:
+            Number(Boolean(settlement.commissionerSent)) +
+            Number(Boolean(settlement.crafterReceived))
     };
 }
 
@@ -404,6 +428,7 @@ function adaptPublicBrief(source) {
         companyDisplayName: requiredText(brief.companyDisplayName, "Company display name"),
         reference: requiredText(brief.reference, "Commission reference"),
         viewState: requiredEnum(brief.viewState, enumMaps.viewState, "Public view state"),
+        isTestFixture: requiredBoolean(brief.isTestFixture, "Test fixture state"),
         terms,
         status: requiredEnum(brief.status, enumMaps.status, "Commission status"),
         gates: adaptPublicGates(requiredObject(brief.gates, "Public pre-work gates")),

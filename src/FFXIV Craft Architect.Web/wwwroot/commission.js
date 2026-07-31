@@ -261,6 +261,12 @@ function render() {
     setText("briefSubtitle", buildSubtitle(projection));
     setText("totalPayment", formatGil(terms.payment.total));
 
+    if (brief.isTestFixture) {
+        showNotice(
+            "TEST COMMISSION - CLAIMING DISABLED",
+            "This visible commission exists only for workflow and timeline verification. No crafter can claim it.");
+    }
+
     renderNextStep();
     renderGates();
     renderOutputs();
@@ -280,6 +286,7 @@ function buildSubtitle(projection) {
 }
 
 function formatStatus(brief) {
+    if (brief.isTestFixture) return "TEST - NOT CLAIMABLE";
     if (brief.viewState === "Revoked") return "REVOKED";
     if (brief.status === "Canceled") return "CANCELED";
     if (brief.closed) return "COMPLETED";
@@ -316,12 +323,56 @@ function resolveNextStep() {
     const brief = projection.public;
     const pending = state.access?.pending;
 
+    if (brief.isTestFixture) {
+        return {
+            title: "Test commission - no action required",
+            body: "This fixture exercises the commission timeline and Discord projection. Claiming is disabled by the commission service.",
+            tone: "blocked"
+        };
+    }
     if (brief.viewState !== "Published") {
         return {
             title: brief.viewState === "Revoked" ? "This public brief was revoked" : "This commission is not open",
             body: "No claim or participant command is available from this view.",
             tone: "blocked"
         };
+    }
+    if (brief.status === "Completed" && projection.kind === "participant") {
+        const settlement = projection.settlementPayment;
+        if (brief.settlementState === "Pending" && !settlement?.crafterReceived) {
+            return {
+                title: "Confirm final payment",
+                body: `Confirm receipt of ${formatGil(brief.terms.payment.total)} against terms v${brief.terms.version}. Settlement completes only after both parties attest.`,
+                tone: "waiting",
+                actions: [{
+                    label: `I received ${formatGil(brief.terms.payment.total)}`,
+                    primary: true,
+                    run: openSettlementReceiptForm
+                }]
+            };
+        }
+        if (brief.settlementState === "Pending") {
+            return {
+                title: "Waiting for commissioner confirmation",
+                body: "You confirmed receipt of the final payment. Settlement completes when the commissioner records the same exchange.",
+                tone: "waiting",
+                actions: [{
+                    label: "Retract my confirmation",
+                    run: openSettlementRetractionForm
+                }]
+            };
+        }
+        if (brief.settlementState === "Satisfied") {
+            return {
+                title: "Commission complete",
+                body: "Delivery and the two-party settlement confirmation are complete.",
+                tone: "blocked",
+                actions: settlement?.crafterReceived ? [{
+                    label: "Correct my receipt confirmation",
+                    run: openSettlementRetractionForm
+                }] : []
+            };
+        }
     }
     if (brief.closed || brief.status === "Canceled" || brief.status === "Completed") {
         return {
@@ -752,6 +803,15 @@ function renderTerms() {
     }
     appendTextRow(target, "Total", formatGil(terms.payment.total));
     appendTextRow(target, "Settlement", formatWords(brief.settlementState));
+    if (state.projection.settlementPayment &&
+        (brief.settlementState === "Pending" ||
+         state.projection.settlementPayment.confirmationCount > 0)) {
+        const settlement = state.projection.settlementPayment;
+        appendTextRow(
+            target,
+            "Final payment confirmations",
+            `${Number(Boolean(settlement.commissionerSent)) + Number(Boolean(settlement.crafterReceived))} of 2`);
+    }
     appendTextRow(target, "Reference", brief.reference);
 
     const detail = byId("termsDetail");
@@ -1263,6 +1323,48 @@ function openPaymentRetractionForm() {
         "Retract confirmation",
         "retract-payment",
         "Payment confirmation retracted.");
+}
+
+function openSettlementReceiptForm() {
+    const brief = state.projection.public;
+    const form = element("form", "action-form");
+    const note = createTextarea("note", {
+        required: true,
+        maxLength: 500,
+        placeholder: "Where or how was the final payment received?"
+    });
+    form.append(
+        element(
+            "p",
+            "form-help",
+            `Confirm ${formatGil(brief.terms.payment.total)} received for terms v${brief.terms.version}. This is your attestation, not automated in-game evidence.`),
+        createField("Receipt note", note)
+    );
+    addFormFooter(form, "Confirm final payment");
+    form.addEventListener("submit", async event => {
+        event.preventDefault();
+        try {
+            await runParticipantCommand(
+                "confirm-settlement-received",
+                {
+                    termsVersion: brief.terms.version,
+                    note: requiredUserText(note.value, "Receipt note")
+                },
+                "Final payment receipt confirmed.");
+        } catch (caught) {
+            showNotice("Settlement confirmation unavailable", caught.message);
+        }
+    });
+    showActionForm(form);
+}
+
+function openSettlementRetractionForm() {
+    openReasonForm(
+        "Retract final-payment confirmation",
+        "Explain what was incorrect. The commission returns to settlement pending until both parties confirm the corrected exchange.",
+        "Retract confirmation",
+        "retract-settlement",
+        "Final-payment confirmation retracted.");
 }
 
 function paymentScheduleValue(schedule) {

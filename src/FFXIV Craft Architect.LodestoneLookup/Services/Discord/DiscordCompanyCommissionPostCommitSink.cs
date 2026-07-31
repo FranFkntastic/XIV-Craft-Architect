@@ -131,6 +131,12 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                 "The crafter acknowledged the current commission terms.",
             CompanyCommissionActivityKind.PaymentClearanceRecorded =>
                 "Payment clearance was recorded.",
+            CompanyCommissionActivityKind.PaymentSentRecorded =>
+                "The commissioner marked the advance payment sent.",
+            CompanyCommissionActivityKind.PaymentReceivedConfirmed =>
+                "The crafter confirmed the advance payment received.",
+            CompanyCommissionActivityKind.PaymentAttestationRetracted =>
+                "A payment confirmation was retracted.",
             CompanyCommissionActivityKind.CompanyMaterialsReady =>
                 "Commissioner-provided materials are ready for handoff.",
             CompanyCommissionActivityKind.CompanyMaterialsReceived =>
@@ -153,6 +159,12 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                 "The commissioner accepted delivery.",
             CompanyCommissionActivityKind.SettlementRecorded =>
                 "Commission settlement was recorded.",
+            CompanyCommissionActivityKind.SettlementPaymentSentRecorded =>
+                "The commissioner marked the final payment sent.",
+            CompanyCommissionActivityKind.SettlementPaymentReceivedConfirmed =>
+                "The crafter confirmed the final payment received.",
+            CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted =>
+                "A final-payment confirmation was retracted.",
             CompanyCommissionActivityKind.CommissionCanceled =>
                 "The commission was canceled.",
             CompanyCommissionActivityKind.CommissionClosed =>
@@ -167,6 +179,8 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                 "The existing Trade order was converted to a company commission.",
             CompanyCommissionActivityKind.MigratedTradeOrderHistory =>
                 "Existing Trade order history was preserved in the commission.",
+            CompanyCommissionActivityKind.TermsAmended =>
+                "The commissioner published revised commission terms.",
             _ => throw new ArgumentOutOfRangeException(
                 nameof(activity),
                 activity.Kind,

@@ -638,6 +638,13 @@
                              {
                                  var operationsProvisional = operationsCommission.ProvisionalCrafter;
                                  <MudTabPanel Text="Operations">
+                                     @if (operationsCommission.PublicMetadata.IsTestFixture)
+                                     {
+                                         <MudAlert Severity="Severity.Warning" Dense="true" Class="trade-orders-test-commission-banner">
+                                             <MudText Typo="Typo.subtitle2">Test commission - claiming disabled</MudText>
+                                             <MudText Typo="Typo.body2">Use this record to verify publication, projection updates, and timeline density. It cannot assign work.</MudText>
+                                         </MudAlert>
+                                     }
                                      <div class="trade-orders-operations-summary">
                                          <div>
                                              <span>State</span>
@@ -845,19 +852,13 @@
                                      {
                                          <section class="trade-orders-operation-card is-attention">
                                              <MudText Typo="Typo.subtitle2">Settlement Required</MudText>
-                                             <MudTextField @bind-Value="_commissionSettlementObservation"
-                                                           id="commission-settlement-observation"
-                                                           Label="Settlement observation"
-                                                           HelperText="Describe what was observed; this is not automated gil evidence."
-                                                           Variant="Variant.Outlined"
-                                                           Margin="Margin.Dense"
-                                                           Immediate="true"
-                                                           MaxLength="500" />
-                                             <MudButton Variant="Variant.Filled"
+                                             <MudText Typo="Typo.body2">
+                                                 Final payment needs independent commissioner-sent and crafter-received confirmations.
+                                             </MudText>
+                                             <MudButton Variant="Variant.Outlined"
                                                         Color="Color.Primary"
-                                                        Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementObservation))"
-                                                        OnClick="RecordCommissionSettlementAsync">
-                                                 Record Settlement
+                                                        OnClick="@(() => _activeOpsTab = PaymentTabIndex)">
+                                                 Review Payment
                                              </MudButton>
                                          </section>
                                      }
@@ -1055,6 +1056,120 @@
                                             </div>
                                         }
                                      </section>
+                                     @if (_selectedOrder.Status == TradeOrderStatus.Completed &&
+                                          commissionTerms.Payment.Total > 0 &&
+                                          commissionTerms.Payment.Schedule != CompanyCommissionPaymentSchedule.Advance)
+                                     {
+                                         var settlement = canonicalCommission.SettlementPayment;
+                                         var legacySettlement =
+                                             canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied &&
+                                             settlement.ConfirmationCount == 0;
+                                         <section class="trade-orders-commission-payment is-settlement">
+                                             <div class="trade-orders-payment-handshake-heading">
+                                                 <div>
+                                                     <MudText Typo="Typo.subtitle2">
+                                                         @($"Final Payment - {FormatGil(commissionTerms.Payment.Total)}")
+                                                     </MudText>
+                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                         Delivery is accepted. Both parties confirm settlement independently against terms v@(commissionTerms.Version).
+                                                     </MudText>
+                                                 </div>
+                                                 <span class="@GetSettlementChipClass(canonicalCommission.SettlementState)">
+                                                     @(legacySettlement
+                                                         ? "Legacy settlement"
+                                                         : $"{settlement.ConfirmationCount} of 2 confirmed")
+                                                 </span>
+                                             </div>
+                                             @if (legacySettlement)
+                                             {
+                                                 <div class="trade-orders-payment-clearance is-complete">
+                                                     <strong>Settlement preserved</strong>
+                                                     <span>This commission was completed before two-party settlement attestations were introduced.</span>
+                                                 </div>
+                                             }
+                                             else
+                                             {
+                                               <div class="trade-orders-payment-handshake">
+                                                 <div class="@($"trade-orders-payment-attestation{(settlement.CommissionerSent != null ? " is-complete" : string.Empty)}")">
+                                                     <span>Commissioner</span>
+                                                     @if (settlement.CommissionerSent is { } sent)
+                                                     {
+                                                         <strong>Final payment marked sent</strong>
+                                                         <p>@sent.Note</p>
+                                                         <small>@sent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(sent.TermsVersion)</small>
+                                                     }
+                                                     else
+                                                     {
+                                                         <strong>Mark final payment sent</strong>
+                                                         <p>The crafter confirms receipt separately from their brief.</p>
+                                                         <MudTextField @bind-Value="_commissionSettlementObservation"
+                                                                       id="commission-settlement-observation"
+                                                                       Label="Payment note"
+                                                                       Variant="Variant.Outlined"
+                                                                       Margin="Margin.Dense"
+                                                                       Immediate="true"
+                                                                       MaxLength="500" />
+                                                         <MudButton Variant="Variant.Filled"
+                                                                    Color="Color.Primary"
+                                                                    FullWidth="true"
+                                                                    Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementObservation))"
+                                                                    OnClick="RecordCommissionSettlementAsync">
+                                                             Mark Sent
+                                                         </MudButton>
+                                                     }
+                                                 </div>
+                                                 <div class="trade-orders-payment-handshake-mark">
+                                                     <MudIcon Icon="@Icons.Material.Filled.SyncAlt" />
+                                                 </div>
+                                                 <div class="@($"trade-orders-payment-attestation{(settlement.CrafterReceived != null ? " is-complete" : " is-waiting")}")">
+                                                     <span>Crafter</span>
+                                                     @if (settlement.CrafterReceived is { } received)
+                                                     {
+                                                         <strong>Final payment received</strong>
+                                                         <p>@received.Note</p>
+                                                         <small>@received.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(received.TermsVersion)</small>
+                                                     }
+                                                     else
+                                                     {
+                                                         <strong>Awaiting receipt</strong>
+                                                         <p>The participant brief shows the exact amount and accepted terms.</p>
+                                                     }
+                                                 </div>
+                                               </div>
+                                               @if (settlement.CommissionerSent != null)
+                                               {
+                                                   <details class="trade-orders-exception-disclosure">
+                                                     <summary>Retract commissioner confirmation</summary>
+                                                     <MudTextField @bind-Value="_commissionSettlementRetractionReason"
+                                                                   id="commission-settlement-retraction-reason"
+                                                                   Label="Retraction reason"
+                                                                   Variant="Variant.Outlined"
+                                                                   Margin="Margin.Dense"
+                                                                   Immediate="true"
+                                                                   MaxLength="500" />
+                                                     <MudButton Variant="Variant.Outlined"
+                                                                Color="Color.Warning"
+                                                                Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementRetractionReason))"
+                                                                OnClick="RetractCommissionSettlementAsync">
+                                                         Retract Confirmation
+                                                     </MudButton>
+                                                   </details>
+                                               }
+                                               <div class="@($"trade-orders-payment-clearance{(canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied ? " is-complete" : string.Empty)}")">
+                                                 <strong>
+                                                     @(canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied
+                                                         ? "Settlement complete"
+                                                         : "Settlement remains open")
+                                                 </strong>
+                                                 <span>
+                                                     @(canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied
+                                                         ? "Both parties confirmed the final payment against the accepted terms."
+                                                         : $"{settlement.ConfirmationCount} of 2 confirmations recorded.")
+                                                 </span>
+                                               </div>
+                                             }
+                                         </section>
+                                     }
                                 }
                                 @if (!HasCanonicalCommission)
                                 {
@@ -1418,6 +1533,7 @@
                                 }
                             </MudTabPanel>
                              <MudTabPanel Text="Timeline">
+                                 @{ var timelineSummary = GetSelectedTimelineSummary(); }
                                  <div class="trade-orders-timeline-toolbar">
                                      <div class="trade-orders-timeline-filters" role="group" aria-label="Filter commission timeline">
                                          @foreach (var filter in Enum.GetValues<CommissionTimelineFilter>())
@@ -1432,22 +1548,62 @@
                                              </button>
                                          }
                                      </div>
+                                     <div class="trade-orders-timeline-summary" aria-label="Timeline event summary">
+                                         @if (timelineSummary.Attention > 0)
+                                         {
+                                             <span class="is-attention">@timelineSummary.Attention need attention</span>
+                                         }
+                                         @if (timelineSummary.Human > 0)
+                                         {
+                                             <span class="is-human">@timelineSummary.Human conversations</span>
+                                         }
+                                         <span>@timelineSummary.Milestone milestones</span>
+                                         <span>@timelineSummary.Routine routine</span>
+                                     </div>
                                  </div>
                                  <div class="trade-orders-timeline">
-                                     @foreach (var item in GetSelectedTimelineItems())
+                                     @foreach (var group in GetSelectedTimelineGroups())
                                      {
-                                         <article class="@GetTimelineItemClass(item)" @key="item.Id">
-                                             <time>@item.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt")</time>
-                                             <span class="trade-orders-timeline-dot"></span>
-                                             <div>
-                                                 <div class="trade-orders-timeline-item-heading">
-                                                     <strong>@item.Title</strong>
-                                                     <span>@FormatTimelineVisibility(item.Visibility)</span>
+                                         @if (group.IsRoutineCluster)
+                                         {
+                                             <details class="trade-orders-timeline-routine-group" @key="group.Items[0].Id">
+                                                 <summary>
+                                                     <span>@group.Items.Count routine updates</span>
+                                                     <small>@group.Items[^1].CreatedAtUtc.ToLocalTime().ToString("MMM d") - @group.Items[0].CreatedAtUtc.ToLocalTime().ToString("MMM d")</small>
+                                                 </summary>
+                                                 @foreach (var routineItem in group.Items)
+                                                 {
+                                                     <article class="@GetTimelineItemClass(routineItem)" @key="routineItem.Id">
+                                                         <time>@routineItem.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt")</time>
+                                                         <span class="trade-orders-timeline-dot"></span>
+                                                         <div>
+                                                             <div class="trade-orders-timeline-item-heading">
+                                                                 <strong>@routineItem.Title</strong>
+                                                                 <span>@FormatTimelineVisibility(routineItem.Visibility)</span>
+                                                             </div>
+                                                             <p>@routineItem.Detail</p>
+                                                             <small>@routineItem.Actor</small>
+                                                         </div>
+                                                     </article>
+                                                 }
+                                             </details>
+                                         }
+                                         else
+                                         {
+                                             var item = group.Items[0];
+                                             <article class="@GetTimelineItemClass(item)" @key="item.Id">
+                                                 <time>@item.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt")</time>
+                                                 <span class="trade-orders-timeline-dot"></span>
+                                                 <div>
+                                                     <div class="trade-orders-timeline-item-heading">
+                                                         <strong>@item.Title</strong>
+                                                         <span>@FormatTimelineImportance(item.Importance) - @FormatTimelineVisibility(item.Visibility)</span>
+                                                     </div>
+                                                     <p>@item.Detail</p>
+                                                     <small>@item.Actor</small>
                                                  </div>
-                                                 <p>@item.Detail</p>
-                                                 <small>@item.Actor</small>
-                                             </div>
-                                         </article>
+                                             </article>
+                                         }
                                      }
                                  </div>
                                  <div class="trade-orders-timeline-composer">
@@ -1514,6 +1670,13 @@
                                  @if (SelectedCommissionOwner is { } sharingOwner &&
                                       sharingOwner.Order.CompanyCommission is { } sharingCommission)
                                  {
+                                     @if (sharingCommission.PublicMetadata.IsTestFixture)
+                                     {
+                                         <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3 trade-orders-test-commission-banner">
+                                             <MudText Typo="Typo.subtitle2">Test commission - claiming disabled</MudText>
+                                             <MudText Typo="Typo.body2">This projection exercises publication and update delivery without assigning work to a crafter.</MudText>
+                                         </MudAlert>
+                                     }
                                      <section class="trade-orders-sharing-card">
                                          <div class="trade-orders-operation-card-heading">
                                              <div>
@@ -1534,9 +1697,13 @@
                                              </div>
                                              <div>
                                                  <span>Claim slot</span>
-                                                 <strong>@(sharingCommission.ActiveClaim == null ? "Open" : "Reserved")</strong>
+                                                 <strong>@(sharingCommission.PublicMetadata.IsTestFixture
+                                                     ? "Disabled for testing"
+                                                     : sharingCommission.ActiveClaim == null ? "Open" : "Reserved")</strong>
                                                  <small>
-                                                     @(sharingCommission.ActiveClaim == null
+                                                     @(sharingCommission.PublicMetadata.IsTestFixture
+                                                         ? "No claim capability can be issued"
+                                                         : sharingCommission.ActiveClaim == null
                                                          ? "One crafter may claim"
                                                          : FormatCanonicalCommissionClaimant(sharingCommission))
                                                  </small>
@@ -1560,7 +1727,8 @@
                                                         OnClick="CopyCommissionLinkAsync">
                                                  Copy Public Link
                                              </MudButton>
-                                             @if (sharingCommission.ActiveClaim == null &&
+                                             @if (!sharingCommission.PublicMetadata.IsTestFixture &&
+                                                  sharingCommission.ActiveClaim == null &&
                                                   sharingCommission.PublicMetadata.ViewState ==
                                                   CompanyCommissionPublicViewState.Published &&
                                                   sharingOwner.Order.Status is not
@@ -1985,6 +2153,13 @@
                                      !HasFailedCompanyPublication)
                                 {
                                     var publication = _selectedOrder.CommissionPublication!;
+                                    @if (publication.IsTestFixture)
+                                    {
+                                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3 trade-orders-test-commission-banner">
+                                            <MudText Typo="Typo.subtitle2">Test commission - claiming disabled</MudText>
+                                            <MudText Typo="Typo.body2">This brief verifies publication rendering only. It cannot be claimed or assigned.</MudText>
+                                        </MudAlert>
+                                    }
                                     <section class="trade-orders-collaboration-state is-live">
                                         <div class="trade-orders-section-heading">
                                             <div>
@@ -2009,7 +2184,7 @@
                                         <div><strong>Published</strong><span>@publication.PublishedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span><b>v@(publication.Version)</b></div>
                                         <div><strong>Payment snapshot</strong><span>@FormatGil(paymentSummary.TotalPayment)</span><b>Locked</b></div>
                                         <div><strong>Pricing evidence</strong><span>@FormatCommissionLocation(_selectedOrder.SourceSnapshot)</span><b>Locked</b></div>
-                                        <div><strong>Crafter access</strong><span>No account or CA workflow required</span><b>Open link</b></div>
+                                        <div><strong>Crafter access</strong><span>@(publication.IsTestFixture ? "Read-only test brief" : "No account or CA workflow required")</span><b>@(publication.IsTestFixture ? "No claims" : "Open link")</b></div>
                                     </div>
                                     <MudAlert Severity="Severity.Success" Dense="true" Class="mt-3">
                                         Repricing this order will not silently alter the published terms. Publish a replacement only when both sides agree to new terms.

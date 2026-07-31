@@ -1696,7 +1696,35 @@
 }
 
 .trade-orders-timeline-toolbar {
+  display: grid;
+  gap: 7px;
   margin-bottom: 8px;
+}
+
+.trade-orders-timeline-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.trade-orders-timeline-summary span {
+  padding: 2px 7px;
+  border: 1px solid #444;
+  border-radius: 999px;
+  color: #aaa;
+  font-size: 0.62rem;
+}
+
+.trade-orders-timeline-summary .is-attention {
+  border-color: #9d553f;
+  background: #3f2923;
+  color: #f1b39e;
+}
+
+.trade-orders-timeline-summary .is-human {
+  border-color: #6e5890;
+  background: #342b42;
+  color: #d7c1ef;
 }
 
 .trade-orders-timeline-filters,
@@ -1743,6 +1771,48 @@
   gap: 9px;
   padding: 10px;
   border-bottom: 1px solid #333;
+}
+
+.trade-orders-timeline-item.is-attention {
+  background: #30231f;
+  box-shadow: inset 3px 0 #c46f51;
+}
+
+.trade-orders-timeline-item.is-human {
+  background: #292431;
+  box-shadow: inset 3px 0 #9070b0;
+}
+
+.trade-orders-timeline-item.is-routine {
+  padding-top: 7px;
+  padding-bottom: 7px;
+  opacity: 0.82;
+}
+
+.trade-orders-timeline-routine-group {
+  border-bottom: 1px solid #333;
+  background: #222;
+}
+
+.trade-orders-timeline-routine-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  color: #aaa;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.trade-orders-timeline-routine-group > summary small {
+  color: #777;
+}
+
+.trade-orders-test-commission-banner {
+  margin-bottom: 9px;
+  border: 1px solid #a66f24;
+  background: #382c1c;
 }
 
 .trade-orders-timeline-item time {
