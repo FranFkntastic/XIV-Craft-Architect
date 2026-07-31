@@ -11,6 +11,8 @@ on:
       - 'src/FFXIV Craft Architect.Web/wwwroot/appsettings.json'
       - 'tools/Discord/reconcile-guild.mjs'
       - 'global.json'
+      - 'Directory.Build.props'
+      - 'eng/Franthropy.version'
       - '.github/workflows/deploy-vps-lodestone.yml'
   workflow_dispatch:
     inputs:

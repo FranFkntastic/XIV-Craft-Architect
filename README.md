@@ -26,6 +26,7 @@ Run the same foundation checks used by CI before handing off a change:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Assert-TruthfulTestSuite.ps1"
 node --test ".\tools\TruthfulSuite\truthful-suite.test.mjs"
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\Resolve-Franthropy.ps1"
 dotnet restore ".\FFXIV Craft Architect.sln" --locked-mode
 node ".\tools\TruthfulSuite\check-dependencies.mjs"
 dotnet format ".\FFXIV Craft Architect.sln" --verify-no-changes --no-restore
