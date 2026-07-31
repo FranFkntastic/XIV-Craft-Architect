@@ -79,6 +79,7 @@ builder.Services.AddScoped<ITradePayrollDraftStore, IndexedDbTradePayrollDraftSt
 builder.Services.AddScoped<TradePayrollPersistenceService>();
 builder.Services.AddScoped<TradeOrderDraftFactory>();
 builder.Services.AddScoped<TradeOrderPricingWorkflowService>();
+builder.Services.AddScoped<TradeOrderLifecycleService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
 builder.Services.AddScoped<TradeCompanyProfilePackageService>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
