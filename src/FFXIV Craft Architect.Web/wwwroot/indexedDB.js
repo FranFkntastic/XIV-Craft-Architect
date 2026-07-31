@@ -1256,6 +1256,42 @@ async function deleteTradeOrderCraftSnapshot(snapshotId) {
     return await deleteStoreRecord(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS, snapshotId);
 }
 
+async function loadAllTradeOrderCraftSnapshots() {
+    return await loadStoreRecords(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS);
+}
+
+async function deleteTradeOrderCraftSnapshotsForOrder(orderId) {
+    const database = await initCompanyDatabase();
+    requireTradeStore(database, STORE_TRADE_ORDER_CRAFT_SNAPSHOTS);
+    const snapshots = await loadStoreRecords(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS);
+    const ids = snapshots
+        .filter(snapshot => snapshot.orderId === orderId)
+        .map(snapshot => snapshot.id);
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_TRADE_ORDER_CRAFT_SNAPSHOTS], 'readwrite');
+        const store = transaction.objectStore(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS);
+        for (const id of ids) {
+            store.delete(id);
+        }
+        transaction.oncomplete = () => resolve(ids.length);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
+async function clearTradeOrderCraftSnapshots() {
+    const database = await initCompanyDatabase();
+    requireTradeStore(database, STORE_TRADE_ORDER_CRAFT_SNAPSHOTS);
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_TRADE_ORDER_CRAFT_SNAPSHOTS], 'readwrite');
+        transaction.objectStore(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS).clear();
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
 async function saveTradePayrollDraft(draft) {
     return await saveStoreRecord(STORE_TRADE_PAYROLL_DRAFTS, draft);
 }
@@ -2011,6 +2047,9 @@ window.IndexedDB = {
     loadTradeOrderCraftSnapshot,
     loadTradeOrderCraftSnapshotsForCompany,
     deleteTradeOrderCraftSnapshot,
+    loadAllTradeOrderCraftSnapshots,
+    deleteTradeOrderCraftSnapshotsForOrder,
+    clearTradeOrderCraftSnapshots,
     saveTradePayrollDraft,
     saveTradePayrollDraftsBatch,
     loadTradePayrollDrafts,

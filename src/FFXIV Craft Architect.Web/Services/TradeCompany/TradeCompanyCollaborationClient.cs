@@ -316,6 +316,10 @@ public sealed class TradeCompanyCollaborationClient(
             Uri.EscapeDataString(publicId),
             content: null,
             cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return;
+        }
         await EnsureSuccessAsync(response, cancellationToken);
     }
 

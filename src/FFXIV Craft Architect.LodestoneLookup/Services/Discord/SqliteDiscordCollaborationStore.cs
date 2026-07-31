@@ -467,6 +467,12 @@ public sealed class SqliteDiscordCollaborationStore(
                         publication.MessageId,
                         workItem.MessageId,
                         StringComparison.Ordinal),
+                DiscordOutboxOperation.DeleteMessage =>
+                    !string.IsNullOrWhiteSpace(publication.MessageId) &&
+                    string.Equals(
+                        publication.MessageId,
+                        workItem.MessageId,
+                        StringComparison.Ordinal),
                 _ => false
             });
         if (!validOperation)
@@ -917,7 +923,9 @@ public sealed class SqliteDiscordCollaborationStore(
         discardStale.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
         discardStale.Parameters.AddWithValue(
             "$preservedWorkItemId",
-            activeCreate is null ? DBNull.Value : activeCreate.Value.WorkItemId.ToString("D"));
+            activeCreate is null || state == DiscordPublicationState.Revoked
+                ? DBNull.Value
+                : activeCreate.Value.WorkItemId.ToString("D"));
         await discardStale.ExecuteNonQueryAsync(cancellationToken);
 
         await using var update = connection.CreateCommand();
@@ -943,7 +951,24 @@ public sealed class SqliteDiscordCollaborationStore(
             DesiredProjectionRevision = desiredProjectionRevision,
             UpdatedAt = queuedAt
         };
-        if (activeCreate.HasValue &&
+        if (state == DiscordPublicationState.Revoked)
+        {
+            var createIsInFlight = activeCreate?.State == DiscordOutboxState.InFlight;
+            if (!string.IsNullOrWhiteSpace(publication.MessageId) || createIsInFlight)
+            {
+                await InsertOutboxAsync(
+                    connection,
+                    (SqliteTransaction)transaction,
+                    updated,
+                    DiscordOutboxOperation.DeleteMessage,
+                    payloadJson,
+                    $"projection:{publicationId:N}:{desiredProjectionRevision}",
+                    queuedAt,
+                    createIsInFlight ? DateTimeOffset.MaxValue : queuedAt,
+                    cancellationToken);
+            }
+        }
+        else if (activeCreate.HasValue &&
             activeCreate.Value.State is DiscordOutboxState.Pending or DiscordOutboxState.Retry)
         {
             await CoalesceQueuedCreateAsync(
@@ -1227,7 +1252,7 @@ public sealed class SqliteDiscordCollaborationStore(
                     next_attempt_at_utc = $completedAt,
                     updated_at_utc = $completedAt
                 WHERE publication_id = $publicationId
-                  AND operation = $edit
+                  AND operation IN ($edit, $delete)
                   AND message_id IS NULL
                   AND state IN ($pending, $retry);
                 """;
@@ -1235,6 +1260,7 @@ public sealed class SqliteDiscordCollaborationStore(
             releaseDeferred.Parameters.AddWithValue("$completedAt", completedAt.ToString("O"));
             releaseDeferred.Parameters.AddWithValue("$publicationId", metadata.Value.ToString("D"));
             releaseDeferred.Parameters.AddWithValue("$edit", (int)DiscordOutboxOperation.EditMessage);
+            releaseDeferred.Parameters.AddWithValue("$delete", (int)DiscordOutboxOperation.DeleteMessage);
             releaseDeferred.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
             releaseDeferred.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
             await releaseDeferred.ExecuteNonQueryAsync(cancellationToken);
@@ -1936,7 +1962,7 @@ public sealed class SqliteDiscordCollaborationStore(
                 last_error = $error,
                 updated_at_utc = $failedAt
             WHERE publication_id = $publicationId
-              AND operation = $edit
+              AND operation IN ($edit, $delete)
               AND message_id IS NULL
               AND state IN ($pending, $retry);
             """;
@@ -1945,6 +1971,7 @@ public sealed class SqliteDiscordCollaborationStore(
         failDeferred.Parameters.AddWithValue("$failedAt", failedAt.ToString("O"));
         failDeferred.Parameters.AddWithValue("$publicationId", metadata.Value.ToString("D"));
         failDeferred.Parameters.AddWithValue("$edit", (int)DiscordOutboxOperation.EditMessage);
+        failDeferred.Parameters.AddWithValue("$delete", (int)DiscordOutboxOperation.DeleteMessage);
         failDeferred.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
         failDeferred.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
         await failDeferred.ExecuteNonQueryAsync(cancellationToken);

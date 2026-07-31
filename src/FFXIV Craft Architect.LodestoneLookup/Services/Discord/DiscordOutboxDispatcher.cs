@@ -6,7 +6,8 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 public enum DiscordOutboxOperation
 {
     CreateMessage,
-    EditMessage
+    EditMessage,
+    DeleteMessage
 }
 
 public sealed record DiscordOutboxWorkItem(
@@ -116,6 +117,12 @@ public sealed class DiscordOutboxDispatcher(
                     workItem.ChannelId,
                     workItem.MessageId,
                     payload,
+                    cancellationToken);
+                break;
+            case DiscordOutboxOperation.DeleteMessage when !string.IsNullOrWhiteSpace(workItem.MessageId):
+                result = await discord.DeleteMessageAsync(
+                    workItem.ChannelId,
+                    workItem.MessageId,
                     cancellationToken);
                 break;
             default:

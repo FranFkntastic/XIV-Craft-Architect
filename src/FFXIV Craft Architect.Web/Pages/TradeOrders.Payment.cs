@@ -241,8 +241,29 @@ public partial class TradeOrders
             return;
         }
 
-        var previousStatus = _selectedOrder.Status;
         var orderId = _selectedOrder.Id;
+        if (status == TradeOrderStatus.Canceled)
+        {
+            try
+            {
+                await OrderLifecycle.CancelAndRetractAsync(_selectedOrder, note);
+                Snackbar.Add("Order canceled and its public commission retracted.", Severity.Success);
+            }
+            catch (Exception exception)
+            {
+                Snackbar.Add($"Could not cancel order: {exception.Message}", Severity.Error);
+                return;
+            }
+
+            await LoadAsync();
+            if (string.IsNullOrWhiteSpace(_loadError))
+            {
+                SelectOrderAfterReload(orderId, "The order was canceled, but it could not be loaded.");
+            }
+            return;
+        }
+
+        var previousStatus = _selectedOrder.Status;
         var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
         orderToSave.Status = status;
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
@@ -258,6 +279,47 @@ public partial class TradeOrders
         if (string.IsNullOrWhiteSpace(_loadError))
         {
             SelectOrderAfterReload(orderId, "Trade order was closed, but it could not be loaded.");
+        }
+    }
+
+    private async Task DeleteSelectedOrderAsync()
+    {
+        if (_selectedOrder == null || _isDeletingSelectedOrder)
+        {
+            return;
+        }
+
+        var order = _selectedOrder;
+        var confirmed = await DialogService.ShowMessageBox(
+            "Delete Order Permanently",
+            $"Delete '{order.Title}' and its linked payroll draft, generated craft plan, and Discord publication? This cannot be undone.",
+            yesText: "Delete Permanently",
+            cancelText: "Keep Order");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        _isDeletingSelectedOrder = true;
+        try
+        {
+            await OrderLifecycle.DeleteOrderAsync(order);
+            await LoadAsync();
+            _selectedOrder = null;
+            _manualNote = string.Empty;
+            if (AppState.SelectedTradeOrderId == order.Id)
+            {
+                AppState.SelectTradeOrder(null);
+            }
+            Snackbar.Add("Order and linked commission data deleted.", Severity.Success);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add($"Could not delete order: {exception.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isDeletingSelectedOrder = false;
         }
     }
 

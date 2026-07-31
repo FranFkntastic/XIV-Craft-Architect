@@ -16,6 +16,7 @@
 @inject WebSettingsService WebSettings
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyCollaborationService TradeCollaboration
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCommissionOperationsService CommissionOperations
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeOrderLifecycleService OrderLifecycle
 @inject CommissionBriefClient CommissionBriefs
 @inject CommissionBriefLocalStateService CommissionBriefLocalState
 @inject WebPlanPersistenceService PlanPersistence
@@ -863,29 +864,6 @@
                                          </section>
                                      }
 
-                                     @if (operationsOwner.Order.Status is not
-                                         (TradeOrderStatus.Completed or TradeOrderStatus.Canceled))
-                                     {
-                                         <details class="trade-orders-exception-disclosure trade-orders-operation-danger">
-                                             <summary>Cancel this commission</summary>
-                                             <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                 Cancellation closes the claim and keeps the commission record and timeline.
-                                             </MudText>
-                                             <MudTextField @bind-Value="_commissionCancellationReason"
-                                                           id="commission-cancellation-reason"
-                                                           Label="Cancellation reason"
-                                                           Variant="Variant.Outlined"
-                                                           Margin="Margin.Dense"
-                                                           Immediate="true"
-                                                           MaxLength="500" />
-                                             <MudButton Variant="Variant.Outlined"
-                                                        Color="Color.Error"
-                                                        Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionCancellationReason))"
-                                                        OnClick="CancelCanonicalCommissionAsync">
-                                                 Cancel Commission
-                                             </MudButton>
-                                         </details>
-                                     }
                                  </MudTabPanel>
                              }
                              <MudTabPanel Text="Payment">
@@ -1372,6 +1350,29 @@
                                             </MudText>
                                         }
                                     </section>
+                                    <section class="trade-orders-close-panel">
+                                        <MudText Typo="Typo.subtitle2">Order Actions</MudText>
+                                        @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+                                        {
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Error"
+                                                       FullWidth="true"
+                                                       Disabled="@_isDeletingSelectedOrder"
+                                                       OnClick="DeleteSelectedOrderAsync">
+                                                @(_isDeletingSelectedOrder ? "Deleting..." : "Delete Order Permanently")
+                                            </MudButton>
+                                        }
+                                        else
+                                        {
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Error"
+                                                       FullWidth="true"
+                                                       Disabled="@(_isCommissionCommandRunning || _isDeletingSelectedOrder)"
+                                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
+                                                Cancel Order
+                                            </MudButton>
+                                        }
+                                    </section>
                                 }
                                 else
                                 {
@@ -1405,6 +1406,13 @@
                                                        FullWidth="true"
                                                        OnClick="ReopenSelectedOrderAsync">
                                                 Reopen Order
+                                            </MudButton>
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Error"
+                                                       FullWidth="true"
+                                                       Disabled="@_isDeletingSelectedOrder"
+                                                       OnClick="DeleteSelectedOrderAsync">
+                                                @(_isDeletingSelectedOrder ? "Deleting..." : "Delete Order Permanently")
                                             </MudButton>
                                         }
                                         else
