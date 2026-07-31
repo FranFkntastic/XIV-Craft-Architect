@@ -213,12 +213,14 @@ public sealed class ProfileHostClient
         string accessKey,
         long sinceRevision,
         int limit,
+        string collection,
         CancellationToken ct)
     {
         using var request = CreateRequest(
             HttpMethod.Get,
             hostUrl,
-            $"/profile-host/changes?sinceRevision={sinceRevision}&limit={limit}",
+            $"/profile-host/changes?sinceRevision={sinceRevision}&limit={limit}" +
+            $"&collection={Uri.EscapeDataString(collection)}",
             accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();

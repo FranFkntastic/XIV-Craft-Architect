@@ -8,6 +8,7 @@ public sealed class ProfileSyncLocalStateService
     private const string ConnectedProfileNameKey = "profileHost.connectedProfileName";
     private const string ProfileStatePrefix = "profileHost.profile.";
     private const string LastSyncRevisionSuffix = "lastSyncRevision";
+    private const string CollectionSyncRevisionSuffix = "collectionSyncRevision.";
     private const string ObjectRevisionSuffix = "objectRevision.";
     private const string HostedObjectSuffix = "hostedObject.";
     private const string PendingSavesSuffix = "pendingSaves";
@@ -104,6 +105,32 @@ public sealed class ProfileSyncLocalStateService
         {
             throw new InvalidOperationException(
                 "Browser storage could not persist the hosted-profile sync cursor.");
+        }
+    }
+
+    public async Task<long> LoadCollectionSyncRevisionAsync(
+        string profileId,
+        string collection)
+    {
+        return await _indexedDb.LoadRequiredSettingAsync(
+            BuildProfileStateKey(
+                profileId,
+                $"{CollectionSyncRevisionSuffix}{collection}"),
+            0L);
+    }
+
+    public async Task SaveCollectionSyncRevisionAsync(
+        string profileId,
+        string collection,
+        long revision)
+    {
+        var key = BuildProfileStateKey(
+            profileId,
+            $"{CollectionSyncRevisionSuffix}{collection}");
+        if (!await _indexedDb.SaveSettingAsync(key, revision))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not persist the hosted-profile cursor for '{collection}'.");
         }
     }
 

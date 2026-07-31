@@ -472,7 +472,8 @@ public sealed class SqliteProfileHostStore
         string profileId,
         long sinceRevision,
         CancellationToken ct,
-        int? limit = null)
+        int? limit = null,
+        string? collection = null)
     {
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
@@ -481,22 +482,29 @@ public sealed class SqliteProfileHostStore
             ct);
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = limit.HasValue
+        var collectionPredicate = collection == null
+            ? string.Empty
+            : " and collection = $collection";
+        command.CommandText = (limit.HasValue
             ? """
             select collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc
             from sync_objects
-            where profile_id = $profileId and revision > $sinceRevision
+            where profile_id = $profileId and revision > $sinceRevision{0}
             order by revision asc
             limit $limit;
             """
             : """
             select collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc
             from sync_objects
-            where profile_id = $profileId and revision > $sinceRevision
+            where profile_id = $profileId and revision > $sinceRevision{0}
             order by revision asc;
-            """;
+            """).Replace("{0}", collectionPredicate, StringComparison.Ordinal);
         command.Parameters.AddWithValue("$profileId", profileId);
         command.Parameters.AddWithValue("$sinceRevision", sinceRevision);
+        if (collection != null)
+        {
+            command.Parameters.AddWithValue("$collection", collection);
+        }
         if (limit.HasValue)
         {
             command.Parameters.AddWithValue("$limit", checked(limit.Value + 1));

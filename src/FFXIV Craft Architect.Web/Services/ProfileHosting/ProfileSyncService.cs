@@ -37,6 +37,15 @@ public sealed record ProfileSyncBootstrapPreview(
 public sealed class ProfileSyncService
 {
     private const int ChangePageSize = 1;
+    private static readonly IReadOnlyList<string> SyncOrder =
+    [
+        ProfileSyncCollections.TradeCompanyProfiles,
+        ProfileSyncCollections.TradeCrafters,
+        ProfileSyncCollections.TradeOrders,
+        ProfileSyncCollections.TradePayrollDrafts,
+        ProfileSyncCollections.Settings,
+        ProfileSyncCollections.Plans
+    ];
     private readonly ProfileHostClient _client;
     private readonly ProfileSyncLocalStateService _localState;
     private readonly IReadOnlyDictionary<string, IProfileSyncCollectionAdapter> _adapters;
@@ -183,64 +192,87 @@ public sealed class ProfileSyncService
         var lastRevision = 0L;
         try
         {
-            lastRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
-            var serverRevision = lastRevision;
-            var hasMore = true;
-            while (hasMore)
+            var serverRevision = 0L;
+            var hostReached = false;
+            var collectionFailures = new List<string>();
+            foreach (var collection in SyncOrder)
             {
-                var changes = await _client.GetChangesAsync(
-                    settings.HostUrl!,
-                    settings.AccessKey!,
-                    serverRevision,
-                    ChangePageSize,
-                    ct);
-                using (SuppressNotifications())
+                try
                 {
-                    foreach (var item in changes.Objects)
+                    var collectionRevision = await _localState
+                        .LoadCollectionSyncRevisionAsync(profileId, collection);
+                    var hasMore = true;
+                    while (hasMore)
                     {
-                        if (IsPending(item.Collection, item.ObjectId))
+                        var changes = await _client.GetChangesAsync(
+                            settings.HostUrl!,
+                            settings.AccessKey!,
+                            collectionRevision,
+                            ChangePageSize,
+                            collection,
+                            ct);
+                        hostReached = true;
+                        using (SuppressNotifications())
                         {
-                            continue;
+                            foreach (var item in changes.Objects)
+                            {
+                                if (IsPending(item.Collection, item.ObjectId))
+                                {
+                                    continue;
+                                }
+
+                                var adapter = GetAdapter(item.Collection);
+                                if (item.Deleted)
+                                {
+                                    await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
+                                }
+                                else
+                                {
+                                    await _localState.SaveHostedObjectProvenanceAsync(
+                                        profileId,
+                                        item.Collection,
+                                        item.ObjectId);
+                                    await adapter.ApplyRemoteObjectAsync(item, ct);
+                                }
+
+                                await _localState.SaveObjectRevisionAsync(
+                                    profileId,
+                                    item.Collection,
+                                    item.ObjectId,
+                                    item.Revision);
+                            }
                         }
 
-                        var adapter = GetAdapter(item.Collection);
-                        if (item.Deleted)
+                        if (changes.HasMore &&
+                            changes.ServerRevision <= collectionRevision)
                         {
-                            await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
-                        }
-                        else
-                        {
-                            await _localState.SaveHostedObjectProvenanceAsync(
-                                profileId,
-                                item.Collection,
-                                item.ObjectId);
-                            await adapter.ApplyRemoteObjectAsync(item, ct);
+                            throw new InvalidOperationException(
+                                "The profile host returned a non-advancing changes page.");
                         }
 
-                        await _localState.SaveObjectRevisionAsync(
+                        collectionRevision = changes.ServerRevision;
+                        hasMore = changes.HasMore;
+                        await _localState.SaveCollectionSyncRevisionAsync(
                             profileId,
-                            item.Collection,
-                            item.ObjectId,
-                            item.Revision);
+                            collection,
+                            collectionRevision);
                     }
-                }
 
-                if (changes.HasMore && changes.ServerRevision <= serverRevision)
+                    serverRevision = Math.Max(serverRevision, collectionRevision);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
                 {
-                    throw new InvalidOperationException(
-                        "The profile host returned a non-advancing changes page.");
+                    collectionFailures.Add($"{collection}: {exception.Message}");
                 }
-
-                serverRevision = changes.ServerRevision;
-                lastRevision = serverRevision;
-                hasMore = changes.HasMore;
-                await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
             }
 
+            lastRevision = serverRevision;
+            await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
             var hostReachable = await RetryPendingSavesAsync(
                 settings,
                 profileId,
                 ct);
+            hostReachable = hostReached && hostReachable;
             SetStatus(new ProfileSyncStatus(
                 true,
                 hostReachable,
@@ -252,7 +284,9 @@ public sealed class ProfileSyncService
                     ? "Conflicts need review"
                     : _pendingSaves.Count > 0
                         ? "Local changes pending"
-                        : "Synced"));
+                        : collectionFailures.Count > 0
+                            ? $"Company data synced; {collectionFailures.Count:N0} storage area will retry automatically."
+                            : "Synced"));
         }
         catch (Exception ex)
         {

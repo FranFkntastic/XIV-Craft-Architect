@@ -146,6 +146,7 @@ public static class ProfileHostEndpoints
                 ProfileHostOptions options,
                 long? sinceRevision,
                 int? limit,
+                string? collection,
                 ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
@@ -176,11 +177,22 @@ public static class ProfileHostEndpoints
                     });
                 }
 
+                if (collection != null &&
+                    !ProfileSyncCollections.All.Contains(collection, StringComparer.Ordinal))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "invalid_collection",
+                        message = "The requested profile collection is not supported."
+                    });
+                }
+
                 var changes = await store.LoadChangesAsync(
                     profile.ProfileId,
                     sinceRevision ?? 0,
                     cancellationToken,
-                    limit);
+                    limit,
+                    collection);
                 return Results.Ok(ToPortableChanges(changes));
             });
 

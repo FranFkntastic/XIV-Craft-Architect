@@ -1759,6 +1759,15 @@
             return GetProfileHostAttentionSummary();
         }
 
+        if (!string.IsNullOrWhiteSpace(ProfileSync.CurrentStatus.Message) &&
+            !string.Equals(
+                ProfileSync.CurrentStatus.Message,
+                "Synced",
+                StringComparison.Ordinal))
+        {
+            return ProfileSync.CurrentStatus.Message;
+        }
+
         return "Available in this browser and synced to the hosted profile";
     }
 
