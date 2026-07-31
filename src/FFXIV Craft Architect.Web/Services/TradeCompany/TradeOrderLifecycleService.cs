@@ -229,6 +229,7 @@ public sealed class TradeOrderLifecycleService(
             .ToArray();
         await profileSync.DeleteObjectsAsync(identities, cancellationToken);
         await indexedDb.ClearTradeOrderCraftSnapshotsAsync();
+        await indexedDb.ClearLegacyTradeCommissionStoresAsync();
         appState.NotifyTradeOperationsDataChanged();
         return new TradeCommissionPurgeResult(
             orderIds.Length,

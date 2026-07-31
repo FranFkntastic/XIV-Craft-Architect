@@ -16,7 +16,7 @@ const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 24;
+const MODULE_REVISION = 25;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -1292,6 +1292,29 @@ async function clearTradeOrderCraftSnapshots() {
     });
 }
 
+async function clearLegacyTradeCommissionStores() {
+    const database = await initLegacyDB();
+    const storeNames = [
+        STORE_TRADE_ORDERS,
+        STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
+        STORE_TRADE_PAYROLL_DRAFTS
+    ].filter(storeName => database.objectStoreNames.contains(storeName));
+
+    if (storeNames.length === 0) {
+        return true;
+    }
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(storeNames, 'readwrite');
+        for (const storeName of storeNames) {
+            transaction.objectStore(storeName).clear();
+        }
+        transaction.oncomplete = () => resolve(true);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
 async function saveTradePayrollDraft(draft) {
     return await saveStoreRecord(STORE_TRADE_PAYROLL_DRAFTS, draft);
 }
@@ -2050,6 +2073,7 @@ window.IndexedDB = {
     loadAllTradeOrderCraftSnapshots,
     deleteTradeOrderCraftSnapshotsForOrder,
     clearTradeOrderCraftSnapshots,
+    clearLegacyTradeCommissionStores,
     saveTradePayrollDraft,
     saveTradePayrollDraftsBatch,
     loadTradePayrollDrafts,
