@@ -471,7 +471,8 @@ public sealed class SqliteProfileHostStore
     public async Task<ProfileSyncChangesResponse> LoadChangesAsync(
         string profileId,
         long sinceRevision,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? limit = null)
     {
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
@@ -480,7 +481,15 @@ public sealed class SqliteProfileHostStore
             ct);
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = """
+        command.CommandText = limit.HasValue
+            ? """
+            select collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc
+            from sync_objects
+            where profile_id = $profileId and revision > $sinceRevision
+            order by revision asc
+            limit $limit;
+            """
+            : """
             select collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc
             from sync_objects
             where profile_id = $profileId and revision > $sinceRevision
@@ -488,6 +497,10 @@ public sealed class SqliteProfileHostStore
             """;
         command.Parameters.AddWithValue("$profileId", profileId);
         command.Parameters.AddWithValue("$sinceRevision", sinceRevision);
+        if (limit.HasValue)
+        {
+            command.Parameters.AddWithValue("$limit", checked(limit.Value + 1));
+        }
 
         var objects = new List<ProfileSyncObjectEnvelope>();
         await using (var reader = await command.ExecuteReaderAsync(ct))
@@ -498,15 +511,25 @@ public sealed class SqliteProfileHostStore
             }
         }
 
-        var serverRevision = await GetServerRevisionAsync(
+        var hasMore = limit.HasValue && objects.Count > limit.Value;
+        if (hasMore)
+        {
+            objects.RemoveAt(objects.Count - 1);
+        }
+
+        var currentServerRevision = await GetServerRevisionAsync(
             connection,
             profileId,
             ct,
             transaction);
+        var serverRevision = hasMore
+            ? objects[^1].Revision
+            : currentServerRevision;
         await transaction.CommitAsync(ct);
         return new ProfileSyncChangesResponse
         {
             ServerRevision = serverRevision,
+            HasMore = hasMore,
             Objects = objects
         };
     }

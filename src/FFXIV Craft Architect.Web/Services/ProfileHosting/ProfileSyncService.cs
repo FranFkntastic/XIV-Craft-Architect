@@ -36,6 +36,7 @@ public sealed record ProfileSyncBootstrapPreview(
 
 public sealed class ProfileSyncService
 {
+    private const int ChangePageSize = 1;
     private readonly ProfileHostClient _client;
     private readonly ProfileSyncLocalStateService _localState;
     private readonly IReadOnlyDictionary<string, IProfileSyncCollectionAdapter> _adapters;
@@ -183,39 +184,59 @@ public sealed class ProfileSyncService
         try
         {
             lastRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
-            var changes = await _client.GetChangesAsync(settings.HostUrl!, settings.AccessKey!, lastRevision, ct);
-            using (SuppressNotifications())
+            var serverRevision = lastRevision;
+            var hasMore = true;
+            while (hasMore)
             {
-                foreach (var item in changes.Objects)
+                var changes = await _client.GetChangesAsync(
+                    settings.HostUrl!,
+                    settings.AccessKey!,
+                    serverRevision,
+                    ChangePageSize,
+                    ct);
+                using (SuppressNotifications())
                 {
-                    if (IsPending(item.Collection, item.ObjectId))
+                    foreach (var item in changes.Objects)
                     {
-                        continue;
-                    }
+                        if (IsPending(item.Collection, item.ObjectId))
+                        {
+                            continue;
+                        }
 
-                    var adapter = GetAdapter(item.Collection);
-                    if (item.Deleted)
-                    {
-                        await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
-                    }
-                    else
-                    {
-                        await _localState.SaveHostedObjectProvenanceAsync(
+                        var adapter = GetAdapter(item.Collection);
+                        if (item.Deleted)
+                        {
+                            await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
+                        }
+                        else
+                        {
+                            await _localState.SaveHostedObjectProvenanceAsync(
+                                profileId,
+                                item.Collection,
+                                item.ObjectId);
+                            await adapter.ApplyRemoteObjectAsync(item, ct);
+                        }
+
+                        await _localState.SaveObjectRevisionAsync(
                             profileId,
                             item.Collection,
-                            item.ObjectId);
-                        await adapter.ApplyRemoteObjectAsync(item, ct);
+                            item.ObjectId,
+                            item.Revision);
                     }
-
-                    await _localState.SaveObjectRevisionAsync(
-                        profileId,
-                        item.Collection,
-                        item.ObjectId,
-                        item.Revision);
                 }
+
+                if (changes.HasMore && changes.ServerRevision <= serverRevision)
+                {
+                    throw new InvalidOperationException(
+                        "The profile host returned a non-advancing changes page.");
+                }
+
+                serverRevision = changes.ServerRevision;
+                lastRevision = serverRevision;
+                hasMore = changes.HasMore;
+                await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
             }
 
-            await _localState.SaveLastSyncRevisionAsync(profileId, changes.ServerRevision);
             var hostReachable = await RetryPendingSavesAsync(
                 settings,
                 profileId,
@@ -223,7 +244,7 @@ public sealed class ProfileSyncService
             SetStatus(new ProfileSyncStatus(
                 true,
                 hostReachable,
-                changes.ServerRevision,
+                serverRevision,
                 _pendingSaves.Count,
                 _conflicts.Count,
                 DateTime.UtcNow,

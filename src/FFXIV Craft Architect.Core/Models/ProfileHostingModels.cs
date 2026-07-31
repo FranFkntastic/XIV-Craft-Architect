@@ -70,6 +70,7 @@ public sealed class ProfileSyncPutResponse
 public sealed class ProfileSyncChangesResponse
 {
     public long ServerRevision { get; set; }
+    public bool HasMore { get; set; }
     public IReadOnlyList<ProfileSyncObjectEnvelope> Objects { get; set; } = Array.Empty<ProfileSyncObjectEnvelope>();
 }
 
