@@ -256,6 +256,11 @@ public sealed class IndexedDbService
             "IndexedDB.clearTradeOrderCraftSnapshots",
             "clear legacy Trade order craft snapshots");
 
+    public Task<bool> ClearLegacyTradeCommissionStoresAsync() =>
+        InvokeRequiredAsync<bool>(
+            "IndexedDB.clearLegacyTradeCommissionStores",
+            "clear pre-split Trade commission storage");
+
     public Task<bool> SaveTradePayrollDraftAsync(
         TradePayrollWorkflowDraft draft) =>
         InvokeOrDefaultAsync(
