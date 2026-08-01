@@ -25,7 +25,16 @@ public sealed record CreateCompanyCommissionCommand(
 
 public sealed record UpdateCompanyCommissionDraftCommand(
     CompanyCommissionCommandContext Context,
-    CompanyCommissionTermsVersion Terms) : ICompanyCommissionCompanyCommand;
+    CompanyCommissionTermsVersion Terms,
+    CompanyCommissionDraftWorkPackage WorkPackage) : ICompanyCommissionCompanyCommand;
+
+public sealed record CompanyCommissionDraftWorkPackage(
+    IReadOnlyList<TradeRequestedOrderOutput> RequestedOutputs,
+    TradeOrderSourceSnapshot SourceSnapshot,
+    string? CraftPlanId,
+    string? CraftPlanName,
+    DateTime? CraftPlanSavedAtUtc,
+    TradeOrderCraftPlanLinkKind CraftPlanLinkKind);
 
 public sealed record AmendCompanyCommissionTermsCommand(
     CompanyCommissionCommandContext Context,

@@ -140,12 +140,15 @@ public partial class TradeOrders
             ? SetSelectedOrderPaymentContractAsync(contract)
             : Task.CompletedTask;
 
-    private Task SetOrderMaterialResponsibilityValueAsync(
+    private async Task SetOrderMaterialResponsibilityValueAsync(
         TradeCommissionPaymentMaterial material,
-        string value) =>
-        Enum.TryParse<CommissionMaterialResponsibility>(value, out var responsibility)
-            ? SetOrderMaterialResponsibilityAsync(material, responsibility)
-            : Task.CompletedTask;
+        string value)
+    {
+        if (Enum.TryParse<CommissionMaterialResponsibility>(value, out var responsibility))
+        {
+            await SetOrderMaterialResponsibilityAsync(material, responsibility);
+        }
+    }
 
     private bool CanCreateRequestedOrder =>
         !string.IsNullOrWhiteSpace(_newRequestedOrderTitle) &&
@@ -153,7 +156,7 @@ public partial class TradeOrders
 
     private bool CanEditSelectedOrderOutputs =>
         _selectedOrder != null &&
-        _selectedOrder.CompanyCommission == null &&
+        (_selectedOrder.CompanyCommission == null || CanEditCanonicalDraft) &&
         TradeOrderWorkflow.CanEditRequestedOutputs(_selectedOrder);
 
     private bool HasSelectedOrderOutputChanges =>
@@ -305,6 +308,14 @@ public partial class TradeOrders
     {
         if (_companyProfile == null)
         {
+            return false;
+        }
+
+        if (order.CompanyCommission != null)
+        {
+            Snackbar.Add(
+                "Canonical commissions can only change through commission operations.",
+                Severity.Error);
             return false;
         }
 

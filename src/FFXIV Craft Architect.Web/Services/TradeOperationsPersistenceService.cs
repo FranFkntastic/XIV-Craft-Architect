@@ -109,8 +109,10 @@ public sealed class TradeOperationsPersistenceService
         var profiles = await LoadCompanyProfilesAsync();
         if (profiles.All(profile => profile.Id != companyProfileId))
         {
-            throw new InvalidOperationException(
-                $"Trade {childKind} '{childId}' references missing company profile '{companyProfileId:D}'.");
+            throw new MissingTradeCompanyProfileException(
+                companyProfileId,
+                childKind,
+                childId);
         }
     }
 
@@ -169,6 +171,11 @@ public sealed class TradeOperationsPersistenceService
 
     public async Task<bool> SaveOrderAsync(TradeOrder order)
     {
+        if (order.CompanyCommission != null)
+        {
+            return false;
+        }
+
         order.UpdatedAtUtc = DateTime.UtcNow;
         return await _indexedDb.SaveTradeOrderAsync(order);
     }

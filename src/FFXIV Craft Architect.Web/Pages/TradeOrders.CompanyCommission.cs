@@ -1,5 +1,7 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
+using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using FFXIV_Craft_Architect.Web.Shared;
@@ -23,6 +25,9 @@ public partial class TradeOrders
     private Guid? _retryingCommissionDiagnosticId;
     private bool _isCommissionCommandRunning;
     private bool _showCommissionTermsRevision;
+    private TradeOrder? _commissionTermsRevisionWorkPackage;
+    private CommissionBriefDocument? _commissionTermsRevisionBrief;
+    private StoredPlan? _commissionTermsRevisionRollbackPlan;
 
     private CompanyCommissionOwnerProjection? SelectedCommissionOwner =>
         _selectedOrder == null
@@ -57,6 +62,21 @@ public partial class TradeOrders
     private bool HasCanonicalCommission =>
         _selectedOrder?.CompanyCommission != null;
 
+    private bool CanEditCanonicalDraft =>
+        SelectedCommissionOwner is { Order.CompanyCommission: { } commission } owner &&
+        owner.Order.Id == _selectedOrder?.Id &&
+        commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft &&
+        commission.ActiveClaim == null &&
+        !TradeOrderStatusWorkflow.IsArchived(owner.Order.Status);
+
+    private bool IsEditingCommissionTermsRevision =>
+        _showCommissionTermsRevision &&
+        _selectedOrder != null &&
+        _commissionTermsRevisionWorkPackage?.Id == _selectedOrder.Id;
+
+    private bool CanEditCanonicalWorkPackage =>
+        CanEditCanonicalDraft || IsEditingCommissionTermsRevision;
+
     private int PaymentTabIndex => HasCanonicalCommission ? 1 : 0;
 
     private int ProcurementTabIndex => HasCanonicalCommission ? 2 : 1;
@@ -73,8 +93,86 @@ public partial class TradeOrders
 
     private void ShowCommissionTermsRevision()
     {
+        var owner = SelectedCommissionOwner;
+        var commission = owner?.Order.CompanyCommission;
+        if (owner == null ||
+            commission == null ||
+            _selectedOrder == null ||
+            commission.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Published)
+        {
+            return;
+        }
+
         _showCommissionTermsRevision = true;
+        _commissionTermsRevisionWorkPackage = CreateCanonicalTermsWorkPackage(
+            owner.Order,
+            commission.CurrentTerms);
+        _commissionTermsRevisionBrief = BuildCanonicalCommissionBrief(
+            owner.Order,
+            commission);
+        _commissionTermsRevisionRollbackPlan = null;
+        _selectedOrder = _commissionTermsRevisionWorkPackage;
+        _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
+        _commissionContact = commission.CurrentTerms.ContactInstructions;
+        _commissionDeliveryInstructions = commission.CurrentTerms.DeliveryInstructions;
         _activeOpsTab = 0;
+    }
+
+    private static TradeOrder CreateCanonicalTermsWorkPackage(
+        TradeOrder source,
+        CompanyCommissionTermsVersion terms)
+    {
+        var copy = TradeOrderWorkflow.CopyOrder(source);
+        copy.SourceSnapshot.RootItems = terms.Outputs.Select(output =>
+            new TradeOrderRootItemSnapshot(
+                output.ItemId,
+                output.Name,
+                output.RequiredQuantity,
+                output.MustBeHq,
+                EstimatedSaleValue: 0m)).ToArray();
+        copy.SourceSnapshot.Materials = terms.Materials.Select(material =>
+            new TradeOrderMaterialSnapshot(
+                material.ItemId,
+                material.Name,
+                material.Quantity,
+                material.RequiresHq,
+                material.UnitCost,
+                material.TotalCost,
+                terms.PricingEvidence.CostBasis,
+                $"Canonical terms v{terms.Version}",
+                terms.PricingEvidence.CapturedAtUtc)).ToArray();
+        copy.SourceSnapshot.CraftLabor = terms.Payment.CraftSynthCount <= 0
+            ? []
+            :
+            [
+                new TradeOrderCraftLaborSnapshot(
+                    $"commission-terms:{terms.Version}",
+                    terms.Outputs.FirstOrDefault()?.ItemId ?? 0,
+                    "Commission craft labor",
+                    terms.Outputs.Sum(output => output.RequiredQuantity),
+                    terms.Payment.CraftSynthCount)
+            ];
+        return copy;
+    }
+
+    private async Task CancelCommissionTermsRevisionAsync()
+    {
+        var owner = SelectedCommissionOwner;
+        var rollback = _commissionTermsRevisionRollbackPlan;
+        _commissionTermsRevisionWorkPackage = null;
+        _commissionTermsRevisionBrief = null;
+        _commissionTermsRevisionRollbackPlan = null;
+        _showCommissionTermsRevision = false;
+
+        if (rollback != null)
+        {
+            await RestoreStagedProcurementPlanAsync(rollback);
+        }
+
+        if (owner != null)
+        {
+            SelectOrder(owner.Order);
+        }
     }
 
     private void PrepareCompanyCommissionEditor(TradeOrder order)
@@ -90,6 +188,9 @@ public partial class TradeOrders
         _commissionSettlementRetractionReason = string.Empty;
         _commissionSharedComment = string.Empty;
         _showCommissionTermsRevision = false;
+        _commissionTermsRevisionWorkPackage = null;
+        _commissionTermsRevisionBrief = null;
+        _commissionTermsRevisionRollbackPlan = null;
         var provisional = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ProvisionalCrafter;
         _commissionIdentityCrafterId = provisional == null
             ? order.AssignedCrafterId
@@ -279,9 +380,19 @@ public partial class TradeOrders
         }
 
         var now = DateTime.UtcNow;
+        var workPackage = _commissionTermsRevisionWorkPackage ?? _selectedOrder;
+        var brief = _commissionTermsRevisionBrief ?? BuildCommissionBrief(
+            workPackage,
+            TradeCommissionPaymentSummary.FromOrder(
+                workPackage,
+                GetSelectedOrderResponsibilityProjection(),
+                GetSelectedOrderEffectivePaymentPolicy()));
+        brief.Contact = _commissionContact?.Trim() ?? string.Empty;
+        brief.DeliveryInstructions =
+            _commissionDeliveryInstructions?.Trim() ?? string.Empty;
         var terms = TradeCompanyCommissionMigrationService.CreateTermsRevision(
-            _selectedOrder,
-            BuildCommissionBrief(_selectedOrder, GetSelectedOrderPaymentSummary()),
+            workPackage,
+            brief,
             checked(commission.CurrentTermsVersion + 1),
             reason,
             now);
@@ -298,6 +409,60 @@ public partial class TradeOrders
                 _commissionTermsRevisionReason = string.Empty;
                 _showCommissionTermsRevision = false;
             }
+        }
+        finally
+        {
+            _isCommissionCommandRunning = false;
+        }
+    }
+
+    private async Task<bool> UpdateCanonicalDraftAsync(
+        TradeOrder workPackage,
+        CommissionBriefDocument brief,
+        string? successMessage)
+    {
+        var owner = SelectedCommissionOwner;
+        var commission = owner?.Order.CompanyCommission;
+        if (owner == null || commission == null)
+        {
+            return false;
+        }
+
+        if (IsEditingCommissionTermsRevision)
+        {
+            _commissionTermsRevisionWorkPackage = TradeOrderWorkflow.CopyOrder(workPackage);
+            _commissionTermsRevisionBrief = brief;
+            _selectedOrder = _commissionTermsRevisionWorkPackage;
+            _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
+            if (!string.IsNullOrWhiteSpace(successMessage))
+            {
+                Snackbar.Add(successMessage.Replace("commission draft", "terms revision"), Severity.Success);
+            }
+            return true;
+        }
+
+        if (!CanEditCanonicalDraft)
+        {
+            Snackbar.Add(
+                "Start a terms revision before changing a published commission.",
+                Severity.Warning);
+            return false;
+        }
+
+        var terms = TradeCompanyCommissionMigrationService.CreateDraftTerms(
+            workPackage,
+            brief,
+            commission.CurrentTerms,
+            DateTime.UtcNow);
+        _isCommissionCommandRunning = true;
+        try
+        {
+            var result = await CommissionOperations.UpdateDraftAsync(
+                owner,
+                terms,
+                workPackage);
+            ApplyCommissionResult(result, successMessage);
+            return result.Success;
         }
         finally
         {
@@ -427,7 +592,7 @@ public partial class TradeOrders
 
     private void ApplyCommissionResult(
         TradeCommissionOperatorResult result,
-        string successMessage)
+        string? successMessage)
     {
         if (!result.Success || result.Projection == null)
         {
@@ -444,7 +609,10 @@ public partial class TradeOrders
             .ToList();
         SelectOrder(result.Projection.Order);
         _activeOpsTab = activeTab;
-        Snackbar.Add(successMessage, Severity.Success);
+        if (!string.IsNullOrWhiteSpace(successMessage))
+        {
+            Snackbar.Add(successMessage, Severity.Success);
+        }
     }
 
     private TradeCrafterProfile? BuildConfirmedCommissionCrafter(
@@ -660,6 +828,7 @@ public partial class TradeOrders
         CompanyCommissionActivityKind kind) =>
         kind switch
         {
+            CompanyCommissionActivityKind.DraftUpdated => "Draft updated",
             CompanyCommissionActivityKind.CommissionOpened => "Commission opened",
             CompanyCommissionActivityKind.ClaimAccepted => "Claim reserved",
             CompanyCommissionActivityKind.ClaimRejected => "Claim rejected",

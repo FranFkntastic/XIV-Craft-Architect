@@ -37,6 +37,7 @@ public sealed record ProfileSyncBootstrapPreview(
 public sealed class ProfileSyncService
 {
     private const int ChangePageSize = 1;
+    private const int RecoveryPageSize = 50;
     private readonly ProfileHostClient _client;
     private readonly ProfileSyncLocalStateService _localState;
     private readonly IReadOnlyDictionary<string, IProfileSyncCollectionAdapter> _adapters;
@@ -214,7 +215,19 @@ public sealed class ProfileSyncService
                                 profileId,
                                 item.Collection,
                                 item.ObjectId);
-                            await adapter.ApplyRemoteObjectAsync(item, ct);
+                            try
+                            {
+                                await adapter.ApplyRemoteObjectAsync(item, ct);
+                            }
+                            catch (MissingTradeCompanyProfileException exception)
+                            {
+                                await RestoreMissingCompanyProfileAsync(
+                                    settings,
+                                    profileId,
+                                    exception.CompanyProfileId,
+                                    ct);
+                                await adapter.ApplyRemoteObjectAsync(item, ct);
+                            }
                         }
 
                         await _localState.SaveObjectRevisionAsync(
@@ -265,6 +278,60 @@ public sealed class ProfileSyncService
                 CurrentStatus.LastSyncedAtUtc,
                 $"Host unreachable: {ex.Message}"));
         }
+    }
+
+    private async Task RestoreMissingCompanyProfileAsync(
+        HostedProfileConnectionSettings settings,
+        string profileId,
+        Guid companyProfileId,
+        CancellationToken ct)
+    {
+        var companyObjectId = companyProfileId.ToString("D");
+        ProfileSyncObjectEnvelope? companyObject = null;
+        var recoveryRevision = 0L;
+        var hasMore = true;
+        while (hasMore && companyObject == null)
+        {
+            var page = await _client.GetChangesAsync(
+                settings.HostUrl!,
+                settings.AccessKey!,
+                recoveryRevision,
+                RecoveryPageSize,
+                ct);
+            companyObject = page.Objects.FirstOrDefault(item =>
+                !item.Deleted &&
+                string.Equals(
+                    item.Collection,
+                    ProfileSyncCollections.TradeCompanyProfiles,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.ObjectId, companyObjectId, StringComparison.OrdinalIgnoreCase));
+            if (page.HasMore && page.ServerRevision <= recoveryRevision)
+            {
+                throw new InvalidOperationException(
+                    "The profile host returned a non-advancing recovery page.");
+            }
+
+            recoveryRevision = page.ServerRevision;
+            hasMore = page.HasMore;
+        }
+
+        if (companyObject == null)
+        {
+            throw new InvalidOperationException(
+                $"Hosted Trade company profile '{companyObjectId}' is unavailable, so its dependent objects cannot be restored.");
+        }
+
+        var companyAdapter = GetAdapter(ProfileSyncCollections.TradeCompanyProfiles);
+        await _localState.SaveHostedObjectProvenanceAsync(
+            profileId,
+            companyObject.Collection,
+            companyObject.ObjectId);
+        await companyAdapter.ApplyRemoteObjectAsync(companyObject, ct);
+        await _localState.SaveObjectRevisionAsync(
+            profileId,
+            companyObject.Collection,
+            companyObject.ObjectId,
+            companyObject.Revision);
     }
 
     public Task QueueLocalSaveAsync(

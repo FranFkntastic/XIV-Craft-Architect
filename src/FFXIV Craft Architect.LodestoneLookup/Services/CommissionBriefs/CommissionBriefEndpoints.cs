@@ -330,6 +330,23 @@ public static class CommissionBriefEndpoints
                     });
                 }
 
+                if (!alreadyBound)
+                {
+                    try
+                    {
+                        TradeCompanyCommissionMigrationService
+                            .RequireCanonicalBriefMatchesCurrentTerms(order, request.Brief);
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        return Results.Conflict(new
+                        {
+                            error = "canonical_terms_conflict",
+                            message = exception.Message
+                        });
+                    }
+                }
+
                 PublishedCommissionBrief published;
                 try
                 {

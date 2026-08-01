@@ -44,6 +44,26 @@ public partial class TradeOrders
         try
         {
             var orderToSave = TradeOrderWorkflow.WithRequestedOutputs(_selectedOrder, outputs, DateTime.UtcNow);
+            if (_selectedOrder.CompanyCommission != null)
+            {
+                var payment = TradeCommissionPaymentSummary.FromOrder(
+                    orderToSave,
+                    GetSelectedOrderResponsibilityProjection(),
+                    GetSelectedOrderEffectivePaymentPolicy());
+                var updated = await UpdateCanonicalDraftAsync(
+                    orderToSave,
+                    BuildCommissionBrief(orderToSave, payment),
+                    "Requested outputs saved to the commission draft");
+                if (updated)
+                {
+                    _activeOpsTab = PaymentTabIndex;
+                    Snackbar.Add(
+                        "Rebuild the linked craft plan before using payment totals.",
+                        Severity.Info);
+                }
+                return;
+            }
+
             var saved = await SaveOrderAndNotifyAsync(orderToSave);
             if (!saved)
             {
@@ -185,6 +205,14 @@ public partial class TradeOrders
             return;
         }
 
+        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
+        {
+            Snackbar.Add(
+                "Published work packages can only change through Revise Terms.",
+                Severity.Warning);
+            return;
+        }
+
         if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
             HasLinkedCraftPlan(_selectedOrder) ? "Rebuilding this order plan" : "Creating this order plan",
             _selectedOrder.CraftPlanId))
@@ -216,17 +244,30 @@ public partial class TradeOrders
                 return;
             }
 
-            var saved = await SaveOrderAndNotifyAsync(result.UpdatedOrder);
+            var saved = _selectedOrder.CompanyCommission == null
+                ? await SaveOrderAndNotifyAsync(result.UpdatedOrder)
+                : await UpdateCanonicalDraftAsync(
+                    result.UpdatedOrder,
+                    BuildCommissionBrief(
+                        result.UpdatedOrder,
+                        TradeCommissionPaymentSummary.FromOrder(
+                            result.UpdatedOrder,
+                            GetSelectedOrderResponsibilityProjection(),
+                            GetSelectedOrderEffectivePaymentPolicy())),
+                    "Linked craft plan rebuilt and saved to the commission draft");
             if (!saved)
             {
                 Snackbar.Add("Craft plan saved, but failed to link it to the order.", Severity.Error);
                 return;
             }
 
-            await LoadAsync();
-            if (string.IsNullOrWhiteSpace(_loadError))
+            if (_selectedOrder.CompanyCommission == null)
             {
-                SelectOrderAfterReload(orderId, "Craft plan was saved, but the order could not be loaded.");
+                await LoadAsync();
+                if (string.IsNullOrWhiteSpace(_loadError))
+                {
+                    SelectOrderAfterReload(orderId, "Craft plan was saved, but the order could not be loaded.");
+                }
             }
 
             Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
@@ -373,6 +414,14 @@ public partial class TradeOrders
             return;
         }
 
+        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
+        {
+            Snackbar.Add(
+                "Published pricing is part of the accepted terms. Use Revise Terms to refresh it.",
+                Severity.Warning);
+            return;
+        }
+
         if (!HasLinkedCraftPlan(_selectedOrder))
         {
             Snackbar.Add("Create a linked craft plan before repricing.", Severity.Warning);
@@ -404,17 +453,28 @@ public partial class TradeOrders
                 return;
             }
 
-            var saved = await SaveOrderAndNotifyAsync(result.UpdatedOrder);
+            var saved = _selectedOrder.CompanyCommission == null
+                ? await SaveOrderAndNotifyAsync(result.UpdatedOrder)
+                : await UpdateCanonicalDraftAsync(
+                    result.UpdatedOrder,
+                    BuildCommissionBrief(
+                        result.UpdatedOrder,
+                        TradeCommissionPaymentSummary.FromOrder(
+                            result.UpdatedOrder,
+                            GetSelectedOrderResponsibilityProjection(),
+                            GetSelectedOrderEffectivePaymentPolicy())),
+                    "Pricing refreshed and saved to the commission draft");
             if (!saved)
             {
                 Snackbar.Add("Order pricing updated, but failed to save it to the order.", Severity.Error);
                 return;
             }
 
-            await LoadAsync();
-            if (string.IsNullOrWhiteSpace(_loadError))
+            if (_selectedOrder.CompanyCommission == null)
             {
-                if (SelectOrderAfterReload(orderId, "Order pricing was saved, but the order could not be loaded."))
+                await LoadAsync();
+                if (string.IsNullOrWhiteSpace(_loadError) &&
+                    SelectOrderAfterReload(orderId, "Order pricing was saved, but the order could not be loaded."))
                 {
                     _activeOpsTab = activeOpsTab;
                 }

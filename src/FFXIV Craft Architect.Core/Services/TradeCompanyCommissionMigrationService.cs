@@ -7,6 +7,28 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public static class TradeCompanyCommissionMigrationService
 {
+    public static CompanyCommissionTermsVersion CreateDraftTerms(
+        TradeOrder source,
+        CommissionBriefDocument brief,
+        CompanyCommissionTermsVersion currentTerms,
+        DateTime createdAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(brief);
+        ArgumentNullException.ThrowIfNull(currentTerms);
+        var actor = new CompanyCommissionActor(
+            "trade-architect",
+            CompanyCommissionActorKind.Commissioner,
+            "Trade Architect");
+        return PreserveCurrentTermIdentity(
+            CreateTerms(source, brief, actor, createdAtUtc),
+            currentTerms) with
+        {
+            Version = currentTerms.Version,
+            ChangeSummary = currentTerms.ChangeSummary
+        };
+    }
+
     public static CompanyCommissionTermsVersion CreateTermsRevision(
         TradeOrder source,
         CommissionBriefDocument brief,
@@ -27,11 +49,28 @@ public static class TradeCompanyCommissionMigrationService
             "trade-architect",
             CompanyCommissionActorKind.Commissioner,
             "Trade Architect");
-        return CreateTerms(source, brief, actor, createdAtUtc) with
+        var currentTerms = source.CompanyCommission?.CurrentTerms ??
+            throw new InvalidOperationException(
+                "A canonical commission is required to create a terms revision.");
+        return PreserveCurrentTermIdentity(
+            CreateTerms(source, brief, actor, createdAtUtc),
+            currentTerms) with
         {
             Version = version,
             ChangeSummary = reason.Trim()
         };
+    }
+
+    public static void RequireCanonicalBriefMatchesCurrentTerms(
+        TradeOrder order,
+        CommissionBriefDocument brief)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(brief);
+        if (order.CompanyCommission is { } commission)
+        {
+            ValidateCanonicalBrief(order, commission, brief);
+        }
     }
 
     public static TradeOrder BindPublishedBrief(
@@ -74,7 +113,8 @@ public static class TradeCompanyCommissionMigrationService
             "hosted-publication",
             CompanyCommissionActorKind.System,
             "Hosted publication");
-        var terms = CreateTerms(copy, publishedBrief.Brief, actor, boundAtUtc);
+        var terms = commission.CurrentTerms;
+        RequireCanonicalBriefMatchesCurrentTerms(copy, publishedBrief.Brief);
         var companyMaterials = terms.Materials
             .Where(item =>
                 item.Responsibility == CommissionMaterialResponsibility.Provided)
@@ -83,12 +123,32 @@ public static class TradeCompanyCommissionMigrationService
                 item.ItemId,
                 item.Quantity))
             .ToArray();
+        var hasOpening = commission.Activity.Any(
+            item => item.Kind == CompanyCommissionActivityKind.CommissionOpened);
+        var activity = hasOpening
+            ? commission.Activity
+            : commission.Activity.Append(new CompanyCommissionActivityEvent
+            {
+                EventId = CreateDeterministicGuid(
+                    commission.CommissionId,
+                    $"commission-opened:{publishedBrief.PublicId}"),
+                CommissionId = commission.CommissionId,
+                CommissionRevision = checked(
+                    (commission.Activity.LastOrDefault()?.CommissionRevision ?? 0) + 1),
+                Actor = actor,
+                SourceSurface = CompanyCommissionSourceSurface.TradeArchitect,
+                CreatedAtUtc = boundAtUtc,
+                Kind = CompanyCommissionActivityKind.CommissionOpened,
+                TermsVersion = commission.CurrentTermsVersion,
+                Comment = "Opened the commission for one exclusive claim."
+            }).ToArray();
         copy.CompanyCommission = commission with
         {
             UpdatedAtUtc = boundAtUtc,
-            CurrentTermsVersion = publishedBrief.Version,
-            TermsVersions = [terms with { Version = publishedBrief.Version }],
-            PublicMetadata = CreatePublicMetadata(copy, publishedBrief),
+            PublicMetadata = CreatePublicMetadata(copy, publishedBrief) with
+            {
+                DiscordBindings = commission.PublicMetadata.DiscordBindings
+            },
             ActiveClaimCapabilityRevision = publishedBrief.Brief.IsTestFixture
                 ? 0
                 : Math.Max(commission.ActiveClaimCapabilityRevision, 1),
@@ -117,8 +177,10 @@ public static class TradeCompanyCommissionMigrationService
                     0,
                     0,
                     boundAtUtc,
-                    actor)).ToArray()
+                    actor)).ToArray(),
+            Activity = activity
         };
+        copy.Status = TradeOrderStatus.ReadyToAssign;
         copy.UpdatedAtUtc = boundAtUtc;
         return copy;
     }
@@ -388,12 +450,13 @@ public static class TradeCompanyCommissionMigrationService
             Outputs = outputs,
             Materials = materials,
             Payment = new CompanyCommissionPaymentTerms(
-                CompanyCommissionPaymentSchedule.Advance,
+                payment?.Schedule ?? CompanyCommissionPaymentSchedule.Advance,
                 payment?.ContractLabel ?? "Commission",
                 payment?.MaterialReimbursement ?? 0,
                 payment?.MaterialBonus ?? 0,
                 payment?.CraftLabor ?? 0,
                 payment?.Total ?? 0,
+                CustomTerms: payment?.CustomTerms,
                 CraftSynthCount: payment?.CraftSynthCount ?? 0,
                 GilPerSynth: payment?.GilPerSynth ?? 0),
             DeliveryInstructions = brief?.DeliveryInstructions ?? string.Empty,
@@ -406,6 +469,93 @@ public static class TradeCompanyCommissionMigrationService
             ChangeSummary = "Converted from the canonical hosted Trade order."
         };
 
+    }
+
+    private static CompanyCommissionTermsVersion PreserveCurrentTermIdentity(
+        CompanyCommissionTermsVersion candidate,
+        CompanyCommissionTermsVersion current)
+    {
+        var outputs = candidate.Outputs.Select(output =>
+        {
+            var existing = current.Outputs.FirstOrDefault(item =>
+                item.ItemId == output.ItemId &&
+                item.MustBeHq == output.MustBeHq);
+            return existing == null ? output : output with { LineId = existing.LineId };
+        }).ToArray();
+        var materials = candidate.Materials.Select(material =>
+        {
+            var existing = current.Materials.FirstOrDefault(item =>
+                item.ItemId == material.ItemId &&
+                item.RequiresHq == material.RequiresHq &&
+                item.Responsibility == material.Responsibility);
+            return existing == null ? material : material with { LineId = existing.LineId };
+        }).ToArray();
+        return candidate with
+        {
+            Outputs = outputs,
+            Materials = materials,
+            Payment = candidate.Payment with
+            {
+                Schedule = current.Payment.Schedule,
+                CustomTerms = current.Payment.CustomTerms
+            }
+        };
+    }
+
+    private static void ValidateCanonicalBrief(
+        TradeOrder order,
+        TradeCompanyCommission commission,
+        CommissionBriefDocument brief)
+    {
+        var terms = commission.CurrentTerms;
+        var outputs = brief.Outputs
+            .Select(item => (item.ItemId, item.Name, item.Quantity, item.MustBeHq))
+            .ToArray();
+        var canonicalOutputs = terms.Outputs
+            .Select(item => (item.ItemId, item.Name, Quantity: item.RequiredQuantity, item.MustBeHq))
+            .ToArray();
+        var crafterMaterials = brief.CrafterMaterials
+            .Select(item => (item.ItemId, item.Name, item.Quantity, item.RequiresHq, item.UnitCost, item.TotalCost))
+            .ToArray();
+        var canonicalCrafterMaterials = terms.Materials
+            .Where(item => item.Responsibility == CommissionMaterialResponsibility.Crafter)
+            .Select(item => (item.ItemId, item.Name, item.Quantity, item.RequiresHq, item.UnitCost, item.TotalCost))
+            .ToArray();
+        var companyMaterials = brief.CompanyMaterials
+            .Select(item => (item.ItemId, item.Name, item.Quantity, item.RequiresHq, item.UnitCost, item.TotalCost))
+            .ToArray();
+        var canonicalCompanyMaterials = terms.Materials
+            .Where(item => item.Responsibility == CommissionMaterialResponsibility.Provided)
+            .Select(item => (item.ItemId, item.Name, item.Quantity, item.RequiresHq, item.UnitCost, item.TotalCost))
+            .ToArray();
+        var payment = brief.Payment;
+        var exact =
+            string.Equals(brief.Title, order.Title, StringComparison.Ordinal) &&
+            string.Equals(brief.Reference, commission.Reference, StringComparison.Ordinal) &&
+            brief.IsTestFixture == commission.PublicMetadata.IsTestFixture &&
+            outputs.SequenceEqual(canonicalOutputs) &&
+            crafterMaterials.SequenceEqual(canonicalCrafterMaterials) &&
+            companyMaterials.SequenceEqual(canonicalCompanyMaterials) &&
+            string.Equals(brief.Contact, terms.ContactInstructions, StringComparison.Ordinal) &&
+            string.Equals(brief.DeliveryInstructions, terms.DeliveryInstructions, StringComparison.Ordinal) &&
+            string.Equals(payment.ContractLabel, terms.Payment.ContractLabel, StringComparison.Ordinal) &&
+            payment.MaterialReimbursement == terms.Payment.MaterialReimbursement &&
+            payment.MaterialBonus == terms.Payment.MaterialAdjustment &&
+            payment.CraftLabor == terms.Payment.CraftLabor &&
+            payment.Total == terms.Payment.Total &&
+            payment.CraftSynthCount == terms.Payment.CraftSynthCount &&
+            payment.GilPerSynth == terms.Payment.GilPerSynth &&
+            payment.Schedule == terms.Payment.Schedule &&
+            string.Equals(payment.CustomTerms, terms.Payment.CustomTerms, StringComparison.Ordinal) &&
+            string.Equals(brief.Evidence.CostBasis, terms.PricingEvidence.CostBasis, StringComparison.Ordinal) &&
+            string.Equals(brief.Evidence.MarketScope, terms.PricingEvidence.MarketScope, StringComparison.Ordinal) &&
+            string.Equals(brief.Evidence.Location, terms.PricingEvidence.Location, StringComparison.Ordinal) &&
+            brief.Evidence.CapturedAtUtc == terms.PricingEvidence.CapturedAtUtc;
+        if (!exact)
+        {
+            throw new InvalidOperationException(
+                "The immutable brief does not exactly match the canonical commission terms.");
+        }
     }
 
     private static CompanyCommissionPublicMetadata CreatePublicMetadata(

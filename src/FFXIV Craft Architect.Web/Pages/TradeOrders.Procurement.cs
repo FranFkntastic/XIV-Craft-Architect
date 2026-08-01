@@ -41,10 +41,11 @@ public partial class TradeOrders
                 effectivePolicy: _companyProfile?.PaymentPolicy);
         }
 
+        var workPackage = GetSelectedOrderPricingWorkPackage();
         return TradeCommissionPaymentSummary.FromOrder(
-            _selectedOrder,
-            GetPayrollDraftForOrder(_selectedOrder),
-            GetSelectedOrderEffectivePaymentPolicy());
+            workPackage,
+            GetSelectedOrderResponsibilityProjection(),
+            GetOrderEffectivePaymentPolicy(workPackage));
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()
@@ -54,11 +55,79 @@ public partial class TradeOrders
             return Array.Empty<TradeOrderProcurementRow>();
         }
 
+        var workPackage = GetSelectedOrderPricingWorkPackage();
+        var useCanonicalTerms = HasCanonicalCommission && !CanEditCanonicalDraft;
         return TradeProcurementRowBuilder.BuildRows(
-            _selectedOrder,
-            GetPayrollDraftForOrder(_selectedOrder),
-            WorkerProjections.Shell.PlanId,
-            GetCurrentLiveProcurementSnapshot());
+            workPackage,
+            GetSelectedOrderResponsibilityProjection(),
+            useCanonicalTerms ? null : WorkerProjections.Shell.PlanId,
+            useCanonicalTerms ? null : GetCurrentLiveProcurementSnapshot());
+    }
+
+    private TradeOrder GetSelectedOrderPricingWorkPackage()
+    {
+        if (_selectedOrder == null || IsEditingCommissionTermsRevision)
+        {
+            return _selectedOrder ?? new TradeOrder();
+        }
+
+        var commission = SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission;
+        return commission?.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published
+            ? CreateCanonicalTermsWorkPackage(_selectedOrder, commission.CurrentTerms)
+            : _selectedOrder;
+    }
+
+    private TradePayrollWorkflowDraft? GetSelectedOrderResponsibilityProjection()
+    {
+        if (_selectedOrder == null)
+        {
+            return null;
+        }
+
+        var stored = GetPayrollDraftForOrder(_selectedOrder);
+        var commission = SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission;
+        if (commission == null)
+        {
+            return stored;
+        }
+
+        if (IsEditingCommissionTermsRevision && _commissionTermsRevisionBrief != null)
+        {
+            var staged = stored == null
+                ? new TradePayrollWorkflowDraft
+                {
+                    CompanyProfileId = _selectedOrder.CompanyProfileId,
+                    OrderId = _selectedOrder.Id
+                }
+                : TradeOrderWorkflow.CopyPayrollDraft(stored);
+            staged.Responsibilities = _commissionTermsRevisionBrief.CrafterMaterials
+                .Select(material => new TradePayrollResponsibilityLine(
+                    material.ItemId,
+                    material.RequiresHq,
+                    CommissionMaterialResponsibility.Crafter))
+                .Concat(_commissionTermsRevisionBrief.CompanyMaterials.Select(material =>
+                    new TradePayrollResponsibilityLine(
+                        material.ItemId,
+                        material.RequiresHq,
+                        CommissionMaterialResponsibility.Provided)))
+                .ToArray();
+            return staged;
+        }
+
+        var projection = stored == null
+            ? new TradePayrollWorkflowDraft
+            {
+                CompanyProfileId = _selectedOrder.CompanyProfileId,
+                OrderId = _selectedOrder.Id
+            }
+            : TradeOrderWorkflow.CopyPayrollDraft(stored);
+        projection.Responsibilities = commission.CurrentTerms.Materials
+            .Select(material => new TradePayrollResponsibilityLine(
+                material.ItemId,
+                material.RequiresHq,
+                material.Responsibility))
+            .ToArray();
+        return projection;
     }
 
     private bool IsSelectedOrderLinkedPlanActive()
@@ -599,9 +668,11 @@ public partial class TradeOrders
             : row.Quantity;
     }
 
-    private static bool CanEditProcurementSource(TradeOrderProcurementRow row)
+    private bool CanEditProcurementSource(TradeOrderProcurementRow row)
     {
-        return TradeProcurementSourceMutationPolicy.CanChangeSource(row);
+        return !_isCommissionCommandRunning &&
+            (!HasCanonicalCommission || CanEditCanonicalDraft) &&
+            TradeProcurementSourceMutationPolicy.CanChangeSource(row);
     }
 
     private async Task ChangeProcurementRowSourceValueAsync(
@@ -652,8 +723,10 @@ public partial class TradeOrders
             return;
         }
 
-        await SetOrderMaterialResponsibilityAsync(material, responsibility);
-        if (responsibility == CommissionMaterialResponsibility.Provided && row.HasChildren)
+        var saved = await SetOrderMaterialResponsibilityAsync(material, responsibility);
+        if (saved &&
+            responsibility == CommissionMaterialResponsibility.Provided &&
+            row.HasChildren)
         {
             Snackbar.Add(
                 $"{row.ItemName} is now a company-provided handoff; its recipe subtree is excluded from crafter payment.",
@@ -693,6 +766,14 @@ public partial class TradeOrders
         if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
         {
             Snackbar.Add("Reopen archived orders before editing acquisition sources.", Severity.Warning);
+            return false;
+        }
+
+        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
+        {
+            Snackbar.Add(
+                "Published acquisition decisions are part of the accepted terms. Use Revise Terms to change them.",
+                Severity.Warning);
             return false;
         }
 
@@ -737,16 +818,35 @@ public partial class TradeOrders
             return false;
         }
 
+        var planId = _selectedOrder.CraftPlanId!;
+        var planName = _selectedOrder.CraftPlanName ??
+            TradeOrderWorkflow.CreateGeneratedCraftPlanName(_selectedOrder);
+        var rollbackSnapshot = await WorkerSession.ExportStoredPlanAsync(
+            planId,
+            planName,
+            includeSourcePlanIdentity: true);
+        if (rollbackSnapshot == null)
+        {
+            Snackbar.Add("The linked craft plan could not be staged safely.", Severity.Error);
+            return false;
+        }
+
+        if (IsEditingCommissionTermsRevision && _commissionTermsRevisionRollbackPlan == null)
+        {
+            _commissionTermsRevisionRollbackPlan = rollbackSnapshot;
+        }
+
         await WorkerSession.MutateAcquisitionAsync(
             new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null));
         var savedAt = DateTime.UtcNow;
         var stored = await WorkerSession.ExportStoredPlanAsync(
-            _selectedOrder.CraftPlanId!,
-            _selectedOrder.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(_selectedOrder),
+            planId,
+            planName,
             includeSourcePlanIdentity: true);
-        if (stored == null || !await PlanPersistence.SaveSnapshotAsync(stored))
+        if (stored == null)
         {
-            Snackbar.Add("Source changed, but failed to save the linked craft plan.", Severity.Error);
+            await RestoreStagedProcurementPlanAsync(rollbackSnapshot);
+            Snackbar.Add("The changed craft plan could not be captured.", Severity.Error);
             return false;
         }
 
@@ -758,17 +858,38 @@ public partial class TradeOrders
         var current = await WorkerSession.GetTradeProjectionAsync();
         var orderToSave = pricingResult.UpdatedOrder ??
             BuildFallbackOrderAfterSourceChange(_selectedOrder, current, savedAt);
-        var savedOrder = await SaveOrderAndNotifyAsync(orderToSave);
+        var savedOrder = _selectedOrder.CompanyCommission == null
+            ? await SaveOrderAndNotifyAsync(orderToSave)
+            : await UpdateCanonicalDraftAsync(
+                orderToSave,
+                BuildCommissionBrief(
+                    orderToSave,
+                    TradeCommissionPaymentSummary.FromOrder(
+                        orderToSave,
+                        GetSelectedOrderResponsibilityProjection(),
+                        GetSelectedOrderEffectivePaymentPolicy())),
+                $"{row.ItemName} acquisition saved to the commission draft");
         if (!savedOrder)
         {
-            Snackbar.Add("Source changed, but failed to save Trade order evidence.", Severity.Error);
+            await RestoreStagedProcurementPlanAsync(rollbackSnapshot);
+            Snackbar.Add("The acquisition change was not committed.", Severity.Error);
             return false;
         }
 
-        await LoadAsync();
-        if (string.IsNullOrWhiteSpace(_loadError))
+        if (!await PlanPersistence.SaveSnapshotAsync(stored))
         {
-            SelectOrderAfterReload(orderToSave.Id, "Source changed, but the order could not be loaded.");
+            Snackbar.Add(
+                "The commission draft was saved, but its local craft-plan cache could not be updated. It will rebuild from the canonical order snapshot when reopened.",
+                Severity.Warning);
+        }
+
+        if (_selectedOrder.CompanyCommission == null)
+        {
+            await LoadAsync();
+            if (string.IsNullOrWhiteSpace(_loadError))
+            {
+                SelectOrderAfterReload(orderToSave.Id, "Source changed, but the order could not be loaded.");
+            }
         }
 
         if (showSuccess)
@@ -777,6 +898,20 @@ public partial class TradeOrders
         }
 
         return true;
+    }
+
+    private async Task RestoreStagedProcurementPlanAsync(StoredPlan rollbackSnapshot)
+    {
+        try
+        {
+            await PlanLifecycle.ReplaceStoredPlanAsync(
+                rollbackSnapshot,
+                trackStoredPlanIdentity: true);
+        }
+        catch
+        {
+            // The canonical order was not changed. A later reopen rebuilds the local plan projection.
+        }
     }
 
     private TradeOrder BuildFallbackOrderAfterSourceChange(
