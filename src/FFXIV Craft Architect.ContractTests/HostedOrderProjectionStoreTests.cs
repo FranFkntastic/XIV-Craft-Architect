@@ -144,6 +144,22 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.False(store.RestoreState.IsAuthoritative);
     }
 
+    [Fact]
+    public void SharedSnapshotCanBeComposedWithoutAPageCache()
+    {
+        var store = new HostedOrderProjectionStore();
+        var companyProfileId = Guid.NewGuid();
+        var included = CreateOrder(Guid.NewGuid(), companyProfileId, "Included");
+        var other = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Other company");
+        Assert.True(store.TryPublishRemoteOrder(included, 2));
+        Assert.True(store.TryPublishRemoteOrder(other, 3));
+
+        var snapshot = Assert.Single(store.GetAll(companyProfileId));
+
+        Assert.Same(included, snapshot.Order);
+        Assert.Equal(2, store.GetAll().Count);
+    }
+
     private static ProfileSyncStatus ReadyStatus(string profileId, long revision) =>
         new(
             IsConnected: true,

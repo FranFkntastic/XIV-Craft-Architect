@@ -157,6 +157,19 @@ public sealed class HostedOrderProjectionStore
         }
     }
 
+    public IReadOnlyList<HostedOrderProjectionSnapshot> GetAll(Guid? companyProfileId = null)
+    {
+        lock (_gate)
+        {
+            return _orders.Values
+                .Where(snapshot =>
+                    !companyProfileId.HasValue ||
+                    snapshot.CompanyProfileId == companyProfileId)
+                .OrderBy(snapshot => snapshot.OrderId)
+                .ToArray();
+        }
+    }
+
     public CompanyCommissionOwnerProjection? GetOwnerProjection(Guid orderId) =>
         Get(orderId)?.OwnerProjection;
 
