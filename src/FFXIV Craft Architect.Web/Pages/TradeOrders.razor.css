@@ -1,5 +1,8 @@
 .trade-orders-page {
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   height: calc(100vh - 112px);
   max-width: none !important;
   padding: 12px 16px;
@@ -8,9 +11,10 @@
 
 .trade-orders-board {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: 280px minmax(640px, 1fr) 6px var(--trade-orders-ops-width, clamp(720px, 32vw, 860px));
   gap: 0;
-  height: 100%;
+  height: auto;
   min-height: 0;
 }
 
@@ -2180,7 +2184,17 @@
   margin: 0;
 }
 
-@media (max-width: 1740px) {
+@media (max-width: 1740px) and (min-width: 1280px) {
+  .trade-orders-board {
+    grid-template-columns: 220px minmax(360px, 1fr) 6px minmax(600px, 48vw);
+  }
+
+  .trade-orders-board.is-plan-expanded {
+    grid-template-columns: 200px minmax(320px, .65fr) 6px minmax(680px, 1.35fr);
+  }
+}
+
+@media (max-width: 1279px) {
   .trade-orders-page {
     height: auto;
     overflow: visible;

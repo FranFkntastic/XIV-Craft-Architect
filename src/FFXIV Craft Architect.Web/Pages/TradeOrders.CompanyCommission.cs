@@ -52,7 +52,8 @@ public partial class TradeOrders
             : CommissionOperations.GetNotificationError(_selectedOrder.Id);
 
     private TradeCompanyCommission? SelectedCanonicalCommission =>
-        SelectedCommissionOwner?.Order.CompanyCommission;
+        SelectedCommissionOwner?.Order.CompanyCommission ??
+        SelectedHostedOrderSnapshot?.Order?.CompanyCommission;
 
     private PendingPaymentPolicyRequest? SelectedPaymentPolicyRequest =>
         SelectedCommissionOwner == null
@@ -90,6 +91,11 @@ public partial class TradeOrders
 
     private void ShowCommissionTermsRevision()
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         var commission = owner?.Order.CompanyCommission;
         if (owner == null ||
@@ -159,23 +165,44 @@ public partial class TradeOrders
 
     private async Task CancelCommissionTermsRevisionAsync(bool discardConflict)
     {
-        var owner = SelectedCommissionOwner;
-        var rollback = discardConflict ? null : _commissionTermsRevisionRollbackPlan;
-        _commissionTermsRevisionWorkPackage = null;
-        _commissionTermsRevisionBrief = null;
-        _commissionTermsRevisionRollbackPlan = null;
-        _commissionTermsRevisionDirty = false;
-        _showCommissionTermsRevision = false;
-        ResetCommissionTermsRevisionBase();
-
-        if (rollback != null)
+        if (_isCommissionCommandRunning)
         {
-            await RestoreStagedProcurementPlanAsync(rollback);
+            return;
         }
 
-        if (owner != null)
+        _isCommissionCommandRunning = true;
+        try
         {
-            SelectOrder(owner.Order);
+            var owner = SelectedCommissionOwner;
+            if (discardConflict &&
+                owner != null &&
+                !await ReconcileLatestCanonicalPlanAsync(owner.Order))
+            {
+                return;
+            }
+
+            var rollback = discardConflict ? null : _commissionTermsRevisionRollbackPlan;
+            if (rollback != null &&
+                !await RestoreStagedProcurementPlanAsync(rollback))
+            {
+                return;
+            }
+
+            _commissionTermsRevisionWorkPackage = null;
+            _commissionTermsRevisionBrief = null;
+            _commissionTermsRevisionRollbackPlan = null;
+            _commissionTermsRevisionDirty = false;
+            _showCommissionTermsRevision = false;
+            ResetCommissionTermsRevisionBase();
+
+            if (owner != null)
+            {
+                SelectOrder(owner.Order);
+            }
+        }
+        finally
+        {
+            _isCommissionCommandRunning = false;
         }
     }
 
@@ -277,6 +304,11 @@ public partial class TradeOrders
 
     private async Task ConfirmCommissionIdentityAsync()
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         var provisional = owner?.Order.CompanyCommission?.ProvisionalCrafter;
         if (owner == null || provisional == null)
@@ -364,6 +396,11 @@ public partial class TradeOrders
 
     private async Task AmendCommissionTermsAsync()
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         var commission = owner?.Order.CompanyCommission;
         if (owner == null ||
@@ -458,6 +495,11 @@ public partial class TradeOrders
             return true;
         }
 
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return false;
+        }
+
         if (!CanEditCanonicalDraft)
         {
             Snackbar.Add(
@@ -545,6 +587,11 @@ public partial class TradeOrders
     private async Task RetryCommissionNotificationAsync(
         TradeDiscordNotificationDiagnostic diagnostic)
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         if (owner == null || !diagnostic.CanRetry)
         {
@@ -573,6 +620,11 @@ public partial class TradeOrders
         bool copyRecoveryUrl = false,
         bool copyClaimUrl = false)
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         if (owner == null || _isCommissionCommandRunning)
         {

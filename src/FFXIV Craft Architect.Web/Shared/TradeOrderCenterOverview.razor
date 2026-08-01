@@ -17,7 +17,7 @@
             </MudButton>
         }
         <div class="trade-order-overview__meta">
-            <span>Client <strong>@Model.Client</strong></span>
+            <span>Claimant <strong>@Model.Claimant</strong></span>
             <span>Crafter <strong>@Model.Crafter</strong></span>
             <span>Terms <strong>v@Model.TermsVersion</strong></span>
         </div>
@@ -30,7 +30,7 @@
                 <MudText Typo="Typo.subtitle1" HtmlTag="h2" id="start-blockers-title">
                     @Model.Blockers.Count @(Model.Blockers.Count == 1 ? "thing blocks" : "things block") crafting
                 </MudText>
-                <MudText Typo="Typo.body2">Clear either start gate first; every applicable gate must clear before crafting.</MudText>
+                <MudText Typo="Typo.body2">Payment and material handoff can clear in either order; every listed requirement must clear before crafting.</MudText>
             </div>
             <div class="trade-order-overview__blockers">
                 @foreach (var blocker in Model.Blockers)

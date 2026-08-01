@@ -261,7 +261,7 @@ public partial class TradeOrders
         }
 
         if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
-            HasLinkedCraftPlan(_selectedOrder) ? "Rebuilding this order plan" : "Creating this order plan",
+            HasLinkedCraftPlan(_selectedOrder) ? "Updating this order plan" : "Creating this order plan",
             _selectedOrder.CraftPlanId))
         {
             return;
@@ -301,7 +301,7 @@ public partial class TradeOrders
                             result.UpdatedOrder,
                             GetSelectedOrderResponsibilityProjection(),
                             GetSelectedOrderEffectivePaymentPolicy())),
-                    "Linked craft plan rebuilt and saved to the commission draft");
+                    "Craft plan updated and saved to the commission draft");
             if (!saved)
             {
                 Snackbar.Add("Craft plan saved, but failed to link it to the order.", Severity.Error);
@@ -321,7 +321,7 @@ public partial class TradeOrders
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Failed to rebuild and price linked craft plan: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Failed to update and price the linked craft plan: {ex.Message}", Severity.Error);
         }
         finally
         {
@@ -342,7 +342,7 @@ public partial class TradeOrders
         };
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
         var dialog = await DialogService.ShowAsync<TradeOrderReplaceCraftPlanDialog>(
-            "Rebuild Linked Craft Plan",
+            "Replace Linked Craft Plan",
             parameters,
             options);
         var result = await dialog.Result;

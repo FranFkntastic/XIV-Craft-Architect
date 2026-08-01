@@ -1,5 +1,10 @@
 @using FFXIV_Craft_Architect.Web.Services.ProfileHosting
 
+<span class="trade-order-restore-banner__announcement"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true">@_completionAnnouncement</span>
+
 @if (ShouldDisplay)
 {
     <section class="@BannerClass"
@@ -28,6 +33,30 @@
     [Parameter, EditorRequired]
     public required HostedOrderRestoreState State { get; set; }
 
+    [Parameter]
+    public bool HasHostedOrderIdentities { get; set; }
+
+    private HostedOrderRestoreStage? _previousStage;
+    private bool _previousStateWasVisible;
+    private string? _completionAnnouncement;
+
+    protected override void OnParametersSet()
+    {
+        if (State.Stage == HostedOrderRestoreStage.Ready &&
+            _previousStage != HostedOrderRestoreStage.Ready &&
+            _previousStateWasVisible)
+        {
+            _completionAnnouncement = "Orders restored.";
+        }
+        else if (State.Stage != HostedOrderRestoreStage.Ready)
+        {
+            _completionAnnouncement = null;
+        }
+
+        _previousStage = State.Stage;
+        _previousStateWasVisible = ShouldDisplay;
+    }
+
     private bool IsUntrustedReconnect =>
         State.Stage == HostedOrderRestoreStage.Reconnecting &&
         !State.ShowsCompleteProjection;
@@ -37,6 +66,7 @@
             HostedOrderRestoreStage.ScopeChanging or
             HostedOrderRestoreStage.IdentityOnly or
             HostedOrderRestoreStage.Failed ||
+        (State.Stage == HostedOrderRestoreStage.Inactive && HasHostedOrderIdentities) ||
         IsUntrustedReconnect;
 
     private bool IsBusy =>
@@ -51,6 +81,7 @@
         State.Stage switch
         {
             HostedOrderRestoreStage.ScopeChanging => "Changing Trade profile",
+            HostedOrderRestoreStage.Inactive => "Profile Hosting is not connected",
             HostedOrderRestoreStage.IdentityOnly => "Order details need verification",
             HostedOrderRestoreStage.Failed => "Orders couldn't be restored",
             _ => "Restoring orders"
@@ -61,6 +92,8 @@
         {
             HostedOrderRestoreStage.ScopeChanging =>
                 "Verifying the orders that belong to this profile.",
+            HostedOrderRestoreStage.Inactive =>
+                "Saved order identities remain visible, but current terms and progress are withheld.",
             HostedOrderRestoreStage.IdentityOnly => IdentityOnlyDetail,
             HostedOrderRestoreStage.Failed =>
                 "Craft Architect couldn't reach the profile service. It will retry automatically.",

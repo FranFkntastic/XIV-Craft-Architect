@@ -910,7 +910,7 @@ public partial class TradeOrders
         return true;
     }
 
-    private async Task RestoreStagedProcurementPlanAsync(StoredPlan rollbackSnapshot)
+    private async Task<bool> RestoreStagedProcurementPlanAsync(StoredPlan rollbackSnapshot)
     {
         try
         {
@@ -922,13 +922,17 @@ public partial class TradeOrders
                 Snackbar.Add(
                     "The previous linked plan could not be restored automatically. Retry the change before using this plan.",
                     Severity.Error);
+                return false;
             }
+
+            return true;
         }
         catch (Exception ex)
         {
             Snackbar.Add(
                 $"The previous linked plan could not be restored automatically: {ex.Message}",
                 Severity.Error);
+            return false;
         }
     }
 

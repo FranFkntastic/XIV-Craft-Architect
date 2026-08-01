@@ -24,7 +24,7 @@ public sealed record TradeOrderProgressStepPresentation(
 public sealed record TradeOrderCenterOverviewPresentation(
     string Title,
     string Status,
-    string Client,
+    string Claimant,
     string Crafter,
     int TermsVersion,
     IReadOnlyList<TradeOrderCenterOutputPresentation> Outputs,
@@ -57,8 +57,8 @@ public partial class TradeOrders
     {
         var snapshot = SelectedHostedOrderSnapshot;
         var owner = snapshot?.OwnerProjection;
-        var order = owner?.Order;
-        var commission = owner?.Order.CompanyCommission;
+        var order = owner?.Order ?? snapshot?.Order;
+        var commission = order?.CompanyCommission;
         if (order == null || commission == null)
         {
             return null;
@@ -87,6 +87,8 @@ public partial class TradeOrders
             outputs,
             blockers,
             BuildCenterProgress(order, commission),
+            owner != null &&
+            CanMutateHostedOrder &&
             !TradeOrderStatusWorkflow.IsArchived(order.Status) &&
             commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published &&
             !IsEditingCommissionTermsRevision);
@@ -99,6 +101,13 @@ public partial class TradeOrders
         if (commission.Gates.Identity.State == CompanyCommissionClearanceState.Pending)
         {
             blockers.Add(new("Identity", "Company roster confirmation required"));
+        }
+        if (commission.ActiveClaim != null &&
+            commission.ParticipantAcknowledgedTermsVersion != commission.CurrentTermsVersion)
+        {
+            blockers.Add(new(
+                "Terms",
+                $"Crafter acknowledgement required for terms v{commission.CurrentTermsVersion}"));
         }
         if (commission.Gates.Payment.State == CompanyCommissionClearanceState.Pending)
         {
@@ -127,10 +136,14 @@ public partial class TradeOrders
         TradeCompanyCommission commission)
     {
         var claimed = commission.ActiveClaim != null;
-        var planned = commission.CurrentTerms.Outputs.Count > 0;
-        var cleared = commission.ClearedToWork;
-        var crafting = order.Status is TradeOrderStatus.InProgress or
+        var planned = !string.IsNullOrWhiteSpace(order.CraftPlanId);
+        var termsAcknowledged = commission.ActiveClaim == null ||
+            commission.ParticipantAcknowledgedTermsVersion == commission.CurrentTermsVersion;
+        var cleared = commission.ClearedToWork && termsAcknowledged;
+        var craftingStarted = order.Status is TradeOrderStatus.InProgress or
             TradeOrderStatus.AwaitingDelivery or
+            TradeOrderStatus.Completed;
+        var craftingComplete = order.Status is TradeOrderStatus.AwaitingDelivery or
             TradeOrderStatus.Completed;
         var delivered = order.Status == TradeOrderStatus.Completed;
         var waitingToStart = claimed && !cleared && order.Status == TradeOrderStatus.Assigned;
@@ -141,8 +154,16 @@ public partial class TradeOrders
             new("Claimed", claimed ? "Done" : "Next", claimed, !claimed),
             new("Planned", planned ? "Done · open" : "Next", planned, claimed && !planned, OpensPlan: true),
             new("Clear to start", cleared ? "Done" : waitingToStart ? "Current" : "Next", cleared, waitingToStart),
-            new("Crafting", crafting ? "Done" : cleared ? "Current" : "Next", crafting, cleared && !crafting),
-            new("Delivery", delivered ? "Done" : crafting ? "Current" : "Later", delivered, crafting && !delivered)
+            new(
+                "Crafting",
+                craftingComplete ? "Done" : craftingStarted ? "Current" : cleared ? "Next" : "Later",
+                craftingComplete,
+                craftingStarted && !craftingComplete),
+            new(
+                "Delivery",
+                delivered ? "Done" : order.Status == TradeOrderStatus.AwaitingDelivery ? "Current" : "Later",
+                delivered,
+                order.Status == TradeOrderStatus.AwaitingDelivery)
         ];
     }
 
@@ -180,6 +201,10 @@ public partial class TradeOrders
         {
             return "Identity review";
         }
+        if (commission.ParticipantAcknowledgedTermsVersion != commission.CurrentTermsVersion)
+        {
+            return "Terms review";
+        }
         return commission.ClearedToWork ? "Ready to craft" : "Waiting to start";
     }
 
@@ -196,8 +221,8 @@ public partial class TradeOrders
     private string FormatWorkbenchStatus(TradeOrder order)
     {
         var snapshot = HostedOrders.Get(order.Id);
-        return snapshot is { Deleted: false, OwnerProjection.Order.CompanyCommission: { } commission }
-            ? FormatWorkbenchStatus(snapshot.OwnerProjection.Order, commission)
+        return snapshot is { Deleted: false, Order.CompanyCommission: { } commission }
+            ? FormatWorkbenchStatus(snapshot.Order, commission)
             : "Status unavailable";
     }
 

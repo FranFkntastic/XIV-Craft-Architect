@@ -57,6 +57,11 @@ public partial class TradeOrders
 
     private string FormatOrderRailMeta(TradeOrder order)
     {
+        if (IsIdentityOnlyOrder(order))
+        {
+            return "Saved order identity";
+        }
+
         return $"{FormatAssignedCrafter(order)} - {order.CommissionedAtUtc.ToLocalTime():yyyy-MM-dd}";
     }
 
@@ -64,7 +69,9 @@ public partial class TradeOrders
     {
         if (order.CompanyCommission != null)
         {
-            return FormatWorkbenchStatus(order);
+            return IsIdentityOnlyOrder(order)
+                ? "Verifying"
+                : FormatWorkbenchStatus(order);
         }
 
         if (order.Status == TradeOrderStatus.InProgress)
@@ -191,7 +198,7 @@ public partial class TradeOrders
 
         return order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.Unknown
             ? "Replace Linked Plan"
-            : "Rebuild Linked Plan";
+            : "Update Craft Plan";
     }
 
     private static string GetLatestHistoryCue(TradeOrder order)
@@ -358,7 +365,7 @@ public partial class TradeOrders
 
     private bool SelectOrderAfterReload(Guid orderId, string missingMessage)
     {
-        var reloadedOrder = _orders.FirstOrDefault(order => order.Id == orderId);
+        var reloadedOrder = VisibleOrders.FirstOrDefault(order => order.Id == orderId);
         if (reloadedOrder == null)
         {
             _selectedOrder = null;

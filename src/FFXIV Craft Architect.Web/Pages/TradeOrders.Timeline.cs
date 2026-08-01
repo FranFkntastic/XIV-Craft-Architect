@@ -189,6 +189,11 @@ public partial class TradeOrders
         var comment = _timelineComment.Trim();
         if (SelectedCommissionOwner is { } owner)
         {
+            if (!EnsureHostedOrderMutationAvailable())
+            {
+                return;
+            }
+
             _isCommissionCommandRunning = true;
             try
             {

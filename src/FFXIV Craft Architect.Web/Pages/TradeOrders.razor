@@ -42,6 +42,8 @@
     }
     else
     {
+        <TradeOrderRestoreBanner State="OrderRestoreState"
+                                 HasHostedOrderIdentities="@_orders.Any(order => order.CompanyCommission != null)" />
         <div class="@TradeOrdersBoardClass"
              @ref="_boardElement"
              style="@TradeOrdersBoardStyle">
@@ -63,7 +65,8 @@
                                   Adornment="Adornment.Start"
                                   AdornmentIcon="@Icons.Material.Filled.Search" />
                     <div class="trade-orders-rail-scroll">
-                        @if (ActiveOrderGroups.Count == 0 && ArchivedOrders.Count == 0)
+                        @if (ActiveOrderGroups.Count == 0 && ArchivedOrders.Count == 0 &&
+                             OrderRestoreState.CanShowAuthoritativeEmpty)
                         {
                             <div class="trade-orders-rail-empty">No orders yet.</div>
                         }
@@ -313,7 +316,22 @@
                     }
                     else if (_selectedOrder != null)
                     {
-                        @if (BuildSelectedOrderCenterOverview() is { } centerOverview)
+                        @if (IsIdentityOnlyOrder(_selectedOrder))
+                        {
+                            <section class="trade-orders-workspace-card">
+                                <div class="trade-orders-workspace-empty">
+                                    <MudIcon Icon="@Icons.Material.Filled.Policy"
+                                             Size="Size.Large"
+                                             Class="trade-orders-workspace-empty-icon" />
+                                    <MudText Typo="Typo.overline">@_selectedOrder.Title</MudText>
+                                    <MudText Typo="Typo.h6">Verifying current order details</MudText>
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                        This saved identity is retained, but its terms and progress stay hidden until the hosted profile verifies them.
+                                    </MudText>
+                                </div>
+                            </section>
+                        }
+                        else if (BuildSelectedOrderCenterOverview() is { } centerOverview)
                         {
                             <section class="trade-orders-workspace-card">
                                 <TradeOrderCenterOverview Model="centerOverview"
@@ -656,6 +674,15 @@
                             <MudText Typo="Typo.body2" Color="Color.Secondary">Select an order to view work, plan, history, and sharing.</MudText>
                         </section>
                     }
+                    else if (IsIdentityOnlyOrder(_selectedOrder))
+                    {
+                        <section class="trade-orders-panel">
+                            <MudText Typo="Typo.subtitle1">Order work unavailable</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                Work, Plan, History, and Share will return when this order's hosted authority is verified.
+                            </MudText>
+                        </section>
+                    }
                     else
                     {
                         var paymentSummary = GetSelectedOrderPaymentSummary();
@@ -857,6 +884,26 @@
                                                  </div>
                                                  <span class="trade-orders-publication-chip">Draft revision</span>
                                              </div>
+                                             @if (HasCommissionTermsRevisionConflict)
+                                             {
+                                                 <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined" Dense="true">
+                                                     Canonical terms changed while you were editing. Your local revision is preserved, but it cannot be published until you deliberately rebase it or discard it.
+                                                     <div class="trade-orders-inline-actions mt-2">
+                                                         <MudButton Variant="Variant.Filled"
+                                                                    Color="Color.Warning"
+                                                                    Disabled="@_isCommissionCommandRunning"
+                                                                    OnClick="RebaseCommissionTermsRevisionAsync">
+                                                             Rebase onto latest terms
+                                                         </MudButton>
+                                                         <MudButton Variant="Variant.Text"
+                                                                    Color="Color.Secondary"
+                                                                    Disabled="@_isCommissionCommandRunning"
+                                                                    OnClick="DiscardConflictedCommissionTermsRevisionAsync">
+                                                             Discard local changes
+                                                         </MudButton>
+                                                     </div>
+                                                 </MudAlert>
+                                             }
                                              <MudTextField @bind-Value="_commissionTermsRevisionReason"
                                                            id="commission-terms-revision-reason"
                                                            Label="What changed?"
@@ -874,7 +921,7 @@
                                                  </MudButton>
                                                  <MudButton Variant="Variant.Filled"
                                                             Color="Color.Primary"
-                                                            Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionTermsRevisionReason))"
+                                                            Disabled="@(_isCommissionCommandRunning || HasCommissionTermsRevisionConflict || string.IsNullOrWhiteSpace(_commissionTermsRevisionReason))"
                                                             OnClick="AmendCommissionTermsAsync">
                                                      Publish Revision
                                                  </MudButton>
