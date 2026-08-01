@@ -7,8 +7,50 @@ public sealed class HostedOrderProjectionStoreTests
 {
     private static readonly DateTime Now = new(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc);
 
-    [Fact]
-    public void NewerCanonicalOrderWinsAndTombstoneCannotRollBack()
+    [Theory]
+    [InlineData(ProjectionStoreScenario.CanonicalRevisionAndTombstone)]
+    [InlineData(ProjectionStoreScenario.CompanyProfileIsImmutable)]
+    [InlineData(ProjectionStoreScenario.ProfileResetClearsRevisionHistory)]
+    [InlineData(ProjectionStoreScenario.OwnerUpgradeAtSameRevision)]
+    [InlineData(ProjectionStoreScenario.SameProfileReconnect)]
+    [InlineData(ProjectionStoreScenario.ScopeChange)]
+    [InlineData(ProjectionStoreScenario.RestoreRevisionCannotRollBack)]
+    [InlineData(ProjectionStoreScenario.CompanySnapshotComposition)]
+    public void ProjectionStorePreservesCanonicalIdentityAndRestoreTruth(
+        ProjectionStoreScenario scenario)
+    {
+        switch (scenario)
+        {
+            case ProjectionStoreScenario.CanonicalRevisionAndTombstone:
+                NewerCanonicalOrderWinsAndTombstoneCannotRollBack();
+                break;
+            case ProjectionStoreScenario.CompanyProfileIsImmutable:
+                SameOrderCannotMoveBetweenCompanyProfiles();
+                break;
+            case ProjectionStoreScenario.ProfileResetClearsRevisionHistory:
+                TombstoneWinsSameRevisionAndProfileResetClearsHistory();
+                break;
+            case ProjectionStoreScenario.OwnerUpgradeAtSameRevision:
+                SameObjectRevisionOwnerUpgradeIsAcceptedAndNotified();
+                break;
+            case ProjectionStoreScenario.SameProfileReconnect:
+                SameProfileReconnectRetainsReadyProjection();
+                break;
+            case ProjectionStoreScenario.ScopeChange:
+                ScopeChangeClearsProjectionAndDoesNotCarryRevisionFloor();
+                break;
+            case ProjectionStoreScenario.RestoreRevisionCannotRollBack:
+                RestoreStateCannotRollBackAppliedRevision();
+                break;
+            case ProjectionStoreScenario.CompanySnapshotComposition:
+                SharedSnapshotCanBeComposedWithoutAPageCache();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+    }
+
+    private static void NewerCanonicalOrderWinsAndTombstoneCannotRollBack()
     {
         var store = new HostedOrderProjectionStore();
         var orderId = Guid.NewGuid();
@@ -33,8 +75,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.Equal([2L, 3L], revisions);
     }
 
-    [Fact]
-    public void SameOrderCannotMoveBetweenCompanyProfiles()
+    private static void SameOrderCannotMoveBetweenCompanyProfiles()
     {
         var store = new HostedOrderProjectionStore();
         var orderId = Guid.NewGuid();
@@ -48,8 +89,7 @@ public sealed class HostedOrderProjectionStoreTests
                 objectRevision: 2));
     }
 
-    [Fact]
-    public void TombstoneWinsSameRevisionAndProfileResetClearsHistory()
+    private static void TombstoneWinsSameRevisionAndProfileResetClearsHistory()
     {
         var store = new HostedOrderProjectionStore();
         var orderId = Guid.NewGuid();
@@ -71,8 +111,7 @@ public sealed class HostedOrderProjectionStoreTests
             objectRevision: 1));
     }
 
-    [Fact]
-    public void SameObjectRevisionOwnerUpgradeIsAcceptedAndNotified()
+    private static void SameObjectRevisionOwnerUpgradeIsAcceptedAndNotified()
     {
         var store = new HostedOrderProjectionStore();
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Canonical");
@@ -91,8 +130,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.Equal(2, notifications);
     }
 
-    [Fact]
-    public void SameProfileReconnectRetainsReadyProjection()
+    private static void SameProfileReconnectRetainsReadyProjection()
     {
         var store = new HostedOrderProjectionStore();
         var profileId = Guid.NewGuid().ToString("D");
@@ -110,8 +148,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.True(store.RestoreState.ShowsCompleteProjection);
     }
 
-    [Fact]
-    public void ScopeChangeClearsProjectionAndDoesNotCarryRevisionFloor()
+    private static void ScopeChangeClearsProjectionAndDoesNotCarryRevisionFloor()
     {
         var store = new HostedOrderProjectionStore();
         var firstProfile = Guid.NewGuid().ToString("D");
@@ -128,8 +165,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.False(store.RestoreState.CanShowAuthoritativeEmpty);
     }
 
-    [Fact]
-    public void RestoreStateCannotRollBackAppliedRevision()
+    private static void RestoreStateCannotRollBackAppliedRevision()
     {
         var store = new HostedOrderProjectionStore();
         var profileId = Guid.NewGuid().ToString("D");
@@ -144,8 +180,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.False(store.RestoreState.IsAuthoritative);
     }
 
-    [Fact]
-    public void SharedSnapshotCanBeComposedWithoutAPageCache()
+    private static void SharedSnapshotCanBeComposedWithoutAPageCache()
     {
         var store = new HostedOrderProjectionStore();
         var companyProfileId = Guid.NewGuid();
@@ -184,4 +219,16 @@ public sealed class HostedOrderProjectionStoreTests
             CompanyProfileId = companyProfileId,
             Title = title
         };
+
+    public enum ProjectionStoreScenario
+    {
+        CanonicalRevisionAndTombstone,
+        CompanyProfileIsImmutable,
+        ProfileResetClearsRevisionHistory,
+        OwnerUpgradeAtSameRevision,
+        SameProfileReconnect,
+        ScopeChange,
+        RestoreRevisionCannotRollBack,
+        CompanySnapshotComposition
+    }
 }

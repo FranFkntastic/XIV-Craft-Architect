@@ -6,8 +6,47 @@ namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class TradeProcurementRowBuilderTests
 {
-    [Fact]
-    public void FullySuppressedPrecraftRemainsInPlan()
+    [Theory]
+    [InlineData(PlanRowScenario.SuppressedPrecraftVisible)]
+    [InlineData(PlanRowScenario.MarketSourcedPrecraft)]
+    [InlineData(PlanRowScenario.OnHandPrecraft)]
+    [InlineData(PlanRowScenario.SuppressedPrecraftSourceIntent)]
+    [InlineData(PlanRowScenario.OrdinaryOrderLivePlan)]
+    [InlineData(PlanRowScenario.ReadOnlyCommissionLivePlan)]
+    [InlineData(PlanRowScenario.EditableCommissionLivePlan)]
+    public void PlanRowsPreserveSourceIntentAndCanonicalEditability(PlanRowScenario scenario)
+    {
+        switch (scenario)
+        {
+            case PlanRowScenario.SuppressedPrecraftVisible:
+                FullySuppressedPrecraftRemainsInPlan();
+                break;
+            case PlanRowScenario.MarketSourcedPrecraft:
+                DirectlySourcedPrecraftRemainsRequiredWhileItsIngredientsAreSuppressed(
+                    AcquisitionSource.MarketBuyNq);
+                break;
+            case PlanRowScenario.OnHandPrecraft:
+                DirectlySourcedPrecraftRemainsRequiredWhileItsIngredientsAreSuppressed(
+                    AcquisitionSource.OnHand);
+                break;
+            case PlanRowScenario.SuppressedPrecraftSourceIntent:
+                FullySuppressedPrecraftCanRecordWholeRowSourceIntent();
+                break;
+            case PlanRowScenario.OrdinaryOrderLivePlan:
+                LivePlanFollowsCanonicalWorkPackageEditability(false, false, true);
+                break;
+            case PlanRowScenario.ReadOnlyCommissionLivePlan:
+                LivePlanFollowsCanonicalWorkPackageEditability(true, false, false);
+                break;
+            case PlanRowScenario.EditableCommissionLivePlan:
+                LivePlanFollowsCanonicalWorkPackageEditability(true, true, true);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+    }
+
+    private static void FullySuppressedPrecraftRemainsInPlan()
     {
         var row = Row(
             source: AcquisitionSource.Craft,
@@ -23,10 +62,7 @@ public sealed class TradeProcurementRowBuilderTests
             TradeProcurementRowBuilder.GetPlanRouteDescription(row));
     }
 
-    [Theory]
-    [InlineData(AcquisitionSource.MarketBuyNq)]
-    [InlineData(AcquisitionSource.OnHand)]
-    public void DirectlySourcedPrecraftRemainsRequiredWhileItsIngredientsAreSuppressed(
+    private static void DirectlySourcedPrecraftRemainsRequiredWhileItsIngredientsAreSuppressed(
         AcquisitionSource source)
     {
         var row = Row(
@@ -42,8 +78,7 @@ public sealed class TradeProcurementRowBuilderTests
         Assert.DoesNotContain("Not currently required", description);
     }
 
-    [Fact]
-    public void FullySuppressedPrecraftCanRecordWholeRowSourceIntent()
+    private static void FullySuppressedPrecraftCanRecordWholeRowSourceIntent()
     {
         var row = Row(
             source: AcquisitionSource.MarketBuyNq,
@@ -57,11 +92,7 @@ public sealed class TradeProcurementRowBuilderTests
             row with { HasChildren = false }));
     }
 
-    [Theory]
-    [InlineData(false, false, true)]
-    [InlineData(true, false, false)]
-    [InlineData(true, true, true)]
-    public void LivePlanFollowsCanonicalWorkPackageEditability(
+    private static void LivePlanFollowsCanonicalWorkPackageEditability(
         bool hasCanonicalCommission,
         bool canEditCanonicalWorkPackage,
         bool expected)
@@ -109,4 +140,15 @@ public sealed class TradeProcurementRowBuilderTests
                 AcquisitionSource.MarketBuyNq,
                 AcquisitionSource.OnHand
             ]);
+
+    public enum PlanRowScenario
+    {
+        SuppressedPrecraftVisible,
+        MarketSourcedPrecraft,
+        OnHandPrecraft,
+        SuppressedPrecraftSourceIntent,
+        OrdinaryOrderLivePlan,
+        ReadOnlyCommissionLivePlan,
+        EditableCommissionLivePlan
+    }
 }

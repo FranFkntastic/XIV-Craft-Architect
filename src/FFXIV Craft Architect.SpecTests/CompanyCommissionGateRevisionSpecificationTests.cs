@@ -14,8 +14,46 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
     private static readonly CompanyCommissionActor Crafter =
         new("crafter", CompanyCommissionActorKind.Crafter, "Crafter");
 
-    [Fact]
-    public void TermsRevisionPreservesSatisfiedGatesWhoseBoundFactsDidNotChange()
+    [Theory]
+    [InlineData(GateRevisionScenario.UnchangedBoundFacts)]
+    [InlineData(GateRevisionScenario.PaymentChanged)]
+    [InlineData(GateRevisionScenario.PartialPaymentAfterRevision)]
+    [InlineData(GateRevisionScenario.MaterialQuantityChanged)]
+    [InlineData(GateRevisionScenario.MaterialQualityChanged)]
+    [InlineData(GateRevisionScenario.PaymentClearsFirst)]
+    [InlineData(GateRevisionScenario.MaterialsClearFirst)]
+    public void TermsRevisionAndParallelGatesPreserveOnlyMatchingEvidence(
+        GateRevisionScenario scenario)
+    {
+        switch (scenario)
+        {
+            case GateRevisionScenario.UnchangedBoundFacts:
+                TermsRevisionPreservesSatisfiedGatesWhoseBoundFactsDidNotChange();
+                break;
+            case GateRevisionScenario.PaymentChanged:
+                PaymentChangeResetsOnlyPaymentEvidence();
+                break;
+            case GateRevisionScenario.PartialPaymentAfterRevision:
+                UnchangedPartialPaymentEvidenceCanCompleteAfterTermsRevision();
+                break;
+            case GateRevisionScenario.MaterialQuantityChanged:
+                CompanyMaterialPromiseChangeResetsOnlyHandoffEvidence();
+                break;
+            case GateRevisionScenario.MaterialQualityChanged:
+                CompanyMaterialQualityChangeResetsOnlyHandoffEvidence();
+                break;
+            case GateRevisionScenario.PaymentClearsFirst:
+                PaymentAndCompanyMaterialGatesCanClearInEitherOrder(paymentFirst: true);
+                break;
+            case GateRevisionScenario.MaterialsClearFirst:
+                PaymentAndCompanyMaterialGatesCanClearInEitherOrder(paymentFirst: false);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+    }
+
+    private static void TermsRevisionPreservesSatisfiedGatesWhoseBoundFactsDidNotChange()
     {
         var order = CompleteBothGates(CreateClaimedOrder());
         var original = order.CompanyCommission!;
@@ -41,8 +79,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.Null(revised.ParticipantAcknowledgedTermsVersion);
     }
 
-    [Fact]
-    public void PaymentChangeResetsOnlyPaymentEvidence()
+    private static void PaymentChangeResetsOnlyPaymentEvidence()
     {
         var order = CompleteBothGates(CreateClaimedOrder());
         var original = order.CompanyCommission!;
@@ -65,8 +102,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.Equal(original.Gates.CompanyMaterials, revised.Gates.CompanyMaterials);
     }
 
-    [Fact]
-    public void UnchangedPartialPaymentEvidenceCanCompleteAfterTermsRevision()
+    private static void UnchangedPartialPaymentEvidenceCanCompleteAfterTermsRevision()
     {
         var order = CreateClaimedOrder();
         order = Apply(
@@ -102,8 +138,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.Equal(2, order.CompanyCommission.Gates.Payment.CrafterReceived!.TermsVersion);
     }
 
-    [Fact]
-    public void CompanyMaterialPromiseChangeResetsOnlyHandoffEvidence()
+    private static void CompanyMaterialPromiseChangeResetsOnlyHandoffEvidence()
     {
         var order = CompleteBothGates(CreateClaimedOrder());
         var original = order.CompanyCommission!;
@@ -130,8 +165,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.Equal(4, Assert.Single(revised.Gates.CompanyMaterials.PromisedQuantities).Quantity);
     }
 
-    [Fact]
-    public void CompanyMaterialQualityChangeResetsOnlyHandoffEvidence()
+    private static void CompanyMaterialQualityChangeResetsOnlyHandoffEvidence()
     {
         var order = CompleteBothGates(CreateClaimedOrder());
         var original = order.CompanyCommission!;
@@ -153,10 +187,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.Null(revised.Gates.CompanyMaterials.ReceivedAtUtc);
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void PaymentAndCompanyMaterialGatesCanClearInEitherOrder(bool paymentFirst)
+    private static void PaymentAndCompanyMaterialGatesCanClearInEitherOrder(bool paymentFirst)
     {
         var order = CreateClaimedOrder();
 
@@ -358,4 +389,15 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
             new CompanyRecordRevision(1),
             Guid.NewGuid(),
             CompanyCommissionProtocol.Version1);
+
+    public enum GateRevisionScenario
+    {
+        UnchangedBoundFacts,
+        PaymentChanged,
+        PartialPaymentAfterRevision,
+        MaterialQuantityChanged,
+        MaterialQualityChanged,
+        PaymentClearsFirst,
+        MaterialsClearFirst
+    }
 }

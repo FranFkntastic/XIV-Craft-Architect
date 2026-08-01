@@ -6,8 +6,34 @@ namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class HostedOrderSyncCoordinatorTests
 {
-    [Fact]
-    public void MissingOrStaleOwnerProjectionRequiresAdoption()
+    [Theory]
+    [InlineData(OwnerProjectionScenario.AdoptionRequired)]
+    [InlineData(OwnerProjectionScenario.AdoptionForbidden)]
+    [InlineData(OwnerProjectionScenario.ValidProjection)]
+    [InlineData(OwnerProjectionScenario.InvalidProjection)]
+    public void OwnerProjectionAdoptionPreservesCanonicalIdentity(
+        OwnerProjectionScenario scenario)
+    {
+        switch (scenario)
+        {
+            case OwnerProjectionScenario.AdoptionRequired:
+                MissingOrStaleOwnerProjectionRequiresAdoption();
+                break;
+            case OwnerProjectionScenario.AdoptionForbidden:
+                DeletedAndNonCommissionOrdersNeverRequireAdoption();
+                break;
+            case OwnerProjectionScenario.ValidProjection:
+                MatchingProjectionAtCurrentOrNewerRevisionIsAccepted();
+                break;
+            case OwnerProjectionScenario.InvalidProjection:
+                StaleOrWrongIdentityProjectionIsRejected();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+    }
+
+    private static void MissingOrStaleOwnerProjectionRequiresAdoption()
     {
         var order = CreateCommissionOrder();
         var missing = Snapshot(order, objectRevision: 5, owner: null);
@@ -19,8 +45,7 @@ public sealed class HostedOrderSyncCoordinatorTests
         Assert.False(NeedsOwnerAdoption(current));
     }
 
-    [Fact]
-    public void DeletedAndNonCommissionOrdersNeverRequireAdoption()
+    private static void DeletedAndNonCommissionOrdersNeverRequireAdoption()
     {
         var commissionOrder = CreateCommissionOrder();
         var ordinaryOrder = new TradeOrder
@@ -36,8 +61,7 @@ public sealed class HostedOrderSyncCoordinatorTests
             Snapshot(ordinaryOrder, 5, null)));
     }
 
-    [Fact]
-    public void MatchingProjectionAtCurrentOrNewerRevisionIsAccepted()
+    private static void MatchingProjectionAtCurrentOrNewerRevisionIsAccepted()
     {
         var order = CreateCommissionOrder();
         var expected = Snapshot(order, objectRevision: 5, owner: null);
@@ -50,8 +74,7 @@ public sealed class HostedOrderSyncCoordinatorTests
             Projection(order, objectRevision: 6, companyRevision: 9));
     }
 
-    [Fact]
-    public void StaleOrWrongIdentityProjectionIsRejected()
+    private static void StaleOrWrongIdentityProjectionIsRejected()
     {
         var order = CreateCommissionOrder();
         var expected = Snapshot(order, objectRevision: 5, owner: null);
@@ -187,5 +210,13 @@ public sealed class HostedOrderSyncCoordinatorTests
                 SettlementState = CompanyCommissionSettlementState.NotDue
             }
         };
+    }
+
+    public enum OwnerProjectionScenario
+    {
+        AdoptionRequired,
+        AdoptionForbidden,
+        ValidProjection,
+        InvalidProjection
     }
 }
