@@ -198,8 +198,15 @@ public static class DiscordCommissionMessage
             components.Add($"labor {FormatGil(payment.CraftLabor)}{basis}");
         }
 
+        var schedule = payment.Schedule switch
+        {
+            CompanyCommissionPaymentSchedule.OnDelivery => "payment on delivery",
+            CompanyCommissionPaymentSchedule.Custom =>
+                payment.CustomTerms ?? "custom payment timing",
+            _ => "payment in advance"
+        };
         return $"**{FormatGil(payment.Total)} total**\n" +
-            $"{payment.ContractLabel}\n" +
+            $"{payment.ContractLabel}; {schedule}\n" +
             string.Join(" + ", components);
     }
 

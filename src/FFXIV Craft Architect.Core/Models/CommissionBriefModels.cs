@@ -22,7 +22,9 @@ public sealed record CommissionBriefPayment(
     decimal Total,
     decimal MaterialAdjustmentPercent = 0,
     int CraftSynthCount = 0,
-    decimal GilPerSynth = 0);
+    decimal GilPerSynth = 0,
+    CompanyCommissionPaymentSchedule Schedule = CompanyCommissionPaymentSchedule.Advance,
+    string? CustomTerms = null);
 
 public sealed record CommissionBriefEvidence(
     string CostBasis,

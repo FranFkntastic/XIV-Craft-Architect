@@ -57,6 +57,13 @@ public partial class TradeOrders
     private bool HasCanonicalCommission =>
         _selectedOrder?.CompanyCommission != null;
 
+    private bool CanEditCanonicalDraft =>
+        SelectedCommissionOwner is { Order.CompanyCommission: { } commission } owner &&
+        owner.Order.Id == _selectedOrder?.Id &&
+        commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft &&
+        commission.ActiveClaim == null &&
+        !TradeOrderStatusWorkflow.IsArchived(owner.Order.Status);
+
     private int PaymentTabIndex => HasCanonicalCommission ? 1 : 0;
 
     private int ProcurementTabIndex => HasCanonicalCommission ? 2 : 1;
@@ -305,6 +312,42 @@ public partial class TradeOrders
         }
     }
 
+    private async Task<bool> UpdateCanonicalDraftAsync(
+        TradeOrder workPackage,
+        CommissionBriefDocument brief,
+        string? successMessage)
+    {
+        var owner = SelectedCommissionOwner;
+        var commission = owner?.Order.CompanyCommission;
+        if (owner == null || commission == null || !CanEditCanonicalDraft)
+        {
+            Snackbar.Add(
+                "Direct editing is only available before the canonical commission is published.",
+                Severity.Warning);
+            return false;
+        }
+
+        var terms = TradeCompanyCommissionMigrationService.CreateDraftTerms(
+            workPackage,
+            brief,
+            commission.CurrentTerms,
+            DateTime.UtcNow);
+        _isCommissionCommandRunning = true;
+        try
+        {
+            var result = await CommissionOperations.UpdateDraftAsync(
+                owner,
+                terms,
+                workPackage);
+            ApplyCommissionResult(result, successMessage);
+            return result.Success;
+        }
+        finally
+        {
+            _isCommissionCommandRunning = false;
+        }
+    }
+
     private Task MarkCommissionMaterialsReadyAsync() =>
         RunCommissionCommandAsync(
             owner => CommissionOperations.MarkCompanyMaterialsReadyAsync(owner),
@@ -427,7 +470,7 @@ public partial class TradeOrders
 
     private void ApplyCommissionResult(
         TradeCommissionOperatorResult result,
-        string successMessage)
+        string? successMessage)
     {
         if (!result.Success || result.Projection == null)
         {
@@ -444,7 +487,10 @@ public partial class TradeOrders
             .ToList();
         SelectOrder(result.Projection.Order);
         _activeOpsTab = activeTab;
-        Snackbar.Add(successMessage, Severity.Success);
+        if (!string.IsNullOrWhiteSpace(successMessage))
+        {
+            Snackbar.Add(successMessage, Severity.Success);
+        }
     }
 
     private TradeCrafterProfile? BuildConfirmedCommissionCrafter(
@@ -660,6 +706,7 @@ public partial class TradeOrders
         CompanyCommissionActivityKind kind) =>
         kind switch
         {
+            CompanyCommissionActivityKind.DraftUpdated => "Draft updated",
             CompanyCommissionActivityKind.CommissionOpened => "Commission opened",
             CompanyCommissionActivityKind.ClaimAccepted => "Claim reserved",
             CompanyCommissionActivityKind.ClaimRejected => "Claim rejected",

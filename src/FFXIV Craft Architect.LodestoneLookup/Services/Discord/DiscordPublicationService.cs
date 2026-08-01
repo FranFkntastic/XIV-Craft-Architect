@@ -175,6 +175,16 @@ public sealed class DiscordPublicationService(
                 "The Trade order changed before publication began.");
         }
 
+        try
+        {
+            TradeCompanyCommissionMigrationService
+                .RequireCanonicalBriefMatchesCurrentTerms(order.Order, brief);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return NewPublicationConflict(exception.Message);
+        }
+
         if (!options.CanPublishDirectly)
         {
             return NewPublicationConflict(

@@ -546,7 +546,7 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.Build"
                                                    OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
-                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || IsSelectedOrderArchived || GetOrderRootItems(_selectedOrder).Count == 0)">
+                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || GetOrderRootItems(_selectedOrder).Count == 0)">
                                             @GetCraftPlanBuildButtonText(_selectedOrder)
                                         </MudButton>
                                         <MudButton Variant="Variant.Outlined"
@@ -554,7 +554,7 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.PriceCheck"
                                                    OnClick="RepriceSelectedOrderAsync"
-                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || !HasLinkedCraftPlan(_selectedOrder))">
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || !HasLinkedCraftPlan(_selectedOrder))">
                                             @(_isRepricingSelectedOrder ? "Repricing..." : "Reprice Order")
                                         </MudButton>
                                         <MudButton Variant="Variant.Outlined"
@@ -627,6 +627,11 @@
                     else
                     {
                         var paymentSummary = GetSelectedOrderPaymentSummary();
+                        var displayedPaymentTotal = SelectedCanonicalCommission?.CurrentTerms.Payment.Total ??
+                            paymentSummary.TotalPayment;
+                        var displayedProcurementTotal = SelectedCanonicalCommission?.CurrentTerms.Materials
+                            .Sum(material => material.TotalCost) ??
+                            paymentSummary.EstimatedProcurementTotal;
                         <div class="trade-orders-ops-header">
                             <div>
                                 <MudText Typo="Typo.subtitle1">@_selectedOrder.Title</MudText>
@@ -875,22 +880,22 @@
                                 <div class="trade-orders-payment-metrics">
                                     <div class="trade-orders-payment-metric">
                                         <span>Payment amount</span>
-                                        <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
+                                        <strong>@FormatGil(displayedPaymentTotal)</strong>
                                         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
                                                        Color="Color.Primary"
                                                        Size="Size.Small"
-                                                       Disabled="@(paymentSummary.TotalPayment <= 0)"
-                                                       OnClick='@(() => CopyGilAmountAsync(paymentSummary.TotalPayment, "Payment amount copied"))'
+                                                       Disabled="@(displayedPaymentTotal <= 0)"
+                                                       OnClick='@(() => CopyGilAmountAsync(displayedPaymentTotal, "Payment amount copied"))'
                                                        aria-label="Copy payment amount" />
                                     </div>
                                     <div class="trade-orders-payment-metric">
                                         <span>Total estimated procurement</span>
-                                        <strong>@FormatGil(paymentSummary.EstimatedProcurementTotal)</strong>
+                                        <strong>@FormatGil(displayedProcurementTotal)</strong>
                                         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
                                                        Color="Color.Primary"
                                                        Size="Size.Small"
-                                                       Disabled="@(paymentSummary.EstimatedProcurementTotal <= 0)"
-                                                       OnClick='@(() => CopyGilAmountAsync(paymentSummary.EstimatedProcurementTotal, "Procurement estimate copied"))'
+                                                       Disabled="@(displayedProcurementTotal <= 0)"
+                                                       OnClick='@(() => CopyGilAmountAsync(displayedProcurementTotal, "Procurement estimate copied"))'
                                                        aria-label="Copy procurement amount" />
                                     </div>
                                 </div>
@@ -1481,7 +1486,7 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.Refresh"
                                                    OnClick="RepriceSelectedOrderAsync"
-                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || !HasLinkedCraftPlan(_selectedOrder))">
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || !HasLinkedCraftPlan(_selectedOrder))">
                                             @(_isRepricingSelectedOrder ? "Refreshing..." : "Refresh Prices")
                                         </MudButton>
                                     </section>
@@ -1771,9 +1776,38 @@
                                                  <small>@(SelectedCompanyPublication?.DestinationLabel ?? "Company routing")</small>
                                              </div>
                                          </div>
+                                         @if (sharingCommission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft)
+                                         {
+                                             <div class="trade-orders-collaboration-fields">
+                                                 <MudTextField @bind-Value="_commissionContact"
+                                                               id="canonical-commission-contact"
+                                                               Label="Crafter contact"
+                                                               Variant="Variant.Outlined"
+                                                               Margin="Margin.Dense"
+                                                               Immediate="true"
+                                                               MaxLength="240"
+                                                               Disabled="@_isCommissionCommandRunning" />
+                                                 <MudTextField @bind-Value="_commissionDeliveryInstructions"
+                                                               id="canonical-commission-delivery-instructions"
+                                                               Label="Delivery instructions"
+                                                               Variant="Variant.Outlined"
+                                                               Margin="Margin.Dense"
+                                                               Immediate="true"
+                                                               Lines="2"
+                                                               MaxLength="1000"
+                                                               Disabled="@_isCommissionCommandRunning" />
+                                             </div>
+                                         }
                                          <div class="trade-orders-collaboration-actions">
                                              @if (sharingCommission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft)
                                              {
+                                                 <MudButton Variant="Variant.Outlined"
+                                                            Color="Color.Secondary"
+                                                            StartIcon="@Icons.Material.Filled.Save"
+                                                            Disabled="@(!HasCanonicalDraftDetailChanges || _isCommissionCommandRunning)"
+                                                            OnClick="SaveCanonicalCommissionDraftDetailsAsync">
+                                                     Save Details
+                                                 </MudButton>
                                                  <MudButton Variant="Variant.Filled"
                                                             Color="Color.Primary"
                                                             StartIcon="@Icons.Material.Filled.Send"
@@ -2140,6 +2174,7 @@
                                         <div class="trade-orders-commission-activity">
                                             <MudText Typo="Typo.subtitle2">Commission Activity</MudText>
                                             @foreach (var activity in ownerCommission.Activity
+                                                .Where(item => item.Kind != CompanyCommissionActivityKind.DraftUpdated)
                                                 .OrderByDescending(item => item.CreatedAtUtc)
                                                 .Take(30))
                                             {
@@ -2416,7 +2451,7 @@
     </div>;
 
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementResponsibilityCell => row => @<div class="trade-orders-procurement-responsibility-cell">
-        @if (HasCanonicalCommission)
+        @if (HasCanonicalCommission && !CanEditCanonicalDraft)
         {
             <strong title="Create a terms revision before changing a published commission supply plan.">@FormatResponsibility(row.Responsibility)</strong>
         }
@@ -2425,7 +2460,7 @@
             <select class="trade-orders-procurement-select"
                     aria-label="@($"{row.ItemName} responsibility")"
                     value="@row.Responsibility.ToString()"
-                    disabled="@IsSelectedOrderArchived"
+                    disabled="@(IsSelectedOrderArchived || _isCommissionCommandRunning)"
                     @onchange="args => ChangeProcurementRowResponsibilityValueAsync(row, args.Value?.ToString())">
                 <option value="@CommissionMaterialResponsibility.Crafter.ToString()"
                         selected="@(row.Responsibility == CommissionMaterialResponsibility.Crafter)">Crafter supplies</option>

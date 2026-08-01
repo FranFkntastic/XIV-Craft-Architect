@@ -27,7 +27,7 @@ public static class CompanyCommissionCommandWorkflow
         return command switch
         {
             UpdateCompanyCommissionDraftCommand update =>
-                UpdateDraft(source, commission, update, nowUtc),
+                UpdateDraft(source, commission, update, nowUtc, actor),
             AmendCompanyCommissionTermsCommand amend =>
                 AmendTerms(source, commission, amend, nowUtc, actor),
             OpenCompanyCommissionCommand =>
@@ -98,26 +98,69 @@ public static class CompanyCommissionCommandWorkflow
         TradeOrder source,
         TradeCompanyCommission commission,
         UpdateCompanyCommissionDraftCommand command,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        CompanyCommissionActor actor)
     {
-        Require(source.Status == TradeOrderStatus.Draft, "Only a draft commission can be edited.");
+        Require(
+            commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft,
+            "Only an unpublished commission draft can be edited directly.");
         Require(commission.ActiveClaim == null, "Claimed terms cannot be edited as a draft.");
+        if (command.WorkPackage is not
+            {
+                RequestedOutputs.Count: > 0,
+                SourceSnapshot: { }
+            } workPackage)
+        {
+            throw new InvalidOperationException(
+                "Draft edits require a canonical work package with at least one output.");
+        }
         ValidateTerms(command.Terms);
         Require(
             command.Terms.Version == commission.CurrentTermsVersion,
             "Draft edits must replace the current unclaimed terms version.");
+        RequireDraftWorkPackageMatchesTerms(workPackage, command.Terms);
+        var terms = command.Terms with
+        {
+            CreatedAtUtc = nowUtc,
+            CreatedBy = actor
+        };
+        var updated = Copy(source);
+        updated.SourceSnapshot = TradeOrderWorkflow.CopySourceSnapshot(
+            workPackage.SourceSnapshot);
+        updated.CraftPlanId = workPackage.CraftPlanId;
+        updated.CraftPlanName = workPackage.CraftPlanName;
+        updated.CraftPlanSavedAtUtc = workPackage.CraftPlanSavedAtUtc;
+        updated.CraftPlanLinkKind = workPackage.CraftPlanLinkKind;
         return Transition(
-            source,
+            updated,
             commission with
             {
                 TermsVersions = commission.TermsVersions
-                    .Where(item => item.Version != command.Terms.Version)
-                    .Append(command.Terms with { CreatedAtUtc = nowUtc })
+                    .Where(item => item.Version != terms.Version)
+                    .Append(terms)
                     .OrderBy(item => item.Version)
-                    .ToArray()
+                    .ToArray(),
+                Gates = commission.Gates with
+                {
+                    Payment = CreatePaymentGate(terms),
+                    CompanyMaterials = CreateMaterialGate(terms)
+                },
+                OutputProgress = terms.Outputs.Select(output =>
+                    new CompanyCommissionOutputProgress(
+                        output.LineId,
+                        output.ItemId,
+                        output.RequiredQuantity,
+                        0,
+                        0,
+                        0,
+                        nowUtc,
+                        actor)).ToArray(),
+                DeliveryReadiness = new CompanyCommissionDeliveryReadiness(false),
+                SettlementState = CompanyCommissionSettlementState.NotDue
             },
-            CompanyCommissionActivityKind.CommentAdded,
-            "Updated draft commission terms.");
+            CompanyCommissionActivityKind.DraftUpdated,
+            "Updated draft commission terms.",
+            visibility: CompanyCommissionActivityVisibility.CompanyOnly);
     }
 
     private static CompanyCommissionDomainTransition AmendTerms(
@@ -1230,6 +1273,34 @@ public static class CompanyCommissionCommandWorkflow
             quantities);
     }
 
+    private static void RequireDraftWorkPackageMatchesTerms(
+        CompanyCommissionDraftWorkPackage workPackage,
+        CompanyCommissionTermsVersion terms)
+    {
+        var requested = workPackage.RequestedOutputs
+            .OrderBy(item => item.ItemId)
+            .ThenBy(item => item.MustBeHq)
+            .Select(item => (item.ItemId, item.Name, item.Quantity, item.MustBeHq))
+            .ToArray();
+        var canonical = terms.Outputs
+            .OrderBy(item => item.ItemId)
+            .ThenBy(item => item.MustBeHq)
+            .Select(item => (item.ItemId, item.Name, Quantity: item.RequiredQuantity, item.MustBeHq))
+            .ToArray();
+        Require(
+            requested.SequenceEqual(canonical),
+            "The draft work package outputs do not match the canonical terms.");
+
+        var snapshotOutputs = workPackage.SourceSnapshot.RootItems
+            .OrderBy(item => item.ItemId)
+            .ThenBy(item => item.MustBeHq)
+            .Select(item => (item.ItemId, item.Name, item.Quantity, item.MustBeHq))
+            .ToArray();
+        Require(
+            snapshotOutputs.SequenceEqual(canonical),
+            "The draft source snapshot outputs do not match the canonical terms.");
+    }
+
     private static void RequireCanWork(TradeCompanyCommission commission)
     {
         RequireClaim(commission);
@@ -1281,6 +1352,15 @@ public static class CompanyCommissionCommandWorkflow
             terms.Payment.CraftSynthCount >= 0 &&
             terms.Payment.GilPerSynth >= 0,
             "Payment amounts and labor basis cannot be negative.");
+        Require(
+            terms.Payment.MaterialReimbursement +
+                terms.Payment.MaterialAdjustment +
+                terms.Payment.CraftLabor == terms.Payment.Total,
+            "The payment total must equal its material, adjustment, and labor components.");
+        Require(
+            terms.Payment.Schedule != CompanyCommissionPaymentSchedule.Custom ||
+                !string.IsNullOrWhiteSpace(terms.Payment.CustomTerms),
+            "Custom payment timing requires explicit terms.");
     }
 
     private static void ValidateProvisionalCrafter(

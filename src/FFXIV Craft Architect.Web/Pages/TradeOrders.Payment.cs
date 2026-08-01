@@ -18,34 +18,60 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 
 public partial class TradeOrders
 {
-    private async Task SetOrderMaterialResponsibilityAsync(
+    private async Task<bool> SetOrderMaterialResponsibilityAsync(
         TradeCommissionPaymentMaterial material,
         CommissionMaterialResponsibility responsibility)
     {
         if (_selectedOrder == null || _companyProfile == null)
         {
-            return;
+            return false;
         }
 
         if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
         {
             Snackbar.Add("Reopen archived orders before editing payment responsibility.", Severity.Warning);
-            return;
+            return false;
         }
 
         var orderId = _selectedOrder.Id;
         var activeOpsTab = _activeOpsTab;
-        var currentDraft = await GetOrCreatePayrollDraftForOrderAsync(_selectedOrder);
+        var currentDraft = _selectedOrder.CompanyCommission != null
+            ? GetSelectedOrderResponsibilityProjection() ?? new TradePayrollWorkflowDraft
+            {
+                CompanyProfileId = _selectedOrder.CompanyProfileId,
+                OrderId = _selectedOrder.Id
+            }
+            : await GetOrCreatePayrollDraftForOrderAsync(_selectedOrder);
         var draftToSave = TradeOrderWorkflow.WithMaterialResponsibility(
             currentDraft,
             material.ItemId,
             material.RequiresHq,
             responsibility);
+        if (_selectedOrder.CompanyCommission != null)
+        {
+            if (!CanEditCanonicalDraft)
+            {
+                Snackbar.Add(
+                    "Published responsibility is part of the accepted terms. Use Revise Terms to change it.",
+                    Severity.Warning);
+                return false;
+            }
+
+            var payment = TradeCommissionPaymentSummary.FromOrder(
+                _selectedOrder,
+                draftToSave,
+                GetSelectedOrderEffectivePaymentPolicy());
+            return await UpdateCanonicalDraftAsync(
+                _selectedOrder,
+                BuildCommissionBrief(_selectedOrder, payment),
+                $"{material.Name} responsibility saved to the commission draft");
+        }
+
         var savedDraft = await TradePayrollPersistence.SaveDraftAsync(draftToSave);
         if (!savedDraft)
         {
             Snackbar.Add("Failed to save payment responsibility.", Severity.Error);
-            return;
+            return false;
         }
 
         _payrollDrafts = _payrollDrafts
@@ -74,6 +100,7 @@ public partial class TradeOrders
                 _activeOpsTab = activeOpsTab;
             }
         }
+        return true;
     }
 
     private async Task<TradePayrollWorkflowDraft> GetOrCreatePayrollDraftForOrderAsync(TradeOrder order)
