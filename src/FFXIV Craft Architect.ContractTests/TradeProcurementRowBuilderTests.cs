@@ -42,6 +42,37 @@ public sealed class TradeProcurementRowBuilderTests
         Assert.DoesNotContain("Not currently required", description);
     }
 
+    [Fact]
+    public void FullySuppressedPrecraftCanRecordWholeRowSourceIntent()
+    {
+        var row = Row(
+            source: AcquisitionSource.MarketBuyNq,
+            isActiveProcurement: false,
+            isFullySuppressed: true,
+            suppressedBy: ["Purchased assembly"],
+            hasEditableOccurrences: false);
+
+        Assert.True(TradeProcurementSourceMutationPolicy.CanChangeSource(row));
+        Assert.False(TradeProcurementSourceMutationPolicy.CanChangeSource(
+            row with { HasChildren = false }));
+    }
+
+    [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, true)]
+    public void LivePlanFollowsCanonicalWorkPackageEditability(
+        bool hasCanonicalCommission,
+        bool canEditCanonicalWorkPackage,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            TradeProcurementSourceMutationPolicy.CanUseLivePlan(
+                hasCanonicalCommission,
+                canEditCanonicalWorkPackage));
+    }
+
     private static TradeOrderProcurementRow Row(
         AcquisitionSource source,
         bool isActiveProcurement,

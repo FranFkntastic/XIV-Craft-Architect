@@ -1302,12 +1302,12 @@ public static class CompanyCommissionCommandWorkflow
         CompanyCommissionTermsVersion currentTerms,
         CompanyCommissionTermsVersion nextTerms)
     {
-        static IEnumerable<(Guid LineId, int ItemId, int Quantity)> GetPromise(
+        static IEnumerable<(Guid LineId, int ItemId, int Quantity, bool RequiresHq)> GetPromise(
             CompanyCommissionTermsVersion terms) =>
             terms.Materials
                 .Where(item =>
                     item.Responsibility == CommissionMaterialResponsibility.Provided)
-                .Select(item => (item.LineId, item.ItemId, item.Quantity))
+                .Select(item => (item.LineId, item.ItemId, item.Quantity, item.RequiresHq))
                 .OrderBy(item => item.LineId);
 
         return GetPromise(currentTerms).SequenceEqual(GetPromise(nextTerms));

@@ -56,7 +56,9 @@ public partial class TradeOrders
         }
 
         var workPackage = GetSelectedOrderPricingWorkPackage();
-        var useCanonicalTerms = HasCanonicalCommission && !CanEditCanonicalDraft;
+        var useCanonicalTerms = !TradeProcurementSourceMutationPolicy.CanUseLivePlan(
+            HasCanonicalCommission,
+            CanEditCanonicalWorkPackage);
         return TradeProcurementRowBuilder.BuildRows(
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
@@ -677,7 +679,9 @@ public partial class TradeOrders
     private bool CanEditProcurementSource(TradeOrderProcurementRow row)
     {
         return !_isCommissionCommandRunning &&
-            (!HasCanonicalCommission || CanEditCanonicalDraft) &&
+            TradeProcurementSourceMutationPolicy.CanUseLivePlan(
+                HasCanonicalCommission,
+                CanEditCanonicalWorkPackage) &&
             TradeProcurementSourceMutationPolicy.CanChangeSource(row);
     }
 
@@ -775,7 +779,7 @@ public partial class TradeOrders
             return false;
         }
 
-        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
+        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalWorkPackage)
         {
             Snackbar.Add(
                 "Published acquisition decisions are part of the accepted terms. Use Revise Terms to change them.",
@@ -885,7 +889,7 @@ public partial class TradeOrders
         if (!await PlanPersistence.SaveSnapshotAsync(stored))
         {
             Snackbar.Add(
-                "The commission draft was saved, but its local craft-plan cache could not be updated. It will rebuild from the canonical order snapshot when reopened.",
+                "The commission draft was saved, but its local craft-plan cache could not be updated. It will be reconstructed from the canonical order snapshot when reopened.",
                 Severity.Warning);
         }
 

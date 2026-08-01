@@ -91,6 +91,42 @@ public sealed class RecipeSpecificationTests
     }
 
     [Fact]
+    public async Task SuppressedPrecraftSourceIntentActivatesWhenItsAncestorIsCrafted()
+    {
+        var root = CraftNode("Carpenter", level: 90, yield: 2, quantity: 1, itemId: 100, nodeId: "root");
+        root.Source = AcquisitionSource.MarketBuyNq;
+        var precraft = CraftNode("Blacksmith", level: 80, yield: 2, quantity: 3, itemId: 200, nodeId: "precraft");
+        precraft.Source = AcquisitionSource.MarketBuyNq;
+        var ingredient = CraftNode("Armorer", level: 70, yield: 1, quantity: 6, itemId: 300, nodeId: "ingredient");
+        root.Children = [precraft];
+        precraft.Children = [ingredient];
+        precraft.Parent = root;
+        ingredient.Parent = precraft;
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        Assert.Equal(
+            1,
+            AcquisitionDecisionMutation.ChangeSource(
+                plan,
+                precraft.ItemId,
+                AcquisitionSource.Craft));
+        var stillSuppressed = await SnapshotService().BuildAsync(plan);
+        Assert.Equal(
+            RecipeOperationState.SuppressedByAncestor,
+            stillSuppressed.OperationsByNodeId[precraft.NodeId].State);
+        Assert.Equal(AcquisitionSource.Craft, precraft.Source);
+
+        AcquisitionDecisionMutation.ChangeSource(
+            plan,
+            root.ItemId,
+            AcquisitionSource.Craft);
+        var activated = await SnapshotService().BuildAsync(plan);
+
+        Assert.Equal(RecipeOperationState.Active, activated.OperationsByNodeId[precraft.NodeId].State);
+        Assert.Equal(RecipeOperationState.Active, activated.OperationsByNodeId[ingredient.NodeId].State);
+    }
+
+    [Fact]
     public async Task RepeatedItemOccurrencesKeepIndependentNodeIdentity()
     {
         var first = CraftNode("Blacksmith", 43, 1, 2, itemId: 5059, nodeId: "occurrence-a");

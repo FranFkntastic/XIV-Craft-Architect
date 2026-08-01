@@ -130,6 +130,29 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.Equal(4, Assert.Single(revised.Gates.CompanyMaterials.PromisedQuantities).Quantity);
     }
 
+    [Fact]
+    public void CompanyMaterialQualityChangeResetsOnlyHandoffEvidence()
+    {
+        var order = CompleteBothGates(CreateClaimedOrder());
+        var original = order.CompanyCommission!;
+        var changedMaterial = original.CurrentTerms.Materials[0] with { RequiresHq = true };
+        var nextTerms = original.CurrentTerms with
+        {
+            Version = 2,
+            Materials = [changedMaterial]
+        };
+
+        var revised = Amend(order, nextTerms).CompanyCommission!;
+
+        Assert.Equal(2, revised.Gates.Payment.TermsVersion);
+        Assert.Equal(original.Gates.Payment.State, revised.Gates.Payment.State);
+        Assert.Equal(
+            CompanyCommissionClearanceState.Pending,
+            revised.Gates.CompanyMaterials.State);
+        Assert.Null(revised.Gates.CompanyMaterials.ReadyAtUtc);
+        Assert.Null(revised.Gates.CompanyMaterials.ReceivedAtUtc);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
