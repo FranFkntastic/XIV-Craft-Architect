@@ -92,6 +92,7 @@ public static class CommissionBriefEndpoints
                 }
                 if (brief.Ownership == null)
                 {
+                    SetProjectionTag(context.Response, brief);
                     return Results.Ok(brief);
                 }
 
@@ -114,12 +115,20 @@ public static class CommissionBriefEndpoints
                         var participant = await commissions.LoadParticipantAsync(
                             capability,
                             ct);
+                        if (participant != null)
+                        {
+                            SetProjectionTag(context.Response, participant);
+                        }
                         return participant == null
                             ? Results.Unauthorized()
                             : Results.Ok(participant);
                     }
 
                     var projection = await commissions.LoadPublicAsync(publicId, ct);
+                    if (projection != null)
+                    {
+                        SetProjectionTag(context.Response, projection);
+                    }
                     return projection == null
                         ? Results.Conflict(new
                         {
@@ -137,6 +146,8 @@ public static class CommissionBriefEndpoints
                     });
                 }
             });
+
+        group.MapGet("/{publicId}/stream", StreamProjectionAsync);
 
         group.MapGet(
             "/{publicId}/link",
@@ -182,6 +193,7 @@ public static class CommissionBriefEndpoints
                 string publicId,
                 CommissionBriefOptions options,
                 SqliteCommissionBriefStore store,
+                CommissionProjectionChangeSignal changeSignal,
                 CancellationToken ct) =>
             {
                 if (!IsAvailable(context, options) || !IsValidPublicId(publicId))
@@ -203,6 +215,7 @@ public static class CommissionBriefEndpoints
                 var publications = context.RequestServices
                     .GetRequiredService<DiscordPublicationService>();
                 await publications.RevokeAsync(publicId, ct);
+                changeSignal.Publish(publicId);
 
                 return Results.NoContent();
             });
@@ -630,6 +643,198 @@ public static class CommissionBriefEndpoints
                 return Results.NoContent();
             });
     }
+
+    private static async Task StreamProjectionAsync(
+        HttpContext context,
+        string publicId,
+        string? projectionTag,
+        CommissionBriefOptions options,
+        SqliteCommissionBriefStore store,
+        SqliteCompanyCommissionCapabilityStore capabilities,
+        HostedCompanyCommissionService commissions,
+        CommissionProjectionChangeSignal changeSignal)
+    {
+        if (!IsAvailable(context, options) || !IsValidPublicId(publicId))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+        if (projectionTag != null && !CommissionProjectionTag.IsValid(projectionTag))
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+
+        var cancellationToken = context.RequestAborted;
+        var participantToken = context.Request.Headers[
+            "X-Commission-Participant"].ToString();
+        var authorized = await LoadAuthorizedProjectionAsync(
+            publicId,
+            participantToken,
+            store,
+            capabilities,
+            commissions,
+            cancellationToken);
+        if (authorized.StatusCode != StatusCodes.Status200OK ||
+            authorized.Projection == null)
+        {
+            context.Response.StatusCode = authorized.StatusCode;
+            return;
+        }
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "text/event-stream; charset=utf-8";
+        context.Response.Headers.CacheControl = "private, no-cache, no-store";
+        context.Response.Headers.Vary = "X-Commission-Participant";
+        context.Response.Headers.Append("X-Accel-Buffering", "no");
+        await context.Response.StartAsync(cancellationToken);
+
+        var currentTag = CommissionProjectionTag.Create(authorized.Projection);
+        if (!string.Equals(currentTag, projectionTag, StringComparison.Ordinal))
+        {
+            await WriteProjectionEventAsync(
+                context.Response,
+                currentTag,
+                cancellationToken);
+        }
+
+        var leaseEndsAt = DateTimeOffset.UtcNow.AddMinutes(1);
+        var nextHeartbeatAt = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var remainingLease = leaseEndsAt - now;
+            if (remainingLease <= TimeSpan.Zero)
+            {
+                break;
+            }
+            if (now >= nextHeartbeatAt)
+            {
+                await context.Response.WriteAsync(": keepalive\n\n", cancellationToken);
+                await context.Response.Body.FlushAsync(cancellationToken);
+                do
+                {
+                    nextHeartbeatAt = nextHeartbeatAt.AddSeconds(15);
+                }
+                while (nextHeartbeatAt <= now);
+                continue;
+            }
+
+            var observation = changeSignal.Observe(publicId);
+            authorized = await LoadAuthorizedProjectionAsync(
+                publicId,
+                participantToken,
+                store,
+                capabilities,
+                commissions,
+                cancellationToken);
+            if (authorized.StatusCode != StatusCodes.Status200OK ||
+                authorized.Projection == null)
+            {
+                break;
+            }
+
+            var nextTag = CommissionProjectionTag.Create(authorized.Projection);
+            if (!string.Equals(nextTag, currentTag, StringComparison.Ordinal))
+            {
+                currentTag = nextTag;
+                await WriteProjectionEventAsync(
+                    context.Response,
+                    currentTag,
+                    cancellationToken);
+                continue;
+            }
+
+            now = DateTimeOffset.UtcNow;
+            var nextWakeAt = nextHeartbeatAt < leaseEndsAt
+                ? nextHeartbeatAt
+                : leaseEndsAt;
+            var delay = nextWakeAt - now;
+            if (delay <= TimeSpan.Zero)
+            {
+                continue;
+            }
+            var scheduledWake = Task.Delay(delay, cancellationToken);
+            await Task.WhenAny(observation.Changed, scheduledWake);
+        }
+    }
+
+    private static async Task<AuthorizedProjectionResult> LoadAuthorizedProjectionAsync(
+        string publicId,
+        string participantToken,
+        SqliteCommissionBriefStore store,
+        SqliteCompanyCommissionCapabilityStore capabilities,
+        HostedCompanyCommissionService commissions,
+        CancellationToken cancellationToken)
+    {
+        var brief = await store.LoadAsync(publicId, cancellationToken);
+        if (brief == null)
+        {
+            return new AuthorizedProjectionResult(StatusCodes.Status404NotFound, null);
+        }
+        if (brief.Ownership == null)
+        {
+            return new AuthorizedProjectionResult(StatusCodes.Status200OK, brief);
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(participantToken))
+            {
+                var capability = await capabilities.ResolveAsync(
+                    publicId,
+                    CompanyCommissionCapabilityKind.Participant,
+                    participantToken,
+                    cancellationToken);
+                if (capability == null)
+                {
+                    return new AuthorizedProjectionResult(
+                        StatusCodes.Status401Unauthorized,
+                        null);
+                }
+
+                var participant = await commissions.LoadParticipantAsync(
+                    capability,
+                    cancellationToken);
+                return participant == null
+                    ? new AuthorizedProjectionResult(StatusCodes.Status401Unauthorized, null)
+                    : new AuthorizedProjectionResult(StatusCodes.Status200OK, participant);
+            }
+
+            var projection = await commissions.LoadPublicAsync(
+                publicId,
+                cancellationToken);
+            return projection == null
+                ? new AuthorizedProjectionResult(StatusCodes.Status409Conflict, null)
+                : new AuthorizedProjectionResult(StatusCodes.Status200OK, projection);
+        }
+        catch (InvalidOperationException)
+        {
+            return new AuthorizedProjectionResult(StatusCodes.Status409Conflict, null);
+        }
+    }
+
+    private static void SetProjectionTag(HttpResponse response, object projection) =>
+        response.Headers["X-Commission-Projection-Tag"] =
+            CommissionProjectionTag.Create(projection);
+
+    private static async Task WriteProjectionEventAsync(
+        HttpResponse response,
+        string projectionTag,
+        CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.Serialize(
+            new { projectionTag },
+            JsonOptions);
+        await response.WriteAsync(
+            $"id: {projectionTag}\nevent: commission-projection\ndata: {payload}\n\n",
+            cancellationToken);
+        await response.Body.FlushAsync(cancellationToken);
+    }
+
+    private sealed record AuthorizedProjectionResult(
+        int StatusCode,
+        object? Projection);
 
     private static bool IsAvailable(HttpContext context, CommissionBriefOptions options) =>
         options.Enabled &&

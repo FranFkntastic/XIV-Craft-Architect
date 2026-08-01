@@ -3,6 +3,7 @@ const ACCESS_STORAGE_PREFIX = "craftArchitect.companyCommission.participant.v1."
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{32,512}$/;
+const PROJECTION_TAG_PATTERN = /^[a-f0-9]{64}$/;
 
 const enumMaps = {
     viewState: ["Draft", "Published", "Revoked"],
@@ -85,7 +86,10 @@ export class CommissionBriefApiClient {
             headers,
             cache: "no-store"
         });
-        return adaptBriefProjection(await adaptResponse(response));
+        const projection = adaptBriefProjection(await adaptResponse(response));
+        projection.projectionTag = optionalProjectionTag(
+            response.headers.get("X-Commission-Projection-Tag"));
+        return projection;
     }
 
     async command(command, payload, authorization) {
@@ -111,6 +115,104 @@ export class CommissionBriefApiClient {
                 body: JSON.stringify(body)
             });
         return adaptResponse(response);
+    }
+
+    watch(participantSecret, projectionTag, onProjectionChanged, onState = () => {}) {
+        if (typeof onProjectionChanged !== "function") {
+            throw new CommissionClientError(
+                "A commission projection callback is required.",
+                "invalid-stream-callback");
+        }
+
+        let cursor = optionalProjectionTag(projectionTag);
+        let stopped = false;
+        let activeController = null;
+        let reconnectCount = 0;
+        const reportState = (connected, message, count) => {
+            try {
+                onState(connected, message, count);
+            } catch {
+                // Stream observation must not be broken by optional status UI.
+            }
+        };
+
+        const run = async () => {
+            if (!cursor) {
+                reportState(false, "The commission service did not provide a projection tag.", reconnectCount);
+                return;
+            }
+
+            while (!stopped) {
+                activeController = new AbortController();
+                try {
+                    const headers = { "Accept": "text/event-stream" };
+                    if (participantSecret) {
+                        headers["X-Commission-Participant"] = participantSecret;
+                    }
+                    const streamPath = `${this.briefPath}/stream?projectionTag=${encodeURIComponent(cursor)}`;
+                    const response = await this.fetch(streamPath, {
+                        method: "GET",
+                        headers,
+                        cache: "no-store",
+                        signal: activeController.signal
+                    });
+                    if (response.status === 401 || response.status === 404) {
+                        reportState(false, "Commission stream authority is no longer available.", reconnectCount);
+                        return;
+                    }
+                    if (!response.ok || !response.body) {
+                        throw new CommissionClientError(
+                            `The commission stream returned HTTP ${response.status}.`,
+                            "commission-stream-unavailable",
+                            response.status);
+                    }
+
+                    reportState(true, null, reconnectCount);
+                    await readProjectionStream(response.body, async nextTag => {
+                        if (stopped || nextTag === cursor) {
+                            return;
+                        }
+                        const appliedTag = optionalProjectionTag(
+                            await onProjectionChanged(nextTag));
+                        if (appliedTag) {
+                            cursor = appliedTag;
+                        }
+                    }, activeController.signal);
+                    reconnectCount = 0;
+                } catch (caught) {
+                    if (stopped || caught?.name === "AbortError") {
+                        return;
+                    }
+                    reconnectCount++;
+                    reportState(false, caught?.message ?? "Commission stream interrupted.", reconnectCount);
+                } finally {
+                    activeController = null;
+                }
+
+                if (!stopped) {
+                    activeController = new AbortController();
+                    await waitForReconnect(
+                        Math.min(15000, 500 * (2 ** Math.min(reconnectCount, 5))),
+                        activeController.signal);
+                    activeController = null;
+                }
+            }
+        };
+
+        void run().catch(caught => {
+            if (!stopped) {
+                reportState(
+                    false,
+                    caught?.message ?? "Commission stream stopped unexpectedly.",
+                    reconnectCount);
+            }
+        });
+        return {
+            stop() {
+                stopped = true;
+                activeController?.abort();
+            }
+        };
     }
 }
 
@@ -587,6 +689,74 @@ function adaptParticipantActivity(value) {
         termsVersion: requiredInteger(value.termsVersion, "Activity terms version", 1),
         comment: optionalText(value.comment)
     };
+}
+
+async function readProjectionStream(body, onProjectionTag, signal) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+        while (!signal.aborted) {
+            const read = await reader.read();
+            if (read.done) return;
+            buffer += decoder.decode(read.value, { stream: true });
+            buffer = buffer.replace(/\r\n/g, "\n");
+            let boundary;
+            while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+                const frame = buffer.slice(0, boundary);
+                buffer = buffer.slice(boundary + 2);
+                const projectionTag = parseProjectionFrame(frame);
+                if (projectionTag) {
+                    await onProjectionTag(projectionTag);
+                }
+            }
+        }
+    } finally {
+        reader.releaseLock();
+    }
+}
+
+function parseProjectionFrame(frame) {
+    if (!frame || frame.startsWith(":")) return null;
+    let eventName = "message";
+    let eventId = null;
+    let data = "";
+    for (const line of frame.split("\n")) {
+        if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim();
+        } else if (line.startsWith("id:")) {
+            eventId = optionalProjectionTag(line.slice(3).trim());
+        } else if (line.startsWith("data:")) {
+            data += line.slice(5).trim();
+        }
+    }
+    if (eventName !== "commission-projection" || !eventId || !data) return null;
+    const payload = JSON.parse(data);
+    const dataTag = optionalProjectionTag(payload?.projectionTag);
+    return dataTag === eventId ? dataTag : null;
+}
+
+function optionalProjectionTag(value) {
+    return typeof value === "string" && PROJECTION_TAG_PATTERN.test(value)
+        ? value
+        : null;
+}
+
+function waitForReconnect(milliseconds, signal) {
+    return new Promise(resolve => {
+        if (signal.aborted) {
+            resolve();
+            return;
+        }
+
+        const finish = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", finish);
+            resolve();
+        };
+        const timer = setTimeout(finish, milliseconds);
+        signal.addEventListener("abort", finish, { once: true });
+    });
 }
 
 function createSecret() {
