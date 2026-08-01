@@ -11,7 +11,9 @@ public sealed class HostedOrderSyncCoordinatorTests
     [InlineData(OwnerProjectionScenario.AdoptionForbidden)]
     [InlineData(OwnerProjectionScenario.ValidProjection)]
     [InlineData(OwnerProjectionScenario.InvalidProjection)]
-    public void OwnerProjectionAdoptionPreservesCanonicalIdentity(
+    [InlineData(OwnerProjectionScenario.TabReplayStartsFromOwnCursor)]
+    [InlineData(OwnerProjectionScenario.TabReplayPreservesSharedCursor)]
+    public void OwnerProjectionAndReplayPoliciesPreserveCanonicalState(
         OwnerProjectionScenario scenario)
     {
         switch (scenario)
@@ -27,6 +29,12 @@ public sealed class HostedOrderSyncCoordinatorTests
                 break;
             case OwnerProjectionScenario.InvalidProjection:
                 StaleOrWrongIdentityProjectionIsRejected();
+                break;
+            case OwnerProjectionScenario.TabReplayStartsFromOwnCursor:
+                TabReplayStartsFromOwnCursor();
+                break;
+            case OwnerProjectionScenario.TabReplayPreservesSharedCursor:
+                TabReplayPreservesSharedCursor();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
@@ -125,6 +133,20 @@ public sealed class HostedOrderSyncCoordinatorTests
                 Projection(order, objectRevision: 5, companyRevision: 0)));
     }
 
+    private static void TabReplayStartsFromOwnCursor()
+    {
+        Assert.Equal(405L, ResolveSyncStartRevision(446, 405));
+        Assert.Equal(400L, ResolveSyncStartRevision(400, 405));
+        Assert.Equal(446L, ResolveSyncStartRevision(446, null));
+    }
+
+    private static void TabReplayPreservesSharedCursor()
+    {
+        Assert.False(ShouldAdvancePersistedRevision(446, 405));
+        Assert.False(ShouldAdvancePersistedRevision(446, 446));
+        Assert.True(ShouldAdvancePersistedRevision(446, 447));
+    }
+
     private static bool NeedsOwnerAdoption(HostedOrderProjectionSnapshot snapshot) =>
         (bool)InvokePolicy(nameof(NeedsOwnerAdoption), snapshot)!;
 
@@ -133,12 +155,44 @@ public sealed class HostedOrderSyncCoordinatorTests
         CompanyCommissionOwnerProjection projection) =>
         InvokePolicy(nameof(ValidateOwnerProjection), expected, projection);
 
+    private static long ResolveSyncStartRevision(
+        long persistedRevision,
+        long? replayAfterRevision) =>
+        (long)InvokeSyncPolicy(
+            nameof(ResolveSyncStartRevision),
+            persistedRevision,
+            replayAfterRevision)!;
+
+    private static bool ShouldAdvancePersistedRevision(
+        long persistedRevision,
+        long candidateRevision) =>
+        (bool)InvokeSyncPolicy(
+            nameof(ShouldAdvancePersistedRevision),
+            persistedRevision,
+            candidateRevision)!;
+
     private static object? InvokePolicy(string name, params object[] arguments)
     {
         var method = typeof(HostedOrderSyncCoordinator).GetMethod(
             name,
             BindingFlags.NonPublic | BindingFlags.Static)
             ?? throw new MissingMethodException(typeof(HostedOrderSyncCoordinator).FullName, name);
+        try
+        {
+            return method.Invoke(null, arguments);
+        }
+        catch (TargetInvocationException exception) when (exception.InnerException != null)
+        {
+            throw exception.InnerException;
+        }
+    }
+
+    private static object? InvokeSyncPolicy(string name, params object?[] arguments)
+    {
+        var method = typeof(ProfileSyncService).GetMethod(
+            name,
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new MissingMethodException(typeof(ProfileSyncService).FullName, name);
         try
         {
             return method.Invoke(null, arguments);
@@ -217,6 +271,8 @@ public sealed class HostedOrderSyncCoordinatorTests
         AdoptionRequired,
         AdoptionForbidden,
         ValidProjection,
-        InvalidProjection
+        InvalidProjection,
+        TabReplayStartsFromOwnCursor,
+        TabReplayPreservesSharedCursor
     }
 }
