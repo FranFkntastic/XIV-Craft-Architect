@@ -654,7 +654,8 @@ public sealed class TradeCommissionOperationsService(
                         createCommand(context),
                         cancellationToken);
                 }
-                catch (CompanyCommissionRevisionConflictException) when (attempt == 0)
+                catch (CompanyCommissionRevisionConflictException)
+                    when (attempt == 0 && CanReplayAfterRevisionConflict(route))
                 {
                     var commission = RequireCommission(commandProjection);
                     commandProjection = await client.LoadOwnerProjectionAsync(
@@ -707,6 +708,27 @@ public sealed class TradeCommissionOperationsService(
             return Rejected(commandProjection, exception.Message);
         }
     }
+
+    private static bool CanReplayAfterRevisionConflict(string route) =>
+        route switch
+        {
+            "confirm-identity" or
+            "reject-claim" or
+            "decide-payment-policy" or
+            "record-payment" or
+            "retract-payment" or
+            "mark-company-materials-ready" or
+            "return-to-work" or
+            "accept-delivery" or
+            "record-settlement" or
+            "retract-settlement" or
+            "cancel" or
+            "revoke-publication" or
+            "add-comment" or
+            "add-private-note" => true,
+            "amend-terms" or "update-draft" => false,
+            _ => false,
+        };
 
     private async Task ApplyProjectionAsync(CompanyCommissionOwnerProjection projection)
     {
