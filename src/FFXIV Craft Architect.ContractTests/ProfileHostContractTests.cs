@@ -1,6 +1,6 @@
 using System.Net;
-using System.Net.Http.Json;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using Microsoft.AspNetCore.Hosting;
