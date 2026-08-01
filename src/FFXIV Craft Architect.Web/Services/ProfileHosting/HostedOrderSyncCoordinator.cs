@@ -95,7 +95,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
             LastEventRevision = Math.Max(Diagnostics.LastEventRevision, serverRevision),
             UpdatedAtUtc = DateTime.UtcNow
         });
-        return await SynchronizeAsync(profileId, _lifetime.Token);
+        return await SynchronizeAsync(profileId, serverRevision, _lifetime.Token);
     }
 
     [JSInvokable]
@@ -123,7 +123,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
     [JSInvokable]
     public Task<long> RecoverProfileRevision(string profileId) =>
         IsActiveProfile(profileId)
-            ? SynchronizeAsync(profileId, _lifetime.Token)
+            ? SynchronizeAsync(profileId, null, _lifetime.Token)
             : Task.FromResult(0L);
 
     private void OnConnectionChanged() =>
@@ -191,12 +191,38 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return;
             }
 
-            _hostedOrders.ResetForProfile(profileId);
+            var cursor = await _localState.LoadLastSyncRevisionAsync(profileId);
+            var sameProfile = string.Equals(
+                _hostedOrders.RestoreState.ProfileId,
+                profileId,
+                StringComparison.OrdinalIgnoreCase);
+            _hostedOrders.BeginProfileRestore(
+                profileId,
+                hasTrustedProjection: sameProfile &&
+                                      _hostedOrders.RestoreState.ShowsCompleteProjection,
+                cursor,
+                DateTime.UtcNow);
             IJSObjectReference? controller = null;
             try
             {
                 await _profileSync.InitializeAsync(cancellationToken);
-                var cursor = await _localState.LoadLastSyncRevisionAsync(profileId);
+                cursor = await _localState.LoadLastSyncRevisionAsync(profileId);
+                if (_profileSync.CurrentStatus.Failure is
+                    ProfileSyncFailure.Authentication or
+                    ProfileSyncFailure.Incompatible or
+                    ProfileSyncFailure.Unverifiable)
+                {
+                    UpdateDiagnostics(new HostedOrderSyncDiagnostics(
+                        profileId,
+                        "inactive",
+                        false,
+                        cursor,
+                        cursor,
+                        0,
+                        _profileSync.CurrentStatus.Message,
+                        DateTime.UtcNow));
+                    return;
+                }
                 _callback ??= DotNetObjectReference.Create(this);
                 _module ??= await _jsRuntime.InvokeAsync<IJSObjectReference>(
                     "import",
@@ -268,6 +294,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
 
     private async Task<long> SynchronizeAsync(
         string profileId,
+        long? targetRevision,
         CancellationToken cancellationToken)
     {
         await _sync.WaitAsync(cancellationToken);
@@ -278,7 +305,14 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return 0;
             }
 
-            await _profileSync.SyncNowAsync(cancellationToken);
+            if (targetRevision is > 0)
+            {
+                await _profileSync.SyncToRevisionAsync(targetRevision.Value, cancellationToken);
+            }
+            else
+            {
+                await _profileSync.SyncNowAsync(cancellationToken);
+            }
             var after = await _localState.LoadLastSyncRevisionAsync(profileId);
             _appState.NotifyTradeOperationsDataChanged();
 

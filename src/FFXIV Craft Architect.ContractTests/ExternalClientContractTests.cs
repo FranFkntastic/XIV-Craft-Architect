@@ -155,6 +155,31 @@ public sealed class ExternalClientContractTests
         Assert.Equal("cap_wrong-key", Assert.Single(handler.Headers["X-Profile-Key"]));
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, ProfileHostConnectionFailure.AccessKeyRejected)]
+    [InlineData(HttpStatusCode.Conflict, ProfileHostConnectionFailure.IncompatibleHost)]
+    [InlineData(HttpStatusCode.NotFound, ProfileHostConnectionFailure.ProfileHostingDisabled)]
+    public async Task ProfileChangesClassifiesUnsafeRestoreFailures(
+        HttpStatusCode statusCode,
+        ProfileHostConnectionFailure expectedFailure)
+    {
+        var handler = new RecordingHandler(statusCode, "{}");
+        var client = new ProfileHostClient(new HttpClient(handler));
+
+        var exception = await Assert.ThrowsAsync<ProfileHostConnectionException>(() =>
+            client.GetChangesAsync(
+                "https://profile.test/",
+                "cap_contract-key",
+                sinceRevision: 7,
+                limit: 1,
+                CancellationToken.None));
+
+        Assert.Equal(expectedFailure, exception.Failure);
+        Assert.Equal(
+            "https://profile.test/api/profile-host/changes?sinceRevision=7&limit=1",
+            handler.RequestUri?.AbsoluteUri);
+    }
+
     [Fact]
     public async Task LodestoneClientMalformedSuccess_MapsToParseFailure()
     {
