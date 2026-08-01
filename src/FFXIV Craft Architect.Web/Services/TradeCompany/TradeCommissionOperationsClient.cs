@@ -23,6 +23,25 @@ public sealed class TradeCommissionOperationsClient(
             content: null,
             contentType: null,
             cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            var problem = await ReadProblemAsync(response, cancellationToken);
+            if (string.Equals(
+                    problem?.Error,
+                    "commission_missing",
+                    StringComparison.Ordinal))
+            {
+                throw new MissingCompanyCommissionOwnerException(
+                    companyId,
+                    commissionId,
+                    problem?.Message ?? problem?.ErrorMessage);
+            }
+
+            throw new InvalidOperationException(
+                problem?.Message ??
+                problem?.ErrorMessage ??
+                $"Company commission operations failed with HTTP {(int)response.StatusCode}.");
+        }
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<CompanyCommissionOwnerProjection>(
             JsonOptions,
@@ -150,22 +169,29 @@ public sealed class TradeCommissionOperationsClient(
             return;
         }
 
-        CommissionOperationsProblem? problem = null;
-        try
-        {
-            problem = await response.Content.ReadFromJsonAsync<CommissionOperationsProblem>(
-                JsonOptions,
-                cancellationToken);
-        }
-        catch (JsonException)
-        {
-            // The HTTP status still fails closed below.
-        }
+        var problem = await ReadProblemAsync(response, cancellationToken);
 
         throw new InvalidOperationException(
             problem?.Message ??
             problem?.ErrorMessage ??
             $"Company commission operations failed with HTTP {(int)response.StatusCode}.");
+    }
+
+    private static async Task<CommissionOperationsProblem?> ReadProblemAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await response.Content.ReadFromJsonAsync<CommissionOperationsProblem>(
+                JsonOptions,
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        {
+            // An unstructured error, including an unknown host route, still fails closed.
+            return null;
+        }
     }
 
     private sealed record CommissionOperationsProblem(

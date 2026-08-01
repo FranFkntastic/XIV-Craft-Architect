@@ -68,7 +68,7 @@ public static class CompanyCommissionEndpoints
                         commissionId,
                         cancellationToken);
                     return snapshot == null
-                        ? Results.NotFound()
+                        ? MissingCanonicalCommission()
                         : Results.Ok(new CompanyCommissionOwnerProjection
                         {
                             Order = snapshot.Order,
@@ -811,6 +811,13 @@ public static class CompanyCommissionEndpoints
             error = "canonical_commission_invalid",
             message =
                 "The hosted Trade order does not contain a valid canonical commission."
+        });
+
+    private static IResult MissingCanonicalCommission() =>
+        Results.NotFound(new
+        {
+            error = "commission_missing",
+            message = "The hosted canonical commission no longer exists."
         });
 
     private static IResult ToCommandError(CompanyCommissionMutationResult mutation) =>

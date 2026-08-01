@@ -1375,7 +1375,9 @@
                                         {
                                             <MudText Typo="Typo.subtitle2">Workflow Status</MudText>
                                             <MudText Typo="Typo.body2" Color="Color.Error">
-                                                Canonical status is unavailable until the authenticated owner projection reloads.
+                                                @(IsSelectedCanonicalOwnerMissing
+                                                    ? "This old commission is no longer hosted. Removing it clears the local copy and any remaining Discord post."
+                                                    : "Canonical status is unavailable until the authenticated owner projection reloads.")
                                             </MudText>
                                         }
                                     </section>
@@ -1398,7 +1400,7 @@
                                                        FullWidth="true"
                                                        Disabled="@(_isCommissionCommandRunning || _isDeletingSelectedOrder)"
                                                        OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
-                                                Cancel Order
+                                                @(IsSelectedCanonicalOwnerMissing ? "Remove Stale Order" : "Cancel Order")
                                             </MudButton>
                                         }
                                     </section>
