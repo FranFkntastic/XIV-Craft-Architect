@@ -387,6 +387,9 @@ public partial class TradeOrders
                 workPackage,
                 GetSelectedOrderResponsibilityProjection(),
                 GetSelectedOrderEffectivePaymentPolicy()));
+        brief.Contact = _commissionContact?.Trim() ?? string.Empty;
+        brief.DeliveryInstructions =
+            _commissionDeliveryInstructions?.Trim() ?? string.Empty;
         var terms = TradeCompanyCommissionMigrationService.CreateTermsRevision(
             workPackage,
             brief,
