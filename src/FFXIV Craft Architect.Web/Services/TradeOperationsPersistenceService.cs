@@ -109,8 +109,10 @@ public sealed class TradeOperationsPersistenceService
         var profiles = await LoadCompanyProfilesAsync();
         if (profiles.All(profile => profile.Id != companyProfileId))
         {
-            throw new InvalidOperationException(
-                $"Trade {childKind} '{childId}' references missing company profile '{companyProfileId:D}'.");
+            throw new MissingTradeCompanyProfileException(
+                companyProfileId,
+                childKind,
+                childId);
         }
     }
 
