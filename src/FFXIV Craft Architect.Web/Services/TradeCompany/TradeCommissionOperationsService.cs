@@ -18,6 +18,7 @@ public sealed class TradeCommissionOperationsService(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly Dictionary<Guid, CompanyCommissionOwnerProjection> _projections = [];
     private readonly Dictionary<Guid, string> _errors = [];
+    private readonly HashSet<Guid> _missingCanonicalOwners = [];
     private readonly Dictionary<Guid, IReadOnlyList<TradeDiscordNotificationDiagnostic>>
         _notificationDiagnostics = [];
     private readonly Dictionary<Guid, string> _notificationErrors = [];
@@ -27,6 +28,9 @@ public sealed class TradeCommissionOperationsService(
 
     public string? GetErrorForOrder(Guid orderId) =>
         _errors.GetValueOrDefault(orderId);
+
+    public bool IsCanonicalOwnerMissing(Guid orderId) =>
+        _missingCanonicalOwners.Contains(orderId);
 
     public IReadOnlyList<TradeDiscordNotificationDiagnostic>
         GetNotificationDiagnostics(Guid orderId) =>
@@ -66,12 +70,14 @@ public sealed class TradeCommissionOperationsService(
         {
             _projections.Remove(order.Id);
             _errors.Remove(order.Id);
+            _missingCanonicalOwners.Remove(order.Id);
             return;
         }
 
         if (!CanPerformExternalAction(order, out var reason))
         {
             _projections.Remove(order.Id);
+            _missingCanonicalOwners.Remove(order.Id);
             _errors[order.Id] = reason;
             return;
         }
@@ -89,9 +95,16 @@ public sealed class TradeCommissionOperationsService(
             ValidateProjection(order, projection);
             await ApplyProjectionAsync(projection);
         }
+        catch (MissingCompanyCommissionOwnerException exception)
+        {
+            _projections.Remove(order.Id);
+            _missingCanonicalOwners.Add(order.Id);
+            _errors[order.Id] = exception.Message;
+        }
         catch (Exception exception)
         {
             _projections.Remove(order.Id);
+            _missingCanonicalOwners.Remove(order.Id);
             _errors[order.Id] = exception.Message;
         }
     }
@@ -685,6 +698,7 @@ public sealed class TradeCommissionOperationsService(
             projection.ObjectRevision.Value);
         _projections[projection.Order.Id] = projection;
         _errors.Remove(projection.Order.Id);
+        _missingCanonicalOwners.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
     }
 

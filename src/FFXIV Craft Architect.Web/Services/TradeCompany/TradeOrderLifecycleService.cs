@@ -22,6 +22,10 @@ public sealed record TradeCommissionPurgeResult(
     int DiscordPublicationsRetracted,
     int LegacyCraftSnapshotsDeleted);
 
+public sealed record TradeOrderCancellationResult(
+    TradeOrder? Order,
+    bool RemovedOrphanedLocalOrder);
+
 public sealed class TradeOrderLifecycleService(
     TradeOperationsPersistenceService tradeOperations,
     TradePayrollPersistenceService payrollPersistence,
@@ -36,7 +40,7 @@ public sealed class TradeOrderLifecycleService(
     private static readonly JsonSerializerOptions SyncJsonOptions =
         ProfileSyncJson.CreateOptions();
 
-    public async Task<TradeOrder> CancelAndRetractAsync(
+    public async Task<TradeOrderCancellationResult> CancelAndRetractAsync(
         TradeOrder order,
         string? reason,
         CancellationToken cancellationToken = default)
@@ -52,10 +56,24 @@ public sealed class TradeOrderLifecycleService(
         if (order.CompanyCommission != null)
         {
             await commissions.RefreshAsync(order, cancellationToken);
-            var owner = commissions.GetForOrder(order.Id) ??
-                throw new InvalidOperationException(
-                    commissions.GetErrorForOrder(order.Id) ??
-                    "The hosted commission could not be loaded for cancellation.");
+            var owner = commissions.GetForOrder(order.Id);
+            if (owner == null)
+            {
+                if (!commissions.IsCanonicalOwnerMissing(order.Id))
+                {
+                    throw new InvalidOperationException(
+                        commissions.GetErrorForOrder(order.Id) ??
+                        "The hosted commission could not be loaded for cancellation.");
+                }
+
+                var localOrphan = TradeOrderWorkflow.CopyOrder(order);
+                localOrphan.Status = TradeOrderStatus.Canceled;
+                await DeleteOrderAsync(localOrphan, cancellationToken);
+                appState.NotifyTradeOperationsDataChanged();
+                return new TradeOrderCancellationResult(
+                    Order: null,
+                    RemovedOrphanedLocalOrder: true);
+            }
             if (owner.Order.Status != TradeOrderStatus.Canceled)
             {
                 var canceled = await commissions.CancelAsync(
@@ -76,7 +94,9 @@ public sealed class TradeOrderLifecycleService(
 
             await RetractDiscordPublicationAsync(owner.Order, cancellationToken);
             appState.NotifyTradeOperationsDataChanged();
-            return owner.Order;
+            return new TradeOrderCancellationResult(
+                owner.Order,
+                RemovedOrphanedLocalOrder: false);
         }
 
         var updated = TradeOrderWorkflow.CopyOrder(order);
@@ -99,7 +119,9 @@ public sealed class TradeOrderLifecycleService(
             cancellationToken);
         await RetractDiscordPublicationAsync(updated, cancellationToken);
         appState.NotifyTradeOperationsDataChanged();
-        return updated;
+        return new TradeOrderCancellationResult(
+            updated,
+            RemovedOrphanedLocalOrder: false);
     }
 
     public async Task DeleteOrderAsync(
