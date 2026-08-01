@@ -1,0 +1,106 @@
+.trade-order-restore-banner__announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.trade-order-restore-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid #4a4330;
+  border-radius: 6px;
+  background: #28251c;
+  color: #e9e4d5;
+}
+
+.trade-order-restore-banner.is-attention {
+  border-color: #806a30;
+  background: #30291a;
+}
+
+.trade-order-restore-banner.is-error {
+  border-color: #78413e;
+  background: #30201f;
+}
+
+.trade-order-restore-banner__mark {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 2px solid #7a6a3f;
+  border-top-color: #dfba4f;
+  border-radius: 50%;
+  color: #f0cc62;
+  font-size: .72rem;
+  font-weight: 800;
+}
+
+[aria-busy="true"] .trade-order-restore-banner__mark {
+  animation: trade-order-restore-spin .9s linear infinite;
+}
+
+[aria-busy="false"] .trade-order-restore-banner__mark {
+  border-color: #b18d37;
+}
+
+.is-error .trade-order-restore-banner__mark {
+  border-color: #a75c57;
+  color: #efaaa5;
+}
+
+.trade-order-restore-banner__copy {
+  min-width: 0;
+}
+
+.trade-order-restore-banner__copy strong,
+.trade-order-restore-banner__copy span {
+  display: block;
+}
+
+.trade-order-restore-banner__copy strong {
+  font-size: .78rem;
+}
+
+.trade-order-restore-banner__copy span,
+.trade-order-restore-banner__progress {
+  color: #bdb6a5;
+  font-size: .68rem;
+}
+
+.trade-order-restore-banner__progress {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes trade-order-restore-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 720px) {
+  .trade-order-restore-banner {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .trade-order-restore-banner__progress {
+    grid-column: 2;
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [aria-busy="true"] .trade-order-restore-banner__mark {
+    animation: none;
+  }
+}

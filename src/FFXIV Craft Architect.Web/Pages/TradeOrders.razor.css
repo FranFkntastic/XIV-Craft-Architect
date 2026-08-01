@@ -1,5 +1,8 @@
 .trade-orders-page {
   box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   height: calc(100vh - 112px);
   max-width: none !important;
   padding: 12px 16px;
@@ -8,10 +11,15 @@
 
 .trade-orders-board {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: 280px minmax(640px, 1fr) 6px var(--trade-orders-ops-width, clamp(720px, 32vw, 860px));
   gap: 0;
-  height: 100%;
+  height: auto;
   min-height: 0;
+}
+
+.trade-orders-board.is-plan-expanded {
+  grid-template-columns: 240px minmax(420px, .7fr) 6px minmax(920px, 1.3fr);
 }
 
 .trade-orders-rail,
@@ -475,6 +483,114 @@
   min-height: 0;
   overflow: auto;
   padding: 12px;
+}
+
+.trade-orders-workbench-heading,
+.trade-orders-start-gates-heading,
+.trade-orders-start-gate-heading,
+.trade-orders-start-gate-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trade-orders-workbench-heading {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: -12px -12px 10px;
+  border-bottom: 1px solid #3b3b3b;
+  background: #242424;
+  padding: 10px 12px;
+}
+
+.trade-orders-start-gates {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.trade-orders-parallel-gates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.trade-orders-start-gate {
+  display: grid;
+  grid-template-rows: auto auto minmax(64px, auto) auto;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #5b4b25;
+  border-radius: 6px;
+  background: #29251c;
+  padding: 11px;
+}
+
+.trade-orders-start-gate-heading > strong {
+  color: #f0cc62;
+  font-size: .94rem;
+  white-space: nowrap;
+}
+
+.trade-orders-start-gate-heading span,
+.trade-orders-start-gate-status span,
+.trade-orders-start-gate small {
+  color: #aaa;
+  font-size: .68rem;
+}
+
+.trade-orders-start-gate-status {
+  border-top: 1px solid #49412b;
+  border-bottom: 1px solid #49412b;
+  padding: 7px 0;
+}
+
+.trade-orders-start-gate-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.trade-orders-start-gate-action.is-end {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.trade-orders-start-gate-evidence,
+.trade-orders-start-gate-materials {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.trade-orders-start-gate-evidence span,
+.trade-orders-start-gate-materials span {
+  color: #c6c6c6;
+  font-size: .72rem;
+}
+
+.trade-orders-work-details {
+  margin-top: 12px;
+  border: 1px solid #3b3b3b;
+  border-radius: 6px;
+  background: #202020;
+}
+
+.trade-orders-work-details > summary {
+  cursor: pointer;
+  color: #d7c789;
+  font-size: .74rem;
+  font-weight: 800;
+  padding: 10px 12px;
+}
+
+.trade-orders-work-details-content {
+  border-top: 1px solid #3b3b3b;
+  padding: 10px;
 }
 
 .trade-orders-payment-metrics {
@@ -2068,7 +2184,17 @@
   margin: 0;
 }
 
-@media (max-width: 1740px) {
+@media (max-width: 1740px) and (min-width: 1280px) {
+  .trade-orders-board {
+    grid-template-columns: 220px minmax(360px, 1fr) 6px minmax(600px, 48vw);
+  }
+
+  .trade-orders-board.is-plan-expanded {
+    grid-template-columns: 200px minmax(320px, .65fr) 6px minmax(680px, 1.35fr);
+  }
+}
+
+@media (max-width: 1279px) {
   .trade-orders-page {
     height: auto;
     overflow: visible;
@@ -2077,6 +2203,10 @@
   .trade-orders-board {
     grid-template-columns: 280px minmax(0, 1fr);
     height: auto;
+  }
+
+  .trade-orders-board.is-plan-expanded {
+    grid-template-columns: 280px minmax(0, 1fr);
   }
 
   .trade-orders-rail {
@@ -2149,7 +2279,9 @@
   }
 
   .trade-orders-payment-metrics,
-  .trade-orders-payment-policy-controls {
+  .trade-orders-payment-policy-controls,
+  .trade-orders-parallel-gates,
+  .trade-orders-start-gate-action {
     grid-template-columns: 1fr;
   }
 

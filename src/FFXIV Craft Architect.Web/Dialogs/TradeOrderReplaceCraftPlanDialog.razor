@@ -32,7 +32,7 @@
         <MudButton Variant="Variant.Filled"
                    Color="Color.Warning"
                    OnClick="Confirm">
-            Rebuild Linked Plan
+            Replace Linked Plan
         </MudButton>
     </DialogActions>
 </MudDialog>
@@ -43,7 +43,7 @@
 
     private string Title => Assessment.Mode == TradeOrderCraftPlanReplacementMode.ReplaceLegacyLink
         ? "Replace Legacy Craft Plan Link"
-        : "Rebuild Linked Craft Plan";
+        : "Replace Linked Craft Plan";
 
     private string PlanName => string.IsNullOrWhiteSpace(Assessment.ExistingPlanName)
         ? "Linked craft plan"

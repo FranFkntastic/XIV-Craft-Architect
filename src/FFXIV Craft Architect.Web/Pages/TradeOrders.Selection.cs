@@ -42,7 +42,10 @@ public partial class TradeOrders
         var query = _orderSearchText.Trim();
         return order.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
             FormatAssignedCrafter(order).Contains(query, StringComparison.OrdinalIgnoreCase) ||
-            FormatStatus(order.Status).Contains(query, StringComparison.OrdinalIgnoreCase);
+            (order.CompanyCommission == null
+                ? FormatStatus(order.Status)
+                : FormatWorkbenchStatus(order))
+            .Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 
     private string GetRailOrderClass(TradeOrder order)
@@ -54,11 +57,23 @@ public partial class TradeOrders
 
     private string FormatOrderRailMeta(TradeOrder order)
     {
+        if (IsIdentityOnlyOrder(order))
+        {
+            return "Saved order identity";
+        }
+
         return $"{FormatAssignedCrafter(order)} - {order.CommissionedAtUtc.ToLocalTime():yyyy-MM-dd}";
     }
 
     private string FormatRailStatusChip(TradeOrder order)
     {
+        if (order.CompanyCommission != null)
+        {
+            return IsIdentityOnlyOrder(order)
+                ? "Verifying"
+                : FormatWorkbenchStatus(order);
+        }
+
         if (order.Status == TradeOrderStatus.InProgress)
         {
             return "Work";
@@ -67,28 +82,6 @@ public partial class TradeOrders
         if (order.Status == TradeOrderStatus.AwaitingDelivery)
         {
             return "Deliver";
-        }
-
-        if (CommissionOperations.GetForOrder(order.Id) is { } projection)
-        {
-            return TradeCommissionOperationsPresentation.GetNextAction(projection) switch
-            {
-                "Review identity" => "Review",
-                "Review payment timing" => "Policy",
-                "Record payment" => "Pay",
-                "Prepare materials" => "Handoff",
-                "Awaiting receipt" => "Receipt",
-                "Review delivery" => "Accept",
-                "Record settlement" => "Settle",
-                "Awaiting claim" => "Open",
-                "Ready to work" => "Ready",
-                _ => "Work"
-            };
-        }
-
-        if (order.CompanyCommission != null)
-        {
-            return "Sync";
         }
 
         return order.Status switch
@@ -205,7 +198,7 @@ public partial class TradeOrders
 
         return order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.Unknown
             ? "Replace Linked Plan"
-            : "Rebuild Linked Plan";
+            : "Update Craft Plan";
     }
 
     private static string GetLatestHistoryCue(TradeOrder order)
@@ -363,16 +356,16 @@ public partial class TradeOrders
         {
             TradeCommissionOperationsPresentation.SyncAttention => "Needs Attention",
             TradeCommissionOperationsPresentation.ClaimAttention => "Claim / Identity Review",
-            TradeCommissionOperationsPresentation.PreWorkAttention => "Pre-work Prerequisites",
-            TradeCommissionOperationsPresentation.ReadyAttention => "Ready to Work",
-            TradeCommissionOperationsPresentation.DeliveryAttention => "Delivery / Settlement",
-            TradeCommissionOperationsPresentation.WorkAttention => "Work in Progress",
+            TradeCommissionOperationsPresentation.PreWorkAttention => "Waiting to start",
+            TradeCommissionOperationsPresentation.ReadyAttention => "Ready to craft",
+            TradeCommissionOperationsPresentation.DeliveryAttention => "Awaiting delivery",
+            TradeCommissionOperationsPresentation.WorkAttention => "In progress",
             _ => "Open"
         };
 
     private bool SelectOrderAfterReload(Guid orderId, string missingMessage)
     {
-        var reloadedOrder = _orders.FirstOrDefault(order => order.Id == orderId);
+        var reloadedOrder = VisibleOrders.FirstOrDefault(order => order.Id == orderId);
         if (reloadedOrder == null)
         {
             _selectedOrder = null;

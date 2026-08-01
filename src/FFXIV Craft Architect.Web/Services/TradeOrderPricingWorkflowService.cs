@@ -102,7 +102,7 @@ public sealed class TradeOrderPricingWorkflowService
         using var operation = _operations.Start(
             CancellableOperationWorkflow.TradeOrderPricing,
             "Trade Order Plan",
-            "Rebuilding the order's local craft plan...",
+            "Restoring the order's local craft plan...",
             ct);
         WorkerSessionOperationLease? workerOperation = null;
         try
@@ -110,7 +110,7 @@ public sealed class TradeOrderPricingWorkflowService
             workerOperation = await _worker.BeginOperationAsync(
                 WorkerSessionOperationKind.TradeOrderPricing,
                 $"trade-plan-cache:{order.Id}",
-                "Rebuilding the order's local craft plan...",
+                "Restoring the order's local craft plan...",
                 operation.Token);
             var build = await _planLifecycle.BuildRecipeAsync(
                 new WorkerRecipeBuildRequest(
@@ -147,7 +147,7 @@ public sealed class TradeOrderPricingWorkflowService
             {
                 return new TradeOrderPlanCacheResult(
                     false,
-                    "The order plan was rebuilt but could not be cached in this browser.",
+                    "The order plan was restored but could not be cached in this browser.",
                     RecipePlannerCommandMessageLevel.Error);
             }
 
@@ -201,7 +201,7 @@ public sealed class TradeOrderPricingWorkflowService
         {
             return TradeOrderPricingWorkflowResult.Noop(
                 TradeOrderPricingWorkflowStatus.ArchivedOrder,
-                "Reopen archived orders before rebuilding the linked craft plan.");
+                "Reopen archived orders before updating the linked craft plan.");
         }
 
         using var operation = _operations.Start(

@@ -22,6 +22,7 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 public partial class TradeOrders
 {
     private const string OpsPaneWidthSettingKey = "ui.trade_orders_ops_pane_width";
+    private const string PlanPaneExpandedSettingKey = "ui.trade_orders_plan_pane_expanded";
     private const int DefaultOpsPaneWidth = 820;
     private const int MinimumOpsPaneWidth = 720;
     private const int MaximumOpsPaneWidth = 860;
@@ -51,6 +52,7 @@ public partial class TradeOrders
     private bool _isLoadingSelectedOrderSupplyPlan;
     private int _activeOpsTab;
     private int _opsPaneWidth = DefaultOpsPaneWidth;
+    private bool _isPlanPaneExpanded;
     private TradeOrderProcurementFilter _procurementFilter = TradeOrderProcurementFilter.All;
     private WebTableSortState<TradeOrderProcurementColumn> _procurementSortState =
         WebTableSortState<TradeOrderProcurementColumn>.Unsorted;
@@ -78,10 +80,6 @@ public partial class TradeOrders
     private IJSObjectReference? _tradeOrdersLayoutModule;
     private IJSObjectReference? _tradeOrdersLayoutRegistration;
     private DotNetObjectReference<TradeOrders>? _tradeOrdersReference;
-    private readonly SemaphoreSlim _hostedOrderRefreshGate = new(1, 1);
-    private readonly CancellationTokenSource _hostedOrderRefreshLifetime = new();
-    private Task _hostedOrderRefreshTask = Task.CompletedTask;
-    private bool _isLoadingHostedOrders;
     private bool _isDisposed;
 
     private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
@@ -177,16 +175,21 @@ public partial class TradeOrders
     private string TradeOrdersBoardStyle =>
         $"--trade-orders-ops-width: {_opsPaneWidth.ToString(System.Globalization.CultureInfo.InvariantCulture)}px";
 
-    private IReadOnlyList<OrderAttentionGroup> ActiveOrderGroups =>
-        BuildAttentionGroups(_orders.Where(order => !IsOrderArchivedForAttention(order)));
+    private string TradeOrdersBoardClass =>
+        $"trade-orders-board{(_isPlanPaneExpanded && _activeOpsTab == PlanTabIndex ? " is-plan-expanded" : string.Empty)}";
 
-    private IReadOnlyList<TradeOrder> ArchivedOrders => _orders
+    private IReadOnlyList<TradeOrder> VisibleOrders => ComposeVisibleOrders();
+
+    private IReadOnlyList<OrderAttentionGroup> ActiveOrderGroups =>
+        BuildAttentionGroups(VisibleOrders.Where(order => !IsOrderArchivedForAttention(order)));
+
+    private IReadOnlyList<TradeOrder> ArchivedOrders => VisibleOrders
         .Where(IsOrderArchivedForAttention)
         .OrderByDescending(order => order.CommissionedAtUtc)
         .ToArray();
 
     private IReadOnlyList<OrderAttentionGroup> FilteredActiveOrderGroups =>
-        BuildAttentionGroups(_orders
+        BuildAttentionGroups(VisibleOrders
             .Where(order => !IsOrderArchivedForAttention(order))
             .Where(OrderMatchesSearch));
 
@@ -198,6 +201,7 @@ public partial class TradeOrders
     {
         HostedOrders.Changed += OnHostedOrderProjectionChanged;
         HostedOrders.Reset += OnHostedOrderProjectionsReset;
+        HostedOrders.RestoreStateChanged += OnHostedOrderRestoreStateChanged;
         _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
         try
@@ -206,6 +210,9 @@ public partial class TradeOrders
                 await WebSettings.GetAsync(OpsPaneWidthSettingKey, DefaultOpsPaneWidth),
                 MinimumOpsPaneWidth,
                 MaximumOpsPaneWidth);
+            _isPlanPaneExpanded = await WebSettings.GetAsync(
+                PlanPaneExpandedSettingKey,
+                false);
         }
         catch
         {
@@ -252,19 +259,18 @@ public partial class TradeOrders
         await InvokeAsync(StateHasChanged);
     }
 
+    private async Task TogglePlanPaneExpandedAsync()
+    {
+        _isPlanPaneExpanded = !_isPlanPaneExpanded;
+        await WebSettings.SetAsync(PlanPaneExpandedSettingKey, _isPlanPaneExpanded);
+    }
+
     public async ValueTask DisposeAsync()
     {
         _isDisposed = true;
-        _hostedOrderRefreshLifetime.Cancel();
         HostedOrders.Changed -= OnHostedOrderProjectionChanged;
         HostedOrders.Reset -= OnHostedOrderProjectionsReset;
-        try
-        {
-            await _hostedOrderRefreshTask;
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        HostedOrders.RestoreStateChanged -= OnHostedOrderRestoreStateChanged;
         if (_tradeOrdersLayoutRegistration != null)
         {
             await _tradeOrdersLayoutRegistration.InvokeVoidAsync("dispose");
@@ -277,14 +283,10 @@ public partial class TradeOrders
         }
 
         _tradeOrdersReference?.Dispose();
-        _hostedOrderRefreshLifetime.Dispose();
     }
 
-    private Task LoadAsync() => LoadAsync(synchronizeProfile: true);
-
-    private async Task LoadAsync(bool synchronizeProfile)
+    private async Task LoadAsync()
     {
-        _isLoadingHostedOrders = true;
         Guid? selectedCanonicalOrderId =
             _selectedOrder?.CompanyCommission == null ? null : _selectedOrder.Id;
         var selectedTab = _activeOpsTab;
@@ -292,23 +294,15 @@ public partial class TradeOrders
         try
         {
             _loadError = null;
-            if (synchronizeProfile)
-            {
-                await ProfileSync.SyncNowAsync();
-            }
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
-            await CommissionOperations.RefreshCanonicalAsync(_orders);
-            _orders = _orders
-                .Select(order => CommissionOperations.GetForOrder(order.Id)?.Order ?? order)
-                .ToList();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
             SelectPendingNavigationOrder();
             if (!hadPendingNavigation &&
                 selectedCanonicalOrderId.HasValue)
             {
-                var refreshed = _orders.FirstOrDefault(
+                var refreshed = VisibleOrders.FirstOrDefault(
                     order => order.Id == selectedCanonicalOrderId.Value);
                 if (refreshed != null)
                 {
@@ -327,15 +321,11 @@ public partial class TradeOrders
             _loadError = ex.Message;
             Snackbar.Add("Trade operations storage is unavailable.", Severity.Error);
         }
-        finally
-        {
-            _isLoadingHostedOrders = false;
-        }
     }
 
     private void OnHostedOrderProjectionChanged(HostedOrderProjectionSnapshot snapshot)
     {
-        if (_isDisposed || _isLoadingHostedOrders)
+        if (_isDisposed)
         {
             return;
         }
@@ -346,49 +336,14 @@ public partial class TradeOrders
             return;
         }
 
-        QueueHostedOrderRefresh();
+        _ = InvokeAsync(() => ApplyHostedOrderProjection(snapshot));
     }
 
-    private void OnHostedOrderProjectionsReset() => QueueHostedOrderRefresh();
+    private void OnHostedOrderProjectionsReset() =>
+        _ = InvokeAsync(ApplyHostedOrderProjectionReset);
 
-    private void QueueHostedOrderRefresh()
-    {
-        if (_isDisposed)
-        {
-            return;
-        }
-        _hostedOrderRefreshTask = InvokeAsync(() =>
-            RefreshHostedOrderProjectionAsync(_hostedOrderRefreshLifetime.Token));
-    }
-
-    private async Task RefreshHostedOrderProjectionAsync(CancellationToken cancellationToken)
-    {
-        await _hostedOrderRefreshGate.WaitAsync(cancellationToken);
-        try
-        {
-            if (_isDisposed || cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-
-            if (ShouldPreserveCanonicalEditor())
-            {
-                await RefreshHostedOrderDataPreservingEditorAsync();
-            }
-            else
-            {
-                await LoadAsync(synchronizeProfile: false);
-            }
-            if (!_isDisposed && !cancellationToken.IsCancellationRequested)
-            {
-                StateHasChanged();
-            }
-        }
-        finally
-        {
-            _hostedOrderRefreshGate.Release();
-        }
-    }
+    private void OnHostedOrderRestoreStateChanged(HostedOrderRestoreState state) =>
+        _ = InvokeAsync(() => ApplyHostedOrderRestoreState(state));
 
     private bool ShouldPreserveCanonicalEditor()
     {
@@ -411,38 +366,6 @@ public partial class TradeOrders
          _detailCrafterId != _selectedOrder.AssignedCrafterId ||
          _detailStatus != _selectedOrder.Status ||
          !string.Equals(_detailNotes, _selectedOrder.Notes, StringComparison.Ordinal));
-
-    private async Task RefreshHostedOrderDataPreservingEditorAsync()
-    {
-        _isLoadingHostedOrders = true;
-        try
-        {
-            _loadError = null;
-            _companyProfile ??=
-                await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
-            _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(
-                _companyProfile.Id)).ToList();
-            var orders = (await TradeOperationsPersistence.LoadOrdersAsync(
-                _companyProfile.Id)).ToList();
-            await CommissionOperations.RefreshCanonicalAsync(orders);
-            _orders = orders
-                .Select(order => CommissionOperations.GetForOrder(order.Id)?.Order ?? order)
-                .ToList();
-            _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(
-                _companyProfile.Id)).ToList();
-        }
-        catch (Exception exception)
-        {
-            _loadError = exception.Message;
-            Snackbar.Add(
-                "The hosted order changed, but its canonical editor could not refresh safely.",
-                Severity.Error);
-        }
-        finally
-        {
-            _isLoadingHostedOrders = false;
-        }
-    }
 
     private async Task<bool> SaveOrderAndNotifyAsync(TradeOrder order)
     {
