@@ -42,7 +42,7 @@
     }
     else
     {
-        <div class="trade-orders-board"
+        <div class="@TradeOrdersBoardClass"
              @ref="_boardElement"
              style="@TradeOrdersBoardStyle">
                 <aside class="trade-orders-rail">
@@ -89,9 +89,10 @@
                                     <div class="trade-orders-rail-list">
                                         @foreach (var order in group.Orders)
                                         {
-                                            <button type="button"
-                                                    class="@GetRailOrderClass(order)"
-                                                    @onclick="() => SelectOrder(order)">
+                                             <button type="button"
+                                                     class="@GetRailOrderClass(order)"
+                                                     aria-current="@(_selectedOrder?.Id == order.Id ? "true" : null)"
+                                                     @onclick="() => SelectOrder(order)">
                                                 <span class="trade-orders-rail-title">@order.Title</span>
                                                 <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
                                                 <span class="trade-orders-status-chip">@FormatRailStatusChip(order)</span>
@@ -119,9 +120,10 @@
                                     <div class="trade-orders-rail-list">
                                         @foreach (var order in FilteredArchivedOrders)
                                         {
-                                            <button type="button"
-                                                    class="@GetRailOrderClass(order)"
-                                                    @onclick="() => SelectOrder(order)">
+                                             <button type="button"
+                                                     class="@GetRailOrderClass(order)"
+                                                     aria-current="@(_selectedOrder?.Id == order.Id ? "true" : null)"
+                                                     @onclick="() => SelectOrder(order)">
                                                 <span class="trade-orders-rail-title">@order.Title</span>
                                                 <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
                                                 <span class="trade-orders-status-chip">@FormatRailStatusChip(order)</span>
@@ -311,6 +313,17 @@
                     }
                     else if (_selectedOrder != null)
                     {
+                        @if (BuildSelectedOrderCenterOverview() is { } centerOverview)
+                        {
+                            <section class="trade-orders-workspace-card">
+                                <TradeOrderCenterOverview Model="centerOverview"
+                                                          OnOpenWork="OpenWorkWorkbenchAsync"
+                                                          OnOpenPlan="OpenPlanWorkbenchAsync"
+                                                          OnReviseTerms="ShowCommissionTermsRevision" />
+                            </section>
+                        }
+                        else if (_selectedOrder.CompanyCommission == null)
+                        {
                         <section class="trade-orders-workspace-card">
                             <div class="trade-orders-workspace-header">
                                  <div>
@@ -587,6 +600,21 @@
                                 </div>
                             </section>
                         </section>
+                        }
+                        else
+                        {
+                            <section class="trade-orders-workspace-card">
+                                <div class="trade-orders-workspace-empty" role="status">
+                                    <MudIcon Icon="@Icons.Material.Filled.SyncProblem"
+                                             Size="Size.Large"
+                                             Class="trade-orders-workspace-empty-icon" />
+                                    <MudText Typo="Typo.h6">Current order state unavailable</MudText>
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                        This workspace will appear when the shared hosted-order projection is authoritative.
+                                    </MudText>
+                                </div>
+                            </section>
+                        }
                     }
                     else
                     {
@@ -613,19 +641,19 @@
                 <div class="trade-orders-ops-splitter"
                      @ref="_opsSplitterElement"
                      role="separator"
-                     aria-label="Resize order operations pane"
+                     aria-label="Resize order work pane"
                      aria-orientation="vertical"
                      aria-valuemin="@MinimumOpsPaneWidth"
                      aria-valuemax="@MaximumOpsPaneWidth"
                      aria-valuenow="@_opsPaneWidth"
                      tabindex="0"></div>
 
-                <aside class="trade-orders-ops">
+                <aside class="trade-orders-ops" aria-label="Order work">
                     @if (_selectedOrder == null)
                     {
                         <section class="trade-orders-panel">
-                            <MudText Typo="Typo.subtitle1">Operations</MudText>
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">Select an order to view payment, procurement, and history.</MudText>
+                            <MudText Typo="Typo.subtitle1">Order work</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">Select an order to view work, plan, history, and sharing.</MudText>
                         </section>
                     }
                     else
@@ -636,23 +664,17 @@
                         var displayedProcurementTotal = SelectedCanonicalCommission?.CurrentTerms.Materials
                             .Sum(material => material.TotalCost) ??
                             paymentSummary.EstimatedProcurementTotal;
-                        <div class="trade-orders-ops-header">
-                            <div>
-                                <MudText Typo="Typo.subtitle1">@_selectedOrder.Title</MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">@GetLatestHistoryCue(_selectedOrder)</MudText>
-                            </div>
-                         </div>
                          <MudTabs Elevation="0"
                                   Rounded="true"
                                   ApplyEffectsToContainer="true"
                                   PanelClass="trade-orders-tab-panel"
                                   ActivePanelIndex="_activeOpsTab"
                                   ActivePanelIndexChanged="SetActiveOpsTabAsync">
-                             @if (SelectedCommissionOwner is { } operationsOwner &&
-                                  operationsOwner.Order.CompanyCommission is { } operationsCommission)
-                             {
-                                 var operationsProvisional = operationsCommission.ProvisionalCrafter;
-                                 <MudTabPanel Text="Operations">
+                             <MudTabPanel Text="Work">
+                               @if (SelectedCommissionOwner is { } operationsOwner &&
+                                    operationsOwner.Order.CompanyCommission is { } operationsCommission)
+                               {
+                                  var operationsProvisional = operationsCommission.ProvisionalCrafter;
                                      @if (operationsCommission.PublicMetadata.IsTestFixture)
                                      {
                                          <MudAlert Severity="Severity.Warning" Dense="true" Class="trade-orders-test-commission-banner">
@@ -660,20 +682,98 @@
                                              <MudText Typo="Typo.body2">Use this record to verify publication, projection updates, and timeline density. It cannot assign work.</MudText>
                                          </MudAlert>
                                      }
-                                     <div class="trade-orders-operations-summary">
-                                         <div>
-                                             <span>State</span>
-                                             <strong>@FormatCanonicalCommissionState(operationsOwner.Order, operationsCommission)</strong>
+                                     <section class="trade-orders-start-gates" aria-labelledby="start-gates-title">
+                                         <div class="trade-orders-start-gates-heading">
+                                             <div>
+                                                 <MudText Typo="Typo.subtitle1" HtmlTag="h2" id="start-gates-title">Start gates</MudText>
+                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                     Payment and material handoff may clear in either order. Crafting starts when both are complete.
+                                                 </MudText>
+                                             </div>
+                                             <span class="@GetCommissionGateChipClass(operationsCommission.Gates.Identity.State)">
+                                                 Identity @FormatCommissionGate(operationsCommission.Gates.Identity.State)
+                                             </span>
                                          </div>
-                                         <div>
-                                             <span>Next action</span>
-                                             <strong>@TradeCommissionOperationsPresentation.GetNextAction(operationsOwner)</strong>
+                                         <div class="trade-orders-parallel-gates">
+                                             <section class="trade-orders-start-gate" aria-labelledby="payment-gate-title">
+                                                 <div class="trade-orders-start-gate-heading">
+                                                     <div>
+                                                         <span>Gate 1 · Payment</span>
+                                                         <MudText Typo="Typo.subtitle2" HtmlTag="h3" id="payment-gate-title">
+                                                             @FormatCommissionPaymentSchedule(operationsCommission.CurrentTerms.Payment) payment
+                                                         </MudText>
+                                                     </div>
+                                                     <strong>@FormatGil(operationsCommission.CurrentTerms.Payment.Total)</strong>
+                                                 </div>
+                                                 <div class="trade-orders-start-gate-status">
+                                                     <span>Status</span>
+                                                     <strong>@FormatPaymentConfirmationProgress(operationsCommission.Gates.Payment)</strong>
+                                                 </div>
+                                                 @if (operationsCommission.Gates.Payment.State != CompanyCommissionClearanceState.NotRequired)
+                                                 {
+                                                     @if (operationsCommission.Gates.Payment.CommissionerSent == null)
+                                                     {
+                                                         <div class="trade-orders-start-gate-action">
+                                                             <MudTextField @bind-Value="_commissionPaymentObservation"
+                                                                           id="commission-start-payment-observation"
+                                                                           Label="Payment note"
+                                                                           Variant="Variant.Outlined"
+                                                                           Margin="Margin.Dense"
+                                                                           Immediate="true"
+                                                                           MaxLength="500" />
+                                                             <MudButton Variant="Variant.Filled"
+                                                                        Color="Color.Primary"
+                                                                        Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionPaymentObservation))"
+                                                                        OnClick="RecordCommissionPaymentAsync">
+                                                                 Mark sent
+                                                             </MudButton>
+                                                         </div>
+                                                     }
+                                                     else
+                                                     {
+                                                         <div class="trade-orders-start-gate-evidence">
+                                                             <strong>Company marked payment sent</strong>
+                                                             <span>@operationsCommission.Gates.Payment.CommissionerSent.Note</span>
+                                                         </div>
+                                                     }
+                                                     <small>Crafter confirmation remains independent and may arrive before or after material handoff.</small>
+                                                 }
+                                             </section>
+
+                                             <section class="trade-orders-start-gate" aria-labelledby="materials-gate-title">
+                                                 <div class="trade-orders-start-gate-heading">
+                                                     <div>
+                                                         <span>Gate 2 · Materials</span>
+                                                         <MudText Typo="Typo.subtitle2" HtmlTag="h3" id="materials-gate-title">Company material handoff</MudText>
+                                                     </div>
+                                                 </div>
+                                                 <div class="trade-orders-start-gate-materials">
+                                                     @foreach (var material in operationsCommission.CurrentTerms.Materials
+                                                        .Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided))
+                                                     {
+                                                         <span>@material.Name <strong>x@material.Quantity.ToString("N0")</strong></span>
+                                                     }
+                                                 </div>
+                                                 <div class="trade-orders-start-gate-status">
+                                                     <span>Status</span>
+                                                     <strong>@FormatCommissionMaterialHandoff(operationsCommission.Gates.CompanyMaterials)</strong>
+                                                 </div>
+                                                 @if (operationsCommission.Gates.CompanyMaterials.State == CompanyCommissionClearanceState.Pending &&
+                                                      operationsCommission.Gates.CompanyMaterials.ReadyAtUtc == null)
+                                                 {
+                                                     <div class="trade-orders-start-gate-action is-end">
+                                                         <MudButton Variant="Variant.Filled"
+                                                                    Color="Color.Primary"
+                                                                    Disabled="@_isCommissionCommandRunning"
+                                                                    OnClick="MarkCommissionMaterialsReadyAsync">
+                                                             Mark full bundle ready
+                                                         </MudButton>
+                                                     </div>
+                                                 }
+                                                 <small>This gate can clear before payment; neither gate waits for the other.</small>
+                                             </section>
                                          </div>
-                                         <div>
-                                             <span>Work clearance</span>
-                                             <strong>@(operationsCommission.ClearedToWork ? "Cleared" : "Locked")</strong>
-                                         </div>
-                                     </div>
+                                     </section>
 
                                      @if (operationsProvisional != null &&
                                           operationsCommission.Gates.Identity.State ==
@@ -742,50 +842,6 @@
                                              </details>
                                          </section>
                                      }
-
-                                     <section class="trade-orders-operation-card">
-                                         <div class="trade-orders-operation-card-heading">
-                                             <div>
-                                                 <MudText Typo="Typo.subtitle2">Prerequisites</MudText>
-                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                     Every applicable gate must clear before progress can begin.
-                                                 </MudText>
-                                             </div>
-                                             <span class="@GetCommissionGateChipClass(
-                                                 operationsCommission.ClearedToWork
-                                                     ? CompanyCommissionClearanceState.Satisfied
-                                                     : CompanyCommissionClearanceState.Pending)">
-                                                 @(operationsCommission.ClearedToWork ? "Ready" : "Waiting")
-                                             </span>
-                                         </div>
-                                         <div class="trade-orders-prerequisite-list">
-                                             <div>
-                                                 <span>Identity</span>
-                                                 <strong>@FormatCommissionGate(operationsCommission.Gates.Identity.State)</strong>
-                                                 <small>
-                                                     @(operationsCommission.Gates.Identity.State ==
-                                                       CompanyCommissionClearanceState.Pending
-                                                         ? "Commissioner confirmation required"
-                                                         : "Company roster identity linked")
-                                                 </small>
-                                             </div>
-                                             <div>
-                                                 <span>Payment</span>
-                                                 <strong>@FormatPaymentConfirmationProgress(operationsCommission.Gates.Payment)</strong>
-                                                 <small>@FormatCommissionPaymentSchedule(operationsCommission.CurrentTerms.Payment)</small>
-                                             </div>
-                                             <div>
-                                                 <span>Company materials</span>
-                                                 <strong>@FormatCommissionGate(operationsCommission.Gates.CompanyMaterials.State)</strong>
-                                                 <small>
-                                                     @(operationsCommission.Gates.CompanyMaterials.State ==
-                                                       CompanyCommissionClearanceState.NotRequired
-                                                         ? "No company-provided bundle"
-                                                         : "Complete bundle only in v1")
-                                                 </small>
-                                             </div>
-                                         </div>
-                                     </section>
 
                                      @if (_showCommissionTermsRevision)
                                      {
@@ -878,9 +934,10 @@
                                          </section>
                                      }
 
-                                 </MudTabPanel>
-                             }
-                             <MudTabPanel Text="Payment">
+                               }
+                               <details class="trade-orders-work-details" open="@(!HasCanonicalCommission)">
+                                   <summary>Terms and calculation details</summary>
+                                   <div class="trade-orders-work-details-content">
                                 <div class="trade-orders-payment-metrics">
                                     <div class="trade-orders-payment-metric">
                                         <span>Payment amount</span>
@@ -1464,9 +1521,27 @@
                                         }
                                     </section>
                                 }
-                            </MudTabPanel>
-                            <MudTabPanel Text="Supply Plan">
-                                @{
+                                   </div>
+                               </details>
+                             </MudTabPanel>
+                            <MudTabPanel Text="Plan">
+                                <div class="trade-orders-workbench-heading">
+                                    <div>
+                                        <MudText Typo="Typo.subtitle1">Craft plan</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            The only editor for this order's linked plan.
+                                        </MudText>
+                                    </div>
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Secondary"
+                                               Size="Size.Small"
+                                               StartIcon="@(_isPlanPaneExpanded ? Icons.Material.Filled.CloseFullscreen : Icons.Material.Filled.OpenInFull)"
+                                               OnClick="TogglePlanPaneExpandedAsync"
+                                               aria-pressed="@_isPlanPaneExpanded">
+                                        @(_isPlanPaneExpanded ? "Restore pane" : "Expand pane")
+                                    </MudButton>
+                                </div>
+                                 @{
                                     var allProcurementRows = GetSelectedOrderProcurementRows();
                                     var procurementRows = GetSupplyPlanRows(allProcurementRows);
                                     var visibleProcurementRows = GetFilteredProcurementRows(procurementRows);
@@ -1596,7 +1671,7 @@
                                     }
                                 }
                             </MudTabPanel>
-                             <MudTabPanel Text="Timeline">
+                             <MudTabPanel Text="History">
                                  @{ var timelineSummary = GetSelectedTimelineSummary(); }
                                  <div class="trade-orders-timeline-toolbar">
                                      <div class="trade-orders-timeline-filters" role="group" aria-label="Filter commission timeline">
@@ -1703,7 +1778,7 @@
                                      </div>
                                  </div>
                              </MudTabPanel>
-                             <MudTabPanel Text="Sharing">
+                             <MudTabPanel Text="Share">
                                 @if (SelectedOrderConflict is not null)
                                 {
                                     <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">

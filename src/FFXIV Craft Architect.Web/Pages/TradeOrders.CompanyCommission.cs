@@ -82,14 +82,6 @@ public partial class TradeOrders
     private bool CanEditCanonicalWorkPackage =>
         CanEditCanonicalDraft || IsEditingCommissionTermsRevision;
 
-    private int PaymentTabIndex => HasCanonicalCommission ? 1 : 0;
-
-    private int ProcurementTabIndex => HasCanonicalCommission ? 2 : 1;
-
-    private int TimelineTabIndex => HasCanonicalCommission ? 3 : 2;
-
-    private int SharingTabIndex => HasCanonicalCommission ? 4 : 3;
-
     private static string GetSettlementChipClass(
         CompanyCommissionSettlementState state) =>
         state == CompanyCommissionSettlementState.Satisfied
@@ -725,42 +717,8 @@ public partial class TradeOrders
 
     private static string FormatCanonicalCommissionState(
         TradeOrder order,
-        TradeCompanyCommission commission)
-    {
-        if (commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Revoked)
-        {
-            return "Publication revoked";
-        }
-        if (order.Status == TradeOrderStatus.Canceled)
-        {
-            return "Canceled";
-        }
-        if (order.Status == TradeOrderStatus.Completed)
-        {
-            return commission.SettlementState == CompanyCommissionSettlementState.Satisfied
-                ? "Completed"
-                : "Delivery accepted";
-        }
-        if (order.Status == TradeOrderStatus.AwaitingDelivery)
-        {
-            return "Awaiting delivery";
-        }
-        if (order.Status == TradeOrderStatus.InProgress)
-        {
-            return "In progress";
-        }
-        if (commission.ActiveClaim == null)
-        {
-            return "Open - one claim slot";
-        }
-        if (commission.Gates.Identity.State == CompanyCommissionClearanceState.Pending)
-        {
-            return "Claimed - identity review";
-        }
-        return commission.ClearedToWork
-            ? "Ready to work"
-            : "Assigned - pre-work";
-    }
+        TradeCompanyCommission commission) =>
+        FormatWorkbenchStatus(order, commission);
 
     private string FormatCanonicalCommissionCrafter(
         TradeOrder order,

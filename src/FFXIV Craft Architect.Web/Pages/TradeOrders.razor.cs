@@ -22,6 +22,7 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 public partial class TradeOrders
 {
     private const string OpsPaneWidthSettingKey = "ui.trade_orders_ops_pane_width";
+    private const string PlanPaneExpandedSettingKey = "ui.trade_orders_plan_pane_expanded";
     private const int DefaultOpsPaneWidth = 820;
     private const int MinimumOpsPaneWidth = 720;
     private const int MaximumOpsPaneWidth = 860;
@@ -51,6 +52,7 @@ public partial class TradeOrders
     private bool _isLoadingSelectedOrderSupplyPlan;
     private int _activeOpsTab;
     private int _opsPaneWidth = DefaultOpsPaneWidth;
+    private bool _isPlanPaneExpanded;
     private TradeOrderProcurementFilter _procurementFilter = TradeOrderProcurementFilter.All;
     private WebTableSortState<TradeOrderProcurementColumn> _procurementSortState =
         WebTableSortState<TradeOrderProcurementColumn>.Unsorted;
@@ -177,6 +179,9 @@ public partial class TradeOrders
     private string TradeOrdersBoardStyle =>
         $"--trade-orders-ops-width: {_opsPaneWidth.ToString(System.Globalization.CultureInfo.InvariantCulture)}px";
 
+    private string TradeOrdersBoardClass =>
+        $"trade-orders-board{(_isPlanPaneExpanded && _activeOpsTab == PlanTabIndex ? " is-plan-expanded" : string.Empty)}";
+
     private IReadOnlyList<OrderAttentionGroup> ActiveOrderGroups =>
         BuildAttentionGroups(_orders.Where(order => !IsOrderArchivedForAttention(order)));
 
@@ -206,6 +211,9 @@ public partial class TradeOrders
                 await WebSettings.GetAsync(OpsPaneWidthSettingKey, DefaultOpsPaneWidth),
                 MinimumOpsPaneWidth,
                 MaximumOpsPaneWidth);
+            _isPlanPaneExpanded = await WebSettings.GetAsync(
+                PlanPaneExpandedSettingKey,
+                false);
         }
         catch
         {
@@ -250,6 +258,12 @@ public partial class TradeOrders
         _opsPaneWidth = nextWidth;
         await WebSettings.SetAsync(OpsPaneWidthSettingKey, nextWidth);
         await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task TogglePlanPaneExpandedAsync()
+    {
+        _isPlanPaneExpanded = !_isPlanPaneExpanded;
+        await WebSettings.SetAsync(PlanPaneExpandedSettingKey, _isPlanPaneExpanded);
     }
 
     public async ValueTask DisposeAsync()
