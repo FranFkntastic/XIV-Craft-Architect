@@ -69,10 +69,33 @@ public partial class TradeOrders
         }
 
         var stored = GetPayrollDraftForOrder(_selectedOrder);
-        var commission = SelectedCanonicalCommission;
+        var commission = SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission;
         if (commission == null)
         {
             return stored;
+        }
+
+        if (IsEditingCommissionTermsRevision && _commissionTermsRevisionBrief != null)
+        {
+            var staged = stored == null
+                ? new TradePayrollWorkflowDraft
+                {
+                    CompanyProfileId = _selectedOrder.CompanyProfileId,
+                    OrderId = _selectedOrder.Id
+                }
+                : TradeOrderWorkflow.CopyPayrollDraft(stored);
+            staged.Responsibilities = _commissionTermsRevisionBrief.CrafterMaterials
+                .Select(material => new TradePayrollResponsibilityLine(
+                    material.ItemId,
+                    material.RequiresHq,
+                    CommissionMaterialResponsibility.Crafter))
+                .Concat(_commissionTermsRevisionBrief.CompanyMaterials.Select(material =>
+                    new TradePayrollResponsibilityLine(
+                        material.ItemId,
+                        material.RequiresHq,
+                        CommissionMaterialResponsibility.Provided)))
+                .ToArray();
+            return staged;
         }
 
         var projection = stored == null
@@ -632,7 +655,7 @@ public partial class TradeOrders
     private bool CanEditProcurementSource(TradeOrderProcurementRow row)
     {
         return !_isCommissionCommandRunning &&
-            (!HasCanonicalCommission || CanEditCanonicalDraft) &&
+            (!HasCanonicalCommission || CanEditCanonicalWorkPackage) &&
             TradeProcurementSourceMutationPolicy.CanChangeSource(row);
     }
 
@@ -730,7 +753,7 @@ public partial class TradeOrders
             return false;
         }
 
-        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
+        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalWorkPackage)
         {
             Snackbar.Add(
                 "Published acquisition decisions are part of the accepted terms. Use Revise Terms to change them.",
@@ -790,6 +813,11 @@ public partial class TradeOrders
         {
             Snackbar.Add("The linked craft plan could not be staged safely.", Severity.Error);
             return false;
+        }
+
+        if (IsEditingCommissionTermsRevision && _commissionTermsRevisionRollbackPlan == null)
+        {
+            _commissionTermsRevisionRollbackPlan = rollbackSnapshot;
         }
 
         await WorkerSession.MutateAcquisitionAsync(

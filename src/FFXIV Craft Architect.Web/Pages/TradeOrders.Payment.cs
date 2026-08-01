@@ -49,7 +49,7 @@ public partial class TradeOrders
             responsibility);
         if (_selectedOrder.CompanyCommission != null)
         {
-            if (!CanEditCanonicalDraft)
+            if (!CanEditCanonicalWorkPackage)
             {
                 Snackbar.Add(
                     "Published responsibility is part of the accepted terms. Use Revise Terms to change it.",
