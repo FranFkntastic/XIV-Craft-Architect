@@ -1629,11 +1629,6 @@ public static partial class ManagedHost
         var costPlans = overlay?.ShoppingPlans is { Count: > 0 }
             ? overlay.ShoppingPlans
             : evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>();
-        var materialLines = new CommissionCostBasisResolver()
-            .BuildSelectedSourceLines(
-                activeDemand,
-                evidence.ItemAnalyses,
-                costPlans);
         var acquisition = CaptureAcquisitionProjection(new WorkerSessionCommandEnvelope(
             WorkerSessionProtocol.ContractVersion,
             WorkerSessionCommandKinds.AcquisitionProjection,
@@ -1641,6 +1636,12 @@ public static partial class ManagedHost
             JsonSerializer.SerializeToElement(
                 new WorkerAcquisitionProjectionRequest("All"),
                 WireJsonOptions)));
+        var materialLines = ApplyOnHandReferenceValues(
+            new CommissionCostBasisResolver().BuildSelectedSourceLines(
+                activeDemand,
+                evidence.ItemAnalyses,
+                costPlans),
+            acquisition.Rows);
 
         var warnings = new List<string>();
         if (evidence.ItemAnalyses.Count == 0)
@@ -1888,7 +1889,8 @@ public static partial class ManagedHost
                 "Uses the recipe tree with current evidence for child purchases.",
                 hasCost ? $"{cost:N0}g" : "-",
                 IsAvailable: true,
-                IsProjectedUnsupported: false));
+                IsProjectedUnsupported: false,
+                TotalCost: hasCost ? cost : null));
         }
 
         if (row.CanBuyFromMarket && !row.MustBeHq)
@@ -1928,7 +1930,8 @@ public static partial class ManagedHost
                     : $"{vendor.Name} - {vendor.Location}",
                 hasCost ? $"{cost:N0}g" : "-",
                 hasCost,
-                IsProjectedUnsupported: false));
+                IsProjectedUnsupported: false,
+                TotalCost: hasCost ? cost : null));
         }
         options.Add(new WorkerAcquisitionOptionProjection(
             AcquisitionSource.OnHand,
@@ -1936,7 +1939,8 @@ public static partial class ManagedHost
             "Use stock already held outside this plan.",
             "0g",
             IsAvailable: true,
-            IsProjectedUnsupported: false));
+            IsProjectedUnsupported: false,
+            TotalCost: 0m));
         if (!row.CanBuyFromMarket && !row.CanBuyFromVendor && !row.HasChildren)
         {
             options.Add(new WorkerAcquisitionOptionProjection(
@@ -1945,7 +1949,8 @@ public static partial class ManagedHost
                 "No supported craft, market, or vendor source is known.",
                 "-",
                 IsAvailable: true,
-                IsProjectedUnsupported: false));
+                IsProjectedUnsupported: false,
+                TotalCost: null));
         }
         return options;
     }
@@ -1983,7 +1988,53 @@ public static partial class ManagedHost
             detail,
             hasCost ? $"{cost:N0}g" : "-",
             hasCost && !estimate.IsUnsupportedProjection,
-            estimate.IsUnsupportedProjection);
+            estimate.IsUnsupportedProjection,
+            TotalCost: hasCost ? cost : null);
+    }
+
+    private static IReadOnlyList<CommissionPayrollInputLine> ApplyOnHandReferenceValues(
+        IReadOnlyList<CommissionPayrollInputLine> lines,
+        IReadOnlyList<WorkerAcquisitionRowProjection> acquisitionRows)
+    {
+        var rows = acquisitionRows
+            .GroupBy(row => (row.ItemId, row.MustBeHq))
+            .ToDictionary(group => group.Key, group => group.First());
+
+        return lines.Select(line =>
+        {
+            if (!string.Equals(
+                    line.EvidenceSource,
+                    TradeOrderWorkflow.OnHandEvidenceSource,
+                    StringComparison.OrdinalIgnoreCase) ||
+                line.Quantity <= 0 ||
+                !rows.TryGetValue((line.ItemId, line.RequiresHq), out var row))
+            {
+                return line;
+            }
+
+            var reference = row.Options
+                .Where(option => option.Source is not
+                    (AcquisitionSource.OnHand or AcquisitionSource.UnknownSource))
+                .Where(option =>
+                    option.IsAvailable &&
+                    !option.IsProjectedUnsupported &&
+                    option.TotalCost > 0)
+                .OrderBy(option => option.TotalCost)
+                .FirstOrDefault();
+            if (reference?.TotalCost is not > 0)
+            {
+                return line;
+            }
+
+            var unitCost = reference.TotalCost.Value / line.Quantity;
+            return line with
+            {
+                UnitCost = unitCost,
+                UnitCostExplanation =
+                    $"Existing stock is not reimbursed. Material value uses the cheapest normal route: " +
+                    $"{reference.Name} at {reference.TotalCost.Value:N0}g."
+            };
+        }).ToArray();
     }
 
     private static WorkerRecipeNodeProjection ProjectRecipeNode(

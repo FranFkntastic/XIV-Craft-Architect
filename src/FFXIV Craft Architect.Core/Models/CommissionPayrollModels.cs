@@ -95,7 +95,8 @@ public sealed record TradePaymentMaterialInput(
     string EvidenceSource,
     string UnitCostExplanation,
     DateTime? EvidenceTimestampUtc,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    bool IsOnHand = false);
 
 public sealed record TradeCraftLaborInput(
     string NodeId,
@@ -143,4 +144,5 @@ public sealed record TradePaymentComparisonSummary(
     TradePaymentContractBreakdown LaborStandard,
     TradePaymentContractBreakdown Active,
     decimal TotalPayment,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    decimal OnHandMaterialValueTotal = 0m);

@@ -79,21 +79,6 @@ public sealed class CommissionCostBasisResolver
         IReadOnlyDictionary<int, MarketItemAnalysis> analysesByItemId,
         IReadOnlyDictionary<int, DetailedShoppingPlan> plansByItemId)
     {
-        if (item.Source == AcquisitionSource.OnHand)
-        {
-            return new CommissionPayrollInputLine(
-                item.ItemId,
-                item.Name,
-                item.TotalQuantity,
-                UnitCost: 0m,
-                item.RequiresHq,
-                CommissionMaterialResponsibility.Crafter,
-                TradeOrderWorkflow.OnHandEvidenceSource,
-                $"{item.Name} is supplied from existing stock; no acquisition cost is included.",
-                EvidenceTimestampUtc: null,
-                Warnings: Array.Empty<string>());
-        }
-
         var warnings = new List<string>();
         var evidenceSource = "Plan price";
         var unitCostExplanation = $"No selected-source evidence found for {item.Name}; using plan price: {item.UnitPrice:N0}g.";
@@ -102,6 +87,38 @@ public sealed class CommissionCostBasisResolver
 
         analysesByItemId.TryGetValue(item.ItemId, out var analysis);
         plansByItemId.TryGetValue(item.ItemId, out var shoppingPlan);
+
+        if (item.Source == AcquisitionSource.OnHand)
+        {
+            var reference = SelectOnHandReferenceUnitCost(item, analysis, shoppingPlan);
+            if (reference == null || reference.UnitCost <= 0)
+            {
+                return new CommissionPayrollInputLine(
+                    item.ItemId,
+                    item.Name,
+                    item.TotalQuantity,
+                    UnitCost: 0m,
+                    item.RequiresHq,
+                    CommissionMaterialResponsibility.Crafter,
+                    TradeOrderWorkflow.OnHandEvidenceSource,
+                    $"{item.Name} is supplied from existing stock, but no ordinary replacement route is priced.",
+                    EvidenceTimestampUtc: null,
+                    Warnings: [$"No replacement value was available for on-hand {item.Name}."]);
+            }
+
+            return new CommissionPayrollInputLine(
+                item.ItemId,
+                item.Name,
+                item.TotalQuantity,
+                reference.UnitCost,
+                item.RequiresHq,
+                CommissionMaterialResponsibility.Crafter,
+                TradeOrderWorkflow.OnHandEvidenceSource,
+                $"Existing stock is not reimbursed. Material value uses {reference.SourceDescription}: " +
+                $"{reference.UnitCost:N0}g each.",
+                reference.EvidenceTimestampUtc,
+                Warnings: Array.Empty<string>());
+        }
 
         var selectedCost = SelectSelectedSourceUnitCost(item, shoppingPlan);
         if (selectedCost != null)
@@ -416,6 +433,62 @@ public sealed class CommissionCostBasisResolver
             source.Label,
             source.Description,
             acquisition.World?.MarketUploadedAtUtc);
+    }
+
+    private static SelectedUnitCost? SelectOnHandReferenceUnitCost(
+        SelectedSourceDemand item,
+        MarketItemAnalysis? analysis,
+        DetailedShoppingPlan? shoppingPlan)
+    {
+        var candidates = new List<SelectedUnitCost>();
+        if (shoppingPlan != null)
+        {
+            var acquisition = MarketPurchaseCostProjectionService.Estimate(
+                shoppingPlan,
+                item.TotalQuantity,
+                item.RequiresHq,
+                includeVendor: true);
+            if (acquisition.IsDefaultEligible && acquisition.HasCost)
+            {
+                var source = FormatAcquisitionSource(shoppingPlan, acquisition);
+                candidates.Add(new SelectedUnitCost(
+                    acquisition.Cost / item.TotalQuantity,
+                    source.Label,
+                    source.Description,
+                    acquisition.World?.MarketUploadedAtUtc));
+            }
+        }
+
+        if (item.CanBuyFromVendor && item.VendorUnitPrice > 0)
+        {
+            candidates.Add(new SelectedUnitCost(
+                item.VendorUnitPrice,
+                "Vendor price",
+                "the cheapest loaded vendor price"));
+        }
+
+        var planUnitCost = item.RequiresHq ? item.HqUnitPrice : item.UnitPrice;
+        if (item.CanBuyFromMarket && planUnitCost > 0)
+        {
+            candidates.Add(new SelectedUnitCost(
+                planUnitCost,
+                "Plan price",
+                "the loaded direct market price"));
+        }
+
+        if (analysis != null)
+        {
+            var market = SelectUnitCost(analysis);
+            if (market.UnitCost > 0)
+            {
+                candidates.Add(market);
+            }
+        }
+
+        return candidates
+            .Where(candidate => candidate.UnitCost > 0)
+            .OrderBy(candidate => candidate.UnitCost)
+            .FirstOrDefault();
     }
 
     private static (string Label, string Description) FormatAcquisitionSource(
