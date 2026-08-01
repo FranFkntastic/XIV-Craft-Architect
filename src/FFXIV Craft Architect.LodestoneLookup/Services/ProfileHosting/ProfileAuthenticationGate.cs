@@ -20,12 +20,13 @@ public sealed class ProfileAuthenticationGate
         where T : class
     {
         ArgumentNullException.ThrowIfNull(authenticate);
-        if (!IsBoundedAccessKey(plaintextKey) ||
-            !TryConsumeWindowPermit() ||
-            !await _concurrency.WaitAsync(0, cancellationToken))
+        if (!IsBoundedAccessKey(plaintextKey))
         {
             return null;
         }
+
+        await WaitForWindowPermitAsync(cancellationToken);
+        await _concurrency.WaitAsync(cancellationToken);
 
         try
         {
@@ -37,24 +38,32 @@ public sealed class ProfileAuthenticationGate
         }
     }
 
-    private bool TryConsumeWindowPermit()
+    private async Task WaitForWindowPermitAsync(CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.UtcNow;
-        lock (_windowLock)
+        while (true)
         {
-            if (now - _windowStartedAt >= AuthenticationWindow)
+            TimeSpan retryAfter;
+            lock (_windowLock)
             {
-                _windowStartedAt = now;
-                _windowAttempts = 0;
+                var now = DateTimeOffset.UtcNow;
+                var elapsed = now - _windowStartedAt;
+                if (elapsed >= AuthenticationWindow)
+                {
+                    _windowStartedAt = now;
+                    _windowAttempts = 0;
+                    elapsed = TimeSpan.Zero;
+                }
+
+                if (_windowAttempts < MaximumAuthenticationsPerWindow)
+                {
+                    _windowAttempts++;
+                    return;
+                }
+
+                retryAfter = AuthenticationWindow - elapsed;
             }
 
-            if (_windowAttempts >= MaximumAuthenticationsPerWindow)
-            {
-                return false;
-            }
-
-            _windowAttempts++;
-            return true;
+            await Task.Delay(retryAfter, cancellationToken);
         }
     }
 

@@ -54,7 +54,7 @@ public sealed class ProfileHostContractTests
     }
 
     [Fact]
-    public async Task ProfileEndpoint_RejectsUnrecognizedAccessKey()
+    public async Task ProfileAuthentication_RejectsUnknownKeysAndQueuesValidBursts()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
         using var client = fixture.CreateClient(withAccessKey: false);
@@ -63,6 +63,51 @@ public sealed class ProfileHostContractTests
         using var response = await client.GetAsync("/profile-host/profile");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var testCancellationToken = timeout.Token;
+        var burstGate = new ProfileAuthenticationGate();
+        var burstResults = new List<string?>();
+        for (var attempt = 0; attempt < 13; attempt++)
+        {
+            burstResults.Add(await burstGate.ExecuteAsync(
+                "cap_valid-contract-key",
+                _ => Task.FromResult<string?>("ok"),
+                testCancellationToken));
+        }
+
+        Assert.All(burstResults, result => Assert.Equal("ok", result));
+
+        var concurrencyGate = new ProfileAuthenticationGate();
+        var entered = new SemaphoreSlim(0, 3);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<string?> AuthenticateAsync(CancellationToken cancellationToken)
+        {
+            entered.Release();
+            await release.Task.WaitAsync(cancellationToken);
+            return "ok";
+        }
+
+        var first = concurrencyGate.ExecuteAsync(
+            "cap_valid-contract-key",
+            AuthenticateAsync,
+            testCancellationToken);
+        var second = concurrencyGate.ExecuteAsync(
+            "cap_valid-contract-key",
+            AuthenticateAsync,
+            testCancellationToken);
+        await entered.WaitAsync(testCancellationToken);
+        await entered.WaitAsync(testCancellationToken);
+
+        var third = concurrencyGate.ExecuteAsync(
+            "cap_valid-contract-key",
+            AuthenticateAsync,
+            testCancellationToken);
+        await Task.Delay(50, testCancellationToken);
+
+        Assert.False(third.IsCompleted);
+        release.SetResult();
+        Assert.Equal(new[] { "ok", "ok", "ok" }, await Task.WhenAll(first, second, third));
     }
 
     [Fact]
