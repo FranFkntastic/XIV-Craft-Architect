@@ -239,9 +239,19 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "franthropy.ffxiv": {
+        "type": "Project",
+        "dependencies": {
+          "Franthropy.Filtering": "[0.1.0, )"
+        }
+      },
+      "franthropy.filtering": {
+        "type": "Project"
+      },
       "Gooseworks.FFXIVCraftArchitect.Core": {
         "type": "Project",
         "dependencies": {
+          "Franthropy.FFXIV": "[0.1.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[8.0.0, )",
           "Microsoft.Extensions.Http": "[8.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[8.0.0, )",

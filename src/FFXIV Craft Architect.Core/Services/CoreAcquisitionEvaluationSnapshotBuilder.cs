@@ -167,7 +167,7 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
 
     private static void CollectLegacyActiveProcurement(PlanNode node, HashSet<string> activeNodeIds)
     {
-        if (node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy)
+        if (node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy or AcquisitionSource.OnHand)
         {
             activeNodeIds.Add(node.NodeId);
             return;
@@ -237,7 +237,8 @@ public static class CoreAcquisitionEvaluationSnapshotBuilder
         return node.Source is AcquisitionSource.MarketBuyNq or
             AcquisitionSource.MarketBuyHq or
             AcquisitionSource.VendorBuy or
-            AcquisitionSource.UnknownSource;
+            AcquisitionSource.UnknownSource or
+            AcquisitionSource.OnHand;
     }
 
     private static Dictionary<string, PlanNode> BuildNodeIndex(CraftingPlan plan)

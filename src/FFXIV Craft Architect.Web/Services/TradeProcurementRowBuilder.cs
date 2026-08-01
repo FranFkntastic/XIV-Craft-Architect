@@ -55,8 +55,12 @@ public static class TradeProcurementRowBuilder
     {
         lines.TryGetValue(row.ItemId, out var line);
         var quantity = Math.Max(row.TotalQuantity, 0);
-        var unitCost = line?.UnitCost ?? row.UnitPrice;
-        var totalCost = unitCost * (line?.Quantity ?? quantity);
+        var totalCost = line != null
+            ? line.UnitCost * line.Quantity
+            : row.CalculatedTotalCost;
+        var unitCost = line?.UnitCost ?? (quantity > 0 && totalCost > 0
+            ? Math.Ceiling(totalCost / quantity)
+            : 0m);
         var warnings = GetWarnings(row);
         return new TradeOrderProcurementRow(
             $"{row.ItemId}:{row.MustBeHq}",
@@ -81,7 +85,9 @@ public static class TradeProcurementRowBuilder
             ActiveQuantity: row.ActiveQuantity,
             UsedIn: row.UsedIn,
             HasEditableOccurrences: row.HasEditableOccurrences,
-            Source: row.Source);
+            Source: row.Source,
+            HasChildren: row.HasChildren,
+            AvailableSources: row.AvailableSources);
     }
 
     private static CommissionMaterialResponsibility GetResponsibility(
@@ -105,6 +111,16 @@ public static class TradeProcurementRowBuilder
             return "Priced";
         }
 
+        if (row.Source == AcquisitionSource.OnHand)
+        {
+            return "On hand";
+        }
+
+        if (row.HasChildren && row.Source == AcquisitionSource.Craft && totalCost > 0)
+        {
+            return "Craft path";
+        }
+
         if (row.IsActiveProcurement)
         {
             return "Unpriced";
@@ -118,11 +134,6 @@ public static class TradeProcurementRowBuilder
         if (row.IsFullySuppressed && row.SuppressedBy.Count > 0)
         {
             return [$"Skipped by {string.Join(", ", row.SuppressedBy)}"];
-        }
-
-        if (row.HasSuppressedOccurrences && row.SuppressedBy.Count > 0)
-        {
-            return [$"Some demand skipped by {string.Join(", ", row.SuppressedBy)}"];
         }
 
         return Array.Empty<string>();

@@ -8,14 +8,17 @@ public static class TradeOrderPaymentDisplayFormatter
     {
         ArgumentNullException.ThrowIfNull(material);
 
+        if (material.Responsibility == CommissionMaterialResponsibility.Provided)
+        {
+            return FormatGilAllowZero(0);
+        }
+
         if (material.TotalCost <= 0)
         {
             return "Not priced";
         }
 
-        return material.Responsibility == CommissionMaterialResponsibility.Crafter
-            ? FormatGil(material.TotalCost)
-            : FormatGilAllowZero(0);
+        return FormatGil(material.TotalCost);
     }
 
     public static string FormatCraftLaborBasis(TradePaymentContractBreakdown breakdown)

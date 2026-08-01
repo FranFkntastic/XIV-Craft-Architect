@@ -48,6 +48,7 @@ public partial class TradeOrders
     private bool _isSavingSelectedOrderCraftPlan;
     private bool _isDeletingSelectedOrder;
     private bool _isRefreshingLiveProcurement;
+    private bool _isLoadingSelectedOrderSupplyPlan;
     private int _activeOpsTab;
     private int _opsPaneWidth = DefaultOpsPaneWidth;
     private TradeOrderProcurementFilter _procurementFilter = TradeOrderProcurementFilter.All;

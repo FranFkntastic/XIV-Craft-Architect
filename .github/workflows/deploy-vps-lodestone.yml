@@ -11,6 +11,8 @@ on:
       - 'src/FFXIV Craft Architect.Web/wwwroot/appsettings.json'
       - 'tools/Discord/reconcile-guild.mjs'
       - 'global.json'
+      - 'Directory.Build.props'
+      - 'eng/Franthropy.version'
       - '.github/workflows/deploy-vps-lodestone.yml'
   workflow_dispatch:
     inputs:
@@ -39,6 +41,7 @@ jobs:
       name: ${{ ((github.event_name == 'workflow_dispatch' && inputs.target == 'staging') || github.ref_name == 'local-dev') && 'development' || 'production' }}
       url: ${{ ((github.event_name == 'workflow_dispatch' && inputs.target == 'staging') || github.ref_name == 'local-dev') && 'https://dev.xivcraftarchitect.com' || 'https://xivcraftarchitect.com' }}
     env:
+      FranthropyRoot: /tmp/franthropy
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
@@ -217,6 +220,17 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain --untracked-files=all)"
           node --check tools/Discord/reconcile-guild.mjs
+
+      - name: Checkout pinned Franthropy dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(tr -d '[:space:]' < eng/Franthropy.version)"
+          git init "$FranthropyRoot"
+          git -C "$FranthropyRoot" remote add origin https://github.com/FranFkntastic/Franthropy.git
+          git -C "$FranthropyRoot" fetch --depth=1 origin "$revision"
+          git -C "$FranthropyRoot" checkout --detach FETCH_HEAD
+          test "$(git -C "$FranthropyRoot" rev-parse HEAD)" = "$revision"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4

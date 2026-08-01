@@ -24,6 +24,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="$(FranthropyFfxivProject)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Data\world-directory.json" />
   </ItemGroup>
 

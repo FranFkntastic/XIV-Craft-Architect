@@ -136,6 +136,15 @@
         "type": "Transitive",
         "resolved": "8.0.0",
         "contentHash": "c9xLpVz6PL9lp/djOWtk5KPDZq3cSYpmXoJQY524EOtuFl5z9ZtsotpsyrDW40U1DRnQSYvcPKEUV0X//u6gkQ=="
+      },
+      "franthropy.ffxiv": {
+        "type": "Project",
+        "dependencies": {
+          "Franthropy.Filtering": "[0.1.0, )"
+        }
+      },
+      "franthropy.filtering": {
+        "type": "Project"
       }
     }
   }

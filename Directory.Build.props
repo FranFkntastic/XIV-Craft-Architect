@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <FranthropyRoot Condition="'$(FranthropyRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)artifacts\dependencies\Franthropy'))</FranthropyRoot>
+    <FranthropyFfxivProject>$([System.IO.Path]::GetFullPath('$(FranthropyRoot)\src\Franthropy.FFXIV\Franthropy.FFXIV.csproj'))</FranthropyFfxivProject>
+  </PropertyGroup>
+</Project>

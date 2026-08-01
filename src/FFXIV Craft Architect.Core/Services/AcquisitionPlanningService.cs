@@ -341,6 +341,8 @@ public static class AcquisitionPlanningService
             sources.Add(AcquisitionSource.UnknownSource);
         }
 
+        sources.Add(AcquisitionSource.OnHand);
+
         return sources;
     }
 

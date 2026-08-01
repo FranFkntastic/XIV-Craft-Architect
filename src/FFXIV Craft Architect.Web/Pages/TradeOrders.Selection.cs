@@ -180,8 +180,8 @@ public partial class TradeOrders
         }
 
         return evidence.IsFullyPriced
-            ? $"{evidence.PricedMaterialCount:N0} priced material lines"
-            : $"{evidence.PricedMaterialCount:N0} of {evidence.MaterialCount:N0} material lines priced";
+            ? $"{evidence.PricedMaterialCount:N0} resolved supply lines"
+            : $"{evidence.PricedMaterialCount:N0} of {evidence.MaterialCount:N0} supply lines resolved";
     }
 
     private static string FormatLinkedCraftPlanDate(TradeOrder order)
