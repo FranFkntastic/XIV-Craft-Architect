@@ -11,14 +11,14 @@ public sealed class HostedOrderSyncCoordinatorTests
     [InlineData(OwnerProjectionScenario.AdoptionForbidden)]
     [InlineData(OwnerProjectionScenario.ValidProjection)]
     [InlineData(OwnerProjectionScenario.InvalidProjection)]
-    [InlineData(OwnerProjectionScenario.TabReplayUsesOwnCursor)]
-    public void OwnerProjectionAndReplayPoliciesPreserveCanonicalState(
+    public void OwnerProjectionAdoptionPreservesCanonicalIdentity(
         OwnerProjectionScenario scenario)
     {
         switch (scenario)
         {
             case OwnerProjectionScenario.AdoptionRequired:
                 MissingOrStaleOwnerProjectionRequiresAdoption();
+                TabReplayUsesOwnCursorWithoutRegressingSharedCursor();
                 break;
             case OwnerProjectionScenario.AdoptionForbidden:
                 DeletedAndNonCommissionOrdersNeverRequireAdoption();
@@ -28,9 +28,6 @@ public sealed class HostedOrderSyncCoordinatorTests
                 break;
             case OwnerProjectionScenario.InvalidProjection:
                 StaleOrWrongIdentityProjectionIsRejected();
-                break;
-            case OwnerProjectionScenario.TabReplayUsesOwnCursor:
-                TabReplayUsesOwnCursorWithoutRegressingSharedCursor();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
@@ -263,7 +260,6 @@ public sealed class HostedOrderSyncCoordinatorTests
         AdoptionRequired,
         AdoptionForbidden,
         ValidProjection,
-        InvalidProjection,
-        TabReplayUsesOwnCursor
+        InvalidProjection
     }
 }
