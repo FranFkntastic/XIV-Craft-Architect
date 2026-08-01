@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
@@ -62,6 +63,115 @@ public sealed class ProfileHostContractTests
         using var response = await client.GetAsync("/profile-host/profile");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ChangeStream_RejectsMissingAccessKey()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient(withAccessKey: false);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/profile-host/changes/stream?sinceRevision=0");
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+        using var response = await client.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ChangeStream_WakesAfterCommittedMutation()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var streamClient = fixture.CreateClient();
+        using var mutationClient = fixture.CreateClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/profile-host/changes/stream?sinceRevision=0");
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var responseTask = streamClient.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            timeout.Token);
+        await Task.Delay(50, timeout.Token);
+        var put = await PutAsync(
+            mutationClient,
+            "{\"name\":\"Stream Wake\"}",
+            expectedRevision: 0);
+        using var response = await responseTask.WaitAsync(timeout.Token);
+        await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+        using var reader = new StreamReader(stream);
+        var lines = new List<string>();
+        while (lines.Count < 3)
+        {
+            var line = await reader.ReadLineAsync(timeout.Token);
+            Assert.NotNull(line);
+            if (line.Length > 0)
+            {
+                lines.Add(line);
+            }
+        }
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal($"id: {put.ServerRevision}", lines[0]);
+        Assert.Equal("event: profile-revision", lines[1]);
+        Assert.Equal($"data: {{\"serverRevision\":{put.ServerRevision}}}", lines[2]);
+
+        timeout.Cancel();
+        streamClient.CancelPendingRequests();
+        reader.Dispose();
+        await stream.DisposeAsync();
+        response.Dispose();
+        await Task.Delay(50);
+    }
+
+    [Fact]
+    public async Task StoreSignal_OnlyPublishesCommittedMutations()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"ca-signal-{Guid.NewGuid():N}.db");
+        try
+        {
+            var signal = new ProfileHostChangeSignal();
+            var store = new SqliteProfileHostStore(
+                new ProfileHostOptions { DatabasePath = databasePath },
+                signal);
+            var profile = await store.CreateProfileAsync("Signal Profile", CancellationToken.None);
+            var firstObservation = signal.Observe(profile.ProfileId);
+
+            var committed = await store.PutObjectAsync(
+                profile.ProfileId,
+                ProfileSyncCollections.Settings,
+                "signal-object",
+                "{}",
+                expectedRevision: 0,
+                CancellationToken.None);
+            await firstObservation.Changed.WaitAsync(TimeSpan.FromSeconds(1));
+            var conflictObservation = signal.Observe(profile.ProfileId);
+            var conflict = await store.PutObjectAsync(
+                profile.ProfileId,
+                ProfileSyncCollections.Settings,
+                "signal-object",
+                "{\"stale\":true}",
+                expectedRevision: 0,
+                CancellationToken.None);
+
+            Assert.True(committed.Success);
+            Assert.True(conflict.Conflict);
+            Assert.False(conflictObservation.Changed.IsCompleted);
+        }
+        finally
+        {
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
     }
 
     [Fact]

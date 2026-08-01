@@ -1,0 +1,14 @@
+@implements IAsyncDisposable
+@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.HostedOrderSyncCoordinator Coordinator
+
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await Coordinator.StartAsync();
+        }
+    }
+
+    public ValueTask DisposeAsync() => Coordinator.DisposeAsync();
+}

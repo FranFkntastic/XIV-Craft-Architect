@@ -254,6 +254,30 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Equal(operationId, store.Operation?.OperationId);
     }
 
+    [Fact]
+    public void ProfileSyncSession_UsesOneAuthenticatedRevisionOnlyLeaderStream()
+    {
+        var repositoryRoot = LocateRepositoryRoot();
+        var session = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "wwwroot",
+            "profile-sync-session.js"));
+
+        Assert.Contains("navigator.locks.request(", session, StringComparison.Ordinal);
+        Assert.Contains("new BroadcastChannel(channelName)", session, StringComparison.Ordinal);
+        Assert.Contains("\"X-Profile-Key\": accessKey", session, StringComparison.Ordinal);
+        Assert.Contains("credentials: \"omit\"", session, StringComparison.Ordinal);
+        Assert.Contains("redirect: \"error\"", session, StringComparison.Ordinal);
+        Assert.Contains("applicationLockName", session, StringComparison.Ordinal);
+        Assert.Contains("\"RecoverProfileRevision\"", session, StringComparison.Ordinal);
+        Assert.Contains("kind: \"profile-revision\"", session, StringComparison.Ordinal);
+        Assert.Contains("serverRevision: revision", session, StringComparison.Ordinal);
+        Assert.Contains("state.fetchController?.abort()", session, StringComparison.Ordinal);
+        Assert.DoesNotContain("new EventSource", session, StringComparison.Ordinal);
+    }
+
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

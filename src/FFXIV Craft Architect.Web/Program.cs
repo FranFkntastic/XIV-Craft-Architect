@@ -95,6 +95,8 @@ builder.Services.AddSingleton(new ProfileHostClientOptions(
         builder.HostEnvironment.BaseAddress)));
 builder.Services.AddScoped<ProfileHostClient>();
 builder.Services.AddScoped<ProfileSyncLocalStateService>();
+builder.Services.AddScoped<HostedOrderProjectionStore>();
+builder.Services.AddScoped<HostedOrderSyncCoordinator>();
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, SettingsProfileSyncAdapter>();
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, PlansProfileSyncAdapter>();
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, TradeCompanyProfileSyncAdapter>();

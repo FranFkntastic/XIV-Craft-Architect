@@ -13,10 +13,10 @@ public sealed class TradeCommissionOperationsService(
     TradeOperationsPersistenceService tradeOperations,
     ProfileSyncLocalStateService localState,
     ProfileSyncService profileSync,
+    HostedOrderProjectionStore hostedOrders,
     AppState appState)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly Dictionary<Guid, CompanyCommissionOwnerProjection> _projections = [];
     private readonly Dictionary<Guid, string> _errors = [];
     private readonly HashSet<Guid> _missingCanonicalOwners = [];
     private readonly Dictionary<Guid, IReadOnlyList<TradeDiscordNotificationDiagnostic>>
@@ -24,7 +24,7 @@ public sealed class TradeCommissionOperationsService(
     private readonly Dictionary<Guid, string> _notificationErrors = [];
 
     public CompanyCommissionOwnerProjection? GetForOrder(Guid orderId) =>
-        _projections.GetValueOrDefault(orderId);
+        hostedOrders.GetOwnerProjection(orderId);
 
     public string? GetErrorForOrder(Guid orderId) =>
         _errors.GetValueOrDefault(orderId);
@@ -68,7 +68,7 @@ public sealed class TradeCommissionOperationsService(
     {
         if (order.CompanyCommission == null)
         {
-            _projections.Remove(order.Id);
+            hostedOrders.ClearOwner(order.Id);
             _errors.Remove(order.Id);
             _missingCanonicalOwners.Remove(order.Id);
             return;
@@ -76,7 +76,6 @@ public sealed class TradeCommissionOperationsService(
 
         if (!CanPerformExternalAction(order, out var reason))
         {
-            _projections.Remove(order.Id);
             _missingCanonicalOwners.Remove(order.Id);
             _errors[order.Id] = reason;
             return;
@@ -97,13 +96,12 @@ public sealed class TradeCommissionOperationsService(
         }
         catch (MissingCompanyCommissionOwnerException exception)
         {
-            _projections.Remove(order.Id);
+            hostedOrders.ClearOwner(order.Id);
             _missingCanonicalOwners.Add(order.Id);
             _errors[order.Id] = exception.Message;
         }
         catch (Exception exception)
         {
-            _projections.Remove(order.Id);
             _missingCanonicalOwners.Remove(order.Id);
             _errors[order.Id] = exception.Message;
         }
@@ -527,10 +525,7 @@ public sealed class TradeCommissionOperationsService(
                     $"Participant recovery reset was {response.Mutation.Status.ToString().ToLowerInvariant()}.");
             }
 
-            var updated = await client.LoadOwnerProjectionAsync(
-                RequireCommission(current).CompanyId.Value,
-                RequireCommission(current).CommissionId,
-                cancellationToken);
+            var updated = response.Projection;
             ValidateProjection(current.Order, updated);
             if (updated.ObjectRevision.Value <= current.ObjectRevision.Value)
             {
@@ -654,7 +649,8 @@ public sealed class TradeCommissionOperationsService(
                         createCommand(context),
                         cancellationToken);
                 }
-                catch (CompanyCommissionRevisionConflictException) when (attempt == 0)
+                catch (CompanyCommissionRevisionConflictException)
+                    when (attempt == 0 && CanReplayAfterRevisionConflict(route))
                 {
                     var commission = RequireCommission(commandProjection);
                     commandProjection = await client.LoadOwnerProjectionAsync(
@@ -675,13 +671,11 @@ public sealed class TradeCommissionOperationsService(
                         $"The commissioner command was {mutation.Status.ToString().ToLowerInvariant()}.");
                 }
 
-                var commissionAfterCommand = RequireCommission(commandProjection);
-                var updated = await client.LoadOwnerProjectionAsync(
-                    commissionAfterCommand.CompanyId.Value,
-                    commissionAfterCommand.CommissionId,
-                    cancellationToken);
+                var updated = response.Projection ?? throw new InvalidOperationException(
+                    "The successful commissioner command returned no committed owner projection.");
                 ValidateProjection(current.Order, updated);
-                if (updated.ObjectRevision.Value <= commandProjection.ObjectRevision.Value)
+                if (mutation.Status == CompanyCommissionMutationStatus.Applied &&
+                    updated.ObjectRevision.Value <= commandProjection.ObjectRevision.Value)
                 {
                     throw new InvalidOperationException(
                         "The commissioner command did not advance the authoritative order revision.");
@@ -708,6 +702,27 @@ public sealed class TradeCommissionOperationsService(
         }
     }
 
+    private static bool CanReplayAfterRevisionConflict(string route) =>
+        route switch
+        {
+            "confirm-identity" or
+            "reject-claim" or
+            "decide-payment-policy" or
+            "record-payment" or
+            "retract-payment" or
+            "mark-company-materials-ready" or
+            "return-to-work" or
+            "accept-delivery" or
+            "record-settlement" or
+            "retract-settlement" or
+            "cancel" or
+            "revoke-publication" or
+            "add-comment" or
+            "add-private-note" => true,
+            "amend-terms" or "update-draft" => false,
+            _ => false,
+        };
+
     private async Task ApplyProjectionAsync(CompanyCommissionOwnerProjection projection)
     {
         if (!await tradeOperations.ApplyCanonicalOrderAsync(projection.Order))
@@ -720,7 +735,7 @@ public sealed class TradeCommissionOperationsService(
             ProfileSyncCollections.TradeOrders,
             projection.Order.Id.ToString("D"),
             projection.ObjectRevision.Value);
-        _projections[projection.Order.Id] = projection;
+        hostedOrders.TryPublishOwner(projection);
         _errors.Remove(projection.Order.Id);
         _missingCanonicalOwners.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
