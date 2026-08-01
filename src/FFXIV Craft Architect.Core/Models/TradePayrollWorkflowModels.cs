@@ -38,7 +38,8 @@ public sealed record TradeCommissionPaymentMaterial(
     string EvidenceSource,
     string UnitCostExplanation,
     DateTime? EvidenceTimestampUtc,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    bool IsOnHand = false);
 
 public sealed record TradeCommissionPaymentSummary(
     IReadOnlyList<TradeCommissionPaymentMaterial> Materials,
@@ -51,7 +52,8 @@ public sealed record TradeCommissionPaymentSummary(
     IReadOnlyList<string> Warnings,
     TradePaymentContractBreakdown Legacy,
     TradePaymentContractBreakdown LaborStandard,
-    TradePaymentContractBreakdown Active)
+    TradePaymentContractBreakdown Active,
+    decimal OnHandMaterialValueTotal = 0m)
 {
     public static TradeCommissionPaymentSummary FromOrder(
         TradeOrder order,
@@ -81,7 +83,11 @@ public sealed record TradeCommissionPaymentSummary(
                     material.EvidenceSource,
                     material.UnitCostExplanation,
                     material.EvidenceTimestampUtc,
-                    material.Warnings ?? Array.Empty<string>());
+                    material.Warnings ?? Array.Empty<string>(),
+                    IsOnHand: string.Equals(
+                        material.EvidenceSource,
+                        TradeOrderWorkflow.OnHandEvidenceSource,
+                        StringComparison.OrdinalIgnoreCase));
             })
             .ToArray();
         var policy = effectivePolicy != null
@@ -103,7 +109,8 @@ public sealed record TradeCommissionPaymentSummary(
                 material.EvidenceSource,
                 material.UnitCostExplanation,
                 material.EvidenceTimestampUtc,
-                material.Warnings))
+                material.Warnings,
+                material.IsOnHand))
             .ToArray();
         var laborInputs = (sourceSnapshot.CraftLabor ?? Array.Empty<TradeOrderCraftLaborSnapshot>())
             .Select(labor => new TradeCraftLaborInput(
@@ -131,6 +138,7 @@ public sealed record TradeCommissionPaymentSummary(
             comparison.Warnings,
             comparison.Legacy,
             comparison.LaborStandard,
-            comparison.Active);
+            comparison.Active,
+            comparison.OnHandMaterialValueTotal);
     }
 }

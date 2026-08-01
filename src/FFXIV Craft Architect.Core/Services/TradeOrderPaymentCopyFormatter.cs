@@ -63,6 +63,10 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine($"Active basis: {FormatPaymentContract(summary.Active.Contract)}");
         builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(summary.MaterialReimbursementTotal)}");
+        if (summary.OnHandMaterialValueTotal > 0)
+        {
+            builder.AppendLine($"On-hand material value (bonus basis only): {FormatGil(summary.OnHandMaterialValueTotal)}");
+        }
         builder.AppendLine($"Provided material value: {FormatGil(summary.ProvidedMaterialTotal)}");
         builder.AppendLine($"Legacy comparison: {FormatPaymentBreakdown(summary.Legacy)}");
         builder.AppendLine($"Labor-standard comparison: {FormatPaymentBreakdown(summary.LaborStandard)}");

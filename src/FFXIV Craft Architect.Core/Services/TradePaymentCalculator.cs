@@ -15,9 +15,18 @@ public sealed class TradePaymentCalculator
         ValidateInputs(materials, laborInputs, policy);
         var estimatedProcurementTotal = RoundGil(materials.Sum(material => material.UnitCost * material.Quantity));
         var materialReimbursementTotal = RoundGil(materials
-            .Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter)
+            .Where(material =>
+                material.Responsibility == CommissionMaterialResponsibility.Crafter &&
+                !material.IsOnHand)
             .Sum(material => material.UnitCost * material.Quantity));
-        var providedMaterialTotal = estimatedProcurementTotal - materialReimbursementTotal;
+        var providedMaterialTotal = RoundGil(materials
+            .Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided)
+            .Sum(material => material.UnitCost * material.Quantity));
+        var onHandMaterialValueTotal = RoundGil(materials
+            .Where(material =>
+                material.Responsibility == CommissionMaterialResponsibility.Crafter &&
+                material.IsOnHand)
+            .Sum(material => material.UnitCost * material.Quantity));
 
         var legacy = BuildLegacy(
             policy,
@@ -49,7 +58,8 @@ public sealed class TradePaymentCalculator
             labor,
             active,
             active.IsAvailable ? active.Total : 0m,
-            warnings);
+            warnings,
+            onHandMaterialValueTotal);
     }
 
     private static void ValidateInputs(
