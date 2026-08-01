@@ -25,6 +25,7 @@ public static class RecipePlanDisplayHelpers
             AcquisitionSource.UnknownSource => "Figure it out",
             AcquisitionSource.VendorBuy => "Vendor",
             AcquisitionSource.VendorSpecialCurrency => "Vendor (Currency)",
+            AcquisitionSource.OnHand => "On hand",
             _ => source.ToString()
         };
     }
@@ -42,6 +43,7 @@ public static class RecipePlanDisplayHelpers
             AcquisitionSource.UnknownSource => "?",
             AcquisitionSource.VendorBuy => "Vend",
             AcquisitionSource.VendorSpecialCurrency => "Currency",
+            AcquisitionSource.OnHand => "Stock",
             _ => source.ToString()
         };
     }
@@ -60,6 +62,7 @@ public static class RecipePlanDisplayHelpers
             AcquisitionSource.UnknownSource => "Gray",
             AcquisitionSource.VendorBuy => "LightGreen",
             AcquisitionSource.VendorSpecialCurrency => "Gold",
+            AcquisitionSource.OnHand => "LightBlue",
             _ => "White"
         };
     }
@@ -77,6 +80,7 @@ public static class RecipePlanDisplayHelpers
             AcquisitionSource.UnknownSource => "#b0b0b0",
             AcquisitionSource.VendorBuy => "#90ee90",   // LightGreen
             AcquisitionSource.VendorSpecialCurrency => "#ffd700", // Gold
+            AcquisitionSource.OnHand => "#8eb9ce",
             _ => "#ffffff"
         };
     }

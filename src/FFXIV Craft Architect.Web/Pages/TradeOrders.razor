@@ -529,7 +529,7 @@
                                     </div>
                                     <div class="@GetPipelineStageClass(HasProcurementEvidence(_selectedOrder), HasMaterialBreakdown(_selectedOrder) && !HasProcurementEvidence(_selectedOrder))">
                                         <span>3 - Procurement evidence</span>
-                                        <strong>@(HasProcurementEvidence(_selectedOrder) ? "Priced evidence available" : "Pricing evidence missing")</strong>
+                                        <strong>@(HasProcurementEvidence(_selectedOrder) ? "Supply evidence available" : "Supply evidence missing")</strong>
                                     </div>
                                     <div class="@GetPipelineStageClass(IsPaymentReady(_selectedOrder))">
                                         <span>4 - Settlement</span>
@@ -633,7 +633,12 @@
                                 <MudText Typo="Typo.caption" Color="Color.Secondary">@GetLatestHistoryCue(_selectedOrder)</MudText>
                             </div>
                          </div>
-                         <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="trade-orders-tab-panel" @bind-ActivePanelIndex="_activeOpsTab">
+                         <MudTabs Elevation="0"
+                                  Rounded="true"
+                                  ApplyEffectsToContainer="true"
+                                  PanelClass="trade-orders-tab-panel"
+                                  ActivePanelIndex="_activeOpsTab"
+                                  ActivePanelIndexChanged="SetActiveOpsTabAsync">
                              @if (SelectedCommissionOwner is { } operationsOwner &&
                                   operationsOwner.Order.CompanyCommission is { } operationsCommission)
                              {
@@ -1241,8 +1246,19 @@
                                         </div>
                                     </div>
                                     <div class="trade-orders-payment-heading">
-                                        <MudText Typo="Typo.subtitle2">Material Responsibility</MudText>
+                                        <div>
+                                            <MudText Typo="Typo.subtitle2">Supply Summary</MudText>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                Derived from the commission supply plan.
+                                            </MudText>
+                                        </div>
                                         <div class="trade-orders-payment-copy-actions">
+                                            <MudButton Variant="Variant.Text"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       OnClick="OpenSupplyPlanAsync">
+                                                Edit Supply Plan
+                                            </MudButton>
                                             <MudButton Variant="Variant.Outlined"
                                                        Color="Color.Secondary"
                                                        Size="Size.Small"
@@ -1291,12 +1307,9 @@
                                                 }
                                                 <span>@FormatMaterialUnitCost(material)</span>
                                                 <span>@FormatMaterialCost(material)</span>
-                                                <CompactSelectField Id="@($"order-material-responsibility-{material.ItemId}")"
-                                                                    Label="@($"{material.Name} responsibility")"
-                                                                    Value="@material.Responsibility.ToString()"
-                                                                    ValueChanged="value => SetOrderMaterialResponsibilityValueAsync(material, value)"
-                                                                    Options="MaterialResponsibilityOptions"
-                                                                    Disabled="@(IsSelectedOrderArchived || HasCanonicalCommission)" />
+                                                <span class="trade-orders-payment-responsibility">
+                                                    @FormatResponsibility(material.Responsibility)
+                                                </span>
                                                 <span>@FormatMaterialPaymentImpact(material)</span>
                                             </div>
                                         }
@@ -1433,15 +1446,15 @@
                                     </section>
                                 }
                             </MudTabPanel>
-                            <MudTabPanel Text="Procurement">
+                            <MudTabPanel Text="Supply Plan">
                                 @{
                                     var allProcurementRows = GetSelectedOrderProcurementRows();
-                                    var procurementRows = GetActiveProcurementRows(allProcurementRows);
+                                    var procurementRows = GetSupplyPlanRows(allProcurementRows);
                                     var visibleProcurementRows = GetFilteredProcurementRows(procurementRows);
                                 }
                                 @if (procurementRows.Count == 0)
                                 {
-                                    <MudAlert Severity="Severity.Info" Dense="true">No material evidence has been captured for this order yet.</MudAlert>
+                                    <MudAlert Severity="Severity.Info" Dense="true">No supply-plan evidence has been captured for this order yet.</MudAlert>
                                 }
                                 else
                                 {
@@ -1449,7 +1462,7 @@
                                         <div>
                                             <span>Output route</span>
                                             <strong>@FormatProcurementOutputSummary(_selectedOrder)</strong>
-                                            <small>@FormatProcurementRouteSummary(_selectedOrder, procurementRows.Count)</small>
+                                            <small>@FormatProcurementRouteSummary(_selectedOrder, CountActiveProcurementRows(procurementRows))</small>
                                         </div>
                                         <MudButton Variant="Variant.Outlined"
                                                    Color="Color.Secondary"
@@ -1463,12 +1476,12 @@
 
                                     <section class="trade-orders-procurement-summary">
                                         <div class="trade-orders-procurement-total">
-                                            <span>Estimated procurement</span>
+                                            <span>Crafter reimbursable</span>
                                             <strong>@FormatGil(GetProcurementEstimatedTotal(procurementRows))</strong>
                                         </div>
                                         <div class="trade-orders-procurement-health">
-                                            <strong>@GetProcurementHealthLabel(procurementRows)</strong>
-                                            <span>@FormatProcurementEvidenceContext(_selectedOrder)</span>
+                                            <strong>Company handoff: @FormatCompanyHandoffSummary(procurementRows)</strong>
+                                            <span>@GetProcurementHealthLabel(procurementRows) | @FormatProcurementEvidenceContext(_selectedOrder)</span>
                                         </div>
                                         <MudButton Variant="Variant.Filled"
                                                    Color="Color.Primary"
@@ -1517,7 +1530,7 @@
                                                   SortState="@_procurementSortState"
                                                   SortChanged="OnProcurementSortChanged"
                                                   FitToContainer="true"
-                                                  ColumnGapPx="8"
+                                                  ColumnGapPx="6"
                                                   HorizontalPaddingPx="8">
                                         <EmptyContent>
                                             <div class="trade-orders-procurement-empty">@GetProcurementFilterEmptyMessage()</div>
@@ -2303,9 +2316,10 @@
                     aria-label="@($"{row.ItemName} procurement route")"
                     value="@row.Source.ToString()"
                     @onchange="args => ChangeProcurementRowSourceValueAsync(row, args.Value?.ToString())">
-                @foreach (var source in GetProcurementSourceOptions())
+                @foreach (var source in GetProcurementSourceOptions(row))
                 {
                     <option value="@source.ToString()"
+                            disabled="@(source == AcquisitionSource.Craft && row.Responsibility == CommissionMaterialResponsibility.Provided)"
                             selected="@(source == row.Source)">@RecipePlanDisplayHelpers.GetSourceDisplayName(source)</option>
                 }
             </select>
@@ -2327,14 +2341,24 @@
     </div>;
 
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => @<div class="trade-orders-procurement-cost-cell">
-        <strong>@FormatGil(row.TotalCost)</strong>
-        <span>@(row.UnitCost > 0 ? $"{FormatGil(row.UnitCost)} each" : row.UnitCostExplanation)</span>
+        <strong>@(row.Responsibility == CommissionMaterialResponsibility.Provided || row.Source == AcquisitionSource.OnHand
+            ? FormatGilAllowZero(0)
+            : FormatGil(row.TotalCost))</strong>
+        <span>
+            @(row.Responsibility == CommissionMaterialResponsibility.Provided
+                ? "Company provided"
+                : row.Source == AcquisitionSource.OnHand
+                    ? "Existing stock"
+                    : row.UnitCost > 0
+                        ? $"{FormatGil(row.UnitCost)} each"
+                        : row.UnitCostExplanation)
+        </span>
     </div>;
 
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementResponsibilityCell => row => @<div class="trade-orders-procurement-responsibility-cell">
         @if (HasCanonicalCommission)
         {
-            <strong title="Published commission responsibility is changed through commission terms.">@FormatResponsibility(row.Responsibility)</strong>
+            <strong title="Create a terms revision before changing a published commission supply plan.">@FormatResponsibility(row.Responsibility)</strong>
         }
         else
         {

@@ -68,7 +68,12 @@ public enum AcquisitionSource
     /// Some items can only be obtained via special currency (e.g., certain housing items).
     /// This option allows users to track these items even though no gil cost is calculated.
     /// </summary>
-    VendorSpecialCurrency
+    VendorSpecialCurrency,
+    /// <summary>
+    /// Use stock already held outside this plan. The item remains required, but its recipe
+    /// children and acquisition cost are excluded from active procurement.
+    /// </summary>
+    OnHand
 }
 
 /// <summary>

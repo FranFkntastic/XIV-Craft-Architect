@@ -1833,6 +1833,12 @@ public static partial class ManagedHost
             availableSources.Insert(0, row.Source);
         }
 
+        var hasCalculatedCost = CoreAcquisitionEvaluationCostCalculator.TryGetCost(
+            row,
+            row.Source,
+            costContext,
+            out var calculatedTotalCost);
+
         return new WorkerAcquisitionRowProjection(
             row.NodeId,
             row.ItemId,
@@ -1859,6 +1865,7 @@ public static partial class ManagedHost
             row.EstimatedCost,
             evidence.UnavailableMarketItemIds.Contains(row.ItemId),
             row.UnitPrice,
+            hasCalculatedCost ? calculatedTotalCost : 0m,
             availableSources,
             BuildAcquisitionOptions(row, costContext));
     }
@@ -1923,6 +1930,13 @@ public static partial class ManagedHost
                 hasCost,
                 IsProjectedUnsupported: false));
         }
+        options.Add(new WorkerAcquisitionOptionProjection(
+            AcquisitionSource.OnHand,
+            "On hand",
+            "Use stock already held outside this plan.",
+            "0g",
+            IsAvailable: true,
+            IsProjectedUnsupported: false));
         if (!row.CanBuyFromMarket && !row.CanBuyFromVendor && !row.HasChildren)
         {
             options.Add(new WorkerAcquisitionOptionProjection(

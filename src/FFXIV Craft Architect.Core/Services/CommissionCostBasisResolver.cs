@@ -79,6 +79,21 @@ public sealed class CommissionCostBasisResolver
         IReadOnlyDictionary<int, MarketItemAnalysis> analysesByItemId,
         IReadOnlyDictionary<int, DetailedShoppingPlan> plansByItemId)
     {
+        if (item.Source == AcquisitionSource.OnHand)
+        {
+            return new CommissionPayrollInputLine(
+                item.ItemId,
+                item.Name,
+                item.TotalQuantity,
+                UnitCost: 0m,
+                item.RequiresHq,
+                CommissionMaterialResponsibility.Crafter,
+                TradeOrderWorkflow.OnHandEvidenceSource,
+                $"{item.Name} is supplied from existing stock; no acquisition cost is included.",
+                EvidenceTimestampUtc: null,
+                Warnings: Array.Empty<string>());
+        }
+
         var warnings = new List<string>();
         var evidenceSource = "Plan price";
         var unitCostExplanation = $"No selected-source evidence found for {item.Name}; using plan price: {item.UnitPrice:N0}g.";

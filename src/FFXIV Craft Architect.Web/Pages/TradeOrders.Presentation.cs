@@ -28,6 +28,14 @@ public partial class TradeOrders
 
     private static string FormatMaterialCost(TradeCommissionPaymentMaterial material)
     {
+        if (string.Equals(
+            material.EvidenceSource,
+            TradeOrderWorkflow.OnHandEvidenceSource,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return FormatGilAllowZero(0);
+        }
+
         if (material.UnitCost <= 0 || material.TotalCost <= 0)
         {
             return "Not priced";
@@ -38,6 +46,14 @@ public partial class TradeOrders
 
     private static string FormatMaterialUnitCost(TradeCommissionPaymentMaterial material)
     {
+        if (string.Equals(
+            material.EvidenceSource,
+            TradeOrderWorkflow.OnHandEvidenceSource,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return "Existing stock";
+        }
+
         return material.UnitCost > 0 ? FormatGil(material.UnitCost) : "Not priced";
     }
 
@@ -71,8 +87,8 @@ public partial class TradeOrders
     private static string FormatResponsibility(CommissionMaterialResponsibility responsibility)
     {
         return responsibility == CommissionMaterialResponsibility.Provided
-            ? "Provided"
-            : "Crafter procures";
+            ? "Company supplies"
+            : "Crafter supplies";
     }
 
     private static string FormatGil(decimal value)
