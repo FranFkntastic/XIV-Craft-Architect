@@ -69,7 +69,7 @@ public partial class TradeOrders
         }
 
         var stored = GetPayrollDraftForOrder(_selectedOrder);
-        var commission = SelectedCanonicalCommission;
+        var commission = SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission;
         if (commission == null)
         {
             return stored;
