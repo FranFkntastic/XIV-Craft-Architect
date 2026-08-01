@@ -11,8 +11,7 @@ public sealed class HostedOrderSyncCoordinatorTests
     [InlineData(OwnerProjectionScenario.AdoptionForbidden)]
     [InlineData(OwnerProjectionScenario.ValidProjection)]
     [InlineData(OwnerProjectionScenario.InvalidProjection)]
-    [InlineData(OwnerProjectionScenario.TabReplayStartsFromOwnCursor)]
-    [InlineData(OwnerProjectionScenario.TabReplayPreservesSharedCursor)]
+    [InlineData(OwnerProjectionScenario.TabReplayUsesOwnCursor)]
     public void OwnerProjectionAndReplayPoliciesPreserveCanonicalState(
         OwnerProjectionScenario scenario)
     {
@@ -30,11 +29,8 @@ public sealed class HostedOrderSyncCoordinatorTests
             case OwnerProjectionScenario.InvalidProjection:
                 StaleOrWrongIdentityProjectionIsRejected();
                 break;
-            case OwnerProjectionScenario.TabReplayStartsFromOwnCursor:
-                TabReplayStartsFromOwnCursor();
-                break;
-            case OwnerProjectionScenario.TabReplayPreservesSharedCursor:
-                TabReplayPreservesSharedCursor();
+            case OwnerProjectionScenario.TabReplayUsesOwnCursor:
+                TabReplayUsesOwnCursorWithoutRegressingSharedCursor();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
@@ -133,15 +129,11 @@ public sealed class HostedOrderSyncCoordinatorTests
                 Projection(order, objectRevision: 5, companyRevision: 0)));
     }
 
-    private static void TabReplayStartsFromOwnCursor()
+    private static void TabReplayUsesOwnCursorWithoutRegressingSharedCursor()
     {
         Assert.Equal(405L, ResolveSyncStartRevision(446, 405));
         Assert.Equal(400L, ResolveSyncStartRevision(400, 405));
         Assert.Equal(446L, ResolveSyncStartRevision(446, null));
-    }
-
-    private static void TabReplayPreservesSharedCursor()
-    {
         Assert.False(ShouldAdvancePersistedRevision(446, 405));
         Assert.False(ShouldAdvancePersistedRevision(446, 446));
         Assert.True(ShouldAdvancePersistedRevision(446, 447));
@@ -272,7 +264,6 @@ public sealed class HostedOrderSyncCoordinatorTests
         AdoptionForbidden,
         ValidProjection,
         InvalidProjection,
-        TabReplayStartsFromOwnCursor,
-        TabReplayPreservesSharedCursor
+        TabReplayUsesOwnCursor
     }
 }
