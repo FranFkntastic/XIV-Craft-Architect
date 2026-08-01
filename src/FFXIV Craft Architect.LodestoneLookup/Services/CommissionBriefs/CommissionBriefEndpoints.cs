@@ -214,8 +214,14 @@ public static class CommissionBriefEndpoints
 
                 var publications = context.RequestServices
                     .GetRequiredService<DiscordPublicationService>();
-                await publications.RevokeAsync(publicId, ct);
-                changeSignal.Publish(publicId);
+                try
+                {
+                    await publications.RevokeAsync(publicId, ct);
+                }
+                finally
+                {
+                    changeSignal.Publish(publicId);
+                }
 
                 return Results.NoContent();
             });

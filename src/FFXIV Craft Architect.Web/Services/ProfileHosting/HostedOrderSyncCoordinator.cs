@@ -355,6 +355,8 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
             _disposed = true;
             _profileSync.ConnectionChanged -= OnConnectionChanged;
             await StopSessionAsync();
+            await _sync.WaitAsync();
+            _sync.Release();
             if (_module != null)
             {
                 await _module.DisposeAsync();

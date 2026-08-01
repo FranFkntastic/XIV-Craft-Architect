@@ -108,13 +108,6 @@ export function createProfileSyncSession(
     async function streamOnce() {
         state.fetchController = new AbortController();
         const streamUrl = new URL("profile-host/changes/stream", normalizeHostUrl(hostUrl));
-        if (streamUrl.origin !== window.location.origin) {
-            throw new ProfileStreamError(
-                "profile_stream_cross_origin",
-                "The profile stream endpoint must use the current origin.",
-                true);
-        }
-
         streamUrl.searchParams.set("sinceRevision", String(state.cursor));
         const response = await fetch(streamUrl, {
             method: "GET",

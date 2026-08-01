@@ -84,7 +84,8 @@ export class CommissionBriefApiClient {
         const response = await this.fetch(this.briefPath, {
             method: "GET",
             headers,
-            cache: "no-store"
+            cache: "no-store",
+            redirect: "error"
         });
         const projection = adaptBriefProjection(await adaptResponse(response));
         projection.projectionTag = optionalProjectionTag(
@@ -112,6 +113,7 @@ export class CommissionBriefApiClient {
                     "Accept": "application/json",
                     "Content-Type": "application/json"
                 },
+                redirect: "error",
                 body: JSON.stringify(body)
             });
         return adaptResponse(response);
@@ -154,6 +156,7 @@ export class CommissionBriefApiClient {
                         method: "GET",
                         headers,
                         cache: "no-store",
+                        redirect: "error",
                         signal: activeController.signal
                     });
                     if (response.status === 401 || response.status === 404) {

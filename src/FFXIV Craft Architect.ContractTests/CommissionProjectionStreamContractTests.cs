@@ -61,6 +61,7 @@ public sealed class CommissionProjectionStreamContractTests
 
         Assert.Contains("/stream?projectionTag=", client, StringComparison.Ordinal);
         Assert.Contains("headers[\"X-Commission-Participant\"]", client, StringComparison.Ordinal);
+        Assert.Contains("redirect: \"error\"", client, StringComparison.Ordinal);
         Assert.Contains("eventName !== \"commission-projection\"", client, StringComparison.Ordinal);
         Assert.Contains("await onProjectionChanged(nextTag)", client, StringComparison.Ordinal);
         Assert.DoesNotContain("new EventSource", client, StringComparison.Ordinal);
