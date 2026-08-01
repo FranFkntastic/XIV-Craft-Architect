@@ -109,7 +109,7 @@ public sealed class RecipeDemandProjectionService : IRecipeDemandProjectionServi
             return;
         }
 
-        if (node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy)
+        if (node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy or AcquisitionSource.OnHand)
         {
             activeRows.Add(CreateRow(
                 RecipeDemandViewKind.ActiveProcurement,
@@ -240,7 +240,7 @@ public sealed class RecipeDemandProjectionService : IRecipeDemandProjectionServi
 
     private static bool IsLedgerDirectSource(PlanNode node)
     {
-        return node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy or AcquisitionSource.UnknownSource;
+        return node.Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy or AcquisitionSource.UnknownSource or AcquisitionSource.OnHand;
     }
 
     private sealed record SuppressingDemandAncestor(string NodeId, int ItemId, string ItemName);

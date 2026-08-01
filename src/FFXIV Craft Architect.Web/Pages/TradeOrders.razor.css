@@ -676,6 +676,12 @@
   gap: 6px;
 }
 
+.trade-orders-payment-responsibility {
+  color: #c9c9c9;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .trade-orders-material-header,
 .trade-orders-material-row {
   grid-template-columns: minmax(150px, 1fr) 64px 86px 96px minmax(104px, 132px);
@@ -777,6 +783,20 @@
   background: rgba(240, 180, 95, 0.045);
 }
 
+::deep .trade-orders-procurement-grid .web-grid-table-row.is-precraft {
+  border-top-color: #574c2c;
+  background: rgba(155, 121, 39, 0.09);
+}
+
+::deep .trade-orders-procurement-grid .web-grid-table-row.is-provided {
+  border-top-color: #405b69;
+  background: rgba(63, 102, 121, 0.1);
+}
+
+::deep .trade-orders-procurement-grid .web-grid-table-row:not(.is-precraft):not(.is-provided) .trade-orders-procurement-item-cell {
+  padding-left: 12px;
+}
+
 ::deep .trade-orders-procurement-grid .web-grid-table-cell.is-align-end {
   text-align: right;
   white-space: nowrap;
@@ -801,6 +821,18 @@
   font-size: 0.78rem;
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+::deep .trade-orders-precraft-chip {
+  flex: 0 0 auto;
+  border-radius: 3px;
+  background: #40361f;
+  color: #e1bf64;
+  padding: 2px 5px;
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 ::deep .trade-orders-procurement-status-dot {

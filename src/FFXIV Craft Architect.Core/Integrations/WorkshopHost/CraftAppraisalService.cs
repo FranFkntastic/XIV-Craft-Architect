@@ -142,6 +142,7 @@ public sealed class CraftAppraisalService : ICraftAppraisalService
             AcquisitionSource.MarketBuyHq => row.HqUnitPrice,
             AcquisitionSource.MarketBuyNq => row.UnitPrice,
             AcquisitionSource.UnknownSource => 0,
+            AcquisitionSource.OnHand => 0,
             _ => row.MustBeHq && row.HqUnitPrice > 0 ? row.HqUnitPrice : row.UnitPrice
         };
     }

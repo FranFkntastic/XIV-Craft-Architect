@@ -87,6 +87,7 @@ public sealed record RecipeDemandProjection(
             AcquisitionSource.MarketBuyHq => row.HqUnitPrice,
             AcquisitionSource.MarketBuyNq => row.UnitPrice,
             AcquisitionSource.UnknownSource => 0,
+            AcquisitionSource.OnHand => 0,
             _ => row.MustBeHq && row.HqUnitPrice > 0 ? row.HqUnitPrice : row.UnitPrice
         };
     }
@@ -265,6 +266,7 @@ public sealed record RecipeDemandRow
 
     public bool IsMarketBoardPurchase => Source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq;
     public bool IsVendorPurchase => Source == AcquisitionSource.VendorBuy;
+    public bool IsOnHand => Source == AcquisitionSource.OnHand;
     public bool IsDirectPurchase => IsMarketBoardPurchase || IsVendorPurchase || Source == AcquisitionSource.UnknownSource;
 
     public void Deconstruct(

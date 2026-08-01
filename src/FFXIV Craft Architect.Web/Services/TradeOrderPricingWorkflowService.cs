@@ -505,12 +505,14 @@ public sealed class TradeOrderPricingWorkflowService
         warnings.AddRange(source.Warnings);
         var materials = TradeOrderMaterialEvidenceMapper.ToMaterialSnapshots(
             source.MaterialLines);
-        var pricedCount = materials.Count(material =>
-            material.UnitCost > 0 && material.TotalCost > 0);
+        var pricedCount = materials.Count(material => TradeOrderWorkflow.IsResolvedMaterialEvidence(
+            material.UnitCost,
+            material.TotalCost,
+            material.EvidenceSource));
         if (pricedCount < source.ActiveProcurementItems.Count)
         {
             warnings.Add(
-                $"Order pricing is incomplete: {pricedCount:N0} of {source.ActiveProcurementItems.Count:N0} active procurement items are priced.");
+                $"Order supply evidence is incomplete: {pricedCount:N0} of {source.ActiveProcurementItems.Count:N0} active materials are resolved.");
         }
 
         order.SourceSnapshot.SourcePlanId = order.CraftPlanId;

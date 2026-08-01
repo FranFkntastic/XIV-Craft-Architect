@@ -80,6 +80,36 @@ public partial class TradeOrders
             : null;
     }
 
+    private Task OpenSupplyPlanAsync() => SetActiveOpsTabAsync(ProcurementTabIndex);
+
+    private async Task SetActiveOpsTabAsync(int tabIndex)
+    {
+        _activeOpsTab = tabIndex;
+        if (tabIndex != ProcurementTabIndex ||
+            _selectedOrder == null ||
+            IsSelectedOrderLinkedPlanActive() ||
+            _isLoadingSelectedOrderSupplyPlan)
+        {
+            return;
+        }
+
+        _isLoadingSelectedOrderSupplyPlan = true;
+        try
+        {
+            if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
+            {
+                return;
+            }
+
+            ClearLiveProcurementSnapshot();
+            await EnsureLiveProcurementSnapshotAsync();
+        }
+        finally
+        {
+            _isLoadingSelectedOrderSupplyPlan = false;
+        }
+    }
+
     private async Task EnsureLiveProcurementSnapshotAsync()
     {
         var key = CreateLiveProcurementKey();
@@ -150,7 +180,11 @@ public partial class TradeOrders
     {
         if (!_procurementSortState.Column.HasValue)
         {
-            return rows;
+            return rows
+                .OrderBy(row => IsSupplyPrecraftRow(row) ? 0 : 1)
+                .ThenBy(row => row.UsedIn, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
         }
 
         IOrderedEnumerable<TradeOrderProcurementRow> ordered = _procurementSortState.Column.Value switch
@@ -173,8 +207,8 @@ public partial class TradeOrders
             new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
             {
                 Id = TradeOrderProcurementColumn.Item,
-                Header = "Material",
-                Size = new WebTableColumnSize(180, 150),
+                Header = "Item",
+                Size = new WebTableColumnSize(170, 140),
                 Sortable = true,
                 CellCssClass = "trade-orders-procurement-item-cell",
                 CellTemplate = RenderProcurementItemCell
@@ -183,16 +217,16 @@ public partial class TradeOrders
                 TradeOrderProcurementColumn.Quantity,
                 "Required",
                 FormatProcurementQuantity,
-                widthPx: 90,
-                minWidthPx: 78,
+                widthPx: 78,
+                minWidthPx: 68,
                 alignEnd: true,
                 cellCssClass: "trade-orders-procurement-quantity",
-                headerTooltip: "Active procurement quantity for live linked plans; total quantity for saved snapshots."),
+                headerTooltip: "Required quantity for precrafts; active procurement quantity for leaf materials."),
             new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
             {
                 Id = TradeOrderProcurementColumn.Source,
-                Header = "Procurement Route",
-                Size = new WebTableColumnSize(170, 132),
+                Header = "Acquisition",
+                Size = new WebTableColumnSize(150, 118),
                 Sortable = true,
                 SuppressRowActivation = true,
                 CellTemplate = RenderProcurementSourceCell
@@ -200,8 +234,8 @@ public partial class TradeOrders
             new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
             {
                 Id = TradeOrderProcurementColumn.Cost,
-                Header = "Estimated Cost",
-                Size = new WebTableColumnSize(140, 116),
+                Header = "Payment Impact",
+                Size = new WebTableColumnSize(120, 96),
                 Sortable = true,
                 CellCssClass = "trade-orders-procurement-cost",
                 CellTemplate = RenderProcurementCostCell
@@ -210,7 +244,7 @@ public partial class TradeOrders
             {
                 Id = TradeOrderProcurementColumn.Responsibility,
                 Header = "Responsibility",
-                Size = new WebTableColumnSize(150, 126),
+                Size = new WebTableColumnSize(140, 116),
                 Sortable = true,
                 SuppressRowActivation = true,
                 CellTemplate = RenderProcurementResponsibilityCell
@@ -236,6 +270,13 @@ public partial class TradeOrders
             builder.AddContent(sequence++, "HQ");
             builder.CloseElement();
         }
+        if (IsSupplyPrecraftRow(row))
+        {
+            builder.OpenElement(sequence++, "span");
+            builder.AddAttribute(sequence++, "class", "trade-orders-precraft-chip");
+            builder.AddContent(sequence++, "Precraft");
+            builder.CloseElement();
+        }
         builder.CloseElement();
 
         builder.OpenElement(sequence++, "span");
@@ -245,12 +286,30 @@ public partial class TradeOrders
         builder.CloseElement();
     };
 
-    private static IReadOnlyList<TradeOrderProcurementRow> GetActiveProcurementRows(
+    private IReadOnlyList<TradeOrderProcurementRow> GetSupplyPlanRows(
         IReadOnlyList<TradeOrderProcurementRow> rows)
     {
         return rows
-            .Where(row => !row.IsLiveAcquisitionRow || row.IsActiveProcurement)
+            .Where(row => !IsRequestedOutputReferenceRow(row))
+            .Where(row =>
+                !row.IsLiveAcquisitionRow ||
+                row.IsActiveProcurement ||
+                IsSupplyPrecraftRow(row))
             .ToArray();
+    }
+
+    private bool IsRequestedOutputReferenceRow(TradeOrderProcurementRow row)
+    {
+        return _selectedOrder != null &&
+            row.IsLiveAcquisitionRow &&
+            GetOrderRootItems(_selectedOrder).Any(output => output.ItemId == row.ItemId);
+    }
+
+    private static bool IsSupplyPrecraftRow(TradeOrderProcurementRow row)
+    {
+        return row.IsLiveAcquisitionRow &&
+            row.HasChildren &&
+            row.HasEditableOccurrences;
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetFilteredProcurementRows(
@@ -285,8 +344,17 @@ public partial class TradeOrders
 
     private static bool ProcurementRowNeedsAttention(TradeOrderProcurementRow row)
     {
+        if (row.Source == AcquisitionSource.OnHand)
+        {
+            return row.Warnings.Count > 0;
+        }
+
+        if (IsSupplyPrecraftRow(row) && row.Source == AcquisitionSource.Craft)
+        {
+            return row.TotalCost <= 0 || row.Warnings.Count > 0;
+        }
+
         return row.TotalCost <= 0 ||
-            row.HasSuppressedOccurrences ||
             row.Warnings.Count > 0 ||
             !string.Equals(row.EvidenceStatus, "Priced", StringComparison.OrdinalIgnoreCase);
     }
@@ -340,7 +408,29 @@ public partial class TradeOrders
     private static decimal GetProcurementEstimatedTotal(
         IReadOnlyList<TradeOrderProcurementRow> rows)
     {
-        return rows.Sum(row => Math.Max(row.TotalCost, 0m));
+        return rows
+            .Where(row => !row.IsLiveAcquisitionRow || row.IsActiveProcurement)
+            .Where(row => row.Responsibility == CommissionMaterialResponsibility.Crafter)
+            .Sum(row => Math.Max(row.TotalCost, 0m));
+    }
+
+    private static int CountActiveProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        return rows.Count(row => !row.IsLiveAcquisitionRow || row.IsActiveProcurement);
+    }
+
+    private static string FormatCompanyHandoffSummary(IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        var companyRows = rows
+            .Where(row => (!row.IsLiveAcquisitionRow || row.IsActiveProcurement) &&
+                row.Responsibility == CommissionMaterialResponsibility.Provided)
+            .ToArray();
+        return companyRows.Length switch
+        {
+            0 => "None",
+            1 => $"{companyRows[0].ItemName} {TradeDisplayFormatter.FormatQuantity(companyRows[0].Quantity)}",
+            _ => $"{companyRows.Length:N0} material lines"
+        };
     }
 
     private static string GetProcurementHealthLabel(
@@ -366,10 +456,15 @@ public partial class TradeOrders
     private static string FormatProcurementFooter(IReadOnlyList<TradeOrderProcurementRow> rows)
     {
         var attentionCount = rows.Count(ProcurementRowNeedsAttention);
+        var materialCount = CountActiveProcurementRows(rows);
+        var precraftCount = rows.Count(IsSupplyPrecraftRow);
         var state = attentionCount == 0
             ? "all pricing evidence current"
             : $"{attentionCount:N0} {(attentionCount == 1 ? "line needs" : "lines need")} attention";
-        return $"{rows.Count:N0} {(rows.Count == 1 ? "material" : "materials")} | {state}";
+        var precraft = precraftCount == 0
+            ? string.Empty
+            : $" | {precraftCount:N0} {(precraftCount == 1 ? "precraft decision" : "precraft decisions")}";
+        return $"{materialCount:N0} active {(materialCount == 1 ? "material" : "materials")}{precraft} | {state}";
     }
 
     private static string GetProcurementStatusDotClass(TradeOrderProcurementRow row)
@@ -388,6 +483,13 @@ public partial class TradeOrders
 
     private static string FormatProcurementEvidence(TradeOrderProcurementRow row)
     {
+        if (row.HasSuppressedOccurrences &&
+            !row.IsFullySuppressed &&
+            row.SuppressedBy.Count > 0)
+        {
+            return $"Partial demand after {string.Join(", ", row.SuppressedBy)} route";
+        }
+
         if (!string.IsNullOrWhiteSpace(row.WarningSummary))
         {
             return row.WarningSummary;
@@ -413,6 +515,16 @@ public partial class TradeOrders
             return "trade-orders-procurement-row is-suppressed";
         }
 
+        if (row.Source == AcquisitionSource.OnHand)
+        {
+            return "trade-orders-procurement-row is-provided";
+        }
+
+        if (IsSupplyPrecraftRow(row))
+        {
+            return "trade-orders-procurement-row is-precraft";
+        }
+
         if (!row.IsActiveProcurement)
         {
             return "trade-orders-procurement-row is-reference";
@@ -425,6 +537,11 @@ public partial class TradeOrders
 
     private static string FormatProcurementQuantity(TradeOrderProcurementRow row)
     {
+        if (IsSupplyPrecraftRow(row))
+        {
+            return TradeDisplayFormatter.FormatQuantity(row.Quantity);
+        }
+
         if (row.IsLiveAcquisitionRow && row.ActiveQuantity != row.Quantity)
         {
             return $"{TradeDisplayFormatter.FormatQuantity(row.ActiveQuantity)} / {TradeDisplayFormatter.FormatQuantity(row.Quantity)}";
@@ -466,6 +583,24 @@ public partial class TradeOrders
             return;
         }
 
+        if (responsibility == CommissionMaterialResponsibility.Provided &&
+            IsSupplyPrecraftRow(row) &&
+            row.Source == AcquisitionSource.Craft)
+        {
+            var sourceChanged = await ChangeProcurementRowSourceAsync(
+                row,
+                AcquisitionSource.OnHand,
+                showSuccess: false);
+            if (!sourceChanged)
+            {
+                return;
+            }
+
+            row = GetSelectedOrderProcurementRows().FirstOrDefault(candidate =>
+                candidate.ItemId == row.ItemId &&
+                candidate.RequiresHq == row.RequiresHq) ?? row;
+        }
+
         var material = GetSelectedOrderPaymentSummary().Materials.FirstOrDefault(candidate =>
             candidate.ItemId == row.ItemId &&
             candidate.RequiresHq == row.RequiresHq);
@@ -476,6 +611,12 @@ public partial class TradeOrders
         }
 
         await SetOrderMaterialResponsibilityAsync(material, responsibility);
+        if (responsibility == CommissionMaterialResponsibility.Provided && row.HasChildren)
+        {
+            Snackbar.Add(
+                $"{row.ItemName} is now a company-provided handoff; its recipe subtree is excluded from crafter payment.",
+                Severity.Success);
+        }
     }
 
     private Task OnProcurementSortChanged(WebTableSortState<TradeOrderProcurementColumn> sortState)
@@ -484,46 +625,60 @@ public partial class TradeOrders
         return Task.CompletedTask;
     }
 
-    private static IReadOnlyList<AcquisitionSource> GetProcurementSourceOptions()
+    private static IReadOnlyList<AcquisitionSource> GetProcurementSourceOptions(TradeOrderProcurementRow row)
     {
-        return
-        [
-            AcquisitionSource.Craft,
-            AcquisitionSource.MarketBuyNq,
-            AcquisitionSource.MarketBuyHq,
-            AcquisitionSource.VendorBuy
-        ];
+        return row.AvailableSources
+            .Where(source => source is
+                AcquisitionSource.Craft or
+                AcquisitionSource.MarketBuyNq or
+                AcquisitionSource.MarketBuyHq or
+                AcquisitionSource.VendorBuy or
+                AcquisitionSource.OnHand)
+            .Distinct()
+            .ToArray();
     }
 
-    private async Task ChangeProcurementRowSourceAsync(TradeOrderProcurementRow row, AcquisitionSource source)
+    private async Task<bool> ChangeProcurementRowSourceAsync(
+        TradeOrderProcurementRow row,
+        AcquisitionSource source,
+        bool showSuccess = true)
     {
         if (_selectedOrder == null)
         {
-            return;
+            return false;
         }
 
         if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
         {
             Snackbar.Add("Reopen archived orders before editing acquisition sources.", Severity.Warning);
-            return;
+            return false;
         }
 
         if (!TradeProcurementSourceMutationPolicy.CanChangeSource(row))
         {
             Snackbar.Add("Open Acquisition Evaluation to change suppressed or reference rows.", Severity.Warning);
-            return;
+            return false;
+        }
+
+        if (source == AcquisitionSource.Craft &&
+            row.Responsibility == CommissionMaterialResponsibility.Provided)
+        {
+            Snackbar.Add(
+                "Assign this precraft to the crafter before expanding its recipe subtree.",
+                Severity.Warning);
+            return false;
         }
 
         if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
         {
-            return;
+            return false;
         }
 
         var live = await WorkerSession.GetTradeProjectionAsync();
         if (live == null || !live.HasPlan)
         {
             Snackbar.Add("Linked craft plan could not be loaded.", Severity.Warning);
-            return;
+            return false;
         }
 
         var liveRow = live.AcquisitionRows.FirstOrDefault(candidate =>
@@ -531,13 +686,13 @@ public partial class TradeOrders
         if (liveRow == null)
         {
             Snackbar.Add("This material could not be found in the linked craft plan.", Severity.Warning);
-            return;
+            return false;
         }
 
         if (!liveRow.AvailableSources.Contains(source))
         {
             Snackbar.Add($"{RecipePlanDisplayHelpers.GetSourceDisplayName(source)} is not available for {row.ItemName}.", Severity.Warning);
-            return;
+            return false;
         }
 
         await WorkerSession.MutateAcquisitionAsync(
@@ -550,7 +705,7 @@ public partial class TradeOrders
         if (stored == null || !await PlanPersistence.SaveSnapshotAsync(stored))
         {
             Snackbar.Add("Source changed, but failed to save the linked craft plan.", Severity.Error);
-            return;
+            return false;
         }
 
         var pricingResult = await TradeOrderPricingWorkflow.RepriceActivePlanAsync(
@@ -565,7 +720,7 @@ public partial class TradeOrders
         if (!savedOrder)
         {
             Snackbar.Add("Source changed, but failed to save Trade order evidence.", Severity.Error);
-            return;
+            return false;
         }
 
         await LoadAsync();
@@ -574,7 +729,12 @@ public partial class TradeOrders
             SelectOrderAfterReload(orderToSave.Id, "Source changed, but the order could not be loaded.");
         }
 
-        Snackbar.Add(pricingResult.Message, ToSeverity(pricingResult.MessageLevel));
+        if (showSuccess)
+        {
+            Snackbar.Add(pricingResult.Message, ToSeverity(pricingResult.MessageLevel));
+        }
+
+        return true;
     }
 
     private TradeOrder BuildFallbackOrderAfterSourceChange(

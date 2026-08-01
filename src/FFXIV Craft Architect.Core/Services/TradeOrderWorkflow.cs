@@ -5,6 +5,8 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public static class TradeOrderWorkflow
 {
+    public const string OnHandEvidenceSource = "On hand";
+
     public static TradeOrder CopyOrder(TradeOrder order)
     {
         ArgumentNullException.ThrowIfNull(order);
@@ -381,8 +383,20 @@ public static class TradeOrderWorkflow
 
         var materials = order.SourceSnapshot?.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>();
         var materialCount = materials.Count;
-        var pricedCount = materials.Count(material => material.UnitCost > 0 && material.TotalCost > 0);
+        var pricedCount = materials.Count(material => IsResolvedMaterialEvidence(
+            material.UnitCost,
+            material.TotalCost,
+            material.EvidenceSource));
         return new TradeOrderProcurementEvidenceState(materialCount, pricedCount);
+    }
+
+    public static bool IsResolvedMaterialEvidence(
+        decimal unitCost,
+        decimal totalCost,
+        string? evidenceSource)
+    {
+        return (unitCost > 0 && totalCost > 0) ||
+            string.Equals(evidenceSource, OnHandEvidenceSource, StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsPaymentReady(TradeOrder order, TradePayrollWorkflowDraft? draft)
@@ -566,13 +580,18 @@ public static class TradeOrderWorkflow
 
     private static string GetEvidenceStatus(TradeCommissionPaymentMaterial material)
     {
-        return material.UnitCost > 0 && material.TotalCost > 0
+        return IsResolvedMaterialEvidence(material.UnitCost, material.TotalCost, material.EvidenceSource)
             ? "Priced"
             : "Missing evidence";
     }
 
     private static string GetSourceLabel(TradeCommissionPaymentMaterial material)
     {
+        if (string.Equals(material.EvidenceSource, OnHandEvidenceSource, StringComparison.OrdinalIgnoreCase))
+        {
+            return "On hand";
+        }
+
         if (material.UnitCost <= 0 || material.TotalCost <= 0)
         {
             return "Unpriced";
@@ -632,9 +651,12 @@ public sealed record TradeOrderProcurementRow(
     int ActiveQuantity = 0,
     string UsedIn = "",
     bool HasEditableOccurrences = true,
-    AcquisitionSource Source = AcquisitionSource.UnknownSource)
+    AcquisitionSource Source = AcquisitionSource.UnknownSource,
+    bool HasChildren = false,
+    IReadOnlyList<AcquisitionSource>? AvailableSources = null)
 {
     public IReadOnlyList<string> SuppressedBy { get; init; } = SuppressedBy ?? Array.Empty<string>();
+    public IReadOnlyList<AcquisitionSource> AvailableSources { get; init; } = AvailableSources ?? [Source];
 }
 
 public enum TradeOrderCraftPlanReplacementMode

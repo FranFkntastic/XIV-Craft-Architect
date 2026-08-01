@@ -286,6 +286,7 @@ public sealed record WorkerAcquisitionRowProjection(
     string EstimatedCost,
     bool IsMarketUnavailable,
     decimal UnitPrice,
+    decimal CalculatedTotalCost,
     IReadOnlyList<AcquisitionSource> AvailableSources,
     IReadOnlyList<WorkerAcquisitionOptionProjection> Options);
 
