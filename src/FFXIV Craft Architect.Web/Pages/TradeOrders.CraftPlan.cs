@@ -43,42 +43,89 @@ public partial class TradeOrders
 
         try
         {
-            var orderToSave = TradeOrderWorkflow.WithRequestedOutputs(_selectedOrder, outputs, DateTime.UtcNow);
-            if (_selectedOrder.CompanyCommission != null)
+            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                    "Updating this order plan",
+                    _selectedOrder.CraftPlanId))
             {
-                var payment = TradeCommissionPaymentSummary.FromOrder(
-                    orderToSave,
-                    GetSelectedOrderResponsibilityProjection(),
-                    GetSelectedOrderEffectivePaymentPolicy());
-                var updated = await UpdateCanonicalDraftAsync(
-                    orderToSave,
-                    BuildCommissionBrief(orderToSave, payment),
-                    "Requested outputs saved to the commission draft");
-                if (updated)
-                {
-                    _activeOpsTab = PaymentTabIndex;
-                    Snackbar.Add(
-                        "Rebuild the linked craft plan before using payment totals.",
-                        Severity.Info);
-                }
                 return;
             }
 
-            var saved = await SaveOrderAndNotifyAsync(orderToSave);
+            var rollbackPlan = string.IsNullOrWhiteSpace(_selectedOrder.CraftPlanId)
+                ? null
+                : await PlanPersistence.LoadPlanPayloadAsync(_selectedOrder.CraftPlanId);
+            var orderToSave = TradeOrderWorkflow.WithRequestedOutputs(
+                _selectedOrder,
+                outputs,
+                DateTime.UtcNow);
+            if (rollbackPlan != null &&
+                _selectedOrder.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated)
+            {
+                orderToSave.CraftPlanId = _selectedOrder.CraftPlanId;
+                orderToSave.CraftPlanName = _selectedOrder.CraftPlanName;
+                orderToSave.CraftPlanSavedAtUtc = _selectedOrder.CraftPlanSavedAtUtc;
+                orderToSave.CraftPlanLinkKind = _selectedOrder.CraftPlanLinkKind;
+            }
+            if (IsEditingCommissionTermsRevision &&
+                _commissionTermsRevisionRollbackPlan == null)
+            {
+                _commissionTermsRevisionRollbackPlan = rollbackPlan;
+            }
+
+            var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
+                orderToSave,
+                new TradeOrderPricingWorkflowOptions(
+                    GetOrderDataCenter(_selectedOrder),
+                    _selectedOrder.SourceSnapshot.World ?? string.Empty,
+                    ForceRefreshMarketData: false));
+            if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
+            {
+                if (rollbackPlan != null)
+                {
+                    await RestoreStagedProcurementPlanAsync(rollbackPlan);
+                }
+                Snackbar.Add(
+                    $"Requested outputs were not saved because the plan could not be updated. {pricingResult.Message}",
+                    ToSnackbarSeverity(pricingResult.MessageLevel));
+                return;
+            }
+
+            orderToSave = pricingResult.UpdatedOrder;
+            var saved = _selectedOrder.CompanyCommission == null
+                ? await SaveOrderAndNotifyAsync(orderToSave)
+                : await UpdateCanonicalDraftAsync(
+                    orderToSave,
+                    BuildCommissionBrief(
+                        orderToSave,
+                        TradeCommissionPaymentSummary.FromOrder(
+                            orderToSave,
+                            GetSelectedOrderResponsibilityProjection(),
+                            GetSelectedOrderEffectivePaymentPolicy())),
+                    "Requested outputs, craft plan, and pricing saved to the commission draft");
             if (!saved)
             {
-                Snackbar.Add("Failed to save requested outputs.", Severity.Error);
+                if (rollbackPlan != null)
+                {
+                    await RestoreStagedProcurementPlanAsync(rollbackPlan);
+                }
+                Snackbar.Add(
+                    "The updated plan was prepared, but the order was not saved. Your output edits remain available to retry.",
+                    Severity.Error);
                 return;
             }
 
-            await LoadAsync();
-            if (string.IsNullOrWhiteSpace(_loadError) &&
-                SelectOrderAfterReload(orderId, "Requested outputs were saved, but the order could not be loaded."))
+            if (_selectedOrder.CompanyCommission == null)
             {
-                _activeOpsTab = PaymentTabIndex;
+                await LoadAsync();
+                if (string.IsNullOrWhiteSpace(_loadError) &&
+                    SelectOrderAfterReload(
+                        orderId,
+                        "Requested outputs were saved, but the order could not be loaded."))
+                {
+                    _activeOpsTab = ProcurementTabIndex;
+                }
             }
 
-            Snackbar.Add("Requested outputs saved. Rebuild the linked craft plan before using payment totals.", Severity.Success);
+            Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
         }
         catch (Exception ex)
         {

@@ -195,7 +195,6 @@ public static class CompanyCommissionCommandWorkflow
             CreatedBy = actor,
             ChangeSummary = command.Reason.Trim()
         };
-        var materialGate = CreateMaterialGate(terms);
         return Transition(
             source,
             commission with
@@ -209,8 +208,14 @@ public static class CompanyCommissionCommandWorkflow
                 PaymentPolicyChangeRequest = null,
                 Gates = commission.Gates with
                 {
-                    Payment = CreatePaymentGate(terms),
-                    CompanyMaterials = materialGate
+                    Payment = RevisePaymentGate(
+                        commission.Gates.Payment,
+                        commission.CurrentTerms,
+                        terms),
+                    CompanyMaterials = ReviseMaterialGate(
+                        commission.Gates.CompanyMaterials,
+                        commission.CurrentTerms,
+                        terms)
                 },
                 OutputProgress = terms.Outputs.Select(output =>
                     new CompanyCommissionOutputProgress(
@@ -1271,6 +1276,41 @@ public static class CompanyCommissionCommandWorkflow
                 ? CompanyCommissionClearanceState.NotRequired
                 : CompanyCommissionClearanceState.Pending,
             quantities);
+    }
+
+    private static CompanyCommissionPaymentClearance RevisePaymentGate(
+        CompanyCommissionPaymentClearance currentGate,
+        CompanyCommissionTermsVersion currentTerms,
+        CompanyCommissionTermsVersion nextTerms)
+    {
+        return currentTerms.Payment == nextTerms.Payment
+            ? currentGate with { TermsVersion = nextTerms.Version }
+            : CreatePaymentGate(nextTerms);
+    }
+
+    private static CompanyCommissionMaterialClearance ReviseMaterialGate(
+        CompanyCommissionMaterialClearance currentGate,
+        CompanyCommissionTermsVersion currentTerms,
+        CompanyCommissionTermsVersion nextTerms)
+    {
+        return HaveSameCompanyMaterialPromise(currentTerms, nextTerms)
+            ? currentGate
+            : CreateMaterialGate(nextTerms);
+    }
+
+    private static bool HaveSameCompanyMaterialPromise(
+        CompanyCommissionTermsVersion currentTerms,
+        CompanyCommissionTermsVersion nextTerms)
+    {
+        static IEnumerable<(Guid LineId, int ItemId, int Quantity)> GetPromise(
+            CompanyCommissionTermsVersion terms) =>
+            terms.Materials
+                .Where(item =>
+                    item.Responsibility == CommissionMaterialResponsibility.Provided)
+                .Select(item => (item.LineId, item.ItemId, item.Quantity))
+                .OrderBy(item => item.LineId);
+
+        return GetPromise(currentTerms).SequenceEqual(GetPromise(nextTerms));
     }
 
     private static void RequireDraftWorkPackageMatchesTerms(

@@ -360,10 +360,7 @@ public partial class TradeOrders
     {
         return rows
             .Where(row => !IsRequestedOutputReferenceRow(row))
-            .Where(row =>
-                !row.IsLiveAcquisitionRow ||
-                row.IsActiveProcurement ||
-                IsSupplyPrecraftRow(row))
+            .Where(TradeProcurementRowBuilder.ShouldIncludePlanRow)
             .ToArray();
     }
 
@@ -376,9 +373,7 @@ public partial class TradeOrders
 
     private static bool IsSupplyPrecraftRow(TradeOrderProcurementRow row)
     {
-        return row.IsLiveAcquisitionRow &&
-            row.HasChildren &&
-            row.HasEditableOccurrences;
+        return TradeProcurementRowBuilder.IsPlanPrecraftRow(row);
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetFilteredProcurementRows(
@@ -413,6 +408,11 @@ public partial class TradeOrders
 
     private static bool ProcurementRowNeedsAttention(TradeOrderProcurementRow row)
     {
+        if (row.IsFullySuppressed)
+        {
+            return false;
+        }
+
         if (row.Source == AcquisitionSource.OnHand)
         {
             return row.Warnings.Count > 0;
@@ -572,6 +572,12 @@ public partial class TradeOrders
 
     private static string FormatProcurementEvidence(TradeOrderProcurementRow row)
     {
+        var routeDescription = TradeProcurementRowBuilder.GetPlanRouteDescription(row);
+        if (!string.IsNullOrWhiteSpace(routeDescription))
+        {
+            return routeDescription;
+        }
+
         if (row.HasSuppressedOccurrences &&
             !row.IsFullySuppressed &&
             row.SuppressedBy.Count > 0)
@@ -907,10 +913,18 @@ public partial class TradeOrders
             await PlanLifecycle.ReplaceStoredPlanAsync(
                 rollbackSnapshot,
                 trackStoredPlanIdentity: true);
+            if (!await PlanPersistence.SaveSnapshotAsync(rollbackSnapshot))
+            {
+                Snackbar.Add(
+                    "The previous linked plan could not be restored automatically. Retry the change before using this plan.",
+                    Severity.Error);
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            // The canonical order was not changed. A later reopen rebuilds the local plan projection.
+            Snackbar.Add(
+                $"The previous linked plan could not be restored automatically: {ex.Message}",
+                Severity.Error);
         }
     }
 
