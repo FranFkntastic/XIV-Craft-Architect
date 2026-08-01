@@ -233,21 +233,21 @@ public partial class TradeOrders
             },
             new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
             {
-                Id = TradeOrderProcurementColumn.Cost,
-                Header = "Payment Impact",
-                Size = new WebTableColumnSize(120, 96),
-                Sortable = true,
-                CellCssClass = "trade-orders-procurement-cost",
-                CellTemplate = RenderProcurementCostCell
-            },
-            new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
-            {
                 Id = TradeOrderProcurementColumn.Responsibility,
                 Header = "Responsibility",
                 Size = new WebTableColumnSize(140, 116),
                 Sortable = true,
                 SuppressRowActivation = true,
                 CellTemplate = RenderProcurementResponsibilityCell
+            },
+            new WebTableColumn<TradeOrderProcurementRow, TradeOrderProcurementColumn>
+            {
+                Id = TradeOrderProcurementColumn.Cost,
+                Header = "Payment Impact",
+                Size = new WebTableColumnSize(120, 96),
+                Sortable = true,
+                CellCssClass = "trade-orders-procurement-cost",
+                CellTemplate = RenderProcurementCostCell
             }
         ];
     }
@@ -405,12 +405,22 @@ public partial class TradeOrders
         return $"{route} | {materialCount:N0} procured {(materialCount == 1 ? "material" : "materials")}";
     }
 
-    private static decimal GetProcurementEstimatedTotal(
+    private static decimal GetProcurementReimbursementTotal(
         IReadOnlyList<TradeOrderProcurementRow> rows)
     {
         return rows
             .Where(row => !row.IsLiveAcquisitionRow || row.IsActiveProcurement)
-            .Where(row => row.Responsibility == CommissionMaterialResponsibility.Crafter)
+            .Where(row =>
+                row.Responsibility == CommissionMaterialResponsibility.Crafter &&
+                row.Source != AcquisitionSource.OnHand)
+            .Sum(row => Math.Max(row.TotalCost, 0m));
+    }
+
+    private static decimal GetProcurementMaterialValueTotal(
+        IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        return rows
+            .Where(row => !row.IsLiveAcquisitionRow || row.IsActiveProcurement)
             .Sum(row => Math.Max(row.TotalCost, 0m));
     }
 
@@ -431,6 +441,16 @@ public partial class TradeOrders
             1 => $"{companyRows[0].ItemName} {TradeDisplayFormatter.FormatQuantity(companyRows[0].Quantity)}",
             _ => $"{companyRows.Length:N0} material lines"
         };
+    }
+
+    private static string FormatCompanyHandoffDetail(IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        var companyCount = rows.Count(row =>
+            (!row.IsLiveAcquisitionRow || row.IsActiveProcurement) &&
+            row.Responsibility == CommissionMaterialResponsibility.Provided);
+        return companyCount == 0
+            ? "Crafter supplies all materials"
+            : $"{companyCount:N0} {(companyCount == 1 ? "handoff line" : "handoff lines")} before work begins";
     }
 
     private static string GetProcurementHealthLabel(
@@ -533,6 +553,28 @@ public partial class TradeOrders
         return row.HasSuppressedOccurrences
             ? "trade-orders-procurement-row is-partial"
             : "trade-orders-procurement-row";
+    }
+
+    private static string GetSupplyPlanRowClass(
+        TradeOrderProcurementRow row,
+        IReadOnlyList<TradeOrderProcurementRow> rows)
+    {
+        var classes = new List<string> { "trade-orders-supply-row" };
+        var procurementClass = GetProcurementRowClass(row);
+        if (!string.IsNullOrWhiteSpace(procurementClass))
+        {
+            classes.Add(procurementClass);
+        }
+
+        if (!IsSupplyPrecraftRow(row) &&
+            !row.HasSuppressedOccurrences &&
+            rows.Where(IsSupplyPrecraftRow).Any(precraft =>
+                row.UsedIn.Contains(precraft.ItemName, StringComparison.OrdinalIgnoreCase)))
+        {
+            classes.Add("is-child");
+        }
+
+        return string.Join(' ', classes);
     }
 
     private static string FormatProcurementQuantity(TradeOrderProcurementRow row)

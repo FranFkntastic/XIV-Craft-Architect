@@ -26,6 +26,35 @@ public sealed class TradePaymentSpecificationTests
     }
 
     [Fact]
+    public void OnHandMaterialsContributeValueWithoutReimbursement()
+    {
+        var onHand = Material(
+            1,
+            "On-hand ore",
+            10,
+            100m,
+            CommissionMaterialResponsibility.Crafter) with
+        {
+            IsOnHand = true
+        };
+        var summary = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
+            Materials: [onHand],
+            CraftLabor: [],
+            Policy: new TradePaymentPolicy(
+                TradePaymentContractMode.LegacyCommission,
+                20m,
+                TradePaymentPolicy.DefaultLaborGilPerSynth),
+            Warnings: []));
+
+        Assert.Equal(1_000m, summary.EstimatedProcurementTotal);
+        Assert.Equal(1_000m, summary.OnHandMaterialValueTotal);
+        Assert.Equal(0m, summary.MaterialReimbursementTotal);
+        Assert.Equal(0m, summary.ProvidedMaterialTotal);
+        Assert.Equal(200m, summary.Legacy.CommissionAmount);
+        Assert.Equal(200m, summary.TotalPayment);
+    }
+
+    [Fact]
     public void GilArithmeticRoundsMidpointsAwayFromZero()
     {
         var summary = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(

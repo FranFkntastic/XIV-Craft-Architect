@@ -752,6 +752,123 @@
   font-size: 0.76rem;
 }
 
+.trade-orders-supply-plan {
+  overflow-x: auto;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px 6px 0 0;
+  background: #232323;
+}
+
+.trade-orders-supply-header,
+.trade-orders-supply-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 72px minmax(118px, 0.9fr) minmax(126px, 0.95fr) minmax(100px, 0.75fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 650px;
+}
+
+.trade-orders-supply-header {
+  min-height: 34px;
+  padding: 0 10px;
+  color: #aaa;
+  background: #202020;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.trade-orders-supply-header span:nth-child(2),
+.trade-orders-supply-header span:last-child {
+  text-align: right;
+}
+
+.trade-orders-supply-row {
+  position: relative;
+  min-height: 72px;
+  padding: 9px 10px;
+  border-top: 1px solid #343434;
+}
+
+.trade-orders-supply-row.is-output {
+  min-height: 58px;
+  background: #252a24;
+}
+
+.trade-orders-supply-row.is-precraft {
+  border-top-color: #574c2c;
+  background: rgba(155, 121, 39, 0.09);
+}
+
+.trade-orders-supply-row.is-provided {
+  border-top-color: #405b69;
+  background: rgba(63, 102, 121, 0.1);
+}
+
+.trade-orders-supply-row.is-partial {
+  background: rgba(240, 180, 95, 0.045);
+}
+
+.trade-orders-supply-row.is-child .trade-orders-procurement-item-cell {
+  padding-left: 24px;
+}
+
+.trade-orders-supply-row.is-child::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  top: 0;
+  width: 10px;
+  height: 50%;
+  border-left: 1px solid #555;
+  border-bottom: 1px solid #555;
+}
+
+.trade-orders-output-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.trade-orders-output-cell strong {
+  color: #9fd17e;
+  font-size: 0.78rem;
+}
+
+.trade-orders-output-cell span,
+.trade-orders-output-route {
+  color: #949d91;
+  font-size: 0.66rem;
+}
+
+.trade-orders-output-route {
+  display: inline-flex;
+  width: max-content;
+  border-radius: 3px;
+  background: #343434;
+  padding: 3px 6px;
+  color: #b9b9b9;
+  font-weight: 700;
+}
+
+.trade-orders-supply-quantity,
+.trade-orders-supply-impact {
+  color: #e0e0e0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.trade-orders-supply-handoff {
+  min-width: 650px;
+  border-top: 1px solid #38515e;
+  border-left: 3px solid #8eb9ce;
+  background: #243039;
+  padding: 8px 10px;
+  color: #c1d9e4;
+  font-size: 0.69rem;
+}
+
 ::deep .trade-orders-procurement-grid .web-grid-table-inner {
   width: 100%;
   min-width: 0;
@@ -997,13 +1114,13 @@
 
 .trade-orders-procurement-summary {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) auto auto;
+  grid-template-columns: minmax(140px, 1fr) minmax(170px, 1fr) auto;
   align-items: center;
   gap: 14px;
   margin-top: 10px;
   border: 1px solid #3a3a3a;
   border-radius: 6px;
-  background: #292929;
+  background: #222a21;
   padding: 10px 12px;
 }
 
@@ -1013,12 +1130,25 @@
 }
 
 .trade-orders-procurement-health {
-  text-align: right;
+  text-align: left;
 }
 
 .trade-orders-procurement-health strong {
   color: #d5dfd2;
-  font-size: 0.72rem;
+  font-size: 0.82rem;
+}
+
+.trade-orders-procurement-health > span:first-child {
+  color: #9ca599;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.trade-orders-procurement-health small {
+  color: #8e968b;
+  font-size: 0.64rem;
 }
 
 .trade-orders-procurement-filters {
@@ -1053,6 +1183,12 @@
   color: #d7ead0;
 }
 
+.trade-orders-procurement-legend {
+  margin-left: auto;
+  color: #969696;
+  font-size: 0.64rem;
+}
+
 .trade-orders-procurement-empty {
   padding: 18px 12px;
   color: #aaa;
@@ -1079,6 +1215,17 @@
 .trade-orders-procurement-footer strong {
   color: #9fd17e;
   font-size: 0.84rem;
+}
+
+.trade-orders-procurement-footer > div {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.trade-orders-procurement-footer small {
+  color: #8f998c;
+  font-size: 0.62rem;
 }
 
 .trade-orders-warning-list {
@@ -1264,6 +1411,12 @@
   display: grid;
   gap: 8px;
   margin-top: 12px;
+}
+
+.trade-orders-collaboration-action-note {
+  color: #b8b8b8;
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
 
 .trade-orders-commission-panel {

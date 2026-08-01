@@ -296,7 +296,8 @@ public sealed record WorkerAcquisitionOptionProjection(
     string Detail,
     string CostText,
     bool IsAvailable,
-    bool IsProjectedUnsupported);
+    bool IsProjectedUnsupported,
+    decimal? TotalCost = null);
 
 public sealed record WorkerMarketAnalysisRequest(
     bool ForceRefreshData,

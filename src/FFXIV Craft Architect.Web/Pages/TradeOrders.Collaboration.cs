@@ -27,6 +27,36 @@ public partial class TradeOrders
             ? null
             : TradeCollaboration.GetPublication(_selectedOrder.Id);
 
+    private string? CanonicalDiscordPublishUnavailableReason
+    {
+        get
+        {
+            if (SelectedCommissionOwner?.Order is not { } order ||
+                order.CompanyCommission is not { } commission)
+            {
+                return "The canonical company commission is unavailable.";
+            }
+
+            if (commission.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft)
+            {
+                return "The canonical brief has already been published.";
+            }
+
+            if (HasActiveCompanyPublication)
+            {
+                return "Trade channel delivery is already in progress.";
+            }
+
+            return CanPublishToConfiguredTradeChannel(order, out var reason)
+                ? null
+                : reason;
+        }
+    }
+
+    private bool CanPublishCanonicalCommissionToDiscord =>
+        !_isPublishingCommission &&
+        CanonicalDiscordPublishUnavailableReason == null;
+
     private IReadOnlyList<TradeCommissionInterest> SelectedPendingInterests =>
         _selectedOrder == null
             ? []
@@ -209,8 +239,11 @@ public partial class TradeOrders
             if (publishResult.Destination == TradeCommissionDestination.DiscordChannel)
             {
                 await PublishSelectedCommissionToDiscordAsync(
-                    payment,
-                    publishResult.IsTestFixture);
+                    _selectedOrder,
+                    BuildCommissionBrief(
+                        _selectedOrder,
+                        payment,
+                        publishResult.IsTestFixture));
                 return;
             }
 
@@ -309,19 +342,42 @@ public partial class TradeOrders
         }
     }
 
-    private async Task PublishSelectedCommissionToDiscordAsync(
-        TradeCommissionPaymentSummary payment,
-        bool isTestFixture)
+    private async Task PublishCanonicalCommissionToDiscordAsync()
     {
-        if (_selectedOrder == null)
+        var owner = SelectedCommissionOwner;
+        if (owner?.Order.CompanyCommission is not { } commission ||
+            !CanPublishCanonicalCommissionToDiscord)
         {
             return;
         }
 
-        var orderId = _selectedOrder.Id;
+        _isPublishingCommission = true;
+        try
+        {
+            await PublishSelectedCommissionToDiscordAsync(
+                owner.Order,
+                BuildCanonicalCommissionBrief(owner.Order, commission));
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(
+                $"Commission publication failed: {exception.Message}",
+                Severity.Error);
+        }
+        finally
+        {
+            _isPublishingCommission = false;
+        }
+    }
+
+    private async Task PublishSelectedCommissionToDiscordAsync(
+        TradeOrder order,
+        CommissionBriefDocument brief)
+    {
+        var orderId = order.Id;
         var result = await TradeCollaboration.PublishToDiscordAsync(
-            _selectedOrder,
-            BuildCommissionBrief(_selectedOrder, payment, isTestFixture));
+            order,
+            brief);
         if (!result.Success)
         {
             if (result.Publication != null)
@@ -693,6 +749,67 @@ public partial class TradeOrders
                 FormatCommissionMarketScope(source),
                 FormatCommissionLocation(source),
                 evidenceCapturedAt)
+        };
+    }
+
+    private CommissionBriefDocument BuildCanonicalCommissionBrief(
+        TradeOrder order,
+        TradeCompanyCommission commission)
+    {
+        var terms = commission.CurrentTerms;
+        return new CommissionBriefDocument
+        {
+            IsTestFixture = commission.PublicMetadata.IsTestFixture,
+            CompanyName = _companyProfile?.Name ?? "FFXIV Trade Company",
+            Title = order.Title,
+            StatusLabel = order.AssignedCrafterId.HasValue ? "Assigned" : "Open for assignment",
+            AssignmentLabel = order.AssignedCrafterId.HasValue
+                ? FormatAssignedCrafter(order)
+                : "Contact operator",
+            Reference = commission.Reference,
+            Contact = terms.ContactInstructions,
+            DeliveryInstructions = terms.DeliveryInstructions,
+            Outputs = terms.Outputs
+                .Select(output => new CommissionBriefOutput(
+                    output.ItemId,
+                    output.Name,
+                    output.RequiredQuantity,
+                    output.MustBeHq))
+                .ToArray(),
+            CrafterMaterials = terms.Materials
+                .Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter)
+                .Select(material => new CommissionBriefMaterial(
+                    material.ItemId,
+                    material.Name,
+                    material.Quantity,
+                    material.RequiresHq,
+                    material.UnitCost,
+                    material.TotalCost))
+                .ToArray(),
+            CompanyMaterials = terms.Materials
+                .Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided)
+                .Select(material => new CommissionBriefMaterial(
+                    material.ItemId,
+                    material.Name,
+                    material.Quantity,
+                    material.RequiresHq,
+                    material.UnitCost,
+                    material.TotalCost))
+                .ToArray(),
+            Payment = new CommissionBriefPayment(
+                terms.Payment.ContractLabel,
+                terms.Payment.MaterialReimbursement,
+                terms.Payment.MaterialAdjustment,
+                terms.Payment.CraftLabor,
+                terms.Payment.Total,
+                MaterialAdjustmentPercent: 0m,
+                terms.Payment.CraftSynthCount,
+                terms.Payment.GilPerSynth),
+            Evidence = new CommissionBriefEvidence(
+                terms.PricingEvidence.CostBasis,
+                terms.PricingEvidence.MarketScope,
+                terms.PricingEvidence.Location,
+                terms.PricingEvidence.CapturedAtUtc)
         };
     }
 

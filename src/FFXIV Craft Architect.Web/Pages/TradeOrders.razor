@@ -1194,6 +1194,14 @@
                                             <span>Payable materials</span>
                                             <strong>@FormatGil(paymentSummary.MaterialReimbursementTotal)</strong>
                                         </div>
+                                        @if (paymentSummary.OnHandMaterialValueTotal > 0)
+                                        {
+                                            <div class="trade-orders-payment-breakdown-row">
+                                                <span>On-hand material value</span>
+                                                <span>Bonus basis only; not reimbursed</span>
+                                                <strong>@FormatGil(paymentSummary.OnHandMaterialValueTotal)</strong>
+                                            </div>
+                                        }
                                         <div class="trade-orders-payment-breakdown-row">
                                             <span>Company-provided materials</span>
                                             <span>Estimate only</span>
@@ -1458,30 +1466,15 @@
                                 }
                                 else
                                 {
-                                    <section class="trade-orders-procurement-context">
-                                        <div>
-                                            <span>Output route</span>
-                                            <strong>@FormatProcurementOutputSummary(_selectedOrder)</strong>
-                                            <small>@FormatProcurementRouteSummary(_selectedOrder, CountActiveProcurementRows(procurementRows))</small>
-                                        </div>
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.OpenInNew"
-                                                   OnClick="OpenSelectedOrderCraftPlanAsync"
-                                                   Disabled="@(_isOpeningSelectedOrderCraftPlan || !HasLinkedCraftPlan(_selectedOrder))">
-                                            @(_isOpeningSelectedOrderCraftPlan ? "Opening..." : "Open Craft Plan")
-                                        </MudButton>
-                                    </section>
-
                                     <section class="trade-orders-procurement-summary">
                                         <div class="trade-orders-procurement-total">
                                             <span>Crafter reimbursable</span>
-                                            <strong>@FormatGil(GetProcurementEstimatedTotal(procurementRows))</strong>
+                                            <strong>@FormatGilAllowZero(GetProcurementReimbursementTotal(procurementRows))</strong>
                                         </div>
                                         <div class="trade-orders-procurement-health">
-                                            <strong>Company handoff: @FormatCompanyHandoffSummary(procurementRows)</strong>
-                                            <span>@GetProcurementHealthLabel(procurementRows) | @FormatProcurementEvidenceContext(_selectedOrder)</span>
+                                            <span>Company handoff</span>
+                                            <strong>@FormatCompanyHandoffSummary(procurementRows)</strong>
+                                            <small>@FormatCompanyHandoffDetail(procurementRows)</small>
                                         </div>
                                         <MudButton Variant="Variant.Filled"
                                                    Color="Color.Primary"
@@ -1518,27 +1511,66 @@
                                                 @onclick="@(() => SetProcurementFilter(TradeOrderProcurementFilter.Company))">
                                             Company supplies <span>@CountProcurementRows(procurementRows, TradeOrderProcurementFilter.Company).ToString("N0")</span>
                                         </button>
+                                        <span class="trade-orders-procurement-legend">
+                                            @GetProcurementHealthLabel(procurementRows) | @FormatProcurementEvidenceContext(_selectedOrder)
+                                        </span>
                                     </div>
 
-                                    <WebGridTable TItem="TradeOrderProcurementRow"
-                                                  TColumnId="TradeOrderProcurementColumn"
-                                                  CssClass="trade-orders-procurement-grid"
-                                                  Items="@GetOrderedProcurementRows(visibleProcurementRows)"
-                                                  Columns="@GetProcurementColumns()"
-                                                  GetRowKey="row => row.RowKey"
-                                                  GetRowClass="GetProcurementRowClass"
-                                                  SortState="@_procurementSortState"
-                                                  SortChanged="OnProcurementSortChanged"
-                                                  FitToContainer="true"
-                                                  ColumnGapPx="6"
-                                                  HorizontalPaddingPx="8">
-                                        <EmptyContent>
+                                    <div class="trade-orders-supply-plan">
+                                        <div class="trade-orders-supply-header">
+                                            <span>Item</span>
+                                            <span>Required</span>
+                                            <span>Acquisition</span>
+                                            <span>Responsibility</span>
+                                            <span>Payment impact</span>
+                                        </div>
+                                        @if (_procurementFilter == TradeOrderProcurementFilter.All)
+                                        {
+                                            @foreach (var output in GetOrderRootItems(_selectedOrder))
+                                            {
+                                                <div class="trade-orders-supply-row is-output" @key="@($"output:{output.ItemId}:{output.MustBeHq}")">
+                                                    <div class="trade-orders-output-cell">
+                                                        <strong>@output.Name</strong>
+                                                        <span>Commission output</span>
+                                                    </div>
+                                                    <strong class="trade-orders-supply-quantity">@TradeDisplayFormatter.FormatQuantity(output.Quantity)</strong>
+                                                    <span class="trade-orders-output-route">Craft output</span>
+                                                    <span class="trade-orders-output-route">Crafter delivers</span>
+                                                    <span class="trade-orders-supply-impact">-</span>
+                                                </div>
+                                            }
+                                        }
+                                        @if (visibleProcurementRows.Count == 0)
+                                        {
                                             <div class="trade-orders-procurement-empty">@GetProcurementFilterEmptyMessage()</div>
-                                        </EmptyContent>
-                                    </WebGridTable>
+                                        }
+                                        else
+                                        {
+                                            @foreach (var row in GetOrderedProcurementRows(visibleProcurementRows))
+                                            {
+                                                <div class="@GetSupplyPlanRowClass(row, procurementRows)" @key="row.RowKey">
+                                                    <div class="trade-orders-procurement-item-cell">@RenderProcurementItemCell(row)</div>
+                                                    <strong class="trade-orders-supply-quantity">@FormatProcurementQuantity(row)</strong>
+                                                    @RenderProcurementSourceCell(row)
+                                                    @RenderProcurementResponsibilityCell(row)
+                                                    @RenderProcurementCostCell(row)
+                                                </div>
+                                                @if (row.Responsibility == CommissionMaterialResponsibility.Provided && row.HasChildren)
+                                                {
+                                                    <div class="trade-orders-supply-handoff">
+                                                        <strong>Material handoff required:</strong>
+                                                        Company provides @TradeDisplayFormatter.FormatQuantity(row.Quantity) @row.ItemName before work begins; its recipe subtree is excluded from crafter reimbursement.
+                                                    </div>
+                                                }
+                                            }
+                                        }
+                                    </div>
                                     <div class="trade-orders-procurement-footer">
                                         <span>@FormatProcurementFooter(procurementRows)</span>
-                                        <strong>@FormatGil(GetProcurementEstimatedTotal(procurementRows))</strong>
+                                        <div>
+                                            <small>@FormatGilAllowZero(GetProcurementMaterialValueTotal(procurementRows)) material value</small>
+                                            <strong>@FormatGilAllowZero(GetProcurementReimbursementTotal(procurementRows)) reimbursable</strong>
+                                        </div>
                                     </div>
                                     @if (paymentSummary.Warnings.Count > 0)
                                     {
@@ -1713,8 +1745,12 @@
                                          <div class="trade-orders-sharing-grid">
                                              <div>
                                                  <span>Public brief</span>
-                                                 <strong>@(sharingCommission.PublicMetadata.PublicUrl ?? sharingCommission.PublicMetadata.PublicBriefId)</strong>
-                                                 <small>@sharingCommission.PublicMetadata.ViewState</small>
+                                                 <strong>@(sharingCommission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published
+                                                     ? sharingCommission.PublicMetadata.PublicUrl ?? sharingCommission.PublicMetadata.PublicBriefId
+                                                     : "Not published")</strong>
+                                                 <small>@(sharingCommission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published
+                                                     ? "Portable brief is live"
+                                                     : "Draft terms only")</small>
                                              </div>
                                              <div>
                                                  <span>Claim slot</span>
@@ -1736,18 +1772,38 @@
                                              </div>
                                          </div>
                                          <div class="trade-orders-collaboration-actions">
-                                             <MudButton Variant="Variant.Filled"
-                                                        Color="Color.Primary"
-                                                        StartIcon="@Icons.Material.Filled.OpenInNew"
-                                                        OnClick="OpenCommissionBriefAsync">
-                                                 View Brief
-                                             </MudButton>
-                                             <MudButton Variant="Variant.Outlined"
-                                                        Color="Color.Secondary"
-                                                        StartIcon="@Icons.Material.Filled.ContentCopy"
-                                                        OnClick="CopyCommissionLinkAsync">
-                                                 Copy Public Link
-                                             </MudButton>
+                                             @if (sharingCommission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft)
+                                             {
+                                                 <MudButton Variant="Variant.Filled"
+                                                            Color="Color.Primary"
+                                                            StartIcon="@Icons.Material.Filled.Send"
+                                                            Disabled="@(!CanPublishCanonicalCommissionToDiscord)"
+                                                            OnClick="PublishCanonicalCommissionToDiscordAsync">
+                                                     @(_isPublishingCommission ? "Publishing..." : "Publish to Company Channel")
+                                                 </MudButton>
+                                                 @if (!string.IsNullOrWhiteSpace(CanonicalDiscordPublishUnavailableReason))
+                                                 {
+                                                     <span class="trade-orders-collaboration-action-note">
+                                                         @CanonicalDiscordPublishUnavailableReason
+                                                     </span>
+                                                 }
+                                             }
+                                             else if (sharingCommission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published &&
+                                                      HasLiveCommissionPublication)
+                                             {
+                                                 <MudButton Variant="Variant.Filled"
+                                                            Color="Color.Primary"
+                                                            StartIcon="@Icons.Material.Filled.OpenInNew"
+                                                            OnClick="OpenCommissionBriefAsync">
+                                                     View Brief
+                                                 </MudButton>
+                                                 <MudButton Variant="Variant.Outlined"
+                                                            Color="Color.Secondary"
+                                                            StartIcon="@Icons.Material.Filled.ContentCopy"
+                                                            OnClick="CopyCommissionLinkAsync">
+                                                     Copy Public Link
+                                                 </MudButton>
+                                             }
                                              @if (!sharingCommission.PublicMetadata.IsTestFixture &&
                                                   sharingCommission.ActiveClaim == null &&
                                                   sharingCommission.PublicMetadata.ViewState ==
@@ -2346,9 +2402,13 @@
             : FormatGil(row.TotalCost))</strong>
         <span>
             @(row.Responsibility == CommissionMaterialResponsibility.Provided
-                ? "Company provided"
+                ? row.TotalCost > 0
+                    ? $"{FormatGil(row.TotalCost)} company value"
+                    : "Company provided"
                 : row.Source == AcquisitionSource.OnHand
-                    ? "Existing stock"
+                    ? row.TotalCost > 0
+                        ? $"{FormatGil(row.TotalCost)} material value"
+                        : "Replacement value unavailable"
                     : row.UnitCost > 0
                         ? $"{FormatGil(row.UnitCost)} each"
                         : row.UnitCostExplanation)
