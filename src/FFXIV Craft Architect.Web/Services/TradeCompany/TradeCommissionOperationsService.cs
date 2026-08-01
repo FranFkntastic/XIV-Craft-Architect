@@ -68,7 +68,7 @@ public sealed class TradeCommissionOperationsService(
     {
         if (order.CompanyCommission == null)
         {
-            hostedOrders.Remove(order.Id);
+            hostedOrders.ClearOwner(order.Id);
             _errors.Remove(order.Id);
             _missingCanonicalOwners.Remove(order.Id);
             return;
@@ -96,7 +96,7 @@ public sealed class TradeCommissionOperationsService(
         }
         catch (MissingCompanyCommissionOwnerException exception)
         {
-            hostedOrders.Remove(order.Id);
+            hostedOrders.ClearOwner(order.Id);
             _missingCanonicalOwners.Add(order.Id);
             _errors[order.Id] = exception.Message;
         }

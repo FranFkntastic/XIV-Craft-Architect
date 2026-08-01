@@ -269,6 +269,10 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Contains("new BroadcastChannel(channelName)", session, StringComparison.Ordinal);
         Assert.Contains("\"X-Profile-Key\": accessKey", session, StringComparison.Ordinal);
         Assert.Contains("credentials: \"omit\"", session, StringComparison.Ordinal);
+        Assert.Contains("redirect: \"error\"", session, StringComparison.Ordinal);
+        Assert.Contains("streamUrl.origin !== window.location.origin", session, StringComparison.Ordinal);
+        Assert.Contains("applicationLockName", session, StringComparison.Ordinal);
+        Assert.Contains("\"RecoverProfileRevision\"", session, StringComparison.Ordinal);
         Assert.Contains("kind: \"profile-revision\"", session, StringComparison.Ordinal);
         Assert.Contains("serverRevision: revision", session, StringComparison.Ordinal);
         Assert.Contains("state.fetchController?.abort()", session, StringComparison.Ordinal);

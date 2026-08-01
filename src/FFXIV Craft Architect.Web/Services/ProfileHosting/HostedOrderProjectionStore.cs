@@ -15,8 +15,30 @@ public sealed class HostedOrderProjectionStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<Guid, HostedOrderProjectionSnapshot> _orders = [];
+    private string? _profileId;
 
     public event Action<HostedOrderProjectionSnapshot>? Changed;
+    public event Action? Reset;
+
+    public void ResetForProfile(string? profileId)
+    {
+        var changed = false;
+        lock (_gate)
+        {
+            if (string.Equals(_profileId, profileId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _profileId = profileId;
+            _orders.Clear();
+            changed = true;
+        }
+        if (changed)
+        {
+            Reset?.Invoke();
+        }
+    }
 
     public HostedOrderProjectionSnapshot? Get(Guid orderId)
     {
@@ -33,15 +55,24 @@ public sealed class HostedOrderProjectionStore
     {
         ArgumentNullException.ThrowIfNull(order);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(objectRevision);
-        var current = Get(order.Id);
-        return TryPublish(new HostedOrderProjectionSnapshot(
-            order.Id,
-            order.CompanyProfileId,
-            objectRevision,
-            current?.CompanyRevision,
-            order,
-            current?.OwnerProjection,
-            Deleted: false));
+        HostedOrderProjectionSnapshot candidate;
+        bool accepted;
+        lock (_gate)
+        {
+            var current = _orders.GetValueOrDefault(order.Id);
+            candidate = new HostedOrderProjectionSnapshot(
+                order.Id,
+                order.CompanyProfileId,
+                objectRevision,
+                current?.CompanyRevision,
+                order,
+                current?.ObjectRevision == objectRevision
+                    ? current.OwnerProjection
+                    : null,
+                Deleted: false);
+            accepted = TryAcceptUnderLock(candidate);
+        }
+        return NotifyIfAccepted(candidate, accepted);
     }
 
     public bool TryPublishOwner(CompanyCommissionOwnerProjection projection)
@@ -65,66 +96,87 @@ public sealed class HostedOrderProjectionStore
         }
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(objectRevision);
 
-        HostedOrderProjectionSnapshot? existing;
+        HostedOrderProjectionSnapshot candidate;
+        bool accepted;
         lock (_gate)
         {
-            existing = _orders.GetValueOrDefault(orderId);
+            var existing = _orders.GetValueOrDefault(orderId);
+            candidate = new HostedOrderProjectionSnapshot(
+                orderId,
+                existing?.CompanyProfileId,
+                objectRevision,
+                existing?.CompanyRevision,
+                Order: null,
+                OwnerProjection: null,
+                Deleted: true);
+            accepted = TryAcceptUnderLock(candidate);
         }
-
-        return TryPublish(new HostedOrderProjectionSnapshot(
-            orderId,
-            existing?.CompanyProfileId,
-            objectRevision,
-            existing?.CompanyRevision,
-            Order: null,
-            OwnerProjection: null,
-            Deleted: true));
+        return NotifyIfAccepted(candidate, accepted);
     }
 
-    public void Remove(Guid orderId)
+    public void ClearOwner(Guid orderId)
     {
+        HostedOrderProjectionSnapshot? changed = null;
         lock (_gate)
         {
-            _orders.Remove(orderId);
+            if (_orders.TryGetValue(orderId, out var current) &&
+                current.OwnerProjection != null)
+            {
+                changed = current with { OwnerProjection = null };
+                _orders[orderId] = changed;
+            }
+        }
+        if (changed != null)
+        {
+            Changed?.Invoke(changed);
         }
     }
 
     private bool TryPublish(HostedOrderProjectionSnapshot candidate)
     {
-        var notify = false;
+        bool accepted;
         lock (_gate)
         {
-            if (_orders.TryGetValue(candidate.OrderId, out var current))
-            {
-                ValidateIdentity(current, candidate);
-                if (candidate.ObjectRevision < current.ObjectRevision)
-                {
-                    return false;
-                }
+            accepted = TryAcceptUnderLock(candidate);
+        }
+        return NotifyIfAccepted(candidate, accepted);
+    }
 
-                if (candidate.ObjectRevision == current.ObjectRevision)
-                {
-                    var currentOwnerRevision =
-                        current.OwnerProjection?.ObjectRevision.Value ?? 0;
-                    var candidateOwnerRevision =
-                        candidate.OwnerProjection?.ObjectRevision.Value ?? 0;
-                    if (candidateOwnerRevision > currentOwnerRevision)
-                    {
-                        _orders[candidate.OrderId] = candidate;
-                    }
-                    return false;
-                }
+    private bool TryAcceptUnderLock(HostedOrderProjectionSnapshot candidate)
+    {
+        if (_orders.TryGetValue(candidate.OrderId, out var current))
+        {
+            ValidateIdentity(current, candidate);
+            if (candidate.ObjectRevision < current.ObjectRevision ||
+                (candidate.ObjectRevision == current.ObjectRevision &&
+                 current.Deleted && !candidate.Deleted))
+            {
+                return false;
             }
 
-            _orders[candidate.OrderId] = candidate;
-            notify = true;
+            if (candidate.ObjectRevision == current.ObjectRevision &&
+                current.Deleted == candidate.Deleted &&
+                (candidate.CompanyRevision ?? 0) <= (current.CompanyRevision ?? 0) &&
+                (candidate.OwnerProjection?.ObjectRevision.Value ?? 0) <=
+                (current.OwnerProjection?.ObjectRevision.Value ?? 0))
+            {
+                return false;
+            }
         }
 
-        if (notify)
+        _orders[candidate.OrderId] = candidate;
+        return true;
+    }
+
+    private bool NotifyIfAccepted(
+        HostedOrderProjectionSnapshot candidate,
+        bool accepted)
+    {
+        if (accepted)
         {
             Changed?.Invoke(candidate);
         }
-        return notify;
+        return accepted;
     }
 
     private static void ValidateIdentity(

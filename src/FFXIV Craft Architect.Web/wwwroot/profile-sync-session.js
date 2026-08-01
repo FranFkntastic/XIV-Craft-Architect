@@ -9,16 +9,21 @@ export function createProfileSyncSession(
     if (!callback || !hostUrl || !accessKey || !profileId) {
         throw new Error("A callback, host URL, profile key, and profile identity are required.");
     }
+    if (!navigator.locks?.request) {
+        throw new Error("Profile synchronization requires Web Locks for cross-tab durability.");
+    }
 
     const normalizedProfileId = profileId.trim().toLowerCase();
     const initialRevision = normalizeRevision(sinceRevision);
     const lockName = `craft-architect-profile-sync:${normalizedProfileId}`;
+    const applicationLockName = `${lockName}:apply`;
     const channelName = `${lockName}:v${protocolVersion}`;
     const state = {
         stopped: false,
         cursor: initialRevision,
         reconnectCount: 0,
         fetchController: null,
+        revisionApplication: Promise.resolve(),
         lockController: new AbortController(),
         channel: typeof BroadcastChannel === "function"
             ? new BroadcastChannel(channelName)
@@ -31,8 +36,27 @@ export function createProfileSyncSession(
             if (!isRevisionMessage(message, normalizedProfileId)) {
                 return;
             }
-            void applyRevision(message.serverRevision, "follower");
+            void enqueueRevision(message.serverRevision, "follower").catch(error => {
+                if (state.stopped) {
+                    return;
+                }
+
+                void callback.invokeMethodAsync(
+                    "ReceiveProfileStreamState",
+                    normalizedProfileId,
+                    "follower",
+                    false,
+                    error?.message ?? "Profile revision application failed.",
+                    state.reconnectCount).catch(() => { });
+            });
         };
+    }
+
+    async function withApplicationLock(action) {
+        return navigator.locks.request(
+            applicationLockName,
+            { mode: "exclusive", signal: state.lockController.signal },
+            action);
     }
 
     async function applyRevision(serverRevision, source) {
@@ -45,18 +69,52 @@ export function createProfileSyncSession(
             return state.cursor;
         }
 
-        const appliedRevision = normalizeRevision(await callback.invokeMethodAsync(
-            "ReceiveProfileRevision",
-            normalizedProfileId,
-            revision,
-            source));
-        state.cursor = Math.max(state.cursor, appliedRevision);
-        return state.cursor;
+        return withApplicationLock(async () => {
+            if (state.stopped || revision <= state.cursor) {
+                return state.cursor;
+            }
+            const appliedRevision = normalizeRevision(await callback.invokeMethodAsync(
+                "ReceiveProfileRevision",
+                normalizedProfileId,
+                revision,
+                source));
+            state.cursor = Math.max(state.cursor, appliedRevision);
+            return state.cursor;
+        });
+    }
+
+    function enqueueRevision(serverRevision, source) {
+        const application = state.revisionApplication.then(() => applyRevision(serverRevision, source));
+        state.revisionApplication = application.catch(() => { });
+        return application;
+    }
+
+    function enqueueRecovery() {
+        const application = state.revisionApplication.then(() =>
+            withApplicationLock(async () => {
+                if (state.stopped) {
+                    return state.cursor;
+                }
+                const appliedRevision = normalizeRevision(await callback.invokeMethodAsync(
+                    "RecoverProfileRevision",
+                    normalizedProfileId));
+                state.cursor = Math.max(state.cursor, appliedRevision);
+                return state.cursor;
+            }));
+        state.revisionApplication = application.catch(() => { });
+        return application;
     }
 
     async function streamOnce() {
         state.fetchController = new AbortController();
         const streamUrl = new URL("profile-host/changes/stream", normalizeHostUrl(hostUrl));
+        if (streamUrl.origin !== window.location.origin) {
+            throw new ProfileStreamError(
+                "profile_stream_cross_origin",
+                "The profile stream endpoint must use the current origin.",
+                true);
+        }
+
         streamUrl.searchParams.set("sinceRevision", String(state.cursor));
         const response = await fetch(streamUrl, {
             method: "GET",
@@ -66,6 +124,7 @@ export function createProfileSyncSession(
             },
             cache: "no-store",
             credentials: "omit",
+            redirect: "error",
             signal: state.fetchController.signal
         });
 
@@ -116,7 +175,7 @@ export function createProfileSyncSession(
                         profileId: normalizedProfileId,
                         serverRevision: revision
                     });
-                    await applyRevision(revision, "leader");
+                    await enqueueRevision(revision, "leader");
                 }
             }
         } finally {
@@ -126,17 +185,6 @@ export function createProfileSyncSession(
     }
 
     async function runLeader() {
-        if (!navigator.locks?.request) {
-            await callback.invokeMethodAsync(
-                "ReceiveProfileStreamState",
-                normalizedProfileId,
-                "unsupported",
-                false,
-                "Web Locks are unavailable; bounded cursor polling remains active.",
-                state.reconnectCount);
-            return;
-        }
-
         try {
             await navigator.locks.request(
                 lockName,
@@ -204,6 +252,9 @@ export function createProfileSyncSession(
     void runLeader();
 
     return {
+        recover() {
+            return enqueueRecovery();
+        },
         stop() {
             window.removeEventListener("pagehide", pageHide);
             stop();

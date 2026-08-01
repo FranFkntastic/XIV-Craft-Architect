@@ -79,6 +79,8 @@ public partial class TradeOrders
     private IJSObjectReference? _tradeOrdersLayoutRegistration;
     private DotNetObjectReference<TradeOrders>? _tradeOrdersReference;
     private readonly SemaphoreSlim _hostedOrderRefreshGate = new(1, 1);
+    private readonly CancellationTokenSource _hostedOrderRefreshLifetime = new();
+    private Task _hostedOrderRefreshTask = Task.CompletedTask;
     private bool _isLoadingHostedOrders;
     private bool _isDisposed;
 
@@ -195,6 +197,7 @@ public partial class TradeOrders
     protected override async Task OnInitializedAsync()
     {
         HostedOrders.Changed += OnHostedOrderProjectionChanged;
+        HostedOrders.Reset += OnHostedOrderProjectionsReset;
         _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
         try
@@ -252,7 +255,16 @@ public partial class TradeOrders
     public async ValueTask DisposeAsync()
     {
         _isDisposed = true;
+        _hostedOrderRefreshLifetime.Cancel();
         HostedOrders.Changed -= OnHostedOrderProjectionChanged;
+        HostedOrders.Reset -= OnHostedOrderProjectionsReset;
+        try
+        {
+            await _hostedOrderRefreshTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
         if (_tradeOrdersLayoutRegistration != null)
         {
             await _tradeOrdersLayoutRegistration.InvokeVoidAsync("dispose");
@@ -265,6 +277,7 @@ public partial class TradeOrders
         }
 
         _tradeOrdersReference?.Dispose();
+        _hostedOrderRefreshLifetime.Dispose();
     }
 
     private Task LoadAsync() => LoadAsync(synchronizeProfile: true);
@@ -333,15 +346,27 @@ public partial class TradeOrders
             return;
         }
 
-        _ = InvokeAsync(RefreshHostedOrderProjectionAsync);
+        QueueHostedOrderRefresh();
     }
 
-    private async Task RefreshHostedOrderProjectionAsync()
+    private void OnHostedOrderProjectionsReset() => QueueHostedOrderRefresh();
+
+    private void QueueHostedOrderRefresh()
     {
-        await _hostedOrderRefreshGate.WaitAsync();
+        if (_isDisposed)
+        {
+            return;
+        }
+        _hostedOrderRefreshTask = InvokeAsync(() =>
+            RefreshHostedOrderProjectionAsync(_hostedOrderRefreshLifetime.Token));
+    }
+
+    private async Task RefreshHostedOrderProjectionAsync(CancellationToken cancellationToken)
+    {
+        await _hostedOrderRefreshGate.WaitAsync(cancellationToken);
         try
         {
-            if (_isDisposed)
+            if (_isDisposed || cancellationToken.IsCancellationRequested)
             {
                 return;
             }
@@ -354,7 +379,10 @@ public partial class TradeOrders
             {
                 await LoadAsync(synchronizeProfile: false);
             }
-            StateHasChanged();
+            if (!_isDisposed && !cancellationToken.IsCancellationRequested)
+            {
+                StateHasChanged();
+            }
         }
         finally
         {
@@ -362,13 +390,27 @@ public partial class TradeOrders
         }
     }
 
-    private bool ShouldPreserveCanonicalEditor() =>
-        _showCommissionTermsRevision ||
-        _selectedOrder?.CompanyCommission is
+    private bool ShouldPreserveCanonicalEditor()
+    {
+        if (IsEditingCommissionTermsRevision)
         {
-            PublicMetadata.ViewState: CompanyCommissionPublicViewState.Draft,
-            ActiveClaim: null
-        };
+            return _commissionTermsRevisionDirty ||
+                   HasCanonicalDraftDetailChanges ||
+                   !string.IsNullOrWhiteSpace(_commissionTermsRevisionReason);
+        }
+
+        return CanEditCanonicalDraft &&
+               (HasSelectedOrderOutputChanges ||
+                HasCanonicalDraftDetailChanges ||
+                HasSelectedOrderDetailChanges());
+    }
+
+    private bool HasSelectedOrderDetailChanges() =>
+        _selectedOrder != null &&
+        (!string.Equals(_detailTitle.Trim(), _selectedOrder.Title, StringComparison.Ordinal) ||
+         _detailCrafterId != _selectedOrder.AssignedCrafterId ||
+         _detailStatus != _selectedOrder.Status ||
+         !string.Equals(_detailNotes, _selectedOrder.Notes, StringComparison.Ordinal));
 
     private async Task RefreshHostedOrderDataPreservingEditorAsync()
     {

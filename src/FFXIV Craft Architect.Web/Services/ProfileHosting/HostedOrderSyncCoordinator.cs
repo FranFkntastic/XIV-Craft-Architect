@@ -19,6 +19,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
     private readonly IJSRuntime _jsRuntime;
     private readonly ProfileSyncService _profileSync;
     private readonly ProfileSyncLocalStateService _localState;
+    private readonly HostedOrderProjectionStore _hostedOrders;
     private readonly AppState _appState;
     private readonly ILogger<HostedOrderSyncCoordinator> _logger;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
@@ -39,12 +40,14 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         IJSRuntime jsRuntime,
         ProfileSyncService profileSync,
         ProfileSyncLocalStateService localState,
+        HostedOrderProjectionStore hostedOrders,
         AppState appState,
         ILogger<HostedOrderSyncCoordinator> logger)
     {
         _jsRuntime = jsRuntime;
         _profileSync = profileSync;
         _localState = localState;
+        _hostedOrders = hostedOrders;
         _appState = appState;
         _logger = logger;
         _profileSync.ConnectionChanged += OnConnectionChanged;
@@ -117,6 +120,12 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         return Task.CompletedTask;
     }
 
+    [JSInvokable]
+    public Task<long> RecoverProfileRevision(string profileId) =>
+        IsActiveProfile(profileId)
+            ? SynchronizeAsync(profileId, _lifetime.Token)
+            : Task.FromResult(0L);
+
     private void OnConnectionChanged() =>
         _ = ReconfigureSafelyAsync();
 
@@ -143,6 +152,10 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
 
     private async Task ReconfigureAsync(CancellationToken cancellationToken)
     {
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _lifetime.Token);
+        cancellationToken = linkedCancellation.Token;
         await _lifecycle.WaitAsync(cancellationToken);
         try
         {
@@ -165,6 +178,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
             await StopSessionAsync();
             if (!settings.IsConfigured || profileId == null)
             {
+                _hostedOrders.ResetForProfile(null);
                 UpdateDiagnostics(new HostedOrderSyncDiagnostics(
                     null,
                     "inactive",
@@ -177,36 +191,51 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return;
             }
 
-            _activeProfileId = profileId;
-            _activeHostUrl = settings.HostUrl;
-            _activeAccessKey = settings.AccessKey;
-            await _profileSync.InitializeAsync(cancellationToken);
-            var cursor = await _localState.LoadLastSyncRevisionAsync(profileId);
-            _callback ??= DotNetObjectReference.Create(this);
-            _module ??= await _jsRuntime.InvokeAsync<IJSObjectReference>(
-                "import",
-                cancellationToken,
-                ModulePath);
-            _controller = await _module.InvokeAsync<IJSObjectReference>(
-                "createProfileSyncSession",
-                cancellationToken,
-                _callback,
-                settings.HostUrl,
-                settings.AccessKey,
-                profileId,
-                cursor);
+            _hostedOrders.ResetForProfile(profileId);
+            IJSObjectReference? controller = null;
+            try
+            {
+                await _profileSync.InitializeAsync(cancellationToken);
+                var cursor = await _localState.LoadLastSyncRevisionAsync(profileId);
+                _callback ??= DotNetObjectReference.Create(this);
+                _module ??= await _jsRuntime.InvokeAsync<IJSObjectReference>(
+                    "import",
+                    cancellationToken,
+                    ModulePath);
+                controller = await _module.InvokeAsync<IJSObjectReference>(
+                    "createProfileSyncSession",
+                    cancellationToken,
+                    _callback,
+                    settings.HostUrl,
+                    settings.AccessKey,
+                    profileId,
+                    cursor);
 
-            _session = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            _recoveryLoop = RunRecoveryLoopAsync(profileId, _session.Token);
-            UpdateDiagnostics(new HostedOrderSyncDiagnostics(
-                profileId,
-                "follower",
-                false,
-                cursor,
-                cursor,
-                0,
-                null,
-                DateTime.UtcNow));
+                _controller = controller;
+                _activeProfileId = profileId;
+                _activeHostUrl = settings.HostUrl;
+                _activeAccessKey = settings.AccessKey;
+                _session = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+                _recoveryLoop = RunRecoveryLoopAsync(profileId, _session.Token);
+                UpdateDiagnostics(new HostedOrderSyncDiagnostics(
+                    profileId,
+                    "follower",
+                    false,
+                    cursor,
+                    cursor,
+                    0,
+                    null,
+                    DateTime.UtcNow));
+            }
+            catch
+            {
+                if (controller != null)
+                {
+                    await controller.DisposeAsync();
+                }
+                _hostedOrders.ResetForProfile(null);
+                throw;
+            }
         }
         finally
         {
@@ -223,7 +252,13 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                await SynchronizeAsync(profileId, cancellationToken);
+                var controller = _controller;
+                if (controller != null && IsActiveProfile(profileId))
+                {
+                    await controller.InvokeAsync<long>(
+                        "recover",
+                        cancellationToken);
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -243,13 +278,9 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return 0;
             }
 
-            var before = await _localState.LoadLastSyncRevisionAsync(profileId);
             await _profileSync.SyncNowAsync(cancellationToken);
             var after = await _localState.LoadLastSyncRevisionAsync(profileId);
-            if (after > before)
-            {
-                _appState.NotifyTradeOperationsDataChanged();
-            }
+            _appState.NotifyTradeOperationsDataChanged();
 
             UpdateDiagnostics(Diagnostics with
             {
@@ -274,6 +305,9 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
     private async Task StopSessionAsync()
     {
         _session?.Cancel();
+        _activeProfileId = null;
+        _activeHostUrl = null;
+        _activeAccessKey = null;
         if (_controller != null)
         {
             try
@@ -300,9 +334,6 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         }
         _session?.Dispose();
         _session = null;
-        _activeProfileId = null;
-        _activeHostUrl = null;
-        _activeAccessKey = null;
     }
 
     private void UpdateDiagnostics(HostedOrderSyncDiagnostics diagnostics)
@@ -313,6 +344,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _lifetime.Cancel();
         await _lifecycle.WaitAsync();
         try
         {
@@ -322,7 +354,6 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
             }
             _disposed = true;
             _profileSync.ConnectionChanged -= OnConnectionChanged;
-            _lifetime.Cancel();
             await StopSessionAsync();
             if (_module != null)
             {
