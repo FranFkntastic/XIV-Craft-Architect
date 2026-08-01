@@ -549,7 +549,7 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.Build"
                                                    OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
-                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalWorkPackage || GetOrderRootItems(_selectedOrder).Count == 0)">
+                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || GetOrderRootItems(_selectedOrder).Count == 0)">
                                             @GetCraftPlanBuildButtonText(_selectedOrder)
                                         </MudButton>
                                         <MudButton Variant="Variant.Outlined"
@@ -557,7 +557,7 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.PriceCheck"
                                                    OnClick="RepriceSelectedOrderAsync"
-                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalWorkPackage || !HasLinkedCraftPlan(_selectedOrder))">
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || !HasLinkedCraftPlan(_selectedOrder))">
                                             @(_isRepricingSelectedOrder ? "Repricing..." : "Reprice Order")
                                         </MudButton>
                                         <MudButton Variant="Variant.Outlined"
@@ -795,7 +795,7 @@
                                                          Create Terms v@(operationsCommission.CurrentTermsVersion + 1)
                                                      </MudText>
                                                      <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                         Edit the work package anywhere on this order, then publish one immutable revision to the existing brief and Discord message.
+                                                         Adjust material responsibility and crafter-facing details, then publish one immutable revision to the existing brief and Discord message.
                                                      </MudText>
                                                  </div>
                                                  <span class="trade-orders-publication-chip">Draft revision</span>
@@ -1489,7 +1489,7 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.Refresh"
                                                    OnClick="RepriceSelectedOrderAsync"
-                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalWorkPackage || !HasLinkedCraftPlan(_selectedOrder))">
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || !HasLinkedCraftPlan(_selectedOrder))">
                                             @(_isRepricingSelectedOrder ? "Refreshing..." : "Refresh Prices")
                                         </MudButton>
                                     </section>

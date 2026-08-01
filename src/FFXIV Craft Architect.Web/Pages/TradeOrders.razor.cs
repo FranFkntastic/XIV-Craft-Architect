@@ -156,7 +156,7 @@ public partial class TradeOrders
 
     private bool CanEditSelectedOrderOutputs =>
         _selectedOrder != null &&
-        (_selectedOrder.CompanyCommission == null || CanEditCanonicalWorkPackage) &&
+        (_selectedOrder.CompanyCommission == null || CanEditCanonicalDraft) &&
         TradeOrderWorkflow.CanEditRequestedOutputs(_selectedOrder);
 
     private bool HasSelectedOrderOutputChanges =>
