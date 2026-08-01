@@ -57,6 +57,10 @@ public partial class TradeOrders
     private bool HasCanonicalCommission =>
         _selectedOrder?.CompanyCommission != null;
 
+    private bool IsSelectedCanonicalOwnerMissing =>
+        _selectedOrder != null &&
+        CommissionOperations.IsCanonicalOwnerMissing(_selectedOrder.Id);
+
     private bool CanEditCanonicalDraft =>
         SelectedCommissionOwner is { Order.CompanyCommission: { } commission } owner &&
         owner.Order.Id == _selectedOrder?.Id &&

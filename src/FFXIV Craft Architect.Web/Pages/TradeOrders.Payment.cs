@@ -249,7 +249,9 @@ public partial class TradeOrders
         var parameters = new DialogParameters
         {
             ["Status"] = status,
-            ["OrderTitle"] = _selectedOrder.Title
+            ["OrderTitle"] = _selectedOrder.Title,
+            ["IsOrphanCleanup"] = status == TradeOrderStatus.Canceled &&
+                IsSelectedCanonicalOwnerMissing
         };
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
         var dialog = await DialogService.ShowAsync<TradeOrderCloseDialog>("Close Order", parameters, options);
@@ -273,7 +275,26 @@ public partial class TradeOrders
         {
             try
             {
-                await OrderLifecycle.CancelAndRetractAsync(_selectedOrder, note);
+                var cancellation = await OrderLifecycle.CancelAndRetractAsync(
+                    _selectedOrder,
+                    note);
+                if (cancellation.RemovedOrphanedLocalOrder)
+                {
+                    await LoadAsync();
+                    _selectedOrder = null;
+                    _manualNote = string.Empty;
+                    if (AppState.SelectedTradeOrderId == orderId)
+                    {
+                        AppState.SelectTradeOrder(null);
+                    }
+
+                    ClearSelectedOrderNavigation();
+                    Snackbar.Add(
+                        "The hosted commission had already been removed, so its stale local order and any remaining Discord publication were removed.",
+                        Severity.Success);
+                    return;
+                }
+
                 Snackbar.Add("Order canceled and its public commission retracted.", Severity.Success);
             }
             catch (Exception exception)
