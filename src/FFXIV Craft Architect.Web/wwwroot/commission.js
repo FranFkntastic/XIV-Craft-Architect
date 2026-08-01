@@ -33,6 +33,8 @@ const state = {
     capabilities: null,
     access: null,
     projection: null,
+    projectionStream: null,
+    projectionRefreshWaiters: [],
     busy: false,
     selectedLodestone: null
 };
@@ -171,6 +173,10 @@ function setBusy(busy) {
     document.querySelectorAll("button, input, select, textarea").forEach(control => {
         control.disabled = busy || control.dataset.permanentDisabled === "true";
     });
+    if (!busy) {
+        const waiters = state.projectionRefreshWaiters.splice(0);
+        waiters.forEach(resolve => resolve());
+    }
 }
 
 function showFatal(error) {
@@ -237,6 +243,7 @@ async function load() {
     render();
     byId("briefMessage").hidden = true;
     byId("briefShell").hidden = false;
+    startProjectionWatch();
 }
 
 async function reloadProjection(successMessage = null) {
@@ -244,6 +251,60 @@ async function reloadProjection(successMessage = null) {
     state.projection = await state.client.load(state.access?.participantSecret ?? null);
     render();
     if (successMessage) showToast(successMessage);
+}
+
+function startProjectionWatch() {
+    state.projectionStream?.stop();
+    state.projectionStream = state.client.watch(
+        state.projection?.kind === "participant"
+            ? state.access?.participantSecret ?? null
+            : null,
+        state.projection?.projectionTag ?? null,
+        refreshProjectionFromStream,
+        (connected, message) => {
+            if (!connected && message?.includes("authority is no longer available")) {
+                void refreshProjectionFromStream(null, true);
+            }
+        });
+}
+
+async function refreshProjectionFromStream(expectedTag = null, authorityChanged = false) {
+    await waitUntilProjectionRefreshIsSafe();
+
+    state.access = state.store.load();
+    let next;
+    try {
+        next = await state.client.load(state.access?.participantSecret ?? null);
+    } catch (caught) {
+        if (!authorityChanged || caught?.status !== 401) throw caught;
+        next = await state.client.load();
+    }
+
+    state.projection = next;
+    render();
+    if (authorityChanged && next.kind === "anonymous") {
+        startProjectionWatch();
+    }
+    return next.projectionTag;
+}
+
+async function waitUntilProjectionRefreshIsSafe() {
+    while (true) {
+        if (state.busy) {
+            await new Promise(resolve => state.projectionRefreshWaiters.push(resolve));
+            continue;
+        }
+
+        const active = document.activeElement;
+        const editing = active instanceof HTMLElement &&
+            active.matches("input, textarea, select") &&
+            Boolean(active.closest("form"));
+        if (!editing) {
+            return;
+        }
+
+        await new Promise(resolve => active.addEventListener("blur", resolve, { once: true }));
+    }
 }
 
 function render() {
@@ -1521,4 +1582,5 @@ async function runParticipantCommand(command, payload, successMessage) {
 }
 
 byId("progressForm").addEventListener("submit", submitProgress);
+window.addEventListener("pagehide", () => state.projectionStream?.stop(), { once: true });
 load().catch(showFatal);

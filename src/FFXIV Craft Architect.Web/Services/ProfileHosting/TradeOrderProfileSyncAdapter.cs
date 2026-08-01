@@ -8,10 +8,14 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
     private static readonly JsonSerializerOptions JsonOptions =
         ProfileSyncJson.CreateOptions();
     private readonly TradeOperationsPersistenceService _tradeOperations;
+    private readonly HostedOrderProjectionStore _projections;
 
-    public TradeOrderProfileSyncAdapter(TradeOperationsPersistenceService tradeOperations)
+    public TradeOrderProfileSyncAdapter(
+        TradeOperationsPersistenceService tradeOperations,
+        HostedOrderProjectionStore projections)
     {
         _tradeOperations = tradeOperations;
+        _projections = projections;
     }
 
     public string Collection => ProfileSyncCollections.TradeOrders;
@@ -49,6 +53,8 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             throw new InvalidOperationException(
                 $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
         }
+
+        _projections.TryPublishRemoteOrder(order, envelope.Revision);
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
@@ -63,6 +69,7 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             throw new InvalidOperationException(
                 $"Browser storage could not delete hosted Trade order '{objectId}'.");
         }
+
     }
 
     private static ProfileSyncObjectEnvelope ToEnvelope(TradeOrder order, DateTime updatedAtUtc)

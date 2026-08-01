@@ -40,6 +40,7 @@ public sealed class ProfileSyncService
     private const int RecoveryPageSize = 50;
     private readonly ProfileHostClient _client;
     private readonly ProfileSyncLocalStateService _localState;
+    private readonly HostedOrderProjectionStore _hostedOrders;
     private readonly IReadOnlyDictionary<string, IProfileSyncCollectionAdapter> _adapters;
     private readonly List<ProfileSyncPendingSave> _pendingSaves = [];
     private readonly List<ProfileSyncConflict> _conflicts = [];
@@ -51,15 +52,18 @@ public sealed class ProfileSyncService
         ProfileHostClient client,
         ProfileSyncLocalStateService localState,
         WebSettingsService settings,
+        HostedOrderProjectionStore hostedOrders,
         IEnumerable<IProfileSyncCollectionAdapter> adapters)
     {
         _client = client;
         _localState = localState;
+        _hostedOrders = hostedOrders;
         _adapters = adapters.ToDictionary(adapter => adapter.Collection, StringComparer.OrdinalIgnoreCase);
         settings.PortableSettingSaved += QueuePortableSettingSaveAsync;
     }
 
     public event Action? StatusChanged;
+    public event Action? ConnectionChanged;
 
     public ProfileSyncStatus CurrentStatus { get; private set; } = ProfileSyncStatus.LocalOnly();
 
@@ -208,6 +212,14 @@ public sealed class ProfileSyncService
                         if (item.Deleted)
                         {
                             await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
+                            if (string.Equals(
+                                    item.Collection,
+                                    ProfileSyncCollections.TradeOrders,
+                                    StringComparison.OrdinalIgnoreCase) &&
+                                Guid.TryParse(item.ObjectId, out var orderId))
+                            {
+                                _hostedOrders.TryPublishTombstone(orderId, item.Revision);
+                            }
                         }
                         else
                         {
@@ -582,6 +594,8 @@ public sealed class ProfileSyncService
         {
             await SyncNowCoreAsync(ct);
         }
+
+        ConnectionChanged?.Invoke();
     }
 
     private async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalBootstrapObjectsAsync(
@@ -626,6 +640,7 @@ public sealed class ProfileSyncService
         _conflicts.Clear();
         _pendingSavesProfileId = null;
         SetStatus(ProfileSyncStatus.LocalOnly());
+        ConnectionChanged?.Invoke();
     }
 
     public Task AcceptRemoteConflictAsync(

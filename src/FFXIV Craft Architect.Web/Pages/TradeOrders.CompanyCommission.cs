@@ -28,6 +28,7 @@ public partial class TradeOrders
     private TradeOrder? _commissionTermsRevisionWorkPackage;
     private CommissionBriefDocument? _commissionTermsRevisionBrief;
     private StoredPlan? _commissionTermsRevisionRollbackPlan;
+    private bool _commissionTermsRevisionDirty;
 
     private CompanyCommissionOwnerProjection? SelectedCommissionOwner =>
         _selectedOrder == null
@@ -115,6 +116,7 @@ public partial class TradeOrders
             owner.Order,
             commission);
         _commissionTermsRevisionRollbackPlan = null;
+        _commissionTermsRevisionDirty = false;
         _selectedOrder = _commissionTermsRevisionWorkPackage;
         _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
         _commissionContact = commission.CurrentTerms.ContactInstructions;
@@ -166,6 +168,7 @@ public partial class TradeOrders
         _commissionTermsRevisionWorkPackage = null;
         _commissionTermsRevisionBrief = null;
         _commissionTermsRevisionRollbackPlan = null;
+        _commissionTermsRevisionDirty = false;
         _showCommissionTermsRevision = false;
 
         if (rollback != null)
@@ -195,6 +198,7 @@ public partial class TradeOrders
         _commissionTermsRevisionWorkPackage = null;
         _commissionTermsRevisionBrief = null;
         _commissionTermsRevisionRollbackPlan = null;
+        _commissionTermsRevisionDirty = false;
         var provisional = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ProvisionalCrafter;
         _commissionIdentityCrafterId = provisional == null
             ? order.AssignedCrafterId
@@ -411,6 +415,7 @@ public partial class TradeOrders
             if (result.Success)
             {
                 _commissionTermsRevisionReason = string.Empty;
+                _commissionTermsRevisionDirty = false;
                 _showCommissionTermsRevision = false;
             }
         }
@@ -436,6 +441,7 @@ public partial class TradeOrders
         {
             _commissionTermsRevisionWorkPackage = TradeOrderWorkflow.CopyOrder(workPackage);
             _commissionTermsRevisionBrief = brief;
+            _commissionTermsRevisionDirty = true;
             _selectedOrder = _commissionTermsRevisionWorkPackage;
             _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
             if (!string.IsNullOrWhiteSpace(successMessage))

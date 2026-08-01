@@ -8,10 +8,14 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 public sealed class SqliteProfileHostStore
 {
     private readonly ProfileHostOptions _options;
+    private readonly ProfileHostChangeSignal? _changeSignal;
 
-    public SqliteProfileHostStore(ProfileHostOptions options)
+    public SqliteProfileHostStore(
+        ProfileHostOptions options,
+        ProfileHostChangeSignal? changeSignal = null)
     {
         _options = options;
+        _changeSignal = changeSignal;
     }
 
     public async Task<ProfileHostProfileResponse> CreateProfileAsync(string displayName, CancellationToken ct)
@@ -534,6 +538,16 @@ public sealed class SqliteProfileHostStore
         };
     }
 
+    public async Task<long> LoadServerRevisionAsync(
+        string profileId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        return await GetServerRevisionAsync(connection, profileId, ct);
+    }
+
     public async Task<ProfileSyncPutResponse> PutObjectAsync(
         string profileId,
         string collection,
@@ -647,6 +661,7 @@ public sealed class SqliteProfileHostStore
             };
         }
         await transaction.CommitAsync(ct);
+        _changeSignal?.Publish(profileId, revision);
 
         return new ProfileSyncPutResponse
         {
@@ -841,6 +856,7 @@ public sealed class SqliteProfileHostStore
             };
         }
         await transaction.CommitAsync(ct);
+        _changeSignal?.Publish(profileId, revision);
 
         return new ProfileSyncPutResponse
         {

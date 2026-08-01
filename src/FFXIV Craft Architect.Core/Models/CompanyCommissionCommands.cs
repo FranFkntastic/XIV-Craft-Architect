@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace FFXIV_Craft_Architect.Core.Models;
 
 public sealed record CompanyCommissionCommandContext(
@@ -186,7 +188,9 @@ public sealed record CompanyCommissionMutationResult(
     TradeOrder? Order = null,
     CompanyCommissionActivityEvent? Activity = null,
     string? ErrorCode = null,
-    string? ErrorMessage = null)
+    string? ErrorMessage = null,
+    [property: JsonIgnore] CompanyRecordRevision? ObjectRevision = null,
+    [property: JsonIgnore] CompanyRecordRevision? CompanyRevision = null)
 {
     public bool Success =>
         Status is CompanyCommissionMutationStatus.Applied or CompanyCommissionMutationStatus.Replayed;

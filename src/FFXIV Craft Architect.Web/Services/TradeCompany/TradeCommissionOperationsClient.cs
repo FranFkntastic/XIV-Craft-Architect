@@ -64,6 +64,23 @@ public sealed class TradeCommissionOperationsClient(
             command,
             typeof(TCommand),
             cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            var problem = await ReadProblemAsync(response, cancellationToken);
+            if (string.Equals(
+                    problem?.Error,
+                    "revision_conflict",
+                    StringComparison.Ordinal))
+            {
+                throw new CompanyCommissionRevisionConflictException(
+                    problem?.Message ?? problem?.ErrorMessage);
+            }
+
+            throw new InvalidOperationException(
+                problem?.Message ??
+                problem?.ErrorMessage ??
+                $"Company commission operations failed with HTTP {(int)response.StatusCode}.");
+        }
         await EnsureSuccessAsync(response, cancellationToken);
         var result = await response.Content.ReadFromJsonAsync<TradeCommissionOwnerMutationBody>(
             JsonOptions,
@@ -77,6 +94,7 @@ public sealed class TradeCommissionOperationsClient(
                 result.Activity,
                 result.ErrorCode,
                 result.ErrorMessage),
+            result.Projection,
             result.ClaimUrl);
     }
 
@@ -200,8 +218,18 @@ public sealed class TradeCommissionOperationsClient(
         string? Message);
 }
 
+internal sealed class CompanyCommissionRevisionConflictException : InvalidOperationException
+{
+    public CompanyCommissionRevisionConflictException(string? message = null)
+        : base(message ??
+            "The hosted commission or company changed before the command was applied.")
+    {
+    }
+}
+
 public sealed record TradeCommissionRecoveryResetResponse(
     CompanyCommissionMutationResult Mutation,
+    CompanyCommissionOwnerProjection Projection,
     string RecoveryUrl);
 
 public sealed record TradeCommissionClaimLinkRequest(
@@ -211,6 +239,7 @@ public sealed record TradeCommissionClaimLinkResponse(string ClaimUrl);
 
 public sealed record TradeCommissionOwnerMutationResponse(
     CompanyCommissionMutationResult Mutation,
+    CompanyCommissionOwnerProjection? Projection,
     string? ClaimUrl);
 
 internal sealed record TradeCommissionOwnerMutationBody(
@@ -219,4 +248,5 @@ internal sealed record TradeCommissionOwnerMutationBody(
     CompanyCommissionActivityEvent? Activity,
     string? ErrorCode,
     string? ErrorMessage,
+    CompanyCommissionOwnerProjection? Projection,
     string? ClaimUrl);

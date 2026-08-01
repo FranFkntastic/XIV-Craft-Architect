@@ -58,6 +58,7 @@ builder.Services.AddSingleton(_ => new ProfileHostOptions
 builder.Services.AddSingleton<ProfileAccessKeyHasher>();
 builder.Services.AddSingleton<ProfilePairingCodeService>();
 builder.Services.AddSingleton<ProfileAuthenticationGate>();
+builder.Services.AddSingleton<ProfileHostChangeSignal>();
 builder.Services.AddSingleton<SqliteProfileHostStore>();
 var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
     ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db");
@@ -70,6 +71,7 @@ builder.Services.AddSingleton(_ => new CommissionBriefOptions
         ?? "http://localhost:5000/commission.html"
 });
 builder.Services.AddSingleton<SqliteCommissionBriefStore>();
+builder.Services.AddSingleton<CommissionProjectionChangeSignal>();
 builder.Services.AddSingleton(_ =>
 {
     var discordDatabasePath = builder.Configuration["Discord:DatabasePath"]
@@ -111,6 +113,9 @@ builder.Services.AddSingleton<HostedCompanyCommissionService>();
 builder.Services.AddSingleton<
     ICompanyCommissionPostCommitSink,
     DiscordCompanyCommissionPostCommitSink>();
+builder.Services.AddSingleton<
+    ICompanyCommissionPostCommitSink,
+    CommissionProjectionChangePostCommitSink>();
 builder.Services.AddSingleton<CompanyCommissionMigrationDiagnostics>();
 builder.Services.AddHostedService<CompanyCommissionSchemaMigrationHostedService>();
 builder.Services.AddSingleton<DiscordRequestVerifier>();
