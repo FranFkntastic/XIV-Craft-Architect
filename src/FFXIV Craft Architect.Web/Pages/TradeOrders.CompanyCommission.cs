@@ -109,6 +109,7 @@ public partial class TradeOrders
             commission);
         _commissionTermsRevisionRollbackPlan = null;
         _commissionTermsRevisionDirty = false;
+        CaptureCommissionTermsRevisionBase(owner, commission);
         _selectedOrder = _commissionTermsRevisionWorkPackage;
         _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
         _commissionContact = commission.CurrentTerms.ContactInstructions;
@@ -153,15 +154,19 @@ public partial class TradeOrders
         return copy;
     }
 
-    private async Task CancelCommissionTermsRevisionAsync()
+    private Task CancelCommissionTermsRevisionAsync() =>
+        CancelCommissionTermsRevisionAsync(discardConflict: false);
+
+    private async Task CancelCommissionTermsRevisionAsync(bool discardConflict)
     {
         var owner = SelectedCommissionOwner;
-        var rollback = _commissionTermsRevisionRollbackPlan;
+        var rollback = discardConflict ? null : _commissionTermsRevisionRollbackPlan;
         _commissionTermsRevisionWorkPackage = null;
         _commissionTermsRevisionBrief = null;
         _commissionTermsRevisionRollbackPlan = null;
         _commissionTermsRevisionDirty = false;
         _showCommissionTermsRevision = false;
+        ResetCommissionTermsRevisionBase();
 
         if (rollback != null)
         {
@@ -191,6 +196,7 @@ public partial class TradeOrders
         _commissionTermsRevisionBrief = null;
         _commissionTermsRevisionRollbackPlan = null;
         _commissionTermsRevisionDirty = false;
+        ResetCommissionTermsRevisionBase();
         var provisional = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ProvisionalCrafter;
         _commissionIdentityCrafterId = provisional == null
             ? order.AssignedCrafterId
@@ -368,6 +374,14 @@ public partial class TradeOrders
             return;
         }
 
+        if (HasCommissionTermsRevisionConflict)
+        {
+            Snackbar.Add(
+                "Canonical terms changed while this revision was being edited. Rebase onto the latest terms or discard the local changes before publishing.",
+                Severity.Warning);
+            return;
+        }
+
         var reason = _commissionTermsRevisionReason.Trim();
         var confirmed = await DialogService.ShowMessageBox(
             "Create Terms Revision",
@@ -409,6 +423,7 @@ public partial class TradeOrders
                 _commissionTermsRevisionReason = string.Empty;
                 _commissionTermsRevisionDirty = false;
                 _showCommissionTermsRevision = false;
+                ResetCommissionTermsRevisionBase();
             }
         }
         finally
