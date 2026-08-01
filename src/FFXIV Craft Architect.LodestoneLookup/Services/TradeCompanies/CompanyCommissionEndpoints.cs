@@ -17,6 +17,7 @@ public sealed record PublicCompanyCommissionCommandEnvelope
 
 public sealed record TradeCommissionRecoveryResetResponse(
     CompanyCommissionMutationResult Mutation,
+    CompanyCommissionOwnerProjection Projection,
     string RecoveryUrl);
 
 public sealed record TradeCommissionOwnerCommandResponse(
@@ -25,6 +26,7 @@ public sealed record TradeCommissionOwnerCommandResponse(
     CompanyCommissionActivityEvent? Activity,
     string? ErrorCode,
     string? ErrorMessage,
+    CompanyCommissionOwnerProjection? Projection,
     string? ClaimUrl = null);
 
 public sealed record IssueCompanyCommissionClaimLinkRequest(
@@ -219,6 +221,7 @@ public static class CompanyCommissionEndpoints
                             $"{recovery.RecoveryGrantId:D}.{issued.PlaintextToken}");
                     return Results.Ok(new TradeCommissionRecoveryResetResponse(
                         mutation,
+                        ToCommittedProjection(mutation),
                         recoveryUrl));
                 }
 
@@ -850,7 +853,20 @@ public static class CompanyCommissionEndpoints
             mutation.Activity,
             mutation.ErrorCode,
             mutation.ErrorMessage,
+            mutation.Success ? ToCommittedProjection(mutation) : null,
             claimUrl);
+
+    private static CompanyCommissionOwnerProjection ToCommittedProjection(
+        CompanyCommissionMutationResult mutation) =>
+        new()
+        {
+            Order = mutation.Order ?? throw new InvalidOperationException(
+                "A successful commission command returned no committed order."),
+            ObjectRevision = mutation.ObjectRevision ?? throw new InvalidOperationException(
+                "A successful commission command returned no committed object revision."),
+            CompanyRevision = mutation.CompanyRevision ?? throw new InvalidOperationException(
+                "A successful commission command returned no committed company revision.")
+        };
 
     private sealed record ClaimPayload(
         int TermsVersion,

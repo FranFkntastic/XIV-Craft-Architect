@@ -385,7 +385,7 @@ public sealed class HostedCompanyCommissionService(
                 ErrorMessage: "The canonical company commission was not found.");
         }
 
-        var replay = ResolveReplay(snapshot.Order, context, fingerprint);
+        var replay = ResolveReplay(snapshot, context, fingerprint);
         if (replay != null)
         {
             await NotifyPostCommitAsync(
@@ -480,7 +480,9 @@ public sealed class HostedCompanyCommissionService(
             var result = new CompanyCommissionMutationResult(
                 CompanyCommissionMutationStatus.Applied,
                 updated,
-                activity);
+                activity,
+                ObjectRevision: committed.Envelope.RecordRevision,
+                CompanyRevision: committed.CompanyRevision);
             await NotifyPostCommitAsync(access, committed, activity, cancellationToken);
             return result;
         }
@@ -491,7 +493,7 @@ public sealed class HostedCompanyCommissionService(
             cancellationToken);
         var replayAfterConflict = current == null
             ? null
-            : ResolveReplay(current.Order, context, fingerprint);
+            : ResolveReplay(current, context, fingerprint);
         if (replayAfterConflict != null)
         {
             await NotifyPostCommitAsync(
@@ -662,10 +664,11 @@ public sealed class HostedCompanyCommissionService(
     }
 
     private static CompanyCommissionMutationResult? ResolveReplay(
-        TradeOrder order,
+        HostedCompanyCommissionSnapshot snapshot,
         CompanyCommissionCommandContext context,
         string fingerprint)
     {
+        var order = snapshot.Order;
         var commission = order.CompanyCommission;
         var prior = commission?.ProcessedCommands
             .SingleOrDefault(item => item.CommandId == context.CommandId);
@@ -693,7 +696,9 @@ public sealed class HostedCompanyCommissionService(
         return new CompanyCommissionMutationResult(
             CompanyCommissionMutationStatus.Replayed,
             order,
-            activity);
+            activity,
+            ObjectRevision: snapshot.Envelope.RecordRevision,
+            CompanyRevision: snapshot.CompanyRevision);
     }
 
     private static TradeOrderHistoryEvent ProjectCompatibilityHistory(

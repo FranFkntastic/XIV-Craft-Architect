@@ -525,10 +525,7 @@ public sealed class TradeCommissionOperationsService(
                     $"Participant recovery reset was {response.Mutation.Status.ToString().ToLowerInvariant()}.");
             }
 
-            var updated = await client.LoadOwnerProjectionAsync(
-                RequireCommission(current).CompanyId.Value,
-                RequireCommission(current).CommissionId,
-                cancellationToken);
+            var updated = response.Projection;
             ValidateProjection(current.Order, updated);
             if (updated.ObjectRevision.Value <= current.ObjectRevision.Value)
             {
@@ -674,13 +671,11 @@ public sealed class TradeCommissionOperationsService(
                         $"The commissioner command was {mutation.Status.ToString().ToLowerInvariant()}.");
                 }
 
-                var commissionAfterCommand = RequireCommission(commandProjection);
-                var updated = await client.LoadOwnerProjectionAsync(
-                    commissionAfterCommand.CompanyId.Value,
-                    commissionAfterCommand.CommissionId,
-                    cancellationToken);
+                var updated = response.Projection ?? throw new InvalidOperationException(
+                    "The successful commissioner command returned no committed owner projection.");
                 ValidateProjection(current.Order, updated);
-                if (updated.ObjectRevision.Value <= commandProjection.ObjectRevision.Value)
+                if (mutation.Status == CompanyCommissionMutationStatus.Applied &&
+                    updated.ObjectRevision.Value <= commandProjection.ObjectRevision.Value)
                 {
                     throw new InvalidOperationException(
                         "The commissioner command did not advance the authoritative order revision.");

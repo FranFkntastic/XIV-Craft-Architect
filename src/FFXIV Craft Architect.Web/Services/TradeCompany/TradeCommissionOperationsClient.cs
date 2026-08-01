@@ -94,6 +94,7 @@ public sealed class TradeCommissionOperationsClient(
                 result.Activity,
                 result.ErrorCode,
                 result.ErrorMessage),
+            result.Projection,
             result.ClaimUrl);
     }
 
@@ -228,6 +229,7 @@ internal sealed class CompanyCommissionRevisionConflictException : InvalidOperat
 
 public sealed record TradeCommissionRecoveryResetResponse(
     CompanyCommissionMutationResult Mutation,
+    CompanyCommissionOwnerProjection Projection,
     string RecoveryUrl);
 
 public sealed record TradeCommissionClaimLinkRequest(
@@ -237,6 +239,7 @@ public sealed record TradeCommissionClaimLinkResponse(string ClaimUrl);
 
 public sealed record TradeCommissionOwnerMutationResponse(
     CompanyCommissionMutationResult Mutation,
+    CompanyCommissionOwnerProjection? Projection,
     string? ClaimUrl);
 
 internal sealed record TradeCommissionOwnerMutationBody(
@@ -245,4 +248,5 @@ internal sealed record TradeCommissionOwnerMutationBody(
     CompanyCommissionActivityEvent? Activity,
     string? ErrorCode,
     string? ErrorMessage,
+    CompanyCommissionOwnerProjection? Projection,
     string? ClaimUrl);
