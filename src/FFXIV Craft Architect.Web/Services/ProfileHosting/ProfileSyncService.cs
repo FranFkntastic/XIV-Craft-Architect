@@ -102,15 +102,19 @@ public sealed class ProfileSyncService
     public bool IsSuppressed => _suppressionDepth > 0;
 
     public Task InitializeAsync(CancellationToken ct = default) =>
-        RunSerializedAsync(() => SyncNowCoreAsync(null, ct), ct);
+        RunSerializedAsync(() => SyncNowCoreAsync(null, null, ct), ct);
 
     public Task SyncNowAsync(CancellationToken ct = default) =>
-        RunSerializedAsync(() => SyncNowCoreAsync(null, ct), ct);
+        RunSerializedAsync(() => SyncNowCoreAsync(null, null, ct), ct);
 
-    public Task SyncToRevisionAsync(long targetRevision, CancellationToken ct = default) =>
+    public Task SyncFromRevisionAsync(
+        long replayAfterRevision,
+        long? targetRevision,
+        CancellationToken ct = default) =>
         RunSerializedAsync(
             () => SyncNowCoreAsync(
-                targetRevision > 0 ? targetRevision : null,
+                targetRevision is > 0 ? targetRevision : null,
+                replayAfterRevision,
                 ct),
             ct);
 
@@ -210,7 +214,10 @@ public sealed class ProfileSyncService
         return remoteObject.Revision;
     }
 
-    private async Task SyncNowCoreAsync(long? targetRevision, CancellationToken ct)
+    private async Task SyncNowCoreAsync(
+        long? targetRevision,
+        long? replayAfterRevision,
+        CancellationToken ct)
     {
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId;
@@ -236,7 +243,10 @@ public sealed class ProfileSyncService
                 TargetRevision = targetRevision,
                 Message = "Reading saved profile state"
             });
-            lastRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
+            var persistedRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
+            lastRevision = ResolveSyncStartRevision(
+                persistedRevision,
+                replayAfterRevision);
             var mayTrustSavedProjection =
                 !_hostedOrders.RestoreState.RequiresIdentityOnly &&
                 _hostedOrders.RestoreState.Stage != HostedOrderRestoreStage.ScopeChanging;
@@ -341,7 +351,11 @@ public sealed class ProfileSyncService
                 serverRevision = changes.ServerRevision;
                 lastRevision = serverRevision;
                 hasMore = changes.HasMore;
-                await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
+                if (ShouldAdvancePersistedRevision(persistedRevision, serverRevision))
+                {
+                    await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
+                    persistedRevision = serverRevision;
+                }
                 if (hasMore)
                 {
                     SetStatus(CurrentStatus with
@@ -415,6 +429,18 @@ public sealed class ProfileSyncService
             });
         }
     }
+
+    private static long ResolveSyncStartRevision(
+        long persistedRevision,
+        long? replayAfterRevision) =>
+        replayAfterRevision.HasValue
+            ? Math.Min(persistedRevision, Math.Max(0, replayAfterRevision.Value))
+            : persistedRevision;
+
+    private static bool ShouldAdvancePersistedRevision(
+        long persistedRevision,
+        long candidateRevision) =>
+        candidateRevision > persistedRevision;
 
     private async Task<int> HydrateTrustedOrderProjectionsAsync(
         string profileId,
@@ -768,7 +794,7 @@ public sealed class ProfileSyncService
         }
         else
         {
-            await SyncNowCoreAsync(null, ct);
+            await SyncNowCoreAsync(null, null, ct);
         }
 
         ConnectionChanged?.Invoke();

@@ -73,11 +73,13 @@ export function createProfileSyncSession(
             if (state.stopped || revision <= state.cursor) {
                 return state.cursor;
             }
+            const replayAfterRevision = state.cursor;
             const appliedRevision = normalizeRevision(await callback.invokeMethodAsync(
                 "ReceiveProfileRevision",
                 normalizedProfileId,
                 revision,
-                source));
+                source,
+                replayAfterRevision));
             state.cursor = Math.max(state.cursor, appliedRevision);
             return state.cursor;
         });
@@ -97,7 +99,8 @@ export function createProfileSyncSession(
                 }
                 const appliedRevision = normalizeRevision(await callback.invokeMethodAsync(
                     "RecoverProfileRevision",
-                    normalizedProfileId));
+                    normalizedProfileId,
+                    state.cursor));
                 state.cursor = Math.max(state.cursor, appliedRevision);
                 return state.cursor;
             }));
