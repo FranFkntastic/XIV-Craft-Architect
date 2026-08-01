@@ -165,14 +165,36 @@ public sealed class DiscordPublicationService(
             return NewPublicationConflict(
                 "The canonical Trade order is unavailable.");
         }
-        if (order.Envelope.RecordRevision != orderRevision &&
-            !string.Equals(
-                order.Order.CommissionPublication?.PublicId,
+        var attachedPublication = order.Order.CommissionPublication;
+        var alreadyBound =
+            attachedPublication != null &&
+            string.Equals(
+                attachedPublication.PublicId,
                 expectedPublicId,
-                StringComparison.Ordinal))
+                StringComparison.Ordinal) &&
+            attachedPublication.Ownership == ownership;
+        if (alreadyBound && attachedPublication!.RevokedAtUtc != null)
+        {
+            return NewPublicationConflict(
+                "The canonical Trade order publication was already revoked.");
+        }
+        if (order.Envelope.RecordRevision != orderRevision && !alreadyBound)
         {
             return NewPublicationConflict(
                 "The Trade order changed before publication began.");
+        }
+
+        if (!alreadyBound)
+        {
+            try
+            {
+                TradeCompanyCommissionMigrationService
+                    .RequireCanonicalBriefMatchesCurrentTerms(order.Order, brief);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return NewPublicationConflict(exception.Message);
+            }
         }
 
         if (!options.CanPublishDirectly)
@@ -317,10 +339,7 @@ public sealed class DiscordPublicationService(
                 }
             }
         }
-        else if (string.Equals(
-                     order.Order.CommissionPublication?.PublicId,
-                     published.PublicId,
-                     StringComparison.Ordinal))
+        else if (alreadyBound)
         {
             orderMutation = new TradeCompanyMutationResult(
                 TradeCompanyMutationStatus.Replayed,

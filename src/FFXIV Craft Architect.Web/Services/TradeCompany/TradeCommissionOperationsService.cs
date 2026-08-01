@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
@@ -185,6 +186,40 @@ public sealed class TradeCommissionOperationsService(
                 context,
                 terms,
                 reason.Trim()),
+            cancellationToken);
+    }
+
+    public Task<TradeCommissionOperatorResult> UpdateDraftAsync(
+        CompanyCommissionOwnerProjection current,
+        CompanyCommissionTermsVersion terms,
+        TradeOrder workPackage,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workPackage);
+        return ExecuteAsync(
+            current,
+            "update-draft",
+            new
+            {
+                Terms = terms,
+                WorkPackage = new CompanyCommissionDraftWorkPackage(
+                    GetRequestedOutputs(workPackage),
+                    TradeOrderWorkflow.CopySourceSnapshot(workPackage.SourceSnapshot),
+                    workPackage.CraftPlanId,
+                    workPackage.CraftPlanName,
+                    workPackage.CraftPlanSavedAtUtc,
+                    workPackage.CraftPlanLinkKind)
+            },
+            context => new UpdateCompanyCommissionDraftCommand(
+                context,
+                terms,
+                new CompanyCommissionDraftWorkPackage(
+                    GetRequestedOutputs(workPackage),
+                    TradeOrderWorkflow.CopySourceSnapshot(workPackage.SourceSnapshot),
+                    workPackage.CraftPlanId,
+                    workPackage.CraftPlanName,
+                    workPackage.CraftPlanSavedAtUtc,
+                    workPackage.CraftPlanLinkKind)),
             cancellationToken);
     }
 
@@ -652,6 +687,17 @@ public sealed class TradeCommissionOperationsService(
         _errors.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
     }
+
+    private static IReadOnlyList<TradeRequestedOrderOutput> GetRequestedOutputs(
+        TradeOrder order) =>
+        (order.SourceSnapshot?.RootItems ?? [])
+            .Select(item => new TradeRequestedOrderOutput(
+                item.ItemId,
+                item.Name,
+                item.Quantity,
+                item.MustBeHq,
+                item.EstimatedSaleValue))
+            .ToArray();
 
     private async Task RefreshNotificationDiagnosticsAsync(
         CompanyId companyId,

@@ -95,7 +95,8 @@ public enum CompanyCommissionActivityKind
     PaymentAttestationRetracted,
     SettlementPaymentSentRecorded,
     SettlementPaymentReceivedConfirmed,
-    SettlementPaymentAttestationRetracted
+    SettlementPaymentAttestationRetracted,
+    DraftUpdated
 }
 
 public enum CompanyCommissionActivityVisibility

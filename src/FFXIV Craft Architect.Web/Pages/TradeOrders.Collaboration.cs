@@ -47,6 +47,23 @@ public partial class TradeOrders
                 return "Trade channel delivery is already in progress.";
             }
 
+            if (commission.CurrentTerms.Outputs.Count == 0)
+            {
+                return "Add at least one requested output before publishing.";
+            }
+
+            if (commission.CurrentTerms.Payment.Total <= 0)
+            {
+                return "Rebuild and price the work package before publishing.";
+            }
+
+            if (commission.CurrentTerms.Payment.Schedule ==
+                    CompanyCommissionPaymentSchedule.Custom &&
+                string.IsNullOrWhiteSpace(commission.CurrentTerms.Payment.CustomTerms))
+            {
+                return "Define the custom payment timing before publishing.";
+            }
+
             return CanPublishToConfiguredTradeChannel(order, out var reason)
                 ? null
                 : reason;
@@ -139,6 +156,17 @@ public partial class TradeOrders
     private bool CanPublishCommission =>
         !_isPublishingCommission &&
         PublishCommissionUnavailableReason == null;
+
+    private bool HasCanonicalDraftDetailChanges =>
+        SelectedCanonicalCommission is { } commission &&
+        (!string.Equals(
+             _commissionContact?.Trim() ?? string.Empty,
+             commission.CurrentTerms.ContactInstructions,
+             StringComparison.Ordinal) ||
+         !string.Equals(
+             _commissionDeliveryInstructions?.Trim() ?? string.Empty,
+             commission.CurrentTerms.DeliveryInstructions,
+             StringComparison.Ordinal));
 
     private void PrepareCommissionDraft(TradeOrder order)
     {
@@ -344,9 +372,7 @@ public partial class TradeOrders
 
     private async Task PublishCanonicalCommissionToDiscordAsync()
     {
-        var owner = SelectedCommissionOwner;
-        if (owner?.Order.CompanyCommission is not { } commission ||
-            !CanPublishCanonicalCommissionToDiscord)
+        if (!CanPublishCanonicalCommissionToDiscord)
         {
             return;
         }
@@ -354,6 +380,18 @@ public partial class TradeOrders
         _isPublishingCommission = true;
         try
         {
+            if (HasCanonicalDraftDetailChanges &&
+                !await TrySaveCanonicalCommissionDraftDetailsAsync(showSuccess: false))
+            {
+                return;
+            }
+
+            var owner = SelectedCommissionOwner;
+            if (owner?.Order.CompanyCommission is not { } commission)
+            {
+                throw new InvalidOperationException(
+                    "The canonical commission changed before publication.");
+            }
             await PublishSelectedCommissionToDiscordAsync(
                 owner.Order,
                 BuildCanonicalCommissionBrief(owner.Order, commission));
@@ -368,6 +406,30 @@ public partial class TradeOrders
         {
             _isPublishingCommission = false;
         }
+    }
+
+    private async Task SaveCanonicalCommissionDraftDetailsAsync() =>
+        await TrySaveCanonicalCommissionDraftDetailsAsync(showSuccess: true);
+
+    private async Task<bool> TrySaveCanonicalCommissionDraftDetailsAsync(
+        bool showSuccess = true)
+    {
+        var owner = SelectedCommissionOwner;
+        var commission = owner?.Order.CompanyCommission;
+        if (owner == null || commission == null || !CanEditCanonicalDraft)
+        {
+            return false;
+        }
+
+        var brief = BuildCanonicalCommissionBrief(owner.Order, commission);
+        brief.Contact = _commissionContact?.Trim() ?? string.Empty;
+        brief.DeliveryInstructions = _commissionDeliveryInstructions?.Trim() ?? string.Empty;
+        return await UpdateCanonicalDraftAsync(
+            owner.Order,
+            brief,
+            showSuccess
+                ? "Crafter-facing details saved to the commission draft"
+                : null);
     }
 
     private async Task PublishSelectedCommissionToDiscordAsync(
@@ -804,7 +866,9 @@ public partial class TradeOrders
                 terms.Payment.Total,
                 MaterialAdjustmentPercent: 0m,
                 terms.Payment.CraftSynthCount,
-                terms.Payment.GilPerSynth),
+                terms.Payment.GilPerSynth,
+                terms.Payment.Schedule,
+                terms.Payment.CustomTerms),
             Evidence = new CommissionBriefEvidence(
                 terms.PricingEvidence.CostBasis,
                 terms.PricingEvidence.MarketScope,

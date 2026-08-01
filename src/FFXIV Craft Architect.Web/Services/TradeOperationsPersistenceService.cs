@@ -169,6 +169,11 @@ public sealed class TradeOperationsPersistenceService
 
     public async Task<bool> SaveOrderAsync(TradeOrder order)
     {
+        if (order.CompanyCommission != null)
+        {
+            return false;
+        }
+
         order.UpdatedAtUtc = DateTime.UtcNow;
         return await _indexedDb.SaveTradeOrderAsync(order);
     }

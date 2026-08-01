@@ -449,9 +449,12 @@ public sealed class HostedCompanyCommissionService(
                 .ToArray()
         };
         updated.UpdatedAtUtc = now;
-        updated.History = updated.History
-            .Append(ProjectCompatibilityHistory(updated, activity))
-            .ToArray();
+        if (activity.Kind != CompanyCommissionActivityKind.DraftUpdated)
+        {
+            updated.History = updated.History
+                .Append(ProjectCompatibilityHistory(updated, activity))
+                .ToArray();
+        }
 
         var mutation = await companies.PutRecordAsync(
             access,

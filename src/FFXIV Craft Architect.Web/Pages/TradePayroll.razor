@@ -302,6 +302,14 @@
         _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
         _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
         _linkedOrder = FindMatchingOrder();
+        if (_linkedOrder?.CompanyCommission != null)
+        {
+            _workflowDraft = null;
+            _assignedCrafterId = null;
+            _unavailableReason =
+                "This plan belongs to a canonical company commission. Open it from Orders to edit its draft terms or operate the published commission.";
+            return;
+        }
 
         var orderCrafterId = _linkedOrder?.AssignedCrafterId;
         var orderCrafterName = orderCrafterId.HasValue ? GetCrafterDisplayName(orderCrafterId.Value) : null;
