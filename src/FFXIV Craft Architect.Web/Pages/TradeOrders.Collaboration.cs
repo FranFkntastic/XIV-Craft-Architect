@@ -161,11 +161,15 @@ public partial class TradeOrders
         SelectedCanonicalCommission is { } commission &&
         (!string.Equals(
              _commissionContact?.Trim() ?? string.Empty,
-             commission.CurrentTerms.ContactInstructions,
+             IsEditingCommissionTermsRevision
+                 ? _commissionTermsRevisionBrief?.Contact ?? commission.CurrentTerms.ContactInstructions
+                 : commission.CurrentTerms.ContactInstructions,
              StringComparison.Ordinal) ||
          !string.Equals(
              _commissionDeliveryInstructions?.Trim() ?? string.Empty,
-             commission.CurrentTerms.DeliveryInstructions,
+             IsEditingCommissionTermsRevision
+                 ? _commissionTermsRevisionBrief?.DeliveryInstructions ?? commission.CurrentTerms.DeliveryInstructions
+                 : commission.CurrentTerms.DeliveryInstructions,
              StringComparison.Ordinal));
 
     private void PrepareCommissionDraft(TradeOrder order)
@@ -416,16 +420,26 @@ public partial class TradeOrders
     {
         var owner = SelectedCommissionOwner;
         var commission = owner?.Order.CompanyCommission;
-        if (owner == null || commission == null || !CanEditCanonicalDraft)
+        if (owner == null || commission == null || !CanEditCanonicalWorkPackage)
         {
             return false;
         }
 
-        var brief = BuildCanonicalCommissionBrief(owner.Order, commission);
+        var workPackage = IsEditingCommissionTermsRevision
+            ? _commissionTermsRevisionWorkPackage ?? _selectedOrder!
+            : owner.Order;
+        var brief = IsEditingCommissionTermsRevision
+            ? BuildCommissionBrief(
+                workPackage,
+                TradeCommissionPaymentSummary.FromOrder(
+                    workPackage,
+                    GetSelectedOrderResponsibilityProjection(),
+                    GetSelectedOrderEffectivePaymentPolicy()))
+            : BuildCanonicalCommissionBrief(owner.Order, commission);
         brief.Contact = _commissionContact?.Trim() ?? string.Empty;
         brief.DeliveryInstructions = _commissionDeliveryInstructions?.Trim() ?? string.Empty;
         return await UpdateCanonicalDraftAsync(
-            owner.Order,
+            workPackage,
             brief,
             showSuccess
                 ? "Crafter-facing details saved to the commission draft"

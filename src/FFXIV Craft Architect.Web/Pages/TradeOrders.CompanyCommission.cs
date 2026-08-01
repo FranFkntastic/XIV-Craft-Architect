@@ -1,5 +1,7 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Core.Services.Interfaces;
+using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using FFXIV_Craft_Architect.Web.Shared;
@@ -23,6 +25,9 @@ public partial class TradeOrders
     private Guid? _retryingCommissionDiagnosticId;
     private bool _isCommissionCommandRunning;
     private bool _showCommissionTermsRevision;
+    private TradeOrder? _commissionTermsRevisionWorkPackage;
+    private CommissionBriefDocument? _commissionTermsRevisionBrief;
+    private StoredPlan? _commissionTermsRevisionRollbackPlan;
 
     private CompanyCommissionOwnerProjection? SelectedCommissionOwner =>
         _selectedOrder == null
@@ -64,6 +69,14 @@ public partial class TradeOrders
         commission.ActiveClaim == null &&
         !TradeOrderStatusWorkflow.IsArchived(owner.Order.Status);
 
+    private bool IsEditingCommissionTermsRevision =>
+        _showCommissionTermsRevision &&
+        _selectedOrder != null &&
+        _commissionTermsRevisionWorkPackage?.Id == _selectedOrder.Id;
+
+    private bool CanEditCanonicalWorkPackage =>
+        CanEditCanonicalDraft || IsEditingCommissionTermsRevision;
+
     private int PaymentTabIndex => HasCanonicalCommission ? 1 : 0;
 
     private int ProcurementTabIndex => HasCanonicalCommission ? 2 : 1;
@@ -80,8 +93,47 @@ public partial class TradeOrders
 
     private void ShowCommissionTermsRevision()
     {
+        var owner = SelectedCommissionOwner;
+        var commission = owner?.Order.CompanyCommission;
+        if (owner == null ||
+            commission == null ||
+            _selectedOrder == null ||
+            commission.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Published)
+        {
+            return;
+        }
+
         _showCommissionTermsRevision = true;
+        _commissionTermsRevisionWorkPackage = TradeOrderWorkflow.CopyOrder(owner.Order);
+        _commissionTermsRevisionBrief = BuildCanonicalCommissionBrief(
+            owner.Order,
+            commission);
+        _commissionTermsRevisionRollbackPlan = null;
+        _selectedOrder = _commissionTermsRevisionWorkPackage;
+        _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
+        _commissionContact = commission.CurrentTerms.ContactInstructions;
+        _commissionDeliveryInstructions = commission.CurrentTerms.DeliveryInstructions;
         _activeOpsTab = 0;
+    }
+
+    private async Task CancelCommissionTermsRevisionAsync()
+    {
+        var owner = SelectedCommissionOwner;
+        var rollback = _commissionTermsRevisionRollbackPlan;
+        _commissionTermsRevisionWorkPackage = null;
+        _commissionTermsRevisionBrief = null;
+        _commissionTermsRevisionRollbackPlan = null;
+        _showCommissionTermsRevision = false;
+
+        if (rollback != null)
+        {
+            await RestoreStagedProcurementPlanAsync(rollback);
+        }
+
+        if (owner != null)
+        {
+            SelectOrder(owner.Order);
+        }
     }
 
     private void PrepareCompanyCommissionEditor(TradeOrder order)
@@ -97,6 +149,9 @@ public partial class TradeOrders
         _commissionSettlementRetractionReason = string.Empty;
         _commissionSharedComment = string.Empty;
         _showCommissionTermsRevision = false;
+        _commissionTermsRevisionWorkPackage = null;
+        _commissionTermsRevisionBrief = null;
+        _commissionTermsRevisionRollbackPlan = null;
         var provisional = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ProvisionalCrafter;
         _commissionIdentityCrafterId = provisional == null
             ? order.AssignedCrafterId
@@ -286,9 +341,16 @@ public partial class TradeOrders
         }
 
         var now = DateTime.UtcNow;
+        var workPackage = _commissionTermsRevisionWorkPackage ?? _selectedOrder;
+        var brief = BuildCommissionBrief(
+            workPackage,
+            TradeCommissionPaymentSummary.FromOrder(
+                workPackage,
+                GetSelectedOrderResponsibilityProjection(),
+                GetSelectedOrderEffectivePaymentPolicy()));
         var terms = TradeCompanyCommissionMigrationService.CreateTermsRevision(
-            _selectedOrder,
-            BuildCommissionBrief(_selectedOrder, GetSelectedOrderPaymentSummary()),
+            workPackage,
+            brief,
             checked(commission.CurrentTermsVersion + 1),
             reason,
             now);
@@ -319,10 +381,28 @@ public partial class TradeOrders
     {
         var owner = SelectedCommissionOwner;
         var commission = owner?.Order.CompanyCommission;
-        if (owner == null || commission == null || !CanEditCanonicalDraft)
+        if (owner == null || commission == null)
+        {
+            return false;
+        }
+
+        if (IsEditingCommissionTermsRevision)
+        {
+            _commissionTermsRevisionWorkPackage = TradeOrderWorkflow.CopyOrder(workPackage);
+            _commissionTermsRevisionBrief = brief;
+            _selectedOrder = _commissionTermsRevisionWorkPackage;
+            _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
+            if (!string.IsNullOrWhiteSpace(successMessage))
+            {
+                Snackbar.Add(successMessage.Replace("commission draft", "terms revision"), Severity.Success);
+            }
+            return true;
+        }
+
+        if (!CanEditCanonicalDraft)
         {
             Snackbar.Add(
-                "Direct editing is only available before the canonical commission is published.",
+                "Start a terms revision before changing a published commission.",
                 Severity.Warning);
             return false;
         }
