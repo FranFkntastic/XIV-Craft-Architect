@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using System.Text.Json;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
@@ -183,6 +184,8 @@ public static class ProfileHostEndpoints
                     limit);
                 return Results.Ok(ToPortableChanges(changes));
             });
+
+        group.MapGet("/changes/stream", StreamChangesAsync);
 
         group.MapPut(
             "/objects/{collection}/{objectId}",
@@ -388,6 +391,117 @@ public static class ProfileHostEndpoints
         objects
             .Where(item => ProfileSyncCollections.All.Contains(item.Collection))
             .ToArray();
+
+    private static async Task StreamChangesAsync(
+        HttpContext context,
+        long? sinceRevision,
+        ProfileHostOptions options,
+        ProfileAuthenticationGate authentication,
+        SqliteProfileHostStore store,
+        ProfileAccessKeyHasher hasher,
+        ProfileHostChangeSignal changeSignal)
+    {
+        if (!options.Enabled)
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        var cancellationToken = context.RequestAborted;
+        var profile = await AuthenticateAsync(
+            context.Request,
+            authentication,
+            store,
+            hasher,
+            cancellationToken);
+        if (profile == null)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+
+        var cursor = sinceRevision ?? 0;
+        if (cursor < 0)
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(
+                new
+                {
+                    error = "invalid_revision_cursor",
+                    message = "The profile revision cursor cannot be negative."
+                },
+                cancellationToken);
+            return;
+        }
+
+        if (cursor > profile.ServerRevision)
+        {
+            context.Response.StatusCode = StatusCodes.Status409Conflict;
+            await context.Response.WriteAsJsonAsync(
+                new
+                {
+                    error = "revision_cursor_ahead",
+                    message = "The profile revision cursor is newer than the authenticated profile."
+                },
+                cancellationToken);
+            return;
+        }
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "text/event-stream; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-cache, no-store";
+        context.Response.Headers.Append("X-Accel-Buffering", "no");
+        await context.Response.StartAsync(cancellationToken);
+
+        var leaseEndsAt = DateTimeOffset.UtcNow.AddMinutes(1);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var remainingLease = leaseEndsAt - DateTimeOffset.UtcNow;
+            if (remainingLease <= TimeSpan.Zero)
+            {
+                break;
+            }
+
+            var observation = changeSignal.Observe(profile.ProfileId);
+            var currentRevision = await store.LoadServerRevisionAsync(
+                profile.ProfileId,
+                cancellationToken);
+            if (currentRevision > cursor)
+            {
+                await WriteRevisionEventAsync(
+                    context.Response,
+                    currentRevision,
+                    cancellationToken);
+                cursor = currentRevision;
+                continue;
+            }
+
+            var heartbeatDelay = Task.Delay(
+                remainingLease < TimeSpan.FromSeconds(15)
+                    ? remainingLease
+                    : TimeSpan.FromSeconds(15),
+                cancellationToken);
+            var completed = await Task.WhenAny(observation.Changed, heartbeatDelay);
+            if (completed == heartbeatDelay)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await context.Response.WriteAsync(": keepalive\n\n", cancellationToken);
+                await context.Response.Body.FlushAsync(cancellationToken);
+            }
+        }
+    }
+
+    private static async Task WriteRevisionEventAsync(
+        HttpResponse response,
+        long revision,
+        CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.Serialize(new { serverRevision = revision });
+        await response.WriteAsync(
+            $"id: {revision}\nevent: profile-revision\ndata: {payload}\n\n",
+            cancellationToken);
+        await response.Body.FlushAsync(cancellationToken);
+    }
 
     private static async Task<ProfileHostProfileResponse?> AuthenticateAsync(
         HttpRequest request,
