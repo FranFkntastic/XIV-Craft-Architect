@@ -65,6 +65,8 @@ public sealed class ProfileSyncService
 {
     private const int ChangePageSize = 1;
     private const int RecoveryPageSize = 50;
+    private const string CanonicalProfileHostUrl = "https://xivcraftarchitect.com/api/";
+    private const string LegacyDevelopmentProfileHostUrl = "https://dev.xivcraftarchitect.com/api/";
     private static readonly JsonSerializerOptions JsonOptions =
         ProfileSyncJson.CreateOptions();
     private readonly ProfileHostClient _client;
@@ -75,7 +77,7 @@ public sealed class ProfileSyncService
     private readonly List<ProfileSyncConflict> _conflicts = [];
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private int _suppressionDepth;
-    private string? _pendingSavesProfileId;
+    private string? _pendingSavesConnectionScopeId;
 
     public ProfileSyncService(
         ProfileHostClient client,
@@ -103,6 +105,63 @@ public sealed class ProfileSyncService
 
     public Task InitializeAsync(CancellationToken ct = default) =>
         RunSerializedAsync(() => SyncNowCoreAsync(null, null, ct), ct);
+
+    public Task PrepareAuthorityAsync(CancellationToken ct = default) =>
+        RunSerializedAsync(() => PrepareAuthorityCoreAsync(ct), ct);
+
+    private async Task PrepareAuthorityCoreAsync(CancellationToken ct)
+    {
+        if (await TryAdoptCanonicalAuthorityAsync(ct))
+        {
+            ConnectionChanged?.Invoke();
+        }
+    }
+
+    private async Task<bool> TryAdoptCanonicalAuthorityAsync(CancellationToken ct)
+    {
+        var settings = await _localState.LoadConnectionSettingsAsync();
+        if (!settings.IsConfigured ||
+            !string.Equals(
+                ProfileHostClient.NormalizeHostUrl(_client.DefaultHostUrl),
+                CanonicalProfileHostUrl,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                ProfileHostClient.NormalizeHostUrl(settings.HostUrl!),
+                LegacyDevelopmentProfileHostUrl,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        await EnsurePendingSavesLoadedAsync(settings);
+        if (_pendingSaves.Count > 0 || _conflicts.Count > 0)
+        {
+            return false;
+        }
+
+        ProfileHostProfileResponse canonicalProfile;
+        try
+        {
+            canonicalProfile = await _client.GetProfileAsync(
+                CanonicalProfileHostUrl,
+                settings.AccessKey!,
+                ct);
+        }
+        catch (ProfileHostConnectionException)
+        {
+            return false;
+        }
+
+        var adopted = settings.Snapshot();
+        adopted.HostUrl = CanonicalProfileHostUrl;
+        adopted.ConnectedProfileId = canonicalProfile.ProfileId;
+        adopted.ConnectedProfileName = canonicalProfile.DisplayName;
+        await _localState.SaveConnectionSettingsAsync(adopted);
+        _pendingSaves.Clear();
+        _conflicts.Clear();
+        _pendingSavesConnectionScopeId = null;
+        return true;
+    }
 
     public Task SyncNowAsync(CancellationToken ct = default) =>
         RunSerializedAsync(() => SyncNowCoreAsync(null, null, ct), ct);
@@ -133,7 +192,7 @@ public sealed class ProfileSyncService
     {
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId;
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         if (!settings.IsConfigured || profileId == null)
         {
             return 0;
@@ -221,7 +280,7 @@ public sealed class ProfileSyncService
     {
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId;
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         if (!settings.IsConfigured || profileId == null)
         {
             SetStatus(ProfileSyncStatus.LocalOnly() with { PendingCount = _pendingSaves.Count });
@@ -615,7 +674,7 @@ public sealed class ProfileSyncService
             return;
         }
 
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         var remote = await _client.ExportBootstrapAsync(
             settings.HostUrl!,
             settings.AccessKey!,
@@ -679,7 +738,7 @@ public sealed class ProfileSyncService
 
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId;
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         if (!settings.IsConfigured || profileId == null)
         {
             return;
@@ -761,7 +820,7 @@ public sealed class ProfileSyncService
         }
 
         await _localState.SaveConnectionSettingsAsync(settings);
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         if (mode == FirstConnectMode.UploadLocal)
         {
             var objects = await LoadLocalBootstrapObjectsAsync(ct);
@@ -840,7 +899,7 @@ public sealed class ProfileSyncService
         await _localState.SaveConnectionSettingsAsync(new HostedProfileConnectionSettings());
         _pendingSaves.Clear();
         _conflicts.Clear();
-        _pendingSavesProfileId = null;
+        _pendingSavesConnectionScopeId = null;
         SetStatus(ProfileSyncStatus.LocalOnly());
         ConnectionChanged?.Invoke();
     }
@@ -942,21 +1001,23 @@ public sealed class ProfileSyncService
         return new SuppressionLease(this);
     }
 
-    private async Task EnsurePendingSavesLoadedAsync(string? profileId)
+    private async Task EnsurePendingSavesLoadedAsync(HostedProfileConnectionSettings settings)
     {
+        var profileId = settings.ProfileScopeId;
+        var connectionScopeId = settings.ConnectionScopeId;
         if (string.Equals(
-                profileId,
-                _pendingSavesProfileId,
+                connectionScopeId,
+                _pendingSavesConnectionScopeId,
                 StringComparison.Ordinal) &&
-            profileId != null)
+            connectionScopeId != null)
         {
             return;
         }
 
         _pendingSaves.Clear();
         _conflicts.Clear();
-        _pendingSavesProfileId = null;
-        if (profileId == null)
+        _pendingSavesConnectionScopeId = null;
+        if (profileId == null || connectionScopeId == null)
         {
             return;
         }
@@ -969,7 +1030,7 @@ public sealed class ProfileSyncService
                     StringComparer.OrdinalIgnoreCase)
                 .OrderBy(pending => pending.Collection, StringComparer.Ordinal)
                 .ThenBy(pending => pending.ObjectId, StringComparer.Ordinal));
-        _pendingSavesProfileId = profileId;
+        _pendingSavesConnectionScopeId = connectionScopeId;
     }
 
     private Task QueuePortableSettingSaveAsync(string key) =>

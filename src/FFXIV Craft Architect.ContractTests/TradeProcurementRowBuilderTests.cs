@@ -14,7 +14,7 @@ public sealed class TradeProcurementRowBuilderTests
     [InlineData(PlanRowScenario.OrdinaryOrderLivePlan)]
     [InlineData(PlanRowScenario.ReadOnlyCommissionLivePlan)]
     [InlineData(PlanRowScenario.EditableCommissionLivePlan)]
-    public void PlanRowsPreserveSourceIntentAndCanonicalEditability(PlanRowScenario scenario)
+    public async Task PlanRowsPreserveSourceIntentAndCanonicalEditability(PlanRowScenario scenario)
     {
         switch (scenario)
         {
@@ -33,13 +33,22 @@ public sealed class TradeProcurementRowBuilderTests
                 FullySuppressedPrecraftCanRecordWholeRowSourceIntent();
                 break;
             case PlanRowScenario.OrdinaryOrderLivePlan:
-                LivePlanFollowsCanonicalWorkPackageEditability(false, false, true);
+                LivePlanMutationFollowsCanonicalWorkPackageEditability(false, false, true);
                 break;
             case PlanRowScenario.ReadOnlyCommissionLivePlan:
-                LivePlanFollowsCanonicalWorkPackageEditability(true, false, false);
+                LivePlanMutationFollowsCanonicalWorkPackageEditability(true, false, false);
+                ReadOnlyCommissionStillConsumesLivePlanStructure();
+                await ProfileSyncAuthorityScenarios.LegacyStateMigratesOnceUnderExactAuthorityPath();
+                await ProfileSyncAuthorityScenarios.CanonicalAdoptionIsAuthenticatedAndAdoptsReturnedIdentity(
+                    System.Net.HttpStatusCode.Unauthorized,
+                    shouldAdopt: false);
+                await ProfileSyncAuthorityScenarios.CanonicalAdoptionIsAuthenticatedAndAdoptsReturnedIdentity(
+                    System.Net.HttpStatusCode.OK,
+                    shouldAdopt: true);
+                ProfileSyncAuthorityScenarios.CommissionedLocalResidueRemainsVisibleButOutsideCanonicalOrders();
                 break;
             case PlanRowScenario.EditableCommissionLivePlan:
-                LivePlanFollowsCanonicalWorkPackageEditability(true, true, true);
+                LivePlanMutationFollowsCanonicalWorkPackageEditability(true, true, true);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
@@ -92,17 +101,147 @@ public sealed class TradeProcurementRowBuilderTests
             row with { HasChildren = false }));
     }
 
-    private static void LivePlanFollowsCanonicalWorkPackageEditability(
+    private static void LivePlanMutationFollowsCanonicalWorkPackageEditability(
         bool hasCanonicalCommission,
         bool canEditCanonicalWorkPackage,
         bool expected)
     {
         Assert.Equal(
             expected,
-            TradeProcurementSourceMutationPolicy.CanUseLivePlan(
+            TradeProcurementSourceMutationPolicy.CanMutateLivePlan(
                 hasCanonicalCommission,
                 canEditCanonicalWorkPackage));
     }
+
+    private static void ReadOnlyCommissionStillConsumesLivePlanStructure()
+    {
+        var order = new TradeOrder
+        {
+            CraftPlanId = "plan-1",
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(
+                        999,
+                        "Incomplete canonical leaf",
+                        1,
+                        false,
+                        25,
+                        25)
+                ]
+            }
+        };
+        var snapshot = new WorkerTradeProjection(
+            Revision: 1,
+            HasPlan: true,
+            PlanId: "plan-1",
+            PlanName: "Cobalt Joint Plate",
+            SelectedDataCenter: "Aether",
+            SelectedRegion: "North America",
+            MarketFetchScope: MarketFetchScope.SelectedDataCenter,
+            RequestedDataCenters: ["Aether"],
+            MarketLens: MarketAcquisitionLens.MinimumUpfrontCost,
+            PlanSessionVersion: 1,
+            MarketAnalysisVersion: 1,
+            CraftedItems: [],
+            RootItems: [],
+            MaterialLines: [],
+            ActiveProcurementItems: [],
+            AcquisitionRows:
+            [
+                ProjectionRow(
+                    itemId: 1_000,
+                    itemName: "Cobalt Ingot",
+                    source: AcquisitionSource.MarketBuyNq,
+                    hasChildren: true,
+                    isActiveProcurement: true,
+                    isFullySuppressed: false,
+                    suppressedBy: []),
+                ProjectionRow(
+                    itemId: 1_001,
+                    itemName: "Cobalt Rivets",
+                    source: AcquisitionSource.Craft,
+                    hasChildren: true,
+                    isActiveProcurement: false,
+                    isFullySuppressed: true,
+                    suppressedBy: ["Purchased assembly"])
+            ],
+            CraftLabor: [],
+            Warnings: []);
+
+        Assert.True(TradeProcurementSourceMutationPolicy.CanReadLivePlan(
+            order.CraftPlanId,
+            "plan-1",
+            snapshot.HasPlan,
+            snapshot.PlanId));
+        Assert.False(TradeProcurementSourceMutationPolicy.CanMutateLivePlan(
+            hasCanonicalCommission: true,
+            canEditCanonicalWorkPackage: false));
+        Assert.Empty(TradeProcurementRowBuilder.BuildRows(
+            order,
+            draft: null,
+            activePlanId: "plan-1",
+            liveSnapshot: snapshot with { PlanId = "another-plan" }));
+
+        var rows = TradeProcurementRowBuilder.BuildRows(
+            order,
+            draft: null,
+            activePlanId: "plan-1",
+            liveSnapshot: snapshot);
+
+        Assert.Collection(
+            rows.OrderBy(row => row.ItemId),
+            ingot =>
+            {
+                Assert.Equal("Cobalt Ingot", ingot.ItemName);
+                Assert.True(TradeProcurementRowBuilder.ShouldIncludePlanRow(ingot));
+            },
+            suppressedPrecraft =>
+            {
+                Assert.Equal("Cobalt Rivets", suppressedPrecraft.ItemName);
+                Assert.True(suppressedPrecraft.IsFullySuppressed);
+                Assert.True(TradeProcurementRowBuilder.ShouldIncludePlanRow(suppressedPrecraft));
+            });
+    }
+
+    private static WorkerAcquisitionRowProjection ProjectionRow(
+        int itemId,
+        string itemName,
+        AcquisitionSource source,
+        bool hasChildren,
+        bool isActiveProcurement,
+        bool isFullySuppressed,
+        IReadOnlyList<string> suppressedBy) =>
+        new(
+            NodeId: itemId.ToString(),
+            ItemId: itemId,
+            ItemName: itemName,
+            IconId: 0,
+            Source: source,
+            SourceReason: AcquisitionSourceReason.UserSelected,
+            MustBeHq: false,
+            HasChildren: hasChildren,
+            CanCraft: true,
+            CanBeHq: false,
+            CanBuyFromMarket: true,
+            CanBuyFromVendor: false,
+            TotalQuantity: 10,
+            ActiveQuantity: isActiveProcurement ? 10 : 0,
+            UsedIn: "Cobalt Joint Plate",
+            HasSuppressedOccurrences: isFullySuppressed,
+            IsFullySuppressed: isFullySuppressed,
+            SuppressedBy: suppressedBy,
+            IsActiveProcurement: isActiveProcurement,
+            HasEditableOccurrences: !isFullySuppressed,
+            IsMarketCandidate: true,
+            MarketEvidence: "Test evidence",
+            EstimatedCost: "100 gil each",
+            IsMarketUnavailable: false,
+            UnitPrice: 100,
+            CalculatedTotalCost: 1_000,
+            AvailableSources: [AcquisitionSource.Craft, AcquisitionSource.MarketBuyNq],
+            Options: []);
 
     private static TradeOrderProcurementRow Row(
         AcquisitionSource source,

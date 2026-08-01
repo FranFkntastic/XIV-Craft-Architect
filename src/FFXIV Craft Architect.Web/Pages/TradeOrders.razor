@@ -65,12 +65,12 @@
                                   Adornment="Adornment.Start"
                                   AdornmentIcon="@Icons.Material.Filled.Search" />
                     <div class="trade-orders-rail-scroll">
-                        @if (ActiveOrderGroups.Count == 0 && ArchivedOrders.Count == 0 &&
+                        @if (ActiveOrderGroups.Count == 0 && ArchivedOrders.Count == 0 && DeviceOnlyOrders.Count == 0 &&
                              OrderRestoreState.CanShowAuthoritativeEmpty)
                         {
                             <div class="trade-orders-rail-empty">No orders yet.</div>
                         }
-                        else if (FilteredActiveOrderGroups.Count == 0 && FilteredArchivedOrders.Count == 0)
+                        else if (FilteredActiveOrderGroups.Count == 0 && FilteredArchivedOrders.Count == 0 && FilteredDeviceOnlyOrders.Count == 0)
                         {
                             <div class="trade-orders-rail-empty">No matching orders.</div>
                         }
@@ -131,6 +131,36 @@
                                                 <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
                                                 <span class="trade-orders-status-chip">@FormatRailStatusChip(order)</span>
                                             </button>
+                                        }
+                                    </div>
+                                }
+                            </section>
+                        }
+                        @if (FilteredDeviceOnlyOrders.Count > 0)
+                        {
+                            <section class="trade-orders-rail-group is-device-only">
+                                <button type="button"
+                                        class="trade-orders-rail-group-title"
+                                        @onclick="ToggleDeviceOnlyGroup"
+                                        aria-expanded="@(!_isDeviceOnlyCollapsed)">
+                                    <span>
+                                        <MudIcon Icon="@(_isDeviceOnlyCollapsed ? Icons.Material.Filled.ChevronRight : Icons.Material.Filled.ExpandMore)" Size="Size.Small" />
+                                        On this device
+                                    </span>
+                                    <span class="trade-orders-count-chip">@FilteredDeviceOnlyOrders.Count.ToString("N0")</span>
+                                </button>
+                                @if (!_isDeviceOnlyCollapsed)
+                                {
+                                    <div class="trade-orders-device-only-note">Not part of the hosted order workspace.</div>
+                                    <div class="trade-orders-rail-list">
+                                        @foreach (var order in FilteredDeviceOnlyOrders)
+                                        {
+                                            <div class="trade-orders-rail-order is-device-only"
+                                                 title="Stored on this device; not editable in the hosted order workspace">
+                                                <span class="trade-orders-rail-title">@order.Title</span>
+                                                <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
+                                                <span class="trade-orders-status-chip">Device only</span>
+                                            </div>
                                         }
                                     </div>
                                 }
@@ -778,7 +808,7 @@
                                                      @foreach (var material in operationsCommission.CurrentTerms.Materials
                                                         .Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided))
                                                      {
-                                                         <span>@material.Name <strong>x@material.Quantity.ToString("N0")</strong></span>
+                                                         <span>@material.Name <strong>×@(material.Quantity.ToString("N0"))</strong></span>
                                                      }
                                                  </div>
                                                  <div class="trade-orders-start-gate-status">
@@ -1589,17 +1619,42 @@
                                         @(_isPlanPaneExpanded ? "Restore pane" : "Expand pane")
                                     </MudButton>
                                 </div>
-                                 @{
-                                    var allProcurementRows = GetSelectedOrderProcurementRows();
-                                    var procurementRows = GetSupplyPlanRows(allProcurementRows);
-                                    var visibleProcurementRows = GetFilteredProcurementRows(procurementRows);
-                                }
-                                @if (procurementRows.Count == 0)
+                                @if (HasLinkedCraftPlan(_selectedOrder) && GetCurrentLiveProcurementSnapshot() is null)
                                 {
-                                    <MudAlert Severity="Severity.Info" Dense="true">No supply-plan evidence has been captured for this order yet.</MudAlert>
+                                    @if (_isLoadingSelectedOrderSupplyPlan || _isRefreshingLiveProcurement)
+                                    {
+                                        <div class="trade-orders-plan-restore" role="status" aria-live="polite">
+                                            <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" />
+                                            <div>
+                                                <strong>Restoring plan...</strong>
+                                                <span>Loading the linked recipe and every precraft decision.</span>
+                                            </div>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <MudAlert Severity="Severity.Warning" Dense="true">
+                                            The linked craft plan is unavailable. Its material leaves are withheld because they are not a complete plan.
+                                            <MudButton Variant="Variant.Text"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       OnClick="@(() => SetActiveOpsTabAsync(ProcurementTabIndex))">
+                                                Try again
+                                            </MudButton>
+                                        </MudAlert>
+                                    }
                                 }
                                 else
                                 {
+                                    var allProcurementRows = GetSelectedOrderProcurementRows();
+                                    var procurementRows = GetSupplyPlanRows(allProcurementRows);
+                                    var visibleProcurementRows = GetFilteredProcurementRows(procurementRows);
+                                    @if (procurementRows.Count == 0)
+                                    {
+                                        <MudAlert Severity="Severity.Info" Dense="true">No supply-plan evidence has been captured for this order yet.</MudAlert>
+                                    }
+                                    else
+                                    {
                                     <section class="trade-orders-procurement-summary">
                                         <div class="trade-orders-procurement-total">
                                             <span>Crafter reimbursable</span>
@@ -1716,6 +1771,7 @@
                                                 }
                                             </ul>
                                         </MudAlert>
+                                    }
                                     }
                                 }
                             </MudTabPanel>

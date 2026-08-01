@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using MudBlazor;
 
@@ -29,9 +30,11 @@ public partial class TradeOrders
 
     private IReadOnlyList<TradeOrder> ComposeVisibleOrders()
     {
-        var visible = _orders
-            .Where(order => order.CompanyCommission == null)
-            .ToDictionary(order => order.Id);
+        var visible = OrderRestoreState.ShowsCompleteProjection
+            ? new Dictionary<Guid, TradeOrder>()
+            : _orders
+                .Where(order => order.CompanyCommission == null)
+                .ToDictionary(order => order.Id);
 
         if (OrderRestoreState.ShowsCompleteProjection && _companyProfile != null)
         {
@@ -112,7 +115,17 @@ public partial class TradeOrders
         {
             ClearUnavailableSelectedOrder("The active company workspace changed.");
         }
-
+        else if (state.ShowsCompleteProjection &&
+                 _selectedOrder != null &&
+                 _companyProfile != null &&
+                 !TradeOrderWorkspaceCompositionPolicy.IsHostedOrder(
+                     _selectedOrder.Id,
+                     _companyProfile.Id,
+                     HostedOrders.GetAll(_companyProfile.Id)))
+        {
+            ClearUnavailableSelectedOrder(
+                "That device-only order is stored separately from the hosted workspace.");
+        }
         StateHasChanged();
     }
 

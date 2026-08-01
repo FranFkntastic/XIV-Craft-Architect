@@ -62,6 +62,7 @@ jobs:
             echo "source_ref=$source_ref"
             echo "slot=$slot"
             echo "domain=$domain"
+            echo "profile_host_domain=xivcraftarchitect.com"
             echo "release=$release"
             echo "verifier_sha256=$verifier_sha256"
             echo "artifact_verifier_sha256=$artifact_verifier_sha256"
@@ -201,6 +202,7 @@ jobs:
             --out-dir "dist/release" \
             --archive-name "craftarchitect-web-${{ steps.target.outputs.slot }}-${{ steps.target.outputs.release }}.tar.gz" \
             --domain "${{ steps.target.outputs.domain }}" \
+            --profile-host-domain "${{ steps.target.outputs.profile_host_domain }}" \
             --slot "${{ steps.target.outputs.slot }}" \
             --source-sha "${{ steps.target.outputs.commit_sha }}" \
             --tree-sha "${{ steps.target.outputs.tree_sha }}" \
@@ -236,6 +238,7 @@ jobs:
           "dist/subject/src/FFXIV Craft Architect.Web/wwwroot"
           "${{ steps.target.outputs.domain }}"
           "${{ steps.target.outputs.slot }}"
+          "${{ steps.target.outputs.profile_host_domain }}"
 
       - name: Prepare deterministic browser harness
         shell: bash

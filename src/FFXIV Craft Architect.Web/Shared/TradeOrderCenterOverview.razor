@@ -19,7 +19,7 @@
         <div class="trade-order-overview__meta">
             <span>Claimant <strong>@Model.Claimant</strong></span>
             <span>Crafter <strong>@Model.Crafter</strong></span>
-            <span>Terms <strong>v@Model.TermsVersion</strong></span>
+            <span>Terms <strong>v@(Model.TermsVersion)</strong></span>
         </div>
     </header>
 
@@ -79,6 +79,8 @@
                 {
                     <button type="button"
                             class="@GetStepClass(step)"
+                            aria-label="@($"{step.Label}: {step.State}. Open plan")"
+                            title="Open plan"
                             @onclick="OnOpenPlan">
                         <span>@step.State</span>
                         <strong>@step.Label</strong>
