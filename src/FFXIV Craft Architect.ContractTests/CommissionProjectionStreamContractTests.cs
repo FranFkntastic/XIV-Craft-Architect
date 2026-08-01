@@ -8,7 +8,7 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class CommissionProjectionStreamContractTests
 {
     [Fact]
-    public void ProjectionTagsAreDeterministicAndAudienceSpecific()
+    public async Task ProjectionStreamAndCommandResponseContractsHold()
     {
         var publicProjection = new
         {
@@ -31,11 +31,7 @@ public sealed class CommissionProjectionStreamContractTests
         Assert.True(CommissionProjectionTag.IsValid(first));
         Assert.Equal(first, repeat);
         Assert.NotEqual(first, participant);
-    }
 
-    [Fact]
-    public async Task ProjectionSignalWakesCurrentObserverOnly()
-    {
         var signal = new CommissionProjectionChangeSignal();
         var current = signal.Observe("commission-test");
 
@@ -46,11 +42,7 @@ public sealed class CommissionProjectionStreamContractTests
         Assert.Equal(0, current.Generation);
         Assert.Equal(1, successor.Generation);
         Assert.False(successor.Changed.IsCompleted);
-    }
 
-    [Fact]
-    public void CommissionClientUsesHeaderAuthenticatedProjectionTagStream()
-    {
         var repositoryRoot = LocateRepositoryRoot();
         var client = File.ReadAllText(Path.Combine(
             repositoryRoot,
@@ -65,11 +57,7 @@ public sealed class CommissionProjectionStreamContractTests
         Assert.Contains("eventName !== \"commission-projection\"", client, StringComparison.Ordinal);
         Assert.Contains("await onProjectionChanged(nextTag)", client, StringComparison.Ordinal);
         Assert.DoesNotContain("new EventSource", client, StringComparison.Ordinal);
-    }
 
-    [Fact]
-    public void OwnerCommandResponseCarriesCompleteCommittedProjection()
-    {
         var order = new TradeOrder
         {
             Id = Guid.NewGuid(),
@@ -90,18 +78,14 @@ public sealed class CommissionProjectionStreamContractTests
             ErrorMessage: null,
             Projection: projection);
 
-        var json = JsonSerializer.Serialize(
+        var responseJson = JsonSerializer.Serialize(
             response,
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
-        Assert.Contains("\"projection\"", json, StringComparison.Ordinal);
-        Assert.Contains("\"objectRevision\":12", json, StringComparison.Ordinal);
-        Assert.Contains("\"companyRevision\":21", json, StringComparison.Ordinal);
-    }
+        Assert.Contains("\"projection\"", responseJson, StringComparison.Ordinal);
+        Assert.Contains("\"objectRevision\":12", responseJson, StringComparison.Ordinal);
+        Assert.Contains("\"companyRevision\":21", responseJson, StringComparison.Ordinal);
 
-    [Fact]
-    public void InternalCommittedRevisionsDoNotLeakThroughParticipantMutationShape()
-    {
         var mutation = new CompanyCommissionMutationResult(
             CompanyCommissionMutationStatus.Applied,
             new TradeOrder
@@ -113,12 +97,12 @@ public sealed class CommissionProjectionStreamContractTests
             ObjectRevision: new CompanyRecordRevision(12),
             CompanyRevision: new CompanyRecordRevision(21));
 
-        var json = JsonSerializer.Serialize(
+        var mutationJson = JsonSerializer.Serialize(
             mutation,
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
-        Assert.DoesNotContain("objectRevision", json, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("companyRevision", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("objectRevision", mutationJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("companyRevision", mutationJson, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string LocateRepositoryRoot()
