@@ -261,6 +261,18 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 planName,
                 includeSourcePlanIdentity),
             cancellationToken);
+        if (string.Equals(result.RejectionCode, "stale-revision", StringComparison.Ordinal))
+        {
+            await RefreshAfterConflictAsync(result, cancellationToken);
+            result = await _engineHost.ExportSessionAsync(
+                _projections.Shell.Revision,
+                new WorkerSessionExportRequest(
+                    planId,
+                    planName,
+                    includeSourcePlanIdentity),
+                cancellationToken);
+        }
+
         var export = result.Projection.Deserialize<WorkerSessionExportProjection>(
             EngineJsonSerializerOptions.CreateWire());
         if (!result.Accepted || export is null)
