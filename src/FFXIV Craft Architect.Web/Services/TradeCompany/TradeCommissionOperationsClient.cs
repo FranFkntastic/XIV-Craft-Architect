@@ -64,6 +64,23 @@ public sealed class TradeCommissionOperationsClient(
             command,
             typeof(TCommand),
             cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            var problem = await ReadProblemAsync(response, cancellationToken);
+            if (string.Equals(
+                    problem?.Error,
+                    "revision_conflict",
+                    StringComparison.Ordinal))
+            {
+                throw new CompanyCommissionRevisionConflictException(
+                    problem?.Message ?? problem?.ErrorMessage);
+            }
+
+            throw new InvalidOperationException(
+                problem?.Message ??
+                problem?.ErrorMessage ??
+                $"Company commission operations failed with HTTP {(int)response.StatusCode}.");
+        }
         await EnsureSuccessAsync(response, cancellationToken);
         var result = await response.Content.ReadFromJsonAsync<TradeCommissionOwnerMutationBody>(
             JsonOptions,
@@ -198,6 +215,15 @@ public sealed class TradeCommissionOperationsClient(
         string? Error,
         string? ErrorMessage,
         string? Message);
+}
+
+internal sealed class CompanyCommissionRevisionConflictException : InvalidOperationException
+{
+    public CompanyCommissionRevisionConflictException(string? message = null)
+        : base(message ??
+            "The hosted commission or company changed before the command was applied.")
+    {
+    }
 }
 
 public sealed record TradeCommissionRecoveryResetResponse(

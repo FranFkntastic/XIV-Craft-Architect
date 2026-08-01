@@ -639,48 +639,72 @@ public sealed class TradeCommissionOperationsService(
             return Rejected(current, reason);
         }
 
+        var commandProjection = current;
         try
         {
-            ValidateProjection(current.Order, current);
-            var context = CreateContext(current, route, payload);
-            var response = await client.ExecuteAsync(
-                route,
-                createCommand(context),
-                cancellationToken);
-            var mutation = response.Mutation;
-            if (!mutation.Success)
+            for (var attempt = 0; attempt < 2; attempt++)
             {
-                return Rejected(
-                    current,
-                    mutation.ErrorMessage ??
-                    $"The commissioner command was {mutation.Status.ToString().ToLowerInvariant()}.");
+                ValidateProjection(current.Order, commandProjection);
+                TradeCommissionOwnerMutationResponse response;
+                try
+                {
+                    var context = CreateContext(commandProjection, route, payload);
+                    response = await client.ExecuteAsync(
+                        route,
+                        createCommand(context),
+                        cancellationToken);
+                }
+                catch (CompanyCommissionRevisionConflictException) when (attempt == 0)
+                {
+                    var commission = RequireCommission(commandProjection);
+                    commandProjection = await client.LoadOwnerProjectionAsync(
+                        commission.CompanyId.Value,
+                        commission.CommissionId,
+                        cancellationToken);
+                    ValidateProjection(current.Order, commandProjection);
+                    await ApplyProjectionAsync(commandProjection);
+                    continue;
+                }
+
+                var mutation = response.Mutation;
+                if (!mutation.Success)
+                {
+                    return Rejected(
+                        commandProjection,
+                        mutation.ErrorMessage ??
+                        $"The commissioner command was {mutation.Status.ToString().ToLowerInvariant()}.");
+                }
+
+                var commissionAfterCommand = RequireCommission(commandProjection);
+                var updated = await client.LoadOwnerProjectionAsync(
+                    commissionAfterCommand.CompanyId.Value,
+                    commissionAfterCommand.CommissionId,
+                    cancellationToken);
+                ValidateProjection(current.Order, updated);
+                if (updated.ObjectRevision.Value <= commandProjection.ObjectRevision.Value)
+                {
+                    throw new InvalidOperationException(
+                        "The commissioner command did not advance the authoritative order revision.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(response.ClaimUrl))
+                {
+                    ValidateCapabilityUrl(updated, response.ClaimUrl, "claim");
+                }
+                await ApplyProjectionAsync(updated);
+                return new TradeCommissionOperatorResult(
+                    true,
+                    updated,
+                    ClaimUrl: response.ClaimUrl);
             }
 
-            var updated = await client.LoadOwnerProjectionAsync(
-                RequireCommission(current).CompanyId.Value,
-                RequireCommission(current).CommissionId,
-                cancellationToken);
-            ValidateProjection(current.Order, updated);
-            if (updated.ObjectRevision.Value <= current.ObjectRevision.Value)
-            {
-                throw new InvalidOperationException(
-                    "The commissioner command did not advance the authoritative order revision.");
-            }
-
-            if (!string.IsNullOrWhiteSpace(response.ClaimUrl))
-            {
-                ValidateCapabilityUrl(updated, response.ClaimUrl, "claim");
-            }
-            await ApplyProjectionAsync(updated);
-            return new TradeCommissionOperatorResult(
-                true,
-                updated,
-                ClaimUrl: response.ClaimUrl);
+            throw new InvalidOperationException(
+                "The hosted commission changed repeatedly while the command was being applied.");
         }
         catch (Exception exception)
         {
             _errors[current.Order.Id] = exception.Message;
-            return Rejected(current, exception.Message);
+            return Rejected(commandProjection, exception.Message);
         }
     }
 
