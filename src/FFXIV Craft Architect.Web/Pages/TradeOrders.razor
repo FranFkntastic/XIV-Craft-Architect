@@ -826,7 +826,8 @@
                                          </section>
                                      }
 
-                                     @if (operationsCommission.DeliveryReadiness.IsReady)
+                                     @if (operationsOwner.Order.Status == TradeOrderStatus.AwaitingDelivery &&
+                                          operationsCommission.DeliveryReadiness.IsReady)
                                      {
                                          <section class="trade-orders-operation-card is-attention">
                                              <div class="trade-orders-operation-card-heading">
@@ -1691,6 +1692,7 @@
                                                    Label="@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared ? "Crafter update" : "Company note")"
                                                    Variant="Variant.Outlined"
                                                    Margin="Margin.Dense"
+                                                   Immediate="true"
                                                    Lines="2"
                                                    MaxLength="2000" />
                                      <div class="trade-orders-timeline-composer-actions">
@@ -2015,7 +2017,8 @@
                                             </div>
                                         }
 
-                                        @if (ownerCommission.DeliveryReadiness.IsReady)
+                                        @if (ownerProjection.Order.Status == TradeOrderStatus.AwaitingDelivery &&
+                                             ownerCommission.DeliveryReadiness.IsReady)
                                         {
                                             <div class="trade-orders-delivery-review">
                                                 <MudTextField @bind-Value="_commissionReturnReason"
