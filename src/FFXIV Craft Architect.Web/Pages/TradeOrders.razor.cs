@@ -78,6 +78,9 @@ public partial class TradeOrders
     private IJSObjectReference? _tradeOrdersLayoutModule;
     private IJSObjectReference? _tradeOrdersLayoutRegistration;
     private DotNetObjectReference<TradeOrders>? _tradeOrdersReference;
+    private readonly SemaphoreSlim _hostedOrderRefreshGate = new(1, 1);
+    private bool _isLoadingHostedOrders;
+    private bool _isDisposed;
 
     private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
     [
@@ -191,6 +194,7 @@ public partial class TradeOrders
 
     protected override async Task OnInitializedAsync()
     {
+        HostedOrders.Changed += OnHostedOrderProjectionChanged;
         _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
         try
@@ -247,6 +251,8 @@ public partial class TradeOrders
 
     public async ValueTask DisposeAsync()
     {
+        _isDisposed = true;
+        HostedOrders.Changed -= OnHostedOrderProjectionChanged;
         if (_tradeOrdersLayoutRegistration != null)
         {
             await _tradeOrdersLayoutRegistration.InvokeVoidAsync("dispose");
@@ -261,8 +267,11 @@ public partial class TradeOrders
         _tradeOrdersReference?.Dispose();
     }
 
-    private async Task LoadAsync()
+    private Task LoadAsync() => LoadAsync(synchronizeProfile: true);
+
+    private async Task LoadAsync(bool synchronizeProfile)
     {
+        _isLoadingHostedOrders = true;
         Guid? selectedCanonicalOrderId =
             _selectedOrder?.CompanyCommission == null ? null : _selectedOrder.Id;
         var selectedTab = _activeOpsTab;
@@ -270,7 +279,10 @@ public partial class TradeOrders
         try
         {
             _loadError = null;
-            await ProfileSync.SyncNowAsync();
+            if (synchronizeProfile)
+            {
+                await ProfileSync.SyncNowAsync();
+            }
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
@@ -301,6 +313,92 @@ public partial class TradeOrders
             _selectedOrder = null;
             _loadError = ex.Message;
             Snackbar.Add("Trade operations storage is unavailable.", Severity.Error);
+        }
+        finally
+        {
+            _isLoadingHostedOrders = false;
+        }
+    }
+
+    private void OnHostedOrderProjectionChanged(HostedOrderProjectionSnapshot snapshot)
+    {
+        if (_isDisposed || _isLoadingHostedOrders)
+        {
+            return;
+        }
+        if (_companyProfile != null &&
+            snapshot.CompanyProfileId.HasValue &&
+            snapshot.CompanyProfileId != _companyProfile.Id)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(RefreshHostedOrderProjectionAsync);
+    }
+
+    private async Task RefreshHostedOrderProjectionAsync()
+    {
+        await _hostedOrderRefreshGate.WaitAsync();
+        try
+        {
+            if (_isDisposed)
+            {
+                return;
+            }
+
+            if (ShouldPreserveCanonicalEditor())
+            {
+                await RefreshHostedOrderDataPreservingEditorAsync();
+            }
+            else
+            {
+                await LoadAsync(synchronizeProfile: false);
+            }
+            StateHasChanged();
+        }
+        finally
+        {
+            _hostedOrderRefreshGate.Release();
+        }
+    }
+
+    private bool ShouldPreserveCanonicalEditor() =>
+        _showCommissionTermsRevision ||
+        _selectedOrder?.CompanyCommission is
+        {
+            PublicMetadata.ViewState: CompanyCommissionPublicViewState.Draft,
+            ActiveClaim: null
+        };
+
+    private async Task RefreshHostedOrderDataPreservingEditorAsync()
+    {
+        _isLoadingHostedOrders = true;
+        try
+        {
+            _loadError = null;
+            _companyProfile ??=
+                await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(
+                _companyProfile.Id)).ToList();
+            var orders = (await TradeOperationsPersistence.LoadOrdersAsync(
+                _companyProfile.Id)).ToList();
+            await CommissionOperations.RefreshCanonicalAsync(orders);
+            _orders = orders
+                .Select(order => CommissionOperations.GetForOrder(order.Id)?.Order ?? order)
+                .ToList();
+            _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(
+                _companyProfile.Id)).ToList();
+        }
+        catch (Exception exception)
+        {
+            _loadError = exception.Message;
+            Snackbar.Add(
+                "The hosted order changed, but its canonical editor could not refresh safely.",
+                Severity.Error);
+        }
+        finally
+        {
+            _isLoadingHostedOrders = false;
         }
     }
 
