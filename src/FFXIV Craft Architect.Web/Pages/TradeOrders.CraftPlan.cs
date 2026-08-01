@@ -205,7 +205,7 @@ public partial class TradeOrders
             return;
         }
 
-        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalWorkPackage)
+        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
         {
             Snackbar.Add(
                 "Published work packages can only change through Revise Terms.",
@@ -414,7 +414,7 @@ public partial class TradeOrders
             return;
         }
 
-        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalWorkPackage)
+        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
         {
             Snackbar.Add(
                 "Published pricing is part of the accepted terms. Use Revise Terms to refresh it.",

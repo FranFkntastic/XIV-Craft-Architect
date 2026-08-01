@@ -104,7 +104,9 @@ public partial class TradeOrders
         }
 
         _showCommissionTermsRevision = true;
-        _commissionTermsRevisionWorkPackage = TradeOrderWorkflow.CopyOrder(owner.Order);
+        _commissionTermsRevisionWorkPackage = CreateCanonicalTermsWorkPackage(
+            owner.Order,
+            commission.CurrentTerms);
         _commissionTermsRevisionBrief = BuildCanonicalCommissionBrief(
             owner.Order,
             commission);
@@ -114,6 +116,43 @@ public partial class TradeOrders
         _commissionContact = commission.CurrentTerms.ContactInstructions;
         _commissionDeliveryInstructions = commission.CurrentTerms.DeliveryInstructions;
         _activeOpsTab = 0;
+    }
+
+    private static TradeOrder CreateCanonicalTermsWorkPackage(
+        TradeOrder source,
+        CompanyCommissionTermsVersion terms)
+    {
+        var copy = TradeOrderWorkflow.CopyOrder(source);
+        copy.SourceSnapshot.RootItems = terms.Outputs.Select(output =>
+            new TradeOrderRootItemSnapshot(
+                output.ItemId,
+                output.Name,
+                output.RequiredQuantity,
+                output.MustBeHq,
+                EstimatedSaleValue: 0m)).ToArray();
+        copy.SourceSnapshot.Materials = terms.Materials.Select(material =>
+            new TradeOrderMaterialSnapshot(
+                material.ItemId,
+                material.Name,
+                material.Quantity,
+                material.RequiresHq,
+                material.UnitCost,
+                material.TotalCost,
+                terms.PricingEvidence.CostBasis,
+                $"Canonical terms v{terms.Version}",
+                terms.PricingEvidence.CapturedAtUtc)).ToArray();
+        copy.SourceSnapshot.CraftLabor = terms.Payment.CraftSynthCount <= 0
+            ? []
+            :
+            [
+                new TradeOrderCraftLaborSnapshot(
+                    $"commission-terms:{terms.Version}",
+                    terms.Outputs.FirstOrDefault()?.ItemId ?? 0,
+                    "Commission craft labor",
+                    terms.Outputs.Sum(output => output.RequiredQuantity),
+                    terms.Payment.CraftSynthCount)
+            ];
+        return copy;
     }
 
     private async Task CancelCommissionTermsRevisionAsync()
@@ -342,12 +381,15 @@ public partial class TradeOrders
 
         var now = DateTime.UtcNow;
         var workPackage = _commissionTermsRevisionWorkPackage ?? _selectedOrder;
-        var brief = BuildCommissionBrief(
+        var brief = _commissionTermsRevisionBrief ?? BuildCommissionBrief(
             workPackage,
             TradeCommissionPaymentSummary.FromOrder(
                 workPackage,
                 GetSelectedOrderResponsibilityProjection(),
                 GetSelectedOrderEffectivePaymentPolicy()));
+        brief.Contact = _commissionContact?.Trim() ?? string.Empty;
+        brief.DeliveryInstructions =
+            _commissionDeliveryInstructions?.Trim() ?? string.Empty;
         var terms = TradeCompanyCommissionMigrationService.CreateTermsRevision(
             workPackage,
             brief,

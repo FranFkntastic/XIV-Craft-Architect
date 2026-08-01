@@ -57,8 +57,8 @@ public partial class TradeOrders
         return TradeProcurementRowBuilder.BuildRows(
             _selectedOrder,
             GetSelectedOrderResponsibilityProjection(),
-            WorkerProjections.Shell.PlanId,
-            GetCurrentLiveProcurementSnapshot());
+            IsEditingCommissionTermsRevision ? null : WorkerProjections.Shell.PlanId,
+            IsEditingCommissionTermsRevision ? null : GetCurrentLiveProcurementSnapshot());
     }
 
     private TradePayrollWorkflowDraft? GetSelectedOrderResponsibilityProjection()
@@ -655,7 +655,7 @@ public partial class TradeOrders
     private bool CanEditProcurementSource(TradeOrderProcurementRow row)
     {
         return !_isCommissionCommandRunning &&
-            (!HasCanonicalCommission || CanEditCanonicalWorkPackage) &&
+            (!HasCanonicalCommission || CanEditCanonicalDraft) &&
             TradeProcurementSourceMutationPolicy.CanChangeSource(row);
     }
 
@@ -753,7 +753,7 @@ public partial class TradeOrders
             return false;
         }
 
-        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalWorkPackage)
+        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
         {
             Snackbar.Add(
                 "Published acquisition decisions are part of the accepted terms. Use Revise Terms to change them.",
