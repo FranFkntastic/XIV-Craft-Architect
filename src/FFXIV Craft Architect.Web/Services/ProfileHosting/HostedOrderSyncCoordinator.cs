@@ -14,7 +14,7 @@ public sealed record HostedOrderSyncDiagnostics(
 
 public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
 {
-    private const string ModulePath = "./profile-sync-session.js?v=1";
+    private const string ModulePath = "./profile-sync-session.js?v=2";
     private static readonly TimeSpan RecoveryInterval = TimeSpan.FromSeconds(30);
     private readonly IJSRuntime _jsRuntime;
     private readonly ProfileSyncService _profileSync;
@@ -82,7 +82,8 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
     public async Task<long> ReceiveProfileRevision(
         string profileId,
         long serverRevision,
-        string source)
+        string source,
+        long replayAfterRevision)
     {
         if (!IsActiveProfile(profileId) || serverRevision <= 0)
         {
@@ -95,7 +96,10 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
             LastEventRevision = Math.Max(Diagnostics.LastEventRevision, serverRevision),
             UpdatedAtUtc = DateTime.UtcNow
         });
-        return await SynchronizeAsync(profileId, _lifetime.Token);
+        return await SynchronizeAsync(
+            profileId,
+            replayAfterRevision,
+            _lifetime.Token);
     }
 
     [JSInvokable]
@@ -121,9 +125,11 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
     }
 
     [JSInvokable]
-    public Task<long> RecoverProfileRevision(string profileId) =>
+    public Task<long> RecoverProfileRevision(
+        string profileId,
+        long replayAfterRevision) =>
         IsActiveProfile(profileId)
-            ? SynchronizeAsync(profileId, _lifetime.Token)
+            ? SynchronizeAsync(profileId, replayAfterRevision, _lifetime.Token)
             : Task.FromResult(0L);
 
     private void OnConnectionChanged() =>
@@ -268,6 +274,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
 
     private async Task<long> SynchronizeAsync(
         string profileId,
+        long replayAfterRevision,
         CancellationToken cancellationToken)
     {
         await _sync.WaitAsync(cancellationToken);
@@ -278,8 +285,10 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return 0;
             }
 
-            await _profileSync.SyncNowAsync(cancellationToken);
-            var after = await _localState.LoadLastSyncRevisionAsync(profileId);
+            await _profileSync.SyncFromRevisionAsync(
+                replayAfterRevision,
+                cancellationToken);
+            var after = Math.Max(0, _profileSync.CurrentStatus.LastSyncRevision);
             _appState.NotifyTradeOperationsDataChanged();
 
             UpdateDiagnostics(Diagnostics with

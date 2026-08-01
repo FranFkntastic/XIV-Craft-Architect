@@ -73,10 +73,17 @@ public sealed class ProfileSyncService
     public bool IsSuppressed => _suppressionDepth > 0;
 
     public Task InitializeAsync(CancellationToken ct = default) =>
-        RunSerializedAsync(() => SyncNowCoreAsync(ct), ct);
+        RunSerializedAsync(() => SyncNowCoreAsync(null, ct), ct);
 
     public Task SyncNowAsync(CancellationToken ct = default) =>
-        RunSerializedAsync(() => SyncNowCoreAsync(ct), ct);
+        RunSerializedAsync(() => SyncNowCoreAsync(null, ct), ct);
+
+    public Task SyncFromRevisionAsync(
+        long replayAfterRevision,
+        CancellationToken ct = default) =>
+        RunSerializedAsync(
+            () => SyncNowCoreAsync(replayAfterRevision, ct),
+            ct);
 
     public Task<long> EnsureHostedObjectRevisionAsync(
         string collection,
@@ -174,7 +181,9 @@ public sealed class ProfileSyncService
         return remoteObject.Revision;
     }
 
-    private async Task SyncNowCoreAsync(CancellationToken ct)
+    private async Task SyncNowCoreAsync(
+        long? replayAfterRevision,
+        CancellationToken ct)
     {
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId;
@@ -188,7 +197,10 @@ public sealed class ProfileSyncService
         var lastRevision = 0L;
         try
         {
-            lastRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
+            var persistedRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
+            lastRevision = ResolveSyncStartRevision(
+                persistedRevision,
+                replayAfterRevision);
             var serverRevision = lastRevision;
             var hasMore = true;
             while (hasMore)
@@ -259,7 +271,11 @@ public sealed class ProfileSyncService
                 serverRevision = changes.ServerRevision;
                 lastRevision = serverRevision;
                 hasMore = changes.HasMore;
-                await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
+                if (ShouldAdvancePersistedRevision(persistedRevision, serverRevision))
+                {
+                    await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
+                    persistedRevision = serverRevision;
+                }
             }
 
             var hostReachable = await RetryPendingSavesAsync(
@@ -291,6 +307,18 @@ public sealed class ProfileSyncService
                 $"Host unreachable: {ex.Message}"));
         }
     }
+
+    private static long ResolveSyncStartRevision(
+        long persistedRevision,
+        long? replayAfterRevision) =>
+        replayAfterRevision.HasValue
+            ? Math.Min(persistedRevision, Math.Max(0, replayAfterRevision.Value))
+            : persistedRevision;
+
+    private static bool ShouldAdvancePersistedRevision(
+        long persistedRevision,
+        long candidateRevision) =>
+        candidateRevision > persistedRevision;
 
     private async Task RestoreMissingCompanyProfileAsync(
         HostedProfileConnectionSettings settings,
@@ -592,7 +620,7 @@ public sealed class ProfileSyncService
         }
         else
         {
-            await SyncNowCoreAsync(ct);
+            await SyncNowCoreAsync(null, ct);
         }
 
         ConnectionChanged?.Invoke();
