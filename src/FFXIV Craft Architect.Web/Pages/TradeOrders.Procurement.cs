@@ -41,10 +41,11 @@ public partial class TradeOrders
                 effectivePolicy: _companyProfile?.PaymentPolicy);
         }
 
+        var workPackage = GetSelectedOrderPricingWorkPackage();
         return TradeCommissionPaymentSummary.FromOrder(
-            _selectedOrder,
+            workPackage,
             GetSelectedOrderResponsibilityProjection(),
-            GetSelectedOrderEffectivePaymentPolicy());
+            GetOrderEffectivePaymentPolicy(workPackage));
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()
@@ -54,11 +55,26 @@ public partial class TradeOrders
             return Array.Empty<TradeOrderProcurementRow>();
         }
 
+        var workPackage = GetSelectedOrderPricingWorkPackage();
+        var useCanonicalTerms = HasCanonicalCommission && !CanEditCanonicalDraft;
         return TradeProcurementRowBuilder.BuildRows(
-            _selectedOrder,
+            workPackage,
             GetSelectedOrderResponsibilityProjection(),
-            IsEditingCommissionTermsRevision ? null : WorkerProjections.Shell.PlanId,
-            IsEditingCommissionTermsRevision ? null : GetCurrentLiveProcurementSnapshot());
+            useCanonicalTerms ? null : WorkerProjections.Shell.PlanId,
+            useCanonicalTerms ? null : GetCurrentLiveProcurementSnapshot());
+    }
+
+    private TradeOrder GetSelectedOrderPricingWorkPackage()
+    {
+        if (_selectedOrder == null || IsEditingCommissionTermsRevision)
+        {
+            return _selectedOrder ?? new TradeOrder();
+        }
+
+        var commission = SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission;
+        return commission?.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published
+            ? CreateCanonicalTermsWorkPackage(_selectedOrder, commission.CurrentTerms)
+            : _selectedOrder;
     }
 
     private TradePayrollWorkflowDraft? GetSelectedOrderResponsibilityProjection()
