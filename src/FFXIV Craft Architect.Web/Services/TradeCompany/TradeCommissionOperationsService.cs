@@ -77,6 +77,7 @@ public sealed class TradeCommissionOperationsService(
         if (!CanPerformExternalAction(order, out var reason))
         {
             _projections.Remove(order.Id);
+            _missingCanonicalOwners.Remove(order.Id);
             _errors[order.Id] = reason;
             return;
         }
