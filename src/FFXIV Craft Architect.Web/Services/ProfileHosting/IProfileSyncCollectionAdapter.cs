@@ -18,3 +18,20 @@ public interface IHostedOrderProfileSyncAdapter
         long revision,
         CancellationToken ct);
 }
+
+public enum ProfileSyncObjectReconciliation
+{
+    PromoteLocalAuthority,
+    ProtectedConflict
+}
+
+public sealed class ProfileSyncObjectReconciliationException(
+    string collection,
+    string objectId,
+    ProfileSyncObjectReconciliation reconciliation,
+    string message) : InvalidOperationException(message)
+{
+    public string Collection { get; } = collection;
+    public string ObjectId { get; } = objectId;
+    public ProfileSyncObjectReconciliation Reconciliation { get; } = reconciliation;
+}
