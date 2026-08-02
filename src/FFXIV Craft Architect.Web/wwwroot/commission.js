@@ -69,6 +69,8 @@ const activityLabels = {
     DeliveryAccepted: "Delivery accepted",
     SettlementRecorded: "Settlement recorded",
     CommissionCanceled: "Commission canceled",
+    ClaimResolutionRequired: "Company resolution required",
+    CommissionReopened: "Commission reopened",
     CommissionClosed: "Commission closed",
     CommissionPublicationRevoked: "Public brief revoked",
     ParticipantRecoveryIssued: "Recovery access issued",
@@ -351,6 +353,9 @@ function formatStatus(projection) {
     const brief = projection.public;
     if (brief.isTestFixture) return "TEST - NOT CLAIMABLE";
     if (brief.viewState === "Revoked") return "REVOKED";
+    if (brief.requiresManualResolution || brief.status === "ResolutionRequired") {
+        return "COMPANY RESOLUTION REQUIRED";
+    }
     if (brief.status === "Canceled") return "CANCELED";
     if (brief.closed) return "COMPLETED";
     if (brief.status === "Completed") return "DELIVERY ACCEPTED";
@@ -398,6 +403,13 @@ function resolveNextStep() {
         return {
             title: brief.viewState === "Revoked" ? "This public brief was revoked" : "This commission is not open",
             body: "No claim or participant command is available from this view.",
+            tone: "blocked"
+        };
+    }
+    if (brief.requiresManualResolution || brief.status === "ResolutionRequired") {
+        return {
+            title: "Company resolution required",
+            body: "The participant withdrew after work or an exchange began. Public claiming is paused while the company reconciles the commission.",
             tone: "blocked"
         };
     }
@@ -643,16 +655,17 @@ function canUseActiveParticipantMutations(projection) {
         brief.viewState === "Published" &&
         !brief.closed &&
         brief.status !== "Canceled" &&
+        brief.status !== "ResolutionRequired" &&
         brief.status !== "Completed";
 }
 
 function canReleaseBeforeWork(projection) {
     const brief = projection.public;
     return canUseActiveParticipantMutations(projection) &&
-        !brief.clearedToWork &&
-        brief.status !== "InProgress" &&
-        brief.status !== "AwaitingDelivery" &&
+        brief.status === "Assigned" &&
         brief.gates.payment !== "Satisfied" &&
+        !projection.payment?.commissionerSent &&
+        !projection.payment?.crafterReceived &&
         brief.gates.companyMaterials !== "Satisfied" &&
         !areCompanyMaterialsReady(projection) &&
         brief.outputProgress.every(progress =>
@@ -961,9 +974,11 @@ function renderAccess() {
                 null,
                 `${crafter.characterName} · ${crafter.homeWorld} · ${crafter.contactMethod}: ${crafter.contactValue}`));
         }
-        if (canReleaseBeforeWork(projection)) {
+        if (canMutate) {
             actions.append(createButton(
-                "Release commission",
+                canReleaseBeforeWork(projection)
+                    ? "Release commission"
+                    : "Withdraw from commission",
                 openReleaseForm,
                 "button danger"));
         }
@@ -1457,12 +1472,15 @@ function paymentScheduleValue(schedule) {
 }
 
 function openReleaseForm() {
+    const directRelease = canReleaseBeforeWork(state.projection);
     openReasonForm(
-        "Release commission",
-        "Explain why you are releasing the claim. The slot may reopen, but this event remains in commission history.",
-        "Release claim",
+        directRelease ? "Release commission" : "Withdraw from commission",
+        directRelease
+            ? "Explain why you are releasing the claim. The slot will reopen and this event remains in commission history."
+            : "Explain why you are withdrawing. Because payment, materials, clearance, or work already began, the commission will leave public channels and require company resolution.",
+        directRelease ? "Release claim" : "Require company resolution",
         "release-claim",
-        "Claim released.");
+        directRelease ? "Claim released." : "Withdrawal recorded for company resolution.");
 }
 
 function openWithdrawReadinessForm() {
@@ -1584,12 +1602,6 @@ async function runParticipantCommand(command, payload, successMessage) {
         showNotice(
             "Accept the current terms first",
             "Review and accept the revised terms before continuing work on this commission.");
-        return;
-    }
-    if (command === "release-claim" && !canReleaseBeforeWork(state.projection)) {
-        showNotice(
-            "Release requires commissioner reconciliation",
-            "Ordinary release is available only before payment, company-material receipt, work clearance, or progress begins.");
         return;
     }
     setBusy(true);

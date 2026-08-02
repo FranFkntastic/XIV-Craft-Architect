@@ -125,7 +125,8 @@ public enum TradeOrderStatus
     InProgress,
     AwaitingDelivery,
     Completed,
-    Canceled
+    Canceled,
+    ResolutionRequired
 }
 
 public static class TradeOrderStatusWorkflow
@@ -136,7 +137,8 @@ public static class TradeOrderStatusWorkflow
         TradeOrderStatus.ReadyToAssign,
         TradeOrderStatus.Assigned,
         TradeOrderStatus.InProgress,
-        TradeOrderStatus.AwaitingDelivery
+        TradeOrderStatus.AwaitingDelivery,
+        TradeOrderStatus.ResolutionRequired
     ];
 
     public static IReadOnlyList<TradeOrderStatus> ArchiveStatuses { get; } =

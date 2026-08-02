@@ -163,6 +163,10 @@ public partial class TradeOrders
         {
             return "Canceled";
         }
+        if (order.Status == TradeOrderStatus.ResolutionRequired || commission.ManualResolution != null)
+        {
+            return "Resolution required";
+        }
         if (order.Status == TradeOrderStatus.Completed)
         {
             return commission.SettlementState == CompanyCommissionSettlementState.Satisfied

@@ -10,12 +10,18 @@ public static class TradeCommissionOperationsPresentation
     public const string PreWorkAttention = "prework";
     public const string WorkAttention = "work";
     public const string DeliveryAttention = "delivery";
+    public const string ResolutionAttention = "resolution";
     public const string SyncAttention = "sync";
 
     public static string GetAttentionGroup(CompanyCommissionOwnerProjection projection)
     {
         var order = projection.Order;
         var commission = RequireCommission(projection);
+        if (order.Status == TradeOrderStatus.ResolutionRequired || commission.ManualResolution != null)
+        {
+            return ResolutionAttention;
+        }
+
         if (TradeOrderStatusWorkflow.IsArchived(order.Status))
         {
             return DeliveryAttention;

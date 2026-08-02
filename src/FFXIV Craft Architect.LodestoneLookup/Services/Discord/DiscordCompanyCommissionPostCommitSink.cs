@@ -113,6 +113,8 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                 "The crafter claim was rejected.",
             CompanyCommissionActivityKind.ClaimReleased =>
                 "The crafter released the commission.",
+            CompanyCommissionActivityKind.ClaimResolutionRequired =>
+                "The crafter withdrew after work or an exchange began. Company resolution is required.",
             CompanyCommissionActivityKind.ClaimRecovered =>
                 "Crafter access to the commission was recovered.",
             CompanyCommissionActivityKind.ProvisionalIdentitySubmitted =>
@@ -167,6 +169,8 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                 "A final-payment confirmation was retracted.",
             CompanyCommissionActivityKind.CommissionCanceled =>
                 "The commission was canceled.",
+            CompanyCommissionActivityKind.CommissionReopened =>
+                "The commission was reopened for claiming.",
             CompanyCommissionActivityKind.CommissionClosed =>
                 "The commission was closed.",
             CompanyCommissionActivityKind.CommissionPublicationRevoked =>

@@ -17,7 +17,8 @@ public enum DiscordPublicationState
     Revoked = 3,
     ReconciliationRequired = 4,
     Failed = 5,
-    TestFixture = 6
+    TestFixture = 6,
+    Suppressed = 7
 }
 
 public sealed record DiscordPublicationRecord(

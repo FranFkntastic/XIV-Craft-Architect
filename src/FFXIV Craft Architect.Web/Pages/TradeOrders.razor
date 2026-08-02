@@ -844,13 +844,59 @@
                                      }
 
                                }
-                               @if (HasCanonicalCommission)
-                               {
+                                @if (_selectedOrder.CompanyCommission?.ManualResolution is { } manualResolution)
+                                {
+                                    <section class="trade-orders-operation-card is-attention">
+                                        <MudText Typo="Typo.subtitle2">Company resolution required</MudText>
+                                        <MudText Typo="Typo.body2">
+                                            The participant withdrew after work or an exchange began. The Discord brief has been removed while the company reconciles payment, materials, and retained output progress.
+                                        </MudText>
+                                        <MudText Typo="Typo.caption">
+                                            Reported @manualResolution.RequestedAtUtc.ToLocalTime().ToString("g"): @manualResolution.Reason
+                                        </MudText>
+                                        <MudTextField @bind-Value="_commissionResolutionNote"
+                                                      id="commission-resolution-note"
+                                                      Label="Resolution note"
+                                                      HelperText="Record what was reconciled before reopening. Cancel remains available below."
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense"
+                                                      Lines="2"
+                                                      Immediate="true"
+                                                      MaxLength="1000" />
+                                        <MudButton Variant="Variant.Filled"
+                                                   Color="Color.Primary"
+                                                   Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionResolutionNote))"
+                                                   OnClick="ReopenCanonicalCommissionAsync">
+                                            Reopen for claiming
+                                        </MudButton>
+                                    </section>
+                                }
+                                @if (HasCanonicalCommission)
+                                {
                                    <section class="trade-orders-operation-card trade-orders-order-actions">
                                        <MudText Typo="Typo.subtitle2">Order actions</MudText>
-                                       @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
-                                       {
-                                           <MudButton Variant="Variant.Outlined"
+                                        @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+                                        {
+                                            @if (_selectedOrder.Status == TradeOrderStatus.Canceled &&
+                                                 _selectedOrder.CompanyCommission?.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published)
+                                            {
+                                                <MudTextField @bind-Value="_commissionResolutionNote"
+                                                              id="commission-reopen-note"
+                                                              Label="Reopen resolution"
+                                                              HelperText="Explain why this canceled commission is ready to return to public claiming."
+                                                              Variant="Variant.Outlined"
+                                                              Margin="Margin.Dense"
+                                                              Lines="2"
+                                                              Immediate="true"
+                                                              MaxLength="1000" />
+                                                <MudButton Variant="Variant.Filled"
+                                                           Color="Color.Primary"
+                                                           Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionResolutionNote))"
+                                                           OnClick="ReopenCanonicalCommissionAsync">
+                                                    Reopen and repost
+                                                </MudButton>
+                                            }
+                                            <MudButton Variant="Variant.Outlined"
                                                       Color="Color.Error"
                                                       Disabled="@_isDeletingSelectedOrder"
                                                       OnClick="DeleteSelectedOrderAsync">

@@ -24,6 +24,15 @@ public static class CompanyCommissionCommandWorkflow
         ArgumentNullException.ThrowIfNull(actor);
         var commission = RequireCommission(source, command.Context);
 
+        if (commission.ManualResolution != null &&
+            command is not (ReopenCompanyCommissionCommand or
+                CancelCompanyCommissionCommand or
+                AddCompanyCommissionPrivateNoteCommand))
+        {
+            throw new InvalidOperationException(
+                "This commission requires company resolution before ordinary work can continue.");
+        }
+
         return command switch
         {
             UpdateCompanyCommissionDraftCommand update =>
@@ -35,9 +44,9 @@ public static class CompanyCommissionCommandWorkflow
             ClaimCompanyCommissionCommand claim =>
                 Claim(source, commission, claim, nowUtc),
             ReleaseCompanyCommissionClaimCommand release =>
-                Release(source, commission, release.Reason, nowUtc, rejected: false),
+                Release(source, commission, release.Reason, nowUtc, actor, rejected: false),
             RejectCompanyCommissionClaimCommand reject =>
-                Release(source, commission, reject.Reason, nowUtc, rejected: true),
+                Release(source, commission, reject.Reason, nowUtc, actor, rejected: true),
             SubmitCompanyCommissionIdentityCommand submit =>
                 SubmitIdentity(source, commission, submit, nowUtc),
             ConfirmCompanyCommissionIdentityCommand confirm =>
@@ -84,6 +93,8 @@ public static class CompanyCommissionCommandWorkflow
                 RedeemRecovery(source, commission, redeem, nowUtc),
             CancelCompanyCommissionCommand cancel =>
                 Cancel(source, commission, cancel.Reason),
+            ReopenCompanyCommissionCommand reopen =>
+                Reopen(source, commission, reopen.Resolution, nowUtc, actor),
             RevokeCompanyCommissionPublicationCommand =>
                 RevokePublication(source, commission, nowUtc),
             CreateCompanyCommissionCommand =>
@@ -338,20 +349,30 @@ public static class CompanyCommissionCommandWorkflow
         TradeCompanyCommission commission,
         string reason,
         DateTime nowUtc,
+        CompanyCommissionActor actor,
         bool rejected)
     {
         RequireClaim(commission);
         RequireReason(reason);
-        Require(
+        var canReleaseDirectly =
             source.Status == TradeOrderStatus.Assigned &&
             commission.Gates.Payment.State != CompanyCommissionClearanceState.Satisfied &&
+            commission.Gates.Payment.ConfirmationCount == 0 &&
+            commission.Gates.CompanyMaterials.State != CompanyCommissionClearanceState.Satisfied &&
             commission.Gates.CompanyMaterials.ReadyAtUtc == null &&
             commission.Gates.CompanyMaterials.ReceivedAtUtc == null &&
             commission.OutputProgress.All(item =>
                 item.CompletedQuantity == 0 &&
                 item.ReadyQuantity == 0 &&
-                item.AcceptedQuantity == 0),
-            "A claim can be released or rejected only before payment, material handoff, or work begins.");
+                item.AcceptedQuantity == 0);
+        if (!canReleaseDirectly)
+        {
+            Require(
+                !rejected,
+                "A claim can be rejected only before payment, material handoff, or work begins.");
+            return RequireManualResolution(source, commission, reason, nowUtc, actor);
+        }
+
         var participant = commission.ParticipantGrant ??
             throw new InvalidOperationException(
                 "The active claim has no participant grant.");
@@ -383,6 +404,49 @@ public static class CompanyCommissionCommandWorkflow
                 ? CompanyCommissionActivityKind.ClaimRejected
                 : CompanyCommissionActivityKind.ClaimReleased,
             reason);
+    }
+
+    private static CompanyCommissionDomainTransition RequireManualResolution(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        string reason,
+        DateTime nowUtc,
+        CompanyCommissionActor actor)
+    {
+        var claim = commission.ActiveClaim ??
+            throw new InvalidOperationException("The commission has no active claim.");
+        var participant = commission.ParticipantGrant ??
+            throw new InvalidOperationException(
+                "The active claim has no participant grant.");
+        var updated = Copy(source);
+        updated.Status = TradeOrderStatus.ResolutionRequired;
+        return Transition(
+            updated,
+            commission with
+            {
+                ParticipantGrant = participant with { RevokedAtUtc = nowUtc },
+                RecoveryGrant = null,
+                ManualResolution = new CompanyCommissionManualResolution(
+                    Guid.NewGuid(),
+                    claim.ClaimId,
+                    source.Status,
+                    nowUtc,
+                    actor.ActorId,
+                    reason)
+            },
+            CompanyCommissionActivityKind.ClaimResolutionRequired,
+            reason,
+            JsonSerializer.Serialize(new
+            {
+                previousStatus = source.Status,
+                termsVersion = commission.CurrentTermsVersion,
+                payment = commission.Gates.Payment,
+                companyMaterials = commission.Gates.CompanyMaterials,
+                outputProgress = commission.OutputProgress,
+                settlementState = commission.SettlementState,
+                settlementPayment = commission.SettlementPayment
+            }),
+            CompanyCommissionActivityVisibility.CompanyOnly);
     }
 
     private static CompanyCommissionDomainTransition SubmitIdentity(
@@ -1175,9 +1239,66 @@ public static class CompanyCommissionCommandWorkflow
         updated.Status = TradeOrderStatus.Canceled;
         return Transition(
             updated,
-            commission,
+            commission with { ManualResolution = null },
             CompanyCommissionActivityKind.CommissionCanceled,
             reason);
+    }
+
+    private static CompanyCommissionDomainTransition Reopen(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        string resolution,
+        DateTime nowUtc,
+        CompanyCommissionActor actor)
+    {
+        RequireReason(resolution);
+        Require(
+            source.Status is TradeOrderStatus.Canceled or TradeOrderStatus.ResolutionRequired,
+            "Only a canceled commission or one awaiting manual resolution can be reopened.");
+        Require(
+            commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published,
+            "A revoked publication cannot be reopened through the commission lifecycle.");
+
+        var updated = Copy(source);
+        updated.Status = TradeOrderStatus.ReadyToAssign;
+        updated.AssignedCrafterId = null;
+        var participant = commission.ParticipantGrant;
+        return Transition(
+            updated,
+            commission with
+            {
+                ActiveClaim = null,
+                ProvisionalCrafter = null,
+                ParticipantGrant = participant == null
+                    ? null
+                    : participant with { RevokedAtUtc = participant.RevokedAtUtc ?? nowUtc },
+                RecoveryGrant = null,
+                ManualResolution = null,
+                ParticipantAcknowledgedTermsVersion = null,
+                PaymentPolicyChangeRequest = null,
+                ActiveClaimCapabilityRevision = checked(
+                    commission.ActiveClaimCapabilityRevision + 1),
+                Gates = InitializeGates(
+                    commission.CurrentTerms,
+                    CompanyCommissionClearanceState.Pending,
+                    nowUtc),
+                DeliveryReadiness = new CompanyCommissionDeliveryReadiness(false),
+                SettlementState = CompanyCommissionSettlementState.NotDue,
+                SettlementPayment = new CompanyCommissionSettlementConfirmation()
+            },
+            CompanyCommissionActivityKind.CommissionReopened,
+            resolution,
+            JsonSerializer.Serialize(new
+            {
+                previousStatus = source.Status,
+                resolvedBy = actor.ActorId,
+                retainedOutputProgress = commission.OutputProgress,
+                previousPayment = commission.Gates.Payment,
+                previousCompanyMaterials = commission.Gates.CompanyMaterials,
+                previousSettlementState = commission.SettlementState,
+                previousSettlementPayment = commission.SettlementPayment
+            }),
+            CompanyCommissionActivityVisibility.CompanyOnly);
     }
 
     private static CompanyCommissionDomainTransition RevokePublication(

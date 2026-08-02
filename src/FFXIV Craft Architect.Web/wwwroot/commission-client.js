@@ -11,7 +11,7 @@ const enumMaps = {
     clearance: ["NotRequired", "Pending", "Satisfied"],
     settlement: ["NotDue", "Pending", "Satisfied"],
     materialResponsibility: ["Crafter", "Provided"],
-    status: ["Draft", "ReadyToAssign", "Assigned", "InProgress", "AwaitingDelivery", "Completed", "Canceled"],
+    status: ["Draft", "ReadyToAssign", "Assigned", "InProgress", "AwaitingDelivery", "Completed", "Canceled", "ResolutionRequired"],
     actorKind: ["Commissioner", "Crafter", "System", "Migration"],
     sourceSurface: ["TradeArchitect", "PublicBrief", "Discord", "HostedMigration", "System"],
     activityKind: [
@@ -51,7 +51,10 @@ const enumMaps = {
         "PaymentAttestationRetracted",
         "SettlementPaymentSentRecorded",
         "SettlementPaymentReceivedConfirmed",
-        "SettlementPaymentAttestationRetracted"
+        "SettlementPaymentAttestationRetracted",
+        "DraftUpdated",
+        "ClaimResolutionRequired",
+        "CommissionReopened"
     ]
 };
 
@@ -576,6 +579,9 @@ function adaptPublicBrief(source) {
         gates: adaptPublicGates(requiredObject(brief.gates, "Public pre-work gates")),
         clearedToWork: requiredBoolean(brief.clearedToWork, "Work clearance"),
         isClaimed: requiredBoolean(brief.isClaimed, "Claim state"),
+        requiresManualResolution: requiredBoolean(
+            brief.requiresManualResolution,
+            "Manual resolution state"),
         outputProgress: progress,
         deliveryReadiness: adaptPublicReadiness(
             requiredObject(brief.deliveryReadiness, "Public delivery readiness")),

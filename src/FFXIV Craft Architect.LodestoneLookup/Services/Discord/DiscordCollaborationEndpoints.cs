@@ -272,6 +272,7 @@ public static class DiscordCollaborationEndpoints
             {
                 DiscordPublicationState.Failed => "Failed",
                 DiscordPublicationState.Revoked => "Revoked",
+                DiscordPublicationState.Suppressed => "Suppressed",
                 DiscordPublicationState.ReconciliationRequired => "Failed",
                 _ when publication.MessageId == null => "Pending",
                 _ => "Published"
