@@ -1699,69 +1699,6 @@
   margin-bottom: 6px;
 }
 
-.trade-orders-commission-payment {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px;
-  border: 1px solid #4b4130;
-  border-radius: 6px;
-  background: #27231b;
-}
-
-.trade-orders-commission-payment-summary,
-.trade-orders-gate-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.trade-orders-commission-payment-summary > div,
-.trade-orders-gate-strip > span {
-  min-width: 0;
-  padding: 7px 8px;
-  border: 1px solid #3d382d;
-  border-radius: 4px;
-  background: #211f1a;
-}
-
-.trade-orders-commission-payment-summary span,
-.trade-orders-gate-strip span {
-  color: #aaa;
-  font-size: 0.68rem;
-}
-
-.trade-orders-commission-payment-summary strong,
-.trade-orders-gate-strip b {
-  display: block;
-  margin-top: 3px;
-  color: #f0f0f0;
-  font-size: 0.76rem;
-}
-
-.trade-orders-payment-request {
-  display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(180px, 1fr) auto;
-  gap: 8px;
-  align-items: end;
-  padding-top: 8px;
-  border-top: 1px solid #40392d;
-}
-
-.trade-orders-payment-request > div:first-child {
-  display: grid;
-  gap: 2px;
-}
-
-.trade-orders-payment-request span {
-  color: #b8b8b8;
-  font-size: 0.7rem;
-}
-
-.trade-orders-payment-request span.is-error {
-  color: #f0a6a6;
-}
-
 .trade-orders-inline-actions,
 .trade-orders-observation-row,
 .trade-orders-material-handoff-action {
@@ -1886,7 +1823,6 @@
 }
 
 .trade-orders-operation-card-heading,
-.trade-orders-payment-handshake-heading,
 .trade-orders-timeline-item-heading {
   display: flex;
   align-items: flex-start;
@@ -2286,14 +2222,11 @@
   .trade-orders-material-table.is-compact .trade-orders-material-row,
   .trade-orders-material-table.is-compact.has-commission-handoff .trade-orders-material-header,
   .trade-orders-material-table.is-compact.has-commission-handoff .trade-orders-material-row,
-  .trade-orders-commission-payment-summary,
-  .trade-orders-gate-strip,
   .trade-orders-commission-identity-strip,
   .trade-orders-operations-summary,
   .trade-orders-prerequisite-list,
   .trade-orders-sharing-grid,
   .trade-orders-payment-handshake,
-  .trade-orders-payment-request,
   .trade-orders-commission-claim,
   .trade-orders-commission-publication,
   .trade-orders-identity-evidence,

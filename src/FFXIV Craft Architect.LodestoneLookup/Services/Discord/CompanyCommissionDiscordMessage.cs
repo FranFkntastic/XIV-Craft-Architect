@@ -199,11 +199,11 @@ public static class CompanyCommissionDiscordMessage
         }
         if (commission.Status == TradeOrderStatus.AwaitingDelivery)
         {
-            return "AWAITING DELIVERY";
+            return "READY FOR DELIVERY";
         }
         if (commission.Status == TradeOrderStatus.InProgress)
         {
-            return "IN PROGRESS";
+            return "CRAFTING";
         }
         if (!commission.IsClaimed)
         {
@@ -214,17 +214,25 @@ public static class CompanyCommissionDiscordMessage
             return "CLAIMED - IDENTITY REVIEW";
         }
         return commission.ClearedToWork
-            ? "READY TO WORK"
+            ? "CRAFTING"
             : "ASSIGNED - PRE-WORK";
     }
 
     private static string OutputSummary(CompanyCommissionPublicBrief commission)
     {
+        var progressByLine = commission.OutputProgress
+            .ToDictionary(progress => progress.LineId);
         var lines = commission.Terms.Outputs
             .Take(20)
             .Select(output =>
-                $"- **{EscapeMarkdown(output.Name)}** x{output.RequiredQuantity:N0}" +
-                (output.MustBeHq ? " HQ" : string.Empty))
+            {
+                var quality = output.MustBeHq ? " HQ" : string.Empty;
+                var progress = progressByLine.GetValueOrDefault(output.LineId);
+                var progressSummary = progress is { CompletedQuantity: > 0 } or { ReadyQuantity: > 0 }
+                    ? $" - {progress.CompletedQuantity:N0} crafted, {progress.ReadyQuantity:N0} ready"
+                    : string.Empty;
+                return $"- **{EscapeMarkdown(output.Name)}** x{output.RequiredQuantity:N0}{quality}{progressSummary}";
+            })
             .ToList();
         if (commission.Terms.Outputs.Count > lines.Count)
         {

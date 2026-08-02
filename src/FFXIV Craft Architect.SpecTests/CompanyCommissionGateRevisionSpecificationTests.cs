@@ -53,6 +53,49 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         }
     }
 
+    [Fact]
+    public void ClearedCommissionCanBeCraftedWithoutAProgressReport()
+    {
+        var order = CompleteBothGates(CreateClaimedOrder());
+
+        Assert.True(order.CompanyCommission!.ClearedToWork);
+        Assert.Equal(TradeOrderStatus.Assigned, order.Status);
+        Assert.All(
+            order.CompanyCommission.OutputProgress,
+            progress => Assert.Equal(0, progress.CompletedQuantity));
+    }
+
+    [Fact]
+    public void CrafterProgressProjectsToPublicAndParticipantBriefs()
+    {
+        var order = CompleteBothGates(CreateClaimedOrder());
+        var progress = Assert.Single(order.CompanyCommission!.OutputProgress);
+        var transition = CompanyCommissionCommandWorkflow.Apply(
+            order,
+            new ReportCompanyCommissionProgressCommand(
+                Context(order),
+                [new CompanyCommissionProgressQuantity(
+                    progress.LineId,
+                    progress.ItemId,
+                    CompletedQuantity: 1,
+                    ReadyQuantity: 1)],
+                "Ready for handoff."),
+            Crafter,
+            StartedAt.AddMinutes(5));
+        order = transition.UpdatedOrder;
+
+        var publicBrief = CompanyCommissionProjectionService.CreatePublicBrief(order, "Test Company");
+        var participantBrief = CompanyCommissionProjectionService.CreateParticipantBrief(order, "Test Company");
+        var publicProgress = Assert.Single(publicBrief.OutputProgress);
+        var participantProgress = Assert.Single(participantBrief.Public.OutputProgress);
+
+        Assert.Equal(1, publicProgress.CompletedQuantity);
+        Assert.Equal(1, publicProgress.ReadyQuantity);
+        Assert.Equal(publicProgress, participantProgress);
+        Assert.Equal(CompanyCommissionActivityKind.ProgressReported, transition.ActivityKind);
+        Assert.Equal("Ready for handoff.", transition.Comment);
+    }
+
     private static void TermsRevisionPreservesSatisfiedGatesWhoseBoundFactsDidNotChange()
     {
         var order = CompleteBothGates(CreateClaimedOrder());

@@ -380,6 +380,7 @@
                                     operationsOwner.Order.CompanyCommission is { } operationsCommission)
                                {
                                   var operationsProvisional = operationsCommission.ProvisionalCrafter;
+                                  var operationsPaymentRequest = SelectedPaymentPolicyRequest;
                                      @if (operationsCommission.PublicMetadata.IsTestFixture)
                                      {
                                          <MudAlert Severity="Severity.Warning" Dense="true" Class="trade-orders-test-commission-banner">
@@ -498,6 +499,49 @@
                                              </section>
                                          </div>
                                      </section>
+
+                                     @if (operationsPaymentRequest != null)
+                                     {
+                                         <section class="trade-orders-operation-card is-attention">
+                                             <div class="trade-orders-operation-card-heading">
+                                                 <div>
+                                                     <MudText Typo="Typo.subtitle2">Payment timing request</MudText>
+                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                         The crafter requested @FormatPaymentRequestSchedule(operationsPaymentRequest).
+                                                     </MudText>
+                                                 </div>
+                                                 <span class="trade-orders-publication-chip is-attention">Review</span>
+                                             </div>
+                                             <span>@(operationsPaymentRequest.Reason ?? "No reason supplied.")</span>
+                                             @if (!string.IsNullOrWhiteSpace(operationsPaymentRequest.Error))
+                                             {
+                                                 <span class="is-error">@operationsPaymentRequest.Error</span>
+                                             }
+                                             <MudTextField @bind-Value="_commissionPaymentDecisionReason"
+                                                           id="commission-payment-decision-reason"
+                                                           Label="Decision reason"
+                                                           Variant="Variant.Outlined"
+                                                           Margin="Margin.Dense"
+                                                           Immediate="true"
+                                                           MaxLength="500" />
+                                             <div class="trade-orders-inline-actions">
+                                                 <MudButton Variant="Variant.Filled"
+                                                            Color="Color.Primary"
+                                                            Size="Size.Small"
+                                                            Disabled="@(_isCommissionCommandRunning || operationsPaymentRequest.RequestedSchedule == null || string.IsNullOrWhiteSpace(_commissionPaymentDecisionReason))"
+                                                            OnClick="@(() => DecideCommissionPaymentPolicyAsync(true))">
+                                                     Accept timing
+                                                 </MudButton>
+                                                 <MudButton Variant="Variant.Outlined"
+                                                            Color="Color.Secondary"
+                                                            Size="Size.Small"
+                                                            Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionPaymentDecisionReason))"
+                                                            OnClick="@(() => DecideCommissionPaymentPolicyAsync(false))">
+                                                     Refuse
+                                                 </MudButton>
+                                             </div>
+                                         </section>
+                                     }
 
                                      @if (operationsProvisional != null &&
                                           operationsCommission.Gates.Identity.State ==
@@ -664,13 +708,114 @@
                                      }
 
                                      @if (operationsOwner.Order.Status == TradeOrderStatus.Completed &&
-                                          operationsCommission.SettlementState != CompanyCommissionSettlementState.Satisfied)
+                                          operationsCommission.CurrentTerms.Payment.Total > 0 &&
+                                          operationsCommission.CurrentTerms.Payment.Schedule != CompanyCommissionPaymentSchedule.Advance)
                                      {
-                                         <section class="trade-orders-operation-card is-attention">
-                                             <MudText Typo="Typo.subtitle2">Settlement Required</MudText>
-                                             <MudText Typo="Typo.body2">
-                                                 Final payment needs independent commissioner-sent and crafter-received confirmations.
-                                             </MudText>
+                                         var settlement = operationsCommission.SettlementPayment;
+                                         var legacySettlement =
+                                             operationsCommission.SettlementState == CompanyCommissionSettlementState.Satisfied &&
+                                             settlement.ConfirmationCount == 0;
+                                         <section class="trade-orders-operation-card @(operationsCommission.SettlementState == CompanyCommissionSettlementState.Satisfied ? string.Empty : "is-attention")">
+                                             <div class="trade-orders-operation-card-heading">
+                                                 <div>
+                                                     <MudText Typo="Typo.subtitle2">Final payment</MudText>
+                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                         @FormatGil(operationsCommission.CurrentTerms.Payment.Total) against terms v@(operationsCommission.CurrentTermsVersion).
+                                                     </MudText>
+                                                 </div>
+                                                 <span class="@GetSettlementChipClass(operationsCommission.SettlementState)">
+                                                     @(legacySettlement
+                                                         ? "Legacy settlement"
+                                                         : $"{settlement.ConfirmationCount} of 2 confirmed")
+                                                 </span>
+                                             </div>
+                                             @if (legacySettlement)
+                                             {
+                                                 <div class="trade-orders-payment-clearance is-complete">
+                                                     <strong>Settlement preserved</strong>
+                                                     <span>This commission predates two-party settlement confirmations.</span>
+                                                 </div>
+                                             }
+                                             else
+                                             {
+                                                 <div class="trade-orders-payment-handshake">
+                                                     <div class="@($"trade-orders-payment-attestation{(settlement.CommissionerSent != null ? " is-complete" : string.Empty)}")">
+                                                         <span>Commissioner</span>
+                                                         @if (settlement.CommissionerSent is { } sent)
+                                                         {
+                                                             <strong>Final payment marked sent</strong>
+                                                             <p>@sent.Note</p>
+                                                             <small>@sent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(sent.TermsVersion)</small>
+                                                         }
+                                                         else
+                                                         {
+                                                             <strong>Record final payment</strong>
+                                                             <MudTextField @bind-Value="_commissionSettlementObservation"
+                                                                           id="commission-settlement-observation"
+                                                                           Label="Payment note"
+                                                                           Variant="Variant.Outlined"
+                                                                           Margin="Margin.Dense"
+                                                                           Immediate="true"
+                                                                           MaxLength="500" />
+                                                             <MudButton Variant="Variant.Filled"
+                                                                        Color="Color.Primary"
+                                                                        FullWidth="true"
+                                                                        Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementObservation))"
+                                                                        OnClick="RecordCommissionSettlementAsync">
+                                                                 Mark sent
+                                                             </MudButton>
+                                                         }
+                                                     </div>
+                                                     <div class="trade-orders-payment-handshake-mark">
+                                                         <MudIcon Icon="@Icons.Material.Filled.SyncAlt" />
+                                                     </div>
+                                                     <div class="@($"trade-orders-payment-attestation{(settlement.CrafterReceived != null ? " is-complete" : " is-waiting")}")">
+                                                         <span>Crafter</span>
+                                                         @if (settlement.CrafterReceived is { } received)
+                                                         {
+                                                             <strong>Final payment receipt confirmed</strong>
+                                                             <p>@received.Note</p>
+                                                             <small>@received.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(received.TermsVersion)</small>
+                                                         }
+                                                         else
+                                                         {
+                                                             <strong>Crafter confirmation pending</strong>
+                                                             <p>The participant brief carries the accepted amount and terms version.</p>
+                                                         }
+                                                     </div>
+                                                 </div>
+                                                 @if (settlement.CommissionerSent != null)
+                                                 {
+                                                     <details class="trade-orders-exception-disclosure">
+                                                         <summary>Retract commissioner confirmation</summary>
+                                                         <MudTextField @bind-Value="_commissionSettlementRetractionReason"
+                                                                       id="commission-settlement-retraction-reason"
+                                                                       Label="Retraction reason"
+                                                                       Variant="Variant.Outlined"
+                                                                       Margin="Margin.Dense"
+                                                                       Immediate="true"
+                                                                       MaxLength="500" />
+                                                         <MudButton Variant="Variant.Outlined"
+                                                                    Color="Color.Warning"
+                                                                    Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementRetractionReason))"
+                                                                    OnClick="RetractCommissionSettlementAsync">
+                                                             Retract confirmation
+                                                         </MudButton>
+                                                     </details>
+                                                 }
+                                                 <div class="@($"trade-orders-payment-clearance{(operationsCommission.SettlementState == CompanyCommissionSettlementState.Satisfied ? " is-complete" : string.Empty)}")">
+                                                     <strong>
+                                                         @(operationsCommission.SettlementState == CompanyCommissionSettlementState.Satisfied
+                                                             ? "Settlement complete"
+                                                             : "Final payment incomplete")
+                                                     </strong>
+                                                     <span>
+                                                         @(operationsCommission.SettlementState == CompanyCommissionSettlementState.Satisfied
+                                                             ? "Both parties confirmed the final payment against the accepted terms."
+                                                             : $"{settlement.ConfirmationCount} of 2 confirmations recorded.")
+                                                     </span>
+                                                 </div>
+                                             }
                                          </section>
                                      }
 
@@ -703,228 +848,6 @@
                                 @if (paymentSummary.Materials.Count > 0 && paymentSummary.EstimatedProcurementTotal <= 0)
                                 {
                                     <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">Material lines are captured, but pricing evidence is missing. Run market analysis from the linked craft plan before using payment totals.</MudAlert>
-                                }
-                                @if (SelectedCanonicalCommission is { } canonicalCommission)
-                                {
-                                     var commissionTerms = canonicalCommission.CurrentTerms;
-                                     var paymentRequest = SelectedPaymentPolicyRequest;
-                                     <section class="trade-orders-commission-payment">
-                                         <div class="trade-orders-payment-handshake-heading">
-                                             <div>
-                                                 <MudText Typo="Typo.subtitle2">
-                                                     @($"{FormatCommissionPaymentSchedule(commissionTerms.Payment)} Payment - {FormatGil(commissionTerms.Payment.Total)}")
-                                                 </MudText>
-                                                 <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                     Both parties attest independently against terms v@(commissionTerms.Version).
-                                                 </MudText>
-                                             </div>
-                                             <span class="@GetCommissionGateChipClass(canonicalCommission.Gates.Payment.State)">
-                                                 @FormatPaymentConfirmationProgress(canonicalCommission.Gates.Payment)
-                                             </span>
-                                         </div>
-                                         @if (canonicalCommission.Gates.Payment.State !=
-                                              CompanyCommissionClearanceState.NotRequired)
-                                         {
-                                             <div class="trade-orders-payment-handshake">
-                                                 <div class="@($"trade-orders-payment-attestation{(canonicalCommission.Gates.Payment.CommissionerSent != null ? " is-complete" : string.Empty)}")">
-                                                     <span>Commissioner</span>
-                                                     @if (canonicalCommission.Gates.Payment.CommissionerSent is { } sent)
-                                                     {
-                                                         <strong>Payment marked sent</strong>
-                                                         <p>@sent.Note</p>
-                                                         <small>@sent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(sent.TermsVersion)</small>
-                                                     }
-                                                      else
-                                                      {
-                                                          <strong>Payment not yet marked sent</strong>
-                                                          <p>No commissioner confirmation has been recorded for these terms.</p>
-                                                      }
-                                                 </div>
-                                                 <div class="trade-orders-payment-handshake-mark">
-                                                     <MudIcon Icon="@Icons.Material.Filled.SyncAlt" />
-                                                 </div>
-                                                 <div class="@($"trade-orders-payment-attestation{(canonicalCommission.Gates.Payment.CrafterReceived != null ? " is-complete" : " is-waiting")}")">
-                                                     <span>Crafter</span>
-                                                     @if (canonicalCommission.Gates.Payment.CrafterReceived is { } received)
-                                                     {
-                                                         <strong>Receipt confirmed</strong>
-                                                         <p>@received.Note</p>
-                                                         <small>@received.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(received.TermsVersion)</small>
-                                                     }
-                                                     else
-                                                     {
-                                                         <strong>Awaiting receipt</strong>
-                                                         <p>The participant brief shows the exact amount and current terms version.</p>
-                                                         <small>Either party may record first; clearance waits for both.</small>
-                                                     }
-                                                 </div>
-                                             </div>
-                                             <div class="@($"trade-orders-payment-clearance{(canonicalCommission.Gates.Payment.State == CompanyCommissionClearanceState.Satisfied ? " is-complete" : string.Empty)}")">
-                                                 <strong>
-                                                     @(canonicalCommission.Gates.Payment.State ==
-                                                       CompanyCommissionClearanceState.Satisfied
-                                                         ? "Payment clearance satisfied"
-                                                         : "Work clearance remains locked")
-                                                 </strong>
-                                                 <span>
-                                                     @(canonicalCommission.Gates.Payment.State ==
-                                                       CompanyCommissionClearanceState.Satisfied
-                                                         ? "Both parties confirmed the same terms-version exchange."
-                                                         : $"{canonicalCommission.Gates.Payment.ConfirmationCount} of 2 confirmations recorded.")
-                                                 </span>
-                                             </div>
-                                         }
-                                         @if (paymentRequest != null)
-                                         {
-                                            <div class="trade-orders-payment-request">
-                                                <div>
-                                                    <strong>Crafter requested @FormatPaymentRequestSchedule(paymentRequest)</strong>
-                                                    <span>@(paymentRequest.Reason ?? "No reason supplied.")</span>
-                                                    @if (!string.IsNullOrWhiteSpace(paymentRequest.Error))
-                                                    {
-                                                        <span class="is-error">@paymentRequest.Error</span>
-                                                    }
-                                                </div>
-                                                <MudTextField @bind-Value="_commissionPaymentDecisionReason"
-                                                              id="commission-payment-decision-reason"
-                                                              Label="Decision reason"
-                                                              Variant="Variant.Outlined"
-                                                              Margin="Margin.Dense"
-                                                              Immediate="true"
-                                                              MaxLength="500" />
-                                                <div class="trade-orders-inline-actions">
-                                                    <MudButton Variant="Variant.Filled"
-                                                               Color="Color.Primary"
-                                                               Size="Size.Small"
-                                                               Disabled="@(_isCommissionCommandRunning || paymentRequest.RequestedSchedule == null || string.IsNullOrWhiteSpace(_commissionPaymentDecisionReason))"
-                                                               OnClick="@(() => DecideCommissionPaymentPolicyAsync(true))">
-                                                        Accept Timing
-                                                    </MudButton>
-                                                    <MudButton Variant="Variant.Outlined"
-                                                               Color="Color.Secondary"
-                                                               Size="Size.Small"
-                                                               Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionPaymentDecisionReason))"
-                                                               OnClick="@(() => DecideCommissionPaymentPolicyAsync(false))">
-                                                        Refuse
-                                                    </MudButton>
-                                                </div>
-                                            </div>
-                                        }
-                                     </section>
-                                     @if (_selectedOrder.Status == TradeOrderStatus.Completed &&
-                                          commissionTerms.Payment.Total > 0 &&
-                                          commissionTerms.Payment.Schedule != CompanyCommissionPaymentSchedule.Advance)
-                                     {
-                                         var settlement = canonicalCommission.SettlementPayment;
-                                         var legacySettlement =
-                                             canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied &&
-                                             settlement.ConfirmationCount == 0;
-                                         <section class="trade-orders-commission-payment is-settlement">
-                                             <div class="trade-orders-payment-handshake-heading">
-                                                 <div>
-                                                     <MudText Typo="Typo.subtitle2">
-                                                         @($"Final Payment - {FormatGil(commissionTerms.Payment.Total)}")
-                                                     </MudText>
-                                                     <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                         Delivery is accepted. Both parties confirm settlement independently against terms v@(commissionTerms.Version).
-                                                     </MudText>
-                                                 </div>
-                                                 <span class="@GetSettlementChipClass(canonicalCommission.SettlementState)">
-                                                     @(legacySettlement
-                                                         ? "Legacy settlement"
-                                                         : $"{settlement.ConfirmationCount} of 2 confirmed")
-                                                 </span>
-                                             </div>
-                                             @if (legacySettlement)
-                                             {
-                                                 <div class="trade-orders-payment-clearance is-complete">
-                                                     <strong>Settlement preserved</strong>
-                                                     <span>This commission was completed before two-party settlement attestations were introduced.</span>
-                                                 </div>
-                                             }
-                                             else
-                                             {
-                                               <div class="trade-orders-payment-handshake">
-                                                 <div class="@($"trade-orders-payment-attestation{(settlement.CommissionerSent != null ? " is-complete" : string.Empty)}")">
-                                                     <span>Commissioner</span>
-                                                     @if (settlement.CommissionerSent is { } sent)
-                                                     {
-                                                         <strong>Final payment marked sent</strong>
-                                                         <p>@sent.Note</p>
-                                                         <small>@sent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(sent.TermsVersion)</small>
-                                                     }
-                                                     else
-                                                     {
-                                                         <strong>Mark final payment sent</strong>
-                                                         <p>The crafter confirms receipt separately from their brief.</p>
-                                                         <MudTextField @bind-Value="_commissionSettlementObservation"
-                                                                       id="commission-settlement-observation"
-                                                                       Label="Payment note"
-                                                                       Variant="Variant.Outlined"
-                                                                       Margin="Margin.Dense"
-                                                                       Immediate="true"
-                                                                       MaxLength="500" />
-                                                         <MudButton Variant="Variant.Filled"
-                                                                    Color="Color.Primary"
-                                                                    FullWidth="true"
-                                                                    Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementObservation))"
-                                                                    OnClick="RecordCommissionSettlementAsync">
-                                                             Mark Sent
-                                                         </MudButton>
-                                                     }
-                                                 </div>
-                                                 <div class="trade-orders-payment-handshake-mark">
-                                                     <MudIcon Icon="@Icons.Material.Filled.SyncAlt" />
-                                                 </div>
-                                                 <div class="@($"trade-orders-payment-attestation{(settlement.CrafterReceived != null ? " is-complete" : " is-waiting")}")">
-                                                     <span>Crafter</span>
-                                                     @if (settlement.CrafterReceived is { } received)
-                                                     {
-                                                         <strong>Final payment received</strong>
-                                                         <p>@received.Note</p>
-                                                         <small>@received.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(received.TermsVersion)</small>
-                                                     }
-                                                     else
-                                                     {
-                                                         <strong>Awaiting receipt</strong>
-                                                         <p>The participant brief shows the exact amount and accepted terms.</p>
-                                                     }
-                                                 </div>
-                                               </div>
-                                               @if (settlement.CommissionerSent != null)
-                                               {
-                                                   <details class="trade-orders-exception-disclosure">
-                                                     <summary>Retract commissioner confirmation</summary>
-                                                     <MudTextField @bind-Value="_commissionSettlementRetractionReason"
-                                                                   id="commission-settlement-retraction-reason"
-                                                                   Label="Retraction reason"
-                                                                   Variant="Variant.Outlined"
-                                                                   Margin="Margin.Dense"
-                                                                   Immediate="true"
-                                                                   MaxLength="500" />
-                                                     <MudButton Variant="Variant.Outlined"
-                                                                Color="Color.Warning"
-                                                                Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementRetractionReason))"
-                                                                OnClick="RetractCommissionSettlementAsync">
-                                                         Retract Confirmation
-                                                     </MudButton>
-                                                   </details>
-                                               }
-                                               <div class="@($"trade-orders-payment-clearance{(canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied ? " is-complete" : string.Empty)}")">
-                                                 <strong>
-                                                     @(canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied
-                                                         ? "Settlement complete"
-                                                         : "Settlement remains open")
-                                                 </strong>
-                                                 <span>
-                                                     @(canonicalCommission.SettlementState == CompanyCommissionSettlementState.Satisfied
-                                                         ? "Both parties confirmed the final payment against the accepted terms."
-                                                         : $"{settlement.ConfirmationCount} of 2 confirmations recorded.")
-                                                 </span>
-                                               </div>
-                                             }
-                                         </section>
-                                     }
                                 }
                                 @if (!HasCanonicalCommission)
                                 {

@@ -352,11 +352,11 @@ function formatStatus(brief) {
     if (brief.status === "Canceled") return "CANCELED";
     if (brief.closed) return "COMPLETED";
     if (brief.status === "Completed") return "DELIVERY ACCEPTED";
-    if (brief.status === "AwaitingDelivery") return "AWAITING DELIVERY";
-    if (brief.status === "InProgress") return "IN PROGRESS";
+    if (brief.status === "AwaitingDelivery") return "READY FOR DELIVERY";
+    if (brief.status === "InProgress") return "CRAFTING";
     if (!brief.isClaimed) return "OPEN - ONE CLAIM SLOT";
     if (brief.gates.identity === "Pending") return "CLAIMED - IDENTITY REVIEW";
-    return brief.clearedToWork ? "READY TO WORK" : "ASSIGNED - PRE-WORK";
+    return brief.clearedToWork ? "CRAFTING" : "ASSIGNED - PRE-WORK";
 }
 
 function renderNextStep() {
