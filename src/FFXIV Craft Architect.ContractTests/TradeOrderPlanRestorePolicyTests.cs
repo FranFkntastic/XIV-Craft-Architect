@@ -171,6 +171,29 @@ public sealed class TradeOrderPlanRestorePolicyTests
     }
 
     [Fact]
+    public async Task ExactReadStopsAsSoonAsItsRequestIsSupersededDuringAnAwait()
+    {
+        var attempts = 0;
+        var requestIsCurrent = true;
+
+        var result = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync<object>(
+            _ =>
+            {
+                attempts++;
+                requestIsCurrent = false;
+                return Task.FromResult<object?>(null);
+            },
+            ReadyStatus,
+            waitsForProfilePlanAuthority: true,
+            delay: NoDelay,
+            canContinue: () => requestIsCurrent);
+
+        Assert.Equal(TradeOrderPlanReadOutcome.RequestSuperseded, result.Outcome);
+        Assert.Equal(1, result.Attempts);
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
     public void MissingGeneratedPlanHasNoAutomaticRebuildPath()
     {
         var repositoryRoot = LocateRepositoryRoot();

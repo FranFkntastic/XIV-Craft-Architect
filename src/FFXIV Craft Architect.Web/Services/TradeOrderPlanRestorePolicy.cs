@@ -13,7 +13,8 @@ public enum TradeOrderPlanReadOutcome
 {
     Loaded,
     WaitForHostedPlan,
-    ExactPlanUnavailable
+    ExactPlanUnavailable,
+    RequestSuperseded
 }
 
 public sealed record TradeOrderPlanReadResult<T>(
@@ -93,7 +94,8 @@ public static class TradeOrderPlanRestorePolicy
         Func<ProfileSyncStatus> getSyncStatus,
         bool waitsForProfilePlanAuthority,
         CancellationToken cancellationToken = default,
-        Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
+        Func<bool>? canContinue = null)
         where T : class
     {
         ArgumentNullException.ThrowIfNull(loadExactPlan);
@@ -104,6 +106,11 @@ public static class TradeOrderPlanRestorePolicy
         for (var attempt = 1; attempt <= MaximumExactPlanReadAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (canContinue != null && !canContinue())
+            {
+                return Superseded<T>(attempt - 1);
+            }
+
             T? payload = null;
             try
             {
@@ -118,6 +125,11 @@ public static class TradeOrderPlanRestorePolicy
             catch (Exception ex)
             {
                 lastException = ex;
+            }
+
+            if (canContinue != null && !canContinue())
+            {
+                return Superseded<T>(attempt);
             }
 
             if (payload != null)
@@ -143,6 +155,11 @@ public static class TradeOrderPlanRestorePolicy
             if (attempt < MaximumExactPlanReadAttempts)
             {
                 await delay(GetRetryDelay(attempt), cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (canContinue != null && !canContinue())
+                {
+                    return Superseded<T>(attempt);
+                }
             }
         }
 
@@ -152,4 +169,8 @@ public static class TradeOrderPlanRestorePolicy
             MaximumExactPlanReadAttempts,
             lastException);
     }
+
+    private static TradeOrderPlanReadResult<T> Superseded<T>(int attempts)
+        where T : class =>
+        new(TradeOrderPlanReadOutcome.RequestSuperseded, null, attempts);
 }

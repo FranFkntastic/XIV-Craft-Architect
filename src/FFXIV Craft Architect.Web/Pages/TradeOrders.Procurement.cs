@@ -280,7 +280,8 @@ public partial class TradeOrders
                     _ => PlanPersistence.LoadPlanPayloadAsync(request.PlanId),
                     () => ProfileSync.CurrentStatus,
                     waitsForProfilePlanAuthority: order.CompanyCommission != null,
-                    cancellationToken: cancellation.Token);
+                    cancellationToken: cancellation.Token,
+                    canContinue: () => CanAdoptCurrentPlanRestoreRequest(request));
                 cancellation.Token.ThrowIfCancellationRequested();
                 if (!CanAdoptCurrentPlanRestoreRequest(request))
                 {
