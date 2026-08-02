@@ -220,6 +220,16 @@
   background: #3b341f;
 }
 
+.trade-orders-rail-group-title:focus-visible,
+.trade-orders-rail-order:focus-visible,
+.trade-orders-search-result:focus-visible,
+.trade-orders-procurement-filter:focus-visible,
+.trade-orders-timeline-filter:focus-visible,
+.trade-orders-timeline-visibility button:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 2px;
+}
+
 .trade-orders-rail-order.is-device-only {
   color: #bcbcbc;
   cursor: default;
@@ -1103,6 +1113,11 @@
 ::deep .trade-orders-procurement-route-actions button:focus-visible {
   color: #d8b13d;
   text-decoration: underline;
+}
+
+::deep .trade-orders-procurement-route-actions button:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 2px;
 }
 
 ::deep .trade-orders-procurement-select {

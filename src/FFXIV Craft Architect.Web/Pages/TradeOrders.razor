@@ -1651,14 +1651,16 @@
                                  <div class="trade-orders-timeline-composer">
                                      @if (HasCanonicalCommission)
                                      {
-                                         <div class="trade-orders-timeline-visibility">
+                                         <div class="trade-orders-timeline-visibility" role="group" aria-label="Choose timeline entry visibility">
                                              <button type="button"
                                                      class="@(_timelineComposerVisibility == CommissionTimelineVisibility.CompanyOnly ? "is-active" : string.Empty)"
+                                                     aria-pressed="@(_timelineComposerVisibility == CommissionTimelineVisibility.CompanyOnly)"
                                                      @onclick="@(() => _timelineComposerVisibility = CommissionTimelineVisibility.CompanyOnly)">
                                                  Company only
                                              </button>
                                              <button type="button"
                                                      class="@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared ? "is-active" : string.Empty)"
+                                                     aria-pressed="@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared)"
                                                      @onclick="@(() => _timelineComposerVisibility = CommissionTimelineVisibility.Shared)">
                                                  Share with crafter
                                              </button>
