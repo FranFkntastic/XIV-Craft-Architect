@@ -176,9 +176,20 @@ public partial class TradeOrders
         _ = InvokeAsync(ScheduleSelectedOrderPlanRestoration);
     }
 
+    private void OnWorkerProjectionChangedForPlanRestoration()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(ScheduleSelectedOrderPlanRestoration);
+    }
+
     private void ScheduleSelectedOrderPlanRestoration()
     {
         if (_isDisposed ||
+            IsPlanMutationTransactionRunning ||
             _activeOpsTab != ProcurementTabIndex ||
             _selectedOrder == null ||
             !HasLinkedCraftPlan(_selectedOrder) ||
@@ -190,7 +201,7 @@ public partial class TradeOrders
         _selectedOrderPlanRestoreRetryRequested = true;
         if (!_isLoadingSelectedOrderSupplyPlan)
         {
-            _ = InvokeAsync(RestoreSelectedOrderPlanAsync);
+            _ = InvokeAsync(() => RestoreSelectedOrderPlanAsync());
         }
     }
 
@@ -218,7 +229,8 @@ public partial class TradeOrders
 
         _selectedOrderPlanRestoreRetryRequested = false;
         var order = _selectedOrder;
-        if (order == null ||
+        if (IsPlanMutationTransactionRunning ||
+            order == null ||
             _activeOpsTab != ProcurementTabIndex ||
             !HasLinkedCraftPlan(order) ||
             GetCurrentLiveProcurementSnapshot() != null)
@@ -231,7 +243,8 @@ public partial class TradeOrders
             generation,
             order.Id,
             order.CraftPlanId!,
-            WorkerProjections.Shell.Revision);
+            WorkerProjections.Shell.Revision,
+            order.CraftPlanSavedAtUtc);
         using var cancellation = new CancellationTokenSource();
         var priorCancellation = Interlocked.Exchange(
             ref _selectedOrderPlanRestoreCancellation,
@@ -242,12 +255,6 @@ public partial class TradeOrders
         try
         {
             cancellation.Token.ThrowIfCancellationRequested();
-            if (!CanAdoptCurrentPlanRestoreRequest(request))
-            {
-                QueuePlanRestoreRetryIfCurrent(request);
-                return;
-            }
-
             _selectedOrderPlanRestoreError = null;
             if (!IsSelectedOrderLinkedPlanActive())
             {
@@ -263,9 +270,8 @@ public partial class TradeOrders
                     "Opening this order plan",
                     order.CraftPlanId);
                 cancellation.Token.ThrowIfCancellationRequested();
-                if (!CanAdoptCurrentPlanRestoreRequest(request))
+                if (!IsCurrentPlanRestoreRequest(request))
                 {
-                    QueuePlanRestoreRetryIfCurrent(request);
                     return;
                 }
                 if (!canReplaceActivePlan)
@@ -280,11 +286,10 @@ public partial class TradeOrders
                     () => ProfileSync.CurrentStatus,
                     waitsForProfilePlanAuthority: order.CompanyCommission != null,
                     cancellationToken: cancellation.Token,
-                    canContinue: () => CanAdoptCurrentPlanRestoreRequest(request));
+                    canContinue: () => IsCurrentPlanRestoreRequest(request));
                 cancellation.Token.ThrowIfCancellationRequested();
-                if (!CanAdoptCurrentPlanRestoreRequest(request))
+                if (!IsCurrentPlanRestoreRequest(request))
                 {
-                    QueuePlanRestoreRetryIfCurrent(request);
                     return;
                 }
 
@@ -292,59 +297,59 @@ public partial class TradeOrders
                 {
                     return;
                 }
-                if (read.Payload == null)
+                if (read.Payload == null ||
+                    !TradeOrderPlanRestorePolicy.IsExactSavedRevision(
+                        request,
+                        read.Payload))
                 {
                     _selectedOrderPlanRestoreError =
-                        "The exact saved craft plan is unavailable here. Try again; the order was left unchanged so its acquisition choices aren't replaced.";
+                        "The exact saved craft plan revision is unavailable here. The order was left unchanged so its acquisition choices aren't replaced.";
                     return;
                 }
 
-                // Worker mutation boundary: the immutable selection and Worker
-                // revision request must still own this adoption.
-                if (!CanAdoptCurrentPlanRestoreRequest(request))
-                {
-                    QueuePlanRestoreRetryIfCurrent(request);
-                    return;
-                }
-                await PlanLifecycle.ReplaceStoredPlanAsync(
+                var adoptedRequest = await AdoptExactOrderPlanAsync(
+                    request,
                     read.Payload,
-                    trackStoredPlanIdentity: true,
-                    derivation: PlanDerivationDispatch.Deferred,
-                    cancellationToken: cancellation.Token);
-                cancellation.Token.ThrowIfCancellationRequested();
+                    ProcurementTabIndex,
+                    cancellation.Token);
+                if (!adoptedRequest.HasValue)
+                {
+                    // A stale Worker may now contain a competing plan. Keep it
+                    // intact and wait for a later independent state change.
+                    _selectedOrderPlanRestoreRetryRequested = false;
+                    return;
+                }
+                request = adoptedRequest.Value;
+            }
+
+            const int maximumProjectionAttempts = 2;
+            for (var attempt = 1; attempt <= maximumProjectionAttempts; attempt++)
+            {
                 if (!IsCurrentPlanRestoreRequest(request) ||
-                    !string.Equals(
-                        WorkerProjections.Shell.PlanId,
-                        request.PlanId,
-                        StringComparison.Ordinal))
+                    !IsSelectedOrderLinkedPlanActive())
                 {
                     return;
                 }
 
-                request = request with { WorkerRevision = WorkerProjections.Shell.Revision };
-                if (!CanAdoptCurrentPlanRestoreRequest(request))
+                request = request with
                 {
-                    QueuePlanRestoreRetryIfCurrent(request);
+                    WorkerRevision = WorkerProjections.Shell.Revision
+                };
+                await EnsureLiveProcurementSnapshotAsync(
+                    cancellation.Token,
+                    () => CanAdoptCurrentPlanRestoreRequest(request));
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (GetCurrentLiveProcurementSnapshot() != null)
+                {
                     return;
+                }
+                if (!IsCurrentPlanRestoreRequest(request) ||
+                    WorkerProjections.Shell.Revision == request.WorkerRevision)
+                {
+                    break;
                 }
             }
 
-            // Component projection publication boundary: do not publish a
-            // response fetched for an abandoned order, tab, plan, or Worker.
-            if (!CanAdoptCurrentPlanRestoreRequest(request))
-            {
-                QueuePlanRestoreRetryIfCurrent(request);
-                return;
-            }
-            await EnsureLiveProcurementSnapshotAsync(
-                cancellation.Token,
-                () => CanAdoptCurrentPlanRestoreRequest(request));
-            cancellation.Token.ThrowIfCancellationRequested();
-            if (!CanAdoptCurrentPlanRestoreRequest(request))
-            {
-                QueuePlanRestoreRetryIfCurrent(request);
-                return;
-            }
             if (GetCurrentLiveProcurementSnapshot() == null)
             {
                 _selectedOrderPlanRestoreError =
@@ -353,6 +358,19 @@ public partial class TradeOrders
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
+        }
+        catch (WorkerSessionCommandRejectedException ex)
+            when (string.Equals(
+                      ex.RejectionCode,
+                      "stale-revision",
+                      StringComparison.Ordinal) &&
+                  IsCurrentPlanRestoreRequest(request))
+        {
+            // The rejected command already refreshed the Worker projection.
+            // Do not turn that self-induced Changed signal into a fresh retry
+            // budget. A later, independent Worker change may schedule another
+            // bounded restoration pass.
+            _selectedOrderPlanRestoreRetryRequested = false;
         }
         catch (Exception ex)
         {
@@ -389,7 +407,8 @@ public partial class TradeOrders
             _selectedOrder?.CraftPlanId,
             _activeOpsTab,
             requiredTab,
-            _isDisposed);
+            _isDisposed,
+            _selectedOrder?.CraftPlanSavedAtUtc);
 
     private bool CanAdoptCurrentPlanRequest(
         TradeOrderPlanRestoreRequest request,
@@ -402,21 +421,14 @@ public partial class TradeOrders
             _activeOpsTab,
             requiredTab,
             _isDisposed,
-            WorkerProjections.Shell.Revision);
+            WorkerProjections.Shell.Revision,
+            _selectedOrder?.CraftPlanSavedAtUtc);
 
     private bool IsCurrentPlanRestoreRequest(TradeOrderPlanRestoreRequest request) =>
         IsCurrentPlanRequest(request, ProcurementTabIndex);
 
     private bool CanAdoptCurrentPlanRestoreRequest(TradeOrderPlanRestoreRequest request) =>
         CanAdoptCurrentPlanRequest(request, ProcurementTabIndex);
-
-    private void QueuePlanRestoreRetryIfCurrent(TradeOrderPlanRestoreRequest request)
-    {
-        if (IsCurrentPlanRestoreRequest(request))
-        {
-            _selectedOrderPlanRestoreRetryRequested = true;
-        }
-    }
 
     private async Task EnsureLiveProcurementSnapshotAsync(
         CancellationToken cancellationToken = default,
@@ -1022,6 +1034,31 @@ public partial class TradeOrders
         AcquisitionSource source,
         bool showSuccess = true)
     {
+        if (_isChangingProcurementSource)
+        {
+            return false;
+        }
+
+        _isChangingProcurementSource = true;
+        try
+        {
+            return await ChangeProcurementRowSourceCoreAsync(
+                row,
+                source,
+                showSuccess);
+        }
+        finally
+        {
+            _isChangingProcurementSource = false;
+            ScheduleSelectedOrderPlanRestoration();
+        }
+    }
+
+    private async Task<bool> ChangeProcurementRowSourceCoreAsync(
+        TradeOrderProcurementRow row,
+        AcquisitionSource source,
+        bool showSuccess = true)
+    {
         if (_selectedOrder == null)
         {
             return false;
@@ -1100,32 +1137,35 @@ public partial class TradeOrders
             _commissionTermsRevisionRollbackPlan = rollbackSnapshot;
         }
 
-        await WorkerSession.MutateAcquisitionAsync(
-            new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null));
-        var savedAt = DateTime.UtcNow;
-        var pricingResult = await TradeOrderPricingWorkflow.RepriceActivePlanAsync(
-            _selectedOrder,
-            source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq
-                ? [row.ItemId]
-                : null);
-        var current = await WorkerSession.GetTradeProjectionAsync();
-        var orderToSave = pricingResult.UpdatedOrder ??
-            BuildFallbackOrderAfterSourceChange(_selectedOrder, current, savedAt);
-        var stored = await WorkerSession.ExportStoredPlanAsync(
-            planId,
-            planName,
-            includeSourcePlanIdentity: true);
-        if (stored == null)
+        TradeOrder orderToSave;
+        TradeOrderPricingWorkflowResult pricingResult;
+        try
         {
-            await RestoreStagedProcurementPlanAsync(rollbackSnapshot);
-            Snackbar.Add("The repriced craft plan could not be captured.", Severity.Error);
-            return false;
+            var stagedOrder = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+            pricingResult = await TradeOrderPricingWorkflow.ReviseActiveAcquisitionAsync(
+                stagedOrder,
+                new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null),
+                source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq
+                    ? [row.ItemId]
+                    : null);
+            if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
+            {
+                if (pricingResult.ActivePlanFence is { } failedFence)
+                {
+                    await RestoreStagedProcurementPlanAsync(
+                        rollbackSnapshot,
+                        failedFence);
+                }
+                Snackbar.Add(pricingResult.Message, ToSeverity(pricingResult.MessageLevel));
+                return false;
+            }
+            orderToSave = pricingResult.UpdatedOrder;
         }
-        orderToSave.CraftPlanSavedAtUtc = stored.SavedAt;
-        if (!await PlanPersistence.SaveSnapshotAsync(stored))
+        catch (Exception ex)
         {
-            await RestoreStagedProcurementPlanAsync(rollbackSnapshot);
-            Snackbar.Add("The exact craft plan could not be saved, so the acquisition change was not committed.", Severity.Error);
+            Snackbar.Add(
+                $"The acquisition change could not be staged safely, and its Worker ownership could not be proven for rollback: {ex.Message}",
+                Severity.Error);
             return false;
         }
 
@@ -1148,7 +1188,12 @@ public partial class TradeOrders
             {
                 return false;
             }
-            await RestoreStagedProcurementPlanAsync(rollbackSnapshot);
+            if (pricingResult.ActivePlanFence is { } failedSaveFence)
+            {
+                await RestoreStagedProcurementPlanAsync(
+                    rollbackSnapshot,
+                    failedSaveFence);
+            }
             Snackbar.Add("The acquisition change was not committed.", Severity.Error);
             return false;
         }
@@ -1170,13 +1215,41 @@ public partial class TradeOrders
         return true;
     }
 
-    private async Task<bool> RestoreStagedProcurementPlanAsync(StoredPlan rollbackSnapshot)
+    private WorkerPlanOwnershipFence? CaptureCurrentWorkerPlanFence(
+        string? expectedPlanId)
     {
+        var shell = WorkerProjections.Shell;
+        return string.IsNullOrWhiteSpace(expectedPlanId) ||
+               !string.Equals(
+                   shell.PlanId,
+                   expectedPlanId,
+                   StringComparison.Ordinal)
+            ? null
+            : new WorkerPlanOwnershipFence(expectedPlanId, shell.Revision);
+    }
+
+    private async Task<bool> RestoreStagedProcurementPlanAsync(
+        StoredPlan rollbackSnapshot,
+        WorkerPlanOwnershipFence stagedFence)
+    {
+        if (!string.Equals(
+                WorkerProjections.Shell.PlanId,
+                stagedFence.PlanId,
+                StringComparison.Ordinal) ||
+            WorkerProjections.Shell.Revision != stagedFence.Revision)
+        {
+            Snackbar.Add(
+                "The active plan changed elsewhere, so this tab preserved it instead of applying an obsolete rollback.",
+                Severity.Info);
+            return false;
+        }
+
         try
         {
             await PlanLifecycle.ReplaceStoredPlanAsync(
                 rollbackSnapshot,
-                trackStoredPlanIdentity: true);
+                trackStoredPlanIdentity: true,
+                expectedWorkerRevision: stagedFence.Revision);
             if (!await PlanPersistence.SaveSnapshotAsync(rollbackSnapshot))
             {
                 Snackbar.Add(
@@ -1196,31 +1269,6 @@ public partial class TradeOrders
         }
     }
 
-    private TradeOrder BuildFallbackOrderAfterSourceChange(
-        TradeOrder order,
-        WorkerTradeProjection? source,
-        DateTime savedAt)
-    {
-        var outputs = GetOrderRootItems(order)
-            .Select(item => new TradeRequestedOrderOutput(
-                item.ItemId,
-                item.Name,
-                item.Quantity,
-                item.MustBeHq,
-                item.EstimatedSaleValue))
-            .ToArray();
-        var orderToSave = TradeOrderWorkflow.CopyOrder(order);
-        orderToSave.SourceSnapshot.Materials = TradeRequestedOrderWorkflow.BuildMaterialSnapshots(
-            source?.ActiveProcurementItems ?? Array.Empty<MaterialAggregate>(),
-            outputs);
-        orderToSave.SourceSnapshot.Warnings = AppendDistinctWarning(
-            orderToSave.SourceSnapshot.Warnings,
-            "Acquisition source changed, but automatic repricing did not complete. Reprice the order before using payment totals.");
-        orderToSave.SourceSnapshot.ImportedAtUtc = savedAt;
-        orderToSave.UpdatedAtUtc = savedAt;
-        return orderToSave;
-    }
-
     private static Severity ToSeverity(RecipePlannerCommandMessageLevel level)
     {
         return level switch
@@ -1230,17 +1278,6 @@ public partial class TradeOrders
             RecipePlannerCommandMessageLevel.Error => Severity.Error,
             _ => Severity.Warning
         };
-    }
-
-    private static IReadOnlyList<string> AppendDistinctWarning(
-        IReadOnlyList<string>? warnings,
-        string warning)
-    {
-        return (warnings ?? Array.Empty<string>())
-            .Append(warning)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
     }
 
 }

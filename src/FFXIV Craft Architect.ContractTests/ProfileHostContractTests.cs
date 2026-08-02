@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using Microsoft.AspNetCore.Hosting;
@@ -220,6 +221,75 @@ public sealed class ProfileHostContractTests
             Assert.True(committed.Success);
             Assert.True(conflict.Conflict);
             Assert.False(conflictObservation.Changed.IsCompleted);
+        }
+        finally
+        {
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task TradeOrder_NewGeneratedPointerRequiresExactSealedSnapshot()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"ca-order-plan-{Guid.NewGuid():N}.db");
+        try
+        {
+            var store = new SqliteProfileHostStore(
+                new ProfileHostOptions { DatabasePath = databasePath });
+            var profile = await store.CreateProfileAsync("Order Plan Profile", CancellationToken.None);
+            var orderId = Guid.NewGuid();
+            var savedAt = new DateTime(2026, 8, 2, 6, 30, 0, DateTimeKind.Utc);
+            var planId = Guid.NewGuid().ToString("D");
+            var order = new TradeOrder
+            {
+                Id = orderId,
+                CompanyProfileId = Guid.NewGuid(),
+                Title = "Cobalt Joint Plate Commission",
+                CraftPlanId = planId,
+                CraftPlanSavedAtUtc = savedAt,
+                CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated
+            };
+            var orderPayload = JsonSerializer.Serialize(order, ProfileSyncJson.CreateOptions());
+            Task<ProfileSyncPutResponse> Put(string collection, string id, string payload, long revision = 0) =>
+                store.PutObjectAsync(profile.ProfileId, collection, id, payload, revision, CancellationToken.None);
+            Task<ProfileSyncPutResponse> Delete(string collection, string id, long revision) =>
+                store.DeleteObjectAsync(profile.ProfileId, collection, id, revision, CancellationToken.None);
+
+            var missingPlan = await Put(ProfileSyncCollections.TradeOrders, orderId.ToString("D"), orderPayload);
+            var plan = new ProfileSyncPlanSnapshot
+            {
+                Id = planId,
+                SavedAt = savedAt,
+                LinkedOrderId = orderId,
+                PlanJson = "{\"recipe\":true}"
+            };
+            var planPayload = ProfileSyncPlanPayloadCodec.Serialize(plan);
+            var sealedPlan = await Put(ProfileSyncCollections.Plans, planId, planPayload);
+            var identicalPlan = await Put(ProfileSyncCollections.Plans, planId, planPayload);
+            plan.DataCenter = "Primal";
+            var overwrittenPlan = await Put(
+                ProfileSyncCollections.Plans, planId, ProfileSyncPlanPayloadCodec.Serialize(plan), sealedPlan.Object!.Revision);
+            var nonCanonicalOrderId = await Put(
+                ProfileSyncCollections.TradeOrders, orderId.ToString("D").ToUpperInvariant(), orderPayload);
+            var accepted = await Put(ProfileSyncCollections.TradeOrders, orderId.ToString("D"), orderPayload);
+            var protectedDelete = await Delete(ProfileSyncCollections.Plans, planId, sealedPlan.Object.Revision);
+            var deletedOrder = await Delete(ProfileSyncCollections.TradeOrders, orderId.ToString("D"), accepted.Object!.Revision);
+            var deletedPlan = await Delete(ProfileSyncCollections.Plans, planId, sealedPlan.Object.Revision);
+
+            Assert.True(missingPlan.Conflict);
+            Assert.Equal("linked_plan_invalid", missingPlan.ErrorCode);
+            Assert.True(sealedPlan.Success);
+            Assert.Equal(sealedPlan.Object.Revision, identicalPlan.Object!.Revision);
+            Assert.Equal("immutable_plan_snapshot", overwrittenPlan.ErrorCode);
+            Assert.True(nonCanonicalOrderId.Conflict);
+            Assert.Equal("linked_plan_invalid", nonCanonicalOrderId.ErrorCode);
+            Assert.True(accepted.Success);
+            Assert.True(protectedDelete.Conflict);
+            Assert.True(deletedOrder.Success);
+            Assert.True(deletedPlan.Success);
         }
         finally
         {

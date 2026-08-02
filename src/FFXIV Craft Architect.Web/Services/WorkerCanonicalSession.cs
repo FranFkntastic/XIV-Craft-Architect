@@ -21,6 +21,7 @@ internal sealed class WorkerCanonicalSession
     private string? _legacyProcurementRouteJson;
     private CraftSessionVersionStamp? _activeProcurementItemsVersion;
     private IReadOnlyList<MaterialAggregate>? _activeProcurementItems;
+    private LinkedPlanRevisionIdentity? _linkedPlanRevision;
 
     public CraftSessionState Session => _session;
 
@@ -32,6 +33,14 @@ internal sealed class WorkerCanonicalSession
         _session = CreateSession();
         _activeProcurementItemsVersion = null;
         _activeProcurementItems = null;
+        _linkedPlanRevision = storedPlan?.LinkedOrderId.HasValue == true
+            ? new LinkedPlanRevisionIdentity(
+                storedPlan.Id,
+                storedPlan.CreatedAt,
+                storedPlan.ModifiedAt,
+                storedPlan.SavedAt,
+                storedPlan.LinkedOrderId.Value)
+            : null;
         _legacyMarketAnalysisScopeSnapshotJson = storedPlan?.MarketAnalysisScopeSnapshotJson;
         _legacyProcurementRouteJson = storedPlan?.ProcurementRouteJson;
         if (storedPlan is null)
@@ -100,13 +109,17 @@ internal sealed class WorkerCanonicalSession
             includeLegacyMarketAnalysisFields: false,
             borrowCanonicalState: true,
             compressMarketIntelligence: true);
+        var linkedRevision = _linkedPlanRevision is { } retained &&
+            string.Equals(retained.PlanId, planId, StringComparison.Ordinal)
+                ? retained
+                : null;
         return new StoredPlan
         {
             Id = snapshot.Id,
             Name = snapshot.Name,
-            CreatedAt = snapshot.CreatedAt,
-            ModifiedAt = snapshot.ModifiedAt,
-            SavedAt = snapshot.SavedAt,
+            CreatedAt = linkedRevision?.CreatedAt ?? snapshot.CreatedAt,
+            ModifiedAt = linkedRevision?.ModifiedAt ?? snapshot.ModifiedAt,
+            SavedAt = linkedRevision?.SavedAt ?? snapshot.SavedAt,
             DataCenter = snapshot.DataCenter,
             ProjectItems = snapshot.ProjectItems.Select(item => new StoredProjectItem
             {
@@ -128,7 +141,8 @@ internal sealed class WorkerCanonicalSession
             SavedRecommendationMode = snapshot.SavedRecommendationMode,
             SavedMarketAnalysisLens = snapshot.SavedMarketAnalysisLens,
             SourcePlanId = snapshot.SourcePlanId,
-            SourcePlanName = snapshot.SourcePlanName
+            SourcePlanName = snapshot.SourcePlanName,
+            LinkedOrderId = linkedRevision?.LinkedOrderId
         };
     }
 
@@ -281,6 +295,7 @@ internal sealed class WorkerCanonicalSession
                     "stored procurement route restored");
             }
         }
+
         catch (JsonException)
         {
             _legacyProcurementRouteJson = null;
@@ -318,6 +333,13 @@ internal sealed class WorkerCanonicalSession
 
     private static CraftSessionState CreateSession() =>
         new(new ImmediateCraftSessionDispatcher());
+
+    private sealed record LinkedPlanRevisionIdentity(
+        string PlanId,
+        DateTime CreatedAt,
+        DateTime ModifiedAt,
+        DateTime SavedAt,
+        Guid LinkedOrderId);
 }
 
 internal sealed record WorkerCanonicalSessionRestoreResult(

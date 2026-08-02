@@ -28,6 +28,23 @@ public sealed record WorkerSessionResultEnvelope(
     JsonElement Projection,
     WorkerSessionDurablePatch? DurableRepairPatch = null);
 
+public sealed class WorkerSessionCommandRejectedException : InvalidOperationException
+{
+    public WorkerSessionCommandRejectedException(
+        string? rejectionCode,
+        long currentRevision,
+        string message)
+        : base(message)
+    {
+        RejectionCode = rejectionCode;
+        CurrentRevision = currentRevision;
+    }
+
+    public string? RejectionCode { get; }
+
+    public long CurrentRevision { get; }
+}
+
 public sealed record WorkerSessionRestorePayload(
     long Revision,
     StoredPlan? StoredPlan,

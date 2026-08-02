@@ -108,6 +108,8 @@ public partial class TradeOrders
 
     private async Task<bool> ReconcileLatestCanonicalPlanAsync(TradeOrder canonicalOrder)
     {
+        var rollbackFence = CaptureCurrentWorkerPlanFence(
+            _commissionTermsRevisionWorkPackage?.CraftPlanId);
         if (string.IsNullOrWhiteSpace(canonicalOrder.CraftPlanId))
         {
             if (string.IsNullOrWhiteSpace(_commissionTermsRevisionWorkPackage?.CraftPlanId))
@@ -131,7 +133,21 @@ public partial class TradeOrders
             canonicalOrder,
             ownerRevision.Value,
             "discarded");
-        return latestPlan != null && await RestoreStagedProcurementPlanAsync(latestPlan);
+        if (latestPlan == null)
+        {
+            return false;
+        }
+        if (!rollbackFence.HasValue)
+        {
+            Snackbar.Add(
+                "The active plan changed while the latest terms were loading, so it was preserved instead of being discarded.",
+                Severity.Info);
+            return false;
+        }
+
+        return await RestoreStagedProcurementPlanAsync(
+            latestPlan,
+            rollbackFence.Value);
     }
 
     private async Task<StoredPlan?> ReadLatestCanonicalPlanAsync(
@@ -174,9 +190,16 @@ public partial class TradeOrders
             return null;
         }
 
+        var exactRevision = new TradeOrderPlanRestoreRequest(
+            Generation: 0,
+            OrderId: orderId,
+            PlanId: planId,
+            WorkerRevision: 0,
+            PlanSavedAtUtc: planSavedAtUtc);
         if (read.Payload == null ||
-            !string.Equals(read.Payload.Id, planId, StringComparison.Ordinal) ||
-            read.Payload.SavedAt.ToUniversalTime() != planSavedAtUtc.Value.ToUniversalTime())
+            !TradeOrderPlanRestorePolicy.IsExactSavedRevision(
+                exactRevision,
+                read.Payload))
         {
             if (read.Outcome != TradeOrderPlanReadOutcome.RequestSuperseded)
             {

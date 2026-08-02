@@ -261,23 +261,17 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
                 planName,
                 includeSourcePlanIdentity),
             cancellationToken);
-        if (string.Equals(result.RejectionCode, "stale-revision", StringComparison.Ordinal))
+        if (!result.Accepted)
         {
             await RefreshAfterConflictAsync(result, cancellationToken);
-            result = await _engineHost.ExportSessionAsync(
-                _projections.Shell.Revision,
-                new WorkerSessionExportRequest(
-                    planId,
-                    planName,
-                    includeSourcePlanIdentity),
-                cancellationToken);
+            throw CreateConflict(result);
         }
-
         var export = result.Projection.Deserialize<WorkerSessionExportProjection>(
             EngineJsonSerializerOptions.CreateWire());
-        if (!result.Accepted || export is null)
+        if (export is null)
         {
-            throw CreateConflict(result);
+            throw new InvalidOperationException(
+                "The Worker did not publish a valid stored-plan snapshot.");
         }
 
         return export.StoredPlan;
@@ -287,12 +281,14 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         StoredPlan storedPlan,
         bool trackStoredPlanIdentity,
         CancellationToken cancellationToken = default,
-        Guid? operationId = null) =>
+        Guid? operationId = null,
+        long? expectedRevision = null) =>
         await ReplaceStoredPlanCoreAsync(
             storedPlan,
             trackStoredPlanIdentity,
             cancellationToken,
-            operationId);
+            operationId,
+            expectedRevision);
 
     public async Task ClearSessionAsync(
         CancellationToken cancellationToken = default) =>
@@ -300,16 +296,18 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             storedPlan: null,
             trackStoredPlanIdentity: false,
             cancellationToken,
-            operationId: null);
+            operationId: null,
+            expectedRevision: null);
 
     private async Task ReplaceStoredPlanCoreAsync(
         StoredPlan? storedPlan,
         bool trackStoredPlanIdentity,
         CancellationToken cancellationToken,
-        Guid? operationId)
+        Guid? operationId,
+        long? expectedRevision)
     {
         var result = await _engineHost.ReplaceSessionAsync(
-            _projections.Shell.Revision,
+            expectedRevision ?? _projections.Shell.Revision,
             storedPlan,
             trackStoredPlanIdentity,
             cancellationToken,
@@ -618,20 +616,14 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public async Task<WorkerRecipePlannerProjection> MutateAcquisitionAsync(
         WorkerAcquisitionMutation mutation,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null)
     {
         var result = await _engineHost.MutateAcquisitionAsync(
             _projections.Shell.Revision,
             mutation,
-            cancellationToken);
-        if (string.Equals(result.RejectionCode, "stale-revision", StringComparison.Ordinal))
-        {
-            await RefreshAfterConflictAsync(result, cancellationToken);
-            result = await _engineHost.MutateAcquisitionAsync(
-                _projections.Shell.Revision,
-                mutation,
-                cancellationToken);
-        }
+            cancellationToken,
+            operationId);
 
         if (!_projections.TryPublishMutation<WorkerRecipePlannerProjection>(
                 result,
@@ -1390,9 +1382,11 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         }
     }
 
-    private static InvalidOperationException CreateConflict(
+    private static WorkerSessionCommandRejectedException CreateConflict(
         WorkerSessionResultEnvelope result) =>
         new(
+            result.RejectionCode,
+            result.Revision,
             result.Message ??
             "The plan changed before this edit was accepted. The current Worker projection has been restored.");
 

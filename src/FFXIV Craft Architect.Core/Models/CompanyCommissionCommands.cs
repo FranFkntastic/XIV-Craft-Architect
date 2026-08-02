@@ -41,7 +41,8 @@ public sealed record CompanyCommissionDraftWorkPackage(
 public sealed record AmendCompanyCommissionTermsCommand(
     CompanyCommissionCommandContext Context,
     CompanyCommissionTermsVersion Terms,
-    string Reason) : ICompanyCommissionCompanyCommand;
+    string Reason,
+    CompanyCommissionDraftWorkPackage? WorkPackage = null) : ICompanyCommissionCompanyCommand;
 
 public sealed record OpenCompanyCommissionCommand(
     CompanyCommissionCommandContext Context) : ICompanyCommissionCompanyCommand;

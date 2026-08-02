@@ -454,23 +454,17 @@ public static class TradeOrderWorkflow
     }
 
     public static TradeOrderCraftPlanLinkDraft CreateGeneratedCraftPlanLinkDraft(
-        TradeOrder order,
-        bool replaceExistingPlan)
+        TradeOrder order)
     {
         ArgumentNullException.ThrowIfNull(order);
 
         var previousPlanId = string.IsNullOrWhiteSpace(order.CraftPlanId)
             ? null
             : order.CraftPlanId;
-        var canReuseExistingPlan =
-            replaceExistingPlan &&
-            order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated &&
-            !string.IsNullOrWhiteSpace(previousPlanId);
         return new TradeOrderCraftPlanLinkDraft(
-            canReuseExistingPlan ? previousPlanId! : Guid.NewGuid().ToString("D"),
+            Guid.NewGuid().ToString("D"),
             CreateGeneratedCraftPlanName(order),
-            canReuseExistingPlan,
-            PreviousPlanId: replaceExistingPlan && !canReuseExistingPlan ? previousPlanId : null);
+            PreviousPlanId: previousPlanId);
     }
 
     public static TradeOrderCraftPlanReplacementAssessment AssessGeneratedCraftPlanReplacement(TradeOrder order)
@@ -625,7 +619,6 @@ public sealed record TradeOrderProcurementEvidenceState(int MaterialCount, int P
 public sealed record TradeOrderCraftPlanLinkDraft(
     string PlanId,
     string PlanName,
-    bool ReusesExistingPlan,
     string? PreviousPlanId);
 
 public sealed record TradeOrderProcurementRow(

@@ -232,13 +232,15 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
     public Task<WorkerSessionResultEnvelope> MutateAcquisitionAsync(
         long expectedRevision,
         WorkerAcquisitionMutation mutation,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.AcquisitionMutation,
             expectedRevision,
             mutation,
             EngineCommandPriority.Interactive,
-            cancellationToken);
+            cancellationToken,
+            operationId);
 
     public Task<WorkerSessionResultEnvelope> GetMarketProjectionAsync(
         long expectedRevision,

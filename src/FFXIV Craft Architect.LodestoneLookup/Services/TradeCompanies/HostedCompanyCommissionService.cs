@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
@@ -28,6 +29,7 @@ public interface ICompanyCommissionPostCommitSink
 
 public sealed class HostedCompanyCommissionService(
     ProfileHostedTradeCompanyService companies,
+    SqliteProfileHostStore profileHost,
     TimeProvider timeProvider,
     IEnumerable<ICompanyCommissionPostCommitSink> postCommitSinks,
     ILogger<HostedCompanyCommissionService> logger)
@@ -405,6 +407,16 @@ public sealed class HostedCompanyCommissionService(
                 ErrorMessage: "The hosted commission or company changed before the command was applied.");
         }
 
+        var linkedPlanValidation = await ValidateLinkedPlanCommandAsync(
+            access,
+            snapshot.Order,
+            command,
+            cancellationToken);
+        if (linkedPlanValidation != null)
+        {
+            return Rejected("linked_plan_invalid", linkedPlanValidation, snapshot.Order);
+        }
+
         CompanyCommissionDomainTransition application;
         try
         {
@@ -655,12 +667,78 @@ public sealed class HostedCompanyCommissionService(
             context.CommandId == Guid.Empty ||
             context.ExpectedObjectRevision.Value <= 0 ||
             context.ExpectedCompanyRevision.Value <= 0 ||
-            context.ProtocolVersion != CompanyCommissionProtocol.Version1)
+            !CompanyCommissionProtocol.IsSupportedOwnerCommandVersion(context.ProtocolVersion))
         {
             return "The command identity, revisions, or protocol are invalid.";
         }
 
         return null;
+    }
+
+    private async Task<string?> ValidateLinkedPlanCommandAsync(
+        TradeCompanyAccessContext access,
+        TradeOrder current,
+        ICompanyCommissionCommand command,
+        CancellationToken cancellationToken)
+    {
+        CompanyCommissionDraftWorkPackage? workPackage = command switch
+        {
+            AmendCompanyCommissionTermsCommand amend => amend.WorkPackage,
+            UpdateCompanyCommissionDraftCommand update => update.WorkPackage,
+            _ => null
+        };
+        if (command is AmendCompanyCommissionTermsCommand &&
+            command.Context.ProtocolVersion == CompanyCommissionProtocol.Version2 &&
+            workPackage == null)
+        {
+            return "Protocol v2 terms revisions require the complete work package.";
+        }
+        if (workPackage == null)
+        {
+            return null;
+        }
+
+        var changesLinkedPlan =
+            !string.Equals(current.CraftPlanId, workPackage.CraftPlanId, StringComparison.Ordinal) ||
+            current.CraftPlanSavedAtUtc != workPackage.CraftPlanSavedAtUtc ||
+            current.CraftPlanLinkKind != workPackage.CraftPlanLinkKind;
+        if (!changesLinkedPlan)
+        {
+            return null;
+        }
+        if (command.Context.ProtocolVersion != CompanyCommissionProtocol.Version2)
+        {
+            return "Changing a commission's linked plan requires protocol v2.";
+        }
+        if (workPackage.CraftPlanLinkKind != TradeOrderCraftPlanLinkKind.OrderGenerated ||
+            string.IsNullOrWhiteSpace(workPackage.CraftPlanId) ||
+            !workPackage.CraftPlanSavedAtUtc.HasValue)
+        {
+            return "The revised commission must reference an exact generated plan snapshot.";
+        }
+
+        var profileId = access.HostProfileId?.ToString("D");
+        if (string.IsNullOrWhiteSpace(profileId))
+        {
+            return "The commission is not bound to a hosted profile.";
+        }
+        var hostedPlan = await profileHost.LoadObjectAsync(
+            profileId,
+            ProfileSyncCollections.Plans,
+            workPackage.CraftPlanId,
+            cancellationToken);
+        if (hostedPlan is not { Deleted: false })
+        {
+            return "The exact linked plan snapshot is not present in this hosted profile.";
+        }
+
+        var snapshot = ProfileSyncPlanPayloadCodec.Deserialize(
+            hostedPlan.PayloadJson,
+            workPackage.CraftPlanId);
+        return snapshot.LinkedOrderId == current.Id &&
+               snapshot.SavedAt == workPackage.CraftPlanSavedAtUtc.Value
+            ? null
+            : "The hosted plan snapshot does not match this order and saved revision.";
     }
 
     private static CompanyCommissionMutationResult? ResolveReplay(

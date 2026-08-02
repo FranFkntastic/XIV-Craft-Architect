@@ -195,8 +195,19 @@ public static class CompanyCommissionCommandWorkflow
             CreatedBy = actor,
             ChangeSummary = command.Reason.Trim()
         };
+        var updated = Copy(source);
+        if (command.WorkPackage is { } workPackage)
+        {
+            RequireDraftWorkPackageMatchesTerms(workPackage, terms);
+            updated.SourceSnapshot = TradeOrderWorkflow.CopySourceSnapshot(
+                workPackage.SourceSnapshot);
+            updated.CraftPlanId = workPackage.CraftPlanId;
+            updated.CraftPlanName = workPackage.CraftPlanName;
+            updated.CraftPlanSavedAtUtc = workPackage.CraftPlanSavedAtUtc;
+            updated.CraftPlanLinkKind = workPackage.CraftPlanLinkKind;
+        }
         return Transition(
-            source,
+            updated,
             commission with
             {
                 CurrentTermsVersion = terms.Version,
