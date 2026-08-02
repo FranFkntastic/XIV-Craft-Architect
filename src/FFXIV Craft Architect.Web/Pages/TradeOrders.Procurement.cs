@@ -149,8 +149,6 @@ public partial class TradeOrders
             : null;
     }
 
-    private Task OpenSupplyPlanAsync() => SetActiveOpsTabAsync(ProcurementTabIndex);
-
     private async Task SetActiveOpsTabAsync(int tabIndex)
     {
         if (tabIndex != _activeOpsTab)

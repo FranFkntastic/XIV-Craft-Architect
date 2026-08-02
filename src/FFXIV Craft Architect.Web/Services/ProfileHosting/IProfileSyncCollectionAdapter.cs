@@ -9,3 +9,12 @@ public interface IProfileSyncCollectionAdapter
     Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct);
     Task DeleteLocalObjectAsync(string objectId, CancellationToken ct);
 }
+
+public interface IHostedOrderProfileSyncAdapter
+{
+    Task ApplyRemoteDeletionAsync(
+        Guid orderId,
+        Guid companyProfileId,
+        long revision,
+        CancellationToken ct);
+}

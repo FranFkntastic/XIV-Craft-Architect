@@ -1,4 +1,5 @@
 .trade-order-overview {
+  container-type: inline-size;
   display: grid;
   align-content: start;
   gap: 12px;
@@ -185,6 +186,11 @@ button.trade-order-overview__step:focus-visible {
   border-color: #8d7939;
 }
 
+button.trade-order-overview__step:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 2px;
+}
+
 .trade-order-overview__step.is-complete {
   border-top-color: #4f8c58;
   background: #1e3021;
@@ -210,7 +216,7 @@ button.trade-order-overview__step:focus-visible {
   font-size: .72rem;
 }
 
-@media (max-width: 980px) {
+@container (max-width: 620px) {
   .trade-order-overview__header,
   .trade-order-overview__attention,
   .trade-order-overview__crafter-update,
