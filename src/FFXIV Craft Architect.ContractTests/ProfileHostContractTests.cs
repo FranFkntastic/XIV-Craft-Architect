@@ -166,7 +166,7 @@ public sealed class ProfileHostContractTests
         {
             var line = await reader.ReadLineAsync(timeout.Token);
             Assert.NotNull(line);
-            if (line.Length > 0)
+            if (line.Length > 0 && !line.StartsWith(':'))
             {
                 lines.Add(line);
             }
