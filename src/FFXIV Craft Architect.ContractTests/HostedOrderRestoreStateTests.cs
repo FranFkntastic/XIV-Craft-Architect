@@ -16,7 +16,8 @@ public sealed class HostedOrderRestoreStateTests
     [InlineData(RestoreScenario.UnverifiableFailure)]
     [InlineData(RestoreScenario.OfflineReconnect)]
     [InlineData(RestoreScenario.ScopeChange)]
-    public void RestoreStateExposesOnlyTruthfulDataForEachLifecycle(
+    [InlineData(RestoreScenario.PlanRecovery)]
+    public async Task RestoreStateExposesOnlyTruthfulDataForEachLifecycle(
         RestoreScenario scenario)
     {
         switch (scenario)
@@ -44,6 +45,9 @@ public sealed class HostedOrderRestoreStateTests
                 break;
             case RestoreScenario.ScopeChange:
                 ScopeChangeRemainsExplicitUntilAuthorityIsReady();
+                break;
+            case RestoreScenario.PlanRecovery:
+                await TradeOrderPlanRestoreContractScenarios.AssertAllAsync();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
@@ -192,6 +196,7 @@ public sealed class HostedOrderRestoreStateTests
         IncompatibleFailure,
         UnverifiableFailure,
         OfflineReconnect,
-        ScopeChange
+        ScopeChange,
+        PlanRecovery
     }
 }

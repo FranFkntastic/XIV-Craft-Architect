@@ -3,19 +3,42 @@ using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
-public sealed class TradeOrderPlanRestorePolicyTests
+internal static class TradeOrderPlanRestoreContractScenarios
 {
     private static readonly Guid OrderA = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid OrderB = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
-    [Theory]
-    [InlineData(CurrentRequestScenario.Current, true)]
-    [InlineData(CurrentRequestScenario.SelectionChanged, false)]
-    [InlineData(CurrentRequestScenario.PlanChanged, false)]
-    [InlineData(CurrentRequestScenario.TabChanged, false)]
-    [InlineData(CurrentRequestScenario.Disposed, false)]
-    [InlineData(CurrentRequestScenario.NewerRequest, false)]
-    public void AdoptionRequiresTheOriginalSelectionAndPlanIntent(
+    public static async Task AssertAllAsync()
+    {
+        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.Current, true);
+        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.SelectionChanged, false);
+        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.PlanChanged, false);
+        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.TabChanged, false);
+        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.Disposed, false);
+        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.NewerRequest, false);
+        WorkerChangeBeforeAdoptionInvalidatesTheRequest();
+        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
+            true, ProfileSyncStage.Inactive, false, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead);
+        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
+            true, ProfileSyncStage.ApplyingChanges, true, 1, TradeOrderPlanMissingDisposition.WaitForHostedPlan);
+        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
+            true, ProfileSyncStage.Ready, true, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead);
+        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
+            true, ProfileSyncStage.Failed, true, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead);
+        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
+            false, ProfileSyncStage.Inactive, false, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead);
+        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
+            true, ProfileSyncStage.Ready, true, 3, TradeOrderPlanMissingDisposition.ExactPlanUnavailable);
+        await ExactReadAdoptsPayloadThatArrivesOnThirdAttempt();
+        await TransientReadExceptionsAreBoundedAndCanRecover();
+        await TransientReadExceptionsStopAfterThreeAttempts();
+        await MissingHostedPlanWaitsForNextSyncStatusWithoutPolling();
+        await ExactReadStopsAsSoonAsItsRequestIsSupersededDuringAnAwait();
+        MissingGeneratedPlanHasNoAutomaticRebuildPath();
+        PlanPanePreservesAnUnnamedActiveWorkerPlanBeforeAnyAdoption();
+    }
+
+    private static void AdoptionRequiresTheOriginalSelectionAndPlanIntent(
         CurrentRequestScenario scenario,
         bool expected)
     {
@@ -42,8 +65,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
                 currentWorkerRevision: 12));
     }
 
-    [Fact]
-    public void WorkerChangeBeforeAdoptionInvalidatesTheRequest()
+    private static void WorkerChangeBeforeAdoptionInvalidatesTheRequest()
     {
         var request = new TradeOrderPlanRestoreRequest(7, OrderA, "plan-a", 12);
 
@@ -58,14 +80,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
             currentWorkerRevision: 13));
     }
 
-    [Theory]
-    [InlineData(true, ProfileSyncStage.Inactive, false, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead)]
-    [InlineData(true, ProfileSyncStage.ApplyingChanges, true, 1, TradeOrderPlanMissingDisposition.WaitForHostedPlan)]
-    [InlineData(true, ProfileSyncStage.Ready, true, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead)]
-    [InlineData(true, ProfileSyncStage.Failed, true, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead)]
-    [InlineData(false, ProfileSyncStage.Inactive, false, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead)]
-    [InlineData(true, ProfileSyncStage.Ready, true, 3, TradeOrderPlanMissingDisposition.ExactPlanUnavailable)]
-    public void MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
+    private static void MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
         bool waitsForProfilePlanAuthority,
         ProfileSyncStage stage,
         bool isConnected,
@@ -92,8 +107,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
                 attempt));
     }
 
-    [Fact]
-    public async Task ExactReadAdoptsPayloadThatArrivesOnThirdAttempt()
+    private static async Task ExactReadAdoptsPayloadThatArrivesOnThirdAttempt()
     {
         var attempts = 0;
         var payload = new object();
@@ -109,8 +123,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
         Assert.Equal(3, result.Attempts);
     }
 
-    [Fact]
-    public async Task TransientReadExceptionsAreBoundedAndCanRecover()
+    private static async Task TransientReadExceptionsAreBoundedAndCanRecover()
     {
         var attempts = 0;
         var payload = new object();
@@ -128,8 +141,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
         Assert.Equal(3, attempts);
     }
 
-    [Fact]
-    public async Task TransientReadExceptionsStopAfterThreeAttempts()
+    private static async Task TransientReadExceptionsStopAfterThreeAttempts()
     {
         var attempts = 0;
 
@@ -151,8 +163,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
         Assert.Equal("IndexedDB attempt 3", result.LastException?.Message);
     }
 
-    [Fact]
-    public async Task MissingHostedPlanWaitsForNextSyncStatusWithoutPolling()
+    private static async Task MissingHostedPlanWaitsForNextSyncStatusWithoutPolling()
     {
         var attempts = 0;
 
@@ -170,8 +181,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
         Assert.Equal(1, attempts);
     }
 
-    [Fact]
-    public async Task ExactReadStopsAsSoonAsItsRequestIsSupersededDuringAnAwait()
+    private static async Task ExactReadStopsAsSoonAsItsRequestIsSupersededDuringAnAwait()
     {
         var attempts = 0;
         var requestIsCurrent = true;
@@ -193,8 +203,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
         Assert.Equal(1, attempts);
     }
 
-    [Fact]
-    public void MissingGeneratedPlanHasNoAutomaticRebuildPath()
+    private static void MissingGeneratedPlanHasNoAutomaticRebuildPath()
     {
         var repositoryRoot = LocateRepositoryRoot();
         var webRoot = Path.Combine(repositoryRoot, "src", "FFXIV Craft Architect.Web");
@@ -216,8 +225,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void PlanPanePreservesAnUnnamedActiveWorkerPlanBeforeAnyAdoption()
+    private static void PlanPanePreservesAnUnnamedActiveWorkerPlanBeforeAnyAdoption()
     {
         var repositoryRoot = LocateRepositoryRoot();
         var procurement = File.ReadAllText(Path.Combine(
@@ -277,7 +285,7 @@ public sealed class TradeOrderPlanRestorePolicyTests
             "Could not locate the repository root from the test output path.");
     }
 
-    public enum CurrentRequestScenario
+    private enum CurrentRequestScenario
     {
         Current,
         SelectionChanged,
