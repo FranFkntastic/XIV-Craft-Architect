@@ -17,7 +17,6 @@ internal static class DiscordIdentityContractScenarios
         "participant_credential_contract_aaaaaaaaaaaaaaaa";
     private const string OtherParticipantCredential =
         "participant_credential_contract_bbbbbbbbbbbbbbbb";
-
     public static async Task RunAsync()
     {
         var root = Path.Combine(
@@ -34,7 +33,6 @@ internal static class DiscordIdentityContractScenarios
             Directory.Delete(root, recursive: true);
         }
     }
-
     private static async Task RunAsync(string root)
     {
         var now = new MutableTimeProvider(
@@ -69,7 +67,6 @@ internal static class DiscordIdentityContractScenarios
             profiles,
             oauth,
             now);
-
         var start = await linking.StartAsync(owner);
         var authorize = new Uri(start.AuthorizationUrl);
         var query = QueryHelpers.ParseQuery(authorize.Query);
@@ -91,7 +88,6 @@ internal static class DiscordIdentityContractScenarios
         Assert.Equal(
             DiscordLinkCompletionStatus.ReplayedState,
             (await linking.CompleteAsync("oauth-code", query["state"])).Status);
-
         var conflictingDiscord = await linking.StartAsync(other);
         oauth.Identity = new DiscordOAuthIdentity(DiscordUser, "conflicting-display");
         Assert.Equal(
@@ -121,7 +117,6 @@ internal static class DiscordIdentityContractScenarios
         Assert.Contains("linked", auditKinds);
         Assert.Contains("profile_link_conflict", auditKinds);
         Assert.Contains("oauth_consumed", auditKinds);
-
         var companyId = new CompanyId(Guid.NewGuid());
         var commissionId = Guid.NewGuid();
         var grantId = Guid.NewGuid();

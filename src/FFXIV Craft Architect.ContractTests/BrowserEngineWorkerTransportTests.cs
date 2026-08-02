@@ -3,6 +3,7 @@ using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Web.Services;
 using Microsoft.JSInterop;
 namespace FFXIV_Craft_Architect.Tests;
+
 public sealed class BrowserEngineWorkerTransportTests
 {
     [Fact]

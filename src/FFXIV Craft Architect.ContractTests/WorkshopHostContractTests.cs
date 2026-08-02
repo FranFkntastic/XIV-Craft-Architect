@@ -4,6 +4,7 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 namespace FFXIV_Craft_Architect.ContractTests;
+
 public sealed class WorkshopHostContractTests
 {
     private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web);

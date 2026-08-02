@@ -1,5 +1,5 @@
-using System.Text.Encodings.Web;
 using System.Text;
+using System.Text.Encodings.Web;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 

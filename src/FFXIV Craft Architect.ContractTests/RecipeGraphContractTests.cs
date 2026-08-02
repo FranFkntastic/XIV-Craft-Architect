@@ -3,6 +3,7 @@ using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 namespace FFXIV_Craft_Architect.ContractTests;
+
 public sealed class RecipeGraphContractTests
 {
     [Fact]
