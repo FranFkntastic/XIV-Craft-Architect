@@ -47,6 +47,21 @@
         </section>
     }
 
+    @if (Model.LatestCrafterUpdate is { } update)
+    {
+        <section class="trade-order-overview__crafter-update" aria-labelledby="latest-crafter-update-title">
+            <div>
+                <MudText Typo="Typo.subtitle2" HtmlTag="h2" id="latest-crafter-update-title">Latest crafting update</MudText>
+                <span>@update.CompletedQuantity.ToString("N0") of @update.RequiredQuantity.ToString("N0") completed · @update.ReadyQuantity.ToString("N0") ready</span>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(update.Comment))
+            {
+                <p>@update.Comment</p>
+            }
+            <small>Reported by @update.ReportedBy · @update.ReportedAtUtc.ToLocalTime().ToString("g")</small>
+        </section>
+    }
+
     <section class="trade-order-overview__section" aria-labelledby="requested-output-title">
         <div class="trade-order-overview__section-heading">
             <MudText Typo="Typo.subtitle2" HtmlTag="h2" id="requested-output-title">Requested output</MudText>

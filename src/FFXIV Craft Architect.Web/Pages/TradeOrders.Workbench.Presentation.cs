@@ -14,6 +14,14 @@ public sealed record TradeOrderCenterBlockerPresentation(
     string Label,
     string Detail);
 
+public sealed record TradeOrderCenterCrafterUpdatePresentation(
+    int CompletedQuantity,
+    int ReadyQuantity,
+    int RequiredQuantity,
+    DateTime ReportedAtUtc,
+    string ReportedBy,
+    string? Comment);
+
 public sealed record TradeOrderProgressStepPresentation(
     string Label,
     string State,
@@ -29,6 +37,7 @@ public sealed record TradeOrderCenterOverviewPresentation(
     int TermsVersion,
     IReadOnlyList<TradeOrderCenterOutputPresentation> Outputs,
     IReadOnlyList<TradeOrderCenterBlockerPresentation> Blockers,
+    TradeOrderCenterCrafterUpdatePresentation? LatestCrafterUpdate,
     IReadOnlyList<TradeOrderProgressStepPresentation> Progress,
     bool CanReviseTerms);
 
@@ -86,12 +95,35 @@ public partial class TradeOrders
             commission.CurrentTermsVersion,
             outputs,
             blockers,
+            BuildLatestCrafterUpdate(commission),
             BuildCenterProgress(order, commission),
             owner != null &&
             CanMutateHostedOrder &&
             !TradeOrderStatusWorkflow.IsArchived(order.Status) &&
             commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published &&
             !IsEditingCommissionTermsRevision);
+    }
+
+    private static TradeOrderCenterCrafterUpdatePresentation? BuildLatestCrafterUpdate(
+        TradeCompanyCommission commission)
+    {
+        var latestReport = commission.Activity
+            .Where(item => item.Kind == CompanyCommissionActivityKind.ProgressReported)
+            .OrderByDescending(item => item.CreatedAtUtc)
+            .ThenByDescending(item => item.CommissionRevision)
+            .FirstOrDefault();
+        if (latestReport == null)
+        {
+            return null;
+        }
+
+        return new TradeOrderCenterCrafterUpdatePresentation(
+            commission.OutputProgress.Sum(item => item.CompletedQuantity),
+            commission.OutputProgress.Sum(item => item.ReadyQuantity),
+            commission.OutputProgress.Sum(item => item.RequiredQuantity),
+            latestReport.CreatedAtUtc,
+            latestReport.Actor.DisplayName ?? FormatCommissionActor(latestReport.Actor.Kind),
+            string.IsNullOrWhiteSpace(latestReport.Comment) ? null : latestReport.Comment.Trim());
     }
 
     private static IReadOnlyList<TradeOrderCenterBlockerPresentation> BuildCenterBlockers(
