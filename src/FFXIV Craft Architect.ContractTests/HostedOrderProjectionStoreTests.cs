@@ -16,7 +16,12 @@ public sealed class HostedOrderProjectionStoreTests
     [InlineData(ProjectionStoreScenario.ScopeChange)]
     [InlineData(ProjectionStoreScenario.RestoreRevisionCannotRollBack)]
     [InlineData(ProjectionStoreScenario.CompanySnapshotComposition)]
-    public void ProjectionStorePreservesCanonicalIdentityAndRestoreTruth(
+    [InlineData(ProjectionStoreScenario.SameProfileConnectionReplacement)]
+    [InlineData(ProjectionStoreScenario.ConnectionScopePathCase)]
+    [InlineData(ProjectionStoreScenario.SameRevisionOwnerPersistence)]
+    [InlineData(ProjectionStoreScenario.LiveTombstonePersistence)]
+    [InlineData(ProjectionStoreScenario.OwnerTombstonePersistence)]
+    public async Task ProjectionStorePreservesCanonicalIdentityAndRestoreTruth(
         ProjectionStoreScenario scenario)
     {
         switch (scenario)
@@ -45,13 +50,27 @@ public sealed class HostedOrderProjectionStoreTests
             case ProjectionStoreScenario.CompanySnapshotComposition:
                 SharedSnapshotCanBeComposedWithoutAPageCache();
                 break;
+            case ProjectionStoreScenario.SameProfileConnectionReplacement:
+                SameProfileConnectionReplacementInvalidatesCapturedAuthorityAndRevisionFloor();
+                break;
+            case ProjectionStoreScenario.ConnectionScopePathCase:
+                ConnectionScopePathCaseIsAuthoritySignificant();
+                break;
+            case ProjectionStoreScenario.SameRevisionOwnerPersistence:
+                await PersistenceReconcilesSameRevisionOwnerUpgrade();
+                break;
+            case ProjectionStoreScenario.LiveTombstonePersistence:
+                await PersistenceReconcilesNewerTombstoneAfterBlockedLiveWrite();
+                break;
+            case ProjectionStoreScenario.OwnerTombstonePersistence:
+                await OwnerPersistenceReconcilesTombstoneThatArrivesDuringDurableWrite();
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
         }
     }
 
-    [Fact]
-    public void SameProfileConnectionReplacementInvalidatesCapturedAuthorityAndRevisionFloor()
+    private static void SameProfileConnectionReplacementInvalidatesCapturedAuthorityAndRevisionFloor()
     {
         var store = new HostedOrderProjectionStore();
         var profileId = Guid.NewGuid().ToString("D");
@@ -96,8 +115,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.Equal(1, resets);
     }
 
-    [Fact]
-    public void ConnectionScopePathCaseIsAuthoritySignificant()
+    private static void ConnectionScopePathCaseIsAuthoritySignificant()
     {
         var store = new HostedOrderProjectionStore();
         var profileId = Guid.NewGuid().ToString("D");
@@ -125,8 +143,7 @@ public sealed class HostedOrderProjectionStoreTests
             store.TryAdoptCommittedOrder(upperPathAuthority, order, 9));
     }
 
-    [Fact]
-    public async Task PersistenceReconcilesSameRevisionOwnerUpgrade()
+    private static async Task PersistenceReconcilesSameRevisionOwnerUpgrade()
     {
         var store = new HostedOrderProjectionStore();
         var profileId = Guid.NewGuid().ToString("D");
@@ -175,8 +192,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.Equal(4, store.RestoreState.LastAppliedRevision);
     }
 
-    [Fact]
-    public async Task PersistenceReconcilesNewerTombstoneAfterBlockedLiveWrite()
+    private static async Task PersistenceReconcilesNewerTombstoneAfterBlockedLiveWrite()
     {
         var store = new HostedOrderProjectionStore();
         var profileId = Guid.NewGuid().ToString("D");
@@ -217,8 +233,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.Equal(6, store.RestoreState.LastAppliedRevision);
     }
 
-    [Fact]
-    public async Task OwnerPersistenceReconcilesTombstoneThatArrivesDuringDurableWrite()
+    private static async Task OwnerPersistenceReconcilesTombstoneThatArrivesDuringDurableWrite()
     {
         var store = new HostedOrderProjectionStore();
         var profileId = Guid.NewGuid().ToString("D");
@@ -460,6 +475,11 @@ public sealed class HostedOrderProjectionStoreTests
         SameProfileReconnect,
         ScopeChange,
         RestoreRevisionCannotRollBack,
-        CompanySnapshotComposition
+        CompanySnapshotComposition,
+        SameProfileConnectionReplacement,
+        ConnectionScopePathCase,
+        SameRevisionOwnerPersistence,
+        LiveTombstonePersistence,
+        OwnerTombstonePersistence
     }
 }

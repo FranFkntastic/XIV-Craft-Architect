@@ -27,6 +27,8 @@ public sealed class HostedOrderRestoreStateTests
             case RestoreScenario.SuccessfulEmptyRestore:
                 SuccessfulRestoreMakesEvenZeroOrdersAuthoritative();
                 await TradeOrderPlanRestoreContractScenarios.AssertAllAsync();
+                await ProfileSyncDeletionProjectionTests.AssertAllAsync();
+                CompanyCommissionProjectionPresentationContractTests.AssertAll();
                 break;
             case RestoreScenario.OrdinaryReconnect:
                 OrdinaryReconnectRetainsCompleteProjectionAndReportsRealProgress();

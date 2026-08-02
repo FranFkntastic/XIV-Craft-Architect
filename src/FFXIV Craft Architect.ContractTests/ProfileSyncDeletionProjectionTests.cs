@@ -15,8 +15,27 @@ public sealed class ProfileSyncDeletionProjectionTests
 {
     private const string Host = "https://profiles.example/api/";
 
-    [Fact]
-    public async Task ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder()
+    internal static async Task AssertAllAsync()
+    {
+        await ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder();
+        await RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant();
+        await DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection();
+        await ConfirmedDeletionCannotCrossCompanyIdentity();
+        await CollaborationResponseAfterProfileSwitchCannotPublishOrPersist();
+        await DelayedCollaborationResponseCannotPersistOverNewerProjection();
+        await CollaborationResponseFromReplacedHostScopeCannotPersist();
+        await CollaborationCannotSendAcrossCaseDistinctConnectionPath();
+        await AdapterRejectsReplacementHostBeforeProjectionOrPersistence();
+        await AdapterHostReplacementDuringPersistenceCannotWriteReplacementRevisionNamespace();
+        await AdapterReconcilesDurableWinnerAfterOlderWriteFinishesLast();
+        await AdapterAlreadyCurrentReplayRepairsMissingDurableOrder();
+        await AdapterTombstoneReconcilesNewerLiveOrderAfterBlockedDelete();
+        await CollaborationReconcilesDurableWinnerAfterOlderWriteFinishesLast();
+        await ConnectionScopeChangeDuringPersistenceCannotWriteReplacementRevisionNamespace();
+        OwnerProjectionIsPreservedThenClearedAndRehydratedByRevision();
+    }
+
+    private static async Task ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Retiring order");
@@ -38,8 +57,7 @@ public sealed class ProfileSyncDeletionProjectionTests
             candidate => candidate.Id == order.Id);
     }
 
-    [Fact]
-    public async Task RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant()
+    private static async Task RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var orderId = Guid.NewGuid();
@@ -69,8 +87,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Empty(store.GetAll());
     }
 
-    [Fact]
-    public async Task DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection()
+    private static async Task DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
@@ -97,8 +114,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(0, fixture.Adapter.DeleteCount);
     }
 
-    [Fact]
-    public async Task ConfirmedDeletionCannotCrossCompanyIdentity()
+    private static async Task ConfirmedDeletionCannotCrossCompanyIdentity()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var remoteOrder = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Remote company");
@@ -119,8 +135,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(0, fixture.Adapter.DeleteCount);
     }
 
-    [Fact]
-    public async Task CollaborationResponseAfterProfileSwitchCannotPublishOrPersist()
+    private static async Task CollaborationResponseAfterProfileSwitchCannotPublishOrPersist()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var nextProfileId = Guid.NewGuid().ToString("D");
@@ -180,8 +195,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(nextProfileId, store.CaptureAuthorityScope().ProfileId);
     }
 
-    [Fact]
-    public async Task DelayedCollaborationResponseCannotPersistOverNewerProjection()
+    private static async Task DelayedCollaborationResponseCannotPersistOverNewerProjection()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
@@ -233,8 +247,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(6, store.Get(order.Id)?.ObjectRevision);
     }
 
-    [Fact]
-    public async Task CollaborationResponseFromReplacedHostScopeCannotPersist()
+    private static async Task CollaborationResponseFromReplacedHostScopeCannotPersist()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Original host");
@@ -293,8 +306,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 order.Id.ToString("D")));
     }
 
-    [Fact]
-    public async Task CollaborationCannotSendAcrossCaseDistinctConnectionPath()
+    private static async Task CollaborationCannotSendAcrossCaseDistinctConnectionPath()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Case-sensitive host path");
@@ -333,8 +345,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(0, runtime.SaveTradeOrderCount);
     }
 
-    [Fact]
-    public async Task AdapterRejectsReplacementHostBeforeProjectionOrPersistence()
+    private static async Task AdapterRejectsReplacementHostBeforeProjectionOrPersistence()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Original host");
@@ -378,8 +389,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 order.Id.ToString("D")));
     }
 
-    [Fact]
-    public async Task AdapterHostReplacementDuringPersistenceCannotWriteReplacementRevisionNamespace()
+    private static async Task AdapterHostReplacementDuringPersistenceCannotWriteReplacementRevisionNamespace()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
@@ -427,8 +437,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 order.Id.ToString("D")));
     }
 
-    [Fact]
-    public async Task AdapterReconcilesDurableWinnerAfterOlderWriteFinishesLast()
+    private static async Task AdapterReconcilesDurableWinnerAfterOlderWriteFinishesLast()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var companyId = Guid.NewGuid();
@@ -487,8 +496,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 original.Id.ToString("D")));
     }
 
-    [Fact]
-    public async Task AdapterAlreadyCurrentReplayRepairsMissingDurableOrder()
+    private static async Task AdapterAlreadyCurrentReplayRepairsMissingDurableOrder()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision five");
@@ -520,8 +528,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(1, runtime.SaveTradeOrderCount);
     }
 
-    [Fact]
-    public async Task AdapterTombstoneReconcilesNewerLiveOrderAfterBlockedDelete()
+    private static async Task AdapterTombstoneReconcilesNewerLiveOrderAfterBlockedDelete()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var companyId = Guid.NewGuid();
@@ -579,8 +586,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 order.Id.ToString("D")));
     }
 
-    [Fact]
-    public async Task CollaborationReconcilesDurableWinnerAfterOlderWriteFinishesLast()
+    private static async Task CollaborationReconcilesDurableWinnerAfterOlderWriteFinishesLast()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
@@ -657,8 +663,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 order.Id.ToString("D")));
     }
 
-    [Fact]
-    public async Task ConnectionScopeChangeDuringPersistenceCannotWriteReplacementRevisionNamespace()
+    private static async Task ConnectionScopeChangeDuringPersistenceCannotWriteReplacementRevisionNamespace()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
@@ -721,8 +726,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 order.Id.ToString("D")));
     }
 
-    [Fact]
-    public void OwnerProjectionIsPreservedThenClearedAndRehydratedByRevision()
+    private static void OwnerProjectionIsPreservedThenClearedAndRehydratedByRevision()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Owner revision four");
