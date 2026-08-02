@@ -3,6 +3,7 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -37,6 +38,7 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
     SqliteProfileHostStore profiles,
     ProfileHostedTradeCompanyService companies,
     SqliteCommissionBriefStore briefs,
+    DiscordPublicationReconciliationService discordReconciliation,
     CompanyCommissionMigrationDiagnostics diagnostics,
     TimeProvider timeProvider,
     ILogger<CompanyCommissionSchemaMigrationHostedService> logger) : BackgroundService
@@ -58,6 +60,14 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
             stoppingToken.ThrowIfCancellationRequested();
             await MigrateAsync(hosted, stoppingToken);
         }
+
+        var canonicalOrders = await profiles.LoadObjectsAsync(
+            ProfileSyncCollections.TradeOrders,
+            includeDeleted: true,
+            stoppingToken);
+        await discordReconciliation.ReconcileStaleAsync(
+            canonicalOrders,
+            stoppingToken);
     }
 
     private async Task MigrateAsync(

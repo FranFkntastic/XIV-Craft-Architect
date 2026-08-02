@@ -15,6 +15,7 @@ public partial class TradeOrders
     private string _commissionDeliveryInstructions = string.Empty;
     private bool _isPublishingCommission;
     private bool _isRevokingCommission;
+    private bool _isReconcilingDiscordPublication;
     private string? _activeInterestClaimId;
     private readonly Dictionary<string, Guid?> _interestCrafterSelections =
         new(StringComparer.Ordinal);
@@ -513,6 +514,44 @@ public partial class TradeOrders
             _selectedOrder.CompanyProfileId,
             orderId);
         Snackbar.Add("Discord publication requeued", Severity.Success);
+    }
+
+    private async Task ReconcileSelectedCommissionToDiscordAsync()
+    {
+        if (_selectedOrder == null ||
+            SelectedCompanyPublication?.PublicId is not { Length: > 0 } publicId)
+        {
+            return;
+        }
+
+        _isReconcilingDiscordPublication = true;
+        try
+        {
+            var orderId = _selectedOrder.Id;
+            var result = await TradeCollaboration.ReconcileDiscordPublicationAsync(
+                _selectedOrder,
+                publicId);
+            if (!result.Success)
+            {
+                Snackbar.Add(
+                    result.Publication?.Message ??
+                    result.Message ??
+                    "Discord publication could not be refreshed.",
+                    result.Disposition == TradeCompanyMutationDisposition.Conflict
+                        ? Severity.Warning
+                        : Severity.Error);
+                return;
+            }
+
+            await TradeCollaboration.RefreshAsync(
+                _selectedOrder.CompanyProfileId,
+                orderId);
+            Snackbar.Add("Discord brief refresh queued", Severity.Success);
+        }
+        finally
+        {
+            _isReconcilingDiscordPublication = false;
+        }
     }
 
     private bool CanPublishToConfiguredTradeChannel(

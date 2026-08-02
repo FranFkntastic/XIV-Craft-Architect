@@ -1,8 +1,13 @@
+using System.Net;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
@@ -40,6 +45,14 @@ public sealed class DiscordCommissionMessageLifecycleTests
         OperatorCanReopenACanceledPublishedCommission();
         await DiscordDeletesCanceledAndHeldMessagesThenCreatesFreshMessagesOnReopen();
         await CancellationOvertakesAnInFlightCreateBeforeReopenPostsFresh();
+        await StartupReconciliationMigratesAnOldProjectionExactlyOnce();
+        await StartupReconciliationDeletesADeletedOrderProjectionExactlyOnce();
+        await ExistingCollaborationSchemaGainsAProjectionFormatRevision();
+        await RetryingAnOldFailedPublicationAdoptsTheCurrentFormat();
+        await MissingVisibleEditRecreatesExactlyOneMessage();
+        await SuppressionOvertakesMissingEditRecovery();
+        ProjectionReconciliationUsesCanonicalOrderState();
+        ReconciliationRequiresAnOperator();
     }
 
     private static void ResolutionStatusPreservesPersistedCompletedAndCanceledValues()
@@ -279,6 +292,391 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
+    private static async Task StartupReconciliationMigratesAnOldProjectionExactlyOnce()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-migration-{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = CreateDiscordOptions(databasePath);
+            var store = new SqliteDiscordCollaborationStore(options);
+            var delivery = CreateDelivery(store, options);
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 1,
+                eventKind: CompanyCommissionActivityKind.CommissionOpened,
+                claimed: false));
+            var create = Assert.Single(await LeaseAsync(store));
+            await store.CompleteAsync(
+                create.WorkItemId,
+                create.LeaseId,
+                "900000000000000020",
+                DateTimeOffset.UtcNow);
+            await SetProjectionFormatVersionAsync(databasePath, 0);
+
+            var refresher = new RecordingPublicationRefresher(store);
+            await using var services = new ServiceCollection()
+                .AddScoped<IDiscordPublicationRefresher>(_ => refresher)
+                .BuildServiceProvider();
+            var reconciliation = new DiscordPublicationReconciliationService(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                store,
+                options,
+                TimeProvider.System,
+                NullLogger<DiscordPublicationReconciliationService>.Instance);
+            var hosted = CreateHostedPublishedOrder();
+
+            var first = await reconciliation.ReconcileStaleAsync([hosted]);
+            Assert.Equal(1, first.Examined);
+            Assert.Equal(1, first.Reconciled);
+            Assert.Equal(1, refresher.CallCount);
+            var edit = Assert.Single(await LeaseAsync(store));
+            Assert.Equal(DiscordOutboxOperation.EditMessage, edit.Operation);
+            var migrated = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal(
+                DiscordPublicationProjectionFormat.CurrentVersion,
+                migrated!.ProjectionFormatVersion);
+
+            var second = await reconciliation.ReconcileStaleAsync([hosted]);
+            Assert.Equal(0, second.Examined);
+            Assert.Equal(1, refresher.CallCount);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    private static async Task StartupReconciliationDeletesADeletedOrderProjectionExactlyOnce()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-deleted-migration-{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = CreateDiscordOptions(databasePath);
+            var store = new SqliteDiscordCollaborationStore(options);
+            var delivery = CreateDelivery(store, options);
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 1,
+                eventKind: CompanyCommissionActivityKind.CommissionOpened,
+                claimed: false));
+            var create = Assert.Single(await LeaseAsync(store));
+            await store.CompleteAsync(
+                create.WorkItemId,
+                create.LeaseId,
+                "900000000000000021",
+                DateTimeOffset.UtcNow);
+            await SetProjectionFormatVersionAsync(databasePath, 0);
+
+            var refresher = new RecordingPublicationRefresher(store);
+            await using var services = new ServiceCollection()
+                .AddScoped<IDiscordPublicationRefresher>(_ => refresher)
+                .BuildServiceProvider();
+            var reconciliation = new DiscordPublicationReconciliationService(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                store,
+                options,
+                TimeProvider.System,
+                NullLogger<DiscordPublicationReconciliationService>.Instance);
+            var active = CreateHostedPublishedOrder();
+            var deleted = new HostedProfileObject(
+                active.ProfileId,
+                new ProfileSyncObjectEnvelope
+                {
+                    Collection = active.Object.Collection,
+                    ObjectId = active.Object.ObjectId,
+                    PayloadJson = "{}",
+                    Revision = active.Object.Revision + 1,
+                    UpdatedAtUtc = CapturedAt.AddMinutes(1),
+                    Deleted = true,
+                    DeletedAtUtc = CapturedAt.AddMinutes(1)
+                });
+
+            var first = await reconciliation.ReconcileStaleAsync([deleted]);
+            Assert.Equal(1, first.Examined);
+            Assert.Equal(1, first.Reconciled);
+            Assert.Equal(0, refresher.CallCount);
+            var removal = Assert.Single(await LeaseAsync(store));
+            Assert.Equal(DiscordOutboxOperation.DeleteMessage, removal.Operation);
+            Assert.Equal("900000000000000021", removal.MessageId);
+            var migrated = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal(DiscordPublicationState.Suppressed, migrated!.State);
+            Assert.Equal(
+                DiscordPublicationProjectionFormat.CurrentVersion,
+                migrated.ProjectionFormatVersion);
+
+            var second = await reconciliation.ReconcileStaleAsync([deleted]);
+            Assert.Equal(0, second.Examined);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    private static async Task MissingVisibleEditRecreatesExactlyOneMessage()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-missing-edit-{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = CreateDiscordOptions(databasePath);
+            var store = new SqliteDiscordCollaborationStore(options);
+            var delivery = CreateDelivery(store, options);
+            var discord = new MissingEditDiscordClient();
+            var dispatcher = CreateDispatcher(store, discord, options);
+
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 1,
+                eventKind: CompanyCommissionActivityKind.CommissionOpened,
+                claimed: false));
+            await dispatcher.DispatchDueAsync(default);
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.Assigned,
+                projectionRevision: 2,
+                eventKind: CompanyCommissionActivityKind.ClaimAccepted,
+                claimed: true));
+            await dispatcher.DispatchDueAsync(default);
+            await dispatcher.DispatchDueAsync(default);
+
+            var publication = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal("900000000000000102", publication!.MessageId);
+            Assert.Equal(2, discord.CreateCount);
+            Assert.Equal(1, discord.EditCount);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    private static async Task RetryingAnOldFailedPublicationAdoptsTheCurrentFormat()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-retry-format-{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = CreateDiscordOptions(databasePath);
+            var store = new SqliteDiscordCollaborationStore(options);
+            var delivery = CreateDelivery(store, options);
+            var created = await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 1,
+                eventKind: CompanyCommissionActivityKind.CommissionOpened,
+                claimed: false));
+            var failedCreate = Assert.Single(await LeaseAsync(store));
+            await store.ExhaustAsync(
+                failedCreate.WorkItemId,
+                failedCreate.LeaseId,
+                "fixture failure",
+                DateTimeOffset.UtcNow);
+            await SetProjectionFormatVersionAsync(databasePath, 0);
+
+            var retried = await store.RetryFailedPublicationAsync(
+                CompanyId,
+                created.Publication!.PublicationId,
+                created.Publication.PublicId,
+                DiscordPublicationState.Open,
+                "{\"content\":\"current format\"}",
+                DateTimeOffset.UtcNow);
+
+            Assert.True(retried.Success, retried.Error);
+            Assert.Equal(
+                DiscordPublicationProjectionFormat.CurrentVersion,
+                retried.Publication!.ProjectionFormatVersion);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    private static async Task ExistingCollaborationSchemaGainsAProjectionFormatRevision()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-schema-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using (var connection = new SqliteConnection(
+                             $"Data Source={databasePath};Pooling=False"))
+            {
+                await connection.OpenAsync();
+                await using var create = connection.CreateCommand();
+                create.CommandText =
+                    """
+                    CREATE TABLE discord_publications (
+                        publication_id TEXT PRIMARY KEY,
+                        company_id TEXT NOT NULL,
+                        order_id TEXT NOT NULL,
+                        source_order_revision INTEGER NOT NULL,
+                        public_id TEXT NOT NULL,
+                        brief_version INTEGER NOT NULL,
+                        channel_id TEXT NOT NULL,
+                        message_id TEXT NULL,
+                        action_token TEXT NOT NULL UNIQUE,
+                        state INTEGER NOT NULL,
+                        desired_projection_revision INTEGER NOT NULL,
+                        idempotency_key TEXT NOT NULL UNIQUE,
+                        created_at_utc TEXT NOT NULL,
+                        updated_at_utc TEXT NOT NULL
+                    );
+                    """;
+                await create.ExecuteNonQueryAsync();
+            }
+
+            var store = new SqliteDiscordCollaborationStore(
+                CreateDiscordOptions(databasePath));
+            await store.InitializeAsync();
+
+            await using var verify = new SqliteConnection(
+                $"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
+            await verify.OpenAsync();
+            await using var columns = verify.CreateCommand();
+            columns.CommandText = "PRAGMA table_info(discord_publications);";
+            await using var reader = await columns.ExecuteReaderAsync();
+            var found = false;
+            while (await reader.ReadAsync())
+            {
+                found |= string.Equals(
+                    reader.GetString(1),
+                    "projection_format_version",
+                    StringComparison.Ordinal);
+            }
+
+            Assert.True(found);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    private static async Task SuppressionOvertakesMissingEditRecovery()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-missing-edit-race-{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = CreateDiscordOptions(databasePath);
+            var store = new SqliteDiscordCollaborationStore(options);
+            var delivery = CreateDelivery(store, options);
+            var discord = new MissingEditDiscordClient(async () =>
+            {
+                await delivery.ProjectAsync(CreateProjection(
+                    TradeOrderStatus.Canceled,
+                    projectionRevision: 3,
+                    eventKind: CompanyCommissionActivityKind.CommissionCanceled,
+                    claimed: true));
+            });
+            var dispatcher = CreateDispatcher(store, discord, options);
+
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign,
+                projectionRevision: 1,
+                eventKind: CompanyCommissionActivityKind.CommissionOpened,
+                claimed: false));
+            await dispatcher.DispatchDueAsync(default);
+            await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.Assigned,
+                projectionRevision: 2,
+                eventKind: CompanyCommissionActivityKind.ClaimAccepted,
+                claimed: true));
+            await dispatcher.DispatchDueAsync(default);
+            await dispatcher.DispatchDueAsync(default);
+
+            var publication = await store.LoadPublicationByOrderAsync(CompanyId, CommissionId);
+            Assert.Equal(DiscordPublicationState.Suppressed, publication!.State);
+            Assert.Null(publication.MessageId);
+            Assert.Equal(1, discord.CreateCount);
+            Assert.Equal(1, discord.EditCount);
+            Assert.Equal(1, discord.DeleteCount);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    private static void ReconciliationRequiresAnOperator()
+    {
+        Assert.False(DiscordCollaborationEndpoints.CanManagePublications(
+            new TradeCompanyAccessContext(
+                CompanyId,
+                Guid.NewGuid(),
+                TradeCompanyRole.ReadOnly)));
+        Assert.True(DiscordCollaborationEndpoints.CanManagePublications(
+            new TradeCompanyAccessContext(
+                CompanyId,
+                Guid.NewGuid(),
+                TradeCompanyRole.Operator)));
+        Assert.True(DiscordCollaborationEndpoints.CanManagePublications(
+            new TradeCompanyAccessContext(
+                CompanyId,
+                Guid.NewGuid(),
+                TradeCompanyRole.Owner)));
+    }
+
+    private static void ProjectionReconciliationUsesCanonicalOrderState()
+    {
+        Assert.Equal(
+            DiscordPublicationState.Open,
+            DiscordPublicationService.ResolvePublicationState(
+                CreateOrderForProjectionState(TradeOrderStatus.ReadyToAssign)));
+        Assert.Equal(
+            DiscordPublicationState.Assigned,
+            DiscordPublicationService.ResolvePublicationState(
+                CreateOrderForProjectionState(TradeOrderStatus.Assigned, assigned: true)));
+        Assert.Equal(
+            DiscordPublicationState.Closed,
+            DiscordPublicationService.ResolvePublicationState(
+                CreateOrderForProjectionState(TradeOrderStatus.Completed, assigned: true)));
+        Assert.Equal(
+            DiscordPublicationState.Suppressed,
+            DiscordPublicationService.ResolvePublicationState(
+                CreateOrderForProjectionState(TradeOrderStatus.Canceled)));
+        Assert.Equal(
+            DiscordPublicationState.Suppressed,
+            DiscordPublicationService.ResolvePublicationState(
+                CreateOrderForProjectionState(TradeOrderStatus.ResolutionRequired, assigned: true)));
+        var revoked = CreateOrderForProjectionState(TradeOrderStatus.ReadyToAssign);
+        revoked.CommissionPublication!.RevokedAtUtc = CapturedAt;
+        Assert.Equal(
+            DiscordPublicationState.Revoked,
+            DiscordPublicationService.ResolvePublicationState(revoked));
+    }
+
     private static TradeOrder CreateAssignedOrder(string? boundary = null)
     {
         var actor = new CompanyCommissionActor("commissioner", CompanyCommissionActorKind.Commissioner);
@@ -378,6 +776,86 @@ public sealed class DiscordCommissionMessageLifecycleTests
             DatabasePath = databasePath
         };
 
+    private static CompanyCommissionDiscordDeliveryService CreateDelivery(
+        SqliteDiscordCollaborationStore store,
+        DiscordCommissionOptions options) =>
+        new(
+            store,
+            new SqliteDiscordNotificationStore(options),
+            options,
+            TimeProvider.System);
+
+    private static DiscordOutboxDispatcher CreateDispatcher(
+        SqliteDiscordCollaborationStore store,
+        IDiscordApiClient discord,
+        DiscordCommissionOptions options) =>
+        new(
+            store,
+            discord,
+            options,
+            TimeProvider.System,
+            NullLogger<DiscordOutboxDispatcher>.Instance);
+
+    private static HostedProfileObject CreateHostedPublishedOrder()
+    {
+        var order = CreateAssignedOrder();
+        order.Status = TradeOrderStatus.ReadyToAssign;
+        order.AssignedCrafterId = null;
+        order.CommissionPublication = new TradeCommissionPublication
+        {
+            PublicId = "discord-lifecycle",
+            PublicUrl = "https://example.test/commission/discord-lifecycle",
+            Version = 1,
+            PublishedAtUtc = CapturedAt
+        };
+        return new HostedProfileObject(
+            "77777777-7777-7777-7777-777777777777",
+            new ProfileSyncObjectEnvelope
+            {
+                Collection = ProfileSyncCollections.TradeOrders,
+                ObjectId = order.Id.ToString("D"),
+                PayloadJson = JsonSerializer.Serialize(order),
+                Revision = 1,
+                UpdatedAtUtc = CapturedAt
+            });
+    }
+
+    private static TradeOrder CreateOrderForProjectionState(
+        TradeOrderStatus status,
+        bool assigned = false)
+    {
+        var order = CreateAssignedOrder();
+        order.Status = status;
+        order.AssignedCrafterId = assigned ? CrafterId : null;
+        order.CommissionPublication = new TradeCommissionPublication
+        {
+            PublicId = "discord-lifecycle",
+            PublicUrl = "https://example.test/commission/discord-lifecycle",
+            Version = 1,
+            PublishedAtUtc = CapturedAt
+        };
+        return order;
+    }
+
+    private static async Task SetProjectionFormatVersionAsync(
+        string databasePath,
+        int version)
+    {
+        await using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = databasePath,
+                Mode = SqliteOpenMode.ReadWrite,
+                Pooling = false
+            }.ToString());
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE discord_publications SET projection_format_version = $version;";
+        command.Parameters.AddWithValue("$version", version);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
     private static CommittedCompanyCommissionDiscordProjection CreateProjection(
         TradeOrderStatus status,
         long projectionRevision,
@@ -458,5 +936,99 @@ public sealed class DiscordCommissionMessageLifecycleTests
             .ToArray();
         Assert.Contains("View commission", buttons);
         Assert.Equal(expectsClaimButton, buttons.Contains("Claim commission"));
+    }
+
+    private sealed class RecordingPublicationRefresher(
+        SqliteDiscordCollaborationStore store) : IDiscordPublicationRefresher
+    {
+        public int CallCount { get; private set; }
+
+        public async Task RefreshOrderAsync(
+            TradeCompanyAccessContext access,
+            Guid orderId,
+            CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            var publication = await store.LoadPublicationByOrderAsync(
+                access.CompanyId,
+                orderId,
+                cancellationToken) ?? throw new InvalidOperationException(
+                "The migration fixture publication is missing.");
+            await store.EnqueueProjectionAsync(
+                publication.PublicationId,
+                DiscordPublicationState.Open,
+                checked(publication.DesiredProjectionRevision + 1),
+                "{\"content\":\"migrated\"}",
+                DateTimeOffset.UtcNow,
+                cancellationToken);
+        }
+    }
+
+    private sealed class MissingEditDiscordClient(
+        Func<Task>? beforeMissingEdit = null) : IDiscordApiClient
+    {
+        public int CreateCount { get; private set; }
+        public int EditCount { get; private set; }
+        public int DeleteCount { get; private set; }
+
+        public Task<DiscordApiResult> CreateMessageAsync(
+            string channelId,
+            object payload,
+            CancellationToken cancellationToken = default)
+        {
+            CreateCount++;
+            return Task.FromResult(new DiscordApiResult(
+                DiscordApiOutcome.Succeeded,
+                $"9000000000000001{CreateCount:00}",
+                HttpStatusCode.OK));
+        }
+
+        public async Task<DiscordApiResult> EditMessageAsync(
+            string channelId,
+            string messageId,
+            object payload,
+            CancellationToken cancellationToken = default)
+        {
+            EditCount++;
+            if (beforeMissingEdit != null)
+            {
+                await beforeMissingEdit();
+            }
+
+            return new DiscordApiResult(
+                DiscordApiOutcome.TerminalFailure,
+                StatusCode: HttpStatusCode.NotFound,
+                Error: "Unknown Message");
+        }
+
+        public Task<DiscordApiResult> DeleteMessageAsync(
+            string channelId,
+            string messageId,
+            CancellationToken cancellationToken = default)
+        {
+            DeleteCount++;
+            return Task.FromResult(new DiscordApiResult(
+                DiscordApiOutcome.Succeeded,
+                messageId,
+                HttpStatusCode.NoContent));
+        }
+
+        public Task<DiscordApiResult> GetMessageAsync(
+            string channelId,
+            string messageId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DiscordApiResult> CreateNotificationMessageAsync(
+            string channelId,
+            object payload,
+            string? allowedMentionUserId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DiscordApiResult> ResolveDirectMessageChannelAsync(
+            string recipientUserId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }

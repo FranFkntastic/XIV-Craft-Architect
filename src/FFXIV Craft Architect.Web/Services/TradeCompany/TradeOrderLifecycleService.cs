@@ -302,6 +302,7 @@ public sealed class TradeOrderLifecycleService(
             cancellationToken);
         var publication = collaboration.GetPublication(order.Id);
         if (publication == null ||
+            publication.State == TradeCommissionDeliveryState.Suppressed ||
             publication.State == TradeCommissionDeliveryState.Revoked ||
             string.IsNullOrWhiteSpace(publication.PublicId))
         {

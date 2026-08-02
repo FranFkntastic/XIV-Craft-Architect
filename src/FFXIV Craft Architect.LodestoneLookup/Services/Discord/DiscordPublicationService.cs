@@ -23,6 +23,14 @@ public sealed record DiscordNewPublicationResult(
     public bool Success => Delivery.Success && Brief != null;
 }
 
+public interface IDiscordPublicationRefresher
+{
+    Task RefreshOrderAsync(
+        TradeCompanyAccessContext access,
+        Guid orderId,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed class DiscordPublicationService(
     ProfileHostedTradeCompanyService companies,
     DiscordCompanyOrderAdapter orders,
@@ -31,7 +39,7 @@ public sealed class DiscordPublicationService(
     SqliteDiscordCollaborationStore collaboration,
     DiscordCommissionOptions options,
     CommissionBriefOptions commissionBriefOptions,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider) : IDiscordPublicationRefresher
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -516,6 +524,43 @@ public sealed class DiscordPublicationService(
             order.Envelope.RecordRevision,
             companyRevision: null,
             cancellationToken);
+    }
+
+    public async Task<DiscordPublicationReconcileResult> ReconcileAsync(
+        TradeCompanyAccessContext access,
+        string publicId,
+        CancellationToken cancellationToken = default)
+    {
+        RequireOperator(access);
+        ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
+        var publication = await collaboration.LoadPublicationByPublicIdAsync(
+            publicId,
+            cancellationToken);
+        if (publication == null || publication.CompanyId != access.CompanyId)
+        {
+            return new DiscordPublicationReconcileResult(
+                DiscordPublicationReconcileStatus.Missing,
+                null,
+                "The Discord publication was not found for this company.");
+        }
+
+        var previousRevision = publication.DesiredProjectionRevision;
+        await RefreshOrderAsync(access, publication.OrderId, cancellationToken);
+        var refreshed = await collaboration.LoadPublicationAsync(
+            publication.PublicationId,
+            cancellationToken);
+        if (refreshed == null ||
+            refreshed.DesiredProjectionRevision <= previousRevision)
+        {
+            return new DiscordPublicationReconcileResult(
+                DiscordPublicationReconcileStatus.Conflict,
+                refreshed,
+                "The canonical commission could not produce a newer Discord projection.");
+        }
+
+        return new DiscordPublicationReconcileResult(
+            DiscordPublicationReconcileStatus.Queued,
+            refreshed);
     }
 
     public Task RefreshCommittedCommissionAsync(
