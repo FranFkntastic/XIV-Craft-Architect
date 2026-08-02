@@ -118,7 +118,8 @@ public sealed class TradeCommissionOperationsClient(
 
     public async Task<TradeCommissionRecoveryResetResponse> ResetParticipantRecoveryAsync(
         ResetCompanyCommissionParticipantRecoveryCommand command,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
@@ -126,7 +127,8 @@ public sealed class TradeCommissionOperationsClient(
             $"{command.Context.CommissionId:D}/commands/reset-participant-recovery",
             command,
             typeof(ResetCompanyCommissionParticipantRecoveryCommand),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<TradeCommissionRecoveryResetResponse>(
             JsonOptions,
@@ -137,7 +139,8 @@ public sealed class TradeCommissionOperationsClient(
 
     public async Task<TradeCommissionClaimLinkResponse> IssueClaimLinkAsync(
         CompanyCommissionCommandContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
@@ -145,7 +148,8 @@ public sealed class TradeCommissionOperationsClient(
             $"{context.CommissionId:D}/commands/issue-claim-link",
             new TradeCommissionClaimLinkRequest(context),
             typeof(TradeCommissionClaimLinkRequest),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<TradeCommissionClaimLinkResponse>(
             JsonOptions,

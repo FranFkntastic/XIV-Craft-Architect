@@ -132,17 +132,21 @@ public sealed class TradeCommissionOperationsService(
 
         try
         {
+            var authority = await CaptureOrderAuthorityAsync();
             if (!await tradeOperations.SaveCrafterAsync(crafter))
             {
                 return Rejected(
                     current,
                     "Browser storage could not create or update the company crafter.");
             }
+            await RequireCurrentAuthorityAsync(authority, "identity confirmation");
 
             await profileSync.QueueLocalSaveAsync(
                 ProfileSyncCollections.TradeCrafters,
                 crafter.Id.ToString("D"));
+            await RequireCurrentAuthorityAsync(authority, "identity confirmation");
             await profileSync.SyncNowAsync(cancellationToken);
+            await RequireCurrentAuthorityAsync(authority, "identity confirmation");
             var crafterConflict = profileSync.Conflicts.FirstOrDefault(item =>
                 string.Equals(
                     item.Collection,
@@ -161,11 +165,12 @@ public sealed class TradeCommissionOperationsService(
 
             var commission = RequireCommission(current);
             var fresh = await client.LoadOwnerProjectionAsync(
+                authority.Connection,
                 commission.CompanyId.Value,
                 commission.CommissionId,
                 cancellationToken);
             ValidateProjection(current.Order, fresh);
-            await ApplyProjectionAsync(fresh);
+            await ApplyProjectionAsync(authority, fresh);
             return await ExecuteAsync(
                 fresh,
                 "confirm-identity",
@@ -174,7 +179,8 @@ public sealed class TradeCommissionOperationsService(
                     context,
                     crafter.Id,
                     lodestoneCharacterId),
-                cancellationToken);
+                cancellationToken,
+                authority);
         }
         catch (Exception exception)
         {
@@ -515,13 +521,15 @@ public sealed class TradeCommissionOperationsService(
         try
         {
             ValidateProjection(current.Order, current);
+            var authority = await CaptureOrderAuthorityAsync();
             var context = CreateContext(
                 current,
                 "reset-participant-recovery",
                 payload: null);
             var response = await client.ResetParticipantRecoveryAsync(
                 new ResetCompanyCommissionParticipantRecoveryCommand(context),
-                cancellationToken);
+                cancellationToken,
+                authority.Connection);
             if (!response.Mutation.Success)
             {
                 return Rejected(
@@ -548,7 +556,7 @@ public sealed class TradeCommissionOperationsService(
             }
 
             ValidateCapabilityUrl(updated, response.RecoveryUrl, "recover");
-            await ApplyProjectionAsync(updated);
+            await ApplyProjectionAsync(authority, updated);
             return new TradeCommissionOperatorResult(
                 true,
                 updated,
@@ -580,10 +588,13 @@ public sealed class TradeCommissionOperationsService(
         try
         {
             ValidateProjection(current.Order, current);
+            var authority = await CaptureOrderAuthorityAsync();
             var response = await client.IssueClaimLinkAsync(
                 CreateContext(current, "issue-claim-link", payload: null),
-                cancellationToken);
+                cancellationToken,
+                authority.Connection);
             ValidateCapabilityUrl(current, response.ClaimUrl, "claim");
+            await RequireCurrentAuthorityAsync(authority, "claim-link issuance");
             _errors.Remove(current.Order.Id);
             return new TradeCommissionOperatorResult(
                 true,
@@ -631,7 +642,8 @@ public sealed class TradeCommissionOperationsService(
         string route,
         object? payload,
         Func<CompanyCommissionCommandContext, TCommand> createCommand,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        OrderCommandAuthority? capturedAuthority = null)
         where TCommand : ICompanyCommissionCommand
     {
         if (!CanPerformExternalAction(current.Order, out var reason))
@@ -642,7 +654,7 @@ public sealed class TradeCommissionOperationsService(
         var commandProjection = current;
         try
         {
-            var authority = await CaptureOrderAuthorityAsync();
+            var authority = capturedAuthority ?? await CaptureOrderAuthorityAsync();
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 ValidateProjection(current.Order, commandProjection);
@@ -768,15 +780,16 @@ public sealed class TradeCommissionOperationsService(
                 var persisted = winner.Deleted
                     ? await tradeOperations.DeleteOrderAsync(winner.OrderId)
                     : await tradeOperations.ApplyCanonicalOrderAsync(winner.Order!);
+                if (!await IsCurrentAuthorityAsync(authority))
+                {
+                    await RepairDurableOrderFromCurrentProjectionAsync(winner.OrderId);
+                    throw new InvalidOperationException(
+                        "The hosted order authority changed while commission persistence was in progress.");
+                }
                 if (!persisted)
                 {
                     throw new InvalidOperationException(
                         "The owner projection was authoritative, but browser storage could not apply its Trade order.");
-                }
-                if (!await IsCurrentAuthorityAsync(authority))
-                {
-                    throw new InvalidOperationException(
-                        "The hosted order authority changed while commission persistence was in progress.");
                 }
                 await localState.SaveObjectRevisionAsync(
                     authority.Connection,
@@ -785,6 +798,10 @@ public sealed class TradeCommissionOperationsService(
                     winner.ObjectRevision);
             },
             () => IsCurrentAuthorityAsync(authority));
+        if (adoption == HostedOrderCommittedProjectionResult.ScopeChanged)
+        {
+            await RepairDurableOrderFromCurrentProjectionAsync(projection.Order.Id);
+        }
         if (adoption is not (
             HostedOrderCommittedProjectionResult.Adopted or
             HostedOrderCommittedProjectionResult.AlreadyCurrent))
@@ -818,6 +835,70 @@ public sealed class TradeCommissionOperationsService(
                    connection.ProfileScopeId,
                    StringComparison.OrdinalIgnoreCase);
     }
+
+    private async Task RequireCurrentAuthorityAsync(
+        OrderCommandAuthority authority,
+        string operation)
+    {
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                $"The hosted order authority changed during {operation}.");
+        }
+    }
+
+    private async Task RepairDurableOrderFromCurrentProjectionAsync(Guid orderId)
+    {
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var authority = hostedOrders.CaptureAuthorityScope();
+            var connection = (await localState.LoadConnectionSettingsAsync()).Snapshot();
+            var scopeIsCurrent = MatchesConnectionScope(authority, connection);
+            var current = scopeIsCurrent ? hostedOrders.Get(orderId) : null;
+            var repaired = current is { Deleted: false, Order: not null }
+                ? await tradeOperations.ApplyCanonicalOrderAsync(current.Order)
+                : await tradeOperations.DeleteOrderAsync(orderId);
+            if (!repaired)
+            {
+                throw new InvalidOperationException(
+                    "Browser storage could not repair the Trade order after its hosted authority changed.");
+            }
+
+            var latestConnection = await localState.LoadConnectionSettingsAsync();
+            if (hostedOrders.IsCurrentAuthority(authority) &&
+                HasSameConnection(connection, latestConnection) &&
+                (!scopeIsCurrent ||
+                 HasSameProjectionVersion(current, hostedOrders.Get(orderId))))
+            {
+                return;
+            }
+        }
+
+        if (!await tradeOperations.DeleteOrderAsync(orderId))
+        {
+            throw new InvalidOperationException(
+                "Browser storage could not remove a Trade order after repeated hosted authority changes.");
+        }
+    }
+
+    private static bool HasSameProjectionVersion(
+        HostedOrderProjectionSnapshot? left,
+        HostedOrderProjectionSnapshot? right) =>
+        left?.ObjectRevision == right?.ObjectRevision &&
+        left?.CompanyRevision == right?.CompanyRevision &&
+        left?.Deleted == right?.Deleted;
+
+    private static bool MatchesConnectionScope(
+        HostedOrderAuthorityScope authority,
+        HostedProfileConnectionSettings connection) =>
+        string.Equals(authority.ProfileId, connection.ProfileScopeId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(authority.ConnectionScopeId, connection.ConnectionScopeId, StringComparison.Ordinal);
+
+    private static bool HasSameConnection(
+        HostedProfileConnectionSettings left,
+        HostedProfileConnectionSettings right) =>
+        string.Equals(left.ProfileScopeId, right.ProfileScopeId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.ConnectionScopeId, right.ConnectionScopeId, StringComparison.Ordinal);
 
     private static IReadOnlyList<TradeRequestedOrderOutput> GetRequestedOutputs(
         TradeOrder order) =>
