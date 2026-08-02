@@ -8,11 +8,6 @@ public sealed record TradeOrderPricingWorkflowOptions(
     string World,
     bool ForceRefreshMarketData);
 
-public sealed record TradeOrderPlanCacheResult(
-    bool Ready,
-    string Message,
-    RecipePlannerCommandMessageLevel MessageLevel);
-
 public sealed record TradeOrderPricingWorkflowResult(
     TradeOrderPricingWorkflowStatus Status,
     TradeOrder? UpdatedOrder,
@@ -69,125 +64,6 @@ public sealed class TradeOrderPricingWorkflowService
         _planPersistence = planPersistence;
         _viewSettings = viewSettings;
         _operations = operations;
-    }
-
-    public async Task<TradeOrderPlanCacheResult> RebuildPlanCacheAsync(
-        TradeOrder order,
-        TradeOrderPricingWorkflowOptions options,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(order);
-        ArgumentNullException.ThrowIfNull(options);
-        if (order.CraftPlanLinkKind != TradeOrderCraftPlanLinkKind.OrderGenerated ||
-            string.IsNullOrWhiteSpace(order.CraftPlanId))
-        {
-            return new TradeOrderPlanCacheResult(
-                false,
-                "The linked plan is not an order-generated plan and cannot be reconstructed automatically.",
-                RecipePlannerCommandMessageLevel.Warning);
-        }
-
-        var projectItems = GetOrderRootItems(order)
-            .Where(item => item.Quantity > 0)
-            .Select(ToProjectItem)
-            .ToArray();
-        if (projectItems.Length == 0)
-        {
-            return new TradeOrderPlanCacheResult(
-                false,
-                "The order has no requested outputs to reconstruct.",
-                RecipePlannerCommandMessageLevel.Warning);
-        }
-
-        using var operation = _operations.Start(
-            CancellableOperationWorkflow.TradeOrderPricing,
-            "Trade Order Plan",
-            "Restoring the order's local craft plan...",
-            ct);
-        WorkerSessionOperationLease? workerOperation = null;
-        try
-        {
-            workerOperation = await _worker.BeginOperationAsync(
-                WorkerSessionOperationKind.TradeOrderPricing,
-                $"trade-plan-cache:{order.Id}",
-                "Restoring the order's local craft plan...",
-                operation.Token);
-            var build = await _planLifecycle.BuildRecipeAsync(
-                new WorkerRecipeBuildRequest(
-                    projectItems,
-                    options.DataCenter,
-                    ResolveOrderRegion(order, options.DataCenter),
-                    order.SourceSnapshot.MarketFetchScope ??
-                        _viewSettings.DefaultMarketFetchScope),
-                PlanDerivationDispatch.Deferred,
-                operation.Token,
-                workerOperation.OperationId);
-            if (!operation.IsCurrent || !build.Built)
-            {
-                return new TradeOrderPlanCacheResult(
-                    false,
-                    "The order plan reconstruction was canceled.",
-                    RecipePlannerCommandMessageLevel.Info);
-            }
-
-            var planName = string.IsNullOrWhiteSpace(order.CraftPlanName)
-                ? TradeOrderWorkflow.CreateGeneratedCraftPlanName(order)
-                : order.CraftPlanName;
-            await _worker.MutatePlanIdentityAsync(
-                order.CraftPlanId,
-                planName,
-                operation.Token,
-                workerOperation.OperationId);
-            var snapshot = await _worker.ExportStoredPlanAsync(
-                order.CraftPlanId,
-                planName,
-                includeSourcePlanIdentity: true,
-                operation.Token);
-            if (snapshot == null || !await _planPersistence.SaveSnapshotAsync(snapshot))
-            {
-                return new TradeOrderPlanCacheResult(
-                    false,
-                    "The order plan was restored but could not be cached in this browser.",
-                    RecipePlannerCommandMessageLevel.Error);
-            }
-
-            await workerOperation.CompleteAsync(operation.Token);
-            operation.Complete("Order plan ready");
-            return new TradeOrderPlanCacheResult(
-                true,
-                "Order plan ready",
-                RecipePlannerCommandMessageLevel.Success);
-        }
-        catch (Exception ex) when (operation.ShouldReportError(ex))
-        {
-            if (workerOperation is not null)
-            {
-                await workerOperation.AbortAsync(CancellationToken.None);
-            }
-            operation.Complete("Order plan reconstruction failed.");
-            return new TradeOrderPlanCacheResult(
-                false,
-                $"Order plan reconstruction failed: {ex.Message}",
-                RecipePlannerCommandMessageLevel.Error);
-        }
-        catch (OperationCanceledException)
-        {
-            if (workerOperation is not null)
-            {
-                await workerOperation.AbortAsync(CancellationToken.None);
-            }
-            return new TradeOrderPlanCacheResult(
-                false,
-                "The order plan reconstruction was canceled.",
-                RecipePlannerCommandMessageLevel.Info);
-        }
-        finally
-        {
-            if (workerOperation is not null)
-            {
-                await workerOperation.DisposeAsync();
-            }
-        }
     }
 
     public async Task<TradeOrderPricingWorkflowResult> RebuildAndPriceAsync(
@@ -327,11 +203,6 @@ public sealed class TradeOrderPricingWorkflowService
         }
 
         var stored = await _planPersistence.LoadPlanPayloadAsync(order.CraftPlanId);
-        if (stored == null &&
-            order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated)
-        {
-            return await RebuildAndPriceAsync(order, options, ct);
-        }
         if (stored == null)
         {
             return TradeOrderPricingWorkflowResult.Noop(

@@ -1560,7 +1560,9 @@
                                 </div>
                                 @if (HasLinkedCraftPlan(_selectedOrder) && GetCurrentLiveProcurementSnapshot() is null)
                                 {
-                                    @if (_isLoadingSelectedOrderSupplyPlan || _isRefreshingLiveProcurement)
+                                    @if (_isLoadingSelectedOrderSupplyPlan ||
+                                         _isRefreshingLiveProcurement ||
+                                         string.IsNullOrWhiteSpace(_selectedOrderPlanRestoreError))
                                     {
                                         <div class="trade-orders-plan-restore" role="status" aria-live="polite">
                                             <MudProgressCircular Indeterminate="true" Size="Size.Small" Color="Color.Primary" />
@@ -1572,8 +1574,8 @@
                                     }
                                     else
                                     {
-                                        <MudAlert Severity="Severity.Warning" Dense="true">
-                                            The linked craft plan is unavailable. Its material leaves are withheld because they are not a complete plan.
+                                        <MudAlert Severity="Severity.Error" Dense="true">
+                                            @_selectedOrderPlanRestoreError
                                             <MudButton Variant="Variant.Text"
                                                        Color="Color.Primary"
                                                        Size="Size.Small"
