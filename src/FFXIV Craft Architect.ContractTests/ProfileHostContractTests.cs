@@ -12,7 +12,7 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class ProfileHostContractTests
 {
     [Fact]
-    public void Pbkdf2Verifier_MatchesFixedSha256Vector()
+    public async Task Pbkdf2Verifier_MatchesFixedSha256Vector()
     {
         var hasher = new ProfileAccessKeyHasher();
         const string storedHash =
@@ -20,6 +20,7 @@ public sealed class ProfileHostContractTests
 
         Assert.True(hasher.Verify("contract-password", storedHash));
         Assert.False(hasher.Verify("Contract-password", storedHash));
+        await ProfileHostCredentialImportContractScenarios.RunAsync();
     }
 
     [Theory]
