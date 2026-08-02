@@ -75,10 +75,59 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
     {
+        var plan = DeserializePlan(envelope);
+
+        var existing = await _planPersistence.LoadPlanPayloadAsync(plan.Id);
+        if (existing?.LinkedOrderId.HasValue == true)
+        {
+            if (WebPlanPersistenceService.HasSameStoredSnapshot(existing, plan))
+            {
+                return;
+            }
+
+            if (!plan.LinkedOrderId.HasValue &&
+                WebPlanPersistenceService.HasSameRevisionContent(existing, plan))
+            {
+                throw new ProfileSyncObjectReconciliationException(
+                    ProfileSyncCollections.Plans,
+                    envelope.ObjectId,
+                    ProfileSyncObjectReconciliation.PromoteLocalAuthority,
+                    $"Hosted plan '{envelope.ObjectId}' predates its linked-order seal.");
+            }
+
+            throw new ProfileSyncObjectReconciliationException(
+                ProfileSyncCollections.Plans,
+                envelope.ObjectId,
+                ProfileSyncObjectReconciliation.ProtectedConflict,
+                $"Hosted plan '{envelope.ObjectId}' conflicts with its linked-order plan.");
+        }
+
+        if (!await _planPersistence.SaveSnapshotAsync(plan))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not apply hosted plan '{envelope.ObjectId}'.");
+        }
+    }
+
+    public async Task AdoptProtectedRemoteObjectAsync(
+        ProfileSyncObjectEnvelope envelope,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var plan = DeserializePlan(envelope);
+        if (!await _planPersistence.PreserveLocalAndAdoptLinkedSnapshotAsync(plan))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not preserve the local plan before applying hosted plan '{envelope.ObjectId}'.");
+        }
+    }
+
+    private static StoredPlan DeserializePlan(ProfileSyncObjectEnvelope envelope)
+    {
         var snapshot = ProfileSyncPlanPayloadCodec.Deserialize(
             envelope.PayloadJson,
             envelope.ObjectId);
-        var plan = new StoredPlan
+        return new StoredPlan
         {
             Id = snapshot.Id,
             Name = snapshot.Name,
@@ -106,12 +155,6 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
             SourcePlanName = snapshot.SourcePlanName,
             LinkedOrderId = snapshot.LinkedOrderId
         };
-
-        if (!await _planPersistence.SaveSnapshotAsync(plan))
-        {
-            throw new InvalidOperationException(
-                $"Browser storage could not apply hosted plan '{envelope.ObjectId}'.");
-        }
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
@@ -125,5 +168,11 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public Task<bool> IsDeleteProtectedAsync(string objectId) =>
         _planPersistence.IsDeleteProtectedAsync(objectId);
+
+    public async Task<bool> IsLinkedOrderPlanAsync(string objectId) =>
+        (await _planPersistence.LoadPlanPayloadAsync(objectId))?.LinkedOrderId.HasValue == true;
+
+    public async Task<Guid?> LoadLinkedOrderIdAsync(string objectId) =>
+        (await _planPersistence.LoadPlanPayloadAsync(objectId))?.LinkedOrderId;
 
 }
