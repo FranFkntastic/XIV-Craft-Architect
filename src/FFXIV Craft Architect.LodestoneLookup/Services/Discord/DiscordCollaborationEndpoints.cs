@@ -46,7 +46,7 @@ public static class DiscordCollaborationEndpoints
                     return Results.Unauthorized();
                 }
 
-                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
+                if (!CanManagePublications(access))
                 {
                     return Results.Forbid();
                 }
@@ -122,7 +122,7 @@ public static class DiscordCollaborationEndpoints
                     return Results.Unauthorized();
                 }
 
-                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
+                if (!CanManagePublications(access))
                 {
                     return Results.Forbid();
                 }
@@ -163,6 +163,66 @@ public static class DiscordCollaborationEndpoints
                         error = "publication_not_retryable",
                         message = result.Error ??
                             "The Discord publication is not safe to retry."
+                    })
+                };
+            });
+
+        group.MapPost(
+            "/publications/{publicId}/reconcile",
+            async (
+                string companyId,
+                string publicId,
+                HttpRequest request,
+                TradeCompanyAuthorization authorization,
+                DiscordPublicationService publications,
+                CancellationToken cancellationToken) =>
+            {
+                var access = await ResolveAccessAsync(
+                    companyId,
+                    request,
+                    authorization,
+                    cancellationToken);
+                if (access == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                if (!CanManagePublications(access))
+                {
+                    return Results.Forbid();
+                }
+
+                if (string.IsNullOrWhiteSpace(publicId))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "invalid_publication",
+                        message = "An existing publication identity is required."
+                    });
+                }
+
+                var result = await publications.ReconcileAsync(
+                    access,
+                    publicId,
+                    cancellationToken);
+                return result.Status switch
+                {
+                    DiscordPublicationReconcileStatus.Queued
+                        when result.Publication is { } publication =>
+                        Results.Ok(ToPublicationResponse(
+                            publication,
+                            publication.CreatedAt.UtcDateTime)),
+                    DiscordPublicationReconcileStatus.Missing =>
+                        Results.NotFound(new
+                        {
+                            error = "publication_not_found",
+                            message = result.Error
+                        }),
+                    _ => Results.Conflict(new
+                    {
+                        error = "publication_not_reconcilable",
+                        message = result.Error ??
+                            "The Discord publication could not be reconciled."
                     })
                 };
             });
@@ -224,7 +284,7 @@ public static class DiscordCollaborationEndpoints
                     return Results.Unauthorized();
                 }
 
-                if (access.Role is not (TradeCompanyRole.Operator or TradeCompanyRole.Owner))
+                if (!CanManagePublications(access))
                 {
                     return Results.Forbid();
                 }
@@ -259,6 +319,10 @@ public static class DiscordCollaborationEndpoints
                 ? access
                 : null;
     }
+
+    internal static bool CanManagePublications(TradeCompanyAccessContext access) =>
+        access.GrantId != Guid.Empty &&
+        access.Role is TradeCompanyRole.Operator or TradeCompanyRole.Owner;
 
     private static DiscordCompanyPublicationResponse ToPublicationResponse(
         DiscordPublicationRecord publication,

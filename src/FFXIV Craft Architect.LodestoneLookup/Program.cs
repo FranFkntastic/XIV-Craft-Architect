@@ -124,8 +124,11 @@ builder.Services.AddSingleton<DiscordRequestVerifier>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddSingleton<SqliteDiscordCollaborationStore>();
 builder.Services.AddSingleton<SqliteDiscordNotificationStore>();
+builder.Services.AddSingleton<DiscordPublicationReconciliationService>();
 builder.Services.AddScoped<DiscordCompanyOrderAdapter>();
 builder.Services.AddScoped<DiscordPublicationService>();
+builder.Services.AddScoped<IDiscordPublicationRefresher>(
+    services => services.GetRequiredService<DiscordPublicationService>());
 builder.Services.AddScoped<CompanyCommissionDiscordDeliveryService>();
 builder.Services.AddScoped<ICompanyCommissionDiscordDelivery>(
     services => services.GetRequiredService<CompanyCommissionDiscordDeliveryService>());

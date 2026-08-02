@@ -251,6 +251,47 @@ public sealed class TradeCompanyCollaborationService(
         }
     }
 
+    public async Task<TradeCommissionWorkflowResult> ReconcileDiscordPublicationAsync(
+        TradeOrder order,
+        string publicId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!CanPerformExternalAction(order, out var reason))
+        {
+            return Rejected(reason);
+        }
+
+        if (string.IsNullOrWhiteSpace(publicId))
+        {
+            return Rejected("The Discord publication identity is unavailable.");
+        }
+
+        try
+        {
+            var authority = await CaptureOrderAuthorityAsync();
+            var publication = await client.ReconcilePublicationAsync(
+                order.CompanyProfileId,
+                publicId,
+                cancellationToken,
+                authority.Connection);
+            await RequireCurrentPublicationAuthorityAsync(
+                authority,
+                order.Id,
+                publication);
+            AdoptDictionaryAuthority(authority);
+            _publications[order.Id] = publication;
+            return new TradeCommissionWorkflowResult(
+                Success: true,
+                TradeCompanyMutationDisposition.Synced,
+                publication,
+                Message: publication.Message);
+        }
+        catch (Exception exception)
+        {
+            return Rejected(exception.Message);
+        }
+    }
+
     public async Task<PortableCommissionLink> PublishPortableLinkAsync(
         TradeOrder order,
         CommissionBriefDocument brief,

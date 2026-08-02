@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 
@@ -155,6 +156,17 @@ public sealed class DiscordOutboxDispatcher(
                     cancellationToken);
                 return;
             case DiscordApiOutcome.TerminalFailure:
+                if (workItem.Operation == DiscordOutboxOperation.EditMessage &&
+                    result.StatusCode == HttpStatusCode.NotFound &&
+                    await store.RecoverMissingEditedMessageAsync(
+                        workItem.WorkItemId,
+                        workItem.LeaseId,
+                        completedAt,
+                        cancellationToken))
+                {
+                    return;
+                }
+
                 await store.ExhaustAsync(
                     workItem.WorkItemId,
                     workItem.LeaseId,

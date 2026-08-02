@@ -1220,6 +1220,12 @@ public sealed class SqliteProfileHostStore
     public async Task<IReadOnlyList<HostedProfileObject>> LoadObjectsAsync(
         string collection,
         CancellationToken ct)
+        => await LoadObjectsAsync(collection, includeDeleted: false, ct);
+
+    public async Task<IReadOnlyList<HostedProfileObject>> LoadObjectsAsync(
+        string collection,
+        bool includeDeleted,
+        CancellationToken ct)
     {
         ValidateCollection(collection);
         await EnsureSchemaAsync(ct);
@@ -1237,10 +1243,11 @@ public sealed class SqliteProfileHostStore
             inner join hosted_profiles p on p.id = o.profile_id
             where p.disabled_at_utc is null
               and o.collection = $collection
-              and o.deleted = 0
+              and ($includeDeleted = 1 or o.deleted = 0)
             order by o.profile_id, o.object_id;
             """;
         command.Parameters.AddWithValue("$collection", collection);
+        command.Parameters.AddWithValue("$includeDeleted", includeDeleted ? 1 : 0);
         var found = new List<HostedProfileObject>();
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))

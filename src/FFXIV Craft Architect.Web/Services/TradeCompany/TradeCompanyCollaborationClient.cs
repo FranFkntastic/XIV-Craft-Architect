@@ -212,6 +212,28 @@ public sealed class TradeCompanyCollaborationClient(
         return ToPublication(publication);
     }
 
+    public async Task<TradeCommissionPublicationProjection> ReconcilePublicationAsync(
+        Guid companyProfileId,
+        string publicId,
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{companyProfileId:D}/discord/publications/{Uri.EscapeDataString(publicId)}/reconcile",
+            content: null,
+            cancellationToken,
+            capturedConnection);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var publication = await response.Content.ReadFromJsonAsync<DiscordPublicationDto>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The Discord reconciliation endpoint returned an empty response.");
+        return ToPublication(publication);
+    }
+
     public async Task<TradeCompanyPortablePublication> PublishPortableLinkAsync(
         Guid companyProfileId,
         Guid orderId,
