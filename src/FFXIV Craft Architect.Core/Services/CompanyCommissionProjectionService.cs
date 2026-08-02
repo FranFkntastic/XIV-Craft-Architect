@@ -30,6 +30,7 @@ public static class CompanyCommissionProjectionService
                 commission.Gates.CompanyMaterials.State),
             ClearedToWork = commission.ClearedToWork,
             IsClaimed = commission.ActiveClaim != null,
+            RequiresManualResolution = commission.ManualResolution != null,
             OutputProgress = commission.OutputProgress
                 .Select(progress => new CompanyCommissionPublicOutputProgress(
                     progress.LineId,

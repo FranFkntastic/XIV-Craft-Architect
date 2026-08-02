@@ -161,6 +161,7 @@ public partial class TradeOrders
             CompanyCommissionActivityKind.DeliveryReturnedToWork or
             CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted or
             CompanyCommissionActivityKind.CommissionCanceled or
+            CompanyCommissionActivityKind.ClaimResolutionRequired or
             CompanyCommissionActivityKind.CommissionPublicationRevoked =>
                 CommissionTimelineImportance.Attention,
             CompanyCommissionActivityKind.CommentAdded =>
@@ -279,6 +280,10 @@ public partial class TradeOrders
                 "The crafter confirmed receipt of the final payment.",
             CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted =>
                 "A party withdrew its final-payment confirmation.",
+            CompanyCommissionActivityKind.ClaimResolutionRequired =>
+                "The participant withdrew after work or an exchange began; public claiming is paused for company resolution.",
+            CompanyCommissionActivityKind.CommissionReopened =>
+                "The company resolved the interruption and reopened the commission for claiming.",
             _ => "Commission state updated."
         };
 }

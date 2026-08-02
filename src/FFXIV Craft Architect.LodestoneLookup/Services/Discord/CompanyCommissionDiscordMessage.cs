@@ -7,6 +7,11 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 public static class CompanyCommissionDiscordMessage
 {
     private const int SapphireColor = 0x2E6EA6;
+    private const int ClaimedColor = 0xD18B18;
+    private const int CraftingColor = 0x2E8B57;
+    private const int DeliveryColor = 0x2B9AA0;
+    private const int ClosedColor = 0x6B7280;
+    private const int ExceptionColor = 0xC0392B;
     private const int SuppressNotificationsFlag = 1 << 12;
 
     public static object CreatePublication(
@@ -47,7 +52,11 @@ public static class CompanyCommissionDiscordMessage
                             : string.Empty) +
                         $"**{lifecycle}**\n{OutputSummary(commission)}",
                         4096),
-                    color = SapphireColor,
+                    color = PublicationColor(commission, state),
+                    author = new
+                    {
+                        name = "Craft Architect | Commission"
+                    },
                     fields = new List<object>
                     {
                         Field("Payment", PaymentSummary(commission.Terms.Payment), false),
@@ -218,6 +227,26 @@ public static class CompanyCommissionDiscordMessage
             : "ASSIGNED - PRE-WORK";
     }
 
+    private static int PublicationColor(
+        CompanyCommissionPublicBrief commission,
+        DiscordPublicationState state)
+    {
+        if (state is DiscordPublicationState.Revoked or DiscordPublicationState.Suppressed ||
+            commission.Status is TradeOrderStatus.Canceled or TradeOrderStatus.ResolutionRequired)
+        {
+            return ExceptionColor;
+        }
+
+        return commission.Status switch
+        {
+            TradeOrderStatus.InProgress => CraftingColor,
+            TradeOrderStatus.AwaitingDelivery => DeliveryColor,
+            TradeOrderStatus.Completed => ClosedColor,
+            _ when state == DiscordPublicationState.Assigned => ClaimedColor,
+            _ => SapphireColor
+        };
+    }
+
     private static string OutputSummary(CompanyCommissionPublicBrief commission)
     {
         var progressByLine = commission.OutputProgress
@@ -362,8 +391,14 @@ public static class CompanyCommissionDiscordMessage
             return DiscordPublicationState.Revoked;
         }
 
-        if (commission.Closed ||
-            TradeOrderStatusWorkflow.IsArchived(commission.Status))
+        if (commission.Status is TradeOrderStatus.Canceled or
+            TradeOrderStatus.ResolutionRequired ||
+            commission.RequiresManualResolution)
+        {
+            return DiscordPublicationState.Suppressed;
+        }
+
+        if (commission.Closed || commission.Status == TradeOrderStatus.Completed)
         {
             return DiscordPublicationState.Closed;
         }

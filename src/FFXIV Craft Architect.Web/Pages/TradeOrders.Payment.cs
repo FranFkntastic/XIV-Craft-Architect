@@ -296,7 +296,7 @@ public partial class TradeOrders
                     return;
                 }
 
-                Snackbar.Add("Order canceled and its public commission retracted.", Severity.Success);
+                Snackbar.Add("Order canceled and removed from the Discord commissions channel.", Severity.Success);
             }
             catch (Exception exception)
             {
@@ -432,6 +432,7 @@ public partial class TradeOrders
             TradeOrderStatus.Assigned => "Assigned",
             TradeOrderStatus.InProgress => "Crafting",
             TradeOrderStatus.AwaitingDelivery => "Ready for Delivery",
+            TradeOrderStatus.ResolutionRequired => "Resolution Required",
             _ => status.ToString()
         };
     }

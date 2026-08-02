@@ -83,16 +83,6 @@ public sealed class TradeOrderLifecycleService(
                 owner = RequireProjection(canceled, "cancel the commission");
             }
 
-            if (owner.Order.CompanyCommission?.PublicMetadata.ViewState ==
-                CompanyCommissionPublicViewState.Published)
-            {
-                var revoked = await commissions.RevokePublicationAsync(
-                    owner,
-                    cancellationToken);
-                owner = RequireProjection(revoked, "retract the commission publication");
-            }
-
-            await RetractDiscordPublicationAsync(owner.Order, cancellationToken);
             appState.NotifyTradeOperationsDataChanged();
             return new TradeOrderCancellationResult(
                 owner.Order,

@@ -240,7 +240,7 @@ public static class CompanyCommissionEndpoints
                     return Results.Ok(ToOwnerResponse(mutation, claimUrl));
                 }
                 else if (command is CancelCompanyCommissionCommand or
-                         RevokeCompanyCommissionPublicationCommand)
+                          RevokeCompanyCommissionPublicationCommand)
                 {
                     foreach (var kind in Enum.GetValues<CompanyCommissionCapabilityKind>())
                     {
@@ -251,6 +251,20 @@ public static class CompanyCommissionEndpoints
                             now,
                             committedCancellationToken);
                     }
+                }
+                else if (command is ReopenCompanyCommissionCommand)
+                {
+                    await RevokeParticipantAuthoritiesAsync(
+                        capabilities,
+                        canonical,
+                        now,
+                        committedCancellationToken);
+                    var claimUrl = await IssueClaimUrlAsync(
+                        canonical,
+                        capabilities,
+                        timeProvider,
+                        committedCancellationToken);
+                    return Results.Ok(ToOwnerResponse(mutation, claimUrl));
                 }
 
                 return Results.Ok(ToOwnerResponse(mutation));
@@ -465,6 +479,7 @@ public static class CompanyCommissionEndpoints
             "reset-participant-recovery" =>
                 Deserialize<ResetCompanyCommissionParticipantRecoveryCommand>(body),
             "cancel" => Deserialize<CancelCompanyCommissionCommand>(body),
+            "reopen" => Deserialize<ReopenCompanyCommissionCommand>(body),
             "revoke-publication" =>
                 Deserialize<RevokeCompanyCommissionPublicationCommand>(body),
             _ => throw new JsonException("The commissioner command route is not supported.")
@@ -507,6 +522,7 @@ public static class CompanyCommissionEndpoints
             ResetCompanyCommissionParticipantRecoveryCommand value =>
                 value with { Context = context },
             CancelCompanyCommissionCommand value => value with { Context = context },
+            ReopenCompanyCommissionCommand value => value with { Context = context },
             RevokeCompanyCommissionPublicationCommand value =>
                 value with { Context = context },
             _ => throw new JsonException("The commissioner command type is invalid.")

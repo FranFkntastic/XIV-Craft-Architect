@@ -580,6 +580,26 @@ public sealed class TradeCommissionOperationsService(
             cancellationToken);
     }
 
+    public Task<TradeCommissionOperatorResult> ReopenAsync(
+        CompanyCommissionOwnerProjection current,
+        string resolution,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(resolution))
+        {
+            return Task.FromResult(Rejected(
+                current,
+                "Describe how the canceled or interrupted commission was resolved before reopening it."));
+        }
+
+        return ExecuteAsync(
+            current,
+            "reopen",
+            new { Resolution = resolution.Trim() },
+            context => new ReopenCompanyCommissionCommand(context, resolution.Trim()),
+            cancellationToken);
+    }
+
     public Task<TradeCommissionOperatorResult> RevokePublicationAsync(
         CompanyCommissionOwnerProjection current,
         CancellationToken cancellationToken = default) =>

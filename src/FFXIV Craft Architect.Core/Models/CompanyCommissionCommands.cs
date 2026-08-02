@@ -171,6 +171,10 @@ public sealed record CancelCompanyCommissionCommand(
     CompanyCommissionCommandContext Context,
     string Reason) : ICompanyCommissionCompanyCommand;
 
+public sealed record ReopenCompanyCommissionCommand(
+    CompanyCommissionCommandContext Context,
+    string Resolution) : ICompanyCommissionCompanyCommand;
+
 public sealed record RevokeCompanyCommissionPublicationCommand(
     CompanyCommissionCommandContext Context) : ICompanyCommissionCompanyCommand;
 
