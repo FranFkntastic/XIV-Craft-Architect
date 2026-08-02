@@ -223,7 +223,8 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 hasTrustedProjection: sameProfile &&
                                       _hostedOrders.RestoreState.ShowsCompleteProjection,
                 cursor,
-                DateTime.UtcNow);
+                DateTime.UtcNow,
+                settings.ConnectionScopeId!);
             IJSObjectReference? controller = null;
             try
             {
@@ -370,13 +371,26 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
             var commission = candidate.Order!.CompanyCommission!;
             try
             {
+                var connection = await _localState.LoadConnectionSettingsAsync();
+                var authority = _hostedOrders.CaptureAuthorityScope();
+                if (!IsCurrentAuthority(authority, connection, profileId))
+                {
+                    throw new InvalidOperationException(
+                        "The hosted order authority changed before owner adoption began.");
+                }
                 var projection = await _commissionClient.LoadOwnerProjectionAsync(
+                    connection,
                     commission.CompanyId.Value,
                     commission.CommissionId,
                     cancellationToken);
 
                 // The order can advance while the authenticated projection is in flight.
                 // Re-read it before making any durable local change.
+                if (!await IsCurrentAuthorityAsync(authority, connection, profileId))
+                {
+                    throw new InvalidOperationException(
+                        "The hosted order authority changed while owner adoption was in progress.");
+                }
                 var current = _hostedOrders.Get(candidate.OrderId);
                 if (current == null || !NeedsOwnerAdoption(current))
                 {
@@ -384,18 +398,39 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 }
 
                 ValidateOwnerProjection(current, projection);
-                if (!await _tradeOperations.ApplyCanonicalOrderAsync(projection.Order))
+                var adoption = await _hostedOrders.AdoptAndPersistCommittedOwnerAsync(
+                    authority,
+                    projection,
+                    async winner =>
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var persisted = winner.Deleted
+                            ? await _tradeOperations.DeleteOrderAsync(winner.OrderId)
+                            : await _tradeOperations.ApplyCanonicalOrderAsync(winner.Order!);
+                        if (!persisted)
+                        {
+                            throw new InvalidOperationException(
+                                "The authenticated owner projection could not be persisted locally.");
+                        }
+                        if (!await IsCurrentAuthorityAsync(authority, connection, profileId))
+                        {
+                            throw new InvalidOperationException(
+                                "The hosted order authority changed while owner persistence was in progress.");
+                        }
+                        await _localState.SaveObjectRevisionAsync(
+                            connection,
+                            ProfileSyncCollections.TradeOrders,
+                            winner.OrderId.ToString("D"),
+                            winner.ObjectRevision);
+                    },
+                    () => IsCurrentAuthorityAsync(authority, connection, profileId));
+                if (adoption is not (
+                    HostedOrderCommittedProjectionResult.Adopted or
+                    HostedOrderCommittedProjectionResult.AlreadyCurrent))
                 {
                     throw new InvalidOperationException(
-                        "The authenticated owner projection could not be persisted locally.");
+                        $"The authenticated owner projection could not be adopted because its authority is {adoption}.");
                 }
-
-                await _localState.SaveObjectRevisionAsync(
-                    profileId,
-                    ProfileSyncCollections.TradeOrders,
-                    projection.Order.Id.ToString("D"),
-                    projection.ObjectRevision.Value);
-                _hostedOrders.TryPublishOwner(projection);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -409,6 +444,44 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                     candidate.OrderId);
             }
         }
+    }
+
+    private bool IsCurrentAuthority(
+        HostedOrderAuthorityScope authority,
+        HostedProfileConnectionSettings connection,
+        string profileId) =>
+        _hostedOrders.IsCurrentAuthority(authority) &&
+        string.Equals(
+            authority.ProfileId,
+            profileId,
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            connection.ProfileScopeId,
+            profileId,
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            authority.ConnectionScopeId,
+            connection.ConnectionScopeId,
+            StringComparison.Ordinal);
+
+    private async Task<bool> IsCurrentAuthorityAsync(
+        HostedOrderAuthorityScope authority,
+        HostedProfileConnectionSettings connection,
+        string profileId)
+    {
+        if (!IsCurrentAuthority(authority, connection, profileId))
+        {
+            return false;
+        }
+        var current = await _localState.LoadConnectionSettingsAsync();
+        return string.Equals(
+                   connection.ConnectionScopeId,
+                   current.ConnectionScopeId,
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   connection.ProfileScopeId,
+                   current.ProfileScopeId,
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool NeedsOwnerAdoption(HostedOrderProjectionSnapshot snapshot) =>

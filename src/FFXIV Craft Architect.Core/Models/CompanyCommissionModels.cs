@@ -430,6 +430,7 @@ public sealed record CompanyCommissionParticipantBrief
     public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
     public required long ParticipantCapabilityRevision { get; init; }
     public required CompanyCommissionPaymentClearance Payment { get; init; }
+    public required bool CompanyMaterialsReadyForHandoff { get; init; }
     public CompanyCommissionSettlementConfirmation SettlementPayment { get; init; } = new();
     public IReadOnlyList<CompanyCommissionParticipantActivity> Activity { get; init; } = [];
 }

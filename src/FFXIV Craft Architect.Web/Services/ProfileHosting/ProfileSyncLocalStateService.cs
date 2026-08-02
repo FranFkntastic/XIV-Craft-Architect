@@ -206,6 +206,33 @@ public sealed class ProfileSyncLocalStateService
         }
     }
 
+    public async Task SaveObjectRevisionAsync(
+        HostedProfileConnectionSettings authority,
+        string collection,
+        string objectId,
+        long revision)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        var profileId = authority.ProfileScopeId
+            ?? throw new InvalidOperationException(
+                "Hosted-profile revision persistence requires a captured profile authority.");
+        if (string.IsNullOrWhiteSpace(authority.HostUrl))
+        {
+            throw new InvalidOperationException(
+                "Hosted-profile revision persistence requires a captured host authority.");
+        }
+
+        var key = BuildProfileStateKey(
+            NormalizeAuthorityScope(authority.HostUrl),
+            profileId,
+            $"{ObjectRevisionSuffix}{collection}.{Uri.EscapeDataString(objectId)}");
+        if (!await _indexedDb.SaveSettingAsync(key, revision))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not persist the hosted revision for '{collection}/{objectId}'.");
+        }
+    }
+
     public async Task<IReadOnlyList<ProfileSyncPendingSave>> LoadPendingSavesAsync(
         string profileId)
     {
@@ -268,10 +295,16 @@ public sealed class ProfileSyncLocalStateService
 
     private async Task<string> BuildProfileStateKeyAsync(string profileId, string suffix)
     {
-        profileId = NormalizeProfileScopeId(profileId);
         var authorityScope = await RequireAuthorityScopeAsync();
-        return $"{ProfileStatePrefix}{authorityScope}.profile.{profileId}.{suffix}";
+        return BuildProfileStateKey(authorityScope, profileId, suffix);
     }
+
+    private static string BuildProfileStateKey(
+        string authorityScope,
+        string profileId,
+        string suffix) =>
+        $"{ProfileStatePrefix}{authorityScope}.profile." +
+        $"{NormalizeProfileScopeId(profileId)}.{suffix}";
 
     private async Task<string> RequireAuthorityScopeAsync()
     {

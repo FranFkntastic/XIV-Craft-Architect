@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, firefox } from 'playwright';
+import { resolveParticipantPreworkChoices } from
+  '../../src/FFXIV Craft Architect.Web/wwwroot/commission-client.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(here, '../..');
@@ -16,6 +18,32 @@ let publishRoot = process.env.ENGINE_WORKER_PUBLISH_ROOT
 let temporaryPublishRoot;
 let server;
 let origin;
+
+function commissionProjection({
+  termsVersion = 2,
+  paymentPending = true,
+  materialsPending = true,
+  paymentReceivedAtTermsVersion = null,
+  companyMaterialsReadyForHandoff = false
+} = {}) {
+  return {
+    kind: 'participant',
+    public: {
+      terms: { version: termsVersion },
+      gates: {
+        payment: paymentPending ? 'Pending' : 'Satisfied',
+        companyMaterials: materialsPending ? 'Pending' : 'Satisfied'
+      }
+    },
+    payment: {
+      crafterReceived: paymentReceivedAtTermsVersion == null
+        ? null
+        : { termsVersion: paymentReceivedAtTermsVersion }
+    },
+    companyMaterialsReadyForHandoff,
+    activity: []
+  };
+}
 
 before(async () => {
   if (!publishRoot) {
@@ -64,6 +92,46 @@ before(async () => {
 after(async () => {
   if (server) await new Promise(resolve => server.close(resolve));
   if (temporaryPublishRoot) await rm(temporaryPublishRoot, { recursive: true, force: true });
+});
+
+test('preserved payment and material evidence remain parallel after an unrelated terms revision', () => {
+  const result = resolveParticipantPreworkChoices(commissionProjection({
+    termsVersion: 2,
+    paymentReceivedAtTermsVersion: 1,
+    companyMaterialsReadyForHandoff: true
+  }));
+
+  assert.equal(result.paymentPending, true);
+  assert.equal(result.materialsReady, true);
+  assert.ok(!result.choices.includes('confirm-advance-payment'));
+  assert.ok(result.choices.includes('acknowledge-company-materials'));
+  assert.ok(result.choices.includes('retract-advance-payment-confirmation'));
+});
+
+test('invalidated payment and material bindings offer only current canonical actions', () => {
+  const result = resolveParticipantPreworkChoices(commissionProjection({
+    termsVersion: 2,
+    paymentReceivedAtTermsVersion: null,
+    companyMaterialsReadyForHandoff: false
+  }));
+
+  assert.ok(result.choices.includes('confirm-advance-payment'));
+  assert.ok(!result.choices.includes('acknowledge-company-materials'));
+  assert.ok(!result.choices.includes('retract-advance-payment-confirmation'));
+});
+
+test('participant progress waits for current terms and remains keyboard labeled', async () => {
+  const source = await readFile(path.join(
+    repositoryRoot,
+    'src',
+    'FFXIV Craft Architect.Web',
+    'wwwroot',
+    'commission.js'), 'utf8');
+  assert.match(source, /requiresTermsAcknowledgement\(projection\)\) return "TERMS REVIEW REQUIRED"/);
+  assert.match(source, /brief\.clearedToWork\s*&&\s*!requiresTermsAcknowledgement\(projection\)/);
+  assert.match(source, /\["report-progress", "declare-readiness", "withdraw-readiness"\]\.includes\(command\)/);
+  assert.match(source, /label\.htmlFor = inputId;\s*input\.id = inputId;/);
+  assert.match(source, /form\.querySelector\("input:not\(\[disabled\]\)"\)\?\.focus/);
 });
 
 for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]) {

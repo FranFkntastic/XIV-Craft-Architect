@@ -472,7 +472,8 @@ public partial class TradeOrders
     private async Task<bool> UpdateCanonicalDraftAsync(
         TradeOrder workPackage,
         CommissionBriefDocument brief,
-        string? successMessage)
+        string? successMessage,
+        Action<TradeCommissionOperatorResult>? observeResult = null)
     {
         var owner = SelectedCommissionOwner;
         var commission = owner?.Order.CompanyCommission;
@@ -520,6 +521,7 @@ public partial class TradeOrders
                 owner,
                 terms,
                 workPackage);
+            observeResult?.Invoke(result);
             ApplyCommissionResult(result, successMessage);
             return result.Success;
         }
@@ -663,25 +665,59 @@ public partial class TradeOrders
         TradeCommissionOperatorResult result,
         string? successMessage)
     {
-        if (!result.Success || result.Projection == null)
+        if (!result.Success)
         {
+            if (result.HostCommitted && result.Projection != null)
+            {
+                var current = GetCurrentCommissionProjection(result.Projection);
+                if (current != null)
+                {
+                    ReplaceSelectedCommissionProjection(current);
+                }
+            }
             Snackbar.Add(
                 result.Message ?? "The commissioner action failed.",
                 Severity.Error);
             return;
         }
+        var committed = result.Projection == null
+            ? null
+            : GetCurrentCommissionProjection(result.Projection);
+        if (committed == null)
+        {
+            Snackbar.Add(
+                "The hosted order authority changed before the committed order could be displayed.",
+                Severity.Error);
+            return;
+        }
 
-        var activeTab = _activeOpsTab;
-        _orders = _orders
-            .Where(order => order.Id != result.Projection.Order.Id)
-            .Append(result.Projection.Order)
-            .ToList();
-        SelectOrder(result.Projection.Order);
-        _activeOpsTab = activeTab;
+        ReplaceSelectedCommissionProjection(committed);
         if (!string.IsNullOrWhiteSpace(successMessage))
         {
             Snackbar.Add(successMessage, Severity.Success);
         }
+    }
+
+    private CompanyCommissionOwnerProjection? GetCurrentCommissionProjection(
+        CompanyCommissionOwnerProjection candidate)
+    {
+        var current = HostedOrders.GetOwnerProjection(candidate.Order.Id);
+        return current != null &&
+               current.Order.CompanyProfileId == candidate.Order.CompanyProfileId &&
+               current.ObjectRevision.Value >= candidate.ObjectRevision.Value
+            ? current
+            : null;
+    }
+
+    private void ReplaceSelectedCommissionProjection(CompanyCommissionOwnerProjection projection)
+    {
+        var activeTab = _activeOpsTab;
+        _orders = _orders
+            .Where(order => order.Id != projection.Order.Id)
+            .Append(projection.Order)
+            .ToList();
+        SelectOrder(projection.Order);
+        _activeOpsTab = activeTab;
     }
 
     private TradeCrafterProfile? BuildConfirmedCommissionCrafter(
@@ -879,7 +915,7 @@ public partial class TradeOrders
             CompanyCommissionActivityKind.PaymentClearanceRecorded => "Payment observed",
             CompanyCommissionActivityKind.TermsAmended => "Terms revised",
             CompanyCommissionActivityKind.PaymentSentRecorded => "Payment sent",
-            CompanyCommissionActivityKind.PaymentReceivedConfirmed => "Payment received",
+            CompanyCommissionActivityKind.PaymentReceivedConfirmed => "Advance payment receipt confirmed",
             CompanyCommissionActivityKind.PaymentAttestationRetracted => "Payment confirmation retracted",
             CompanyCommissionActivityKind.CompanyMaterialsReady => "Materials ready",
             CompanyCommissionActivityKind.CompanyMaterialsReceived => "Materials received",
@@ -891,7 +927,7 @@ public partial class TradeOrders
             CompanyCommissionActivityKind.DeliveryAccepted => "Delivery accepted",
             CompanyCommissionActivityKind.SettlementRecorded => "Settlement recorded",
             CompanyCommissionActivityKind.SettlementPaymentSentRecorded => "Final payment sent",
-            CompanyCommissionActivityKind.SettlementPaymentReceivedConfirmed => "Final payment received",
+            CompanyCommissionActivityKind.SettlementPaymentReceivedConfirmed => "Final payment receipt confirmed",
             CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted => "Final-payment confirmation retracted",
             CompanyCommissionActivityKind.CommentAdded => "Comment",
             CompanyCommissionActivityKind.CommissionCanceled => "Commission canceled",

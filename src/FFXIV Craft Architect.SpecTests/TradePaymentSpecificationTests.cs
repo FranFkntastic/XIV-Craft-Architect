@@ -8,6 +8,7 @@ public sealed class TradePaymentSpecificationTests
     [Fact]
     public void LegacyCommissionReimbursesCrafterButCommissionsAllMaterials()
     {
+        CompanyCommissionGateRevisionSpecificationTests.AssertAll();
         var summary = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             Materials:
             [

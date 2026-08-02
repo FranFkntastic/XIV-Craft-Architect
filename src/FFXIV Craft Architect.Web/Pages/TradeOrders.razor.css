@@ -220,6 +220,16 @@
   background: #3b341f;
 }
 
+.trade-orders-rail-group-title:focus-visible,
+.trade-orders-rail-order:focus-visible,
+.trade-orders-search-result:focus-visible,
+.trade-orders-procurement-filter:focus-visible,
+.trade-orders-timeline-filter:focus-visible,
+.trade-orders-timeline-visibility button:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 2px;
+}
+
 .trade-orders-rail-order.is-device-only {
   color: #bcbcbc;
   cursor: default;
@@ -646,42 +656,6 @@
 
 .trade-orders-payment-metric .mud-icon-button {
   grid-area: copy;
-}
-
-.trade-orders-payment-policy {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.65rem;
-  align-items: center;
-  border: 1px solid #343434;
-  border-radius: 6px;
-  background: #202020;
-  margin-top: 10px;
-  padding: 10px;
-}
-
-.trade-orders-payment-policy-controls {
-  display: grid;
-  grid-template-columns: auto minmax(10.5rem, 13rem);
-  gap: 0.6rem;
-  align-items: center;
-}
-
-.trade-orders-payment-policy span {
-  display: block;
-  color: #b8b8b8;
-  font-size: 0.68rem;
-  line-height: 1.1;
-}
-
-.trade-orders-payment-policy strong {
-  display: block;
-  color: #f0f0f0;
-  font-size: 0.82rem;
-  line-height: 1.2;
-  margin-top: 4px;
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .trade-orders-payment-subtotals {
@@ -1141,6 +1115,11 @@
   text-decoration: underline;
 }
 
+::deep .trade-orders-procurement-route-actions button:focus-visible {
+  outline: 2px solid #f0cc62;
+  outline-offset: 2px;
+}
+
 ::deep .trade-orders-procurement-select {
   width: 100%;
   min-width: 0;
@@ -1361,22 +1340,12 @@
   padding-left: 18px;
 }
 
-.trade-orders-status-panel,
-.trade-orders-close-panel,
 .trade-orders-panel {
   border: 1px solid #343434;
   border-radius: 6px;
   background: #252525;
   margin-top: 12px;
   padding: 12px;
-}
-
-.trade-orders-close-panel {
-  border-color: #463030;
-}
-
-.trade-orders-close-panel .mud-button-root + .mud-button-root {
-  margin-top: 8px;
 }
 
 .trade-orders-history {
@@ -1699,69 +1668,6 @@
   margin-bottom: 6px;
 }
 
-.trade-orders-commission-payment {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px;
-  border: 1px solid #4b4130;
-  border-radius: 6px;
-  background: #27231b;
-}
-
-.trade-orders-commission-payment-summary,
-.trade-orders-gate-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.trade-orders-commission-payment-summary > div,
-.trade-orders-gate-strip > span {
-  min-width: 0;
-  padding: 7px 8px;
-  border: 1px solid #3d382d;
-  border-radius: 4px;
-  background: #211f1a;
-}
-
-.trade-orders-commission-payment-summary span,
-.trade-orders-gate-strip span {
-  color: #aaa;
-  font-size: 0.68rem;
-}
-
-.trade-orders-commission-payment-summary strong,
-.trade-orders-gate-strip b {
-  display: block;
-  margin-top: 3px;
-  color: #f0f0f0;
-  font-size: 0.76rem;
-}
-
-.trade-orders-payment-request {
-  display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(180px, 1fr) auto;
-  gap: 8px;
-  align-items: end;
-  padding-top: 8px;
-  border-top: 1px solid #40392d;
-}
-
-.trade-orders-payment-request > div:first-child {
-  display: grid;
-  gap: 2px;
-}
-
-.trade-orders-payment-request span {
-  color: #b8b8b8;
-  font-size: 0.7rem;
-}
-
-.trade-orders-payment-request span.is-error {
-  color: #f0a6a6;
-}
-
 .trade-orders-inline-actions,
 .trade-orders-observation-row,
 .trade-orders-material-handoff-action {
@@ -1886,7 +1792,6 @@
 }
 
 .trade-orders-operation-card-heading,
-.trade-orders-payment-handshake-heading,
 .trade-orders-timeline-item-heading {
   display: flex;
   align-items: flex-start;
@@ -2286,14 +2191,11 @@
   .trade-orders-material-table.is-compact .trade-orders-material-row,
   .trade-orders-material-table.is-compact.has-commission-handoff .trade-orders-material-header,
   .trade-orders-material-table.is-compact.has-commission-handoff .trade-orders-material-row,
-  .trade-orders-commission-payment-summary,
-  .trade-orders-gate-strip,
   .trade-orders-commission-identity-strip,
   .trade-orders-operations-summary,
   .trade-orders-prerequisite-list,
   .trade-orders-sharing-grid,
   .trade-orders-payment-handshake,
-  .trade-orders-payment-request,
   .trade-orders-commission-claim,
   .trade-orders-commission-publication,
   .trade-orders-identity-evidence,
@@ -2307,12 +2209,7 @@
     transform: rotate(90deg);
   }
 
-  .trade-orders-payment-policy {
-    grid-template-columns: 1fr;
-  }
-
   .trade-orders-payment-metrics,
-  .trade-orders-payment-policy-controls,
   .trade-orders-parallel-gates,
   .trade-orders-start-gate-action {
     grid-template-columns: 1fr;

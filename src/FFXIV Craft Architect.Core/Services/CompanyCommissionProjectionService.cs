@@ -64,6 +64,9 @@ public static class CompanyCommissionProjectionService
             ProvisionalCrafter = commission.ProvisionalCrafter,
             ParticipantCapabilityRevision = commission.ParticipantGrant?.CapabilityRevision ?? 0,
             Payment = commission.Gates.Payment,
+            CompanyMaterialsReadyForHandoff =
+                commission.Gates.CompanyMaterials.State == CompanyCommissionClearanceState.Pending &&
+                commission.Gates.CompanyMaterials.ReadyAtUtc.HasValue,
             SettlementPayment = commission.SettlementPayment,
             Activity = commission.Activity
                 .Where(item =>

@@ -17,6 +17,9 @@ public sealed class TradeCommissionOperationsService(
     AppState appState)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private sealed record OrderCommandAuthority(
+        HostedOrderAuthorityScope Projection,
+        HostedProfileConnectionSettings Connection);
     private readonly Dictionary<Guid, string> _errors = [];
     private readonly HashSet<Guid> _missingCanonicalOwners = [];
     private readonly Dictionary<Guid, IReadOnlyList<TradeDiscordNotificationDiagnostic>>
@@ -81,22 +84,35 @@ public sealed class TradeCommissionOperationsService(
             return;
         }
 
+        OrderCommandAuthority? authority = null;
+        HostedOrderProjectionSnapshot? expectedProjection = null;
         try
         {
+            authority = await CaptureOrderAuthorityAsync();
             var companyId = order.CompanyCommission?.CompanyId ??
                 throw new InvalidOperationException(
                     "The cached order does not contain canonical company ownership.");
             var commissionId = order.CompanyCommission.CommissionId;
+            expectedProjection = hostedOrders.Get(order.Id);
             var projection = await client.LoadOwnerProjectionAsync(
+                authority.Connection,
                 companyId.Value,
                 commissionId,
                 cancellationToken);
             ValidateProjection(order, projection);
-            await ApplyProjectionAsync(projection);
+            await ApplyProjectionAsync(authority, projection);
         }
         catch (MissingCompanyCommissionOwnerException exception)
         {
-            hostedOrders.ClearOwner(order.Id);
+            if (authority == null ||
+                !await IsCurrentAuthorityAsync(authority) ||
+                !hostedOrders.TryClearOwner(
+                    authority.Projection,
+                    order.Id,
+                    expectedProjection))
+            {
+                return;
+            }
             _missingCanonicalOwners.Add(order.Id);
             _errors[order.Id] = exception.Message;
         }
@@ -127,17 +143,21 @@ public sealed class TradeCommissionOperationsService(
 
         try
         {
+            var authority = await CaptureOrderAuthorityAsync();
             if (!await tradeOperations.SaveCrafterAsync(crafter))
             {
                 return Rejected(
                     current,
                     "Browser storage could not create or update the company crafter.");
             }
+            await RequireCurrentAuthorityAsync(authority, "identity confirmation");
 
             await profileSync.QueueLocalSaveAsync(
                 ProfileSyncCollections.TradeCrafters,
                 crafter.Id.ToString("D"));
+            await RequireCurrentAuthorityAsync(authority, "identity confirmation");
             await profileSync.SyncNowAsync(cancellationToken);
+            await RequireCurrentAuthorityAsync(authority, "identity confirmation");
             var crafterConflict = profileSync.Conflicts.FirstOrDefault(item =>
                 string.Equals(
                     item.Collection,
@@ -156,11 +176,12 @@ public sealed class TradeCommissionOperationsService(
 
             var commission = RequireCommission(current);
             var fresh = await client.LoadOwnerProjectionAsync(
+                authority.Connection,
                 commission.CompanyId.Value,
                 commission.CommissionId,
                 cancellationToken);
             ValidateProjection(current.Order, fresh);
-            await ApplyProjectionAsync(fresh);
+            await ApplyProjectionAsync(authority, fresh);
             return await ExecuteAsync(
                 fresh,
                 "confirm-identity",
@@ -169,7 +190,8 @@ public sealed class TradeCommissionOperationsService(
                     context,
                     crafter.Id,
                     lodestoneCharacterId),
-                cancellationToken);
+                cancellationToken,
+                authority);
         }
         catch (Exception exception)
         {
@@ -507,16 +529,20 @@ public sealed class TradeCommissionOperationsService(
             return Rejected(current, reason);
         }
 
+        CompanyCommissionOwnerProjection? committedProjection = null;
+        var hostCommitted = false;
         try
         {
             ValidateProjection(current.Order, current);
+            var authority = await CaptureOrderAuthorityAsync();
             var context = CreateContext(
                 current,
                 "reset-participant-recovery",
                 payload: null);
             var response = await client.ResetParticipantRecoveryAsync(
                 new ResetCompanyCommissionParticipantRecoveryCommand(context),
-                cancellationToken);
+                cancellationToken,
+                authority.Connection);
             if (!response.Mutation.Success)
             {
                 return Rejected(
@@ -525,6 +551,8 @@ public sealed class TradeCommissionOperationsService(
                     $"Participant recovery reset was {response.Mutation.Status.ToString().ToLowerInvariant()}.");
             }
 
+            hostCommitted = true;
+            committedProjection = response.Projection;
             var updated = response.Projection;
             ValidateProjection(current.Order, updated);
             if (updated.ObjectRevision.Value <= current.ObjectRevision.Value)
@@ -543,16 +571,20 @@ public sealed class TradeCommissionOperationsService(
             }
 
             ValidateCapabilityUrl(updated, response.RecoveryUrl, "recover");
-            await ApplyProjectionAsync(updated);
+            await ApplyProjectionAsync(authority, updated);
             return new TradeCommissionOperatorResult(
                 true,
                 updated,
-                RecoveryUrl: response.RecoveryUrl);
+                RecoveryUrl: response.RecoveryUrl,
+                HostCommitted: true);
         }
         catch (Exception exception)
         {
             _errors[current.Order.Id] = exception.Message;
-            return Rejected(current, exception.Message);
+            return Rejected(
+                committedProjection ?? current,
+                exception.Message,
+                hostCommitted);
         }
     }
 
@@ -575,10 +607,13 @@ public sealed class TradeCommissionOperationsService(
         try
         {
             ValidateProjection(current.Order, current);
+            var authority = await CaptureOrderAuthorityAsync();
             var response = await client.IssueClaimLinkAsync(
                 CreateContext(current, "issue-claim-link", payload: null),
-                cancellationToken);
+                cancellationToken,
+                authority.Connection);
             ValidateCapabilityUrl(current, response.ClaimUrl, "claim");
+            await RequireCurrentAuthorityAsync(authority, "claim-link issuance");
             _errors.Remove(current.Order.Id);
             return new TradeCommissionOperatorResult(
                 true,
@@ -626,7 +661,8 @@ public sealed class TradeCommissionOperationsService(
         string route,
         object? payload,
         Func<CompanyCommissionCommandContext, TCommand> createCommand,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        OrderCommandAuthority? capturedAuthority = null)
         where TCommand : ICompanyCommissionCommand
     {
         if (!CanPerformExternalAction(current.Order, out var reason))
@@ -635,8 +671,11 @@ public sealed class TradeCommissionOperationsService(
         }
 
         var commandProjection = current;
+        CompanyCommissionOwnerProjection? committedProjection = null;
+        var hostCommitted = false;
         try
         {
+            var authority = capturedAuthority ?? await CaptureOrderAuthorityAsync();
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 ValidateProjection(current.Order, commandProjection);
@@ -647,18 +686,20 @@ public sealed class TradeCommissionOperationsService(
                     response = await client.ExecuteAsync(
                         route,
                         createCommand(context),
-                        cancellationToken);
+                        cancellationToken,
+                        authority.Connection);
                 }
                 catch (CompanyCommissionRevisionConflictException)
                     when (attempt == 0 && CanReplayAfterRevisionConflict(route))
                 {
                     var commission = RequireCommission(commandProjection);
                     commandProjection = await client.LoadOwnerProjectionAsync(
+                        authority.Connection,
                         commission.CompanyId.Value,
                         commission.CommissionId,
                         cancellationToken);
                     ValidateProjection(current.Order, commandProjection);
-                    await ApplyProjectionAsync(commandProjection);
+                    await ApplyProjectionAsync(authority, commandProjection);
                     continue;
                 }
 
@@ -671,6 +712,7 @@ public sealed class TradeCommissionOperationsService(
                         $"The commissioner command was {mutation.Status.ToString().ToLowerInvariant()}.");
                 }
 
+                hostCommitted = true;
                 var updated = response.Projection ?? throw new InvalidOperationException(
                     "The successful commissioner command returned no committed owner projection.");
                 ValidateProjection(current.Order, updated);
@@ -685,11 +727,13 @@ public sealed class TradeCommissionOperationsService(
                 {
                     ValidateCapabilityUrl(updated, response.ClaimUrl, "claim");
                 }
-                await ApplyProjectionAsync(updated);
+                committedProjection = updated;
+                await ApplyProjectionAsync(authority, updated);
                 return new TradeCommissionOperatorResult(
                     true,
                     updated,
-                    ClaimUrl: response.ClaimUrl);
+                    ClaimUrl: response.ClaimUrl,
+                    HostCommitted: true);
             }
 
             throw new InvalidOperationException(
@@ -698,7 +742,10 @@ public sealed class TradeCommissionOperationsService(
         catch (Exception exception)
         {
             _errors[current.Order.Id] = exception.Message;
-            return Rejected(commandProjection, exception.Message);
+            return Rejected(
+                hostCommitted ? committedProjection : commandProjection,
+                exception.Message,
+                hostCommitted);
         }
     }
 
@@ -723,23 +770,157 @@ public sealed class TradeCommissionOperationsService(
             _ => false,
         };
 
-    private async Task ApplyProjectionAsync(CompanyCommissionOwnerProjection projection)
+    private async Task<OrderCommandAuthority> CaptureOrderAuthorityAsync()
     {
-        if (!await tradeOperations.ApplyCanonicalOrderAsync(projection.Order))
+        var projection = hostedOrders.CaptureAuthorityScope();
+        var connection = await localState.LoadConnectionSettingsAsync();
+        if (string.IsNullOrWhiteSpace(projection.ProfileId) ||
+            string.IsNullOrWhiteSpace(connection.ConnectionScopeId) ||
+            !string.Equals(
+                projection.ProfileId,
+                profileSync.CurrentStatus.ProfileId,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                projection.ProfileId,
+                connection.ProfileScopeId,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                projection.ConnectionScopeId,
+                connection.ConnectionScopeId,
+                StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "The owner projection was authoritative, but browser storage could not apply its Trade order.");
+                "The hosted order authority is not ready for this commission operation.");
         }
+        return new OrderCommandAuthority(projection, connection.Snapshot());
+    }
 
-        await localState.SaveObjectRevisionAsync(
-            ProfileSyncCollections.TradeOrders,
-            projection.Order.Id.ToString("D"),
-            projection.ObjectRevision.Value);
-        hostedOrders.TryPublishOwner(projection);
+    private async Task ApplyProjectionAsync(
+        OrderCommandAuthority authority,
+        CompanyCommissionOwnerProjection projection)
+    {
+        var adoption = await hostedOrders.AdoptAndPersistCommittedOwnerAsync(
+            authority.Projection,
+            projection,
+            async winner =>
+            {
+                var persisted = winner.Deleted
+                    ? await tradeOperations.DeleteOrderAsync(winner.OrderId)
+                    : await tradeOperations.ApplyCanonicalOrderAsync(winner.Order!);
+                if (!await IsCurrentAuthorityAsync(authority))
+                {
+                    await RepairDurableOrderFromCurrentProjectionAsync(winner.OrderId);
+                    throw new InvalidOperationException(
+                        "The hosted order authority changed while commission persistence was in progress.");
+                }
+                if (!persisted)
+                {
+                    throw new InvalidOperationException(
+                        "The owner projection was authoritative, but browser storage could not apply its Trade order.");
+                }
+                await localState.SaveObjectRevisionAsync(
+                    authority.Connection,
+                    ProfileSyncCollections.TradeOrders,
+                    winner.OrderId.ToString("D"),
+                    winner.ObjectRevision);
+            },
+            () => IsCurrentAuthorityAsync(authority));
+        if (adoption == HostedOrderCommittedProjectionResult.ScopeChanged)
+        {
+            await RepairDurableOrderFromCurrentProjectionAsync(projection.Order.Id);
+        }
+        if (adoption is not (
+            HostedOrderCommittedProjectionResult.Adopted or
+            HostedOrderCommittedProjectionResult.AlreadyCurrent))
+        {
+            throw new InvalidOperationException(
+                $"The committed commission projection could not be applied because its authority is {adoption}.");
+        }
         _errors.Remove(projection.Order.Id);
         _missingCanonicalOwners.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
     }
+
+    private async Task<bool> IsCurrentAuthorityAsync(OrderCommandAuthority authority)
+    {
+        if (!hostedOrders.IsCurrentAuthority(authority.Projection))
+        {
+            return false;
+        }
+        var connection = await localState.LoadConnectionSettingsAsync();
+        return string.Equals(
+                   authority.Connection.ConnectionScopeId,
+                   connection.ConnectionScopeId,
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   authority.Connection.ProfileScopeId,
+                   connection.ProfileScopeId,
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task RequireCurrentAuthorityAsync(
+        OrderCommandAuthority authority,
+        string operation)
+    {
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                $"The hosted order authority changed during {operation}.");
+        }
+    }
+
+    private async Task RepairDurableOrderFromCurrentProjectionAsync(Guid orderId)
+    {
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var authority = hostedOrders.CaptureAuthorityScope();
+            var connection = (await localState.LoadConnectionSettingsAsync()).Snapshot();
+            var scopeIsCurrent = MatchesConnectionScope(authority, connection);
+            var current = scopeIsCurrent ? hostedOrders.Get(orderId) : null;
+            var repaired = current is { Deleted: false, Order: not null }
+                ? await tradeOperations.ApplyCanonicalOrderAsync(current.Order)
+                : await tradeOperations.DeleteOrderAsync(orderId);
+            if (!repaired)
+            {
+                throw new InvalidOperationException(
+                    "Browser storage could not repair the Trade order after its hosted authority changed.");
+            }
+
+            var latestConnection = await localState.LoadConnectionSettingsAsync();
+            if (hostedOrders.IsCurrentAuthority(authority) &&
+                HasSameConnection(connection, latestConnection) &&
+                (!scopeIsCurrent ||
+                 HasSameProjectionVersion(current, hostedOrders.Get(orderId))))
+            {
+                return;
+            }
+        }
+
+        if (!await tradeOperations.DeleteOrderAsync(orderId))
+        {
+            throw new InvalidOperationException(
+                "Browser storage could not remove a Trade order after repeated hosted authority changes.");
+        }
+    }
+
+    private static bool HasSameProjectionVersion(
+        HostedOrderProjectionSnapshot? left,
+        HostedOrderProjectionSnapshot? right) =>
+        left?.ObjectRevision == right?.ObjectRevision &&
+        left?.CompanyRevision == right?.CompanyRevision &&
+        left?.Deleted == right?.Deleted;
+
+    private static bool MatchesConnectionScope(
+        HostedOrderAuthorityScope authority,
+        HostedProfileConnectionSettings connection) =>
+        string.Equals(authority.ProfileId, connection.ProfileScopeId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(authority.ConnectionScopeId, connection.ConnectionScopeId, StringComparison.Ordinal);
+
+    private static bool HasSameConnection(
+        HostedProfileConnectionSettings left,
+        HostedProfileConnectionSettings right) =>
+        string.Equals(left.ProfileScopeId, right.ProfileScopeId, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.ConnectionScopeId, right.ConnectionScopeId, StringComparison.Ordinal);
 
     private static IReadOnlyList<TradeRequestedOrderOutput> GetRequestedOutputs(
         TradeOrder order) =>
@@ -869,9 +1050,10 @@ public sealed class TradeCommissionOperationsService(
             "The authenticated owner projection does not contain a company commission.");
 
     private static TradeCommissionOperatorResult Rejected(
-        CompanyCommissionOwnerProjection current,
-        string message) =>
-        new(false, current, message);
+        CompanyCommissionOwnerProjection? current,
+        string message,
+        bool hostCommitted = false) =>
+        new(false, current, message, HostCommitted: hostCommitted);
 
     private static void ValidateCapabilityUrl(
         CompanyCommissionOwnerProjection projection,
@@ -896,4 +1078,5 @@ public sealed record TradeCommissionOperatorResult(
     CompanyCommissionOwnerProjection? Projection,
     string? Message = null,
     string? RecoveryUrl = null,
-    string? ClaimUrl = null);
+    string? ClaimUrl = null,
+    bool HostCommitted = false);

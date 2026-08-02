@@ -17,12 +17,28 @@ public sealed class TradeCommissionOperationsClient(
         Guid commissionId,
         CancellationToken cancellationToken = default)
     {
+        var connection = await localState.LoadConnectionSettingsAsync();
+        return await LoadOwnerProjectionAsync(
+            connection,
+            companyId,
+            commissionId,
+            cancellationToken);
+    }
+
+    public async Task<CompanyCommissionOwnerProjection> LoadOwnerProjectionAsync(
+        HostedProfileConnectionSettings connection,
+        Guid companyId,
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
         using var response = await SendAsync(
             HttpMethod.Get,
             $"trade/v1/companies/{companyId:D}/commissions/{commissionId:D}/owner",
             content: null,
             contentType: null,
-            cancellationToken);
+            cancellationToken,
+            connection);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             var problem = await ReadProblemAsync(response, cancellationToken);
@@ -53,7 +69,8 @@ public sealed class TradeCommissionOperationsClient(
     public async Task<TradeCommissionOwnerMutationResponse> ExecuteAsync<TCommand>(
         string route,
         TCommand command,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
         where TCommand : ICompanyCommissionCommand
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(route);
@@ -63,7 +80,8 @@ public sealed class TradeCommissionOperationsClient(
             $"{command.Context.CommissionId:D}/commands/{route}",
             command,
             typeof(TCommand),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
         {
             var problem = await ReadProblemAsync(response, cancellationToken);
@@ -100,7 +118,8 @@ public sealed class TradeCommissionOperationsClient(
 
     public async Task<TradeCommissionRecoveryResetResponse> ResetParticipantRecoveryAsync(
         ResetCompanyCommissionParticipantRecoveryCommand command,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
@@ -108,7 +127,8 @@ public sealed class TradeCommissionOperationsClient(
             $"{command.Context.CommissionId:D}/commands/reset-participant-recovery",
             command,
             typeof(ResetCompanyCommissionParticipantRecoveryCommand),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<TradeCommissionRecoveryResetResponse>(
             JsonOptions,
@@ -119,7 +139,8 @@ public sealed class TradeCommissionOperationsClient(
 
     public async Task<TradeCommissionClaimLinkResponse> IssueClaimLinkAsync(
         CompanyCommissionCommandContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
@@ -127,7 +148,8 @@ public sealed class TradeCommissionOperationsClient(
             $"{context.CommissionId:D}/commands/issue-claim-link",
             new TradeCommissionClaimLinkRequest(context),
             typeof(TradeCommissionClaimLinkRequest),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<TradeCommissionClaimLinkResponse>(
             JsonOptions,
@@ -141,9 +163,11 @@ public sealed class TradeCommissionOperationsClient(
         string relativePath,
         object? content,
         Type? contentType,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
-        var connection = await localState.LoadConnectionSettingsAsync();
+        var connection = capturedConnection ??
+                         await localState.LoadConnectionSettingsAsync();
         if (!connection.IsConfigured)
         {
             throw new InvalidOperationException(

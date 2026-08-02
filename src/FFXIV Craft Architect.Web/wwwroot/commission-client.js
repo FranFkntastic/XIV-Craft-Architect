@@ -413,6 +413,39 @@ export function createCommandAuthorization(projection, access, capability = {}, 
     };
 }
 
+export function resolveParticipantPreworkChoices(projection) {
+    if (projection?.kind !== "participant") {
+        return {
+            paymentPending: false,
+            materialsPending: false,
+            materialsReady: false,
+            choices: []
+        };
+    }
+
+    const paymentPending = projection.public.gates.payment === "Pending";
+    const materialsPending = projection.public.gates.companyMaterials === "Pending";
+    const hasPaymentReceiptEvidence = Boolean(projection.payment?.crafterReceived);
+    const materialsReady = materialsPending &&
+        projection.companyMaterialsReadyForHandoff;
+    const choices = [];
+
+    if (paymentPending && !hasPaymentReceiptEvidence) {
+        choices.push("confirm-advance-payment");
+    }
+    if (materialsReady) {
+        choices.push("acknowledge-company-materials");
+    }
+    if (paymentPending) {
+        choices.push("request-payment-schedule-change");
+        if (hasPaymentReceiptEvidence) {
+            choices.push("retract-advance-payment-confirmation");
+        }
+    }
+
+    return { paymentPending, materialsPending, materialsReady, choices };
+}
+
 export function adaptBriefProjection(payload) {
     const isParticipant = Boolean(payload?.public);
     const publicBrief = adaptPublicBrief(isParticipant ? payload.public : payload);
@@ -423,6 +456,7 @@ export function adaptBriefProjection(payload) {
             provisionalCrafter: null,
             participantCapabilityRevision: null,
             payment: null,
+            companyMaterialsReadyForHandoff: false,
             settlementPayment: null,
             activity: []
         };
@@ -440,6 +474,9 @@ export function adaptBriefProjection(payload) {
             0),
         payment: adaptParticipantPayment(
             requiredObject(payload.payment, "Participant payment state")),
+        companyMaterialsReadyForHandoff: requiredBoolean(
+            payload.companyMaterialsReadyForHandoff,
+            "Company material handoff readiness"),
         settlementPayment: adaptSettlementPayment(
             requiredObject(payload.settlementPayment, "Participant settlement state")),
         activity: requiredArray(payload.activity, "Participant activity").map(adaptParticipantActivity)

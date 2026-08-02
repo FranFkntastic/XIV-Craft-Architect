@@ -53,7 +53,9 @@ builder.Services.AddSingleton(_ => new ProfileHostOptions
 {
     Enabled = builder.Configuration.GetValue("ProfileHost:Enabled", false),
     DatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
-        ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db")
+        ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db"),
+    ChangeStreamLease = builder.Configuration.GetValue("ProfileHost:ChangeStreamLease", TimeSpan.FromMinutes(1)),
+    ChangeStreamHeartbeat = builder.Configuration.GetValue("ProfileHost:ChangeStreamHeartbeat", TimeSpan.FromSeconds(15))
 });
 builder.Services.AddSingleton<ProfileAccessKeyHasher>();
 builder.Services.AddSingleton<ProfilePairingCodeService>();

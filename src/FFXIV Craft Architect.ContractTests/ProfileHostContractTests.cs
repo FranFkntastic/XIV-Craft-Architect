@@ -5,10 +5,19 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
+[CollectionDefinition("Profile host integration", DisableParallelization = true)]
+public sealed class ProfileHostIntegrationCollection
+{
+}
+
+[Collection("Profile host integration")]
 public sealed class ProfileHostContractTests
 {
     [Fact]
@@ -157,7 +166,7 @@ public sealed class ProfileHostContractTests
         {
             var line = await reader.ReadLineAsync(timeout.Token);
             Assert.NotNull(line);
-            if (line.Length > 0)
+            if (line.Length > 0 && !line.StartsWith(':'))
             {
                 lines.Add(line);
             }
@@ -168,6 +177,7 @@ public sealed class ProfileHostContractTests
         Assert.Equal($"id: {put.ServerRevision}", lines[0]);
         Assert.Equal("event: profile-revision", lines[1]);
         Assert.Equal($"data: {{\"serverRevision\":{put.ServerRevision}}}", lines[2]);
+        await reader.ReadToEndAsync(timeout.Token);
 
         timeout.Cancel();
         streamClient.CancelPendingRequests();
@@ -479,6 +489,8 @@ public sealed class ProfileHostContractTests
                         {
                             ["ProfileHost:Enabled"] = "true",
                             ["ProfileHost:DatabasePath"] = databasePath,
+                            ["ProfileHost:ChangeStreamLease"] = "00:00:00.250",
+                            ["ProfileHost:ChangeStreamHeartbeat"] = "00:00:00.050",
                         });
                     });
                 });
@@ -503,10 +515,24 @@ public sealed class ProfileHostContractTests
 
         public async ValueTask DisposeAsync()
         {
+            application.Services
+                .GetRequiredService<IHostApplicationLifetime>()
+                .StopApplication();
             await application.DisposeAsync();
-            if (File.Exists(databasePath))
+            SqliteConnection.ClearAllPools();
+            const int maximumDeleteAttempts = 50;
+            for (var attempt = 0;
+                 attempt < maximumDeleteAttempts && File.Exists(databasePath);
+                 attempt++)
             {
-                File.Delete(databasePath);
+                try
+                {
+                    File.Delete(databasePath);
+                }
+                catch (IOException) when (attempt < maximumDeleteAttempts - 1)
+                {
+                    await Task.Delay(100);
+                }
             }
         }
     }

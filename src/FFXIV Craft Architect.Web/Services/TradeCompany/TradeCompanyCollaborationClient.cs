@@ -17,13 +17,15 @@ public sealed class TradeCompanyCollaborationClient(
     public async Task<IReadOnlyList<TradeCommissionInterest>> LoadPendingInterestsAsync(
         Guid companyProfileId,
         Guid orderId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Get,
             $"trade/v1/companies/{companyProfileId:D}/discord/claims?orderId={orderId:D}",
             content: null,
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return [];
@@ -39,13 +41,15 @@ public sealed class TradeCompanyCollaborationClient(
     public async Task<TradeCommissionPublicationProjection?> LoadPublicationAsync(
         Guid companyProfileId,
         Guid orderId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Get,
             $"trade/v1/companies/{companyProfileId:D}/discord/publications?orderId={orderId:D}",
             content: null,
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
@@ -164,7 +168,8 @@ public sealed class TradeCompanyCollaborationClient(
         long orderRevision,
         CommissionBriefDocument brief,
         string idempotencyKey,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
@@ -174,7 +179,8 @@ public sealed class TradeCompanyCollaborationClient(
                 new CompanyRecordRevision(orderRevision),
                 brief,
                 idempotencyKey),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         var publication = await response.Content.ReadFromJsonAsync<DiscordPublicationDto>(
             JsonOptions,
@@ -187,14 +193,16 @@ public sealed class TradeCompanyCollaborationClient(
     public async Task<TradeCommissionPublicationProjection> RetryPublicationAsync(
         Guid companyProfileId,
         string publicId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(publicId);
         using var response = await SendAsync(
             HttpMethod.Post,
             $"trade/v1/companies/{companyProfileId:D}/discord/publications/{Uri.EscapeDataString(publicId)}/retry",
             content: null,
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         var publication = await response.Content.ReadFromJsonAsync<DiscordPublicationDto>(
             JsonOptions,
@@ -210,7 +218,8 @@ public sealed class TradeCompanyCollaborationClient(
         long orderRevision,
         CommissionBriefDocument brief,
         string idempotencyKey,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
@@ -222,7 +231,8 @@ public sealed class TradeCompanyCollaborationClient(
                 Brief = brief,
                 IdempotencyKey = idempotencyKey
             },
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         var published = await response.Content.ReadFromJsonAsync<CommissionBriefCreateResponse>(
             JsonOptions,
@@ -262,14 +272,16 @@ public sealed class TradeCompanyCollaborationClient(
     public async Task RevokePortableLinkAsync(
         Guid companyProfileId,
         string publicId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Delete,
             $"trade/v1/companies/{companyProfileId:D}/commission-briefs/" +
             Uri.EscapeDataString(publicId),
             content: null,
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
@@ -278,14 +290,16 @@ public sealed class TradeCompanyCollaborationClient(
         string claimId,
         Guid crafterId,
         string idempotencyKey,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         var parsedClaimId = ParseClaimId(claimId);
         using var response = await SendAsync(
             HttpMethod.Post,
             $"trade/v1/companies/{companyProfileId:D}/discord/claims/{parsedClaimId:D}/accept",
             new DiscordAcceptInterestBody(crafterId, idempotencyKey),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         return await ReadReceiptAsync(response, accepted: true, cancellationToken);
     }
@@ -293,14 +307,16 @@ public sealed class TradeCompanyCollaborationClient(
     public async Task<TradeCommissionInterestResolutionReceipt> DeclineAsync(
         Guid companyProfileId,
         string claimId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         var parsedClaimId = ParseClaimId(claimId);
         using var response = await SendAsync(
             HttpMethod.Post,
             $"trade/v1/companies/{companyProfileId:D}/discord/claims/{parsedClaimId:D}/decline",
             new DiscordDeclineInterestBody($"discord-decline:{parsedClaimId:D}"),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         return await ReadReceiptAsync(response, accepted: false, cancellationToken);
     }
@@ -308,14 +324,16 @@ public sealed class TradeCompanyCollaborationClient(
     public async Task RevokeAsync(
         Guid companyProfileId,
         string publicId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Delete,
             $"trade/v1/companies/{companyProfileId:D}/discord/publications/" +
             Uri.EscapeDataString(publicId),
             content: null,
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             return;
@@ -327,9 +345,11 @@ public sealed class TradeCompanyCollaborationClient(
         HttpMethod method,
         string relativePath,
         object? content,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
-        var connection = await localState.LoadConnectionSettingsAsync();
+        var connection = capturedConnection ??
+                         await localState.LoadConnectionSettingsAsync();
         if (!connection.IsConfigured)
         {
             throw new InvalidOperationException(

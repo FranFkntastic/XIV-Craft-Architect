@@ -5,7 +5,8 @@ import {
     ParticipantAccessStore,
     clearCapabilityFragment,
     createCommandAuthorization,
-    readCapabilityFragment
+    readCapabilityFragment,
+    resolveParticipantPreworkChoices
 } from "./commission-client.js";
 
 const byId = id => document.getElementById(id);
@@ -314,7 +315,7 @@ function render() {
     const terms = brief.terms;
 
     document.title = `${brief.title} — Company Commission`;
-    setText("statusChip", formatStatus(brief));
+    setText("statusChip", formatStatus(projection));
     setText(
         "briefIdentity",
         `${brief.companyDisplayName} · Commission ${brief.reference} · Terms v${terms.version}`);
@@ -346,17 +347,19 @@ function buildSubtitle(projection) {
     return formatDeliveryInstructions(projection.public.terms.deliveryInstructions);
 }
 
-function formatStatus(brief) {
+function formatStatus(projection) {
+    const brief = projection.public;
     if (brief.isTestFixture) return "TEST - NOT CLAIMABLE";
     if (brief.viewState === "Revoked") return "REVOKED";
     if (brief.status === "Canceled") return "CANCELED";
     if (brief.closed) return "COMPLETED";
     if (brief.status === "Completed") return "DELIVERY ACCEPTED";
-    if (brief.status === "AwaitingDelivery") return "AWAITING DELIVERY";
-    if (brief.status === "InProgress") return "IN PROGRESS";
+    if (requiresTermsAcknowledgement(projection)) return "TERMS REVIEW REQUIRED";
+    if (brief.status === "AwaitingDelivery") return "READY FOR DELIVERY";
+    if (brief.status === "InProgress") return "CRAFTING";
     if (!brief.isClaimed) return "OPEN - ONE CLAIM SLOT";
     if (brief.gates.identity === "Pending") return "CLAIMED - IDENTITY REVIEW";
-    return brief.clearedToWork ? "READY TO WORK" : "ASSIGNED - PRE-WORK";
+    return brief.clearedToWork ? "CRAFTING" : "ASSIGNED - PRE-WORK";
 }
 
 function renderNextStep() {
@@ -519,44 +522,33 @@ function resolveNextStep() {
             tone: "waiting"
         };
     }
-    if (brief.gates.payment === "Pending") {
-        const participantPayment = projection.payment;
-        if (participantPayment && !participantPayment.crafterReceived) {
-            return {
-                title: "Confirm advance payment",
-                body: `Confirm receipt of ${formatGil(brief.terms.payment.total)} against terms v${brief.terms.version}. Work unlocks only after both parties record the same exchange.`,
-                tone: "waiting",
-                actions: [{
-                    label: `I received ${formatGil(brief.terms.payment.total)}`,
-                    primary: true,
-                    run: openPaymentReceiptForm
-                }, {
-                    label: "Request schedule change",
-                    run: openPaymentRequestForm
-                }]
-            };
-        }
+    const prework = resolveParticipantPreworkChoices(projection);
+    if (prework.paymentPending || prework.materialsPending) {
+        const bothPending = prework.paymentPending && prework.materialsPending;
+        const paymentConfirmed = Boolean(projection.payment?.crafterReceived);
+        const title = bothPending
+            ? "Complete the remaining start requirements"
+            : prework.paymentPending
+                ? paymentConfirmed
+                    ? "Waiting for commissioner confirmation"
+                    : "Confirm advance payment"
+                : prework.materialsReady
+                    ? "Confirm the complete material bundle"
+                    : "Waiting for company materials";
+        const body = bothPending
+            ? "Payment and complete material handoff can be confirmed in either order. Crafting begins when both are complete."
+            : prework.paymentPending
+                ? paymentConfirmed
+                    ? "You confirmed receipt. Work unlocks when the commissioner records that the same advance payment was sent."
+                    : `Confirm receipt of ${formatGil(brief.terms.payment.total)} against terms v${brief.terms.version}. Work unlocks only after both parties record the same exchange.`
+                : prework.materialsReady
+                    ? "The commissioner marked every promised quantity ready. Confirm receipt only after the complete bundle has been handed over."
+                    : "The commissioner must mark the complete promised bundle ready before you can acknowledge receipt.";
         return {
-            title: "Waiting for commissioner confirmation",
-            body: "You confirmed receipt. Work unlocks when the commissioner records that the same advance payment was sent.",
+            title,
+            body,
             tone: "waiting",
-            actions: [{
-                label: "Request schedule change",
-                run: openPaymentRequestForm
-            }, {
-                label: "Retract my confirmation",
-                run: openPaymentRetractionForm
-            }]
-        };
-    }
-    if (brief.gates.companyMaterials === "Pending") {
-        const ready = areCompanyMaterialsReady(projection);
-        return {
-            title: ready ? "Confirm the complete material bundle" : "Waiting for company materials",
-            body: ready
-                ? "The commissioner marked every promised quantity ready. Confirm receipt only after the complete bundle has been handed over."
-                : "The commissioner must mark the complete promised bundle ready before you can acknowledge receipt.",
-            tone: "waiting"
+            actions: prework.choices.map(createPreworkAction)
         };
     }
     if (!brief.clearedToWork) {
@@ -593,9 +585,38 @@ function resolveNextStep() {
         actions: [{
             label: "Focus progress",
             primary: true,
-            run: () => byId("progressForm").scrollIntoView({ behavior: "smooth", block: "center" })
+            run: focusProgress
         }]
     };
+}
+
+function focusProgress() {
+    const form = byId("progressForm");
+    form.scrollIntoView({ behavior: "smooth", block: "center" });
+    form.querySelector("input:not([disabled])")?.focus({ preventScroll: true });
+}
+
+function createPreworkAction(choice) {
+    switch (choice) {
+        case "confirm-advance-payment":
+            return {
+                label: `I received ${formatGil(state.projection.public.terms.payment.total)}`,
+                primary: true,
+                run: openPaymentReceiptForm
+            };
+        case "acknowledge-company-materials":
+            return {
+                label: "I received the complete material bundle",
+                primary: true,
+                run: acknowledgeMaterials
+            };
+        case "request-payment-schedule-change":
+            return { label: "Request schedule change", run: openPaymentRequestForm };
+        case "retract-advance-payment-confirmation":
+            return { label: "Retract my confirmation", run: openPaymentRetractionForm };
+        default:
+            throw new Error(`Unknown pre-work choice: ${choice}`);
+    }
 }
 
 function requiresTermsAcknowledgement(projection) {
@@ -607,8 +628,7 @@ function requiresTermsAcknowledgement(projection) {
 }
 
 function areCompanyMaterialsReady(projection) {
-    return latestActivityRevision(projection, "CompanyMaterialsReady") >
-        latestActivityRevision(projection, "CompanyMaterialsReceived");
+    return projection.companyMaterialsReadyForHandoff;
 }
 
 function latestActivityRevision(projection, kind) {
@@ -717,6 +737,7 @@ function renderOutputs() {
     const brief = projection.public;
     const canEdit = canUseActiveParticipantMutations(projection) &&
         brief.clearedToWork &&
+        !requiresTermsAcknowledgement(projection) &&
         !brief.deliveryReadiness.isReady;
     const progressByLine = new Map(brief.outputProgress.map(item => [item.lineId, item]));
     const target = byId("outputs");
@@ -772,12 +793,15 @@ function renderProgressQuantity(kind, output, value, canEdit) {
         "label",
         "sr-only",
         `${kind === "completed" ? "Completed" : "Ready"} ${output.name}`);
+    const inputId = `progress-${kind}-${output.lineId}`;
     const input = createInput("number", `${kind}-${output.lineId}`, {
         min: 0,
         max: output.requiredQuantity,
         value: value ?? 0,
         required: true
     });
+    label.htmlFor = inputId;
+    input.id = inputId;
     input.className = "quantity-input";
     input.dataset.lineId = output.lineId;
     input.dataset.itemId = String(output.itemId);
@@ -915,7 +939,7 @@ function renderAccess() {
 
     if (projection.kind === "participant") {
         const canMutate = canUseActiveParticipantMutations(projection);
-        setText("accessState", canMutate ? "Saved locally" : "Reference only");
+        setText("accessState", canMutate ? "Can update order" : "Reference only");
         accessNote.append(
             element(
                 "strong",
@@ -1553,6 +1577,13 @@ async function runParticipantCommand(command, payload, successMessage) {
         showNotice(
             "Participant action unavailable",
             "This browser lacks active participant authority, or the commission is no longer open to ordinary participant changes.");
+        return;
+    }
+    if (["report-progress", "declare-readiness", "withdraw-readiness"].includes(command) &&
+        requiresTermsAcknowledgement(state.projection)) {
+        showNotice(
+            "Accept the current terms first",
+            "Review and accept the revised terms before continuing work on this commission.");
         return;
     }
     if (command === "release-claim" && !canReleaseBeforeWork(state.projection)) {
