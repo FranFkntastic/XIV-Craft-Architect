@@ -2,9 +2,7 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
 using FFXIV_Craft_Architect.Web.Services;
 using Microsoft.JSInterop;
-
 namespace FFXIV_Craft_Architect.Tests;
-
 public sealed class BrowserEngineWorkerTransportTests
 {
     [Fact]
@@ -19,7 +17,6 @@ public sealed class BrowserEngineWorkerTransportTests
             "Company.Alpha");
         EngineWorkerMessage? received = null;
         transport.MessageReceived += (_, message) => received = message;
-
         var capability = await transport.StartAsync(3, CancellationToken.None);
         var progress = new EngineWorkerMessage(
             EngineWorkerClient.ProtocolVersion,
@@ -32,7 +29,6 @@ public sealed class BrowserEngineWorkerTransportTests
         await transport.SendAsync(progress, CancellationToken.None);
         await transport.TerminateAsync(CancellationToken.None);
         await transport.DisposeAsync();
-
         Assert.True(capability.ExecutionSupported);
         Assert.Equal("11111111-1111-1111-1111-111111111111", capability.WorkerInstanceId);
         Assert.Equal(progress.Kind, received?.Kind);
@@ -52,7 +48,6 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.True(controller.Disposed);
         Assert.True(module.Disposed);
     }
-
     [Fact]
     public async Task Transport_FailedTerminationRetainsControllerForCleanupRetry()
     {
@@ -60,32 +55,26 @@ public sealed class BrowserEngineWorkerTransportTests
         var transport = new BrowserEngineWorkerTransport(
             new RecordingRuntime(new RecordingModule(controller)));
         await transport.StartAsync(1, CancellationToken.None);
-
         await Assert.ThrowsAsync<InvalidOperationException>(() => transport.TerminateAsync(CancellationToken.None));
         await transport.TerminateAsync(CancellationToken.None);
-
         Assert.Equal(2, controller.TerminationAttempts);
         Assert.True(controller.Terminated);
         Assert.True(controller.Disposed);
         await transport.DisposeAsync();
     }
-
     [Fact]
     public async Task Transport_RestartRequestsFreshWorkspaceAuthority()
     {
         var controller = new RecordingController();
         var module = new RecordingModule(controller);
         var transport = new BrowserEngineWorkerTransport(new RecordingRuntime(module));
-
         await transport.StartAsync(1, CancellationToken.None);
         Assert.False(module.RequestFreshAuthority);
         await transport.TerminateAsync(CancellationToken.None);
         await transport.StartAsync(2, CancellationToken.None);
-
         Assert.True(module.RequestFreshAuthority);
         await transport.DisposeAsync();
     }
-
     [Fact]
     public async Task Transport_RunningWorkerErrorIsCorrelatedToActiveExecution()
     {
@@ -103,16 +92,13 @@ public sealed class BrowserEngineWorkerTransportTests
             Guid.NewGuid(),
             JsonSerializer.SerializeToElement(new { request = "fixture" }));
         await transport.SendAsync(execute, CancellationToken.None);
-
         await transport.ReceiveError("error", "runtime crashed");
-
         Assert.Equal("protocol-error", received?.Kind);
         Assert.Equal(execute.ExecutionId, received?.ExecutionId);
         Assert.Equal(execute.TransactionId, received?.TransactionId);
         Assert.Contains("runtime crashed", received?.Payload?.GetProperty("message").GetString(), StringComparison.Ordinal);
         await transport.DisposeAsync();
     }
-
     [Fact]
     public async Task Transport_MalformedRunningMessageFailsActiveExecutionImmediately()
     {
@@ -130,16 +116,13 @@ public sealed class BrowserEngineWorkerTransportTests
             Guid.NewGuid(),
             JsonSerializer.SerializeToElement(new { request = "fixture" }));
         await transport.SendAsync(execute, CancellationToken.None);
-
         await transport.ReceiveMessageJson("{");
-
         Assert.Equal("protocol-error", received?.Kind);
         Assert.Equal(execute.ExecutionId, received?.ExecutionId);
         Assert.Equal(execute.TransactionId, received?.TransactionId);
         Assert.Equal("worker-message-invalid", received?.Payload?.GetProperty("code").GetString());
         await transport.DisposeAsync();
     }
-
     [Theory]
     [InlineData("")]
     [InlineData("has spaces")]
@@ -149,11 +132,9 @@ public sealed class BrowserEngineWorkerTransportTests
     public void Transport_RejectsUnsafeWorkspaceIds(string workspaceId)
     {
         var runtime = new RecordingRuntime(new RecordingModule(new RecordingController()));
-
         Assert.Throws<ArgumentException>(() =>
             new BrowserEngineWorkerTransport(runtime, workspaceId: workspaceId));
     }
-
     [Fact]
     public void BrowserBootstrap_EnforcesSingleWriterAndBoundedFollowerCoordination()
     {
@@ -164,7 +145,6 @@ public sealed class BrowserEngineWorkerTransportTests
             "FFXIV Craft Architect.Web",
             "wwwroot",
             "engine-worker-bootstrap.js"));
-
         Assert.Contains("navigator.locks.request(", bootstrap, StringComparison.Ordinal);
         Assert.Contains("new BroadcastChannel(channelName)", bootstrap, StringComparison.Ordinal);
         Assert.Contains("ifAvailable: true", bootstrap, StringComparison.Ordinal);
@@ -178,7 +158,6 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Contains("requestLease();", bootstrap, StringComparison.Ordinal);
         Assert.DoesNotContain("new SharedWorker", bootstrap, StringComparison.Ordinal);
     }
-
     [Fact]
     public void BrowserWorker_NamespacesDurableStateWithoutOrphaningLegacyActiveSession()
     {
@@ -189,13 +168,11 @@ public sealed class BrowserEngineWorkerTransportTests
             "FFXIV Craft Architect.Web",
             "wwwroot",
             "engine-worker.js"));
-
         Assert.Contains("workspaceId === \"active\"", worker, StringComparison.Ordinal);
         Assert.Contains("`workspace:${workspaceId}:active`", worker, StringComparison.Ordinal);
         Assert.Contains("`${activeSessionManifestId}:${revision}`", worker, StringComparison.Ordinal);
         Assert.Contains("`${activeSessionManifestId}:${revision}:${field}`", worker, StringComparison.Ordinal);
     }
-
     [Fact]
     public void CrossTabShell_AdvancesAuthorityAndInvalidatesStaleViewProjections()
     {
@@ -221,7 +198,6 @@ public sealed class BrowserEngineWorkerTransportTests
                 recipe,
                 EngineJsonSerializerOptions.CreateWire()));
         Assert.True(store.TryPublishRecipe(recipeResult));
-
         var successor = store.Shell with
         {
             Revision = 1,
@@ -229,7 +205,6 @@ public sealed class BrowserEngineWorkerTransportTests
             PlanId = "plan-1",
             PlanName = "Plan 1"
         };
-
         Assert.True(store.TryPublishCrossTabShell(successor));
         Assert.Equal(1, store.Shell.Revision);
         Assert.Null(store.Recipe);
@@ -237,7 +212,6 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Null(store.Market);
         Assert.Null(store.Procurement);
         Assert.False(store.TryPublishCrossTabShell(successor));
-
         var operationId = Guid.NewGuid();
         var operationShell = successor with
         {
@@ -253,7 +227,6 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.True(store.TryPublishCrossTabShell(operationShell));
         Assert.Equal(operationId, store.Operation?.OperationId);
     }
-
     [Fact]
     public void ProfileSyncSession_UsesOneAuthenticatedRevisionOnlyLeaderStream()
     {
@@ -265,7 +238,6 @@ public sealed class BrowserEngineWorkerTransportTests
             "wwwroot",
             "profile-sync-session.js"))
             .Replace("\r\n", "\n", StringComparison.Ordinal);
-
         Assert.Contains("navigator.locks.request(", session, StringComparison.Ordinal);
         Assert.Contains("new BroadcastChannel(channelName)", session, StringComparison.Ordinal);
         Assert.Contains("\"X-Profile-Key\": accessKey", session, StringComparison.Ordinal);
@@ -280,7 +252,6 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Contains("serverRevision: revision", session, StringComparison.Ordinal);
         Assert.Contains("state.fetchController?.abort()", session, StringComparison.Ordinal);
         Assert.DoesNotContain("new EventSource", session, StringComparison.Ordinal);
-
         var syncService = File.ReadAllText(Path.Combine(
             repositoryRoot,
             "src",
@@ -291,7 +262,6 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Contains("Math.Min(persistedRevision, Math.Max(0, replayAfterRevision.Value))", syncService, StringComparison.Ordinal);
         Assert.Contains("candidateRevision > persistedRevision", syncService, StringComparison.Ordinal);
     }
-
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -300,16 +270,13 @@ public sealed class BrowserEngineWorkerTransportTests
         {
             directory = directory.Parent;
         }
-
         return directory?.FullName ??
             throw new DirectoryNotFoundException("Could not locate the repository root.");
     }
-
     private sealed class RecordingRuntime(RecordingModule module) : IJSRuntime
     {
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
             InvokeAsync<TValue>(identifier, CancellationToken.None, args);
-
         public ValueTask<TValue> InvokeAsync<TValue>(
             string identifier,
             CancellationToken cancellationToken,
@@ -320,20 +287,14 @@ public sealed class BrowserEngineWorkerTransportTests
             return ValueTask.FromResult((TValue)(object)module);
         }
     }
-
     private sealed class RecordingModule(RecordingController controller) : IJSObjectReference
     {
         public string? WorkerUrl { get; private set; }
-
         public string? WorkspaceId { get; private set; }
-
         public bool RequestFreshAuthority { get; private set; }
-
         public bool Disposed { get; private set; }
-
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
             InvokeAsync<TValue>(identifier, CancellationToken.None, args);
-
         public ValueTask<TValue> InvokeAsync<TValue>(
             string identifier,
             CancellationToken cancellationToken,
@@ -346,31 +307,22 @@ public sealed class BrowserEngineWorkerTransportTests
             RequestFreshAuthority = Assert.IsType<bool>(args[3]);
             return ValueTask.FromResult((TValue)(object)controller);
         }
-
         public ValueTask DisposeAsync()
         {
             Disposed = true;
             return ValueTask.CompletedTask;
         }
     }
-
     private sealed class RecordingController : IJSObjectReference
     {
         public DotNetObjectReference<BrowserEngineWorkerTransport>? Callback { get; set; }
-
         public EngineWorkerMessage? Sent { get; private set; }
-
         public bool Terminated { get; private set; }
-
         public bool Disposed { get; private set; }
-
         public bool FailTerminationOnce { get; init; }
-
         public int TerminationAttempts { get; private set; }
-
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
             InvokeAsync<TValue>(identifier, CancellationToken.None, args);
-
         public ValueTask<TValue> InvokeAsync<TValue>(
             string identifier,
             CancellationToken cancellationToken,
@@ -422,11 +374,9 @@ public sealed class BrowserEngineWorkerTransportTests
             }
             return ValueTask.FromResult(default(TValue)!);
         }
-
         public async Task EmitAsync(EngineWorkerMessage message) =>
             await Callback!.Value.ReceiveMessage(
                 JsonSerializer.SerializeToElement(message, EngineJsonSerializerOptions.CreateWire()));
-
         public ValueTask DisposeAsync()
         {
             Disposed = true;

@@ -2,16 +2,13 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
-
 namespace FFXIV_Craft_Architect.ContractTests;
-
 public sealed class RecipeGraphContractTests
 {
     [Fact]
     public async Task ExactRecipeEvidence_GeneratesCompleteBoundedGraph()
     {
         var response = await CreateService().BuildAsync(Request());
-
         Assert.True(response.IsComplete);
         Assert.Empty(response.Diagnostics);
         Assert.Equal(CraftRecipeGraphResponseV1.ExactProviderId, response.ProviderId);
@@ -22,7 +19,6 @@ public sealed class RecipeGraphContractTests
         Assert.Equal(CraftRecipeUnlockEvidenceV1.NoUnlockRequired, recipe.UnlockEvidence);
         Assert.Equal(CraftRecipeResolutionConfidenceV1.Exact, recipe.ResolutionConfidence);
     }
-
     [Fact]
     public async Task CraftableIntermediate_RemainsRecipeEdgeInsteadOfTerminalMaterial()
     {
@@ -46,9 +42,7 @@ public sealed class RecipeGraphContractTests
             new FixedPlanBuilder(new CraftingPlan { RootItems = [root] }),
             new FixedSnapshotService(snapshot),
             "contract-provider-1");
-
         var response = await service.BuildAsync(Request());
-
         Assert.True(response.IsComplete);
         Assert.Equal([100u, 200u], response.Recipes.Select(recipe => recipe.OutputItemId));
         Assert.Equal((200u, 2u),
@@ -57,7 +51,6 @@ public sealed class RecipeGraphContractTests
             (Assert.Single(response.Recipes[1].Ingredients).ItemId, response.Recipes[1].Ingredients[0].QuantityPerCraft));
         Assert.Equal([300u], response.TerminalMaterialItemIds);
     }
-
     [Fact]
     public async Task ExpandedNodeLimit_RejectsGraphBeyond1024NodesBeforeSnapshotWork()
     {
@@ -71,16 +64,13 @@ public sealed class RecipeGraphContractTests
             new FixedPlanBuilder(new CraftingPlan { RootItems = [root] }),
             snapshotService,
             "contract-provider-1");
-
         var response = await service.BuildAsync(Request());
-
         Assert.False(response.IsComplete);
         Assert.Empty(response.Recipes);
         Assert.Empty(response.TerminalMaterialItemIds);
         Assert.Equal("ExpandedNodeLimitExceeded", Assert.Single(response.Diagnostics).Code);
         Assert.Equal(0, snapshotService.BuildCount);
     }
-
     [Fact]
     public async Task DepthLimit_RejectsGraphBeyond16EdgesBeforeSnapshotWork()
     {
@@ -97,74 +87,59 @@ public sealed class RecipeGraphContractTests
             new FixedPlanBuilder(new CraftingPlan { RootItems = [root] }),
             snapshotService,
             "contract-provider-1");
-
         var response = await service.BuildAsync(Request());
-
         Assert.False(response.IsComplete);
         Assert.Empty(response.Recipes);
         Assert.Equal("DepthLimitExceeded", Assert.Single(response.Diagnostics).Code);
         Assert.Equal(0, snapshotService.BuildCount);
     }
-
     [Fact]
     public async Task IngredientLimit_RejectsAndBoundsRecipeBeyond32Ingredients()
     {
         var response = await CreateService(ingredientCount: 33).BuildAsync(Request());
-
         Assert.False(response.IsComplete);
         Assert.Contains(response.Diagnostics, diagnostic => diagnostic.Code == "InvalidIngredientCollection");
         Assert.Equal(32, Assert.Single(response.Recipes).Ingredients.Count);
     }
-
     [Fact]
     public async Task MalformedIngredient_IsRejectedInsteadOfSilentlyUndercounted()
     {
         var response = await CreateService(malformedIngredient: true).BuildAsync(Request());
-
         Assert.False(response.IsComplete);
         Assert.Contains(response.Diagnostics, diagnostic => diagnostic.Code == "InvalidIngredientCollection");
         Assert.DoesNotContain(Assert.Single(response.Recipes).Ingredients, ingredient => ingredient.ItemId == 999);
     }
-
     [Fact]
     public async Task UnknownUnlockEvidence_IsRejectedAsIncomplete()
     {
         var response = await CreateService(unknownUnlock: true).BuildAsync(Request());
-
         Assert.False(response.IsComplete);
         Assert.Contains(response.Diagnostics, diagnostic => diagnostic.Code == "UnknownRecipeUnlockEvidence");
         var recipe = Assert.Single(response.Recipes);
         Assert.Equal(0u, recipe.RecipeUnlockItemId);
         Assert.Equal(CraftRecipeUnlockEvidenceV1.Unknown, recipe.UnlockEvidence);
     }
-
     [Fact]
     public async Task ExactRecipeEvidence_ProducesCanonicalKnownHash()
     {
         var response = await CreateService().BuildAsync(Request());
-
         Assert.Equal(
             "sha256:233570B7F1D21071ADECC360E78260CA80FAB43B4AFBC3A25980862B7A7ED772",
             response.RecipeDataIdentity);
     }
-
     [Fact]
     public async Task SourceIngredientOrder_DoesNotChangeCanonicalHash()
     {
         var forward = await CreateService(reverseIngredients: false).BuildAsync(Request());
         var reverse = await CreateService(reverseIngredients: true).BuildAsync(Request());
-
         Assert.Equal(forward.RecipeDataIdentity, reverse.RecipeDataIdentity);
     }
-
     [Fact]
     public async Task UnsupportedRequestSchema_IsRejectedAtWireBoundary()
     {
         var request = Request() with { SchemaVersion = "craft-architect-exact-recipe-graph-request/v2" };
-
         await Assert.ThrowsAsync<ArgumentException>(() => CreateService().BuildAsync(request));
     }
-
     [Fact]
     public void ResponseJson_PreservesVersionedCamelCaseStringEnumShape()
     {
@@ -185,21 +160,17 @@ public sealed class RecipeGraphContractTests
                 },
             ],
         };
-
         var json = JsonSerializer.Serialize(response, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-
         Assert.Contains("\"schemaVersion\":\"craft-architect-exact-recipe-graph/v1\"", json, StringComparison.Ordinal);
         Assert.Contains("\"providerId\":\"CraftArchitect\"", json, StringComparison.Ordinal);
         Assert.Contains("\"unlockEvidence\":\"NoUnlockRequired\"", json, StringComparison.Ordinal);
         Assert.Contains("\"maximumDepth\":16", json, StringComparison.Ordinal);
     }
-
     private static CraftRecipeGraphRequestV1 Request() => new()
     {
         ItemId = 100,
         ItemName = "Root Gear",
     };
-
     private static CraftRecipeGraphService CreateService(
         bool reverseIngredients = false,
         int ingredientCount = 2,
@@ -242,7 +213,6 @@ public sealed class RecipeGraphContractTests
                 0,
                 null));
         }
-
         var operation = new RecipeOperation(
             "root",
             null,
@@ -281,7 +251,6 @@ public sealed class RecipeGraphContractTests
             new FixedSnapshotService(snapshot),
             "contract-provider-1");
     }
-
     private static PlanNode Node(string nodeId, int itemId, string name, bool canCraft, PlanNode? parent = null) => new()
     {
         NodeId = nodeId,
@@ -293,7 +262,6 @@ public sealed class RecipeGraphContractTests
         CanCraft = canCraft,
         Source = canCraft ? AcquisitionSource.Craft : AcquisitionSource.MarketBuyNq,
     };
-
     private static RecipeOperationIngredient Ingredient(PlanNode child, int quantity, int? totalQuantity = null) => new(
         child.ItemId,
         child.Name,
@@ -305,7 +273,6 @@ public sealed class RecipeGraphContractTests
         RecipeIngredientLinkStatus.Matched,
         totalQuantity ?? quantity,
         totalQuantity ?? quantity);
-
     private static RecipeOperation Operation(
         PlanNode node,
         uint recipeId,
@@ -339,7 +306,6 @@ public sealed class RecipeGraphContractTests
         false,
         90,
         0);
-
     private sealed class FixedPlanBuilder(CraftingPlan plan) : ICoreRecipePlanBuilder
     {
         public Task<CraftingPlan> BuildPlanAsync(
@@ -347,20 +313,16 @@ public sealed class RecipeGraphContractTests
             string dataCenter,
             string world,
             CancellationToken ct = default) => Task.FromResult(plan);
-
         public Task FetchVendorPricesAsync(CraftingPlan value, CancellationToken ct = default) => Task.CompletedTask;
     }
-
     private sealed class FixedSnapshotService(RecipeOperationSnapshot snapshot) : IRecipeOperationSnapshotService
     {
         public int BuildCount { get; private set; }
-
         public Task<RecipeOperationSnapshot> BuildAsync(CraftingPlan? plan, CancellationToken ct = default)
         {
             BuildCount++;
             return Task.FromResult(snapshot);
         }
-
         public Task<RecipeOperationSnapshot> BuildAsync(
             CraftingPlan? plan,
             RecipeOperationSnapshotIdentity identity,

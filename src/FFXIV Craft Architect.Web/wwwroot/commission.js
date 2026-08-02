@@ -205,14 +205,25 @@ async function load() {
         state.access = state.store.load();
     } catch (caught) {
         const canReplaceDamagedAccess = caught.code === "invalid-saved-access" &&
-            Boolean(state.capabilities.claimCapability || state.capabilities.recoveryCapability);
+            Boolean(
+                state.capabilities.claimCapability ||
+                state.capabilities.recoveryCapability ||
+                state.capabilities.bootstrapToken);
         if (!canReplaceDamagedAccess) throw caught;
         state.store.discard();
         state.access = null;
     }
     state.client = new CommissionBriefApiClient(publicId);
+    if (state.capabilities.bootstrapToken) {
+        state.access = state.store.beginAuthorityExchange("bootstrap", {});
+        await state.client.exchangeDiscordBootstrap(
+            state.capabilities.bootstrapToken,
+            state.access.participantSecret);
+    }
     const hasAuthorityFragment = Boolean(
-        state.capabilities.claimCapability || state.capabilities.recoveryCapability);
+        state.capabilities.claimCapability ||
+        state.capabilities.recoveryCapability ||
+        state.capabilities.bootstrapToken);
     const loadSecret = state.access?.pending || !hasAuthorityFragment
         ? state.access?.participantSecret ?? null
         : null;
@@ -239,7 +250,8 @@ async function load() {
         state.capabilities = {
             claimCapability: null,
             recoveryCapability: null,
-            recoveryGrantId: null
+            recoveryGrantId: null,
+            bootstrapToken: null
         };
     }
 
@@ -1316,7 +1328,8 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
         state.capabilities = {
             claimCapability: null,
             recoveryCapability: null,
-            recoveryGrantId: null
+            recoveryGrantId: null,
+            bootstrapToken: null
         };
         await reloadProjection(successMessage);
     } catch (caught) {

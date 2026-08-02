@@ -567,6 +567,33 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task<bool> HasCommittedClaimContactAsync(
+        CompanyId companyId,
+        Guid commissionId,
+        string discordUserId,
+        CancellationToken cancellationToken = default)
+    {
+        if (commissionId == Guid.Empty || !DiscordSnowflake.IsValid(discordUserId))
+        {
+            return false;
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM discord_claim_contacts
+            WHERE company_id = $companyId
+              AND commission_id = $commissionId
+              AND discord_user_id = $discordUserId;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+        command.Parameters.AddWithValue("$discordUserId", discordUserId);
+        return Convert.ToInt64(
+            await command.ExecuteScalarAsync(cancellationToken)) == 1;
+    }
+
     internal async Task<IReadOnlyList<DiscordNotificationOutboxWorkItem>> LeaseDueAsync(
         DateTimeOffset now,
         TimeSpan leaseDuration,

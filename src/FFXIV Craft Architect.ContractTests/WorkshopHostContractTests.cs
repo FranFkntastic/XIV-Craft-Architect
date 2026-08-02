@@ -3,13 +3,10 @@ using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
-
 namespace FFXIV_Craft_Architect.ContractTests;
-
 public sealed class WorkshopHostContractTests
 {
     private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web);
-
     [Fact]
     public void AppraisalRequestJson_IsVersionedAndCarriesItemName()
     {
@@ -25,15 +22,12 @@ public sealed class WorkshopHostContractTests
                 World = "Siren",
             },
         };
-
         var json = JsonSerializer.Serialize(request, WireJson);
-
         Assert.Contains("\"schemaVersion\":1", json, StringComparison.Ordinal);
         Assert.Contains("\"itemName\":\"Varnish\"", json, StringComparison.Ordinal);
         Assert.Contains("\"quantity\":4", json, StringComparison.Ordinal);
         Assert.Contains("\"pricingMode\":\"CurrentMarketEvidence\"", json, StringComparison.Ordinal);
     }
-
     [Fact]
     public async Task MissingMaterialPriceEvidence_ProducesIncompleteAdvisoryQuote()
     {
@@ -56,14 +50,12 @@ public sealed class WorkshopHostContractTests
             new FixedPlanBuilder(plan),
             new NoEvidenceService(),
             () => new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero));
-
         var quote = await service.AppraiseAsync(new CraftAppraisalRequest
         {
             ItemId = 7017,
             ItemName = "Varnish",
             Quantity = 4,
         });
-
         Assert.False(quote.IsComplete);
         Assert.Equal("IncompletePriceEvidence", quote.AppraisalStatus);
         Assert.Equal("Low", quote.Confidence);
@@ -72,7 +64,6 @@ public sealed class WorkshopHostContractTests
         Assert.Contains(quote.Warnings, warning => warning.Contains("missing price evidence", StringComparison.OrdinalIgnoreCase));
         Assert.Same(plan, quote.Plan);
     }
-
     [Fact]
     public async Task FreshMarketEvidence_IsReusedWithoutAnUpstreamRefresh()
     {
@@ -94,7 +85,6 @@ public sealed class WorkshopHostContractTests
         var service = new CraftAppraisalPriceEvidenceService(
             cache,
             new FixedPlanBuilder(new CraftingPlan { RootItems = [material] }));
-
         var result = await service.ApplyAsync(
             new CraftingPlan { RootItems = [material] },
             new CraftAppraisalRequest
@@ -104,13 +94,11 @@ public sealed class WorkshopHostContractTests
                 Quantity = 10,
                 Scope = new CraftAppraisalScope { DataCenter = "Aether" },
             });
-
         Assert.Equal(80m, material.MarketPrice);
         Assert.Equal(0, cache.EnsureCalls);
         Assert.Equal(0, cache.RefreshCalls);
         Assert.Equal(1, result.MarketItemsPriced);
     }
-
     [Fact]
     public async Task RegionEvidenceFetchesScopesConcurrentlyAndRetainsPartialResults()
     {
@@ -127,7 +115,6 @@ public sealed class WorkshopHostContractTests
             cache,
             new FixedPlanBuilder(new CraftingPlan { RootItems = [material] }),
             TimeSpan.FromMilliseconds(100));
-
         var result = await service.ApplyAsync(
             new CraftingPlan { RootItems = [material] },
             new CraftAppraisalRequest
@@ -137,7 +124,6 @@ public sealed class WorkshopHostContractTests
                 Quantity = 10,
                 Scope = new CraftAppraisalScope { Region = "North America" },
             });
-
         Assert.Equal(70m, material.MarketPrice);
         Assert.Equal(1, result.MarketItemsPriced);
         Assert.Equal(4, cache.EnsureCalls);
@@ -149,7 +135,6 @@ public sealed class WorkshopHostContractTests
             result.Issues,
             issue => issue.Message.Contains("Aether", StringComparison.OrdinalIgnoreCase));
     }
-
     [Theory]
     [InlineData(AcquisitionSource.MarketBuyNq, 25, 100, "MarketEvidence")]
     [InlineData(AcquisitionSource.VendorBuy, 15, 60, "VendorPrice")]
@@ -177,14 +162,12 @@ public sealed class WorkshopHostContractTests
             new FixedPlanBuilder(new CraftingPlan { RootItems = [material] }),
             new NoEvidenceService(),
             () => new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero));
-
         var quote = await service.AppraiseAsync(new CraftAppraisalRequest
         {
             ItemId = 7017,
             ItemName = "Varnish",
             Quantity = 4,
         });
-
         Assert.True(quote.IsComplete);
         Assert.Equal("Complete", quote.AppraisalStatus);
         Assert.Equal("Medium", quote.Confidence);
@@ -197,7 +180,6 @@ public sealed class WorkshopHostContractTests
         Assert.Equal(costSource, quotedMaterial.CostSource);
         Assert.Empty(quotedMaterial.Warnings);
     }
-
     [Fact]
     public async Task MixedSourceQuote_AggregatesMatchingDemandWithoutCollapsingSourceEconomics()
     {
@@ -245,14 +227,12 @@ public sealed class WorkshopHostContractTests
             new FixedPlanBuilder(new CraftingPlan { RootItems = [root] }),
             new NoEvidenceService(),
             () => DateTimeOffset.UnixEpoch);
-
         var quote = await service.AppraiseAsync(new CraftAppraisalRequest
         {
             ItemId = 100,
             ItemName = "Contract Craft",
             Quantity = 2,
         });
-
         Assert.True(quote.IsComplete);
         Assert.Equal(190m, quote.EstimatedTotalCost);
         Assert.Equal(95m, quote.EstimatedUnitCost);
@@ -264,7 +244,6 @@ public sealed class WorkshopHostContractTests
         Assert.Equal((4m, 2m, 10m, 40m),
             (vendorQuote.TotalQuantity, vendorQuote.QuantityPerCraft, vendorQuote.UnitCost, vendorQuote.TotalCost));
     }
-
     [Fact]
     public void PartialObservationJson_RemainsIncompleteMarketEvidence()
     {
@@ -295,17 +274,14 @@ public sealed class WorkshopHostContractTests
               }]
             }
             """;
-
         var observation = JsonSerializer.Deserialize<WorkshopHostMarketObservation>(json, WireJson)!;
         var evidence = observation.ToMarketEvidenceSnapshot();
-
         Assert.Equal(MarketEvidenceCompleteness.Partial, evidence.Completeness);
         Assert.True(evidence.IsTruncated);
         Assert.Equal(5, evidence.ReportedListingCount);
         Assert.Equal(2, evidence.ListingCapacity);
         Assert.Equal("listing-1", Assert.Single(evidence.Listings).ListingId);
     }
-
     [Fact]
     public void CapabilityWire_RequiresAvailableStatusAndMatchingSchema()
     {
@@ -326,15 +302,12 @@ public sealed class WorkshopHostContractTests
               }]
             }
             """;
-
         var capabilities = JsonSerializer.Deserialize<WorkshopHostCapabilityResponse>(json, WireJson)!;
-
         Assert.True(capabilities.Supports("acquisition-batches", 1));
         Assert.False(capabilities.Supports("acquisition-batches", 2));
         Assert.False(capabilities.Supports("recipe-graphs", 1));
         Assert.False(capabilities.Supports("unknown-capability", 1));
     }
-
     private sealed class FixedPlanBuilder(CraftingPlan plan) : ICoreRecipePlanBuilder
     {
         public Task<CraftingPlan> BuildPlanAsync(
@@ -342,10 +315,8 @@ public sealed class WorkshopHostContractTests
             string dataCenter,
             string world,
             CancellationToken ct = default) => Task.FromResult(plan);
-
         public Task FetchVendorPricesAsync(CraftingPlan value, CancellationToken ct = default) => Task.CompletedTask;
     }
-
     private sealed class NoEvidenceService : ICraftAppraisalPriceEvidenceService
     {
         public Task<CraftAppraisalPriceEvidenceResult> ApplyAsync(
@@ -354,27 +325,22 @@ public sealed class WorkshopHostContractTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult(CraftAppraisalPriceEvidenceResult.Empty);
     }
-
     private sealed class FixedMarketCache(CachedMarketData data) : IMarketCacheService
     {
         public int EnsureCalls { get; private set; }
         public int RefreshCalls { get; private set; }
-
         public Task<CachedMarketData?> GetAsync(int itemId, string dataCenter, TimeSpan? maxAge = null) =>
             Task.FromResult<CachedMarketData?>(data);
-
         public Task<(CachedMarketData? Data, bool IsStale)> GetWithStaleAsync(
             int itemId,
             string dataCenter,
             TimeSpan? maxAge = null) =>
             Task.FromResult<(CachedMarketData?, bool)>((data, false));
-
         public Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyAsync(
             IReadOnlyCollection<(int itemId, string dataCenter)> requests,
             TimeSpan? maxAge = null) =>
             Task.FromResult<IReadOnlyDictionary<(int, string), CachedMarketData>>(
                 requests.ToDictionary(request => request, _ => data));
-
         public Task SetAsync(int itemId, string dataCenter, CachedMarketData value) => Task.CompletedTask;
         public Task<bool> HasValidCacheAsync(int itemId, string dataCenter, TimeSpan? maxAge = null) =>
             Task.FromResult(true);
@@ -384,7 +350,6 @@ public sealed class WorkshopHostContractTests
             Task.FromResult(new List<(int, string)>());
         public Task<int> CleanupStaleAsync(TimeSpan maxAge) => Task.FromResult(0);
         public Task<CacheStats> GetStatsAsync() => Task.FromResult(new CacheStats());
-
         public Task<int> EnsurePopulatedAsync(
             List<(int itemId, string dataCenter)> requests,
             TimeSpan? maxAge = null,
@@ -394,7 +359,6 @@ public sealed class WorkshopHostContractTests
             EnsureCalls++;
             return Task.FromResult(0);
         }
-
         public Task<int> RefreshRequestedAsync(
             List<(int itemId, string dataCenter)> requests,
             IProgress<string>? progress = null,
@@ -404,16 +368,13 @@ public sealed class WorkshopHostContractTests
             return Task.FromResult(0);
         }
     }
-
     private sealed class PartialRegionMarketCache : IMarketCacheService
     {
         private readonly object gate = new();
         private readonly Dictionary<(int itemId, string dataCenter), CachedMarketData> entries = [];
         private int activeCalls;
-
         public int EnsureCalls { get; private set; }
         public int MaximumConcurrentCalls { get; private set; }
-
         public Task<CachedMarketData?> GetAsync(int itemId, string dataCenter, TimeSpan? maxAge = null)
         {
             lock (gate)
@@ -421,13 +382,11 @@ public sealed class WorkshopHostContractTests
                 return Task.FromResult(entries.GetValueOrDefault((itemId, dataCenter)));
             }
         }
-
         public async Task<(CachedMarketData? Data, bool IsStale)> GetWithStaleAsync(
             int itemId,
             string dataCenter,
             TimeSpan? maxAge = null) =>
             (await GetAsync(itemId, dataCenter, maxAge), false);
-
         public Task<IReadOnlyDictionary<(int itemId, string dataCenter), CachedMarketData>> GetManyAsync(
             IReadOnlyCollection<(int itemId, string dataCenter)> requests,
             TimeSpan? maxAge = null)
@@ -440,20 +399,16 @@ public sealed class WorkshopHostContractTests
                         .ToDictionary(request => request, request => entries[request]));
             }
         }
-
         public Task SetAsync(int itemId, string dataCenter, CachedMarketData value)
         {
             lock (gate)
             {
                 entries[(itemId, dataCenter)] = value;
             }
-
             return Task.CompletedTask;
         }
-
         public async Task<bool> HasValidCacheAsync(int itemId, string dataCenter, TimeSpan? maxAge = null) =>
             await GetAsync(itemId, dataCenter, maxAge) != null;
-
         public async Task<List<(int itemId, string dataCenter)>> GetMissingAsync(
             List<(int itemId, string dataCenter)> requests,
             TimeSpan? maxAge = null)
@@ -461,10 +416,8 @@ public sealed class WorkshopHostContractTests
             var present = await GetManyAsync(requests, maxAge);
             return requests.Where(request => !present.ContainsKey(request)).ToList();
         }
-
         public Task<int> CleanupStaleAsync(TimeSpan maxAge) => Task.FromResult(0);
         public Task<CacheStats> GetStatsAsync() => Task.FromResult(new CacheStats());
-
         public async Task<int> EnsurePopulatedAsync(
             List<(int itemId, string dataCenter)> requests,
             TimeSpan? maxAge = null,
@@ -477,7 +430,6 @@ public sealed class WorkshopHostContractTests
                 activeCalls++;
                 MaximumConcurrentCalls = Math.Max(MaximumConcurrentCalls, activeCalls);
             }
-
             try
             {
                 var scope = Assert.Single(requests).dataCenter;
@@ -485,7 +437,6 @@ public sealed class WorkshopHostContractTests
                 {
                     await Task.Delay(Timeout.InfiniteTimeSpan, ct);
                 }
-
                 await Task.Delay(20, ct);
                 var price = scope switch
                 {
@@ -504,7 +455,6 @@ public sealed class WorkshopHostContractTests
                         FetchedAt = DateTime.UtcNow,
                     });
                 }
-
                 return requests.Count;
             }
             finally
@@ -515,7 +465,6 @@ public sealed class WorkshopHostContractTests
                 }
             }
         }
-
         public Task<int> RefreshRequestedAsync(
             List<(int itemId, string dataCenter)> requests,
             IProgress<string>? progress = null,

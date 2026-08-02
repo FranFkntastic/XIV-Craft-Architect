@@ -177,6 +177,100 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
             plaintext);
     }
 
+    public async Task<CompanyCommissionCapabilityResolution> InstallLinkedParticipantAsync(
+        CompanyId companyId,
+        Guid commissionId,
+        string publicBriefId,
+        Guid participantGrantId,
+        long participantCapabilityRevision,
+        string participantPlaintextToken,
+        DateTime installedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        if (commissionId == Guid.Empty ||
+            participantGrantId == Guid.Empty ||
+            participantCapabilityRevision <= 0 ||
+            string.IsNullOrWhiteSpace(publicBriefId) ||
+            publicBriefId.Length > MaximumPublicBriefIdLength ||
+            !IsValidCapability(participantPlaintextToken))
+        {
+            throw new ArgumentException(
+                "A valid linked participant credential is required.");
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        await using (var revoke = connection.CreateCommand())
+        {
+            revoke.Transaction = transaction;
+            revoke.CommandText = """
+                UPDATE company_commission_capabilities
+                SET revoked_at_utc = COALESCE(revoked_at_utc, $installedAtUtc)
+                WHERE company_id = $companyId
+                  AND commission_id = $commissionId
+                  AND capability_kind = $kind
+                  AND grant_id = $grantId
+                  AND revoked_at_utc IS NULL;
+                """;
+            revoke.Parameters.AddWithValue("$installedAtUtc", installedAtUtc.ToString("O"));
+            revoke.Parameters.AddWithValue("$companyId", companyId.ToString());
+            revoke.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+            revoke.Parameters.AddWithValue(
+                "$kind",
+                CompanyCommissionCapabilityKind.Participant.ToString());
+            revoke.Parameters.AddWithValue("$grantId", participantGrantId.ToString("D"));
+            await revoke.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var install = connection.CreateCommand())
+        {
+            install.Transaction = transaction;
+            install.CommandText = """
+                INSERT INTO company_commission_capabilities (
+                    capability_id, company_id, commission_id, public_brief_id,
+                    capability_kind, grant_id, capability_revision, token_hash,
+                    issued_at_utc, revoked_at_utc, consumed_by_command_id)
+                VALUES (
+                    $capabilityId, $companyId, $commissionId, $publicBriefId,
+                    $kind, $grantId, $capabilityRevision, $tokenHash,
+                    $installedAtUtc, NULL, NULL)
+                ON CONFLICT (
+                    company_id, commission_id, capability_kind, grant_id, capability_revision)
+                WHERE capability_kind <> 'Claim'
+                DO UPDATE SET
+                    public_brief_id = excluded.public_brief_id,
+                    token_hash = excluded.token_hash,
+                    issued_at_utc = excluded.issued_at_utc,
+                    revoked_at_utc = NULL,
+                    consumed_by_command_id = NULL;
+                """;
+            install.Parameters.AddWithValue("$capabilityId", Guid.NewGuid().ToString("D"));
+            install.Parameters.AddWithValue("$companyId", companyId.ToString());
+            install.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+            install.Parameters.AddWithValue("$publicBriefId", publicBriefId);
+            install.Parameters.AddWithValue(
+                "$kind",
+                CompanyCommissionCapabilityKind.Participant.ToString());
+            install.Parameters.AddWithValue("$grantId", participantGrantId.ToString("D"));
+            install.Parameters.AddWithValue("$capabilityRevision", participantCapabilityRevision);
+            install.Parameters.AddWithValue("$tokenHash", HashToken(participantPlaintextToken));
+            install.Parameters.AddWithValue("$installedAtUtc", installedAtUtc.ToString("O"));
+            await install.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new CompanyCommissionCapabilityResolution(
+            companyId,
+            commissionId,
+            publicBriefId,
+            CompanyCommissionCapabilityKind.Participant,
+            participantGrantId,
+            participantCapabilityRevision);
+    }
+
     public async Task<CompanyCommissionCapabilityResolution?> ResolveAsync(
         string publicBriefId,
         CompanyCommissionCapabilityKind kind,
