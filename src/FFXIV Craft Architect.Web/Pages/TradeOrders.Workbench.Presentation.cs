@@ -187,11 +187,11 @@ public partial class TradeOrders
         }
         if (order.Status == TradeOrderStatus.AwaitingDelivery)
         {
-            return "Awaiting delivery";
+            return "Ready for delivery";
         }
         if (order.Status == TradeOrderStatus.InProgress)
         {
-            return "In progress";
+            return "Crafting";
         }
         if (commission.ActiveClaim == null)
         {
@@ -205,7 +205,7 @@ public partial class TradeOrders
         {
             return "Terms review";
         }
-        return commission.ClearedToWork ? "Ready to craft" : "Waiting to start";
+        return commission.ClearedToWork ? "Crafting" : "Needs prerequisites";
     }
 
     private static string FormatCommissionMaterialHandoff(

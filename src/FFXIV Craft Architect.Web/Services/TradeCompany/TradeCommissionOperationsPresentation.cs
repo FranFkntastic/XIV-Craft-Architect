@@ -8,7 +8,6 @@ public static class TradeCommissionOperationsPresentation
     public const string OpenAttention = "open";
     public const string ClaimAttention = "claim";
     public const string PreWorkAttention = "prework";
-    public const string ReadyAttention = "ready";
     public const string WorkAttention = "work";
     public const string DeliveryAttention = "delivery";
     public const string SyncAttention = "sync";
@@ -30,13 +29,6 @@ public static class TradeCommissionOperationsPresentation
         if (order.Status == TradeOrderStatus.InProgress)
         {
             return WorkAttention;
-        }
-
-        if (order.Status == TradeOrderStatus.Assigned &&
-            order.AssignedCrafterId.HasValue &&
-            commission.ActiveClaim == null)
-        {
-            return ReadyAttention;
         }
 
         if (commission.ActiveClaim == null)
@@ -64,7 +56,7 @@ public static class TradeCommissionOperationsPresentation
 
         if (order.Status == TradeOrderStatus.Assigned)
         {
-            return ReadyAttention;
+            return WorkAttention;
         }
 
         return WorkAttention;
@@ -81,14 +73,7 @@ public static class TradeCommissionOperationsPresentation
 
         if (order.Status == TradeOrderStatus.InProgress)
         {
-            return "Work in progress";
-        }
-
-        if (order.Status == TradeOrderStatus.Assigned &&
-            order.AssignedCrafterId.HasValue &&
-            commission.ActiveClaim == null)
-        {
-            return "Ready to work";
+            return "Crafting";
         }
 
         if (commission.ActiveClaim == null)
@@ -135,9 +120,7 @@ public static class TradeCommissionOperationsPresentation
             return "Clear prerequisites";
         }
 
-        return order.Status == TradeOrderStatus.Assigned
-            ? "Ready to work"
-            : "Work in progress";
+        return "Crafting";
     }
 
     public static PendingPaymentPolicyRequest? GetPendingPaymentPolicyRequest(

@@ -488,6 +488,12 @@
   flex-direction: column;
 }
 
+.trade-orders-ops ::deep .mud-tabs-panels {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .trade-orders-tab-panel {
   height: 100%;
   min-height: 0;
