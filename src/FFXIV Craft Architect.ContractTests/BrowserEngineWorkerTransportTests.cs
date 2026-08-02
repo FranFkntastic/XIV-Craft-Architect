@@ -272,9 +272,9 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Contains("redirect: \"error\"", session, StringComparison.Ordinal);
         Assert.Contains("applicationLockName", session, StringComparison.Ordinal);
         Assert.Contains("\"RecoverProfileRevision\"", session, StringComparison.Ordinal);
+        Assert.Contains("normalizedProfileId,\n                    state.cursor", session, StringComparison.Ordinal);
         Assert.Contains("const replayAfterRevision = state.cursor", session, StringComparison.Ordinal);
         Assert.Contains("source,\n                replayAfterRevision", session, StringComparison.Ordinal);
-        Assert.Contains("normalizedProfileId,\n                    state.cursor", session, StringComparison.Ordinal);
         Assert.Contains("kind: \"profile-revision\"", session, StringComparison.Ordinal);
         Assert.Contains("serverRevision: revision", session, StringComparison.Ordinal);
         Assert.Contains("state.fetchController?.abort()", session, StringComparison.Ordinal);

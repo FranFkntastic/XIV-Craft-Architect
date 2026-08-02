@@ -1481,6 +1481,7 @@
 
     private async Task LoadProfileHostSettingsAsync()
     {
+        await ProfileSync.PrepareAuthorityAsync();
         var settings = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
         _profileHostUrl = string.IsNullOrWhiteSpace(settings.HostUrl)
             ? ProfileHostClient.DefaultHostUrl

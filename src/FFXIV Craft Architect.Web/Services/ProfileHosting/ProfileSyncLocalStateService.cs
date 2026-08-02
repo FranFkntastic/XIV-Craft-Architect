@@ -6,7 +6,9 @@ namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 public sealed class ProfileSyncLocalStateService
 {
     private const string ConnectedProfileNameKey = "profileHost.connectedProfileName";
-    private const string ProfileStatePrefix = "profileHost.profile.";
+    private const string AuthorityMigrationKey = "profileHost.authorityMigration.v1";
+    private const string ProfileStatePrefix = "profileHost.authority.";
+    private const string LegacyProfileStatePrefix = "profileHost.profile.";
     private const string LastSyncRevisionSuffix = "lastSyncRevision";
     private const string ObjectRevisionSuffix = "objectRevision.";
     private const string HostedObjectSuffix = "hostedObject.";
@@ -37,10 +39,15 @@ public sealed class ProfileSyncLocalStateService
         StringComparer.Ordinal);
 
     private readonly IndexedDbService _indexedDb;
+    private readonly ProfileHostClientOptions _options;
+    private string? _authorityScope;
 
-    public ProfileSyncLocalStateService(IndexedDbService indexedDb)
+    public ProfileSyncLocalStateService(
+        IndexedDbService indexedDb,
+        ProfileHostClientOptions options)
     {
         _indexedDb = indexedDb;
+        _options = options;
     }
 
     public static bool IsSyncedSetting(string key)
@@ -51,9 +58,38 @@ public sealed class ProfileSyncLocalStateService
     public async Task<HostedProfileConnectionSettings> LoadConnectionSettingsAsync()
     {
         var settings = await _indexedDb.LoadAllSettingsRequiredAsync();
+        var savedHostUrl = ReadSetting<string>(settings, ProfileSyncSettingsKeys.HostUrl);
+        var authorityMigrationComplete = ReadSetting(settings, AuthorityMigrationKey, false);
+        var hostUrl = ResolveEffectiveHostUrl(savedHostUrl);
+        _authorityScope = NormalizeAuthorityScope(hostUrl);
+        if (!authorityMigrationComplete)
+        {
+            var migrated = new Dictionary<string, string>
+            {
+                [ProfileSyncSettingsKeys.HostUrl] = JsonSerializer.Serialize(hostUrl),
+                [AuthorityMigrationKey] = JsonSerializer.Serialize(true)
+            };
+            foreach (var item in settings.Where(item =>
+                         item.Key.StartsWith(LegacyProfileStatePrefix, StringComparison.Ordinal)))
+            {
+                var destination = $"{ProfileStatePrefix}{_authorityScope}.profile." +
+                    item.Key[LegacyProfileStatePrefix.Length..];
+                if (!settings.ContainsKey(destination))
+                {
+                    migrated[destination] = item.Value;
+                }
+            }
+
+            if (!await _indexedDb.SaveSettingsBatchAsync(migrated))
+            {
+                throw new InvalidOperationException(
+                    "Browser storage could not migrate the hosted-profile authority.");
+            }
+        }
+
         return new HostedProfileConnectionSettings
         {
-            HostUrl = ReadSetting<string>(settings, ProfileSyncSettingsKeys.HostUrl),
+            HostUrl = hostUrl,
             AccessKey = ReadSetting<string>(settings, ProfileSyncSettingsKeys.AccessKey),
             RememberAccessKey = ReadSetting(
                 settings,
@@ -68,10 +104,12 @@ public sealed class ProfileSyncLocalStateService
 
     public async Task SaveConnectionSettingsAsync(HostedProfileConnectionSettings settings)
     {
+        var hostUrl = ProfileHostClient.NormalizeHostUrl(
+            settings.HostUrl ?? _options.DefaultHostUrl);
         var serialized = new Dictionary<string, string>
         {
             [ProfileSyncSettingsKeys.HostUrl] =
-                JsonSerializer.Serialize(settings.HostUrl ?? string.Empty),
+                JsonSerializer.Serialize(hostUrl),
             [ProfileSyncSettingsKeys.AccessKey] = JsonSerializer.Serialize(
                 settings.RememberAccessKey
                     ? settings.AccessKey ?? string.Empty
@@ -81,25 +119,27 @@ public sealed class ProfileSyncLocalStateService
             [ProfileSyncSettingsKeys.ConnectedProfileId] =
                 JsonSerializer.Serialize(settings.ConnectedProfileId ?? string.Empty),
             [ConnectedProfileNameKey] =
-                JsonSerializer.Serialize(settings.ConnectedProfileName ?? string.Empty)
+                JsonSerializer.Serialize(settings.ConnectedProfileName ?? string.Empty),
+            [AuthorityMigrationKey] = JsonSerializer.Serialize(true)
         };
         if (!await _indexedDb.SaveSettingsBatchAsync(serialized))
         {
             throw new InvalidOperationException(
                 "Browser storage could not persist the hosted-profile connection.");
         }
+        _authorityScope = NormalizeAuthorityScope(hostUrl);
     }
 
     public async Task<long> LoadLastSyncRevisionAsync(string profileId)
     {
         return await _indexedDb.LoadRequiredSettingAsync(
-            BuildProfileStateKey(profileId, LastSyncRevisionSuffix),
+            await BuildProfileStateKeyAsync(profileId, LastSyncRevisionSuffix),
             0L);
     }
 
     public async Task SaveLastSyncRevisionAsync(string profileId, long revision)
     {
-        var key = BuildProfileStateKey(profileId, LastSyncRevisionSuffix);
+        var key = await BuildProfileStateKeyAsync(profileId, LastSyncRevisionSuffix);
         if (!await _indexedDb.SaveSettingAsync(key, revision))
         {
             throw new InvalidOperationException(
@@ -113,7 +153,7 @@ public sealed class ProfileSyncLocalStateService
         string objectId)
     {
         return await _indexedDb.LoadRequiredSettingAsync(
-            BuildObjectRevisionKey(profileId, collection, objectId),
+            await BuildObjectRevisionKeyAsync(profileId, collection, objectId),
             0L);
     }
 
@@ -123,13 +163,14 @@ public sealed class ProfileSyncLocalStateService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(collection);
         ArgumentException.ThrowIfNullOrWhiteSpace(objectId);
+        var authorityPrefix = $"{ProfileStatePrefix}{await RequireAuthorityScopeAsync()}.profile.";
         var hostedSuffix =
             $".{HostedObjectSuffix}{collection}.{Uri.EscapeDataString(objectId)}";
         var revisionSuffix =
             $".{ObjectRevisionSuffix}{collection}.{Uri.EscapeDataString(objectId)}";
         var settings = await _indexedDb.LoadAllSettingsRequiredAsync();
         return settings.Any(item =>
-            item.Key.StartsWith(ProfileStatePrefix, StringComparison.Ordinal) &&
+            item.Key.StartsWith(authorityPrefix, StringComparison.Ordinal) &&
             (item.Key.EndsWith(hostedSuffix, StringComparison.Ordinal) ||
              item.Key.EndsWith(revisionSuffix, StringComparison.Ordinal)));
     }
@@ -141,7 +182,7 @@ public sealed class ProfileSyncLocalStateService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(collection);
         ArgumentException.ThrowIfNullOrWhiteSpace(objectId);
-        var key = BuildProfileStateKey(
+        var key = await BuildProfileStateKeyAsync(
             profileId,
             $"{HostedObjectSuffix}{collection}.{Uri.EscapeDataString(objectId)}");
         if (!await _indexedDb.SaveSettingAsync(key, true))
@@ -157,7 +198,7 @@ public sealed class ProfileSyncLocalStateService
         string objectId,
         long revision)
     {
-        var key = BuildObjectRevisionKey(profileId, collection, objectId);
+        var key = await BuildObjectRevisionKeyAsync(profileId, collection, objectId);
         if (!await _indexedDb.SaveSettingAsync(key, revision))
         {
             throw new InvalidOperationException(
@@ -169,7 +210,7 @@ public sealed class ProfileSyncLocalStateService
         string profileId)
     {
         return await _indexedDb.LoadRequiredSettingAsync(
-                   BuildProfileStateKey(profileId, PendingSavesSuffix),
+                   await BuildProfileStateKeyAsync(profileId, PendingSavesSuffix),
                    Array.Empty<ProfileSyncPendingSave>())
                ?? Array.Empty<ProfileSyncPendingSave>();
     }
@@ -178,7 +219,7 @@ public sealed class ProfileSyncLocalStateService
         string profileId,
         IReadOnlyList<ProfileSyncPendingSave> pendingSaves)
     {
-        var key = BuildProfileStateKey(profileId, PendingSavesSuffix);
+        var key = await BuildProfileStateKeyAsync(profileId, PendingSavesSuffix);
         if (!await _indexedDb.SaveSettingAsync(key, pendingSaves))
         {
             throw new InvalidOperationException(
@@ -208,12 +249,12 @@ public sealed class ProfileSyncLocalStateService
         await SaveObjectRevisionAsync(profileId, collection, objectId, revision);
     }
 
-    private static string BuildObjectRevisionKey(
+    private async Task<string> BuildObjectRevisionKeyAsync(
         string profileId,
         string collection,
         string objectId)
     {
-        return BuildProfileStateKey(
+        return await BuildProfileStateKeyAsync(
             profileId,
             $"{ObjectRevisionSuffix}{collection}.{Uri.EscapeDataString(objectId)}");
     }
@@ -225,10 +266,44 @@ public sealed class ProfileSyncLocalStateService
                 "Hosted-profile sync state requires a connected profile ID.");
     }
 
-    private static string BuildProfileStateKey(string profileId, string suffix)
+    private async Task<string> BuildProfileStateKeyAsync(string profileId, string suffix)
     {
         profileId = NormalizeProfileScopeId(profileId);
-        return $"{ProfileStatePrefix}{profileId}.{suffix}";
+        var authorityScope = await RequireAuthorityScopeAsync();
+        return $"{ProfileStatePrefix}{authorityScope}.profile.{profileId}.{suffix}";
+    }
+
+    private async Task<string> RequireAuthorityScopeAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_authorityScope))
+        {
+            return _authorityScope;
+        }
+
+        await LoadConnectionSettingsAsync();
+        return _authorityScope
+            ?? throw new InvalidOperationException(
+                "Hosted-profile sync state requires a valid authority URL.");
+    }
+
+    private string ResolveEffectiveHostUrl(string? savedHostUrl)
+    {
+        var defaultHostUrl = ProfileHostClient.NormalizeHostUrl(_options.DefaultHostUrl);
+        if (string.IsNullOrWhiteSpace(savedHostUrl))
+        {
+            return defaultHostUrl;
+        }
+
+        return ProfileHostClient.NormalizeHostUrl(savedHostUrl);
+    }
+
+    private static string NormalizeAuthorityScope(string hostUrl)
+    {
+        var normalized = ProfileHostClient.NormalizeHostUrl(hostUrl);
+        var uri = new Uri(normalized, UriKind.Absolute);
+        var exactAuthority =
+            $"{uri.Scheme.ToLowerInvariant()}://{uri.Authority.ToLowerInvariant()}{uri.AbsolutePath}";
+        return Uri.EscapeDataString(exactAuthority);
     }
 
     private static string NormalizeProfileScopeId(string profileId)

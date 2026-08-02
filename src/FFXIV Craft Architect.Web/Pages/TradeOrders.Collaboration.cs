@@ -54,7 +54,7 @@ public partial class TradeOrders
 
             if (commission.CurrentTerms.Payment.Total <= 0)
             {
-                return "Rebuild and price the work package before publishing.";
+                return "Finish the work package and pricing before publishing.";
             }
 
             if (commission.CurrentTerms.Payment.Schedule ==

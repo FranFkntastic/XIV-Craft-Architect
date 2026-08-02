@@ -1,0 +1,128 @@
+@using FFXIV_Craft_Architect.Web.Services.ProfileHosting
+
+<span class="trade-order-restore-banner__announcement"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true">@_completionAnnouncement</span>
+
+@if (ShouldDisplay)
+{
+    <section class="@BannerClass"
+             role="status"
+             aria-live="polite"
+             aria-atomic="true"
+             aria-busy="@IsBusy.ToString().ToLowerInvariant()">
+        <span class="trade-order-restore-banner__mark" aria-hidden="true">
+            @if (!IsBusy)
+            {
+                <span>!</span>
+            }
+        </span>
+        <div class="trade-order-restore-banner__copy">
+            <strong>@Title</strong>
+            <span>@Detail</span>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(ProgressDetail))
+        {
+            <span class="trade-order-restore-banner__progress">@ProgressDetail</span>
+        }
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public required HostedOrderRestoreState State { get; set; }
+
+    [Parameter]
+    public bool HasHostedOrderIdentities { get; set; }
+
+    private HostedOrderRestoreStage? _previousStage;
+    private bool _previousStateWasVisible;
+    private string? _completionAnnouncement;
+
+    protected override void OnParametersSet()
+    {
+        if (State.Stage == HostedOrderRestoreStage.Ready &&
+            _previousStage != HostedOrderRestoreStage.Ready &&
+            _previousStateWasVisible)
+        {
+            _completionAnnouncement = "Orders restored.";
+        }
+        else if (State.Stage != HostedOrderRestoreStage.Ready)
+        {
+            _completionAnnouncement = null;
+        }
+
+        _previousStage = State.Stage;
+        _previousStateWasVisible = ShouldDisplay;
+    }
+
+    private bool IsUntrustedReconnect =>
+        State.Stage == HostedOrderRestoreStage.Reconnecting &&
+        !State.ShowsCompleteProjection;
+
+    private bool ShouldDisplay =>
+        State.Stage is HostedOrderRestoreStage.ColdRestoring or
+            HostedOrderRestoreStage.ScopeChanging or
+            HostedOrderRestoreStage.IdentityOnly or
+            HostedOrderRestoreStage.Failed ||
+        (State.Stage == HostedOrderRestoreStage.Inactive && HasHostedOrderIdentities) ||
+        IsUntrustedReconnect;
+
+    private bool IsBusy =>
+        State.Stage is HostedOrderRestoreStage.ColdRestoring or
+            HostedOrderRestoreStage.ScopeChanging ||
+        IsUntrustedReconnect;
+
+    private string BannerClass =>
+        $"trade-order-restore-banner{(State.Stage == HostedOrderRestoreStage.Failed ? " is-error" : string.Empty)}{(State.Stage == HostedOrderRestoreStage.IdentityOnly ? " is-attention" : string.Empty)}";
+
+    private string Title =>
+        State.Stage switch
+        {
+            HostedOrderRestoreStage.ScopeChanging => "Changing Trade profile",
+            HostedOrderRestoreStage.Inactive => "Profile Hosting is not connected",
+            HostedOrderRestoreStage.IdentityOnly => "Order details need verification",
+            HostedOrderRestoreStage.Failed => "Orders couldn't be restored",
+            _ => "Restoring orders"
+        };
+
+    private string Detail =>
+        State.Stage switch
+        {
+            HostedOrderRestoreStage.ScopeChanging =>
+                "Verifying the orders that belong to this profile.",
+            HostedOrderRestoreStage.Inactive =>
+                "Saved order identities remain visible, but current terms and progress are withheld.",
+            HostedOrderRestoreStage.IdentityOnly => IdentityOnlyDetail,
+            HostedOrderRestoreStage.Failed =>
+                "Craft Architect couldn't reach the profile service. It will retry automatically.",
+            _ => State.ProgressStage ?? "Reading saved order information."
+        };
+
+    private string IdentityOnlyDetail =>
+        State.Failure switch
+        {
+            HostedOrderRestoreFailure.Authentication =>
+                "Profile access must be restored before current order details can be used.",
+            HostedOrderRestoreFailure.Incompatible =>
+                "The saved order snapshot doesn't match the hosted profile and can't be used safely.",
+            _ =>
+                "The saved order snapshot couldn't be verified, so current order details are withheld."
+        };
+
+    private string? ProgressDetail
+    {
+        get
+        {
+            if (IsBusy && State.AppliedObjectCount > 0)
+            {
+                return $"{State.AppliedObjectCount:N0} hosted change{(State.AppliedObjectCount == 1 ? string.Empty : "s")} applied";
+            }
+
+            return State.LastTrustedAtUtc is { } lastTrusted && !IsBusy
+                ? $"Last verified {lastTrusted.ToLocalTime():MMM d, h:mm tt}"
+                : null;
+        }
+    }
+}

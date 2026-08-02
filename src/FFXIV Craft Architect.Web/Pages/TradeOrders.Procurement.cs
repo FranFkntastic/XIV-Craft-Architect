@@ -56,12 +56,11 @@ public partial class TradeOrders
         }
 
         var workPackage = GetSelectedOrderPricingWorkPackage();
-        var useCanonicalTerms = HasCanonicalCommission && !CanEditCanonicalDraft;
         return TradeProcurementRowBuilder.BuildRows(
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
-            useCanonicalTerms ? null : WorkerProjections.Shell.PlanId,
-            useCanonicalTerms ? null : GetCurrentLiveProcurementSnapshot());
+            WorkerProjections.Shell.PlanId,
+            GetCurrentLiveProcurementSnapshot());
     }
 
     private TradeOrder GetSelectedOrderPricingWorkPackage()
@@ -156,21 +155,26 @@ public partial class TradeOrders
         _activeOpsTab = tabIndex;
         if (tabIndex != ProcurementTabIndex ||
             _selectedOrder == null ||
-            IsSelectedOrderLinkedPlanActive() ||
             _isLoadingSelectedOrderSupplyPlan)
         {
             return;
         }
 
+        if (!HasLinkedCraftPlan(_selectedOrder))
+        {
+            return;
+        }
+
         _isLoadingSelectedOrderSupplyPlan = true;
+        await InvokeAsync(StateHasChanged);
         try
         {
-            if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
+            if (!IsSelectedOrderLinkedPlanActive() &&
+                !await LoadSelectedOrderCraftPlanForNavigationAsync())
             {
                 return;
             }
 
-            ClearLiveProcurementSnapshot();
             await EnsureLiveProcurementSnapshotAsync();
         }
         finally
@@ -207,6 +211,13 @@ public partial class TradeOrders
             var currentKey = CreateLiveProcurementKey();
             if (!currentKey.HasValue || !currentKey.Value.Equals(key.Value))
             {
+                return;
+            }
+
+            if (snapshot is not { HasPlan: true } ||
+                !string.Equals(snapshot.PlanId, key.Value.PlanId, StringComparison.Ordinal))
+            {
+                ClearLiveProcurementSnapshot();
                 return;
             }
 
@@ -360,10 +371,7 @@ public partial class TradeOrders
     {
         return rows
             .Where(row => !IsRequestedOutputReferenceRow(row))
-            .Where(row =>
-                !row.IsLiveAcquisitionRow ||
-                row.IsActiveProcurement ||
-                IsSupplyPrecraftRow(row))
+            .Where(TradeProcurementRowBuilder.ShouldIncludePlanRow)
             .ToArray();
     }
 
@@ -376,9 +384,7 @@ public partial class TradeOrders
 
     private static bool IsSupplyPrecraftRow(TradeOrderProcurementRow row)
     {
-        return row.IsLiveAcquisitionRow &&
-            row.HasChildren &&
-            row.HasEditableOccurrences;
+        return TradeProcurementRowBuilder.IsPlanPrecraftRow(row);
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetFilteredProcurementRows(
@@ -413,6 +419,11 @@ public partial class TradeOrders
 
     private static bool ProcurementRowNeedsAttention(TradeOrderProcurementRow row)
     {
+        if (row.IsFullySuppressed)
+        {
+            return false;
+        }
+
         if (row.Source == AcquisitionSource.OnHand)
         {
             return row.Warnings.Count > 0;
@@ -572,6 +583,12 @@ public partial class TradeOrders
 
     private static string FormatProcurementEvidence(TradeOrderProcurementRow row)
     {
+        var routeDescription = TradeProcurementRowBuilder.GetPlanRouteDescription(row);
+        if (!string.IsNullOrWhiteSpace(routeDescription))
+        {
+            return routeDescription;
+        }
+
         if (row.HasSuppressedOccurrences &&
             !row.IsFullySuppressed &&
             row.SuppressedBy.Count > 0)
@@ -671,7 +688,9 @@ public partial class TradeOrders
     private bool CanEditProcurementSource(TradeOrderProcurementRow row)
     {
         return !_isCommissionCommandRunning &&
-            (!HasCanonicalCommission || CanEditCanonicalDraft) &&
+            TradeProcurementSourceMutationPolicy.CanMutateLivePlan(
+                HasCanonicalCommission,
+                CanEditCanonicalWorkPackage) &&
             TradeProcurementSourceMutationPolicy.CanChangeSource(row);
     }
 
@@ -769,7 +788,7 @@ public partial class TradeOrders
             return false;
         }
 
-        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
+        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalWorkPackage)
         {
             Snackbar.Add(
                 "Published acquisition decisions are part of the accepted terms. Use Revise Terms to change them.",
@@ -879,7 +898,7 @@ public partial class TradeOrders
         if (!await PlanPersistence.SaveSnapshotAsync(stored))
         {
             Snackbar.Add(
-                "The commission draft was saved, but its local craft-plan cache could not be updated. It will rebuild from the canonical order snapshot when reopened.",
+                "The commission draft was saved, but its local craft-plan cache could not be updated. It will be reconstructed from the canonical order snapshot when reopened.",
                 Severity.Warning);
         }
 
@@ -900,17 +919,29 @@ public partial class TradeOrders
         return true;
     }
 
-    private async Task RestoreStagedProcurementPlanAsync(StoredPlan rollbackSnapshot)
+    private async Task<bool> RestoreStagedProcurementPlanAsync(StoredPlan rollbackSnapshot)
     {
         try
         {
             await PlanLifecycle.ReplaceStoredPlanAsync(
                 rollbackSnapshot,
                 trackStoredPlanIdentity: true);
+            if (!await PlanPersistence.SaveSnapshotAsync(rollbackSnapshot))
+            {
+                Snackbar.Add(
+                    "The previous linked plan could not be restored automatically. Retry the change before using this plan.",
+                    Severity.Error);
+                return false;
+            }
+
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // The canonical order was not changed. A later reopen rebuilds the local plan projection.
+            Snackbar.Add(
+                $"The previous linked plan could not be restored automatically: {ex.Message}",
+                Severity.Error);
+            return false;
         }
     }
 

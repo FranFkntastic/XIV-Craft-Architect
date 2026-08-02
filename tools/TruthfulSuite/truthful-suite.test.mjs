@@ -81,6 +81,7 @@ test('archive creation is deterministic and exact-byte extraction verifies confi
   assert.equal(config.EngineRewrite.ExecutionEnabled, true);
   assert.equal(config.EngineAcceptance.Enabled, false);
   assert.equal(config.LodestoneLookup.BaseAddress, 'https://example.com/api/');
+  assert.equal(config.ProfileHost.BaseAddress, 'https://example.com/api/');
   assert.equal(release.sourceDirty, false);
   assert.equal(firstResult.buildManifest.source.dirty, false);
   assert.equal(firstResult.buildManifest.acceptance.worker.required, true);
@@ -91,6 +92,7 @@ test('archive creation is deterministic and exact-byte extraction verifies confi
     localDev.published, path.join(localDev.temporaryRoot, 'out'), localDev.acceptance, localDev.fixtures);
   localDevOptions.slot = 'local-dev';
   localDevOptions.domain = 'dev.example.com';
+  localDevOptions['profile-host-domain'] = 'example.com';
   localDevOptions['source-ref'] = 'local-dev';
   const localDevResult = await createTestArtifact(localDevOptions);
   const localDevExtracted = path.join(localDev.temporaryRoot, 'extracted');
@@ -105,6 +107,9 @@ test('archive creation is deterministic and exact-byte extraction verifies confi
   const localDevConfig = JSON.parse(await readFile(path.join(localDevExtracted, 'appsettings.json'), 'utf8'));
   assert.equal(localDevConfig.ProcurementRoutes.GenerationEnabled, true);
   assert.equal(localDevConfig.EngineRewrite.ExecutionEnabled, true);
+  assert.equal(localDevConfig.LodestoneLookup.BaseAddress, 'https://dev.example.com/api/');
+  assert.equal(localDevConfig.ProfileHost.BaseAddress, 'https://example.com/api/');
+  assert.equal(localDevResult.buildManifest.target.profileHostDomain, 'example.com');
   assert.equal(localDevResult.buildManifest.acceptance.worker.required, true);
   assert.equal(localDevResult.buildManifest.acceptance.worker.outcomeId, 'engine-browser-tests');
 
@@ -145,7 +150,7 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
     'spec-tests': ['dotnet', '.', ['test', 'src/FFXIV Craft Architect.SpecTests/FFXIV Craft Architect.SpecTests.csproj', '--configuration', 'Release', '--no-build', '--no-restore', '--blame-hang', '--blame-hang-timeout', '5m', '--blame-hang-dump-type', 'mini', '--logger', 'trx;LogFileName=spec-tests.trx', '--logger', 'console;verbosity=normal'], 600],
     'contract-tests': ['dotnet', '.', ['test', 'src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj', '--configuration', 'Release', '--no-build', '--no-restore', '--blame-hang', '--blame-hang-timeout', '5m', '--blame-hang-dump-type', 'mini', '--logger', 'trx;LogFileName=contract-tests.trx', '--logger', 'console;verbosity=normal'], 600],
     'web-publish': ['dotnet', '.', ['publish', 'src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj', '--configuration', 'Release', '--output', 'dist/publish', '--no-restore', '-p:BuildInfoBranchName=main'], 600],
-    'product-configuration': ['node', '.', ['tools/TruthfulSuite/check-product.mjs', 'dist/subject/src/FFXIV Craft Architect.Web/wwwroot', 'example.com', 'main'], 60],
+    'product-configuration': ['node', '.', ['tools/TruthfulSuite/check-product.mjs', 'dist/subject/src/FFXIV Craft Architect.Web/wwwroot', 'example.com', 'main', 'example.com'], 60],
     'engine-browser-tests': ['npm', 'dist/subject/tools/IndexedDbBrowserTests', ['run', 'test:engine'], 600]
   };
   for (const expected of result.buildManifest.acceptance.requiredOutcomes) {
@@ -170,8 +175,8 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
   const passingTrx = total => `<TestRun><Results>${Array.from({ length: total }, (_, index) => `<UnitTestResult executionId="execution-${index}" testId="test-${index}" testName="Test ${index}" outcome="Passed" />`).join('')}</Results><ResultSummary outcome="Completed"><Counters total="${total}" executed="${total}" passed="${total}" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="${total}" inProgress="0" pending="0" /></ResultSummary></TestRun>`;
   const specTrx = path.join(value.temporaryRoot, 'spec-tests.trx');
   const contractTrx = path.join(value.temporaryRoot, 'contract-tests.trx');
-  await writeFile(specTrx, passingTrx(59));
-  await writeFile(contractTrx, passingTrx(117));
+  await writeFile(specTrx, passingTrx(67));
+  await writeFile(contractTrx, passingTrx(149));
 
   const acceptanceManifest = path.join(outDir, 'acceptance-manifest.json');
   const verifyOptions = {

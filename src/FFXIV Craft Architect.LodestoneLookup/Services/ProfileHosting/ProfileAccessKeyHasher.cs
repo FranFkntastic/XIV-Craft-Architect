@@ -24,7 +24,28 @@ public sealed class ProfileAccessKeyHasher
 
     public bool Verify(string plaintextKey, string storedHash)
     {
-        if (string.IsNullOrEmpty(plaintextKey) || string.IsNullOrEmpty(storedHash))
+        if (string.IsNullOrEmpty(plaintextKey) ||
+            !TryParseStoredHash(storedHash, out var parsedHash))
+        {
+            return false;
+        }
+
+        var actual = Rfc2898DeriveBytes.Pbkdf2(
+            plaintextKey,
+            parsedHash.Salt,
+            Iterations,
+            HashAlgorithmName.SHA256,
+            parsedHash.Expected.Length);
+        return CryptographicOperations.FixedTimeEquals(actual, parsedHash.Expected);
+    }
+
+    public bool IsSupportedStoredHash(string storedHash) =>
+        TryParseStoredHash(storedHash, out _);
+
+    private static bool TryParseStoredHash(string storedHash, out ParsedStoredHash parsedHash)
+    {
+        parsedHash = default;
+        if (string.IsNullOrEmpty(storedHash))
         {
             return false;
         }
@@ -55,14 +76,11 @@ public sealed class ProfileAccessKeyHasher
             return false;
         }
 
-        var actual = Rfc2898DeriveBytes.Pbkdf2(
-            plaintextKey,
-            salt,
-            iterations,
-            HashAlgorithmName.SHA256,
-            expected.Length);
-        return CryptographicOperations.FixedTimeEquals(actual, expected);
+        parsedHash = new ParsedStoredHash(salt, expected);
+        return true;
     }
+
+    private readonly record struct ParsedStoredHash(byte[] Salt, byte[] Expected);
 }
 
 public sealed record CreatedProfileAccessKey(string PlaintextKey, string StoredHash);

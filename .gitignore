@@ -54,6 +54,8 @@ settings.json
 
 # Cache files
 inventory_cache.json
+__pycache__/
+*.py[cod]
 .cache/
 .tmp/
 tmp/

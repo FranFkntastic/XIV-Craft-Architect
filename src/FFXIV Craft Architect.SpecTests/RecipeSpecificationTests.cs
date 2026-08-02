@@ -6,29 +6,48 @@ namespace FFXIV_Craft_Architect.SpecTests;
 
 public sealed class RecipeSpecificationTests
 {
-    [Fact]
-    public void RecipeYieldRoundsCraftCountUp()
+    [Theory]
+    [InlineData(2, 2, 5, 2, 3)]
+    [InlineData(1, 0, 5, 1, 5)]
+    public void RecipeYieldDeterminesCeilingCraftCount(
+        int nodeYield,
+        int recipeYield,
+        int quantity,
+        int expectedYield,
+        int expectedCraftCount)
     {
         var result = new RecipeResolutionService().Resolve(
-            CraftNode("Blacksmith", level: 80, yield: 2, quantity: 5),
-            Item(Craft("1000", level: 80, jobId: 9, yield: 2)));
+            CraftNode("Blacksmith", level: 80, yield: nodeYield, quantity),
+            Item(Craft("1000", level: 80, jobId: 9, yield: recipeYield)));
 
-        Assert.Equal(3, result.CraftCount);
+        Assert.Equal(expectedYield, result.Yield);
+        Assert.Equal(expectedCraftCount, result.CraftCount);
     }
 
-    [Fact]
-    public void NonpositiveRecipeYieldNormalizesToOne()
+    [Theory]
+    [InlineData(RecipeResolutionScenario.Exact)]
+    [InlineData(RecipeResolutionScenario.Ambiguous)]
+    [InlineData(RecipeResolutionScenario.NonNumeric)]
+    public void RecipeResolutionUsesStableIdentityAndReportsAmbiguity(
+        RecipeResolutionScenario scenario)
     {
-        var result = new RecipeResolutionService().Resolve(
-            CraftNode("Blacksmith", level: 80, yield: 1, quantity: 5),
-            Item(Craft("1000", level: 80, jobId: 9, yield: 0)));
-
-        Assert.Equal(1, result.Yield);
-        Assert.Equal(5, result.CraftCount);
+        switch (scenario)
+        {
+            case RecipeResolutionScenario.Exact:
+                ExactRecipeResolutionUsesJobLevelAndYieldTogether();
+                break;
+            case RecipeResolutionScenario.Ambiguous:
+                AmbiguousExactRecipeResolutionUsesLowestNumericId();
+                break;
+            case RecipeResolutionScenario.NonNumeric:
+                NonNumericRecipeIdentityRemainsUnresolved();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
     }
 
-    [Fact]
-    public void ExactRecipeResolutionUsesJobLevelAndYieldTogether()
+    private static void ExactRecipeResolutionUsesJobLevelAndYieldTogether()
     {
         var result = new RecipeResolutionService().Resolve(
             CraftNode("Blacksmith", level: 43, yield: 2, quantity: 4),
@@ -41,8 +60,7 @@ public sealed class RecipeSpecificationTests
         Assert.Equal(100u, result.RecipeId);
     }
 
-    [Fact]
-    public void AmbiguousExactRecipeResolutionUsesLowestNumericId()
+    private static void AmbiguousExactRecipeResolutionUsesLowestNumericId()
     {
         var result = new RecipeResolutionService().Resolve(
             CraftNode("Blacksmith", level: 43, yield: 1, quantity: 2),
@@ -55,8 +73,7 @@ public sealed class RecipeSpecificationTests
         Assert.Equal(RecipeOperationDiagnosticCode.AmbiguousRecipe, Assert.Single(result.Diagnostics).Code);
     }
 
-    [Fact]
-    public void NonNumericRecipeIdentityRemainsUnresolved()
+    private static void NonNumericRecipeIdentityRemainsUnresolved()
     {
         var result = new RecipeResolutionService().Resolve(
             CraftNode("Blacksmith", level: 43, yield: 1, quantity: 2),
@@ -66,8 +83,26 @@ public sealed class RecipeSpecificationTests
         Assert.Equal(RecipeResolutionConfidence.NonNumericRecipeId, result.Confidence);
     }
 
-    [Fact]
-    public async Task BoughtAncestorSuppressesAllCraftableDescendants()
+    [Theory]
+    [InlineData(AncestorSourceScenario.BoughtAncestor)]
+    [InlineData(AncestorSourceScenario.SuppressedPrecraftIntent)]
+    public async Task AncestorSourceChangesPreserveDescendantsAndTheirIntent(
+        AncestorSourceScenario scenario)
+    {
+        switch (scenario)
+        {
+            case AncestorSourceScenario.BoughtAncestor:
+                await BoughtAncestorSuppressesAllCraftableDescendants();
+                break;
+            case AncestorSourceScenario.SuppressedPrecraftIntent:
+                await SuppressedPrecraftSourceIntentActivatesWhenItsAncestorIsCrafted();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+    }
+
+    private static async Task BoughtAncestorSuppressesAllCraftableDescendants()
     {
         var root = CraftNode("Carpenter", level: 90, yield: 2, quantity: 1, itemId: 100, nodeId: "root");
         root.Source = AcquisitionSource.MarketBuyNq;
@@ -88,6 +123,41 @@ public sealed class RecipeSpecificationTests
         Assert.Equal(["child", "grandchild"], descendants.Select(operation => operation.NodeId).ToArray());
         Assert.All(descendants, operation => Assert.Equal(RecipeOperationState.SuppressedByAncestor, operation.State));
         Assert.All(descendants, operation => Assert.Equal(root.NodeId, operation.SuppressedByNodeId));
+    }
+
+    private static async Task SuppressedPrecraftSourceIntentActivatesWhenItsAncestorIsCrafted()
+    {
+        var root = CraftNode("Carpenter", level: 90, yield: 2, quantity: 1, itemId: 100, nodeId: "root");
+        root.Source = AcquisitionSource.MarketBuyNq;
+        var precraft = CraftNode("Blacksmith", level: 80, yield: 2, quantity: 3, itemId: 200, nodeId: "precraft");
+        precraft.Source = AcquisitionSource.MarketBuyNq;
+        var ingredient = CraftNode("Armorer", level: 70, yield: 1, quantity: 6, itemId: 300, nodeId: "ingredient");
+        root.Children = [precraft];
+        precraft.Children = [ingredient];
+        precraft.Parent = root;
+        ingredient.Parent = precraft;
+        var plan = new CraftingPlan { RootItems = [root] };
+
+        Assert.Equal(
+            1,
+            AcquisitionDecisionMutation.ChangeSource(
+                plan,
+                precraft.ItemId,
+                AcquisitionSource.Craft));
+        var stillSuppressed = await SnapshotService().BuildAsync(plan);
+        Assert.Equal(
+            RecipeOperationState.SuppressedByAncestor,
+            stillSuppressed.OperationsByNodeId[precraft.NodeId].State);
+        Assert.Equal(AcquisitionSource.Craft, precraft.Source);
+
+        AcquisitionDecisionMutation.ChangeSource(
+            plan,
+            root.ItemId,
+            AcquisitionSource.Craft);
+        var activated = await SnapshotService().BuildAsync(plan);
+
+        Assert.Equal(RecipeOperationState.Active, activated.OperationsByNodeId[precraft.NodeId].State);
+        Assert.Equal(RecipeOperationState.Active, activated.OperationsByNodeId[ingredient.NodeId].State);
     }
 
     [Fact]
@@ -209,5 +279,18 @@ public sealed class RecipeSpecificationTests
                 {"item":{"id":{{{itemId}}},"name":"{{{name}}}","craft":[{"id":"{{{recipeId}}}","rlvl":{{{level}}},"job":{{{jobId}}},"yield":{{{yield}}},"ingredients":[{{{ingredientJson}}}]}]}}
                 """;
         }
+    }
+
+    public enum RecipeResolutionScenario
+    {
+        Exact,
+        Ambiguous,
+        NonNumeric
+    }
+
+    public enum AncestorSourceScenario
+    {
+        BoughtAncestor,
+        SuppressedPrecraftIntent
     }
 }

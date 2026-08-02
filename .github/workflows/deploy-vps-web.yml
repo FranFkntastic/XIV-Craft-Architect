@@ -79,6 +79,7 @@ jobs:
           {
             echo "slot=$slot"
             echo "domain=$domain"
+            echo "profile_host_domain=xivcraftarchitect.com"
             echo "checkout_ref=$checkout_ref"
             echo "source_ref=$source_ref"
           } >> "$GITHUB_OUTPUT"
@@ -158,6 +159,7 @@ jobs:
             --out-dir "dist/release" \
             --archive-name "craftarchitect-web-${{ steps.target.outputs.slot }}-${{ steps.target.outputs.release }}.tar.gz" \
             --domain "${{ steps.target.outputs.domain }}" \
+            --profile-host-domain "${{ steps.deploy-target.outputs.profile_host_domain }}" \
             --slot "${{ steps.target.outputs.slot }}" \
             --source-sha "${{ steps.target.outputs.commit_sha }}" \
             --tree-sha "${{ steps.target.outputs.tree_sha }}" \
@@ -185,6 +187,7 @@ jobs:
           "dist/subject/src/FFXIV Craft Architect.Web/wwwroot"
           "${{ steps.target.outputs.domain }}"
           "${{ steps.target.outputs.slot }}"
+          "${{ steps.deploy-target.outputs.profile_host_domain }}"
 
       - name: Upload verified release handoff
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -322,6 +325,7 @@ jobs:
         shell: bash
         env:
           DEPLOY_DOMAIN: ${{ needs.package.outputs.domain }}
+          PROFILE_HOST_DOMAIN: xivcraftarchitect.com
           CONFIGURATION_SHA256: ${{ needs.package.outputs.configuration_sha256 }}
           DEPLOY_SOURCE_SHA: ${{ needs.package.outputs.source_sha }}
           DEPLOY_RELEASE: ${{ needs.package.outputs.release }}
@@ -337,7 +341,7 @@ jobs:
             const config = JSON.parse(await readFile("deployed-appsettings.json", "utf8"));
             const enabled = true;
             if (config?.LodestoneLookup?.BaseAddress !== "https://" + process.env.DEPLOY_DOMAIN + "/api/") process.exit(1);
-            if (config?.ProfileHost?.BaseAddress !== "https://" + process.env.DEPLOY_DOMAIN + "/api/") process.exit(1);
+            if (config?.ProfileHost?.BaseAddress !== "https://" + process.env.PROFILE_HOST_DOMAIN + "/api/") process.exit(1);
             if (config?.ProcurementRoutes?.GenerationEnabled !== enabled) process.exit(1);
             if (config?.EngineRewrite?.ExecutionEnabled !== enabled) process.exit(1);
             if (config?.EngineAcceptance?.Enabled !== false) process.exit(1);

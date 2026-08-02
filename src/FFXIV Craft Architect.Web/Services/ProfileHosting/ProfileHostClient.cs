@@ -221,8 +221,35 @@ public sealed class ProfileHostClient
             $"/profile-host/changes?sinceRevision={sinceRevision}&limit={limit}",
             accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<ProfileSyncChangesResponse>(cancellationToken: ct))!;
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.AccessKeyRejected,
+                "The profile access key was rejected or revoked.");
+        }
+        if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.IncompatibleHost,
+                "The saved profile revision is incompatible with the hosted profile.");
+        }
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.ProfileHostingDisabled,
+                "The configured host no longer exposes this hosted profile.");
+        }
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.HostUnavailable,
+                $"The profile host returned HTTP {(int)response.StatusCode} while loading changes.");
+        }
+
+        return (await response.Content.ReadFromJsonAsync<ProfileSyncChangesResponse>(cancellationToken: ct))
+            ?? throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.IncompatibleHost,
+                "The profile host returned an invalid changes response.");
     }
 
     public async Task<ProfileSyncPutResponse> PutObjectAsync(

@@ -336,6 +336,29 @@ static async Task RunProfileHostProvisioningCommandAsync(
                 });
                 break;
             }
+        case ProfileHostProvisioningAction.ImportActiveCredentials:
+            {
+                var sourceDatabasePath = command.SourceDatabasePath ??
+                    throw new InvalidOperationException("Source database path is required.");
+                var profileId = command.ProfileId ??
+                    throw new InvalidOperationException("Profile id is required.");
+                var expectedDisplayName = command.DisplayName ??
+                    throw new InvalidOperationException("Expected display name is required.");
+                var imported = await store.ImportActiveAccessKeysAsync(
+                    sourceDatabasePath,
+                    profileId,
+                    expectedDisplayName,
+                    hasher,
+                    cancellationToken);
+                WriteJson(new
+                {
+                    imported.ProfileId,
+                    imported.SourceActiveKeyCount,
+                    InsertedKeyCount = imported.InsertedKeyIds.Count,
+                    AlreadyPresentKeyCount = imported.AlreadyPresentKeyIds.Count
+                });
+                break;
+            }
         case ProfileHostProvisioningAction.RotateKey:
             {
                 var profileId = command.ProfileId ?? throw new InvalidOperationException("Profile id is required.");

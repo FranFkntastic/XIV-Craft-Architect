@@ -52,7 +52,8 @@ public partial class TradeOrders
             : CommissionOperations.GetNotificationError(_selectedOrder.Id);
 
     private TradeCompanyCommission? SelectedCanonicalCommission =>
-        SelectedCommissionOwner?.Order.CompanyCommission;
+        SelectedCommissionOwner?.Order.CompanyCommission ??
+        SelectedHostedOrderSnapshot?.Order?.CompanyCommission;
 
     private PendingPaymentPolicyRequest? SelectedPaymentPolicyRequest =>
         SelectedCommissionOwner == null
@@ -82,14 +83,6 @@ public partial class TradeOrders
     private bool CanEditCanonicalWorkPackage =>
         CanEditCanonicalDraft || IsEditingCommissionTermsRevision;
 
-    private int PaymentTabIndex => HasCanonicalCommission ? 1 : 0;
-
-    private int ProcurementTabIndex => HasCanonicalCommission ? 2 : 1;
-
-    private int TimelineTabIndex => HasCanonicalCommission ? 3 : 2;
-
-    private int SharingTabIndex => HasCanonicalCommission ? 4 : 3;
-
     private static string GetSettlementChipClass(
         CompanyCommissionSettlementState state) =>
         state == CompanyCommissionSettlementState.Satisfied
@@ -98,6 +91,11 @@ public partial class TradeOrders
 
     private void ShowCommissionTermsRevision()
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         var commission = owner?.Order.CompanyCommission;
         if (owner == null ||
@@ -117,6 +115,7 @@ public partial class TradeOrders
             commission);
         _commissionTermsRevisionRollbackPlan = null;
         _commissionTermsRevisionDirty = false;
+        CaptureCommissionTermsRevisionBase(owner, commission);
         _selectedOrder = _commissionTermsRevisionWorkPackage;
         _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
         _commissionContact = commission.CurrentTerms.ContactInstructions;
@@ -161,24 +160,49 @@ public partial class TradeOrders
         return copy;
     }
 
-    private async Task CancelCommissionTermsRevisionAsync()
-    {
-        var owner = SelectedCommissionOwner;
-        var rollback = _commissionTermsRevisionRollbackPlan;
-        _commissionTermsRevisionWorkPackage = null;
-        _commissionTermsRevisionBrief = null;
-        _commissionTermsRevisionRollbackPlan = null;
-        _commissionTermsRevisionDirty = false;
-        _showCommissionTermsRevision = false;
+    private Task CancelCommissionTermsRevisionAsync() =>
+        CancelCommissionTermsRevisionAsync(discardConflict: false);
 
-        if (rollback != null)
+    private async Task CancelCommissionTermsRevisionAsync(bool discardConflict)
+    {
+        if (_isCommissionCommandRunning)
         {
-            await RestoreStagedProcurementPlanAsync(rollback);
+            return;
         }
 
-        if (owner != null)
+        _isCommissionCommandRunning = true;
+        try
         {
-            SelectOrder(owner.Order);
+            var owner = SelectedCommissionOwner;
+            if (discardConflict &&
+                owner != null &&
+                !await ReconcileLatestCanonicalPlanAsync(owner.Order))
+            {
+                return;
+            }
+
+            var rollback = discardConflict ? null : _commissionTermsRevisionRollbackPlan;
+            if (rollback != null &&
+                !await RestoreStagedProcurementPlanAsync(rollback))
+            {
+                return;
+            }
+
+            _commissionTermsRevisionWorkPackage = null;
+            _commissionTermsRevisionBrief = null;
+            _commissionTermsRevisionRollbackPlan = null;
+            _commissionTermsRevisionDirty = false;
+            _showCommissionTermsRevision = false;
+            ResetCommissionTermsRevisionBase();
+
+            if (owner != null)
+            {
+                SelectOrder(owner.Order);
+            }
+        }
+        finally
+        {
+            _isCommissionCommandRunning = false;
         }
     }
 
@@ -199,6 +223,7 @@ public partial class TradeOrders
         _commissionTermsRevisionBrief = null;
         _commissionTermsRevisionRollbackPlan = null;
         _commissionTermsRevisionDirty = false;
+        ResetCommissionTermsRevisionBase();
         var provisional = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ProvisionalCrafter;
         _commissionIdentityCrafterId = provisional == null
             ? order.AssignedCrafterId
@@ -279,6 +304,11 @@ public partial class TradeOrders
 
     private async Task ConfirmCommissionIdentityAsync()
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         var provisional = owner?.Order.CompanyCommission?.ProvisionalCrafter;
         if (owner == null || provisional == null)
@@ -366,6 +396,11 @@ public partial class TradeOrders
 
     private async Task AmendCommissionTermsAsync()
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         var commission = owner?.Order.CompanyCommission;
         if (owner == null ||
@@ -373,6 +408,14 @@ public partial class TradeOrders
             _selectedOrder == null ||
             string.IsNullOrWhiteSpace(_commissionTermsRevisionReason))
         {
+            return;
+        }
+
+        if (HasCommissionTermsRevisionConflict)
+        {
+            Snackbar.Add(
+                "Canonical terms changed while this revision was being edited. Rebase onto the latest terms or discard the local changes before publishing.",
+                Severity.Warning);
             return;
         }
 
@@ -417,6 +460,7 @@ public partial class TradeOrders
                 _commissionTermsRevisionReason = string.Empty;
                 _commissionTermsRevisionDirty = false;
                 _showCommissionTermsRevision = false;
+                ResetCommissionTermsRevisionBase();
             }
         }
         finally
@@ -449,6 +493,11 @@ public partial class TradeOrders
                 Snackbar.Add(successMessage.Replace("commission draft", "terms revision"), Severity.Success);
             }
             return true;
+        }
+
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return false;
         }
 
         if (!CanEditCanonicalDraft)
@@ -538,6 +587,11 @@ public partial class TradeOrders
     private async Task RetryCommissionNotificationAsync(
         TradeDiscordNotificationDiagnostic diagnostic)
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         if (owner == null || !diagnostic.CanRetry)
         {
@@ -566,6 +620,11 @@ public partial class TradeOrders
         bool copyRecoveryUrl = false,
         bool copyClaimUrl = false)
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return;
+        }
+
         var owner = SelectedCommissionOwner;
         if (owner == null || _isCommissionCommandRunning)
         {
@@ -725,42 +784,8 @@ public partial class TradeOrders
 
     private static string FormatCanonicalCommissionState(
         TradeOrder order,
-        TradeCompanyCommission commission)
-    {
-        if (commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Revoked)
-        {
-            return "Publication revoked";
-        }
-        if (order.Status == TradeOrderStatus.Canceled)
-        {
-            return "Canceled";
-        }
-        if (order.Status == TradeOrderStatus.Completed)
-        {
-            return commission.SettlementState == CompanyCommissionSettlementState.Satisfied
-                ? "Completed"
-                : "Delivery accepted";
-        }
-        if (order.Status == TradeOrderStatus.AwaitingDelivery)
-        {
-            return "Awaiting delivery";
-        }
-        if (order.Status == TradeOrderStatus.InProgress)
-        {
-            return "In progress";
-        }
-        if (commission.ActiveClaim == null)
-        {
-            return "Open - one claim slot";
-        }
-        if (commission.Gates.Identity.State == CompanyCommissionClearanceState.Pending)
-        {
-            return "Claimed - identity review";
-        }
-        return commission.ClearedToWork
-            ? "Ready to work"
-            : "Assigned - pre-work";
-    }
+        TradeCompanyCommission commission) =>
+        FormatWorkbenchStatus(order, commission);
 
     private string FormatCanonicalCommissionCrafter(
         TradeOrder order,

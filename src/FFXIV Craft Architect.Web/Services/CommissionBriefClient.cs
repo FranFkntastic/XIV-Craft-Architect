@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -8,13 +9,18 @@ public sealed class CommissionBriefClient
 {
     private readonly HttpClient _httpClient;
 
-    public CommissionBriefClient(LodestoneLookupClientOptions options)
+    public CommissionBriefClient(ProfileHostClientOptions options)
+        : this(options, new HttpClient())
     {
-        _httpClient = new HttpClient
-        {
-            BaseAddress = options.BaseAddress,
-            Timeout = TimeSpan.FromSeconds(20)
-        };
+    }
+
+    public CommissionBriefClient(ProfileHostClientOptions options, HttpClient httpClient)
+    {
+        _httpClient = httpClient;
+        _httpClient.BaseAddress = new Uri(
+            ProfileHostClient.NormalizeHostUrl(options.DefaultHostUrl),
+            UriKind.Absolute);
+        _httpClient.Timeout = TimeSpan.FromSeconds(20);
     }
 
     public async Task<CommissionBriefCreateResponse> PublishAsync(

@@ -5,6 +5,45 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public static class TradeProcurementRowBuilder
 {
+    public static bool IsPlanPrecraftRow(TradeOrderProcurementRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return row.IsLiveAcquisitionRow && row.HasChildren;
+    }
+
+    public static bool ShouldIncludePlanRow(TradeOrderProcurementRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return !row.IsLiveAcquisitionRow ||
+            row.IsActiveProcurement ||
+            IsPlanPrecraftRow(row);
+    }
+
+    public static string? GetPlanRouteDescription(TradeOrderProcurementRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (row.IsFullySuppressed)
+        {
+            return row.SuppressedBy.Count == 0
+                ? "Not currently required by the selected acquisition route"
+                : $"Not currently required because {string.Join(", ", row.SuppressedBy)} is sourced directly";
+        }
+
+        if (!row.HasChildren || row.Source == AcquisitionSource.Craft)
+        {
+            return null;
+        }
+
+        if (row.Responsibility == CommissionMaterialResponsibility.Provided)
+        {
+            return "Required item; its ingredients are not required because the company provides it";
+        }
+
+        return row.Source == AcquisitionSource.OnHand
+            ? "Required item; its ingredients are not required because existing stock supplies it"
+            : "Required item; its ingredients are not required because it is acquired finished";
+    }
+
     public static IReadOnlyList<TradeOrderProcurementRow> BuildRows(
         TradeOrder order,
         TradePayrollWorkflowDraft? draft,
@@ -13,9 +52,17 @@ public static class TradeProcurementRowBuilder
     {
         ArgumentNullException.ThrowIfNull(order);
 
-        if (!CanUseLiveProjection(order, activePlanId, liveSnapshot))
+        var expectsLivePlan = !string.IsNullOrWhiteSpace(order.CraftPlanId) &&
+            string.Equals(order.CraftPlanId, activePlanId, StringComparison.Ordinal);
+        if (!TradeProcurementSourceMutationPolicy.CanReadLivePlan(
+                order.CraftPlanId,
+                activePlanId,
+                liveSnapshot?.HasPlan == true,
+                liveSnapshot?.PlanId))
         {
-            return TradeOrderWorkflow.BuildProcurementRows(order, draft);
+            return expectsLivePlan
+                ? Array.Empty<TradeOrderProcurementRow>()
+                : TradeOrderWorkflow.BuildProcurementRows(order, draft);
         }
 
         var snapshot = liveSnapshot!;
@@ -28,16 +75,6 @@ public static class TradeProcurementRowBuilder
             .Select(row => ToTradeRow(row, lines, responsibilities))
             .OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-    }
-
-    private static bool CanUseLiveProjection(
-        TradeOrder order,
-        string? activePlanId,
-        WorkerTradeProjection? liveSnapshot)
-    {
-        return liveSnapshot != null &&
-            !string.IsNullOrWhiteSpace(order.CraftPlanId) &&
-            string.Equals(order.CraftPlanId, activePlanId, StringComparison.Ordinal);
     }
 
     private static Dictionary<(int ItemId, bool RequiresHq), CommissionMaterialResponsibility> BuildResponsibilityLookup(

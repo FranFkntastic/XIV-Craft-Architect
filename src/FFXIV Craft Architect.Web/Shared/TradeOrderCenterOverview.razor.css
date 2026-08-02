@@ -1,0 +1,198 @@
+.trade-order-overview {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 100%;
+}
+
+.trade-order-overview__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #3a3a3a;
+}
+
+.trade-order-overview__title-row,
+.trade-order-overview__meta,
+.trade-order-overview__section-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.trade-order-overview__title-row {
+  flex-wrap: wrap;
+}
+
+.trade-order-overview__status {
+  border: 1px solid #9c7f2e;
+  border-radius: 999px;
+  background: #342c18;
+  color: #f0cc62;
+  padding: 4px 8px;
+  font-size: .7rem;
+  font-weight: 800;
+}
+
+.trade-order-overview__meta {
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  color: #aaa;
+  font-size: .7rem;
+}
+
+.trade-order-overview__meta strong {
+  color: #e8e8e8;
+}
+
+.trade-order-overview__attention {
+  display: grid;
+  grid-template-columns: minmax(190px, .8fr) minmax(280px, 1.2fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #806a30;
+  border-radius: 6px;
+  background: #30291a;
+  padding: 12px;
+}
+
+.trade-order-overview__attention p {
+  color: #c8b985;
+}
+
+.trade-order-overview__blockers {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.trade-order-overview__blockers > div {
+  min-width: 150px;
+  flex: 1 1 180px;
+  border: 1px solid #574a28;
+  border-radius: 4px;
+  background: #25221b;
+  padding: 7px 9px;
+}
+
+.trade-order-overview__blockers strong,
+.trade-order-overview__blockers span,
+.trade-order-overview__output span,
+.trade-order-overview__section-heading > span {
+  display: block;
+}
+
+.trade-order-overview__blockers strong {
+  color: #f0cc62;
+  font-size: .72rem;
+}
+
+.trade-order-overview__blockers span,
+.trade-order-overview__output span,
+.trade-order-overview__section-heading > span {
+  color: #aaa;
+  font-size: .68rem;
+}
+
+.trade-order-overview__section {
+  border: 1px solid #383838;
+  border-radius: 6px;
+  background: #202020;
+  overflow: hidden;
+}
+
+.trade-order-overview__section-heading {
+  justify-content: space-between;
+  padding: 9px 11px;
+  border-bottom: 1px solid #383838;
+}
+
+.trade-order-overview__outputs {
+  display: grid;
+}
+
+.trade-order-overview__output {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(2, minmax(74px, auto));
+  align-items: center;
+  gap: 12px;
+  padding: 11px;
+}
+
+.trade-order-overview__output + .trade-order-overview__output {
+  border-top: 1px solid #343434;
+}
+
+.trade-order-overview__output > div:not(:first-child) {
+  border-left: 1px solid #3d3d3d;
+  padding-left: 10px;
+}
+
+.trade-order-overview__path {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 6px;
+  padding: 10px;
+}
+
+.trade-order-overview__step {
+  min-width: 0;
+  border: 1px solid #3d3d3d;
+  border-top: 3px solid #555;
+  border-radius: 4px;
+  background: #252525;
+  color: #ddd;
+  padding: 8px;
+  text-align: left;
+}
+
+button.trade-order-overview__step {
+  cursor: pointer;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+button.trade-order-overview__step:hover,
+button.trade-order-overview__step:focus-visible {
+  border-color: #8d7939;
+}
+
+.trade-order-overview__step.is-complete {
+  border-top-color: #4f8c58;
+  background: #1e3021;
+}
+
+.trade-order-overview__step.is-current {
+  border-top-color: #d8b13d;
+  background: #332c1c;
+}
+
+.trade-order-overview__step span {
+  display: block;
+  color: #aaa;
+  font-size: .6rem;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.trade-order-overview__step strong {
+  display: block;
+  margin-top: 4px;
+  font-size: .72rem;
+}
+
+@media (max-width: 980px) {
+  .trade-order-overview__header,
+  .trade-order-overview__attention,
+  .trade-order-overview__output,
+  .trade-order-overview__path {
+    grid-template-columns: 1fr;
+  }
+
+  .trade-order-overview__output > div:not(:first-child) {
+    border-left: 0;
+    padding-left: 0;
+  }
+}

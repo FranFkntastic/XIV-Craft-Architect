@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
@@ -11,7 +12,33 @@ public sealed record ProfileSyncStatus(
     DateTime? LastSyncedAtUtc,
     string? Message)
 {
+    public string? ProfileId { get; init; }
+    public ProfileSyncStage Stage { get; init; } = ProfileSyncStage.Inactive;
+    public ProfileSyncFailure Failure { get; init; }
+    public int AppliedObjectCount { get; init; }
+    public long? TargetRevision { get; init; }
+
     public static ProfileSyncStatus LocalOnly() => new(false, false, 0, 0, 0, null, "Local only");
+}
+
+public enum ProfileSyncStage
+{
+    Inactive,
+    ReadingLocalState,
+    DownloadingChanges,
+    ApplyingChanges,
+    PublishingLocalChanges,
+    Ready,
+    Failed
+}
+
+public enum ProfileSyncFailure
+{
+    None,
+    Offline,
+    Authentication,
+    Incompatible,
+    Unverifiable
 }
 
 public enum FirstConnectMode
@@ -38,6 +65,10 @@ public sealed class ProfileSyncService
 {
     private const int ChangePageSize = 1;
     private const int RecoveryPageSize = 50;
+    private const string CanonicalProfileHostUrl = "https://xivcraftarchitect.com/api/";
+    private const string LegacyDevelopmentProfileHostUrl = "https://dev.xivcraftarchitect.com/api/";
+    private static readonly JsonSerializerOptions JsonOptions =
+        ProfileSyncJson.CreateOptions();
     private readonly ProfileHostClient _client;
     private readonly ProfileSyncLocalStateService _localState;
     private readonly HostedOrderProjectionStore _hostedOrders;
@@ -46,7 +77,7 @@ public sealed class ProfileSyncService
     private readonly List<ProfileSyncConflict> _conflicts = [];
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private int _suppressionDepth;
-    private string? _pendingSavesProfileId;
+    private string? _pendingSavesConnectionScopeId;
 
     public ProfileSyncService(
         ProfileHostClient client,
@@ -73,16 +104,77 @@ public sealed class ProfileSyncService
     public bool IsSuppressed => _suppressionDepth > 0;
 
     public Task InitializeAsync(CancellationToken ct = default) =>
-        RunSerializedAsync(() => SyncNowCoreAsync(null, ct), ct);
+        RunSerializedAsync(() => SyncNowCoreAsync(null, null, ct), ct);
+
+    public Task PrepareAuthorityAsync(CancellationToken ct = default) =>
+        RunSerializedAsync(() => PrepareAuthorityCoreAsync(ct), ct);
+
+    private async Task PrepareAuthorityCoreAsync(CancellationToken ct)
+    {
+        if (await TryAdoptCanonicalAuthorityAsync(ct))
+        {
+            ConnectionChanged?.Invoke();
+        }
+    }
+
+    private async Task<bool> TryAdoptCanonicalAuthorityAsync(CancellationToken ct)
+    {
+        var settings = await _localState.LoadConnectionSettingsAsync();
+        if (!settings.IsConfigured ||
+            !string.Equals(
+                ProfileHostClient.NormalizeHostUrl(_client.DefaultHostUrl),
+                CanonicalProfileHostUrl,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                ProfileHostClient.NormalizeHostUrl(settings.HostUrl!),
+                LegacyDevelopmentProfileHostUrl,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        await EnsurePendingSavesLoadedAsync(settings);
+        if (_pendingSaves.Count > 0 || _conflicts.Count > 0)
+        {
+            return false;
+        }
+
+        ProfileHostProfileResponse canonicalProfile;
+        try
+        {
+            canonicalProfile = await _client.GetProfileAsync(
+                CanonicalProfileHostUrl,
+                settings.AccessKey!,
+                ct);
+        }
+        catch (ProfileHostConnectionException)
+        {
+            return false;
+        }
+
+        var adopted = settings.Snapshot();
+        adopted.HostUrl = CanonicalProfileHostUrl;
+        adopted.ConnectedProfileId = canonicalProfile.ProfileId;
+        adopted.ConnectedProfileName = canonicalProfile.DisplayName;
+        await _localState.SaveConnectionSettingsAsync(adopted);
+        _pendingSaves.Clear();
+        _conflicts.Clear();
+        _pendingSavesConnectionScopeId = null;
+        return true;
+    }
 
     public Task SyncNowAsync(CancellationToken ct = default) =>
-        RunSerializedAsync(() => SyncNowCoreAsync(null, ct), ct);
+        RunSerializedAsync(() => SyncNowCoreAsync(null, null, ct), ct);
 
     public Task SyncFromRevisionAsync(
         long replayAfterRevision,
+        long? targetRevision,
         CancellationToken ct = default) =>
         RunSerializedAsync(
-            () => SyncNowCoreAsync(replayAfterRevision, ct),
+            () => SyncNowCoreAsync(
+                targetRevision is > 0 ? targetRevision : null,
+                replayAfterRevision,
+                ct),
             ct);
 
     public Task<long> EnsureHostedObjectRevisionAsync(
@@ -100,7 +192,7 @@ public sealed class ProfileSyncService
     {
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId;
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         if (!settings.IsConfigured || profileId == null)
         {
             return 0;
@@ -182,12 +274,13 @@ public sealed class ProfileSyncService
     }
 
     private async Task SyncNowCoreAsync(
+        long? targetRevision,
         long? replayAfterRevision,
         CancellationToken ct)
     {
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId;
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         if (!settings.IsConfigured || profileId == null)
         {
             SetStatus(ProfileSyncStatus.LocalOnly() with { PendingCount = _pendingSaves.Count });
@@ -195,14 +288,44 @@ public sealed class ProfileSyncService
         }
 
         var lastRevision = 0L;
+        var appliedObjectCount = 0;
         try
         {
+            SetStatus(CurrentStatus with
+            {
+                ProfileId = profileId,
+                IsConnected = true,
+                LastSyncRevision = 0,
+                Stage = ProfileSyncStage.ReadingLocalState,
+                Failure = ProfileSyncFailure.None,
+                AppliedObjectCount = 0,
+                TargetRevision = targetRevision,
+                Message = "Reading saved profile state"
+            });
             var persistedRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
             lastRevision = ResolveSyncStartRevision(
                 persistedRevision,
                 replayAfterRevision);
+            var mayTrustSavedProjection =
+                !_hostedOrders.RestoreState.RequiresIdentityOnly &&
+                _hostedOrders.RestoreState.Stage != HostedOrderRestoreStage.ScopeChanging;
+            var trustedOrderCount = mayTrustSavedProjection &&
+                                    !_hostedOrders.RestoreState.HasTrustedProjection
+                ? await HydrateTrustedOrderProjectionsAsync(profileId, ct)
+                : 0;
+            _hostedOrders.BeginProfileRestore(
+                profileId,
+                hasTrustedProjection: trustedOrderCount > 0,
+                lastRevision,
+                DateTime.UtcNow);
             var serverRevision = lastRevision;
             var hasMore = true;
+            SetStatus(CurrentStatus with
+            {
+                LastSyncRevision = lastRevision,
+                Stage = ProfileSyncStage.DownloadingChanges,
+                Message = "Checking hosted revisions"
+            });
             while (hasMore)
             {
                 var changes = await _client.GetChangesAsync(
@@ -215,6 +338,13 @@ public sealed class ProfileSyncService
                 {
                     foreach (var item in changes.Objects)
                     {
+                        SetStatus(CurrentStatus with
+                        {
+                            Stage = ProfileSyncStage.ApplyingChanges,
+                            AppliedObjectCount = appliedObjectCount,
+                            TargetRevision = targetRevision,
+                            Message = "Applying hosted changes"
+                        });
                         if (IsPending(item.Collection, item.ObjectId))
                         {
                             continue;
@@ -259,6 +389,15 @@ public sealed class ProfileSyncService
                             item.Collection,
                             item.ObjectId,
                             item.Revision);
+                        appliedObjectCount++;
+                        SetStatus(CurrentStatus with
+                        {
+                            LastSyncRevision = item.Revision,
+                            Stage = ProfileSyncStage.ApplyingChanges,
+                            AppliedObjectCount = appliedObjectCount,
+                            TargetRevision = targetRevision,
+                            Message = $"Applied {appliedObjectCount:N0} hosted change{(appliedObjectCount == 1 ? string.Empty : "s")}"
+                        });
                     }
                 }
 
@@ -276,12 +415,35 @@ public sealed class ProfileSyncService
                     await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
                     persistedRevision = serverRevision;
                 }
+                if (hasMore)
+                {
+                    SetStatus(CurrentStatus with
+                    {
+                        LastSyncRevision = serverRevision,
+                        Stage = ProfileSyncStage.DownloadingChanges,
+                        AppliedObjectCount = appliedObjectCount,
+                        TargetRevision = targetRevision,
+                        Message = "Checking the next hosted revision"
+                    });
+                }
             }
 
+            SetStatus(CurrentStatus with
+            {
+                LastSyncRevision = serverRevision,
+                Stage = ProfileSyncStage.PublishingLocalChanges,
+                AppliedObjectCount = appliedObjectCount,
+                TargetRevision = Math.Max(targetRevision ?? 0, serverRevision),
+                Message = "Publishing local changes"
+            });
             var hostReachable = await RetryPendingSavesAsync(
                 settings,
                 profileId,
                 ct);
+            if (hostReachable && !_hostedOrders.RestoreState.HasTrustedProjection)
+            {
+                await HydrateTrustedOrderProjectionsAsync(profileId, ct);
+            }
             SetStatus(new ProfileSyncStatus(
                 true,
                 hostReachable,
@@ -293,10 +455,22 @@ public sealed class ProfileSyncService
                     ? "Conflicts need review"
                     : _pendingSaves.Count > 0
                         ? "Local changes pending"
-                        : "Synced"));
+                        : "Synced") with
+            {
+                ProfileId = profileId,
+                Stage = hostReachable
+                    ? ProfileSyncStage.Ready
+                    : ProfileSyncStage.Failed,
+                Failure = hostReachable
+                    ? ProfileSyncFailure.None
+                    : ProfileSyncFailure.Offline,
+                AppliedObjectCount = appliedObjectCount,
+                TargetRevision = Math.Max(targetRevision ?? 0, serverRevision)
+            });
         }
         catch (Exception ex)
         {
+            var failure = ClassifyFailure(ex);
             SetStatus(new ProfileSyncStatus(
                 true,
                 false,
@@ -304,7 +478,14 @@ public sealed class ProfileSyncService
                 _pendingSaves.Count,
                 _conflicts.Count,
                 CurrentStatus.LastSyncedAtUtc,
-                $"Host unreachable: {ex.Message}"));
+                ex.Message) with
+            {
+                ProfileId = profileId,
+                Stage = ProfileSyncStage.Failed,
+                Failure = failure,
+                AppliedObjectCount = appliedObjectCount,
+                TargetRevision = targetRevision
+            });
         }
     }
 
@@ -319,6 +500,58 @@ public sealed class ProfileSyncService
         long persistedRevision,
         long candidateRevision) =>
         candidateRevision > persistedRevision;
+
+    private async Task<int> HydrateTrustedOrderProjectionsAsync(
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        if (!_adapters.TryGetValue(ProfileSyncCollections.TradeOrders, out var adapter))
+        {
+            return 0;
+        }
+
+        var restored = 0;
+        foreach (var envelope in await adapter.LoadLocalObjectsAsync(cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var revision = await _localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                envelope.ObjectId);
+            if (revision <= 0)
+            {
+                continue;
+            }
+
+            var order = JsonSerializer.Deserialize<TradeOrder>(envelope.PayloadJson, JsonOptions)
+                ?? throw new InvalidOperationException(
+                    $"Saved Trade order '{envelope.ObjectId}' could not be restored safely.");
+            if (_hostedOrders.TryPublishRemoteOrder(order, revision) ||
+                _hostedOrders.Get(order.Id)?.ObjectRevision == revision)
+            {
+                restored++;
+            }
+        }
+
+        return restored;
+    }
+
+    private static ProfileSyncFailure ClassifyFailure(Exception exception) =>
+        exception switch
+        {
+            ProfileHostConnectionException
+            {
+                Failure: ProfileHostConnectionFailure.AccessKeyRejected
+            } => ProfileSyncFailure.Authentication,
+            ProfileHostConnectionException
+            {
+                Failure: ProfileHostConnectionFailure.IncompatibleHost or
+                    ProfileHostConnectionFailure.ProfileHostingDisabled
+            } => ProfileSyncFailure.Incompatible,
+            ProfileHostConnectionException => ProfileSyncFailure.Offline,
+            HttpRequestException => ProfileSyncFailure.Offline,
+            _ => ProfileSyncFailure.Unverifiable
+        };
 
     private async Task RestoreMissingCompanyProfileAsync(
         HostedProfileConnectionSettings settings,
@@ -441,7 +674,7 @@ public sealed class ProfileSyncService
             return;
         }
 
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         var remote = await _client.ExportBootstrapAsync(
             settings.HostUrl!,
             settings.AccessKey!,
@@ -505,7 +738,7 @@ public sealed class ProfileSyncService
 
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId;
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         if (!settings.IsConfigured || profileId == null)
         {
             return;
@@ -587,7 +820,7 @@ public sealed class ProfileSyncService
         }
 
         await _localState.SaveConnectionSettingsAsync(settings);
-        await EnsurePendingSavesLoadedAsync(profileId);
+        await EnsurePendingSavesLoadedAsync(settings);
         if (mode == FirstConnectMode.UploadLocal)
         {
             var objects = await LoadLocalBootstrapObjectsAsync(ct);
@@ -620,7 +853,7 @@ public sealed class ProfileSyncService
         }
         else
         {
-            await SyncNowCoreAsync(null, ct);
+            await SyncNowCoreAsync(null, null, ct);
         }
 
         ConnectionChanged?.Invoke();
@@ -666,7 +899,7 @@ public sealed class ProfileSyncService
         await _localState.SaveConnectionSettingsAsync(new HostedProfileConnectionSettings());
         _pendingSaves.Clear();
         _conflicts.Clear();
-        _pendingSavesProfileId = null;
+        _pendingSavesConnectionScopeId = null;
         SetStatus(ProfileSyncStatus.LocalOnly());
         ConnectionChanged?.Invoke();
     }
@@ -768,21 +1001,23 @@ public sealed class ProfileSyncService
         return new SuppressionLease(this);
     }
 
-    private async Task EnsurePendingSavesLoadedAsync(string? profileId)
+    private async Task EnsurePendingSavesLoadedAsync(HostedProfileConnectionSettings settings)
     {
+        var profileId = settings.ProfileScopeId;
+        var connectionScopeId = settings.ConnectionScopeId;
         if (string.Equals(
-                profileId,
-                _pendingSavesProfileId,
+                connectionScopeId,
+                _pendingSavesConnectionScopeId,
                 StringComparison.Ordinal) &&
-            profileId != null)
+            connectionScopeId != null)
         {
             return;
         }
 
         _pendingSaves.Clear();
         _conflicts.Clear();
-        _pendingSavesProfileId = null;
-        if (profileId == null)
+        _pendingSavesConnectionScopeId = null;
+        if (profileId == null || connectionScopeId == null)
         {
             return;
         }
@@ -795,7 +1030,7 @@ public sealed class ProfileSyncService
                     StringComparer.OrdinalIgnoreCase)
                 .OrderBy(pending => pending.Collection, StringComparer.Ordinal)
                 .ThenBy(pending => pending.ObjectId, StringComparer.Ordinal));
-        _pendingSavesProfileId = profileId;
+        _pendingSavesConnectionScopeId = connectionScopeId;
     }
 
     private Task QueuePortableSettingSaveAsync(string key) =>
@@ -1006,6 +1241,17 @@ public sealed class ProfileSyncService
     private void SetStatus(ProfileSyncStatus status)
     {
         CurrentStatus = status;
+        var currentRestore = _hostedOrders.RestoreState;
+        if (status.ProfileId != null && currentRestore.ProfileId == null)
+        {
+            _hostedOrders.BeginProfileRestore(
+                status.ProfileId,
+                hasTrustedProjection: false,
+                status.LastSyncRevision,
+                DateTime.UtcNow);
+            currentRestore = _hostedOrders.RestoreState;
+        }
+        _hostedOrders.TryPublishRestoreState(currentRestore.Apply(status, DateTime.UtcNow));
         StatusChanged?.Invoke();
     }
 

@@ -304,11 +304,12 @@ function assertEffectiveConfiguration(files, buildManifest) {
   }
   const parsed = JSON.parse(config.data.toString('utf8'));
   const expectedBaseAddress = `https://${buildManifest.target.domain}/api/`;
+  const expectedProfileHostBaseAddress = `https://${buildManifest.target.profileHostDomain}/api/`;
   if (parsed?.LodestoneLookup?.BaseAddress !== expectedBaseAddress) {
     throw new Error(`Effective Lodestone base address is not ${expectedBaseAddress}`);
   }
-  if (parsed?.ProfileHost?.BaseAddress !== expectedBaseAddress) {
-    throw new Error(`Effective profile host base address is not ${expectedBaseAddress}`);
+  if (parsed?.ProfileHost?.BaseAddress !== expectedProfileHostBaseAddress) {
+    throw new Error(`Effective profile host base address is not ${expectedProfileHostBaseAddress}`);
   }
   const expectedTarget = targetConfiguration(buildManifest.target.slot);
   if (parsed?.ProcurementRoutes?.GenerationEnabled !== expectedTarget.procurementRoutesGenerationEnabled ||
@@ -358,7 +359,9 @@ function validateBuildManifest(manifest) {
     }
   }
   const expectedTarget = targetConfiguration(manifest?.target?.slot);
-  if (manifest?.target?.procurementRoutesGenerationEnabled !== expectedTarget.procurementRoutesGenerationEnabled ||
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(manifest?.target?.domain) ||
+      !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(manifest?.target?.profileHostDomain) ||
+      manifest?.target?.procurementRoutesGenerationEnabled !== expectedTarget.procurementRoutesGenerationEnabled ||
       manifest?.target?.engineRewriteExecutionEnabled !== expectedTarget.engineRewriteExecutionEnabled) {
     throw new Error('Build manifest target configuration does not match its deployment slot.');
   }
@@ -373,8 +376,8 @@ function validateBuildManifest(manifest) {
       JSON.stringify(requiredOutcomes(manifest.target.slot))) {
     throw new Error('Build manifest required outcomes are incomplete or reordered.');
   }
-  if (manifest?.acceptance?.dotnet?.specTestCases !== 59 ||
-      manifest?.acceptance?.dotnet?.contractTestCases !== 117) {
+  if (manifest?.acceptance?.dotnet?.specTestCases !== 67 ||
+      manifest?.acceptance?.dotnet?.contractTestCases !== 149) {
     throw new Error('Build manifest .NET test inventory is incomplete.');
   }
   if (JSON.stringify(manifest?.acceptance?.worker) !== JSON.stringify(expectedTarget.worker)) {
@@ -382,14 +385,17 @@ function validateBuildManifest(manifest) {
   }
 }
 
-async function writeEffectiveConfiguration(root, domain, slot) {
+async function writeEffectiveConfiguration(root, domain, profileHostDomain, slot) {
   if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain)) {
     throw new Error(`Invalid target domain: ${domain}`);
+  }
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(profileHostDomain)) {
+    throw new Error(`Invalid profile host domain: ${profileHostDomain}`);
   }
   const target = targetConfiguration(slot);
   const config = {
     LodestoneLookup: { BaseAddress: `https://${domain}/api/` },
-    ProfileHost: { BaseAddress: `https://${domain}/api/` },
+    ProfileHost: { BaseAddress: `https://${profileHostDomain}/api/` },
     ProcurementRoutes: { GenerationEnabled: target.procurementRoutesGenerationEnabled },
     EngineRewrite: { ExecutionEnabled: target.engineRewriteExecutionEnabled },
     EngineAcceptance: { Enabled: false, UseDeterministicEvidence: false }
@@ -482,6 +488,7 @@ export async function createArtifact(options, behavior = {}) {
   const outDir = requiredOption(options, 'out-dir');
   const archiveName = requiredOption(options, 'archive-name');
   const domain = requiredOption(options, 'domain');
+  const profileHostDomain = options['profile-host-domain'] ?? domain;
   const slot = requiredOption(options, 'slot');
   const sourceSha = requiredOption(options, 'source-sha');
   const treeSha = requiredOption(options, 'tree-sha');
@@ -502,7 +509,7 @@ export async function createArtifact(options, behavior = {}) {
   if (behavior.verifySource !== false) await verifySourceIdentity(options, sourceSha, treeSha);
 
   const target = targetConfiguration(slot);
-  await writeEffectiveConfiguration(root, domain, slot);
+  await writeEffectiveConfiguration(root, domain, profileHostDomain, slot);
   const effectiveConfiguration = await readFile(path.join(root, 'appsettings.json'));
   await writeReleaseIdentity(root, {
     sourceSha,
@@ -546,6 +553,7 @@ export async function createArtifact(options, behavior = {}) {
     target: {
       slot,
       domain,
+      profileHostDomain,
       procurementRoutesGenerationEnabled: target.procurementRoutesGenerationEnabled,
       engineRewriteExecutionEnabled: target.engineRewriteExecutionEnabled
     },
@@ -573,7 +581,7 @@ export async function createArtifact(options, behavior = {}) {
       harnessTreeSha256: harnessTreeSha,
       fixtureTreeSha256: fixtureTreeSha,
       requiredOutcomes: requiredOutcomes(slot),
-      dotnet: { specTestCases: 59, contractTestCases: 117 },
+      dotnet: { specTestCases: 67, contractTestCases: 149 },
       worker: target.worker
     }
   };

@@ -16,13 +16,112 @@ public sealed class HostedOrderProjectionStore
     private readonly object _gate = new();
     private readonly Dictionary<Guid, HostedOrderProjectionSnapshot> _orders = [];
     private string? _profileId;
+    private HostedOrderRestoreState _restoreState = HostedOrderRestoreState.Inactive(DateTime.UtcNow);
 
     public event Action<HostedOrderProjectionSnapshot>? Changed;
     public event Action? Reset;
+    public event Action<HostedOrderRestoreState>? RestoreStateChanged;
+
+    public HostedOrderRestoreState RestoreState
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _restoreState;
+            }
+        }
+    }
+
+    public void BeginProfileRestore(
+        string profileId,
+        bool hasTrustedProjection,
+        long lastAppliedRevision,
+        DateTime now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        HostedOrderRestoreState next;
+        var reset = false;
+        lock (_gate)
+        {
+            var retainIdentityOnly = !string.IsNullOrWhiteSpace(_profileId) &&
+                                     string.Equals(
+                                         _profileId,
+                                         profileId,
+                                         StringComparison.OrdinalIgnoreCase) &&
+                                     _restoreState.Stage == HostedOrderRestoreStage.IdentityOnly;
+            var scopeChanged = _profileId != null &&
+                               !string.Equals(_profileId, profileId, StringComparison.OrdinalIgnoreCase);
+            if (scopeChanged)
+            {
+                _orders.Clear();
+                reset = true;
+            }
+
+            var retainedTrust = !scopeChanged &&
+                                (_restoreState.HasTrustedProjection || hasTrustedProjection);
+            _profileId = profileId;
+            var nextRevision = scopeChanged
+                ? lastAppliedRevision
+                : Math.Max(_restoreState.LastAppliedRevision, lastAppliedRevision);
+            next = HostedOrderRestoreState.BeginProfile(
+                profileId,
+                retainedTrust,
+                nextRevision,
+                scopeChanged,
+                now);
+            if (retainIdentityOnly)
+            {
+                next = next with
+                {
+                    Stage = HostedOrderRestoreStage.IdentityOnly,
+                    Failure = _restoreState.Failure,
+                    Message = _restoreState.Message,
+                    ProgressStage = "Verifying restored profile authority"
+                };
+            }
+            _restoreState = next;
+        }
+
+        if (reset)
+        {
+            Reset?.Invoke();
+        }
+        RestoreStateChanged?.Invoke(next);
+    }
+
+    public bool TryPublishRestoreState(HostedOrderRestoreState next)
+    {
+        ArgumentNullException.ThrowIfNull(next);
+        var accepted = false;
+        lock (_gate)
+        {
+            if (!string.Equals(_profileId, next.ProfileId, StringComparison.OrdinalIgnoreCase) ||
+                next.LastAppliedRevision < _restoreState.LastAppliedRevision)
+            {
+                return false;
+            }
+
+            if (next == _restoreState)
+            {
+                return false;
+            }
+
+            _restoreState = next;
+            accepted = true;
+        }
+
+        if (accepted)
+        {
+            RestoreStateChanged?.Invoke(next);
+        }
+        return accepted;
+    }
 
     public void ResetForProfile(string? profileId)
     {
         var changed = false;
+        HostedOrderRestoreState? restoreState = null;
         lock (_gate)
         {
             if (string.Equals(_profileId, profileId, StringComparison.Ordinal))
@@ -32,11 +131,21 @@ public sealed class HostedOrderProjectionStore
 
             _profileId = profileId;
             _orders.Clear();
+            _restoreState = profileId == null
+                ? HostedOrderRestoreState.Inactive(DateTime.UtcNow)
+                : HostedOrderRestoreState.BeginProfile(
+                    profileId,
+                    hasTrustedProjection: false,
+                    lastAppliedRevision: 0,
+                    scopeChanged: true,
+                    DateTime.UtcNow);
+            restoreState = _restoreState;
             changed = true;
         }
         if (changed)
         {
             Reset?.Invoke();
+            RestoreStateChanged?.Invoke(restoreState!);
         }
     }
 
@@ -45,6 +154,19 @@ public sealed class HostedOrderProjectionStore
         lock (_gate)
         {
             return _orders.GetValueOrDefault(orderId);
+        }
+    }
+
+    public IReadOnlyList<HostedOrderProjectionSnapshot> GetAll(Guid? companyProfileId = null)
+    {
+        lock (_gate)
+        {
+            return _orders.Values
+                .Where(snapshot =>
+                    !companyProfileId.HasValue ||
+                    snapshot.CompanyProfileId == companyProfileId)
+                .OrderBy(snapshot => snapshot.OrderId)
+                .ToArray();
         }
     }
 
@@ -165,6 +287,14 @@ public sealed class HostedOrderProjectionStore
         }
 
         _orders[candidate.OrderId] = candidate;
+        if (candidate.ObjectRevision > _restoreState.LastAppliedRevision)
+        {
+            _restoreState = _restoreState with
+            {
+                LastAppliedRevision = candidate.ObjectRevision,
+                UpdatedAtUtc = DateTime.UtcNow
+            };
+        }
         return true;
     }
 
@@ -175,6 +305,7 @@ public sealed class HostedOrderProjectionStore
         if (accepted)
         {
             Changed?.Invoke(candidate);
+            RestoreStateChanged?.Invoke(RestoreState);
         }
         return accepted;
     }

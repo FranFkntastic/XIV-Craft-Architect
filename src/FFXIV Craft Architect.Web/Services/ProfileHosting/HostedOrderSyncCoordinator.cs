@@ -1,3 +1,5 @@
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
@@ -20,6 +22,8 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
     private readonly ProfileSyncService _profileSync;
     private readonly ProfileSyncLocalStateService _localState;
     private readonly HostedOrderProjectionStore _hostedOrders;
+    private readonly TradeCommissionOperationsClient _commissionClient;
+    private readonly TradeOperationsPersistenceService _tradeOperations;
     private readonly AppState _appState;
     private readonly ILogger<HostedOrderSyncCoordinator> _logger;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
@@ -41,6 +45,8 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         ProfileSyncService profileSync,
         ProfileSyncLocalStateService localState,
         HostedOrderProjectionStore hostedOrders,
+        TradeCommissionOperationsClient commissionClient,
+        TradeOperationsPersistenceService tradeOperations,
         AppState appState,
         ILogger<HostedOrderSyncCoordinator> logger)
     {
@@ -48,6 +54,8 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         _profileSync = profileSync;
         _localState = localState;
         _hostedOrders = hostedOrders;
+        _commissionClient = commissionClient;
+        _tradeOperations = tradeOperations;
         _appState = appState;
         _logger = logger;
         _profileSync.ConnectionChanged += OnConnectionChanged;
@@ -98,6 +106,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         });
         return await SynchronizeAsync(
             profileId,
+            serverRevision,
             replayAfterRevision,
             _lifetime.Token);
     }
@@ -129,7 +138,11 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         string profileId,
         long replayAfterRevision) =>
         IsActiveProfile(profileId)
-            ? SynchronizeAsync(profileId, replayAfterRevision, _lifetime.Token)
+            ? SynchronizeAsync(
+                profileId,
+                null,
+                replayAfterRevision,
+                _lifetime.Token)
             : Task.FromResult(0L);
 
     private void OnConnectionChanged() =>
@@ -171,6 +184,9 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return;
             }
 
+            // Resolve any authenticated authority adoption before capturing the
+            // settings that bind cursor replay, owner projection, and SSE.
+            await _profileSync.PrepareAuthorityAsync(cancellationToken);
             var settings = await _localState.LoadConnectionSettingsAsync();
             var profileId = settings.ProfileScopeId;
             if (settings.IsConfigured &&
@@ -197,12 +213,39 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return;
             }
 
-            _hostedOrders.ResetForProfile(profileId);
+            var cursor = await _localState.LoadLastSyncRevisionAsync(profileId);
+            var sameProfile = string.Equals(
+                _hostedOrders.RestoreState.ProfileId,
+                profileId,
+                StringComparison.OrdinalIgnoreCase);
+            _hostedOrders.BeginProfileRestore(
+                profileId,
+                hasTrustedProjection: sameProfile &&
+                                      _hostedOrders.RestoreState.ShowsCompleteProjection,
+                cursor,
+                DateTime.UtcNow);
             IJSObjectReference? controller = null;
             try
             {
                 await _profileSync.InitializeAsync(cancellationToken);
-                var cursor = await _localState.LoadLastSyncRevisionAsync(profileId);
+                cursor = await _localState.LoadLastSyncRevisionAsync(profileId);
+                if (_profileSync.CurrentStatus.Failure is
+                    ProfileSyncFailure.Authentication or
+                    ProfileSyncFailure.Incompatible or
+                    ProfileSyncFailure.Unverifiable)
+                {
+                    UpdateDiagnostics(new HostedOrderSyncDiagnostics(
+                        profileId,
+                        "inactive",
+                        false,
+                        cursor,
+                        cursor,
+                        0,
+                        _profileSync.CurrentStatus.Message,
+                        DateTime.UtcNow));
+                    return;
+                }
+                await AdoptCanonicalOwnerProjectionsAsync(profileId, cancellationToken);
                 _callback ??= DotNetObjectReference.Create(this);
                 _module ??= await _jsRuntime.InvokeAsync<IJSObjectReference>(
                     "import",
@@ -274,7 +317,8 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
 
     private async Task<long> SynchronizeAsync(
         string profileId,
-        long replayAfterRevision,
+        long? targetRevision,
+        long? replayAfterRevision,
         CancellationToken cancellationToken)
     {
         await _sync.WaitAsync(cancellationToken);
@@ -285,10 +329,19 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return 0;
             }
 
-            await _profileSync.SyncFromRevisionAsync(
-                replayAfterRevision,
-                cancellationToken);
+            if (replayAfterRevision.HasValue)
+            {
+                await _profileSync.SyncFromRevisionAsync(
+                    replayAfterRevision.Value,
+                    targetRevision,
+                    cancellationToken);
+            }
+            else
+            {
+                await _profileSync.SyncNowAsync(cancellationToken);
+            }
             var after = Math.Max(0, _profileSync.CurrentStatus.LastSyncRevision);
+            await AdoptCanonicalOwnerProjectionsAsync(profileId, cancellationToken);
             _appState.NotifyTradeOperationsDataChanged();
 
             UpdateDiagnostics(Diagnostics with
@@ -304,6 +357,87 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         finally
         {
             _sync.Release();
+        }
+    }
+
+    private async Task AdoptCanonicalOwnerProjectionsAsync(
+        string profileId,
+        CancellationToken cancellationToken)
+    {
+        foreach (var candidate in _hostedOrders.GetAll().Where(NeedsOwnerAdoption))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var commission = candidate.Order!.CompanyCommission!;
+            try
+            {
+                var projection = await _commissionClient.LoadOwnerProjectionAsync(
+                    commission.CompanyId.Value,
+                    commission.CommissionId,
+                    cancellationToken);
+
+                // The order can advance while the authenticated projection is in flight.
+                // Re-read it before making any durable local change.
+                var current = _hostedOrders.Get(candidate.OrderId);
+                if (current == null || !NeedsOwnerAdoption(current))
+                {
+                    continue;
+                }
+
+                ValidateOwnerProjection(current, projection);
+                if (!await _tradeOperations.ApplyCanonicalOrderAsync(projection.Order))
+                {
+                    throw new InvalidOperationException(
+                        "The authenticated owner projection could not be persisted locally.");
+                }
+
+                await _localState.SaveObjectRevisionAsync(
+                    profileId,
+                    ProfileSyncCollections.TradeOrders,
+                    projection.Order.Id.ToString("D"),
+                    projection.ObjectRevision.Value);
+                _hostedOrders.TryPublishOwner(projection);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Authenticated owner projection for hosted order {OrderId} could not be adopted; preserving the last truthful local projection.",
+                    candidate.OrderId);
+            }
+        }
+    }
+
+    internal static bool NeedsOwnerAdoption(HostedOrderProjectionSnapshot snapshot) =>
+        !snapshot.Deleted &&
+        snapshot.Order?.CompanyCommission != null &&
+        (snapshot.OwnerProjection == null ||
+         snapshot.OwnerProjection.ObjectRevision.Value < snapshot.ObjectRevision);
+
+    internal static void ValidateOwnerProjection(
+        HostedOrderProjectionSnapshot expected,
+        CompanyCommissionOwnerProjection projection)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        var expectedOrder = expected.Order;
+        var expectedCommission = expectedOrder?.CompanyCommission;
+        var returnedCommission = projection.Order.CompanyCommission;
+        if (expectedOrder == null ||
+            expectedCommission == null ||
+            projection.Order.Id != expected.OrderId ||
+            projection.Order.CompanyProfileId != expected.CompanyProfileId ||
+            returnedCommission == null ||
+            returnedCommission.CompanyId != expectedCommission.CompanyId ||
+            returnedCommission.CommissionId != expectedCommission.CommissionId ||
+            projection.ObjectRevision.Value < expected.ObjectRevision ||
+            projection.ObjectRevision.Value <= 0 ||
+            projection.CompanyRevision.Value <= 0)
+        {
+            throw new InvalidOperationException(
+                "The authenticated owner endpoint returned the wrong commission, a stale order, or omitted authoritative revisions.");
         }
     }
 

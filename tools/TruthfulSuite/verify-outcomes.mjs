@@ -43,7 +43,7 @@ const REQUIRED_COMMANDS = {
     executable: 'node', cwd: '.', timeoutSeconds: 60,
     arguments: buildManifest => ['tools/TruthfulSuite/check-product.mjs',
       'dist/subject/src/FFXIV Craft Architect.Web/wwwroot', buildManifest.target.domain,
-      buildManifest.target.slot]
+      buildManifest.target.slot, buildManifest.target.profileHostDomain]
   },
   'engine-browser-tests': {
     executable: 'npm', cwd: 'dist/subject/tools/IndexedDbBrowserTests', timeoutSeconds: 600,

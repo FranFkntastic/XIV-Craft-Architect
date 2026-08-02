@@ -1,0 +1,116 @@
+<section class="trade-order-overview" aria-labelledby="selected-order-title">
+    <header class="trade-order-overview__header">
+        <div>
+            <MudText Typo="Typo.overline">Commission</MudText>
+            <div class="trade-order-overview__title-row">
+                <MudText Typo="Typo.h6" HtmlTag="h1" id="selected-order-title">@Model.Title</MudText>
+                <span class="trade-order-overview__status">@Model.Status</span>
+            </div>
+        </div>
+        @if (Model.CanReviseTerms)
+        {
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.EditNote"
+                       OnClick="OnReviseTerms">
+                Revise terms
+            </MudButton>
+        }
+        <div class="trade-order-overview__meta">
+            <span>Claimant <strong>@Model.Claimant</strong></span>
+            <span>Crafter <strong>@Model.Crafter</strong></span>
+            <span>Terms <strong>v@(Model.TermsVersion)</strong></span>
+        </div>
+    </header>
+
+    @if (Model.Blockers.Count > 0)
+    {
+        <section class="trade-order-overview__attention" aria-labelledby="start-blockers-title">
+            <div>
+                <MudText Typo="Typo.subtitle1" HtmlTag="h2" id="start-blockers-title">
+                    @Model.Blockers.Count @(Model.Blockers.Count == 1 ? "thing blocks" : "things block") crafting
+                </MudText>
+                <MudText Typo="Typo.body2">Payment and material handoff can clear in either order; every listed requirement must clear before crafting.</MudText>
+            </div>
+            <div class="trade-order-overview__blockers">
+                @foreach (var blocker in Model.Blockers)
+                {
+                    <div>
+                        <strong>@blocker.Label</strong>
+                        <span>@blocker.Detail</span>
+                    </div>
+                }
+            </div>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OnOpenWork">
+                Open start gates
+            </MudButton>
+        </section>
+    }
+
+    <section class="trade-order-overview__section" aria-labelledby="requested-output-title">
+        <div class="trade-order-overview__section-heading">
+            <MudText Typo="Typo.subtitle2" HtmlTag="h2" id="requested-output-title">Requested output</MudText>
+            <span>@Model.Outputs.Sum(output => output.ReadyQuantity).ToString("N0") of @Model.Outputs.Sum(output => output.RequiredQuantity).ToString("N0") ready</span>
+        </div>
+        <div class="trade-order-overview__outputs">
+            @foreach (var output in Model.Outputs)
+            {
+                <div class="trade-order-overview__output">
+                    <div>
+                        <strong>@output.Name</strong>
+                        <span>@(output.MustBeHq ? "High quality" : "Normal quality") · quantity @output.RequiredQuantity.ToString("N0")</span>
+                    </div>
+                    <div><span>Completed</span><strong>@output.CompletedQuantity.ToString("N0")</strong></div>
+                    <div><span>Ready</span><strong>@output.ReadyQuantity.ToString("N0")</strong></div>
+                </div>
+            }
+        </div>
+    </section>
+
+    <section class="trade-order-overview__section" aria-labelledby="order-progress-title">
+        <div class="trade-order-overview__section-heading">
+            <MudText Typo="Typo.subtitle2" HtmlTag="h2" id="order-progress-title">Order progress</MudText>
+            <span>Payment, materials, crafting, and delivery</span>
+        </div>
+        <div class="trade-order-overview__path">
+            @foreach (var step in Model.Progress)
+            {
+                @if (step.OpensPlan)
+                {
+                    <button type="button"
+                            class="@GetStepClass(step)"
+                            aria-label="@($"{step.Label}: {step.State}. Open plan")"
+                            title="Open plan"
+                            @onclick="OnOpenPlan">
+                        <span>@step.State</span>
+                        <strong>@step.Label</strong>
+                    </button>
+                }
+                else
+                {
+                    <div class="@GetStepClass(step)">
+                        <span>@step.State</span>
+                        <strong>@step.Label</strong>
+                    </div>
+                }
+            }
+        </div>
+    </section>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public required TradeOrderCenterOverviewPresentation Model { get; set; }
+
+    [Parameter]
+    public EventCallback OnOpenWork { get; set; }
+
+    [Parameter]
+    public EventCallback OnOpenPlan { get; set; }
+
+    [Parameter]
+    public EventCallback OnReviseTerms { get; set; }
+
+    private static string GetStepClass(TradeOrderProgressStepPresentation step) =>
+        $"trade-order-overview__step{(step.IsComplete ? " is-complete" : string.Empty)}{(step.IsCurrent ? " is-current" : string.Empty)}";
+}
