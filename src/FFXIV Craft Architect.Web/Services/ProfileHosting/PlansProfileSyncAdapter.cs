@@ -6,16 +6,13 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
 {
     private readonly IndexedDbService _indexedDb;
     private readonly WebPlanPersistenceService _planPersistence;
-    private readonly TradeOperationsPersistenceService _tradeOperations;
 
     public PlansProfileSyncAdapter(
         IndexedDbService indexedDb,
-        WebPlanPersistenceService planPersistence,
-        TradeOperationsPersistenceService tradeOperations)
+        WebPlanPersistenceService planPersistence)
     {
         _indexedDb = indexedDb;
         _planPersistence = planPersistence;
-        _tradeOperations = tradeOperations;
     }
 
     public string Collection => ProfileSyncCollections.Plans;
@@ -47,7 +44,8 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
             SavedRecommendationMode = plan.SavedRecommendationMode,
             SavedMarketAnalysisLens = plan.SavedMarketAnalysisLens,
             SourcePlanId = plan.SourcePlanId,
-            SourcePlanName = plan.SourcePlanName
+            SourcePlanName = plan.SourcePlanName,
+            LinkedOrderId = plan.LinkedOrderId
         };
         return new ProfileSyncObjectEnvelope
         {
@@ -60,18 +58,12 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var generatedPlanIds = await LoadOrderGeneratedPlanIdsAsync(ct);
         var summaries = await _indexedDb.LoadPlanSummariesAsync();
         var now = DateTime.UtcNow;
         var objects = new List<ProfileSyncObjectEnvelope>();
         foreach (var summary in summaries.OrderBy(item => item.Id, StringComparer.Ordinal))
         {
             ct.ThrowIfCancellationRequested();
-            if (generatedPlanIds.Contains(summary.Id))
-            {
-                continue;
-            }
-
             var plan = await _indexedDb.LoadPlanAsync(summary.Id)
                 ?? throw new InvalidOperationException(
                     $"Saved plan summary '{summary.Id}' has no browser payload.");
@@ -111,10 +103,11 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
             SavedRecommendationMode = snapshot.SavedRecommendationMode,
             SavedMarketAnalysisLens = snapshot.SavedMarketAnalysisLens,
             SourcePlanId = snapshot.SourcePlanId,
-            SourcePlanName = snapshot.SourcePlanName
+            SourcePlanName = snapshot.SourcePlanName,
+            LinkedOrderId = snapshot.LinkedOrderId
         };
 
-        if (!await _indexedDb.SavePlansBatchAsync([plan]))
+        if (!await _planPersistence.SaveSnapshotAsync(plan))
         {
             throw new InvalidOperationException(
                 $"Browser storage could not apply hosted plan '{envelope.ObjectId}'.");
@@ -130,24 +123,7 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
         }
     }
 
-    private async Task<HashSet<string>> LoadOrderGeneratedPlanIdsAsync(CancellationToken ct)
-    {
-        var planIds = new HashSet<string>(StringComparer.Ordinal);
-        var profiles = await _tradeOperations.LoadCompanyProfilesAsync();
-        foreach (var profile in profiles.OrderBy(item => item.Id))
-        {
-            ct.ThrowIfCancellationRequested();
-            var orders = await _tradeOperations.LoadOrdersAsync(profile.Id);
-            foreach (var order in orders)
-            {
-                if (order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated &&
-                    !string.IsNullOrWhiteSpace(order.CraftPlanId))
-                {
-                    planIds.Add(order.CraftPlanId);
-                }
-            }
-        }
+    public Task<bool> IsDeleteProtectedAsync(string objectId) =>
+        _planPersistence.IsDeleteProtectedAsync(objectId);
 
-        return planIds;
-    }
 }

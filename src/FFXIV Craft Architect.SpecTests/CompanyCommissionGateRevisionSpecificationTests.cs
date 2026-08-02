@@ -22,6 +22,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         scenarios.UnrelatedRevisionPreservesPartialPaymentAndReadyMaterialBindings();
         scenarios.ChangedPaymentAndMaterialFactsInvalidatePartialGateEvidence();
         scenarios.TerminalCommissionsRejectStartGateMutations();
+        scenarios.TermsRevisionCanAtomicallyAdvanceTheLinkedWorkPackage();
     }
 
     public void TermsRevisionAndParallelGatesPreserveOnlyMatchingEvidence(
@@ -86,6 +87,48 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.NotNull(participant.Payment.CommissionerSent);
         Assert.Null(participant.Payment.CrafterReceived);
         Assert.True(participant.CompanyMaterialsReadyForHandoff);
+    }
+
+    public void TermsRevisionCanAtomicallyAdvanceTheLinkedWorkPackage()
+    {
+        var order = CreateClaimedOrder();
+        var terms = order.CompanyCommission!.CurrentTerms with
+        {
+            Version = 2,
+            DeliveryInstructions = "Deliver in Gridania."
+        };
+        var savedAt = StartedAt.AddMinutes(9);
+        var snapshot = TradeOrderWorkflow.CopySourceSnapshot(order.SourceSnapshot);
+        snapshot.World = "Siren";
+        snapshot.ImportedAtUtc = savedAt;
+        var workPackage = new CompanyCommissionDraftWorkPackage(
+            terms.Outputs.Select(output => new TradeRequestedOrderOutput(
+                output.ItemId,
+                output.Name,
+                output.RequiredQuantity,
+                output.MustBeHq,
+                0)).ToArray(),
+            snapshot,
+            "plan-v2",
+            "Order - Gate test commission",
+            savedAt,
+            TradeOrderCraftPlanLinkKind.OrderGenerated);
+
+        var revised = Apply(
+            order,
+            new AmendCompanyCommissionTermsCommand(
+                Context(order),
+                terms,
+                "Update commission terms.",
+                workPackage),
+            Commissioner,
+            10);
+
+        Assert.Equal("plan-v2", revised.CraftPlanId);
+        Assert.Equal(savedAt, revised.CraftPlanSavedAtUtc);
+        Assert.Equal(TradeOrderCraftPlanLinkKind.OrderGenerated, revised.CraftPlanLinkKind);
+        Assert.Equal("Siren", revised.SourceSnapshot.World);
+        Assert.Equal(2, revised.CompanyCommission!.CurrentTermsVersion);
     }
 
     public void ChangedPaymentAndMaterialFactsInvalidatePartialGateEvidence()

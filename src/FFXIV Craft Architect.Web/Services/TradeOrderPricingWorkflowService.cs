@@ -16,16 +16,22 @@ public sealed record TradeOrderPricingWorkflowResult(
     int MarketItemsAnalyzed,
     int MarketEntriesFetched,
     int PricedMaterialLines,
-    int TotalMaterialLines)
+    int TotalMaterialLines,
+    WorkerPlanOwnershipFence? ActivePlanFence = null)
 {
     public bool HasUpdatedOrder => UpdatedOrder != null;
 
     public static TradeOrderPricingWorkflowResult Noop(
         TradeOrderPricingWorkflowStatus status,
         string message,
-        RecipePlannerCommandMessageLevel level = RecipePlannerCommandMessageLevel.Warning) =>
-        new(status, null, message, level, 0, 0, 0, 0);
+        RecipePlannerCommandMessageLevel level = RecipePlannerCommandMessageLevel.Warning,
+        WorkerPlanOwnershipFence? activePlanFence = null) =>
+        new(status, null, message, level, 0, 0, 0, 0, activePlanFence);
 }
+
+public readonly record struct WorkerPlanOwnershipFence(
+    string PlanId,
+    long Revision);
 
 public enum TradeOrderPricingWorkflowStatus
 {
@@ -86,6 +92,7 @@ public sealed class TradeOrderPricingWorkflowService
             "Building the order's craft plan...",
             ct);
         WorkerSessionOperationLease? workerOperation = null;
+        TradeOrder? stagedOrder = null;
         try
         {
             workerOperation = await _worker.BeginOperationAsync(
@@ -117,17 +124,14 @@ public sealed class TradeOrderPricingWorkflowService
                 workerOperation.OperationId);
             if (!operation.IsCurrent || !build.Built)
             {
-                return CanceledResult();
+                return CanceledResult(CaptureActivePlanFence(order.CraftPlanId));
             }
 
             var orderToSave = TradeOrderWorkflow.CopyOrder(order);
+            stagedOrder = orderToSave;
             var savedAt = DateTime.UtcNow;
-            var link = TradeOrderWorkflow.CreateGeneratedCraftPlanLinkDraft(
+            var link = await BeginLinkedPlanRevisionAsync(
                 orderToSave,
-                replaceExistingPlan: true);
-            await _worker.MutatePlanIdentityAsync(
-                link.PlanId,
-                link.PlanName,
                 operation.Token,
                 workerOperation.OperationId);
             var source = await _worker.GetTradeProjectionAsync(
@@ -155,6 +159,7 @@ public sealed class TradeOrderPricingWorkflowService
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
+            var activePlanFence = CaptureActivePlanFence(stagedOrder?.CraftPlanId);
             if (workerOperation is not null)
             {
                 await workerOperation.AbortAsync(CancellationToken.None);
@@ -163,15 +168,17 @@ public sealed class TradeOrderPricingWorkflowService
             return TradeOrderPricingWorkflowResult.Noop(
                 TradeOrderPricingWorkflowStatus.Failed,
                 $"Trade order pricing failed: {ex.Message}",
-                RecipePlannerCommandMessageLevel.Error);
+                RecipePlannerCommandMessageLevel.Error,
+                activePlanFence);
         }
         catch (OperationCanceledException)
         {
+            var activePlanFence = CaptureActivePlanFence(stagedOrder?.CraftPlanId);
             if (workerOperation is not null)
             {
                 await workerOperation.AbortAsync(CancellationToken.None);
             }
-            return CanceledResult();
+            return CanceledResult(activePlanFence);
         }
         finally
         {
@@ -203,11 +210,14 @@ public sealed class TradeOrderPricingWorkflowService
         }
 
         var stored = await _planPersistence.LoadPlanPayloadAsync(order.CraftPlanId);
-        if (stored == null)
+        if (stored == null ||
+            !order.CraftPlanSavedAtUtc.HasValue ||
+            stored.SavedAt != order.CraftPlanSavedAtUtc.Value ||
+            stored.LinkedOrderId is { } linkedOrderId && linkedOrderId != order.Id)
         {
             return TradeOrderPricingWorkflowResult.Noop(
                 TradeOrderPricingWorkflowStatus.PlanLoadFailed,
-                "Linked Craft Architect plan could not be loaded.");
+                "The exact linked Craft Architect plan revision could not be loaded.");
         }
 
         using var operation = _operations.Start(
@@ -216,6 +226,7 @@ public sealed class TradeOrderPricingWorkflowService
             "Opening the order's craft plan...",
             ct);
         WorkerSessionOperationLease? workerOperation = null;
+        TradeOrder? stagedOrder = null;
         try
         {
             workerOperation = await _worker.BeginOperationAsync(
@@ -229,8 +240,14 @@ public sealed class TradeOrderPricingWorkflowService
                 derivation: PlanDerivationDispatch.Deferred,
                 cancellationToken: operation.Token,
                 operationId: workerOperation.OperationId);
+            var orderToSave = TradeOrderWorkflow.CopyOrder(order);
+            stagedOrder = orderToSave;
+            await BeginLinkedPlanRevisionAsync(
+                orderToSave,
+                operation.Token,
+                workerOperation.OperationId);
             return await PriceAndPersistAsync(
-                TradeOrderWorkflow.CopyOrder(order),
+                orderToSave,
                 new MarketRefreshRequest(options.ForceRefreshMarketData),
                 operation,
                 workerOperation,
@@ -241,6 +258,7 @@ public sealed class TradeOrderPricingWorkflowService
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
+            var activePlanFence = CaptureActivePlanFence(stagedOrder?.CraftPlanId);
             if (workerOperation is not null)
             {
                 await workerOperation.AbortAsync(CancellationToken.None);
@@ -249,15 +267,17 @@ public sealed class TradeOrderPricingWorkflowService
             return TradeOrderPricingWorkflowResult.Noop(
                 TradeOrderPricingWorkflowStatus.Failed,
                 $"Trade order pricing failed: {ex.Message}",
-                RecipePlannerCommandMessageLevel.Error);
+                RecipePlannerCommandMessageLevel.Error,
+                activePlanFence);
         }
         catch (OperationCanceledException)
         {
+            var activePlanFence = CaptureActivePlanFence(stagedOrder?.CraftPlanId);
             if (workerOperation is not null)
             {
                 await workerOperation.AbortAsync(CancellationToken.None);
             }
-            return CanceledResult();
+            return CanceledResult(activePlanFence);
         }
         finally
         {
@@ -268,8 +288,9 @@ public sealed class TradeOrderPricingWorkflowService
         }
     }
 
-    public async Task<TradeOrderPricingWorkflowResult> RepriceActivePlanAsync(
+    public async Task<TradeOrderPricingWorkflowResult> ReviseActiveAcquisitionAsync(
         TradeOrder order,
+        WorkerAcquisitionMutation mutation,
         IReadOnlyCollection<int>? marketItemIdsToRefresh,
         CancellationToken ct = default)
     {
@@ -294,8 +315,25 @@ public sealed class TradeOrderPricingWorkflowService
                 $"trade-pricing:{order.Id}",
                 "Pricing the Trade order...",
                 operation.Token);
+            var active = await _worker.GetTradeProjectionAsync(
+                cancellationToken: operation.Token);
+            if (active is not { HasPlan: true } ||
+                !string.Equals(active.PlanId, order.CraftPlanId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The linked plan changed before the acquisition edit could begin.");
+            }
+
+            await BeginLinkedPlanRevisionAsync(
+                order,
+                operation.Token,
+                workerOperation.OperationId);
+            await _worker.MutateAcquisitionAsync(
+                mutation,
+                operation.Token,
+                workerOperation.OperationId);
             return await PriceAndPersistAsync(
-                TradeOrderWorkflow.CopyOrder(order),
+                order,
                 marketItemIdsToRefresh is null
                     ? MarketRefreshRequest.Skip
                     : new MarketRefreshRequest(marketItemIdsToRefresh),
@@ -305,6 +343,7 @@ public sealed class TradeOrderPricingWorkflowService
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
+            var activePlanFence = CaptureActivePlanFence(order.CraftPlanId);
             if (workerOperation is not null)
             {
                 await workerOperation.AbortAsync(CancellationToken.None);
@@ -313,15 +352,17 @@ public sealed class TradeOrderPricingWorkflowService
             return TradeOrderPricingWorkflowResult.Noop(
                 TradeOrderPricingWorkflowStatus.Failed,
                 $"Trade order pricing failed: {ex.Message}",
-                RecipePlannerCommandMessageLevel.Error);
+                RecipePlannerCommandMessageLevel.Error,
+                activePlanFence);
         }
         catch (OperationCanceledException)
         {
+            var activePlanFence = CaptureActivePlanFence(order.CraftPlanId);
             if (workerOperation is not null)
             {
                 await workerOperation.AbortAsync(CancellationToken.None);
             }
-            return CanceledResult();
+            return CanceledResult(activePlanFence);
         }
         finally
         {
@@ -330,6 +371,25 @@ public sealed class TradeOrderPricingWorkflowService
                 await workerOperation.DisposeAsync();
             }
         }
+    }
+
+    public async Task<TradeOrderCraftPlanLinkDraft> BeginLinkedPlanRevisionAsync(
+        TradeOrder order,
+        CancellationToken cancellationToken = default,
+        Guid? operationId = null)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        var link = TradeOrderWorkflow.CreateGeneratedCraftPlanLinkDraft(order);
+        await _worker.MutatePlanIdentityAsync(
+            link.PlanId,
+            link.PlanName,
+            cancellationToken,
+            operationId);
+        order.CraftPlanId = link.PlanId;
+        order.CraftPlanName = link.PlanName;
+        order.CraftPlanSavedAtUtc = null;
+        order.CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated;
+        return link;
     }
 
     private async Task<TradeOrderPricingWorkflowResult> PriceAndPersistAsync(
@@ -364,7 +424,7 @@ public sealed class TradeOrderPricingWorkflowService
         warnings.AddRange(derivation.Warnings);
         if (!operation.IsCurrent)
         {
-            return CanceledResult();
+            return CanceledResult(CaptureActivePlanFence(order.CraftPlanId));
         }
 
         operation.ReportStatus("Calculating the order payment...", progress: 90);
@@ -418,13 +478,30 @@ public sealed class TradeOrderPricingWorkflowService
                 order.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(order),
                 includeSourcePlanIdentity: true,
                 operation.Token);
-            if (snapshot == null || !await _planPersistence.SaveSnapshotAsync(snapshot))
+            if (snapshot == null)
             {
                 return TradeOrderPricingWorkflowResult.Noop(
                     TradeOrderPricingWorkflowStatus.PlanBuildFailed,
                     "Order pricing updated, but failed to save the linked Craft Architect plan.",
-                    RecipePlannerCommandMessageLevel.Error);
+                    RecipePlannerCommandMessageLevel.Error,
+                    CaptureActivePlanFence(order.CraftPlanId));
             }
+            snapshot.LinkedOrderId = order.Id;
+            if (!await _planPersistence.SaveSnapshotAsync(snapshot))
+            {
+                return TradeOrderPricingWorkflowResult.Noop(
+                    TradeOrderPricingWorkflowStatus.PlanBuildFailed,
+                    "Order pricing updated, but failed to seal the linked plan snapshot.",
+                    RecipePlannerCommandMessageLevel.Error,
+                    CaptureActivePlanFence(order.CraftPlanId));
+            }
+            order.CraftPlanSavedAtUtc = snapshot.SavedAt;
+            await _planLifecycle.ReplaceStoredPlanAsync(
+                snapshot,
+                trackStoredPlanIdentity: true,
+                derivation: PlanDerivationDispatch.Deferred,
+                cancellationToken: operation.Token,
+                operationId: workerOperation.OperationId);
         }
 
         var complete = pricedCount == source.ActiveProcurementItems.Count &&
@@ -447,7 +524,18 @@ public sealed class TradeOrderPricingWorkflowService
             derivation.MarketItemsAnalyzed,
             derivation.MarketEntriesFetched,
             pricedCount,
-            source.ActiveProcurementItems.Count);
+            source.ActiveProcurementItems.Count,
+            CaptureActivePlanFence(order.CraftPlanId));
+    }
+
+    private WorkerPlanOwnershipFence? CaptureActivePlanFence(string? expectedPlanId = null)
+    {
+        var shell = _projections.Shell;
+        return !string.IsNullOrWhiteSpace(shell.PlanId) &&
+               (string.IsNullOrWhiteSpace(expectedPlanId) ||
+                string.Equals(shell.PlanId, expectedPlanId, StringComparison.Ordinal))
+            ? new WorkerPlanOwnershipFence(shell.PlanId, shell.Revision)
+            : null;
     }
 
     private static ProjectItem ToProjectItem(TradeOrderRootItemSnapshot item) =>
@@ -483,11 +571,13 @@ public sealed class TradeOrderPricingWorkflowService
             : order.SourceSnapshot.Region;
     }
 
-    private static TradeOrderPricingWorkflowResult CanceledResult() =>
+    private static TradeOrderPricingWorkflowResult CanceledResult(
+        WorkerPlanOwnershipFence? activePlanFence = null) =>
         TradeOrderPricingWorkflowResult.Noop(
             TradeOrderPricingWorkflowStatus.Canceled,
             "Trade order pricing was canceled.",
-            RecipePlannerCommandMessageLevel.Info);
+            RecipePlannerCommandMessageLevel.Info,
+            activePlanFence);
 
     private sealed record MarketRefreshRequest
     {

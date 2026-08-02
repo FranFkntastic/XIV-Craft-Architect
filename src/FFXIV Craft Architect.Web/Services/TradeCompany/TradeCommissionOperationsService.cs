@@ -14,6 +14,7 @@ public sealed class TradeCommissionOperationsService(
     ProfileSyncLocalStateService localState,
     ProfileSyncService profileSync,
     HostedOrderProjectionStore hostedOrders,
+    WebPlanPersistenceService planPersistence,
     AppState appState)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -200,60 +201,167 @@ public sealed class TradeCommissionOperationsService(
         }
     }
 
-    public Task<TradeCommissionOperatorResult> AmendTermsAsync(
+    public async Task<TradeCommissionOperatorResult> AmendTermsAsync(
         CompanyCommissionOwnerProjection current,
         CompanyCommissionTermsVersion terms,
+        TradeOrder workPackage,
         string reason,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(reason))
         {
-            return Task.FromResult(Rejected(current, "Describe why the terms changed."));
+            return Rejected(current, "Describe why the terms changed.");
         }
 
-        return ExecuteAsync(
-            current,
-            "amend-terms",
-            new { Terms = terms, Reason = reason.Trim() },
-            context => new AmendCompanyCommissionTermsCommand(
-                context,
-                terms,
-                reason.Trim()),
-            cancellationToken);
+        try
+        {
+            var authority = await CaptureOrderAuthorityAsync();
+            var commandProjection = await PublishChangedLinkedPlanAsync(
+                current,
+                workPackage,
+                authority,
+                cancellationToken);
+            var draft = CreateDraftWorkPackage(workPackage);
+            var result = await ExecuteAsync(
+                commandProjection,
+                "amend-terms",
+                new { Terms = terms, Reason = reason.Trim(), WorkPackage = draft },
+                context => new AmendCompanyCommissionTermsCommand(
+                    context,
+                    terms,
+                    reason.Trim(),
+                    draft),
+                cancellationToken,
+                authority,
+                CompanyCommissionProtocol.Version2);
+            return ValidateCommittedWorkPackage(result, workPackage);
+        }
+        catch (Exception exception)
+        {
+            _errors[current.Order.Id] = exception.Message;
+            return Rejected(current, exception.Message);
+        }
     }
 
-    public Task<TradeCommissionOperatorResult> UpdateDraftAsync(
+    public async Task<TradeCommissionOperatorResult> UpdateDraftAsync(
         CompanyCommissionOwnerProjection current,
         CompanyCommissionTermsVersion terms,
         TradeOrder workPackage,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workPackage);
-        return ExecuteAsync(
-            current,
-            "update-draft",
-            new
-            {
-                Terms = terms,
-                WorkPackage = new CompanyCommissionDraftWorkPackage(
-                    GetRequestedOutputs(workPackage),
-                    TradeOrderWorkflow.CopySourceSnapshot(workPackage.SourceSnapshot),
-                    workPackage.CraftPlanId,
-                    workPackage.CraftPlanName,
-                    workPackage.CraftPlanSavedAtUtc,
-                    workPackage.CraftPlanLinkKind)
-            },
-            context => new UpdateCompanyCommissionDraftCommand(
-                context,
-                terms,
-                new CompanyCommissionDraftWorkPackage(
-                    GetRequestedOutputs(workPackage),
-                    TradeOrderWorkflow.CopySourceSnapshot(workPackage.SourceSnapshot),
-                    workPackage.CraftPlanId,
-                    workPackage.CraftPlanName,
-                    workPackage.CraftPlanSavedAtUtc,
-                    workPackage.CraftPlanLinkKind)),
+        try
+        {
+            var authority = await CaptureOrderAuthorityAsync();
+            var commandProjection = await PublishChangedLinkedPlanAsync(
+                current,
+                workPackage,
+                authority,
+                cancellationToken);
+            var draft = CreateDraftWorkPackage(workPackage);
+            var result = await ExecuteAsync(
+                commandProjection,
+                "update-draft",
+                new { Terms = terms, WorkPackage = draft },
+                context => new UpdateCompanyCommissionDraftCommand(
+                    context,
+                    terms,
+                    draft),
+                cancellationToken,
+                authority,
+                CompanyCommissionProtocol.Version2);
+            return ValidateCommittedWorkPackage(result, workPackage);
+        }
+        catch (Exception exception)
+        {
+            _errors[current.Order.Id] = exception.Message;
+            return Rejected(current, exception.Message);
+        }
+    }
+
+    private static CompanyCommissionDraftWorkPackage CreateDraftWorkPackage(
+        TradeOrder workPackage) =>
+        new(
+            GetRequestedOutputs(workPackage),
+            TradeOrderWorkflow.CopySourceSnapshot(workPackage.SourceSnapshot),
+            workPackage.CraftPlanId,
+            workPackage.CraftPlanName,
+            workPackage.CraftPlanSavedAtUtc,
+            workPackage.CraftPlanLinkKind);
+
+    private static TradeCommissionOperatorResult ValidateCommittedWorkPackage(
+        TradeCommissionOperatorResult result,
+        TradeOrder workPackage)
+    {
+        if (!result.Success || result.Projection is not { } committed ||
+            string.Equals(
+                committed.Order.CraftPlanId,
+                workPackage.CraftPlanId,
+                StringComparison.Ordinal) &&
+            committed.Order.CraftPlanSavedAtUtc == workPackage.CraftPlanSavedAtUtc)
+        {
+            return result;
+        }
+
+        return Rejected(
+            committed,
+            "The host committed the order but did not adopt the exact linked plan revision.",
+            hostCommitted: true);
+    }
+
+    private async Task<CompanyCommissionOwnerProjection> PublishChangedLinkedPlanAsync(
+        CompanyCommissionOwnerProjection current,
+        TradeOrder workPackage,
+        OrderCommandAuthority authority,
+        CancellationToken cancellationToken)
+    {
+        if (workPackage.CraftPlanLinkKind != TradeOrderCraftPlanLinkKind.OrderGenerated ||
+            string.IsNullOrWhiteSpace(workPackage.CraftPlanId) ||
+            !workPackage.CraftPlanSavedAtUtc.HasValue ||
+            string.Equals(
+                current.Order.CraftPlanId,
+                workPackage.CraftPlanId,
+                StringComparison.Ordinal) &&
+            current.Order.CraftPlanSavedAtUtc == workPackage.CraftPlanSavedAtUtc)
+        {
+            return current;
+        }
+
+        var stored = await planPersistence.LoadPlanPayloadAsync(workPackage.CraftPlanId);
+        if (stored == null ||
+            !string.Equals(stored.Id, workPackage.CraftPlanId, StringComparison.Ordinal) ||
+            stored.SavedAt != workPackage.CraftPlanSavedAtUtc.Value ||
+            stored.LinkedOrderId != workPackage.Id)
+        {
+            throw new InvalidOperationException(
+                "The exact linked plan revision is unavailable, so the order was not changed.");
+        }
+
+        var publication = await profileSync.PublishLocalObjectAsync(
+            ProfileSyncCollections.Plans,
+            stored.Id,
+            authority.Connection,
             cancellationToken);
+        if (!publication.Published)
+        {
+            throw new InvalidOperationException(
+                $"The exact linked plan is saved on this device, but the order was not changed. {publication.Message}");
+        }
+        await RequireCurrentAuthorityAsync(authority, "linked-plan publication");
+        var commission = RequireCommission(current);
+        var refreshed = await client.LoadOwnerProjectionAsync(
+            authority.Connection,
+            commission.CompanyId.Value,
+            commission.CommissionId,
+            cancellationToken);
+        ValidateProjection(current.Order, refreshed);
+        if (refreshed.ObjectRevision != current.ObjectRevision)
+        {
+            throw new InvalidOperationException(
+                "The commission changed while its linked plan was being published. Rebase the terms revision before retrying.");
+        }
+        await ApplyProjectionAsync(authority, refreshed);
+        return refreshed;
     }
 
     public Task<TradeCommissionOperatorResult> RejectClaimAsync(
@@ -662,7 +770,8 @@ public sealed class TradeCommissionOperationsService(
         object? payload,
         Func<CompanyCommissionCommandContext, TCommand> createCommand,
         CancellationToken cancellationToken,
-        OrderCommandAuthority? capturedAuthority = null)
+        OrderCommandAuthority? capturedAuthority = null,
+        int protocolVersion = CompanyCommissionProtocol.Version1)
         where TCommand : ICompanyCommissionCommand
     {
         if (!CanPerformExternalAction(current.Order, out var reason))
@@ -682,7 +791,11 @@ public sealed class TradeCommissionOperationsService(
                 TradeCommissionOwnerMutationResponse response;
                 try
                 {
-                    var context = CreateContext(commandProjection, route, payload);
+                    var context = CreateContext(
+                        commandProjection,
+                        route,
+                        payload,
+                        protocolVersion);
                     response = await client.ExecuteAsync(
                         route,
                         createCommand(context),
@@ -998,7 +1111,8 @@ public sealed class TradeCommissionOperationsService(
     private static CompanyCommissionCommandContext CreateContext(
         CompanyCommissionOwnerProjection current,
         string route,
-        object? payload)
+        object? payload,
+        int protocolVersion = CompanyCommissionProtocol.Version1)
     {
         var fingerprintSource = JsonSerializer.Serialize(
             new
@@ -1018,7 +1132,7 @@ public sealed class TradeCommissionOperationsService(
             current.ObjectRevision,
             current.CompanyRevision,
             new Guid(commandIdBytes),
-            CompanyCommissionProtocol.Version1);
+            protocolVersion);
     }
 
     private static void ValidateProjection(

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace FFXIV_Craft_Architect.Core.Models;
 
@@ -54,6 +55,8 @@ public sealed class ProfileSyncObjectEnvelope
 
 public sealed class ProfileSyncPlanSnapshot
 {
+    // LinkedOrderId is an additive optional field. Keep the v1 envelope so
+    // cached clients can continue reading ordinary plan updates during rollout.
     public const int CurrentSchemaVersion = 1;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -74,6 +77,7 @@ public sealed class ProfileSyncPlanSnapshot
         MarketAcquisitionLens.MinimumUpfrontCost;
     public string? SourcePlanId { get; set; }
     public string? SourcePlanName { get; set; }
+    public Guid? LinkedOrderId { get; set; }
 }
 
 public sealed class ProfileSyncPlanProjectItem
@@ -134,6 +138,27 @@ public static class ProfileSyncPlanPayloadCodec
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         return JsonSerializer.Serialize(snapshot, JsonOptions);
+    }
+
+    public static bool HasSameRevisionContent(
+        ProfileSyncPlanSnapshot left,
+        ProfileSyncPlanSnapshot right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        return string.Equals(
+            NormalizeUnsealed(left),
+            NormalizeUnsealed(right),
+            StringComparison.Ordinal);
+    }
+
+    private static string NormalizeUnsealed(ProfileSyncPlanSnapshot snapshot)
+    {
+        var node = JsonSerializer.SerializeToNode(snapshot, JsonOptions)?.AsObject()
+            ?? throw new InvalidOperationException("Plan snapshot normalization failed.");
+        node.Remove("schemaVersion");
+        node.Remove("linkedOrderId");
+        return node.ToJsonString(JsonOptions);
     }
 }
 

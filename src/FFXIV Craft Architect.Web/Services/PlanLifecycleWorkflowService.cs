@@ -79,14 +79,16 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         bool trackStoredPlanIdentity,
         PlanDerivationDispatch derivation = PlanDerivationDispatch.Background,
         CancellationToken cancellationToken = default,
-        Guid? operationId = null)
+        Guid? operationId = null,
+        long? expectedWorkerRevision = null)
     {
         Cancel();
         await _worker.ReplaceStoredPlanAsync(
             storedPlan,
             trackStoredPlanIdentity,
             cancellationToken,
-            operationId);
+            operationId,
+            expectedWorkerRevision);
         if (derivation == PlanDerivationDispatch.Background)
         {
             Schedule();

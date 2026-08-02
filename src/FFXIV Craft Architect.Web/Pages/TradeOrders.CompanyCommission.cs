@@ -171,6 +171,8 @@ public partial class TradeOrders
         }
 
         _isCommissionCommandRunning = true;
+        var rollbackFence = CaptureCurrentWorkerPlanFence(
+            _commissionTermsRevisionWorkPackage?.CraftPlanId);
         try
         {
             var owner = SelectedCommissionOwner;
@@ -182,10 +184,21 @@ public partial class TradeOrders
             }
 
             var rollback = discardConflict ? null : _commissionTermsRevisionRollbackPlan;
-            if (rollback != null &&
-                !await RestoreStagedProcurementPlanAsync(rollback))
+            if (rollback != null)
             {
-                return;
+                if (rollbackFence is not { } ownedFence)
+                {
+                    Snackbar.Add(
+                        "The active plan no longer matches this terms edit, so it was preserved instead of being rolled back.",
+                        Severity.Info);
+                    return;
+                }
+                if (!await RestoreStagedProcurementPlanAsync(
+                        rollback,
+                        ownedFence))
+                {
+                    return;
+                }
             }
 
             _commissionTermsRevisionWorkPackage = null;
@@ -203,6 +216,7 @@ public partial class TradeOrders
         finally
         {
             _isCommissionCommandRunning = false;
+            ScheduleSelectedOrderPlanRestoration();
         }
     }
 
@@ -453,6 +467,7 @@ public partial class TradeOrders
             var result = await CommissionOperations.AmendTermsAsync(
                 owner,
                 terms,
+                workPackage,
                 reason);
             ApplyCommissionResult(result, $"Terms v{terms.Version} created");
             if (result.Success)

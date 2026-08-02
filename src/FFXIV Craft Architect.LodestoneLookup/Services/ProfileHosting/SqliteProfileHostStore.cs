@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using Microsoft.Data.Sqlite;
 
@@ -883,6 +884,18 @@ public sealed class SqliteProfileHostStore
             ct,
             transaction);
 
+        if (existing is { Deleted: false } &&
+            IsIdenticalLinkedPlanSnapshot(collection, objectId, existing.PayloadJson, payloadJson))
+        {
+            await transaction.RollbackAsync(ct);
+            return new ProfileSyncPutResponse
+            {
+                Success = true,
+                ServerRevision = currentServerRevision,
+                Object = existing
+            };
+        }
+
         if (existing != null && existing.Revision != expectedRevision)
         {
             await transaction.RollbackAsync(ct);
@@ -905,6 +918,63 @@ public sealed class SqliteProfileHostStore
                 ServerRevision = currentServerRevision,
                 ErrorCode = "missing_remote_object",
                 ErrorMessage = "Remote object does not exist."
+            };
+        }
+
+        var linkedPlanError = await ValidateTradeOrderLinkedPlanAsync(
+            connection,
+            transaction,
+            profileId,
+            collection,
+            objectId,
+            payloadJson,
+            existing,
+            ct);
+        if (linkedPlanError != null)
+        {
+            await transaction.RollbackAsync(ct);
+            return new ProfileSyncPutResponse
+            {
+                Success = false,
+                Conflict = true,
+                ServerRevision = currentServerRevision,
+                RemoteObject = existing,
+                ErrorCode = "linked_plan_invalid",
+                ErrorMessage = linkedPlanError
+            };
+        }
+
+        if (existing is { Deleted: false } &&
+            IsUnsafeLinkedPlanSealPromotion(
+                collection,
+                objectId,
+                existing.PayloadJson,
+                payloadJson))
+        {
+            await transaction.RollbackAsync(ct);
+            return new ProfileSyncPutResponse
+            {
+                Success = false,
+                Conflict = true,
+                ServerRevision = currentServerRevision,
+                RemoteObject = existing,
+                ErrorCode = "linked_plan_promotion_mismatch",
+                ErrorMessage = "The legacy hosted plan differs from the proposed linked snapshot seal."
+            };
+        }
+
+        if (existing is { Deleted: false } &&
+            IsLinkedPlanSnapshot(collection, objectId, existing.PayloadJson))
+        {
+            await transaction.RollbackAsync(ct);
+            return new ProfileSyncPutResponse
+            {
+                Success = false,
+                Conflict = true,
+                ServerRevision = currentServerRevision,
+                RemoteObject = existing,
+                ErrorCode = "immutable_plan_snapshot",
+                ErrorMessage = "A linked order plan snapshot is immutable. Publish a new plan identity instead."
             };
         }
 
@@ -958,6 +1028,151 @@ public sealed class SqliteProfileHostStore
                 UpdatedAtUtc = now
             }
         };
+    }
+
+    private static bool IsLinkedPlanSnapshot(
+        string collection,
+        string objectId,
+        string payloadJson) =>
+        string.Equals(collection, ProfileSyncCollections.Plans, StringComparison.OrdinalIgnoreCase) &&
+        ProfileSyncPlanPayloadCodec.Deserialize(payloadJson, objectId).LinkedOrderId.HasValue;
+
+    private static bool IsIdenticalLinkedPlanSnapshot(
+        string collection,
+        string objectId,
+        string existingPayloadJson,
+        string candidatePayloadJson)
+    {
+        if (!string.Equals(collection, ProfileSyncCollections.Plans, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var existing = ProfileSyncPlanPayloadCodec.Deserialize(existingPayloadJson, objectId);
+        return existing.LinkedOrderId.HasValue &&
+               string.Equals(
+                   ProfileSyncPlanPayloadCodec.Serialize(existing),
+                   ProfileSyncPlanPayloadCodec.Serialize(
+                       ProfileSyncPlanPayloadCodec.Deserialize(candidatePayloadJson, objectId)),
+                   StringComparison.Ordinal);
+    }
+
+    private static bool IsUnsafeLinkedPlanSealPromotion(
+        string collection,
+        string objectId,
+        string existingPayloadJson,
+        string candidatePayloadJson)
+    {
+        if (!string.Equals(collection, ProfileSyncCollections.Plans, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var existing = ProfileSyncPlanPayloadCodec.Deserialize(existingPayloadJson, objectId);
+        var candidate = ProfileSyncPlanPayloadCodec.Deserialize(candidatePayloadJson, objectId);
+        return !existing.LinkedOrderId.HasValue &&
+               candidate.LinkedOrderId.HasValue &&
+               !ProfileSyncPlanPayloadCodec.HasSameRevisionContent(existing, candidate);
+    }
+
+    private static async Task<bool> IsLinkedPlanStillReferencedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string profileId,
+        string planId,
+        string planPayloadJson,
+        CancellationToken cancellationToken)
+    {
+        var linkedOrderId = ProfileSyncPlanPayloadCodec.Deserialize(
+            planPayloadJson,
+            planId).LinkedOrderId;
+        if (!linkedOrderId.HasValue)
+        {
+            return false;
+        }
+
+        var order = await LoadObjectAsync(
+            connection,
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            linkedOrderId.Value.ToString("D"),
+            cancellationToken,
+            transaction);
+        if (order is not { Deleted: false })
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static async Task<string?> ValidateTradeOrderLinkedPlanAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string profileId,
+        string collection,
+        string objectId,
+        string payloadJson,
+        ProfileSyncObjectEnvelope? existing,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(
+                collection,
+                ProfileSyncCollections.TradeOrders,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var candidate = JsonSerializer.Deserialize<TradeOrder>(
+            payloadJson,
+            ProfileSyncJson.CreateOptions());
+        if (candidate == null ||
+            !string.Equals(candidate.Id.ToString("D"), objectId, StringComparison.Ordinal))
+        {
+            return "The Trade order payload does not match its hosted object identity.";
+        }
+        if (candidate.CraftPlanLinkKind != TradeOrderCraftPlanLinkKind.OrderGenerated)
+        {
+            return null;
+        }
+
+        var current = existing is { Deleted: false }
+            ? JsonSerializer.Deserialize<TradeOrder>(
+                existing.PayloadJson,
+                ProfileSyncJson.CreateOptions())
+            : null;
+        if (current?.Id == candidate.Id &&
+            current.CraftPlanLinkKind == candidate.CraftPlanLinkKind &&
+            string.Equals(current.CraftPlanId, candidate.CraftPlanId, StringComparison.Ordinal) &&
+            current.CraftPlanSavedAtUtc == candidate.CraftPlanSavedAtUtc)
+        {
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(candidate.CraftPlanId) ||
+            !candidate.CraftPlanSavedAtUtc.HasValue)
+        {
+            return "A changed generated-plan link requires both plan identity and saved timestamp.";
+        }
+
+        var hostedPlan = await LoadObjectAsync(
+            connection,
+            profileId,
+            ProfileSyncCollections.Plans,
+            candidate.CraftPlanId,
+            cancellationToken,
+            transaction);
+        if (hostedPlan is not { Deleted: false })
+        {
+            return "The referenced generated plan snapshot is not hosted in this profile.";
+        }
+        var plan = ProfileSyncPlanPayloadCodec.Deserialize(
+            hostedPlan.PayloadJson,
+            candidate.CraftPlanId);
+        return plan.LinkedOrderId == candidate.Id &&
+               plan.SavedAt == candidate.CraftPlanSavedAtUtc.Value
+            ? null
+            : "The referenced generated plan does not match this order and saved revision.";
     }
 
     public async Task<HostedProfileObject?> FindObjectAsync(
@@ -1101,6 +1316,27 @@ public sealed class SqliteProfileHostStore
                 Conflict = true,
                 ErrorCode = "missing_remote_object",
                 ErrorMessage = "Remote object does not exist."
+            };
+        }
+
+        if (existing is { Deleted: false } &&
+            IsLinkedPlanSnapshot(collection, objectId, existing.PayloadJson) &&
+            await IsLinkedPlanStillReferencedAsync(
+                connection,
+                transaction,
+                profileId,
+                objectId,
+                existing.PayloadJson,
+                ct))
+        {
+            await transaction.RollbackAsync(ct);
+            return new ProfileSyncPutResponse
+            {
+                Success = false,
+                Conflict = true,
+                RemoteObject = existing,
+                ErrorCode = "immutable_plan_snapshot",
+                ErrorMessage = "Linked order plan snapshots cannot be deleted by generic profile synchronization."
             };
         }
 

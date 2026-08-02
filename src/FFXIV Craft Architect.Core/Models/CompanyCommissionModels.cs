@@ -3,6 +3,10 @@ namespace FFXIV_Craft_Architect.Core.Models;
 public static class CompanyCommissionProtocol
 {
     public const int Version1 = 1;
+    public const int Version2 = 2;
+
+    public static bool IsSupportedOwnerCommandVersion(int version) =>
+        version is Version1 or Version2;
 }
 
 public enum CompanyCommissionPublicViewState
