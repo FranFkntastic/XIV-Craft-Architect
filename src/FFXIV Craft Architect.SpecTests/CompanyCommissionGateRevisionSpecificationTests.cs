@@ -14,14 +14,20 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
     private static readonly CompanyCommissionActor Crafter =
         new("crafter", CompanyCommissionActorKind.Crafter, "Crafter");
 
-    [Theory]
-    [InlineData(GateRevisionScenario.UnchangedBoundFacts)]
-    [InlineData(GateRevisionScenario.PaymentChanged)]
-    [InlineData(GateRevisionScenario.PartialPaymentAfterRevision)]
-    [InlineData(GateRevisionScenario.MaterialQuantityChanged)]
-    [InlineData(GateRevisionScenario.MaterialQualityChanged)]
-    [InlineData(GateRevisionScenario.PaymentClearsFirst)]
-    [InlineData(GateRevisionScenario.MaterialsClearFirst)]
+    public static void AssertAll()
+    {
+        var scenarios = new CompanyCommissionGateRevisionSpecificationTests();
+        foreach (var scenario in Enum.GetValues<GateRevisionScenario>())
+        {
+            scenarios.TermsRevisionAndParallelGatesPreserveOnlyMatchingEvidence(scenario);
+        }
+
+        scenarios.ClearedCommissionCanBeCraftedWithoutAProgressReport();
+        scenarios.CrafterProgressProjectsToPublicAndParticipantBriefs();
+        scenarios.UnrelatedRevisionPreservesPartialPaymentAndReadyMaterialBindings();
+        scenarios.ChangedPaymentAndMaterialFactsInvalidatePartialGateEvidence();
+    }
+
     public void TermsRevisionAndParallelGatesPreserveOnlyMatchingEvidence(
         GateRevisionScenario scenario)
     {
@@ -53,7 +59,6 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         }
     }
 
-    [Fact]
     public void ClearedCommissionCanBeCraftedWithoutAProgressReport()
     {
         var order = CompleteBothGates(CreateClaimedOrder());
@@ -65,7 +70,6 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
             progress => Assert.Equal(0, progress.CompletedQuantity));
     }
 
-    [Fact]
     public void CrafterProgressProjectsToPublicAndParticipantBriefs()
     {
         var order = CompleteBothGates(CreateClaimedOrder());
@@ -96,7 +100,6 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.Equal("Ready for handoff.", transition.Comment);
     }
 
-    [Fact]
     public void UnrelatedRevisionPreservesPartialPaymentAndReadyMaterialBindings()
     {
         var order = PreparePartialGateEvidence(CreateClaimedOrder());
@@ -124,7 +127,6 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.True(participant.CompanyMaterialsReadyForHandoff);
     }
 
-    [Fact]
     public void ChangedPaymentAndMaterialFactsInvalidatePartialGateEvidence()
     {
         var order = PreparePartialGateEvidence(CreateClaimedOrder());

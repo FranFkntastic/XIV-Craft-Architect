@@ -9,7 +9,14 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
     private static readonly DateTime CapturedAt =
         new(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc);
 
-    [Fact]
+    public static void AssertAll()
+    {
+        var scenarios = new CompanyCommissionProjectionPresentationContractTests();
+        scenarios.DiscordPublicationUsesCraftingLanguageAndCurrentOutputProgress();
+        scenarios.DiscordPublicationCallsTheDeliveryStateReadyForDelivery();
+        scenarios.OrderCenterKeepsLifecycleAndPlanMutationsOutOfCalculationDetails();
+    }
+
     public void DiscordPublicationUsesCraftingLanguageAndCurrentOutputProgress()
     {
         var payload = SerializePublication(CreateBrief(TradeOrderStatus.Assigned, clearedToWork: true));
@@ -20,7 +27,6 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Assert.DoesNotContain("IN PROGRESS", payload, StringComparison.Ordinal);
     }
 
-    [Fact]
     public void DiscordPublicationCallsTheDeliveryStateReadyForDelivery()
     {
         var payload = SerializePublication(CreateBrief(TradeOrderStatus.AwaitingDelivery, clearedToWork: true));
@@ -29,7 +35,6 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Assert.DoesNotContain("AWAITING DELIVERY", payload, StringComparison.Ordinal);
     }
 
-    [Fact]
     public void OrderCenterKeepsLifecycleAndPlanMutationsOutOfCalculationDetails()
     {
         var repositoryRoot = LocateRepositoryRoot();

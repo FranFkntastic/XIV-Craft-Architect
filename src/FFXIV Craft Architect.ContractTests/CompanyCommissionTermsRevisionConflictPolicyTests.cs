@@ -20,6 +20,7 @@ public sealed class CompanyCommissionTermsRevisionConflictPolicyTests
         bool hasLocalChanges,
         bool expectedConflict)
     {
+        CompanyCommissionProjectionPresentationContractTests.AssertAll();
         Assert.Equal(
             expectedConflict,
             CompanyCommissionTermsRevisionConflictPolicy.HasConflict(
