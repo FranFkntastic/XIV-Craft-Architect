@@ -12,6 +12,12 @@ using Microsoft.Extensions.Hosting;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
+[CollectionDefinition("Profile host integration", DisableParallelization = true)]
+public sealed class ProfileHostIntegrationCollection
+{
+}
+
+[Collection("Profile host integration")]
 public sealed class ProfileHostContractTests
 {
     [Fact]
