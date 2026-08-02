@@ -51,6 +51,7 @@ public sealed class SqliteDiscordCollaborationStore(
                     action_token TEXT NOT NULL UNIQUE,
                     state INTEGER NOT NULL,
                     desired_projection_revision INTEGER NOT NULL,
+                    projection_format_version INTEGER NOT NULL DEFAULT 0,
                     idempotency_key TEXT NOT NULL UNIQUE,
                     created_at_utc TEXT NOT NULL,
                     updated_at_utc TEXT NOT NULL
@@ -107,6 +108,9 @@ public sealed class SqliteDiscordCollaborationStore(
                     ON discord_outbox(state, next_attempt_at_utc);
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
+            await EnsureProjectionFormatVersionColumnAsync(
+                connection,
+                cancellationToken);
             if (options.HasBootstrapInstallation)
             {
                 await UpsertCompanyInstallationAsync(
@@ -240,6 +244,7 @@ public sealed class SqliteDiscordCollaborationStore(
             actionToken,
             initialState,
             1,
+            DiscordPublicationProjectionFormat.CurrentVersion,
             idempotencyKey,
             createdAt,
             createdAt);
@@ -320,6 +325,44 @@ public sealed class SqliteDiscordCollaborationStore(
         return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
     }
 
+    public async Task<IReadOnlyList<DiscordPublicationRecord>>
+        LoadPublicationsRequiringProjectionAsync(
+            int projectionFormatVersion,
+            int maximumCount,
+            CancellationToken cancellationToken = default)
+    {
+        if (projectionFormatVersion <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(projectionFormatVersion));
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = CreatePublicationSelect(connection);
+        command.CommandText +=
+            """
+             WHERE projection_format_version < $projectionFormatVersion
+               AND state NOT IN ($reconciliationRequired, $failed)
+             ORDER BY created_at_utc
+             LIMIT $maximumCount;
+            """;
+        command.Parameters.AddWithValue(
+            "$projectionFormatVersion",
+            projectionFormatVersion);
+        command.Parameters.AddWithValue(
+            "$reconciliationRequired",
+            (int)DiscordPublicationState.ReconciliationRequired);
+        command.Parameters.AddWithValue("$failed", (int)DiscordPublicationState.Failed);
+        command.Parameters.AddWithValue("$maximumCount", Math.Clamp(maximumCount, 1, 500));
+        var publications = new List<DiscordPublicationRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            publications.Add(ReadPublication(reader));
+        }
+
+        return publications;
+    }
+
     public async Task<DiscordPublicationRetryResult> RetryFailedPublicationAsync(
         CompanyId companyId,
         Guid publicationId,
@@ -361,6 +404,7 @@ public sealed class SqliteDiscordCollaborationStore(
                 p.action_token,
                 p.state,
                 p.desired_projection_revision,
+                p.projection_format_version,
                 p.idempotency_key,
                 p.created_at_utc,
                 p.updated_at_utc,
@@ -392,19 +436,19 @@ public sealed class SqliteDiscordCollaborationStore(
             while (await reader.ReadAsync(cancellationToken))
             {
                 publication ??= ReadPublication(reader);
-                if (reader.IsDBNull(14))
+                if (reader.IsDBNull(15))
                 {
                     continue;
                 }
 
-                var outboxState = (DiscordOutboxState)reader.GetInt32(18);
+                var outboxState = (DiscordOutboxState)reader.GetInt32(19);
                 if (outboxState == DiscordOutboxState.Failed)
                 {
                     failed.Add((
-                        Guid.Parse(reader.GetString(14)),
-                        (DiscordOutboxOperation)reader.GetInt32(15),
-                        reader.GetString(16),
-                        reader.IsDBNull(17) ? null : reader.GetString(17)));
+                        Guid.Parse(reader.GetString(15)),
+                        (DiscordOutboxOperation)reader.GetInt32(16),
+                        reader.GetString(17),
+                        reader.IsDBNull(18) ? null : reader.GetString(18)));
                 }
                 else if (outboxState != DiscordOutboxState.Succeeded)
                 {
@@ -520,11 +564,17 @@ public sealed class SqliteDiscordCollaborationStore(
         restore.CommandText =
             """
             UPDATE discord_publications
-            SET state = $state, updated_at_utc = $queuedAt
+            SET
+                state = $state,
+                projection_format_version = $projectionFormatVersion,
+                updated_at_utc = $queuedAt
             WHERE publication_id = $publicationId
               AND state = $failed;
             """;
         restore.Parameters.AddWithValue("$state", (int)restoredState);
+        restore.Parameters.AddWithValue(
+            "$projectionFormatVersion",
+            DiscordPublicationProjectionFormat.CurrentVersion);
         restore.Parameters.AddWithValue("$queuedAt", queuedAt.ToString("O"));
         restore.Parameters.AddWithValue(
             "$publicationId",
@@ -545,6 +595,7 @@ public sealed class SqliteDiscordCollaborationStore(
             publication with
             {
                 State = restoredState,
+                ProjectionFormatVersion = DiscordPublicationProjectionFormat.CurrentVersion,
                 UpdatedAt = queuedAt
             });
     }
@@ -936,11 +987,15 @@ public sealed class SqliteDiscordCollaborationStore(
             SET
                 state = $state,
                 desired_projection_revision = $desiredRevision,
+                projection_format_version = $projectionFormatVersion,
                 updated_at_utc = $now
             WHERE publication_id = $publicationId;
             """;
         update.Parameters.AddWithValue("$state", (int)state);
         update.Parameters.AddWithValue("$desiredRevision", desiredProjectionRevision);
+        update.Parameters.AddWithValue(
+            "$projectionFormatVersion",
+            DiscordPublicationProjectionFormat.CurrentVersion);
         update.Parameters.AddWithValue("$now", queuedAt.ToString("O"));
         update.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
         await update.ExecuteNonQueryAsync(cancellationToken);
@@ -949,6 +1004,7 @@ public sealed class SqliteDiscordCollaborationStore(
         {
             State = state,
             DesiredProjectionRevision = desiredProjectionRevision,
+            ProjectionFormatVersion = DiscordPublicationProjectionFormat.CurrentVersion,
             UpdatedAt = queuedAt
         };
         if (RemovesMessage(state))
@@ -1279,6 +1335,161 @@ public sealed class SqliteDiscordCollaborationStore(
         await transaction.CommitAsync(cancellationToken);
     }
 
+    public async Task<bool> RecoverMissingEditedMessageAsync(
+        Guid workItemId,
+        string leaseId,
+        DateTimeOffset recoveredAt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        await using var inspect = connection.CreateCommand();
+        inspect.Transaction = (SqliteTransaction)transaction;
+        inspect.CommandText =
+            """
+            SELECT
+                o.publication_id,
+                o.operation,
+                o.desired_projection_revision,
+                p.desired_projection_revision,
+                p.state
+            FROM discord_outbox o
+            INNER JOIN discord_publications p
+                ON p.publication_id = o.publication_id
+            WHERE o.work_item_id = $workItemId
+              AND o.lease_id = $leaseId
+              AND o.state = $inFlight;
+            """;
+        inspect.Parameters.AddWithValue("$workItemId", workItemId.ToString("D"));
+        inspect.Parameters.AddWithValue("$leaseId", leaseId);
+        inspect.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+        Guid publicationId;
+        long workProjectionRevision;
+        long desiredProjectionRevision;
+        DiscordPublicationState publicationState;
+        await using (var reader = await inspect.ExecuteReaderAsync(cancellationToken))
+        {
+            if (!await reader.ReadAsync(cancellationToken) ||
+                (DiscordOutboxOperation)reader.GetInt32(1) !=
+                DiscordOutboxOperation.EditMessage)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return false;
+            }
+
+            publicationId = Guid.Parse(reader.GetString(0));
+            workProjectionRevision = reader.GetInt64(2);
+            desiredProjectionRevision = reader.GetInt64(3);
+            publicationState = (DiscordPublicationState)reader.GetInt32(4);
+        }
+
+        await using (var clearIdentity = connection.CreateCommand())
+        {
+            clearIdentity.Transaction = (SqliteTransaction)transaction;
+            clearIdentity.CommandText =
+                """
+                UPDATE discord_publications
+                SET message_id = NULL, updated_at_utc = $recoveredAt
+                WHERE publication_id = $publicationId;
+                """;
+            clearIdentity.Parameters.AddWithValue(
+                "$publicationId",
+                publicationId.ToString("D"));
+            clearIdentity.Parameters.AddWithValue(
+                "$recoveredAt",
+                recoveredAt.ToString("O"));
+            await clearIdentity.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (!DisplaysMessage(publicationState))
+        {
+            await UpdateOutboxTerminalAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                workItemId,
+                leaseId,
+                DiscordOutboxState.Succeeded,
+                null,
+                recoveredAt,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return true;
+        }
+
+        var recoverCurrent = workProjectionRevision == desiredProjectionRevision;
+        if (!recoverCurrent)
+        {
+            await UpdateOutboxTerminalAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                workItemId,
+                leaseId,
+                DiscordOutboxState.Succeeded,
+                null,
+                recoveredAt,
+                cancellationToken);
+        }
+
+        await using var recover = connection.CreateCommand();
+        recover.Transaction = (SqliteTransaction)transaction;
+        recover.CommandText = recoverCurrent
+            ?
+            """
+            UPDATE discord_outbox
+            SET
+                operation = $create,
+                message_id = NULL,
+                state = $pending,
+                attempt_count = 0,
+                next_attempt_at_utc = $recoveredAt,
+                lease_id = NULL,
+                lease_expires_at_utc = NULL,
+                last_error = NULL,
+                updated_at_utc = $recoveredAt
+            WHERE work_item_id = $workItemId
+              AND lease_id = $leaseId
+              AND state = $inFlight;
+            """
+            :
+            """
+            UPDATE discord_outbox
+            SET
+                operation = $create,
+                message_id = NULL,
+                state = $pending,
+                attempt_count = 0,
+                next_attempt_at_utc = $recoveredAt,
+                lease_id = NULL,
+                lease_expires_at_utc = NULL,
+                last_error = NULL,
+                updated_at_utc = $recoveredAt
+            WHERE publication_id = $publicationId
+              AND desired_projection_revision = $desiredProjectionRevision
+              AND operation = $edit
+              AND state IN ($pending, $retry);
+            """;
+        recover.Parameters.AddWithValue("$create", (int)DiscordOutboxOperation.CreateMessage);
+        recover.Parameters.AddWithValue("$edit", (int)DiscordOutboxOperation.EditMessage);
+        recover.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+        recover.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
+        recover.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+        recover.Parameters.AddWithValue("$workItemId", workItemId.ToString("D"));
+        recover.Parameters.AddWithValue("$leaseId", leaseId);
+        recover.Parameters.AddWithValue("$publicationId", publicationId.ToString("D"));
+        recover.Parameters.AddWithValue("$desiredProjectionRevision", desiredProjectionRevision);
+        recover.Parameters.AddWithValue("$recoveredAt", recoveredAt.ToString("O"));
+        if (await recover.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
     public Task RetryAsync(
         Guid workItemId,
         string leaseId,
@@ -1432,6 +1643,38 @@ public sealed class SqliteDiscordCollaborationStore(
         }
     }
 
+    private static async Task EnsureProjectionFormatVersionColumnAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var inspect = connection.CreateCommand();
+        inspect.CommandText = "PRAGMA table_info(discord_publications);";
+        var hasColumn = false;
+        await using (var reader = await inspect.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                hasColumn |= string.Equals(
+                    reader.GetString(1),
+                    "projection_format_version",
+                    StringComparison.Ordinal);
+            }
+        }
+
+        if (hasColumn)
+        {
+            return;
+        }
+
+        await using var migrate = connection.CreateCommand();
+        migrate.CommandText =
+            """
+            ALTER TABLE discord_publications
+            ADD COLUMN projection_format_version INTEGER NOT NULL DEFAULT 0;
+            """;
+        await migrate.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static async Task InsertPublicationAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -1454,6 +1697,7 @@ public sealed class SqliteDiscordCollaborationStore(
                 action_token,
                 state,
                 desired_projection_revision,
+                projection_format_version,
                 idempotency_key,
                 created_at_utc,
                 updated_at_utc
@@ -1470,6 +1714,7 @@ public sealed class SqliteDiscordCollaborationStore(
                 $actionToken,
                 $state,
                 $desiredProjectionRevision,
+                $projectionFormatVersion,
                 $idempotencyKey,
                 $createdAt,
                 $updatedAt
@@ -1679,6 +1924,7 @@ public sealed class SqliteDiscordCollaborationStore(
                 action_token,
                 state,
                 desired_projection_revision,
+                projection_format_version,
                 idempotency_key,
                 created_at_utc,
                 updated_at_utc
@@ -1700,9 +1946,10 @@ public sealed class SqliteDiscordCollaborationStore(
             reader.GetString(8),
             (DiscordPublicationState)reader.GetInt32(9),
             reader.GetInt64(10),
-            reader.GetString(11),
-            DateTimeOffset.Parse(reader.GetString(12)),
-            DateTimeOffset.Parse(reader.GetString(13)));
+            reader.GetInt32(11),
+            reader.GetString(12),
+            DateTimeOffset.Parse(reader.GetString(13)),
+            DateTimeOffset.Parse(reader.GetString(14)));
 
     private static void AddPublicationParameters(
         SqliteCommand command,
@@ -1725,6 +1972,9 @@ public sealed class SqliteDiscordCollaborationStore(
         command.Parameters.AddWithValue(
             "$desiredProjectionRevision",
             publication.DesiredProjectionRevision);
+        command.Parameters.AddWithValue(
+            "$projectionFormatVersion",
+            publication.ProjectionFormatVersion);
         command.Parameters.AddWithValue("$idempotencyKey", publication.IdempotencyKey);
         command.Parameters.AddWithValue("$createdAt", publication.CreatedAt.ToString("O"));
         command.Parameters.AddWithValue("$updatedAt", publication.UpdatedAt.ToString("O"));
@@ -2038,6 +2288,12 @@ public sealed class SqliteDiscordCollaborationStore(
 
     private static bool RemovesMessage(DiscordPublicationState state) =>
         state is DiscordPublicationState.Revoked or DiscordPublicationState.Suppressed;
+
+    private static bool DisplaysMessage(DiscordPublicationState state) =>
+        state is DiscordPublicationState.Open or
+            DiscordPublicationState.Assigned or
+            DiscordPublicationState.Closed or
+            DiscordPublicationState.TestFixture;
 
     private static async Task UpdateOutboxTerminalAsync(
         SqliteConnection connection,

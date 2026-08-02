@@ -1875,6 +1875,16 @@
                                                             OnClick="CopyCommissionLinkAsync">
                                                      Copy Public Link
                                                  </MudButton>
+                                                 @if (SelectedCompanyPublication?.PublicId is { Length: > 0 })
+                                                 {
+                                                     <MudButton Variant="Variant.Outlined"
+                                                                Color="Color.Secondary"
+                                                                StartIcon="@Icons.Material.Filled.Refresh"
+                                                                Disabled="@_isReconcilingDiscordPublication"
+                                                                OnClick="ReconcileSelectedCommissionToDiscordAsync">
+                                                         @(_isReconcilingDiscordPublication ? "Refreshing..." : "Refresh Discord Brief")
+                                                     </MudButton>
+                                                 }
                                              }
                                              @if (!sharingCommission.PublicMetadata.IsTestFixture &&
                                                   sharingCommission.ActiveClaim == null &&
@@ -2071,6 +2081,16 @@
                                                    OnClick="CopyCommissionLinkAsync">
                                             Copy Link
                                         </MudButton>
+                                        @if (SelectedCompanyPublication?.PublicId is { Length: > 0 })
+                                        {
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Secondary"
+                                                       StartIcon="@Icons.Material.Filled.Refresh"
+                                                       Disabled="@_isReconcilingDiscordPublication"
+                                                       OnClick="ReconcileSelectedCommissionToDiscordAsync">
+                                                @(_isReconcilingDiscordPublication ? "Refreshing..." : "Refresh Discord Brief")
+                                            </MudButton>
+                                        }
                                         <MudButton Variant="Variant.Outlined"
                                                    Color="Color.Error"
                                                    Disabled="@_isRevokingCommission"

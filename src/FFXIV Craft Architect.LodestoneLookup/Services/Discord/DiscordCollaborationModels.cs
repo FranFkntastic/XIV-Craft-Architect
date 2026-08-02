@@ -2,6 +2,11 @@ using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
+public static class DiscordPublicationProjectionFormat
+{
+    public const int CurrentVersion = 2;
+}
+
 public sealed record DiscordCompanyInstallationBinding(
     CompanyId CompanyId,
     string ApplicationId,
@@ -33,6 +38,7 @@ public sealed record DiscordPublicationRecord(
     string ActionToken,
     DiscordPublicationState State,
     long DesiredProjectionRevision,
+    int ProjectionFormatVersion,
     string IdempotencyKey,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
@@ -66,6 +72,21 @@ public sealed record DiscordPublicationRetryResult(
     string? Error = null)
 {
     public bool Success => Status == DiscordPublicationRetryStatus.Queued;
+}
+
+public enum DiscordPublicationReconcileStatus
+{
+    Queued,
+    Conflict,
+    Missing
+}
+
+public sealed record DiscordPublicationReconcileResult(
+    DiscordPublicationReconcileStatus Status,
+    DiscordPublicationRecord? Publication,
+    string? Error = null)
+{
+    public bool Success => Status == DiscordPublicationReconcileStatus.Queued;
 }
 
 public enum DiscordInterestClaimState

@@ -22,7 +22,8 @@ public enum TradeCommissionDeliveryState
     Pending,
     Published,
     Failed,
-    Revoked
+    Revoked,
+    Suppressed
 }
 
 public enum TradeCommissionInterestState
