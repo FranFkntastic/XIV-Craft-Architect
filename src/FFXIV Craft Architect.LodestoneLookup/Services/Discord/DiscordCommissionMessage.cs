@@ -158,6 +158,7 @@ public static class DiscordCommissionMessage
             DiscordPublicationState.Assigned => "Assigned",
             DiscordPublicationState.Closed => "Closed",
             DiscordPublicationState.Revoked => "Publication revoked",
+            DiscordPublicationState.Suppressed => "Temporarily unavailable",
             DiscordPublicationState.ReconciliationRequired => "Reconciliation required",
             DiscordPublicationState.Failed => "Publication failed",
             _ => "Unavailable"
@@ -174,6 +175,7 @@ public static class DiscordCommissionMessage
                 : brief.AssignmentLabel,
             DiscordPublicationState.Closed => "No longer accepting volunteers",
             DiscordPublicationState.Revoked => "This publication is no longer active",
+            DiscordPublicationState.Suppressed => "This commission is not currently public",
             DiscordPublicationState.ReconciliationRequired => "Operator reconciliation is required",
             DiscordPublicationState.Failed => "Publication is unavailable",
             _ => "Unavailable"

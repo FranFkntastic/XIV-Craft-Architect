@@ -90,6 +90,7 @@ public partial class TradeOrders
             TradeOrderStatus.Assigned => "Pay",
             TradeOrderStatus.InProgress => "Work",
             TradeOrderStatus.AwaitingDelivery => "Deliver",
+            TradeOrderStatus.ResolutionRequired => "Resolve",
             TradeOrderStatus.Completed => "Done",
             TradeOrderStatus.Canceled => "Canceled",
             _ => order.Status.ToString()
@@ -344,6 +345,7 @@ public partial class TradeOrders
             TradeOrderStatus.Assigned => TradeCommissionOperationsPresentation.PreWorkAttention,
             TradeOrderStatus.InProgress => TradeCommissionOperationsPresentation.WorkAttention,
             TradeOrderStatus.AwaitingDelivery => TradeCommissionOperationsPresentation.DeliveryAttention,
+            TradeOrderStatus.ResolutionRequired => TradeCommissionOperationsPresentation.ResolutionAttention,
             _ => TradeCommissionOperationsPresentation.OpenAttention
         };
     }
@@ -352,17 +354,19 @@ public partial class TradeOrders
         key switch
         {
             TradeCommissionOperationsPresentation.SyncAttention => 0,
-            TradeCommissionOperationsPresentation.ClaimAttention => 1,
-            TradeCommissionOperationsPresentation.PreWorkAttention => 2,
-            TradeCommissionOperationsPresentation.DeliveryAttention => 3,
-            TradeCommissionOperationsPresentation.WorkAttention => 4,
-            _ => 5
+            TradeCommissionOperationsPresentation.ResolutionAttention => 1,
+            TradeCommissionOperationsPresentation.ClaimAttention => 2,
+            TradeCommissionOperationsPresentation.PreWorkAttention => 3,
+            TradeCommissionOperationsPresentation.DeliveryAttention => 4,
+            TradeCommissionOperationsPresentation.WorkAttention => 5,
+            _ => 6
         };
 
     private static string FormatAttentionGroup(string key) =>
         key switch
         {
             TradeCommissionOperationsPresentation.SyncAttention => "Needs Attention",
+            TradeCommissionOperationsPresentation.ResolutionAttention => "Manual resolution",
             TradeCommissionOperationsPresentation.ClaimAttention => "Claim / Identity Review",
             TradeCommissionOperationsPresentation.PreWorkAttention => "Needs prerequisites",
             TradeCommissionOperationsPresentation.DeliveryAttention => "Ready for delivery",

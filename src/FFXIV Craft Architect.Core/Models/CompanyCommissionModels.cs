@@ -100,7 +100,9 @@ public enum CompanyCommissionActivityKind
     SettlementPaymentSentRecorded,
     SettlementPaymentReceivedConfirmed,
     SettlementPaymentAttestationRetracted,
-    DraftUpdated
+    DraftUpdated,
+    ClaimResolutionRequired,
+    CommissionReopened
 }
 
 public enum CompanyCommissionActivityVisibility
@@ -196,6 +198,14 @@ public sealed record CompanyCommissionRecoveryGrant(
     DateTime IssuedAtUtc,
     DateTime? RedeemedAtUtc = null,
     DateTime? RevokedAtUtc = null);
+
+public sealed record CompanyCommissionManualResolution(
+    Guid ResolutionId,
+    Guid ClaimId,
+    TradeOrderStatus PreviousStatus,
+    DateTime RequestedAtUtc,
+    string RequestedByActorId,
+    string Reason);
 
 public sealed record CompanyCommissionIdentityClearance(
     CompanyCommissionClearanceState State,
@@ -346,6 +356,7 @@ public sealed record TradeCompanyCommission
     public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
     public CompanyCommissionParticipantGrant? ParticipantGrant { get; init; }
     public CompanyCommissionRecoveryGrant? RecoveryGrant { get; init; }
+    public CompanyCommissionManualResolution? ManualResolution { get; init; }
     public CompanyCommissionPaymentPolicyChangeRequest? PaymentPolicyChangeRequest { get; init; }
     public int? ParticipantAcknowledgedTermsVersion { get; init; }
     public required CompanyCommissionGateState Gates { get; init; }
@@ -380,6 +391,7 @@ public sealed record CompanyCommissionPublicBrief
     public required CompanyCommissionPublicGateState Gates { get; init; }
     public required bool ClearedToWork { get; init; }
     public required bool IsClaimed { get; init; }
+    public bool RequiresManualResolution { get; init; }
     public IReadOnlyList<CompanyCommissionPublicOutputProgress> OutputProgress { get; init; } = [];
     public required CompanyCommissionPublicDeliveryReadiness DeliveryReadiness { get; init; }
     public required CompanyCommissionSettlementState SettlementState { get; init; }

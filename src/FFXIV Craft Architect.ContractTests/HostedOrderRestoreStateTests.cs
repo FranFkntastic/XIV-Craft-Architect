@@ -29,6 +29,7 @@ public sealed class HostedOrderRestoreStateTests
                 await TradeOrderPlanRestoreContractScenarios.AssertAllAsync();
                 await ProfileSyncDeletionProjectionTests.AssertAllAsync();
                 CompanyCommissionProjectionPresentationContractTests.AssertAll();
+                await DiscordCommissionMessageLifecycleTests.AssertAllAsync();
                 break;
             case RestoreScenario.OrdinaryReconnect:
                 OrdinaryReconnectRetainsCompleteProjectionAndReportsRealProgress();

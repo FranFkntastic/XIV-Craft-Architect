@@ -200,7 +200,8 @@ public static class CompanyCommissionNotificationPolicy
             CompanyCommissionActivityKind.CommissionClosed or
             CompanyCommissionActivityKind.ParticipantRecoveryRedeemed or
             CompanyCommissionActivityKind.MigratedFromTradeOrder or
-            CompanyCommissionActivityKind.MigratedTradeOrderHistory =>
+            CompanyCommissionActivityKind.MigratedTradeOrderHistory or
+            CompanyCommissionActivityKind.CommissionReopened =>
                 DiscordNotificationAttentionClass.Routine,
 
             CompanyCommissionActivityKind.ClaimAccepted or
@@ -217,7 +218,8 @@ public static class CompanyCommissionNotificationPolicy
             CompanyCommissionActivityKind.ProvisionalIdentityRejected or
             CompanyCommissionActivityKind.DeliveryReturnedToWork or
             CompanyCommissionActivityKind.CommissionCanceled or
-            CompanyCommissionActivityKind.CommissionPublicationRevoked =>
+            CompanyCommissionActivityKind.CommissionPublicationRevoked or
+            CompanyCommissionActivityKind.ClaimResolutionRequired =>
                 DiscordNotificationAttentionClass.CriticalException,
 
             _ => throw new ArgumentOutOfRangeException(nameof(eventKind), eventKind, null)

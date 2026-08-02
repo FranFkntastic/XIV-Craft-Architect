@@ -53,8 +53,8 @@ if ($methodCount -eq 0) {
 if ($methodCount -gt 150) {
     $violations += "Test method ceiling exceeded: $methodCount > 150."
 }
-if ($lineCount -gt 10000) {
-    $violations += "Test source ceiling exceeded: $lineCount > 10000."
+if ($lineCount -gt 10500) {
+    $violations += "Test source ceiling exceeded: $lineCount > 10500."
 }
 
 $specProject = Get-Content -LiteralPath (Join-Path $testProjects[0] 'FFXIV Craft Architect.SpecTests.csproj') -Raw

@@ -20,6 +20,7 @@ public partial class TradeOrders
     private string _commissionReturnReason = string.Empty;
     private string _commissionSettlementObservation = string.Empty;
     private string _commissionSettlementRetractionReason = string.Empty;
+    private string _commissionResolutionNote = string.Empty;
     private string _commissionSharedComment = string.Empty;
     private Guid? _commissionIdentityCrafterId;
     private Guid? _retryingCommissionDiagnosticId;
@@ -582,6 +583,26 @@ public partial class TradeOrders
             owner => CommissionOperations.RevokePublicationAsync(owner),
             "Commission publication revoked");
 
+    private async Task ReopenCanonicalCommissionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_commissionResolutionNote))
+        {
+            Snackbar.Add(
+                "Describe how the cancellation or participant withdrawal was resolved before reopening.",
+                Severity.Warning);
+            return;
+        }
+
+        var note = _commissionResolutionNote;
+        await RunCommissionCommandAsync(
+            owner => CommissionOperations.ReopenAsync(owner, note),
+            "Commission reopened and queued for a fresh Discord post");
+        if (SelectedCommissionOwner?.Order.Status == TradeOrderStatus.ReadyToAssign)
+        {
+            _commissionResolutionNote = string.Empty;
+        }
+    }
+
     private Task AddCommissionCommentAsync() =>
         RunCommissionCommandAsync(
             owner => CommissionOperations.AddCommentAsync(
@@ -946,6 +967,8 @@ public partial class TradeOrders
             CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted => "Final-payment confirmation retracted",
             CompanyCommissionActivityKind.CommentAdded => "Comment",
             CompanyCommissionActivityKind.CommissionCanceled => "Commission canceled",
+            CompanyCommissionActivityKind.ClaimResolutionRequired => "Company resolution required",
+            CompanyCommissionActivityKind.CommissionReopened => "Commission reopened",
             CompanyCommissionActivityKind.CommissionClosed => "Commission closed",
             CompanyCommissionActivityKind.CommissionPublicationRevoked => "Public access revoked",
             CompanyCommissionActivityKind.ParticipantRecoveryIssued => "Recovery access issued",

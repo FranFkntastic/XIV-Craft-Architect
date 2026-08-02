@@ -690,7 +690,13 @@ public sealed class DiscordPublicationService(
             return DiscordPublicationState.Revoked;
         }
 
-        if (TradeOrderStatusWorkflow.IsArchived(order.Status))
+        if (order.Status is TradeOrderStatus.Canceled or
+            TradeOrderStatus.ResolutionRequired)
+        {
+            return DiscordPublicationState.Suppressed;
+        }
+
+        if (order.Status == TradeOrderStatus.Completed)
         {
             return DiscordPublicationState.Closed;
         }
