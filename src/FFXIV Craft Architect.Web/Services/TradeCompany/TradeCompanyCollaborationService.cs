@@ -9,7 +9,8 @@ public sealed class TradeCompanyCollaborationService(
     TradeCompanyCollaborationClient client,
     TradeOperationsPersistenceService tradeOperations,
     ProfileSyncLocalStateService localState,
-    ProfileSyncService profileSync)
+    ProfileSyncService profileSync,
+    HostedOrderProjectionStore hostedOrders)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly Dictionary<Guid, IReadOnlyList<TradeCommissionInterest>> _interests = [];
@@ -241,6 +242,10 @@ public sealed class TradeCompanyCollaborationService(
             ProfileSyncCollections.TradeOrders,
             order.Id.ToString("D"),
             published.OrderRecord.RecordRevision.Value);
+        PublishCommittedOrder(
+            hostedOrders,
+            hostedOrder,
+            published.OrderRecord.RecordRevision.Value);
         return published.Link;
     }
 
@@ -324,6 +329,10 @@ public sealed class TradeCompanyCollaborationService(
                         ProfileSyncCollections.TradeOrders,
                         receipt.UpdatedOrder.Id.ToString("D"),
                         receipt.UpdatedOrderRevision.Value);
+                    PublishCommittedOrder(
+                        hostedOrders,
+                        receipt.UpdatedOrder,
+                        receipt.UpdatedOrderRevision.Value);
                 }
             }
 
@@ -341,6 +350,12 @@ public sealed class TradeCompanyCollaborationService(
             return Rejected(exception.Message);
         }
     }
+
+    private static bool PublishCommittedOrder(
+        HostedOrderProjectionStore hostedOrders,
+        TradeOrder order,
+        long revision) =>
+        revision > 0 && hostedOrders.TryPublishRemoteOrder(order, revision);
 
     private async Task<long> ResolveHostedOrderRevisionAsync(
         TradeOrder order,

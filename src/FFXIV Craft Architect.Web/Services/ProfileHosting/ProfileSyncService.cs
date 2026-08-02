@@ -707,6 +707,11 @@ public sealed class ProfileSyncService
                     $"The hosted profile did not confirm deletion of {item.Collection}/{item.ObjectId}.");
             }
 
+            PublishConfirmedOrderTombstone(
+                _hostedOrders,
+                item.Collection,
+                item.ObjectId,
+                response.Object.Revision);
             await _localState.SaveObjectRevisionAsync(
                 profileId,
                 item.Collection,
@@ -725,6 +730,18 @@ public sealed class ProfileSyncService
                 item.ObjectId));
         }
     }
+
+    private static bool PublishConfirmedOrderTombstone(
+        HostedOrderProjectionStore hostedOrders,
+        string collection,
+        string objectId,
+        long revision) =>
+        string.Equals(
+            collection,
+            ProfileSyncCollections.TradeOrders,
+            StringComparison.OrdinalIgnoreCase) &&
+        Guid.TryParse(objectId, out var orderId) &&
+        hostedOrders.TryPublishTombstone(orderId, revision);
 
     private async Task QueueLocalSaveCoreAsync(
         string collection,
