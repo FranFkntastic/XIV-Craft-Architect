@@ -365,369 +365,17 @@
                         {
                             <section class="trade-orders-workspace-card">
                                 <TradeOrderCenterOverview Model="centerOverview"
-                                                          OnOpenWork="OpenWorkWorkbenchAsync"
                                                           OnOpenPlan="OpenPlanWorkbenchAsync"
-                                                          OnReviseTerms="ShowCommissionTermsRevision" />
-                            </section>
-                        }
-                        else if (_selectedOrder.CompanyCommission == null)
-                        {
-                        <section class="trade-orders-workspace-card">
-                            <div class="trade-orders-workspace-header">
-                                 <div>
-                                     <MudText Typo="Typo.overline">
-                                         @(HasCanonicalCommission ? "Selected Commission" : "Selected Order")
-                                     </MudText>
-                                     <MudText Typo="Typo.h6">@_selectedOrder.Title</MudText>
-                                 </div>
-                                 @if (HasCanonicalCommission)
-                                 {
-                                     <MudButton Variant="Variant.Outlined"
-                                                Color="Color.Primary"
-                                                StartIcon="@Icons.Material.Filled.EditNote"
-                                                OnClick="ShowCommissionTermsRevision"
-                                                Disabled="@(IsSelectedOrderArchived || IsEditingCommissionTermsRevision ||
-                                                    SelectedCanonicalCommission?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Published)">
-                                         @(IsEditingCommissionTermsRevision ? "Revision in Progress" : "Revise Terms")
-                                     </MudButton>
-                                 }
-                                 else
-                                 {
-                                     <MudButton Variant="Variant.Filled"
-                                                Color="Color.Primary"
-                                                OnClick="SaveSelectedOrderAsync"
-                                                Disabled="@(IsSelectedOrderArchived || string.IsNullOrWhiteSpace(_detailTitle))">
-                                         Save Order
-                                     </MudButton>
-                                 }
-                             </div>
-                             @if (SelectedCanonicalCommission is { } centerCommission)
-                             {
-                                 <div class="trade-orders-commission-identity-strip">
-                                     <div>
-                                         <span>Claimant</span>
-                                         <strong>@FormatCanonicalCommissionClaimant(centerCommission)</strong>
-                                     </div>
-                                     <div>
-                                         <span>Company crafter</span>
-                                         <strong>@FormatCanonicalCommissionCrafter(_selectedOrder, centerCommission)</strong>
-                                     </div>
-                                     <div>
-                                         <span>Commission state</span>
-                                         <strong>@FormatCanonicalCommissionState(_selectedOrder, centerCommission)</strong>
-                                     </div>
-                                 </div>
-                                 <div class="trade-orders-authority-note">
-                                     <MudIcon Icon="@Icons.Material.Filled.VerifiedUser" Size="Size.Small" />
-                                     <span>
-                                         Assignment and lifecycle are derived from the canonical commission.
-                                         Plan and price here; operate the external agreement in the right pane.
-                                     </span>
-                                 </div>
-                             }
-                             else
-                             {
-                                 <div class="trade-orders-editor-grid">
-                                     <MudTextField @bind-Value="_detailTitle"
-                                                   id="selected-order-title"
-                                                   Label="Order title"
-                                                   Variant="Variant.Outlined"
-                                                   Margin="Margin.Dense"
-                                                   Immediate="true"
-                                                   Disabled="@IsSelectedOrderArchived" />
-                                     <CompactSelectField Id="selected-order-crafter"
-                                                         Label="Assigned crafter"
-                                                         @bind-Value="DetailCrafterValue"
-                                                         Options="GetCrafterOptions()"
-                                                         Disabled="@IsSelectedOrderArchived" />
-                                     <MudTextField @bind-Value="_detailNotes"
-                                                   id="selected-order-notes"
-                                                   Label="Notes"
-                                                   Variant="Variant.Outlined"
-                                                   Margin="Margin.Dense"
-                                                   Lines="1"
-                                                   Disabled="@IsSelectedOrderArchived" />
-                                 </div>
-                             }
-                            <section class="trade-orders-work-section">
-                                <div class="trade-orders-section-heading">
-                                    <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
-                                    @if (CanEditSelectedOrderOutputs)
-                                    {
-                                        <div class="trade-orders-section-actions">
-                                            <MudButton Variant="Variant.Outlined"
-                                                       Color="Color.Secondary"
-                                                       Size="Size.Small"
-                                                       StartIcon="@Icons.Material.Filled.Undo"
-                                                       OnClick="ResetSelectedOrderOutputEdits"
-                                                       Disabled="@(!HasSelectedOrderOutputChanges || _isSavingSelectedOrderOutputs)">
-                                                Reset
-                                            </MudButton>
-                                            <MudButton Variant="Variant.Filled"
-                                                       Color="Color.Primary"
-                                                       Size="Size.Small"
-                                                       StartIcon="@Icons.Material.Filled.Save"
-                                                       OnClick="SaveSelectedOrderOutputsAsync"
-                                                       Disabled="@(!CanSaveSelectedOrderOutputs)">
-                                                @(_isSavingSelectedOrderOutputs ? "Saving..." : "Save Outputs")
-                                            </MudButton>
-                                        </div>
-                                    }
-                                </div>
-                                @if (CanEditSelectedOrderOutputs)
-                                {
-                                    <div class="trade-orders-search-row">
-                                        <MudTextField @bind-Value="_selectedOrderOutputSearchQuery"
-                                                      id="selected-order-output-search"
-                                                      Label="Add output item"
-                                                      Variant="Variant.Outlined"
-                                                      Margin="Margin.Dense"
-                                                      Immediate="true"
-                                                      OnKeyUp="OnSelectedOrderOutputSearchKeyUp" />
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Secondary"
-                                                   OnClick="SearchSelectedOrderOutputItemsAsync"
-                                                   Disabled="@(_isSearchingSelectedOrderOutputs || string.IsNullOrWhiteSpace(_selectedOrderOutputSearchQuery))">
-                                            @(_isSearchingSelectedOrderOutputs ? "Searching..." : "Search")
-                                        </MudButton>
-                                    </div>
-                                    @if (_selectedOrderOutputSearchResults.Count > 0)
-                                    {
-                                        <div class="trade-orders-search-results">
-                                            @foreach (var result in _selectedOrderOutputSearchResults)
-                                            {
-                                                <button type="button"
-                                                        class="trade-orders-search-result"
-                                                        @onclick="() => AddSelectedOrderOutput(result)">
-                                                    <span>@result.Object.Name</span>
-                                                    <span>ID @result.Id</span>
-                                                </button>
-                                            }
-                                        </div>
-                                    }
-                                    <div class="trade-orders-output-table">
-                                        <div class="trade-orders-output-header">
-                                            <span>Item</span>
-                                            <span>Qty</span>
-                                            <span>HQ</span>
-                                            <span></span>
-                                        </div>
-                                        @foreach (var output in _selectedOrderOutputEditors)
-                                        {
-                                            <div class="trade-orders-output-row">
-                                                <span>@output.Name</span>
-                                                <MudNumericField T="int"
-                                                                 id="@($"selected-order-output-quantity-{output.ItemId}-{output.MustBeHq}")"
-                                                                 Value="@output.Quantity"
-                                                                 ValueChanged="quantity => UpdateSelectedOrderOutputQuantity(output, quantity)"
-                                                                 Immediate="true"
-                                                                 Min="1"
-                                                                 Max="9999"
-                                                                 HideSpinButtons="true"
-                                                                 Variant="Variant.Outlined"
-                                                                 Margin="Margin.Dense" />
-                                                <MudCheckBox T="bool"
-                                                             Value="@output.MustBeHq"
-                                                             ValueChanged="mustBeHq => UpdateSelectedOrderOutputHq(output, mustBeHq)"
-                                                             Color="Color.Primary" />
-                                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
-                                                               Color="Color.Error"
-                                                               Size="Size.Small"
-                                                               OnClick="() => RemoveSelectedOrderOutput(output)" />
-                                            </div>
+                                                          OnReviseTerms="ShowCommissionTermsRevision">
+                                    <RequirementsContent>
+                                        @{
+                                            var paymentSummary = GetSelectedOrderPaymentSummary();
+                                            var displayedPaymentTotal = SelectedCanonicalCommission?.CurrentTerms.Payment.Total ??
+                                                paymentSummary.TotalPayment;
+                                            var displayedProcurementTotal = SelectedCanonicalCommission?.CurrentTerms.Materials
+                                                .Sum(material => material.TotalCost) ??
+                                                paymentSummary.EstimatedProcurementTotal;
                                         }
-                                    </div>
-                                }
-                                else
-                                {
-                                    <div class="@($"trade-orders-breakdown-table{(SelectedCommissionOwner != null ? " has-commission-progress" : string.Empty)}")">
-                                        <div class="trade-orders-breakdown-header">
-                                            <span>Item</span>
-                                            <span>Qty</span>
-                                            <span>HQ</span>
-                                            @if (SelectedCommissionOwner != null)
-                                            {
-                                                <span>Completed</span>
-                                                <span>Ready</span>
-                                            }
-                                        </div>
-                                        @if (SelectedCanonicalCommission is { } outputCommission)
-                                        {
-                                            @foreach (var output in outputCommission.CurrentTerms.Outputs)
-                                            {
-                                                var progress = GetSelectedOutputProgress(output.LineId);
-                                                <div class="trade-orders-breakdown-row" @key="output.LineId">
-                                                    <span>@output.Name</span>
-                                                    <span>@TradeDisplayFormatter.FormatQuantity(output.RequiredQuantity)</span>
-                                                    <span>@FormatHq(output.MustBeHq)</span>
-                                                    <span>@((progress?.CompletedQuantity ?? 0).ToString("N0"))</span>
-                                                    <span>@((progress?.ReadyQuantity ?? 0).ToString("N0"))</span>
-                                                </div>
-                                            }
-                                        }
-                                        else
-                                        {
-                                            @foreach (var item in GetOrderRootItems(_selectedOrder))
-                                            {
-                                                <div class="trade-orders-breakdown-row">
-                                                    <span>@item.Name</span>
-                                                    <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
-                                                    <span>@FormatHq(item.MustBeHq)</span>
-                                                </div>
-                                            }
-                                        }
-                                    </div>
-                                }
-                            </section>
-                            <section class="trade-orders-work-section">
-                                <div class="trade-orders-section-heading">
-                                    <MudText Typo="Typo.subtitle2">Craft Architect Pipeline</MudText>
-                                </div>
-                                <div class="trade-orders-pipeline">
-                                    <div class="@GetPipelineStageClass(GetOrderRootItems(_selectedOrder).Count > 0)">
-                                        <span>1 - Order request</span>
-                                        <strong>@(GetOrderRootItems(_selectedOrder).Count > 0 ? "Outputs captured" : "Add requested outputs")</strong>
-                                    </div>
-                                    <div class="@GetPipelineStageClass(HasLinkedCraftPlan(_selectedOrder), !HasLinkedCraftPlan(_selectedOrder))">
-                                        <span>2 - Craft plan</span>
-                                        <strong>@(HasLinkedCraftPlan(_selectedOrder) ? "Plan available" : "Craft plan missing")</strong>
-                                    </div>
-                                    <div class="@GetPipelineStageClass(HasProcurementEvidence(_selectedOrder), HasMaterialBreakdown(_selectedOrder) && !HasProcurementEvidence(_selectedOrder))">
-                                        <span>3 - Procurement evidence</span>
-                                        <strong>@(HasProcurementEvidence(_selectedOrder) ? "Supply evidence available" : "Supply evidence missing")</strong>
-                                    </div>
-                                    <div class="@GetPipelineStageClass(IsPaymentReady(_selectedOrder))">
-                                        <span>4 - Settlement</span>
-                                        <strong>@GetSettlementStageLabel(_selectedOrder)</strong>
-                                    </div>
-                                </div>
-                            </section>
-                            <section class="trade-orders-work-section">
-                                <div class="trade-orders-section-heading">
-                                    <MudText Typo="Typo.subtitle2">Linked Craft Plan</MudText>
-                                    <div class="trade-orders-section-actions">
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.Build"
-                                                   OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
-                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || GetOrderRootItems(_selectedOrder).Count == 0)">
-                                            @GetCraftPlanBuildButtonText(_selectedOrder)
-                                        </MudButton>
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.PriceCheck"
-                                                   OnClick="RepriceSelectedOrderAsync"
-                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || !HasLinkedCraftPlan(_selectedOrder))">
-                                            @(_isRepricingSelectedOrder ? "Repricing..." : "Reprice Order")
-                                        </MudButton>
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.OpenInNew"
-                                                   OnClick="OpenSelectedOrderCraftPlanAsync"
-                                                   Disabled="@(_isOpeningSelectedOrderCraftPlan || !HasLinkedCraftPlan(_selectedOrder))">
-                                            @(_isOpeningSelectedOrderCraftPlan ? "Opening..." : "Open Craft Plan")
-                                        </MudButton>
-                                    </div>
-                                </div>
-                                <div class="trade-orders-linked-plan-grid">
-                                    <div>
-                                        <span>Plan</span>
-                                        <strong>@GetLinkedCraftPlanName(_selectedOrder)</strong>
-                                    </div>
-                                    <div>
-                                        <span>Procurement evidence</span>
-                                        <strong>@GetProcurementEvidenceLabel(_selectedOrder)</strong>
-                                    </div>
-                                    <div>
-                                        <span>Last saved</span>
-                                        <strong>@FormatLinkedCraftPlanDate(_selectedOrder)</strong>
-                                    </div>
-                                </div>
-                            </section>
-                        </section>
-                        }
-                        else
-                        {
-                            <section class="trade-orders-workspace-card">
-                                <div class="trade-orders-workspace-empty" role="status">
-                                    <MudIcon Icon="@Icons.Material.Filled.SyncProblem"
-                                             Size="Size.Large"
-                                             Class="trade-orders-workspace-empty-icon" />
-                                    <MudText Typo="Typo.h6">Current order state unavailable</MudText>
-                                    <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                        This workspace will appear when the shared hosted-order projection is authoritative.
-                                    </MudText>
-                                </div>
-                            </section>
-                        }
-                    }
-                    else
-                    {
-                        <section class="trade-orders-workspace-card">
-                            <div class="trade-orders-workspace-empty">
-                                <MudIcon Icon="@Icons.Material.Filled.Assignment"
-                                         Size="Size.Large"
-                                         Class="trade-orders-workspace-empty-icon" />
-                                <MudText Typo="Typo.h6">No Order Selected</MudText>
-                                <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                    Select an order from the list, or start a new one.
-                                </MudText>
-                                <MudButton Variant="Variant.Filled"
-                                           Color="Color.Primary"
-                                           StartIcon="@Icons.Material.Filled.Add"
-                                           OnClick="StartNewOrderWorkspace">
-                                    New Order
-                                </MudButton>
-                            </div>
-                        </section>
-                    }
-                </main>
-
-                <div class="trade-orders-ops-splitter"
-                     @ref="_opsSplitterElement"
-                     role="separator"
-                     aria-label="Resize order work pane"
-                     aria-orientation="vertical"
-                     aria-valuemin="@MinimumOpsPaneWidth"
-                     aria-valuemax="@MaximumOpsPaneWidth"
-                     aria-valuenow="@_opsPaneWidth"
-                     tabindex="0"></div>
-
-                <aside class="trade-orders-ops" aria-label="Order work">
-                    @if (_selectedOrder == null)
-                    {
-                        <section class="trade-orders-panel">
-                            <MudText Typo="Typo.subtitle1">Order work</MudText>
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">Select an order to view work, plan, history, and sharing.</MudText>
-                        </section>
-                    }
-                    else if (IsIdentityOnlyOrder(_selectedOrder))
-                    {
-                        <section class="trade-orders-panel">
-                            <MudText Typo="Typo.subtitle1">Order work unavailable</MudText>
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">
-                                Work, Plan, History, and Share will return when this order's hosted authority is verified.
-                            </MudText>
-                        </section>
-                    }
-                    else
-                    {
-                        var paymentSummary = GetSelectedOrderPaymentSummary();
-                        var displayedPaymentTotal = SelectedCanonicalCommission?.CurrentTerms.Payment.Total ??
-                            paymentSummary.TotalPayment;
-                        var displayedProcurementTotal = SelectedCanonicalCommission?.CurrentTerms.Materials
-                            .Sum(material => material.TotalCost) ??
-                            paymentSummary.EstimatedProcurementTotal;
-                         <MudTabs Elevation="0"
-                                  Rounded="true"
-                                  ApplyEffectsToContainer="true"
-                                  PanelClass="trade-orders-tab-panel"
-                                  ActivePanelIndex="_activeOpsTab"
-                                  ActivePanelIndexChanged="SetActiveOpsTabAsync">
-                             <MudTabPanel Text="Work">
                                @if (SelectedCommissionOwner is { } operationsOwner &&
                                     operationsOwner.Order.CompanyCommission is { } operationsCommission)
                                {
@@ -739,12 +387,12 @@
                                              <MudText Typo="Typo.body2">Use this record to verify publication, projection updates, and timeline density. It cannot assign work.</MudText>
                                          </MudAlert>
                                      }
-                                     <section class="trade-orders-start-gates" aria-labelledby="start-gates-title">
+                                     <section class="trade-orders-start-gates" aria-labelledby="before-crafting-title">
                                          <div class="trade-orders-start-gates-heading">
                                              <div>
-                                                 <MudText Typo="Typo.subtitle1" HtmlTag="h2" id="start-gates-title">Start gates</MudText>
+                                                 <MudText Typo="Typo.subtitle1" HtmlTag="h2" id="before-crafting-title">Before crafting</MudText>
                                                  <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                     Payment and material handoff may clear in either order. Crafting starts when both are complete.
+                                                     Payment and material handoff may clear in either order. Crafting can begin once every requirement is complete.
                                                  </MudText>
                                              </div>
                                              <span class="@GetCommissionGateChipClass(operationsCommission.Gates.Identity.State)">
@@ -755,7 +403,7 @@
                                              <section class="trade-orders-start-gate" aria-labelledby="payment-gate-title">
                                                  <div class="trade-orders-start-gate-heading">
                                                      <div>
-                                                         <span>Gate 1 · Payment</span>
+                                                         <span>Payment</span>
                                                          <MudText Typo="Typo.subtitle2" HtmlTag="h3" id="payment-gate-title">
                                                              @FormatCommissionPaymentSchedule(operationsCommission.CurrentTerms.Payment) payment
                                                          </MudText>
@@ -786,13 +434,32 @@
                                                              </MudButton>
                                                          </div>
                                                      }
-                                                     else
-                                                     {
-                                                         <div class="trade-orders-start-gate-evidence">
-                                                             <strong>Company marked payment sent</strong>
-                                                             <span>@operationsCommission.Gates.Payment.CommissionerSent.Note</span>
-                                                         </div>
-                                                     }
+                                                      else
+                                                      {
+                                                          <div class="trade-orders-start-gate-evidence">
+                                                              <strong>Company marked payment sent</strong>
+                                                              <span>@operationsCommission.Gates.Payment.CommissionerSent.Note</span>
+                                                          </div>
+                                                          @if (operationsOwner.Order.Status == TradeOrderStatus.Assigned)
+                                                          {
+                                                              <details class="trade-orders-exception-disclosure">
+                                                                  <summary>Retract commissioner confirmation</summary>
+                                                                  <MudTextField @bind-Value="_commissionPaymentRetractionReason"
+                                                                                id="commission-payment-retraction-reason"
+                                                                                Label="Retraction reason"
+                                                                                Variant="Variant.Outlined"
+                                                                                Margin="Margin.Dense"
+                                                                                Immediate="true"
+                                                                                MaxLength="500" />
+                                                                  <MudButton Variant="Variant.Outlined"
+                                                                             Color="Color.Warning"
+                                                                             Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionPaymentRetractionReason))"
+                                                                             OnClick="RetractCommissionPaymentAsync">
+                                                                      Retract confirmation
+                                                                  </MudButton>
+                                                              </details>
+                                                          }
+                                                      }
                                                      <small>Crafter confirmation remains independent and may arrive before or after material handoff.</small>
                                                  }
                                              </section>
@@ -800,7 +467,7 @@
                                              <section class="trade-orders-start-gate" aria-labelledby="materials-gate-title">
                                                  <div class="trade-orders-start-gate-heading">
                                                      <div>
-                                                         <span>Gate 2 · Materials</span>
+                                                         <span>Company materials</span>
                                                          <MudText Typo="Typo.subtitle2" HtmlTag="h3" id="materials-gate-title">Company material handoff</MudText>
                                                      </div>
                                                  </div>
@@ -827,7 +494,7 @@
                                                          </MudButton>
                                                      </div>
                                                  }
-                                                 <small>This gate can clear before payment; neither gate waits for the other.</small>
+                                                 <small>Materials can be confirmed before payment; neither requirement waits for the other.</small>
                                              </section>
                                          </div>
                                      </section>
@@ -1004,11 +671,6 @@
                                              <MudText Typo="Typo.body2">
                                                  Final payment needs independent commissioner-sent and crafter-received confirmations.
                                              </MudText>
-                                             <MudButton Variant="Variant.Outlined"
-                                                        Color="Color.Primary"
-                                                        OnClick="@(() => _activeOpsTab = PaymentTabIndex)">
-                                                 Review Payment
-                                             </MudButton>
                                          </section>
                                      }
 
@@ -1072,25 +734,11 @@
                                                          <p>@sent.Note</p>
                                                          <small>@sent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") - terms v@(sent.TermsVersion)</small>
                                                      }
-                                                     else
-                                                     {
-                                                         <strong>Mark payment sent</strong>
-                                                         <p>Record your side of the exchange; the crafter confirms receipt separately.</p>
-                                                         <MudTextField @bind-Value="_commissionPaymentObservation"
-                                                                       id="commission-payment-observation"
-                                                                       Label="Payment note"
-                                                                       Variant="Variant.Outlined"
-                                                                       Margin="Margin.Dense"
-                                                                       Immediate="true"
-                                                                       MaxLength="500" />
-                                                         <MudButton Variant="Variant.Filled"
-                                                                    Color="Color.Primary"
-                                                                    FullWidth="true"
-                                                                    Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionPaymentObservation))"
-                                                                    OnClick="RecordCommissionPaymentAsync">
-                                                             Mark Sent
-                                                         </MudButton>
-                                                     }
+                                                      else
+                                                      {
+                                                          <strong>Payment not yet marked sent</strong>
+                                                          <p>No commissioner confirmation has been recorded for these terms.</p>
+                                                      }
                                                  </div>
                                                  <div class="trade-orders-payment-handshake-mark">
                                                      <MudIcon Icon="@Icons.Material.Filled.SyncAlt" />
@@ -1111,26 +759,6 @@
                                                      }
                                                  </div>
                                              </div>
-                                             @if (canonicalCommission.Gates.Payment.CommissionerSent != null &&
-                                                  _selectedOrder.Status == TradeOrderStatus.Assigned)
-                                             {
-                                                 <details class="trade-orders-exception-disclosure">
-                                                     <summary>Retract commissioner confirmation</summary>
-                                                     <MudTextField @bind-Value="_commissionPaymentRetractionReason"
-                                                                   id="commission-payment-retraction-reason"
-                                                                   Label="Retraction reason"
-                                                                   Variant="Variant.Outlined"
-                                                                   Margin="Margin.Dense"
-                                                                   Immediate="true"
-                                                                   MaxLength="500" />
-                                                     <MudButton Variant="Variant.Outlined"
-                                                                Color="Color.Warning"
-                                                                Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionPaymentRetractionReason))"
-                                                                OnClick="RetractCommissionPaymentAsync">
-                                                         Retract Confirmation
-                                                     </MudButton>
-                                                 </details>
-                                             }
                                              <div class="@($"trade-orders-payment-clearance{(canonicalCommission.Gates.Payment.State == CompanyCommissionClearanceState.Satisfied ? " is-complete" : string.Empty)}")">
                                                  <strong>
                                                      @(canonicalCommission.Gates.Payment.State ==
@@ -1466,22 +1094,6 @@
                                             </div>
                                         }
                                     </div>
-                                    @if (SelectedCanonicalCommission is { } materialCommission &&
-                                         materialCommission.Gates.CompanyMaterials.State == CompanyCommissionClearanceState.Pending &&
-                                         materialCommission.Gates.CompanyMaterials.ReadyAtUtc == null)
-                                    {
-                                        <div class="trade-orders-material-handoff-action">
-                                            <span>
-                                                Marking ready covers the complete promised company-material bundle; v1 does not record partial handoff.
-                                            </span>
-                                            <MudButton Variant="Variant.Outlined"
-                                                       Color="Color.Primary"
-                                                       Disabled="@_isCommissionCommandRunning"
-                                                       OnClick="MarkCommissionMaterialsReadyAsync">
-                                                Mark Full Bundle Ready
-                                            </MudButton>
-                                        </div>
-                                    }
                                 }
                                 else
                                 {
@@ -1573,7 +1185,362 @@
                                 }
                                    </div>
                                </details>
-                             </MudTabPanel>
+                                    </RequirementsContent>
+                                </TradeOrderCenterOverview>
+                            </section>
+                        }
+                        else if (_selectedOrder.CompanyCommission == null)
+                        {
+                        <section class="trade-orders-workspace-card">
+                            <div class="trade-orders-workspace-header">
+                                 <div>
+                                     <MudText Typo="Typo.overline">
+                                         @(HasCanonicalCommission ? "Selected Commission" : "Selected Order")
+                                     </MudText>
+                                     <MudText Typo="Typo.h6">@_selectedOrder.Title</MudText>
+                                 </div>
+                                 @if (HasCanonicalCommission)
+                                 {
+                                     <MudButton Variant="Variant.Outlined"
+                                                Color="Color.Primary"
+                                                StartIcon="@Icons.Material.Filled.EditNote"
+                                                OnClick="ShowCommissionTermsRevision"
+                                                Disabled="@(IsSelectedOrderArchived || IsEditingCommissionTermsRevision ||
+                                                    SelectedCanonicalCommission?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Published)">
+                                         @(IsEditingCommissionTermsRevision ? "Revision in Progress" : "Revise Terms")
+                                     </MudButton>
+                                 }
+                                 else
+                                 {
+                                     <MudButton Variant="Variant.Filled"
+                                                Color="Color.Primary"
+                                                OnClick="SaveSelectedOrderAsync"
+                                                Disabled="@(IsSelectedOrderArchived || string.IsNullOrWhiteSpace(_detailTitle))">
+                                         Save Order
+                                     </MudButton>
+                                 }
+                             </div>
+                             @if (SelectedCanonicalCommission is { } centerCommission)
+                             {
+                                 <div class="trade-orders-commission-identity-strip">
+                                     <div>
+                                         <span>Claimant</span>
+                                         <strong>@FormatCanonicalCommissionClaimant(centerCommission)</strong>
+                                     </div>
+                                     <div>
+                                         <span>Company crafter</span>
+                                         <strong>@FormatCanonicalCommissionCrafter(_selectedOrder, centerCommission)</strong>
+                                     </div>
+                                     <div>
+                                         <span>Commission state</span>
+                                         <strong>@FormatCanonicalCommissionState(_selectedOrder, centerCommission)</strong>
+                                     </div>
+                                 </div>
+                                 <div class="trade-orders-authority-note">
+                                     <MudIcon Icon="@Icons.Material.Filled.VerifiedUser" Size="Size.Small" />
+                                     <span>
+                                         Assignment and lifecycle are derived from the canonical commission.
+                                         Plan and price here; operate the external agreement in the right pane.
+                                     </span>
+                                 </div>
+                             }
+                             else
+                             {
+                                 <div class="trade-orders-editor-grid">
+                                     <MudTextField @bind-Value="_detailTitle"
+                                                   id="selected-order-title"
+                                                   Label="Order title"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Immediate="true"
+                                                   Disabled="@IsSelectedOrderArchived" />
+                                     <CompactSelectField Id="selected-order-crafter"
+                                                         Label="Assigned crafter"
+                                                         @bind-Value="DetailCrafterValue"
+                                                         Options="GetCrafterOptions()"
+                                                         Disabled="@IsSelectedOrderArchived" />
+                                     <MudTextField @bind-Value="_detailNotes"
+                                                   id="selected-order-notes"
+                                                   Label="Notes"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Lines="1"
+                                                   Disabled="@IsSelectedOrderArchived" />
+                                 </div>
+                             }
+                            <section class="trade-orders-work-section">
+                                <div class="trade-orders-section-heading">
+                                    <MudText Typo="Typo.subtitle2">Requested Outputs</MudText>
+                                    @if (CanEditSelectedOrderOutputs)
+                                    {
+                                        <div class="trade-orders-section-actions">
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Secondary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.Undo"
+                                                       OnClick="ResetSelectedOrderOutputEdits"
+                                                       Disabled="@(!HasSelectedOrderOutputChanges || _isSavingSelectedOrderOutputs)">
+                                                Reset
+                                            </MudButton>
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       StartIcon="@Icons.Material.Filled.Save"
+                                                       OnClick="SaveSelectedOrderOutputsAsync"
+                                                       Disabled="@(!CanSaveSelectedOrderOutputs)">
+                                                @(_isSavingSelectedOrderOutputs ? "Saving..." : "Save Outputs")
+                                            </MudButton>
+                                        </div>
+                                    }
+                                </div>
+                                @if (CanEditSelectedOrderOutputs)
+                                {
+                                    <div class="trade-orders-search-row">
+                                        <MudTextField @bind-Value="_selectedOrderOutputSearchQuery"
+                                                      id="selected-order-output-search"
+                                                      Label="Add output item"
+                                                      Variant="Variant.Outlined"
+                                                      Margin="Margin.Dense"
+                                                      Immediate="true"
+                                                      OnKeyUp="OnSelectedOrderOutputSearchKeyUp" />
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   OnClick="SearchSelectedOrderOutputItemsAsync"
+                                                   Disabled="@(_isSearchingSelectedOrderOutputs || string.IsNullOrWhiteSpace(_selectedOrderOutputSearchQuery))">
+                                            @(_isSearchingSelectedOrderOutputs ? "Searching..." : "Search")
+                                        </MudButton>
+                                    </div>
+                                    @if (_selectedOrderOutputSearchResults.Count > 0)
+                                    {
+                                        <div class="trade-orders-search-results">
+                                            @foreach (var result in _selectedOrderOutputSearchResults)
+                                            {
+                                                <button type="button"
+                                                        class="trade-orders-search-result"
+                                                        @onclick="() => AddSelectedOrderOutput(result)">
+                                                    <span>@result.Object.Name</span>
+                                                    <span>ID @result.Id</span>
+                                                </button>
+                                            }
+                                        </div>
+                                    }
+                                    <div class="trade-orders-output-table">
+                                        <div class="trade-orders-output-header">
+                                            <span>Item</span>
+                                            <span>Qty</span>
+                                            <span>HQ</span>
+                                            <span></span>
+                                        </div>
+                                        @foreach (var output in _selectedOrderOutputEditors)
+                                        {
+                                            <div class="trade-orders-output-row">
+                                                <span>@output.Name</span>
+                                                <MudNumericField T="int"
+                                                                 id="@($"selected-order-output-quantity-{output.ItemId}-{output.MustBeHq}")"
+                                                                 Value="@output.Quantity"
+                                                                 ValueChanged="quantity => UpdateSelectedOrderOutputQuantity(output, quantity)"
+                                                                 Immediate="true"
+                                                                 Min="1"
+                                                                 Max="9999"
+                                                                 HideSpinButtons="true"
+                                                                 Variant="Variant.Outlined"
+                                                                 Margin="Margin.Dense" />
+                                                <MudCheckBox T="bool"
+                                                             Value="@output.MustBeHq"
+                                                             ValueChanged="mustBeHq => UpdateSelectedOrderOutputHq(output, mustBeHq)"
+                                                             Color="Color.Primary" />
+                                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                               Color="Color.Error"
+                                                               Size="Size.Small"
+                                                               OnClick="() => RemoveSelectedOrderOutput(output)" />
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="@($"trade-orders-breakdown-table{(SelectedCommissionOwner != null ? " has-commission-progress" : string.Empty)}")">
+                                        <div class="trade-orders-breakdown-header">
+                                            <span>Item</span>
+                                            <span>Qty</span>
+                                            <span>HQ</span>
+                                            @if (SelectedCommissionOwner != null)
+                                            {
+                                                <span>Completed</span>
+                                                <span>Ready</span>
+                                            }
+                                        </div>
+                                        @if (SelectedCanonicalCommission is { } outputCommission)
+                                        {
+                                            @foreach (var output in outputCommission.CurrentTerms.Outputs)
+                                            {
+                                                var progress = GetSelectedOutputProgress(output.LineId);
+                                                <div class="trade-orders-breakdown-row" @key="output.LineId">
+                                                    <span>@output.Name</span>
+                                                    <span>@TradeDisplayFormatter.FormatQuantity(output.RequiredQuantity)</span>
+                                                    <span>@FormatHq(output.MustBeHq)</span>
+                                                    <span>@((progress?.CompletedQuantity ?? 0).ToString("N0"))</span>
+                                                    <span>@((progress?.ReadyQuantity ?? 0).ToString("N0"))</span>
+                                                </div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            @foreach (var item in GetOrderRootItems(_selectedOrder))
+                                            {
+                                                <div class="trade-orders-breakdown-row">
+                                                    <span>@item.Name</span>
+                                                    <span>@TradeDisplayFormatter.FormatQuantity(item.Quantity)</span>
+                                                    <span>@FormatHq(item.MustBeHq)</span>
+                                                </div>
+                                            }
+                                        }
+                                    </div>
+                                }
+                            </section>
+                            <section class="trade-orders-work-section">
+                                <div class="trade-orders-section-heading">
+                                    <MudText Typo="Typo.subtitle2">Craft Architect Pipeline</MudText>
+                                </div>
+                                <div class="trade-orders-pipeline">
+                                    <div class="@GetPipelineStageClass(GetOrderRootItems(_selectedOrder).Count > 0)">
+                                        <span>1 - Order request</span>
+                                        <strong>@(GetOrderRootItems(_selectedOrder).Count > 0 ? "Outputs captured" : "Add requested outputs")</strong>
+                                    </div>
+                                    <div class="@GetPipelineStageClass(HasLinkedCraftPlan(_selectedOrder), !HasLinkedCraftPlan(_selectedOrder))">
+                                        <span>2 - Craft plan</span>
+                                        <strong>@(HasLinkedCraftPlan(_selectedOrder) ? "Plan available" : "Craft plan missing")</strong>
+                                    </div>
+                                    <div class="@GetPipelineStageClass(HasProcurementEvidence(_selectedOrder), HasMaterialBreakdown(_selectedOrder) && !HasProcurementEvidence(_selectedOrder))">
+                                        <span>3 - Procurement evidence</span>
+                                        <strong>@(HasProcurementEvidence(_selectedOrder) ? "Supply evidence available" : "Supply evidence missing")</strong>
+                                    </div>
+                                    <div class="@GetPipelineStageClass(IsPaymentReady(_selectedOrder))">
+                                        <span>4 - Settlement</span>
+                                        <strong>@GetSettlementStageLabel(_selectedOrder)</strong>
+                                    </div>
+                                </div>
+                            </section>
+                            <section class="trade-orders-work-section">
+                                <div class="trade-orders-section-heading">
+                                    <MudText Typo="Typo.subtitle2">Linked Craft Plan</MudText>
+                                    <div class="trade-orders-section-actions">
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.Build"
+                                                   OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
+                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || GetOrderRootItems(_selectedOrder).Count == 0)">
+                                            @GetCraftPlanBuildButtonText(_selectedOrder)
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.PriceCheck"
+                                                   OnClick="RepriceSelectedOrderAsync"
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isRepricingSelectedOrder ? "Repricing..." : "Reprice Order")
+                                        </MudButton>
+                                        <MudButton Variant="Variant.Outlined"
+                                                   Color="Color.Secondary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.OpenInNew"
+                                                   OnClick="OpenSelectedOrderCraftPlanAsync"
+                                                   Disabled="@(_isOpeningSelectedOrderCraftPlan || !HasLinkedCraftPlan(_selectedOrder))">
+                                            @(_isOpeningSelectedOrderCraftPlan ? "Opening..." : "Open Craft Plan")
+                                        </MudButton>
+                                    </div>
+                                </div>
+                                <div class="trade-orders-linked-plan-grid">
+                                    <div>
+                                        <span>Plan</span>
+                                        <strong>@GetLinkedCraftPlanName(_selectedOrder)</strong>
+                                    </div>
+                                    <div>
+                                        <span>Procurement evidence</span>
+                                        <strong>@GetProcurementEvidenceLabel(_selectedOrder)</strong>
+                                    </div>
+                                    <div>
+                                        <span>Last saved</span>
+                                        <strong>@FormatLinkedCraftPlanDate(_selectedOrder)</strong>
+                                    </div>
+                                </div>
+                            </section>
+                        </section>
+                        }
+                        else
+                        {
+                            <section class="trade-orders-workspace-card">
+                                <div class="trade-orders-workspace-empty" role="status">
+                                    <MudIcon Icon="@Icons.Material.Filled.SyncProblem"
+                                             Size="Size.Large"
+                                             Class="trade-orders-workspace-empty-icon" />
+                                    <MudText Typo="Typo.h6">Current order state unavailable</MudText>
+                                    <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                        This workspace will appear when the shared hosted-order projection is authoritative.
+                                    </MudText>
+                                </div>
+                            </section>
+                        }
+                    }
+                    else
+                    {
+                        <section class="trade-orders-workspace-card">
+                            <div class="trade-orders-workspace-empty">
+                                <MudIcon Icon="@Icons.Material.Filled.Assignment"
+                                         Size="Size.Large"
+                                         Class="trade-orders-workspace-empty-icon" />
+                                <MudText Typo="Typo.h6">No Order Selected</MudText>
+                                <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                    Select an order from the list, or start a new one.
+                                </MudText>
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.Add"
+                                           OnClick="StartNewOrderWorkspace">
+                                    New Order
+                                </MudButton>
+                            </div>
+                        </section>
+                    }
+                </main>
+
+                <div class="trade-orders-ops-splitter"
+                     @ref="_opsSplitterElement"
+                     role="separator"
+                     aria-label="Resize order work pane"
+                     aria-orientation="vertical"
+                     aria-valuemin="@MinimumOpsPaneWidth"
+                     aria-valuemax="@MaximumOpsPaneWidth"
+                     aria-valuenow="@_opsPaneWidth"
+                     tabindex="0"></div>
+
+                <aside class="trade-orders-ops" aria-label="Order plan and history">
+                    @if (_selectedOrder == null)
+                    {
+                        <section class="trade-orders-panel">
+                            <MudText Typo="Typo.subtitle1">Order details</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">Select an order to view its plan, history, and sharing.</MudText>
+                        </section>
+                    }
+                    else if (IsIdentityOnlyOrder(_selectedOrder))
+                    {
+                        <section class="trade-orders-panel">
+                            <MudText Typo="Typo.subtitle1">Order details unavailable</MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Secondary">
+                                Plan, History, and Share will return when this order's hosted authority is verified.
+                            </MudText>
+                        </section>
+                    }
+                    else
+                    {
+                        var paymentSummary = GetSelectedOrderPaymentSummary();
+                         <MudTabs Elevation="0"
+                                  Rounded="true"
+                                  ApplyEffectsToContainer="true"
+                                  PanelClass="trade-orders-tab-panel"
+                                  ActivePanelIndex="_activeOpsTab"
+                                  ActivePanelIndexChanged="SetActiveOpsTabAsync">
                             <MudTabPanel Text="Plan">
                                 <div class="trade-orders-workbench-heading">
                                     <div>
@@ -2075,288 +2042,6 @@
                                          </section>
                                      }
                                  }
-                                 @if (SelectedCommissionOwner is { } ownerProjection &&
-                                      false &&
-                                      ownerProjection.Order.CompanyCommission is { } ownerCommission)
-                                {
-                                    var provisional = ownerCommission.ProvisionalCrafter;
-                                    <section class="trade-orders-commission-panel">
-                                        <div class="trade-orders-section-heading">
-                                            <div>
-                                                <MudText Typo="Typo.subtitle2">
-                                                    @ownerCommission.Reference - Commission
-                                                </MudText>
-                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                    Terms v@(ownerCommission.CurrentTermsVersion) - owner revision @ownerProjection.ObjectRevision
-                                                </MudText>
-                                            </div>
-                                            <span class="trade-orders-publication-chip is-attention">
-                                                @TradeCommissionOperationsPresentation.GetNextAction(ownerProjection)
-                                            </span>
-                                        </div>
-
-                                        <div class="trade-orders-commission-claim">
-                                            <div>
-                                                <span>Claimant</span>
-                                                <strong>
-                                                    @(provisional != null
-                                                        ? $"{provisional.CharacterName} @ {provisional.HomeWorld}"
-                                                        : ownerCommission.ActiveClaim != null
-                                                            ? FormatAssignedCrafter(ownerProjection.Order)
-                                                            : "Open claim slot")
-                                                </strong>
-                                            </div>
-                                            <div>
-                                                <span>Contact</span>
-                                                <strong>
-                                                    @(provisional != null
-                                                        ? $"{provisional.ContactMethod}: {provisional.ContactValue}"
-                                                        : "-")
-                                                </strong>
-                                            </div>
-                                            <div>
-                                                <span>Character evidence</span>
-                                                <strong>
-                                                    @(string.IsNullOrWhiteSpace(provisional?.LodestoneCharacterId)
-                                                        ? "Not verified"
-                                                        : $"Lodestone {provisional.LodestoneCharacterId}")
-                                                </strong>
-                                            </div>
-                                        </div>
-
-                                        <div class="trade-orders-gate-strip">
-                                            <span>Identity <b>@FormatCommissionGate(ownerCommission.Gates.Identity.State)</b></span>
-                                            <span>Payment <b>@FormatCommissionGate(ownerCommission.Gates.Payment.State)</b></span>
-                                            <span>Company materials <b>@FormatCommissionGate(ownerCommission.Gates.CompanyMaterials.State)</b></span>
-                                        </div>
-
-                                        @if (provisional != null &&
-                                             ownerCommission.Gates.Identity.State == CompanyCommissionClearanceState.Pending)
-                                        {
-                                            <div class="trade-orders-identity-review">
-                                                <CompactSelectField Id="commission-identity-crafter"
-                                                                    Label="Company crafter"
-                                                                    Tooltip="Choose an existing crafter, or create one from this provisional identity."
-                                                                    @bind-Value="CommissionIdentityCrafterValue"
-                                                                    Options="GetCommissionCrafterOptions()"
-                                                                    Disabled="@_isCommissionCommandRunning" />
-                                                <MudButton Variant="Variant.Filled"
-                                                           Color="Color.Primary"
-                                                           Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(provisional.LodestoneCharacterId))"
-                                                           OnClick="ConfirmCommissionIdentityAsync">
-                                                    Confirm Identity
-                                                </MudButton>
-                                                <MudTextField @bind-Value="_commissionIdentityRejectionReason"
-                                                              id="commission-identity-rejection-reason"
-                                                              Label="Rejection reason"
-                                                              Variant="Variant.Outlined"
-                                                              Margin="Margin.Dense"
-                                                              Immediate="true"
-                                                              MaxLength="500" />
-                                                <MudCheckBox T="bool"
-                                                             @bind-Value="_blockRejectedCommissionContact"
-                                                             Dense="true"
-                                                             Color="Color.Warning"
-                                                             Label="Block this contact from reclaiming" />
-                                                <MudButton Variant="Variant.Outlined"
-                                                           Color="Color.Error"
-                                                           Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionIdentityRejectionReason))"
-                                                           OnClick="RejectCommissionClaimAsync">
-                                                    Reject & Release
-                                                </MudButton>
-                                            </div>
-                                        }
-
-                                        @if (ownerProjection.Order.Status == TradeOrderStatus.AwaitingDelivery &&
-                                             ownerCommission.DeliveryReadiness.IsReady)
-                                        {
-                                            <div class="trade-orders-delivery-review">
-                                                <MudTextField @bind-Value="_commissionReturnReason"
-                                                              id="commission-return-to-work-reason"
-                                                              Label="Return-to-work reason"
-                                                              Variant="Variant.Outlined"
-                                                              Margin="Margin.Dense"
-                                                              Immediate="true"
-                                                              MaxLength="500" />
-                                                <MudButton Variant="Variant.Outlined"
-                                                           Color="Color.Warning"
-                                                           Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionReturnReason))"
-                                                           OnClick="ReturnCommissionToWorkAsync">
-                                                    Return to Work
-                                                </MudButton>
-                                                <MudButton Variant="Variant.Filled"
-                                                           Color="Color.Success"
-                                                           Disabled="@_isCommissionCommandRunning"
-                                                           OnClick="AcceptCommissionDeliveryAsync">
-                                                    Accept Complete Delivery
-                                                </MudButton>
-                                            </div>
-                                        }
-
-                                        @if (ownerProjection.Order.Status == TradeOrderStatus.Completed &&
-                                             ownerCommission.SettlementState != CompanyCommissionSettlementState.Satisfied)
-                                        {
-                                            <div class="trade-orders-observation-row">
-                                                <MudTextField @bind-Value="_commissionSettlementObservation"
-                                                              id="commission-settlement-observation"
-                                                              Label="Settlement observation"
-                                                              HelperText="Describe what was observed; this is not automated gil evidence"
-                                                              Variant="Variant.Outlined"
-                                                              Margin="Margin.Dense"
-                                                              Immediate="true"
-                                                              MaxLength="500" />
-                                                <MudButton Variant="Variant.Outlined"
-                                                           Color="Color.Primary"
-                                                           Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSettlementObservation))"
-                                                           OnClick="RecordCommissionSettlementAsync">
-                                                    Record Settlement
-                                                </MudButton>
-                                            </div>
-                                        }
-
-                                        @if (ownerCommission.ActiveClaim != null)
-                                        {
-                                            <div class="trade-orders-recovery-row">
-                                                <span>
-                                                    Participant access revision @ownerCommission.ParticipantGrant?.CapabilityRevision.
-                                                    Issue a recovery link only after browser-data loss or device change.
-                                                </span>
-                                                <MudButton Variant="Variant.Outlined"
-                                                           Color="Color.Secondary"
-                                                           Disabled="@_isCommissionCommandRunning"
-                                                           OnClick="RecoverCommissionParticipantAsync">
-                                                    Issue Recovery Link
-                                                </MudButton>
-                                            </div>
-                                        }
-                                        else if (ownerCommission.PublicMetadata.ViewState ==
-                                                     CompanyCommissionPublicViewState.Published &&
-                                                 ownerProjection.Order.Status is not
-                                                     (TradeOrderStatus.Completed or TradeOrderStatus.Canceled))
-                                        {
-                                            <div class="trade-orders-recovery-row">
-                                                <span>
-                                                    One claim slot is open. Fresh links share this canonical commission.
-                                                </span>
-                                                <MudButton Variant="Variant.Outlined"
-                                                           Color="Color.Secondary"
-                                                           Disabled="@_isCommissionCommandRunning"
-                                                           OnClick="CopyCommissionClaimLinkAsync">
-                                                    Copy Claim Link
-                                                </MudButton>
-                                            </div>
-                                        }
-
-                                        @if (ownerCommission.PublicMetadata.ViewState !=
-                                                 CompanyCommissionPublicViewState.Published)
-                                        {
-                                            @if (!_isPublishingCommission &&
-                                                 PublishCommissionUnavailableReason is { } unavailableReason)
-                                            {
-                                                <MudAlert Severity="Severity.Info" Dense="true">
-                                                    @unavailableReason
-                                                </MudAlert>
-                                            }
-                                            <div class="trade-orders-collaboration-actions">
-                                                <MudButton Variant="Variant.Filled"
-                                                           Color="Color.Primary"
-                                                           FullWidth="true"
-                                                           StartIcon="@Icons.Material.Filled.Share"
-                                                           Disabled="@(!CanPublishCommission)"
-                                                           OnClick="PublishSelectedCommissionAsync">
-                                                    @(_isPublishingCommission
-                                                        ? "Publishing..."
-                                                        : PublishCommissionButtonLabel)
-                                                </MudButton>
-                                            </div>
-                                        }
-
-                                        <div class="trade-orders-commission-publication">
-                                            <span>Published</span>
-                                            <strong>
-                                                @(ownerCommission.PublicMetadata.PublishedAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "Not published")
-                                            </strong>
-                                            <span>Public brief</span>
-                                            <strong>@(ownerCommission.PublicMetadata.PublicUrl ?? ownerCommission.PublicMetadata.PublicBriefId)</strong>
-                                            <span>Trade channel</span>
-                                            <strong>@(SelectedCompanyPublication?.State.ToString() ?? "Not delivered")</strong>
-                                        </div>
-
-                                        @if (!string.IsNullOrWhiteSpace(SelectedCommissionNotificationError))
-                                        {
-                                            <MudAlert Severity="Severity.Warning" Dense="true">
-                                                @SelectedCommissionNotificationError
-                                            </MudAlert>
-                                        }
-
-                                        @if (SelectedCommissionNotificationDiagnostics.Count > 0)
-                                        {
-                                            <div class="trade-orders-notification-diagnostics">
-                                                @foreach (var diagnostic in SelectedCommissionNotificationDiagnostics)
-                                                {
-                                                    <div class="trade-orders-notification-diagnostic"
-                                                         @key="diagnostic.DiagnosticId">
-                                                        <div>
-                                                            <strong>@diagnostic.Summary</strong>
-                                                            <span>@diagnostic.RecommendedAction</span>
-                                                        </div>
-                                                        @if (diagnostic.CanRetry)
-                                                        {
-                                                            <MudButton Variant="Variant.Text"
-                                                                       Color="Color.Warning"
-                                                                       Size="Size.Small"
-                                                                       Disabled="@(_retryingCommissionDiagnosticId.HasValue)"
-                                                                       OnClick="@(() => RetryCommissionNotificationAsync(diagnostic))">
-                                                                @(_retryingCommissionDiagnosticId == diagnostic.DiagnosticId
-                                                                    ? "Requeuing"
-                                                                    : "Retry")
-                                                            </MudButton>
-                                                        }
-                                                    </div>
-                                                }
-                                            </div>
-                                        }
-
-                                        <div class="trade-orders-shared-comment">
-                                            <MudTextField @bind-Value="_commissionSharedComment"
-                                                          id="commission-shared-comment"
-                                                          Label="Shared commission comment"
-                                                          HelperText="Visible in commission activity; internal History notes stay private"
-                                                          Variant="Variant.Outlined"
-                                                          Margin="Margin.Dense"
-                                                          Immediate="true"
-                                                          Lines="2"
-                                                          MaxLength="1000" />
-                                            <MudButton Variant="Variant.Outlined"
-                                                       Color="Color.Secondary"
-                                                       Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionSharedComment))"
-                                                       OnClick="AddCommissionCommentAsync">
-                                                Add Shared Comment
-                                            </MudButton>
-                                        </div>
-
-                                        <div class="trade-orders-commission-activity">
-                                            <MudText Typo="Typo.subtitle2">Commission Activity</MudText>
-                                            @foreach (var activity in ownerCommission.Activity
-                                                .Where(item => item.Kind != CompanyCommissionActivityKind.DraftUpdated)
-                                                .OrderByDescending(item => item.CreatedAtUtc)
-                                                .Take(30))
-                                            {
-                                                <div>
-                                                    <strong>@FormatCommissionActivity(activity.Kind)</strong>
-                                                    <span>
-                                                        @activity.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-                                                        - @(activity.Actor.DisplayName ?? activity.Actor.Kind.ToString())
-                                                    </span>
-                                                    @if (!string.IsNullOrWhiteSpace(activity.Comment))
-                                                    {
-                                                        <p>@activity.Comment</p>
-                                                    }
-                                                </div>
-                                            }
-                                        </div>
-                                    </section>
-                                }
                                 @if (SelectedCommissionOwner == null && SelectedPendingInterests.Count > 0)
                                 {
                                     <section class="trade-orders-interest-list">
