@@ -45,64 +45,29 @@ internal static class TradeOrderPlanRestoreContractScenarios
         ExplicitPlanOpenUsesFencedAdoptionAndPreservesUnnamedPlan();
     }
 
-    private static void AdoptionRequiresTheOriginalSelectionAndPlanIntent(
-        CurrentRequestScenario scenario,
-        bool expected)
+    private static void AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario scenario, bool expected)
     {
-        var request = new TradeOrderPlanRestoreRequest(7, OrderA, "plan-a", 12);
-        var selectedOrderId = scenario == CurrentRequestScenario.SelectionChanged
-            ? OrderB
-            : OrderA;
-        var selectedPlanId = scenario == CurrentRequestScenario.PlanChanged
-            ? "plan-b"
-            : "plan-a";
+        var selectedOrderId = scenario == CurrentRequestScenario.SelectionChanged ? OrderB : OrderA;
+        var selectedPlanId = scenario == CurrentRequestScenario.PlanChanged ? "plan-b" : "plan-a";
         var activeTab = scenario == CurrentRequestScenario.TabChanged ? 1 : 0;
         var generation = scenario == CurrentRequestScenario.NewerRequest ? 8 : 7;
 
-        Assert.Equal(
-            expected,
-            TradeOrderPlanRestorePolicy.CanAdoptExactPlan(
-                request,
-                generation,
-                selectedOrderId,
-                selectedPlanId,
-                activeTab,
-                planTab: 0,
-                disposed: scenario == CurrentRequestScenario.Disposed,
-                currentWorkerRevision: 12));
+        Assert.Equal(expected, CanAdopt(generation, selectedOrderId, selectedPlanId, activeTab,
+            disposed: scenario == CurrentRequestScenario.Disposed));
     }
 
     private static void WorkerChangeBeforeAdoptionInvalidatesTheRequest()
-    {
-        var request = new TradeOrderPlanRestoreRequest(7, OrderA, "plan-a", 12);
+        => Assert.False(CanAdopt(workerRevision: 13));
 
-        Assert.False(TradeOrderPlanRestorePolicy.CanAdoptExactPlan(
-            request,
-            currentGeneration: 7,
-            selectedOrderId: OrderA,
-            selectedPlanId: "plan-a",
-            activeTab: 0,
-            planTab: 0,
-            disposed: false,
-            currentWorkerRevision: 13));
-    }
+    private static void ExplicitLoaderRequestRejectsSelectionOrWorkerChange(bool selectionStillMatches, long workerRevision) =>
+        Assert.False(CanAdopt(selectedOrderId: selectionStillMatches ? OrderA : OrderB,
+            activeTab: 2, planTab: 2, workerRevision: workerRevision));
 
-    private static void ExplicitLoaderRequestRejectsSelectionOrWorkerChange(
-        bool selectionStillMatches,
-        long workerRevision)
-    {
-        var request = new TradeOrderPlanRestoreRequest(7, OrderA, "plan-a", 12);
-
-        Assert.False(TradeOrderPlanRestorePolicy.CanAdoptExactPlan(
-            request,
-            currentGeneration: 7,
-            selectedOrderId: selectionStillMatches ? OrderA : OrderB,
-            selectedPlanId: "plan-a",
-            activeTab: 2,
-            planTab: 2,
-            disposed: false,
-            currentWorkerRevision: workerRevision));
-    }
+    private static bool CanAdopt(long generation = 7, Guid? selectedOrderId = null,
+        string selectedPlanId = "plan-a", int activeTab = 0, int planTab = 0,
+        bool disposed = false, long workerRevision = 12) =>
+        TradeOrderPlanRestorePolicy.CanAdoptExactPlan(new(7, OrderA, "plan-a", 12), generation,
+            selectedOrderId ?? OrderA, selectedPlanId, activeTab, planTab, disposed, workerRevision);
 
     private static void MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
         bool waitsForProfilePlanAuthority,
@@ -111,23 +76,11 @@ internal static class TradeOrderPlanRestoreContractScenarios
         int attempt,
         TradeOrderPlanMissingDisposition expected)
     {
-        var status = new ProfileSyncStatus(
-            isConnected,
-            HostReachable: isConnected,
-            LastSyncRevision: 10,
-            PendingCount: 0,
-            ConflictCount: 0,
-            LastSyncedAtUtc: DateTime.UtcNow,
-            Message: "fixture")
-        {
-            Stage = stage
-        };
-
         Assert.Equal(
             expected,
             TradeOrderPlanRestorePolicy.ResolveMissingExactPlan(
                 waitsForProfilePlanAuthority,
-                status,
+                Status(stage, isConnected),
                 attempt));
     }
 
@@ -136,11 +89,7 @@ internal static class TradeOrderPlanRestoreContractScenarios
         var attempts = 0;
         var payload = new object();
 
-        var result = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync(
-            _ => Task.FromResult(++attempts == 3 ? payload : null),
-            ReadyStatus,
-            waitsForProfilePlanAuthority: true,
-            delay: NoDelay);
+        var result = await ReadExactAsync(_ => Task.FromResult(++attempts == 3 ? payload : null));
 
         Assert.Equal(TradeOrderPlanReadOutcome.Loaded, result.Outcome);
         Assert.Same(payload, result.Payload);
@@ -152,13 +101,10 @@ internal static class TradeOrderPlanRestoreContractScenarios
         var attempts = 0;
         var payload = new object();
 
-        var result = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync<object>(
+        var result = await ReadExactAsync<object>(
             _ => ++attempts < 3
                 ? Task.FromException<object?>(new InvalidOperationException("IndexedDB opening"))
-                : Task.FromResult<object?>(payload),
-            ReadyStatus,
-            waitsForProfilePlanAuthority: true,
-            delay: NoDelay);
+                : Task.FromResult<object?>(payload));
 
         Assert.Equal(TradeOrderPlanReadOutcome.Loaded, result.Outcome);
         Assert.Same(payload, result.Payload);
@@ -169,16 +115,13 @@ internal static class TradeOrderPlanRestoreContractScenarios
     {
         var attempts = 0;
 
-        var result = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync<object>(
+        var result = await ReadExactAsync<object>(
             _ =>
             {
                 attempts++;
                 return Task.FromException<object?>(
                     new InvalidOperationException($"IndexedDB attempt {attempts}"));
-            },
-            ReadyStatus,
-            waitsForProfilePlanAuthority: true,
-            delay: NoDelay);
+            });
 
         Assert.Equal(TradeOrderPlanReadOutcome.ExactPlanUnavailable, result.Outcome);
         Assert.Null(result.Payload);
@@ -191,15 +134,13 @@ internal static class TradeOrderPlanRestoreContractScenarios
     {
         var attempts = 0;
 
-        var result = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync<object>(
+        var result = await ReadExactAsync<object>(
             _ =>
             {
                 attempts++;
                 return Task.FromResult<object?>(null);
             },
-            () => Status(ProfileSyncStage.ApplyingChanges, isConnected: true),
-            waitsForProfilePlanAuthority: true,
-            delay: NoDelay);
+            () => Status(ProfileSyncStage.ApplyingChanges, isConnected: true));
 
         Assert.Equal(TradeOrderPlanReadOutcome.WaitForHostedPlan, result.Outcome);
         Assert.Equal(1, attempts);
@@ -210,16 +151,13 @@ internal static class TradeOrderPlanRestoreContractScenarios
         var attempts = 0;
         var requestIsCurrent = true;
 
-        var result = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync<object>(
+        var result = await ReadExactAsync<object>(
             _ =>
             {
                 attempts++;
                 requestIsCurrent = false;
                 return Task.FromResult<object?>(null);
             },
-            ReadyStatus,
-            waitsForProfilePlanAuthority: true,
-            delay: NoDelay,
             canContinue: () => requestIsCurrent);
 
         Assert.Equal(TradeOrderPlanReadOutcome.RequestSuperseded, result.Outcome);
@@ -229,17 +167,10 @@ internal static class TradeOrderPlanRestoreContractScenarios
 
     private static void MissingGeneratedPlanHasNoAutomaticRebuildPath()
     {
-        var repositoryRoot = LocateRepositoryRoot();
-        var webRoot = Path.Combine(repositoryRoot, "src", "FFXIV Craft Architect.Web");
-        var pricing = File.ReadAllText(Path.Combine(
-            webRoot,
-            "Services",
-            "TradeOrderPricingWorkflowService.cs"))
-            .ReplaceLineEndings("\n");
-        var craftPlan = File.ReadAllText(Path.Combine(
-            webRoot,
-            "Pages",
-            "TradeOrders.CraftPlan.cs"));
+        var pricing = ReadWebSource("Services", "TradeOrderPricingWorkflowService.cs").ReplaceLineEndings("\n");
+        var craftPlan = ReadWebSource("Pages", "TradeOrders.CraftPlan.cs");
+        var procurement = ReadWebSource("Pages", "TradeOrders.Procurement.cs");
+        var termsConflict = ReadWebSource("Pages", "TradeOrders.TermsRevisionConflict.cs");
 
         Assert.DoesNotContain("RebuildPlanCacheAsync", pricing, StringComparison.Ordinal);
         Assert.DoesNotContain("LoadOrRebuildOrderPlanAsync", craftPlan, StringComparison.Ordinal);
@@ -247,118 +178,100 @@ internal static class TradeOrderPlanRestoreContractScenarios
             "return await RebuildAndPriceAsync(order, options, ct)",
             pricing,
             StringComparison.Ordinal);
+        AssertContainsAll(termsConflict, "ReadExactPlanAsync", "PlanPersistence.LoadPlanPayloadAsync(planId)",
+            "canContinue: CanContinue", "read.Payload.Id", "read.Payload.SavedAt", "CraftPlanSavedAtUtc");
+        AssertDoesNotContainAny(termsConflict, "RebuildAndPriceAsync", "RepriceAsync");
+        Assert.True(procurement.IndexOf("RepriceActivePlanAsync", StringComparison.Ordinal) <
+            procurement.IndexOf("ExportStoredPlanAsync", procurement.IndexOf("RepriceActivePlanAsync", StringComparison.Ordinal), StringComparison.Ordinal));
+        AssertContainsAll(procurement, "orderToSave.CraftPlanSavedAtUtc = stored.SavedAt", "SaveSnapshotAsync(stored)");
+        var exactSave = procurement.IndexOf("SaveSnapshotAsync(stored)", StringComparison.Ordinal);
+        Assert.True(exactSave < procurement.IndexOf("UpdateCanonicalDraftAsync", exactSave, StringComparison.Ordinal));
+        var rebase = termsConflict[..termsConflict.IndexOf(
+            "private Task DiscardConflictedCommissionTermsRevisionAsync()",
+            StringComparison.Ordinal)];
+        AssertContainsAll(rebase, "ReadLatestCanonicalPlanAsync", "_commissionTermsRevisionRollbackPlan = latestBaseline");
+        AssertDoesNotContainAny(rebase, "WorkerSession", "RestoreStagedProcurementPlanAsync");
     }
 
     private static void PlanPanePreservesAnUnnamedActiveWorkerPlanBeforeAnyAdoption()
     {
-        var repositoryRoot = LocateRepositoryRoot();
-        var procurement = File.ReadAllText(Path.Combine(
-            repositoryRoot,
-            "src",
-            "FFXIV Craft Architect.Web",
-            "Pages",
-            "TradeOrders.Procurement.cs"));
+        var procurement = ReadWebSource("Pages", "TradeOrders.Procurement.cs");
 
-        var preservation = procurement.IndexOf(
-            "string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)",
-            StringComparison.Ordinal);
-        var exactRead = procurement.IndexOf(
-            "ReadExactPlanAsync",
-            StringComparison.Ordinal);
-        var adoption = procurement.IndexOf(
-            "ReplaceStoredPlanAsync",
-            StringComparison.Ordinal);
-
-        Assert.True(preservation >= 0);
-        Assert.True(exactRead > preservation);
-        Assert.True(adoption > exactRead);
+        AssertInOrder(procurement, "string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)",
+            "ReadExactPlanAsync", "ReplaceStoredPlanAsync");
     }
 
     private static void ExplicitPlanOpenUsesFencedAdoptionAndPreservesUnnamedPlan()
     {
-        var repositoryRoot = LocateRepositoryRoot();
-        var craftPlan = File.ReadAllText(Path.Combine(
-            repositoryRoot,
-            "src",
-            "FFXIV Craft Architect.Web",
-            "Pages",
-            "TradeOrders.CraftPlan.cs"));
-        var procurement = File.ReadAllText(Path.Combine(
-            repositoryRoot,
-            "src",
-            "FFXIV Craft Architect.Web",
-            "Pages",
-            "TradeOrders.Procurement.cs"));
-        var start = craftPlan.IndexOf(
-            "private async Task<bool> LoadExactOrderPlanAsync",
-            StringComparison.Ordinal);
-        var end = craftPlan.IndexOf(
-            "private string GetOrderDataCenter",
-            start,
-            StringComparison.Ordinal);
-        Assert.True(start >= 0 && end > start);
-        var loader = craftPlan[start..end];
-
-        var preserveUnnamed = loader.IndexOf(
-            "string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)",
-            StringComparison.Ordinal);
-        var confirm = loader.IndexOf(
-            "ConfirmActiveCraftPlanCanBeReplacedAsync",
-            StringComparison.Ordinal);
-        var exactRead = loader.IndexOf("ReadExactPlanAsync", StringComparison.Ordinal);
-        var replace = loader.IndexOf("ReplaceStoredPlanAsync", StringComparison.Ordinal);
-
-        Assert.Contains("TradeOrderPlanRestoreRequest", loader, StringComparison.Ordinal);
-        Assert.Contains("CanAdoptCurrentPlanRequest", loader, StringComparison.Ordinal);
-        Assert.Contains("canContinue:", loader, StringComparison.Ordinal);
-        Assert.Contains("cancellationToken:", loader, StringComparison.Ordinal);
-        Assert.True(preserveUnnamed >= 0);
-        Assert.True(confirm > preserveUnnamed);
-        Assert.True(exactRead > confirm);
-        Assert.True(replace > exactRead);
+        var craftPlan = ReadWebSource("Pages", "TradeOrders.CraftPlan.cs");
+        var procurement = ReadWebSource("Pages", "TradeOrders.Procurement.cs");
+        var loader = Slice(craftPlan, "private async Task<bool> LoadExactOrderPlanAsync", "private string GetOrderDataCenter");
+        AssertContainsAll(loader, "TradeOrderPlanRestoreRequest", "CanAdoptCurrentPlanRequest", "canContinue:", "cancellationToken:");
+        AssertInOrder(loader, "string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)",
+            "ConfirmActiveCraftPlanCanBeReplacedAsync", "ReadExactPlanAsync", "ReplaceStoredPlanAsync");
         Assert.Contains("tabIndex != _activeOpsTab", procurement, StringComparison.Ordinal);
 
-        var confirmStart = craftPlan.IndexOf(
-            "private async Task<bool> ConfirmActiveCraftPlanCanBeReplacedAsync",
-            StringComparison.Ordinal);
-        var confirmEnd = craftPlan.IndexOf(
-            "private async Task<bool> SaveActiveCraftPlanBeforeTradeActionAsync",
-            confirmStart,
-            StringComparison.Ordinal);
-        Assert.True(confirmStart >= 0 && confirmEnd > confirmStart);
-        Assert.DoesNotContain(
-            "string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)",
-            craftPlan[confirmStart..confirmEnd],
-            StringComparison.Ordinal);
+        var confirmation = Slice(craftPlan, "private async Task<bool> ConfirmActiveCraftPlanCanBeReplacedAsync",
+            "private async Task<bool> SaveActiveCraftPlanBeforeTradeActionAsync");
+        Assert.DoesNotContain("string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)", confirmation, StringComparison.Ordinal);
     }
 
     private static Task NoDelay(TimeSpan _, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.CompletedTask;
-    }
+    { cancellationToken.ThrowIfCancellationRequested(); return Task.CompletedTask; }
+
+    private static Task<TradeOrderPlanReadResult<T>> ReadExactAsync<T>(Func<CancellationToken, Task<T?>> load,
+        Func<ProfileSyncStatus>? status = null, Func<bool>? canContinue = null) where T : class =>
+        TradeOrderPlanRestorePolicy.ReadExactPlanAsync(load, status ?? ReadyStatus, true,
+            delay: NoDelay, canContinue: canContinue);
 
     private static ProfileSyncStatus ReadyStatus() =>
         Status(ProfileSyncStage.Ready, isConnected: true);
 
     private static ProfileSyncStatus Status(ProfileSyncStage stage, bool isConnected) =>
-        new(
-            isConnected,
-            HostReachable: isConnected,
-            LastSyncRevision: 10,
-            PendingCount: 0,
-            ConflictCount: 0,
-            LastSyncedAtUtc: DateTime.UtcNow,
-            Message: "fixture")
+        new(isConnected, isConnected, 10, 0, 0, DateTime.UtcNow, "fixture") { Stage = stage };
+
+    private static string ReadWebSource(params string[] path) =>
+        File.ReadAllText(Path.Combine([LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web", .. path]));
+
+    private static void AssertContainsAll(string source, params string[] values)
+    {
+        foreach (var value in values)
         {
-            Stage = stage
-        };
+            Assert.Contains(value, source, StringComparison.Ordinal);
+        }
+    }
+
+    private static void AssertDoesNotContainAny(string source, params string[] values)
+    {
+        foreach (var value in values)
+        {
+            Assert.DoesNotContain(value, source, StringComparison.Ordinal);
+        }
+    }
+
+    private static string Slice(string source, string startMarker, string endMarker)
+    {
+        var start = source.IndexOf(startMarker, StringComparison.Ordinal);
+        var end = source.IndexOf(endMarker, start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        return source[start..end];
+    }
+
+    private static void AssertInOrder(string source, params string[] values)
+    {
+        var previous = -1;
+        foreach (var value in values)
+        {
+            var current = source.IndexOf(value, previous + 1, StringComparison.Ordinal);
+            Assert.True(current > previous, $"Expected '{value}' after index {previous}.");
+            previous = current;
+        }
+    }
 
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null &&
-               !Directory.Exists(Path.Combine(directory.FullName, "src")))
+        while (directory != null && !Directory.Exists(Path.Combine(directory.FullName, "src")))
         {
             directory = directory.Parent;
         }

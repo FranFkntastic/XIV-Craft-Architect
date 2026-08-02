@@ -84,13 +84,16 @@ public sealed class TradeCommissionOperationsService(
             return;
         }
 
+        OrderCommandAuthority? authority = null;
+        HostedOrderProjectionSnapshot? expectedProjection = null;
         try
         {
-            var authority = await CaptureOrderAuthorityAsync();
+            authority = await CaptureOrderAuthorityAsync();
             var companyId = order.CompanyCommission?.CompanyId ??
                 throw new InvalidOperationException(
                     "The cached order does not contain canonical company ownership.");
             var commissionId = order.CompanyCommission.CommissionId;
+            expectedProjection = hostedOrders.Get(order.Id);
             var projection = await client.LoadOwnerProjectionAsync(
                 authority.Connection,
                 companyId.Value,
@@ -101,7 +104,15 @@ public sealed class TradeCommissionOperationsService(
         }
         catch (MissingCompanyCommissionOwnerException exception)
         {
-            hostedOrders.ClearOwner(order.Id);
+            if (authority == null ||
+                !await IsCurrentAuthorityAsync(authority) ||
+                !hostedOrders.TryClearOwner(
+                    authority.Projection,
+                    order.Id,
+                    expectedProjection))
+            {
+                return;
+            }
             _missingCanonicalOwners.Add(order.Id);
             _errors[order.Id] = exception.Message;
         }
@@ -518,6 +529,8 @@ public sealed class TradeCommissionOperationsService(
             return Rejected(current, reason);
         }
 
+        CompanyCommissionOwnerProjection? committedProjection = null;
+        var hostCommitted = false;
         try
         {
             ValidateProjection(current.Order, current);
@@ -538,6 +551,8 @@ public sealed class TradeCommissionOperationsService(
                     $"Participant recovery reset was {response.Mutation.Status.ToString().ToLowerInvariant()}.");
             }
 
+            hostCommitted = true;
+            committedProjection = response.Projection;
             var updated = response.Projection;
             ValidateProjection(current.Order, updated);
             if (updated.ObjectRevision.Value <= current.ObjectRevision.Value)
@@ -560,12 +575,16 @@ public sealed class TradeCommissionOperationsService(
             return new TradeCommissionOperatorResult(
                 true,
                 updated,
-                RecoveryUrl: response.RecoveryUrl);
+                RecoveryUrl: response.RecoveryUrl,
+                HostCommitted: true);
         }
         catch (Exception exception)
         {
             _errors[current.Order.Id] = exception.Message;
-            return Rejected(current, exception.Message);
+            return Rejected(
+                committedProjection ?? current,
+                exception.Message,
+                hostCommitted);
         }
     }
 
@@ -652,6 +671,8 @@ public sealed class TradeCommissionOperationsService(
         }
 
         var commandProjection = current;
+        CompanyCommissionOwnerProjection? committedProjection = null;
+        var hostCommitted = false;
         try
         {
             var authority = capturedAuthority ?? await CaptureOrderAuthorityAsync();
@@ -691,6 +712,7 @@ public sealed class TradeCommissionOperationsService(
                         $"The commissioner command was {mutation.Status.ToString().ToLowerInvariant()}.");
                 }
 
+                hostCommitted = true;
                 var updated = response.Projection ?? throw new InvalidOperationException(
                     "The successful commissioner command returned no committed owner projection.");
                 ValidateProjection(current.Order, updated);
@@ -705,11 +727,13 @@ public sealed class TradeCommissionOperationsService(
                 {
                     ValidateCapabilityUrl(updated, response.ClaimUrl, "claim");
                 }
+                committedProjection = updated;
                 await ApplyProjectionAsync(authority, updated);
                 return new TradeCommissionOperatorResult(
                     true,
                     updated,
-                    ClaimUrl: response.ClaimUrl);
+                    ClaimUrl: response.ClaimUrl,
+                    HostCommitted: true);
             }
 
             throw new InvalidOperationException(
@@ -718,7 +742,10 @@ public sealed class TradeCommissionOperationsService(
         catch (Exception exception)
         {
             _errors[current.Order.Id] = exception.Message;
-            return Rejected(commandProjection, exception.Message);
+            return Rejected(
+                hostCommitted ? committedProjection : commandProjection,
+                exception.Message,
+                hostCommitted);
         }
     }
 
@@ -813,11 +840,6 @@ public sealed class TradeCommissionOperationsService(
         _missingCanonicalOwners.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
     }
-
-    private async Task ApplyProjectionAsync(CompanyCommissionOwnerProjection projection) =>
-        await ApplyProjectionAsync(
-            await CaptureOrderAuthorityAsync(),
-            projection);
 
     private async Task<bool> IsCurrentAuthorityAsync(OrderCommandAuthority authority)
     {
@@ -1028,9 +1050,10 @@ public sealed class TradeCommissionOperationsService(
             "The authenticated owner projection does not contain a company commission.");
 
     private static TradeCommissionOperatorResult Rejected(
-        CompanyCommissionOwnerProjection current,
-        string message) =>
-        new(false, current, message);
+        CompanyCommissionOwnerProjection? current,
+        string message,
+        bool hostCommitted = false) =>
+        new(false, current, message, HostCommitted: hostCommitted);
 
     private static void ValidateCapabilityUrl(
         CompanyCommissionOwnerProjection projection,
@@ -1055,4 +1078,5 @@ public sealed record TradeCommissionOperatorResult(
     CompanyCommissionOwnerProjection? Projection,
     string? Message = null,
     string? RecoveryUrl = null,
-    string? ClaimUrl = null);
+    string? ClaimUrl = null,
+    bool HostCommitted = false);

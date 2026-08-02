@@ -7,6 +7,7 @@ using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Dialogs;
 using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
+using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using FFXIV_Craft_Architect.Web.Shared.TablePrimitives;
 
 using Microsoft.AspNetCore.Components;
@@ -1102,17 +1103,6 @@ public partial class TradeOrders
         await WorkerSession.MutateAcquisitionAsync(
             new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null));
         var savedAt = DateTime.UtcNow;
-        var stored = await WorkerSession.ExportStoredPlanAsync(
-            planId,
-            planName,
-            includeSourcePlanIdentity: true);
-        if (stored == null)
-        {
-            await RestoreStagedProcurementPlanAsync(rollbackSnapshot);
-            Snackbar.Add("The changed craft plan could not be captured.", Severity.Error);
-            return false;
-        }
-
         var pricingResult = await TradeOrderPricingWorkflow.RepriceActivePlanAsync(
             _selectedOrder,
             source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq
@@ -1121,6 +1111,25 @@ public partial class TradeOrders
         var current = await WorkerSession.GetTradeProjectionAsync();
         var orderToSave = pricingResult.UpdatedOrder ??
             BuildFallbackOrderAfterSourceChange(_selectedOrder, current, savedAt);
+        var stored = await WorkerSession.ExportStoredPlanAsync(
+            planId,
+            planName,
+            includeSourcePlanIdentity: true);
+        if (stored == null)
+        {
+            await RestoreStagedProcurementPlanAsync(rollbackSnapshot);
+            Snackbar.Add("The repriced craft plan could not be captured.", Severity.Error);
+            return false;
+        }
+        orderToSave.CraftPlanSavedAtUtc = stored.SavedAt;
+        if (!await PlanPersistence.SaveSnapshotAsync(stored))
+        {
+            await RestoreStagedProcurementPlanAsync(rollbackSnapshot);
+            Snackbar.Add("The exact craft plan could not be saved, so the acquisition change was not committed.", Severity.Error);
+            return false;
+        }
+
+        TradeCommissionOperatorResult? commissionResult = null;
         var savedOrder = _selectedOrder.CompanyCommission == null
             ? await SaveOrderAndNotifyAsync(orderToSave)
             : await UpdateCanonicalDraftAsync(
@@ -1131,19 +1140,17 @@ public partial class TradeOrders
                         orderToSave,
                         GetSelectedOrderResponsibilityProjection(),
                         GetSelectedOrderEffectivePaymentPolicy())),
-                $"{row.ItemName} acquisition saved to the commission draft");
+                $"{row.ItemName} acquisition saved to the commission draft",
+                result => commissionResult = result);
         if (!savedOrder)
         {
+            if (commissionResult?.HostCommitted == true)
+            {
+                return false;
+            }
             await RestoreStagedProcurementPlanAsync(rollbackSnapshot);
             Snackbar.Add("The acquisition change was not committed.", Severity.Error);
             return false;
-        }
-
-        if (!await PlanPersistence.SaveSnapshotAsync(stored))
-        {
-            Snackbar.Add(
-                "The commission draft was saved, but its local craft-plan cache could not be updated. It will be reconstructed from the canonical order snapshot when reopened.",
-                Severity.Warning);
         }
 
         if (_selectedOrder.CompanyCommission == null)

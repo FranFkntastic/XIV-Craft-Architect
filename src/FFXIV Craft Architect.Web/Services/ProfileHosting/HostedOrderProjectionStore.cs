@@ -595,6 +595,37 @@ public sealed class HostedOrderProjectionStore
         }
     }
 
+    public bool TryClearOwner(
+        HostedOrderAuthorityScope authority,
+        Guid orderId,
+        HostedOrderProjectionSnapshot? expected)
+    {
+        HostedOrderProjectionSnapshot? changed = null;
+        lock (_gate)
+        {
+            if (!IsCurrentAuthorityUnderLock(authority))
+            {
+                return false;
+            }
+            var current = _orders.GetValueOrDefault(orderId);
+            if ((current == null) != (expected == null) ||
+                current != null && !HasSameVersionTuple(current, expected!))
+            {
+                return false;
+            }
+            if (current?.OwnerProjection != null)
+            {
+                changed = current with { OwnerProjection = null };
+                _orders[orderId] = changed;
+            }
+        }
+        if (changed != null)
+        {
+            Changed?.Invoke(changed);
+        }
+        return true;
+    }
+
     private bool TryPublish(HostedOrderProjectionSnapshot candidate)
     {
         bool accepted;

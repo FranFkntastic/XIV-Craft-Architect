@@ -64,36 +64,21 @@ public partial class TradeOrders
         _isCommissionCommandRunning = true;
         try
         {
-            var planId = _commissionTermsRevisionWorkPackage.CraftPlanId;
-            var planName = _commissionTermsRevisionWorkPackage.CraftPlanName ??
-                TradeOrderWorkflow.CreateGeneratedCraftPlanName(_commissionTermsRevisionWorkPackage);
-            var localDraftPlan = string.IsNullOrWhiteSpace(planId)
-                ? null
-                : await WorkerSession.ExportStoredPlanAsync(
-                    planId,
-                    planName,
-                    includeSourcePlanIdentity: true);
-            if (!string.IsNullOrWhiteSpace(planId) && localDraftPlan == null)
+            var latestBaseline = await ReadLatestCanonicalPlanAsync(
+                owner.Order,
+                owner.ObjectRevision,
+                "rebased");
+            if (!string.IsNullOrWhiteSpace(owner.Order.CraftPlanId) && latestBaseline == null)
+            {
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(owner.Order.CraftPlanId) &&
+                !string.IsNullOrWhiteSpace(_commissionTermsRevisionWorkPackage.CraftPlanId))
             {
                 Snackbar.Add(
-                    "The local plan revision could not be captured safely, so it was not rebased.",
+                    "The latest terms do not identify an exact saved craft plan, so the local revision was not rebased.",
                     Severity.Error);
                 return;
-            }
-
-            var latestBaseline = await BuildLatestCanonicalPlanBaselineAsync(
-                owner.Order,
-                localDraftPlan);
-            if (latestBaseline == null)
-            {
-                return;
-            }
-            if (localDraftPlan != null)
-            {
-                if (!await RestoreStagedProcurementPlanAsync(localDraftPlan))
-                {
-                    return;
-                }
             }
 
             var rebased = TradeOrderWorkflow.CopyOrder(_commissionTermsRevisionWorkPackage);
@@ -115,6 +100,7 @@ public partial class TradeOrders
         {
             _isCommissionCommandRunning = false;
         }
+
     }
 
     private Task DiscardConflictedCommissionTermsRevisionAsync() =>
@@ -122,69 +108,88 @@ public partial class TradeOrders
 
     private async Task<bool> ReconcileLatestCanonicalPlanAsync(TradeOrder canonicalOrder)
     {
-        var recoveryPlan = await CaptureActiveRevisionPlanAsync();
-        return await BuildLatestCanonicalPlanBaselineAsync(
-            canonicalOrder,
-            recoveryPlan) != null;
-    }
-
-    private async Task<StoredPlan?> CaptureActiveRevisionPlanAsync()
-    {
-        var workPackage = _commissionTermsRevisionWorkPackage;
-        if (workPackage == null || string.IsNullOrWhiteSpace(workPackage.CraftPlanId))
+        if (string.IsNullOrWhiteSpace(canonicalOrder.CraftPlanId))
         {
-            return null;
-        }
-
-        return await WorkerSession.ExportStoredPlanAsync(
-            workPackage.CraftPlanId,
-            workPackage.CraftPlanName ??
-                TradeOrderWorkflow.CreateGeneratedCraftPlanName(workPackage),
-            includeSourcePlanIdentity: true);
-    }
-
-    private async Task<StoredPlan?> BuildLatestCanonicalPlanBaselineAsync(
-        TradeOrder canonicalOrder,
-        StoredPlan? recoveryPlan)
-    {
-        var result = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
-            canonicalOrder,
-            new TradeOrderPricingWorkflowOptions(
-                GetOrderDataCenter(canonicalOrder),
-                canonicalOrder.SourceSnapshot.World ?? string.Empty,
-                ForceRefreshMarketData: false));
-        if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
-        {
-            if (recoveryPlan != null)
+            if (string.IsNullOrWhiteSpace(_commissionTermsRevisionWorkPackage?.CraftPlanId))
             {
-                await RestoreStagedProcurementPlanAsync(recoveryPlan);
+                return true;
             }
+
             Snackbar.Add(
-                $"The latest canonical plan could not be restored. {result.Message}",
+                "The latest terms do not identify an exact saved craft plan, so the local revision was not discarded.",
                 Severity.Error);
+            return false;
+        }
+
+        var ownerRevision = SelectedCommissionOwner?.ObjectRevision;
+        if (ownerRevision == null)
+        {
+            return false;
+        }
+
+        var latestPlan = await ReadLatestCanonicalPlanAsync(
+            canonicalOrder,
+            ownerRevision.Value,
+            "discarded");
+        return latestPlan != null && await RestoreStagedProcurementPlanAsync(latestPlan);
+    }
+
+    private async Task<StoredPlan?> ReadLatestCanonicalPlanAsync(
+        TradeOrder canonicalOrder,
+        CompanyRecordRevision ownerRevision,
+        string action)
+    {
+        var orderId = canonicalOrder.Id;
+        var planId = canonicalOrder.CraftPlanId;
+        var planSavedAtUtc = canonicalOrder.CraftPlanSavedAtUtc;
+        if (string.IsNullOrWhiteSpace(planId))
+        {
+            return null;
+        }
+        if (planSavedAtUtc == null)
+        {
+            Snackbar.Add(
+                $"The latest terms do not identify an exact saved craft plan revision, so the local revision was not {action}.",
+                Severity.Warning);
             return null;
         }
 
-        var updated = result.UpdatedOrder;
-        var baseline = string.IsNullOrWhiteSpace(updated.CraftPlanId)
-            ? null
-            : await WorkerSession.ExportStoredPlanAsync(
-                updated.CraftPlanId,
-                updated.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(updated),
-                includeSourcePlanIdentity: true);
-        if (baseline != null)
+        bool CanContinue()
         {
-            return baseline;
+            var owner = SelectedCommissionOwner;
+            return !_isDisposed &&
+                _selectedOrder?.Id == orderId &&
+                owner?.ObjectRevision == ownerRevision &&
+                string.Equals(owner.Order.CraftPlanId, planId, StringComparison.Ordinal) &&
+                owner.Order.CraftPlanSavedAtUtc == planSavedAtUtc;
         }
 
-        if (recoveryPlan != null)
+        var read = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync(
+            _ => PlanPersistence.LoadPlanPayloadAsync(planId),
+            () => ProfileSync.CurrentStatus,
+            waitsForProfilePlanAuthority: canonicalOrder.CompanyCommission != null,
+            canContinue: CanContinue);
+        if (!CanContinue())
         {
-            await RestoreStagedProcurementPlanAsync(recoveryPlan);
+            return null;
         }
-        Snackbar.Add(
-            "The latest canonical plan was restored but could not be captured safely.",
-            Severity.Error);
-        return null;
+
+        if (read.Payload == null ||
+            !string.Equals(read.Payload.Id, planId, StringComparison.Ordinal) ||
+            read.Payload.SavedAt.ToUniversalTime() != planSavedAtUtc.Value.ToUniversalTime())
+        {
+            if (read.Outcome != TradeOrderPlanReadOutcome.RequestSuperseded)
+            {
+                Snackbar.Add(
+                    read.Outcome == TradeOrderPlanReadOutcome.WaitForHostedPlan
+                        ? $"The latest saved craft plan is still arriving, so the local revision was not {action}."
+                        : $"The exact saved craft plan for the latest terms is unavailable. The local revision was not {action}.",
+                    Severity.Warning);
+            }
+            return null;
+        }
+
+        return read.Payload;
     }
 }
 
