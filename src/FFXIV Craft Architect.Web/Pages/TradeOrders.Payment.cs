@@ -193,6 +193,7 @@ public partial class TradeOrders
         }
 
         var orderId = orderToSave.Id;
+        var activeOpsTab = _activeOpsTab;
         var saved = await SaveOrderAndNotifyAsync(orderToSave);
         if (!saved)
         {
@@ -205,7 +206,7 @@ public partial class TradeOrders
         {
             if (SelectOrderAfterReload(orderId, "Payment policy was saved, but the order could not be loaded."))
             {
-                _activeOpsTab = PaymentTabIndex;
+                _activeOpsTab = activeOpsTab;
             }
         }
     }

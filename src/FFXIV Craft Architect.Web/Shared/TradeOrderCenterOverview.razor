@@ -23,29 +23,7 @@
         </div>
     </header>
 
-    @if (Model.Blockers.Count > 0)
-    {
-        <section class="trade-order-overview__attention" aria-labelledby="start-blockers-title">
-            <div>
-                <MudText Typo="Typo.subtitle1" HtmlTag="h2" id="start-blockers-title">
-                    @Model.Blockers.Count @(Model.Blockers.Count == 1 ? "thing blocks" : "things block") crafting
-                </MudText>
-                <MudText Typo="Typo.body2">Payment and material handoff can clear in either order; every listed requirement must clear before crafting.</MudText>
-            </div>
-            <div class="trade-order-overview__blockers">
-                @foreach (var blocker in Model.Blockers)
-                {
-                    <div>
-                        <strong>@blocker.Label</strong>
-                        <span>@blocker.Detail</span>
-                    </div>
-                }
-            </div>
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="OnOpenWork">
-                Open start gates
-            </MudButton>
-        </section>
-    }
+    @RequirementsContent
 
     @if (Model.LatestCrafterUpdate is { } update)
     {
@@ -118,7 +96,7 @@
     public required TradeOrderCenterOverviewPresentation Model { get; set; }
 
     [Parameter]
-    public EventCallback OnOpenWork { get; set; }
+    public RenderFragment? RequirementsContent { get; set; }
 
     [Parameter]
     public EventCallback OnOpenPlan { get; set; }
