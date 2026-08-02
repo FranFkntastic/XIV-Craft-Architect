@@ -6,6 +6,8 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
@@ -503,6 +505,9 @@ public sealed class ProfileHostContractTests
 
         public async ValueTask DisposeAsync()
         {
+            application.Services
+                .GetRequiredService<IHostApplicationLifetime>()
+                .StopApplication();
             await application.DisposeAsync();
             const int maximumDeleteAttempts = 50;
             for (var attempt = 0;
