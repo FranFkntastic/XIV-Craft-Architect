@@ -279,6 +279,16 @@ public sealed class BrowserEngineWorkerTransportTests
         Assert.Contains("serverRevision: revision", session, StringComparison.Ordinal);
         Assert.Contains("state.fetchController?.abort()", session, StringComparison.Ordinal);
         Assert.DoesNotContain("new EventSource", session, StringComparison.Ordinal);
+
+        var syncService = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Services",
+            "ProfileHosting",
+            "ProfileSyncService.cs"));
+        Assert.Contains("Math.Min(persistedRevision, Math.Max(0, replayAfterRevision.Value))", syncService, StringComparison.Ordinal);
+        Assert.Contains("candidateRevision > persistedRevision", syncService, StringComparison.Ordinal);
     }
 
     private static string LocateRepositoryRoot()
