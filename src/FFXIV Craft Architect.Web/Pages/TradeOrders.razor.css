@@ -481,15 +481,17 @@
   padding: 12px 12px 10px;
 }
 
-.trade-orders-ops .mud-tabs {
+.trade-orders-ops ::deep .mud-tabs {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
   flex-direction: column;
+  overflow: hidden;
 }
 
-.trade-orders-tab-panel {
-  height: 100%;
+.trade-orders-ops ::deep .trade-orders-tab-panel {
+  flex: 1 1 auto;
+  height: auto;
   min-height: 0;
   overflow: auto;
   padding: 12px;

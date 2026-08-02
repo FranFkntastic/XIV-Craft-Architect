@@ -1489,34 +1489,6 @@
                                 }
                                 @if (HasCanonicalCommission)
                                 {
-                                    <section class="trade-orders-status-panel">
-                                        @if (SelectedCanonicalCommission is { } workflowCommission)
-                                        {
-                                            <div class="trade-orders-section-heading">
-                                                <div>
-                                                    <MudText Typo="Typo.subtitle2">Workflow Status</MudText>
-                                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                        Hosted commission commands derive this state.
-                                                    </MudText>
-                                                </div>
-                                                <span class="trade-orders-publication-chip">@FormatStatus(_selectedOrder.Status)</span>
-                                            </div>
-                                            <div class="trade-orders-gate-strip">
-                                                <span>Identity <b>@FormatCommissionGate(workflowCommission.Gates.Identity.State)</b></span>
-                                                <span>Payment <b>@FormatCommissionGate(workflowCommission.Gates.Payment.State)</b></span>
-                                                <span>Company materials <b>@FormatCommissionGate(workflowCommission.Gates.CompanyMaterials.State)</b></span>
-                                            </div>
-                                        }
-                                        else
-                                        {
-                                            <MudText Typo="Typo.subtitle2">Workflow Status</MudText>
-                                            <MudText Typo="Typo.body2" Color="Color.Error">
-                                                @(IsSelectedCanonicalOwnerMissing
-                                                    ? "This old commission is no longer hosted. Removing it clears the local copy and any remaining Discord post."
-                                                    : "Canonical status is unavailable until the authenticated owner projection reloads.")
-                                            </MudText>
-                                        }
-                                    </section>
                                     <section class="trade-orders-close-panel">
                                         <MudText Typo="Typo.subtitle2">Order Actions</MudText>
                                         @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))

@@ -851,9 +851,9 @@
         return status switch
         {
             TradeOrderStatus.ReadyToAssign => "Ready to Assign",
-            TradeOrderStatus.Assigned => "Assigned Awaiting Payment",
-            TradeOrderStatus.InProgress => "In Progress",
-            TradeOrderStatus.AwaitingDelivery => "Awaiting Delivery",
+            TradeOrderStatus.Assigned => "Assigned",
+            TradeOrderStatus.InProgress => "Crafting",
+            TradeOrderStatus.AwaitingDelivery => "Ready for Delivery",
             _ => status.ToString()
         };
     }
