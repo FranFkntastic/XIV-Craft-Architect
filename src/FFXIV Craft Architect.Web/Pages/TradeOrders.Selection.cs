@@ -213,6 +213,7 @@ public partial class TradeOrders
 
     private void SelectOrder(TradeOrder order)
     {
+        InvalidateSelectedOrderPlanRestoration();
         ClearLiveProcurementSnapshot();
         _selectedOrderPlanRestoreError = null;
         _selectedOrder = order;

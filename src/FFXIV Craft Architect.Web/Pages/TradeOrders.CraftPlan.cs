@@ -373,7 +373,7 @@ public partial class TradeOrders
                 return;
             }
 
-            if (!await LoadOrRebuildOrderPlanAsync(_selectedOrder))
+            if (!await LoadExactOrderPlanAsync(_selectedOrder))
             {
                 return;
             }
@@ -435,7 +435,7 @@ public partial class TradeOrders
             return false;
         }
 
-        if (!await LoadOrRebuildOrderPlanAsync(_selectedOrder))
+        if (!await LoadExactOrderPlanAsync(_selectedOrder))
         {
             return false;
         }
@@ -602,31 +602,27 @@ public partial class TradeOrders
         return true;
     }
 
-    private async Task<bool> LoadOrRebuildOrderPlanAsync(
-        TradeOrder order,
-        bool showFailure = true)
+    private async Task<bool> LoadExactOrderPlanAsync(TradeOrder order)
     {
-        var stored = await PlanPersistence.LoadPlanPayloadAsync(order.CraftPlanId!);
-        if (stored != null)
+        var read = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync(
+            _ => PlanPersistence.LoadPlanPayloadAsync(order.CraftPlanId!),
+            () => ProfileSync.CurrentStatus,
+            waitsForProfilePlanAuthority: order.CompanyCommission != null);
+        if (read.Payload != null)
         {
             await PlanLifecycle.ReplaceStoredPlanAsync(
-                stored,
+                read.Payload,
                 trackStoredPlanIdentity: true);
             return true;
         }
 
-        var result = await TradeOrderPricingWorkflow.RebuildPlanCacheAsync(
-            order,
-            new TradeOrderPricingWorkflowOptions(
-                GetOrderDataCenter(order),
-                order.SourceSnapshot.World ?? string.Empty,
-                ForceRefreshMarketData: false));
-        if (!result.Ready && showFailure)
-        {
-            Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
-        }
+        Snackbar.Add(
+            read.Outcome == TradeOrderPlanReadOutcome.WaitForHostedPlan
+                ? "The saved craft plan is still arriving. Try again in a moment."
+                : "The exact saved craft plan is unavailable here. The order was left unchanged so its acquisition choices aren't replaced.",
+            Severity.Warning);
 
-        return result.Ready;
+        return false;
     }
 
     private string GetOrderDataCenter(TradeOrder order)

@@ -1576,6 +1576,12 @@
                                     {
                                         <MudAlert Severity="Severity.Error" Dense="true">
                                             @_selectedOrderPlanRestoreError
+                                            <MudButton Variant="Variant.Text"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       OnClick="@(() => SetActiveOpsTabAsync(ProcurementTabIndex))">
+                                                Try again
+                                            </MudButton>
                                         </MudAlert>
                                     }
                                 }

@@ -52,6 +52,8 @@ public partial class TradeOrders
     private bool _isLoadingSelectedOrderSupplyPlan;
     private bool _selectedOrderPlanRestoreRetryRequested;
     private string? _selectedOrderPlanRestoreError;
+    private long _selectedOrderPlanRestoreGeneration;
+    private CancellationTokenSource? _selectedOrderPlanRestoreCancellation;
     private int _activeOpsTab;
     private int _opsPaneWidth = DefaultOpsPaneWidth;
     private bool _isPlanPaneExpanded;
@@ -291,6 +293,7 @@ public partial class TradeOrders
     public async ValueTask DisposeAsync()
     {
         _isDisposed = true;
+        InvalidateSelectedOrderPlanRestoration();
         HostedOrders.Changed -= OnHostedOrderProjectionChanged;
         HostedOrders.Reset -= OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged -= OnHostedOrderRestoreStateChanged;

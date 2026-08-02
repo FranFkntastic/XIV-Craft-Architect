@@ -153,6 +153,10 @@ public partial class TradeOrders
 
     private async Task SetActiveOpsTabAsync(int tabIndex)
     {
+        if (tabIndex != ProcurementTabIndex)
+        {
+            InvalidateSelectedOrderPlanRestoration();
+        }
         _activeOpsTab = tabIndex;
         if (tabIndex != ProcurementTabIndex || _selectedOrder == null)
         {
@@ -191,6 +195,20 @@ public partial class TradeOrders
         }
     }
 
+    private void InvalidateSelectedOrderPlanRestoration()
+    {
+        Interlocked.Increment(ref _selectedOrderPlanRestoreGeneration);
+        _selectedOrderPlanRestoreRetryRequested = false;
+        _selectedOrderPlanRestoreError = null;
+        var cancellation = Interlocked.Exchange(
+            ref _selectedOrderPlanRestoreCancellation,
+            null);
+        if (cancellation != null)
+        {
+            cancellation.Cancel();
+        }
+    }
+
     private async Task RestoreSelectedOrderPlanAsync()
     {
         if (_isLoadingSelectedOrderSupplyPlan)
@@ -199,63 +217,142 @@ public partial class TradeOrders
             return;
         }
 
+        _selectedOrderPlanRestoreRetryRequested = false;
+        var order = _selectedOrder;
+        if (order == null ||
+            _activeOpsTab != ProcurementTabIndex ||
+            !HasLinkedCraftPlan(order) ||
+            GetCurrentLiveProcurementSnapshot() != null)
+        {
+            return;
+        }
+
+        var generation = Interlocked.Increment(ref _selectedOrderPlanRestoreGeneration);
+        var request = new TradeOrderPlanRestoreRequest(
+            generation,
+            order.Id,
+            order.CraftPlanId!,
+            WorkerProjections.Shell.Revision);
+        using var cancellation = new CancellationTokenSource();
+        var priorCancellation = Interlocked.Exchange(
+            ref _selectedOrderPlanRestoreCancellation,
+            cancellation);
+        priorCancellation?.Cancel();
         _isLoadingSelectedOrderSupplyPlan = true;
         await InvokeAsync(StateHasChanged);
         try
         {
-            while (_selectedOrderPlanRestoreRetryRequested && !_isDisposed)
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!CanAdoptCurrentPlanRestoreRequest(request))
             {
-                _selectedOrderPlanRestoreRetryRequested = false;
-                var order = _selectedOrder;
-                if (order == null ||
-                    _activeOpsTab != ProcurementTabIndex ||
-                    !HasLinkedCraftPlan(order) ||
-                    GetCurrentLiveProcurementSnapshot() != null)
+                QueuePlanRestoreRetryIfCurrent(request);
+                return;
+            }
+
+            _selectedOrderPlanRestoreError = null;
+            if (!IsSelectedOrderLinkedPlanActive())
+            {
+                if (WorkerProjections.Shell.HasSession &&
+                    string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId))
+                {
+                    _selectedOrderPlanRestoreError =
+                        "Your unsaved active plan is being preserved. Save or discard it before editing this order's plan.";
+                    return;
+                }
+
+                var canReplaceActivePlan = await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                    "Opening this order plan",
+                    order.CraftPlanId);
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (!CanAdoptCurrentPlanRestoreRequest(request))
+                {
+                    QueuePlanRestoreRetryIfCurrent(request);
+                    return;
+                }
+                if (!canReplaceActivePlan)
+                {
+                    _selectedOrderPlanRestoreError =
+                        "The active plan could not be saved, so this order's plan was not opened.";
+                    return;
+                }
+
+                var read = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync(
+                    _ => PlanPersistence.LoadPlanPayloadAsync(request.PlanId),
+                    () => ProfileSync.CurrentStatus,
+                    waitsForProfilePlanAuthority: order.CompanyCommission != null,
+                    cancellationToken: cancellation.Token);
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (!CanAdoptCurrentPlanRestoreRequest(request))
+                {
+                    QueuePlanRestoreRetryIfCurrent(request);
+                    return;
+                }
+
+                if (read.Outcome == TradeOrderPlanReadOutcome.WaitForHostedPlan)
+                {
+                    return;
+                }
+                if (read.Payload == null)
+                {
+                    _selectedOrderPlanRestoreError =
+                        "The exact saved craft plan is unavailable here. Try again; the order was left unchanged so its acquisition choices aren't replaced.";
+                    return;
+                }
+
+                // Worker mutation boundary: the immutable selection and Worker
+                // revision request must still own this adoption.
+                if (!CanAdoptCurrentPlanRestoreRequest(request))
+                {
+                    QueuePlanRestoreRetryIfCurrent(request);
+                    return;
+                }
+                await PlanLifecycle.ReplaceStoredPlanAsync(
+                    read.Payload,
+                    trackStoredPlanIdentity: true,
+                    derivation: PlanDerivationDispatch.Deferred,
+                    cancellationToken: cancellation.Token);
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (!IsCurrentPlanRestoreRequest(request) ||
+                    !string.Equals(
+                        WorkerProjections.Shell.PlanId,
+                        request.PlanId,
+                        StringComparison.Ordinal))
                 {
                     return;
                 }
 
-                _selectedOrderPlanRestoreError = null;
-                if (!IsSelectedOrderLinkedPlanActive())
+                request = request with { WorkerRevision = WorkerProjections.Shell.Revision };
+                if (!CanAdoptCurrentPlanRestoreRequest(request))
                 {
-                    if (WorkerProjections.Shell.HasSession &&
-                        string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId))
-                    {
-                        _selectedOrderPlanRestoreError =
-                            "Your unsaved active plan is being preserved. Save or discard it before editing this order's plan.";
-                        return;
-                    }
-
-                    if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
-                            "Opening this order plan",
-                            order.CraftPlanId))
-                    {
-                        _selectedOrderPlanRestoreError =
-                            "The active plan could not be saved, so this order's plan was not opened.";
-                        return;
-                    }
-
-                    if (!await LoadOrRebuildOrderPlanAsync(order, showFailure: false))
-                    {
-                        if (ProfileSync.CurrentStatus.Stage is
-                                ProfileSyncStage.Ready or ProfileSyncStage.Failed ||
-                            !ProfileSync.CurrentStatus.IsConnected)
-                        {
-                            _selectedOrderPlanRestoreError =
-                                "The linked craft plan could not be restored from saved plan data.";
-                        }
-                        continue;
-                    }
-                }
-
-                await EnsureLiveProcurementSnapshotAsync();
-                if (_selectedOrder?.Id == order.Id &&
-                    GetCurrentLiveProcurementSnapshot() == null)
-                {
-                    _selectedOrderPlanRestoreError =
-                        "The linked craft plan loaded, but its complete procurement projection is unavailable.";
+                    QueuePlanRestoreRetryIfCurrent(request);
+                    return;
                 }
             }
+
+            // Component projection publication boundary: do not publish a
+            // response fetched for an abandoned order, tab, plan, or Worker.
+            if (!CanAdoptCurrentPlanRestoreRequest(request))
+            {
+                QueuePlanRestoreRetryIfCurrent(request);
+                return;
+            }
+            await EnsureLiveProcurementSnapshotAsync(
+                cancellation.Token,
+                () => CanAdoptCurrentPlanRestoreRequest(request));
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!CanAdoptCurrentPlanRestoreRequest(request))
+            {
+                QueuePlanRestoreRetryIfCurrent(request);
+                return;
+            }
+            if (GetCurrentLiveProcurementSnapshot() == null)
+            {
+                _selectedOrderPlanRestoreError =
+                    "The linked craft plan loaded, but its complete procurement projection is unavailable.";
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -266,16 +363,54 @@ public partial class TradeOrders
         }
         finally
         {
+            Interlocked.CompareExchange(
+                ref _selectedOrderPlanRestoreCancellation,
+                null,
+                cancellation);
             _isLoadingSelectedOrderSupplyPlan = false;
-            await InvokeAsync(StateHasChanged);
-            if (_selectedOrderPlanRestoreRetryRequested)
+            if (!_isDisposed)
             {
-                _ = InvokeAsync(RestoreSelectedOrderPlanAsync);
+                await InvokeAsync(StateHasChanged);
+                if (_selectedOrderPlanRestoreRetryRequested)
+                {
+                    _ = InvokeAsync(RestoreSelectedOrderPlanAsync);
+                }
             }
         }
     }
 
-    private async Task EnsureLiveProcurementSnapshotAsync()
+    private bool IsCurrentPlanRestoreRequest(TradeOrderPlanRestoreRequest request) =>
+        TradeOrderPlanRestorePolicy.IsCurrent(
+            request,
+            Interlocked.Read(ref _selectedOrderPlanRestoreGeneration),
+            _selectedOrder?.Id,
+            _selectedOrder?.CraftPlanId,
+            _activeOpsTab,
+            ProcurementTabIndex,
+            _isDisposed);
+
+    private bool CanAdoptCurrentPlanRestoreRequest(TradeOrderPlanRestoreRequest request) =>
+        TradeOrderPlanRestorePolicy.CanAdoptExactPlan(
+            request,
+            Interlocked.Read(ref _selectedOrderPlanRestoreGeneration),
+            _selectedOrder?.Id,
+            _selectedOrder?.CraftPlanId,
+            _activeOpsTab,
+            ProcurementTabIndex,
+            _isDisposed,
+            WorkerProjections.Shell.Revision);
+
+    private void QueuePlanRestoreRetryIfCurrent(TradeOrderPlanRestoreRequest request)
+    {
+        if (IsCurrentPlanRestoreRequest(request))
+        {
+            _selectedOrderPlanRestoreRetryRequested = true;
+        }
+    }
+
+    private async Task EnsureLiveProcurementSnapshotAsync(
+        CancellationToken cancellationToken = default,
+        Func<bool>? canPublish = null)
     {
         var key = CreateLiveProcurementKey();
         if (!key.HasValue)
@@ -294,7 +429,8 @@ public partial class TradeOrders
         _isRefreshingLiveProcurement = true;
         try
         {
-            var snapshot = await WorkerSession.GetTradeProjectionAsync();
+            var snapshot = await WorkerSession.GetTradeProjectionAsync(
+                cancellationToken: cancellationToken);
             if (requestId != _liveProcurementRefreshRequestId)
             {
                 return;
@@ -313,13 +449,20 @@ public partial class TradeOrders
                 return;
             }
 
+            if (canPublish != null && !canPublish())
+            {
+                return;
+            }
             _liveProcurementSnapshot = snapshot;
             _liveProcurementKey = key.Value;
         }
         finally
         {
             _isRefreshingLiveProcurement = false;
-            await InvokeAsync(StateHasChanged);
+            if (!_isDisposed)
+            {
+                await InvokeAsync(StateHasChanged);
+            }
         }
     }
 
