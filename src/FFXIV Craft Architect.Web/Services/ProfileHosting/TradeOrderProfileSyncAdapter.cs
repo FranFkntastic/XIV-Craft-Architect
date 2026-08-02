@@ -48,13 +48,26 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             order.CompanyProfileId,
             "order",
             envelope.ObjectId);
+        var authority = _projections.CaptureAuthorityScope();
+        var adoption = _projections.TryAdoptCommittedOrder(
+            authority,
+            order,
+            envelope.Revision);
+        if (adoption == HostedOrderCommittedProjectionResult.AlreadyCurrent)
+        {
+            return;
+        }
+        if (adoption != HostedOrderCommittedProjectionResult.Adopted ||
+            !_projections.IsCurrentAuthority(authority))
+        {
+            throw new InvalidOperationException(
+                $"Hosted Trade order '{envelope.ObjectId}' could not be applied because its authority is {adoption}.");
+        }
         if (!await _tradeOperations.ApplyCanonicalOrderAsync(order))
         {
             throw new InvalidOperationException(
                 $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
         }
-
-        _projections.TryPublishRemoteOrder(order, envelope.Revision);
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)

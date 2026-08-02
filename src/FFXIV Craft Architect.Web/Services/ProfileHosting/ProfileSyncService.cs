@@ -318,6 +318,7 @@ public sealed class ProfileSyncService
                 hasTrustedProjection: trustedOrderCount > 0,
                 lastRevision,
                 DateTime.UtcNow);
+            var syncAuthority = _hostedOrders.CaptureAuthorityScope();
             var serverRevision = lastRevision;
             var hasMore = true;
             SetStatus(CurrentStatus with
@@ -353,15 +354,37 @@ public sealed class ProfileSyncService
                         var adapter = GetAdapter(item.Collection);
                         if (item.Deleted)
                         {
-                            await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
+                            Guid? deletedOrderId = null;
+                            Guid? deletedOrderCompanyProfileId = null;
                             if (string.Equals(
                                     item.Collection,
                                     ProfileSyncCollections.TradeOrders,
                                     StringComparison.OrdinalIgnoreCase) &&
-                                Guid.TryParse(item.ObjectId, out var orderId))
+                                Guid.TryParse(item.ObjectId, out var parsedDeletedOrderId))
                             {
-                                _hostedOrders.TryPublishTombstone(orderId, item.Revision);
+                                deletedOrderId = parsedDeletedOrderId;
+                                deletedOrderCompanyProfileId =
+                                    await ResolveDeletedOrderCompanyProfileIdAsync(
+                                        adapter,
+                                        parsedDeletedOrderId,
+                                        ct);
                             }
+                            if (deletedOrderCompanyProfileId.HasValue)
+                            {
+                                var adoption = _hostedOrders.TryAdoptCommittedTombstone(
+                                    syncAuthority,
+                                    deletedOrderId!.Value,
+                                    deletedOrderCompanyProfileId.Value,
+                                    item.Revision);
+                                if (adoption is not (
+                                    HostedOrderCommittedProjectionResult.Adopted or
+                                    HostedOrderCommittedProjectionResult.AlreadyCurrent))
+                                {
+                                    throw new InvalidOperationException(
+                                        $"Hosted order deletion could not be applied because its authority is {adoption}.");
+                                }
+                            }
+                            await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
                         }
                         else
                         {
@@ -675,6 +698,7 @@ public sealed class ProfileSyncService
         }
 
         await EnsurePendingSavesLoadedAsync(settings);
+        var authority = _hostedOrders.CaptureAuthorityScope();
         var remote = await _client.ExportBootstrapAsync(
             settings.HostUrl!,
             settings.AccessKey!,
@@ -707,11 +731,26 @@ public sealed class ProfileSyncService
                     $"The hosted profile did not confirm deletion of {item.Collection}/{item.ObjectId}.");
             }
 
-            PublishConfirmedOrderTombstone(
-                _hostedOrders,
-                item.Collection,
-                item.ObjectId,
-                response.Object.Revision);
+            if (string.Equals(
+                    item.Collection,
+                    ProfileSyncCollections.TradeOrders,
+                    StringComparison.OrdinalIgnoreCase) &&
+                Guid.TryParse(item.ObjectId, out var orderId))
+            {
+                var companyProfileId = ReadOrderCompanyProfileId(remoteObject);
+                var adoption = _hostedOrders.TryAdoptCommittedTombstone(
+                    authority,
+                    orderId,
+                    companyProfileId,
+                    response.Object.Revision);
+                if (adoption is not (
+                    HostedOrderCommittedProjectionResult.Adopted or
+                    HostedOrderCommittedProjectionResult.AlreadyCurrent))
+                {
+                    throw new InvalidOperationException(
+                        $"The confirmed order deletion could not be adopted because its authority is {adoption}.");
+                }
+            }
             await _localState.SaveObjectRevisionAsync(
                 profileId,
                 item.Collection,
@@ -731,17 +770,45 @@ public sealed class ProfileSyncService
         }
     }
 
-    private static bool PublishConfirmedOrderTombstone(
-        HostedOrderProjectionStore hostedOrders,
-        string collection,
-        string objectId,
-        long revision) =>
-        string.Equals(
-            collection,
-            ProfileSyncCollections.TradeOrders,
-            StringComparison.OrdinalIgnoreCase) &&
-        Guid.TryParse(objectId, out var orderId) &&
-        hostedOrders.TryPublishTombstone(orderId, revision);
+    private async Task<Guid> ResolveDeletedOrderCompanyProfileIdAsync(
+        IProfileSyncCollectionAdapter adapter,
+        Guid orderId,
+        CancellationToken cancellationToken)
+    {
+        if (_hostedOrders.Get(orderId)?.CompanyProfileId is { } projectedCompanyProfileId)
+        {
+            return projectedCompanyProfileId;
+        }
+
+        var local = (await adapter.LoadLocalObjectsAsync(cancellationToken))
+            .FirstOrDefault(item => string.Equals(
+                item.ObjectId,
+                orderId.ToString("D"),
+                StringComparison.OrdinalIgnoreCase));
+        if (local == null)
+        {
+            throw new InvalidOperationException(
+                $"Hosted Trade order '{orderId:D}' was deleted without recoverable company identity.");
+        }
+        return ReadOrderCompanyProfileId(local);
+    }
+
+    private static Guid ReadOrderCompanyProfileId(ProfileSyncObjectEnvelope envelope)
+    {
+        var order = JsonSerializer.Deserialize<TradeOrder>(envelope.PayloadJson, JsonOptions)
+            ?? throw new InvalidOperationException(
+                $"Hosted Trade order '{envelope.ObjectId}' did not contain its company identity.");
+        if (order.CompanyProfileId == Guid.Empty ||
+            !string.Equals(
+                order.Id.ToString("D"),
+                envelope.ObjectId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Hosted Trade order '{envelope.ObjectId}' returned the wrong order or company identity.");
+        }
+        return order.CompanyProfileId;
+    }
 
     private async Task QueueLocalSaveCoreAsync(
         string collection,

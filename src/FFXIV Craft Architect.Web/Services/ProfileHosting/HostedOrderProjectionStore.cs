@@ -11,11 +11,23 @@ public sealed record HostedOrderProjectionSnapshot(
     CompanyCommissionOwnerProjection? OwnerProjection,
     bool Deleted);
 
+public readonly record struct HostedOrderAuthorityScope(string? ProfileId, long Epoch);
+
+public enum HostedOrderCommittedProjectionResult
+{
+    Adopted,
+    AlreadyCurrent,
+    Stale,
+    ScopeChanged,
+    IdentityMismatch
+}
+
 public sealed class HostedOrderProjectionStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<Guid, HostedOrderProjectionSnapshot> _orders = [];
     private string? _profileId;
+    private long _scopeEpoch;
     private HostedOrderRestoreState _restoreState = HostedOrderRestoreState.Inactive(DateTime.UtcNow);
 
     public event Action<HostedOrderProjectionSnapshot>? Changed;
@@ -30,6 +42,22 @@ public sealed class HostedOrderProjectionStore
             {
                 return _restoreState;
             }
+        }
+    }
+
+    public HostedOrderAuthorityScope CaptureAuthorityScope()
+    {
+        lock (_gate)
+        {
+            return new HostedOrderAuthorityScope(_profileId, _scopeEpoch);
+        }
+    }
+
+    public bool IsCurrentAuthority(HostedOrderAuthorityScope authority)
+    {
+        lock (_gate)
+        {
+            return IsCurrentAuthorityUnderLock(authority);
         }
     }
 
@@ -50,12 +78,19 @@ public sealed class HostedOrderProjectionStore
                                          profileId,
                                          StringComparison.OrdinalIgnoreCase) &&
                                      _restoreState.Stage == HostedOrderRestoreStage.IdentityOnly;
-            var scopeChanged = _profileId != null &&
-                               !string.Equals(_profileId, profileId, StringComparison.OrdinalIgnoreCase);
+            var profileChanged = !string.Equals(
+                _profileId,
+                profileId,
+                StringComparison.OrdinalIgnoreCase);
+            var scopeChanged = _profileId != null && profileChanged;
             if (scopeChanged)
             {
                 _orders.Clear();
                 reset = true;
+            }
+            if (profileChanged)
+            {
+                _scopeEpoch++;
             }
 
             var retainedTrust = !scopeChanged &&
@@ -130,6 +165,7 @@ public sealed class HostedOrderProjectionStore
             }
 
             _profileId = profileId;
+            _scopeEpoch++;
             _orders.Clear();
             _restoreState = profileId == null
                 ? HostedOrderRestoreState.Inactive(DateTime.UtcNow)
@@ -197,6 +233,49 @@ public sealed class HostedOrderProjectionStore
         return NotifyIfAccepted(candidate, accepted);
     }
 
+    public HostedOrderCommittedProjectionResult TryAdoptCommittedOrder(
+        HostedOrderAuthorityScope authority,
+        TradeOrder order,
+        long objectRevision)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(objectRevision);
+        HostedOrderProjectionSnapshot candidate;
+        HostedOrderCommittedProjectionResult result;
+        lock (_gate)
+        {
+            if (!IsCurrentAuthorityUnderLock(authority))
+            {
+                return HostedOrderCommittedProjectionResult.ScopeChanged;
+            }
+
+            var current = _orders.GetValueOrDefault(order.Id);
+            candidate = new HostedOrderProjectionSnapshot(
+                order.Id,
+                order.CompanyProfileId,
+                objectRevision,
+                current?.CompanyRevision,
+                order,
+                current?.ObjectRevision == objectRevision
+                    ? current.OwnerProjection
+                    : null,
+                Deleted: false);
+            result = ClassifyCommittedCandidateUnderLock(current, candidate);
+            if (result == HostedOrderCommittedProjectionResult.Adopted)
+            {
+                _orders[candidate.OrderId] = candidate;
+                AdvanceRestoreRevisionUnderLock(candidate.ObjectRevision);
+            }
+        }
+
+        if (result == HostedOrderCommittedProjectionResult.Adopted)
+        {
+            Changed?.Invoke(candidate);
+            RestoreStateChanged?.Invoke(RestoreState);
+        }
+        return result;
+    }
+
     public bool TryPublishOwner(CompanyCommissionOwnerProjection projection)
     {
         ArgumentNullException.ThrowIfNull(projection);
@@ -210,7 +289,10 @@ public sealed class HostedOrderProjectionStore
             Deleted: false));
     }
 
-    public bool TryPublishTombstone(Guid orderId, long objectRevision)
+    public bool TryPublishTombstone(
+        Guid orderId,
+        long objectRevision,
+        Guid? companyProfileId = null)
     {
         if (orderId == Guid.Empty)
         {
@@ -223,9 +305,15 @@ public sealed class HostedOrderProjectionStore
         lock (_gate)
         {
             var existing = _orders.GetValueOrDefault(orderId);
+            companyProfileId ??= existing?.CompanyProfileId;
+            if (!companyProfileId.HasValue)
+            {
+                throw new InvalidOperationException(
+                    "A cold hosted-order tombstone requires its company profile identity.");
+            }
             candidate = new HostedOrderProjectionSnapshot(
                 orderId,
-                existing?.CompanyProfileId,
+                companyProfileId,
                 objectRevision,
                 existing?.CompanyRevision,
                 Order: null,
@@ -234,6 +322,58 @@ public sealed class HostedOrderProjectionStore
             accepted = TryAcceptUnderLock(candidate);
         }
         return NotifyIfAccepted(candidate, accepted);
+    }
+
+    public HostedOrderCommittedProjectionResult TryAdoptCommittedTombstone(
+        HostedOrderAuthorityScope authority,
+        Guid orderId,
+        Guid companyProfileId,
+        long objectRevision)
+    {
+        if (orderId == Guid.Empty)
+        {
+            throw new ArgumentException("A hosted order identity is required.", nameof(orderId));
+        }
+        if (companyProfileId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "A hosted order company identity is required.",
+                nameof(companyProfileId));
+        }
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(objectRevision);
+
+        HostedOrderProjectionSnapshot candidate;
+        HostedOrderCommittedProjectionResult result;
+        lock (_gate)
+        {
+            if (!IsCurrentAuthorityUnderLock(authority))
+            {
+                return HostedOrderCommittedProjectionResult.ScopeChanged;
+            }
+
+            var current = _orders.GetValueOrDefault(orderId);
+            candidate = new HostedOrderProjectionSnapshot(
+                orderId,
+                companyProfileId,
+                objectRevision,
+                current?.CompanyRevision,
+                Order: null,
+                OwnerProjection: null,
+                Deleted: true);
+            result = ClassifyCommittedCandidateUnderLock(current, candidate);
+            if (result == HostedOrderCommittedProjectionResult.Adopted)
+            {
+                _orders[candidate.OrderId] = candidate;
+                AdvanceRestoreRevisionUnderLock(candidate.ObjectRevision);
+            }
+        }
+
+        if (result == HostedOrderCommittedProjectionResult.Adopted)
+        {
+            Changed?.Invoke(candidate);
+            RestoreStateChanged?.Invoke(RestoreState);
+        }
+        return result;
     }
 
     public void ClearOwner(Guid orderId)
@@ -287,15 +427,58 @@ public sealed class HostedOrderProjectionStore
         }
 
         _orders[candidate.OrderId] = candidate;
-        if (candidate.ObjectRevision > _restoreState.LastAppliedRevision)
+        AdvanceRestoreRevisionUnderLock(candidate.ObjectRevision);
+        return true;
+    }
+
+    private HostedOrderCommittedProjectionResult ClassifyCommittedCandidateUnderLock(
+        HostedOrderProjectionSnapshot? current,
+        HostedOrderProjectionSnapshot candidate)
+    {
+        if (current == null)
+        {
+            return HostedOrderCommittedProjectionResult.Adopted;
+        }
+
+        try
+        {
+            ValidateIdentity(current, candidate);
+        }
+        catch (InvalidOperationException)
+        {
+            return HostedOrderCommittedProjectionResult.IdentityMismatch;
+        }
+
+        if (candidate.ObjectRevision < current.ObjectRevision ||
+            (candidate.ObjectRevision == current.ObjectRevision &&
+             current.Deleted && !candidate.Deleted))
+        {
+            return HostedOrderCommittedProjectionResult.Stale;
+        }
+
+        return candidate.ObjectRevision == current.ObjectRevision &&
+               candidate.Deleted == current.Deleted
+            ? HostedOrderCommittedProjectionResult.AlreadyCurrent
+            : HostedOrderCommittedProjectionResult.Adopted;
+    }
+
+    private bool IsCurrentAuthorityUnderLock(HostedOrderAuthorityScope authority) =>
+        authority.Epoch == _scopeEpoch &&
+        string.Equals(
+            authority.ProfileId,
+            _profileId,
+            StringComparison.OrdinalIgnoreCase);
+
+    private void AdvanceRestoreRevisionUnderLock(long objectRevision)
+    {
+        if (objectRevision > _restoreState.LastAppliedRevision)
         {
             _restoreState = _restoreState with
             {
-                LastAppliedRevision = candidate.ObjectRevision,
+                LastAppliedRevision = objectRevision,
                 UpdatedAtUtc = DateTime.UtcNow
             };
         }
-        return true;
     }
 
     private bool NotifyIfAccepted(
