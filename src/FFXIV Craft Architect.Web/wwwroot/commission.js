@@ -927,7 +927,7 @@ function renderAccess() {
 
     if (projection.kind === "participant") {
         const canMutate = canUseActiveParticipantMutations(projection);
-        setText("accessState", canMutate ? "Saved locally" : "Reference only");
+        setText("accessState", canMutate ? "Can update order" : "Reference only");
         accessNote.append(
             element(
                 "strong",

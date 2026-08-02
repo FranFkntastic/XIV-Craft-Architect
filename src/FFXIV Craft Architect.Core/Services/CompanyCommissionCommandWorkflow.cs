@@ -893,7 +893,7 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             source.Status == TradeOrderStatus.AwaitingDelivery &&
             commission.DeliveryReadiness.IsReady,
-            "The commission is not awaiting delivery.");
+            "The commission is not ready for delivery.");
         RequireReason(reason);
         var updated = Copy(source);
         updated.Status = TradeOrderStatus.InProgress;
