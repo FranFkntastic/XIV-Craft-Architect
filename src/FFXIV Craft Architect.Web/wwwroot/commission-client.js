@@ -425,15 +425,12 @@ export function resolveParticipantPreworkChoices(projection) {
 
     const paymentPending = projection.public.gates.payment === "Pending";
     const materialsPending = projection.public.gates.companyMaterials === "Pending";
-    const termsVersion = projection.public.terms.version;
-    const paymentReceiptIsCurrent =
-        projection.payment?.crafterReceived?.termsVersion === termsVersion;
+    const hasPaymentReceiptEvidence = Boolean(projection.payment?.crafterReceived);
     const materialsReady = materialsPending &&
-        latestActivityRevision(projection.activity, "CompanyMaterialsReady", termsVersion) >
-            latestActivityRevision(projection.activity, "CompanyMaterialsReceived", termsVersion);
+        projection.companyMaterialsReadyForHandoff;
     const choices = [];
 
-    if (paymentPending && !paymentReceiptIsCurrent) {
+    if (paymentPending && !hasPaymentReceiptEvidence) {
         choices.push("confirm-advance-payment");
     }
     if (materialsReady) {
@@ -441,18 +438,12 @@ export function resolveParticipantPreworkChoices(projection) {
     }
     if (paymentPending) {
         choices.push("request-payment-schedule-change");
-        if (paymentReceiptIsCurrent) {
+        if (hasPaymentReceiptEvidence) {
             choices.push("retract-advance-payment-confirmation");
         }
     }
 
     return { paymentPending, materialsPending, materialsReady, choices };
-}
-
-function latestActivityRevision(activity, kind, termsVersion) {
-    return (activity ?? [])
-        .filter(item => item.kind === kind && item.termsVersion === termsVersion)
-        .reduce((latest, item) => Math.max(latest, item.commissionRevision), 0);
 }
 
 export function adaptBriefProjection(payload) {
@@ -465,6 +456,7 @@ export function adaptBriefProjection(payload) {
             provisionalCrafter: null,
             participantCapabilityRevision: null,
             payment: null,
+            companyMaterialsReadyForHandoff: false,
             settlementPayment: null,
             activity: []
         };
@@ -482,6 +474,9 @@ export function adaptBriefProjection(payload) {
             0),
         payment: adaptParticipantPayment(
             requiredObject(payload.payment, "Participant payment state")),
+        companyMaterialsReadyForHandoff: requiredBoolean(
+            payload.companyMaterialsReadyForHandoff,
+            "Company material handoff readiness"),
         settlementPayment: adaptSettlementPayment(
             requiredObject(payload.settlementPayment, "Participant settlement state")),
         activity: requiredArray(payload.activity, "Participant activity").map(adaptParticipantActivity)

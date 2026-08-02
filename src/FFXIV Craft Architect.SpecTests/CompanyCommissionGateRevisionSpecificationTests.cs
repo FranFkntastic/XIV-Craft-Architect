@@ -96,6 +96,66 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.Equal("Ready for handoff.", transition.Comment);
     }
 
+    [Fact]
+    public void UnrelatedRevisionPreservesPartialPaymentAndReadyMaterialBindings()
+    {
+        var order = PreparePartialGateEvidence(CreateClaimedOrder());
+        var original = order.CompanyCommission!;
+        var nextTerms = original.CurrentTerms with
+        {
+            Version = 2,
+            DeliveryInstructions = "Deliver in Gridania."
+        };
+
+        order = Amend(order, nextTerms);
+        var revised = order.CompanyCommission!;
+        var participant = CompanyCommissionProjectionService.CreateParticipantBrief(
+            order,
+            "Test Company");
+
+        Assert.Equal(
+            original.Gates.Payment.CommissionerSent,
+            revised.Gates.Payment.CommissionerSent);
+        Assert.Equal(
+            original.Gates.CompanyMaterials.ReadyAtUtc,
+            revised.Gates.CompanyMaterials.ReadyAtUtc);
+        Assert.NotNull(participant.Payment.CommissionerSent);
+        Assert.Null(participant.Payment.CrafterReceived);
+        Assert.True(participant.CompanyMaterialsReadyForHandoff);
+    }
+
+    [Fact]
+    public void ChangedPaymentAndMaterialFactsInvalidatePartialGateEvidence()
+    {
+        var order = PreparePartialGateEvidence(CreateClaimedOrder());
+        var original = order.CompanyCommission!;
+        var nextTerms = original.CurrentTerms with
+        {
+            Version = 2,
+            Payment = original.CurrentTerms.Payment with
+            {
+                MaterialAdjustment = original.CurrentTerms.Payment.MaterialAdjustment + 25,
+                Total = original.CurrentTerms.Payment.Total + 25
+            },
+            Materials =
+            [
+                original.CurrentTerms.Materials[0] with
+                {
+                    Quantity = original.CurrentTerms.Materials[0].Quantity + 1
+                }
+            ]
+        };
+
+        order = Amend(order, nextTerms);
+        var participant = CompanyCommissionProjectionService.CreateParticipantBrief(
+            order,
+            "Test Company");
+
+        Assert.Null(participant.Payment.CommissionerSent);
+        Assert.Null(participant.Payment.CrafterReceived);
+        Assert.False(participant.CompanyMaterialsReadyForHandoff);
+    }
+
     private static void TermsRevisionPreservesSatisfiedGatesWhoseBoundFactsDidNotChange()
     {
         var order = CompleteBothGates(CreateClaimedOrder());
@@ -243,6 +303,24 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
 
     private static TradeOrder CompleteBothGates(TradeOrder order) =>
         CompleteMaterials(CompletePayment(order));
+
+    private static TradeOrder PreparePartialGateEvidence(TradeOrder order)
+    {
+        order = Apply(
+            order,
+            new RecordCompanyCommissionPaymentCommand(
+                Context(order),
+                "Advance payment sent."),
+            Commissioner,
+            1);
+        return Apply(
+            order,
+            new MarkCompanyCommissionMaterialsReadyCommand(
+                Context(order),
+                order.CompanyCommission!.Gates.CompanyMaterials.PromisedQuantities),
+            Commissioner,
+            2);
+    }
 
     private static TradeOrder CompletePayment(TradeOrder order)
     {

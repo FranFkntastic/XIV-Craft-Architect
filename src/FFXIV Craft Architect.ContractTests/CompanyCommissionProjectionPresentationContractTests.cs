@@ -50,6 +50,10 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
 
         Assert.Contains("Crafter confirmed payment receipt", centerBeforeDetails, StringComparison.Ordinal);
         Assert.Contains("crafterReceipt.TermsVersion", centerBeforeDetails, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "crafterReceipt.TermsVersion == operationsCommission.CurrentTermsVersion",
+            centerBeforeDetails,
+            StringComparison.Ordinal);
         Assert.Contains("OnClick=\"DeleteSelectedOrderAsync\"", centerBeforeDetails, StringComparison.Ordinal);
         Assert.Contains("OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled)", centerBeforeDetails, StringComparison.Ordinal);
         Assert.DoesNotContain("@bind-Value", calculationDetails, StringComparison.Ordinal);

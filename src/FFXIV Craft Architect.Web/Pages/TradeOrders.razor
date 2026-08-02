@@ -465,8 +465,7 @@
                                                               </details>
                                                            }
                                                        }
-                                                      @if (operationsCommission.Gates.Payment.CrafterReceived is { } crafterReceipt &&
-                                                           crafterReceipt.TermsVersion == operationsCommission.CurrentTermsVersion)
+                                                      @if (operationsCommission.Gates.Payment.CrafterReceived is { } crafterReceipt)
                                                       {
                                                           <div class="trade-orders-start-gate-evidence">
                                                               <strong>Crafter confirmed payment receipt</strong>

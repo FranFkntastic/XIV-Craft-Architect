@@ -523,8 +523,7 @@ function resolveNextStep() {
     const prework = resolveParticipantPreworkChoices(projection);
     if (prework.paymentPending || prework.materialsPending) {
         const bothPending = prework.paymentPending && prework.materialsPending;
-        const paymentConfirmed =
-            projection.payment?.crafterReceived?.termsVersion === brief.terms.version;
+        const paymentConfirmed = Boolean(projection.payment?.crafterReceived);
         const title = bothPending
             ? "Complete the remaining start requirements"
             : prework.paymentPending
@@ -621,16 +620,12 @@ function requiresTermsAcknowledgement(projection) {
 }
 
 function areCompanyMaterialsReady(projection) {
-    const termsVersion = projection.public.terms.version;
-    return latestActivityRevision(projection, "CompanyMaterialsReady", termsVersion) >
-        latestActivityRevision(projection, "CompanyMaterialsReceived", termsVersion);
+    return projection.companyMaterialsReadyForHandoff;
 }
 
-function latestActivityRevision(projection, kind, termsVersion = null) {
+function latestActivityRevision(projection, kind) {
     return projection.activity
-        .filter(item =>
-            item.kind === kind &&
-            (termsVersion == null || item.termsVersion === termsVersion))
+        .filter(item => item.kind === kind)
         .reduce((latest, item) => Math.max(latest, item.commissionRevision), 0);
 }
 
