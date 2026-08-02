@@ -9,13 +9,16 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
         ProfileSyncJson.CreateOptions();
     private readonly TradeOperationsPersistenceService _tradeOperations;
     private readonly HostedOrderProjectionStore _projections;
+    private readonly ProfileSyncLocalStateService _localState;
 
     public TradeOrderProfileSyncAdapter(
         TradeOperationsPersistenceService tradeOperations,
-        HostedOrderProjectionStore projections)
+        HostedOrderProjectionStore projections,
+        ProfileSyncLocalStateService localState)
     {
         _tradeOperations = tradeOperations;
         _projections = projections;
+        _localState = localState;
     }
 
     public string Collection => ProfileSyncCollections.TradeOrders;
@@ -49,24 +52,46 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             "order",
             envelope.ObjectId);
         var authority = _projections.CaptureAuthorityScope();
-        var adoption = _projections.TryAdoptCommittedOrder(
+        var previous = _projections.Get(order.Id);
+        var adoption = await _projections.AdoptAndPersistCommittedOrderAsync(
             authority,
             order,
-            envelope.Revision);
-        if (adoption == HostedOrderCommittedProjectionResult.AlreadyCurrent)
-        {
-            return;
-        }
-        if (adoption != HostedOrderCommittedProjectionResult.Adopted ||
-            !_projections.IsCurrentAuthority(authority))
+            envelope.Revision,
+            async candidate =>
+            {
+                var persisted = candidate.Deleted
+                    ? await _tradeOperations.DeleteOrderAsync(candidate.OrderId)
+                    : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
+                if (!persisted)
+                {
+                    throw new InvalidOperationException(
+                        $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
+                }
+                await _localState.SaveObjectRevisionAsync(
+                    ProfileSyncCollections.TradeOrders,
+                    candidate.OrderId.ToString("D"),
+                    candidate.ObjectRevision);
+            },
+            rollback: previous?.Order == null
+                ? null
+                : async () =>
+                {
+                    _projections.TryRollbackCommittedOrder(
+                        authority,
+                        envelope.Revision,
+                        previous);
+                    await _tradeOperations.ApplyCanonicalOrderAsync(previous.Order);
+                    await _localState.SaveObjectRevisionAsync(
+                        ProfileSyncCollections.TradeOrders,
+                        previous.OrderId.ToString("D"),
+                        previous.ObjectRevision);
+                });
+        if (adoption is not (
+            HostedOrderCommittedProjectionResult.Adopted or
+            HostedOrderCommittedProjectionResult.AlreadyCurrent))
         {
             throw new InvalidOperationException(
                 $"Hosted Trade order '{envelope.ObjectId}' could not be applied because its authority is {adoption}.");
-        }
-        if (!await _tradeOperations.ApplyCanonicalOrderAsync(order))
-        {
-            throw new InvalidOperationException(
-                $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
         }
     }
 

@@ -354,6 +354,7 @@ public sealed class ProfileSyncService
                         var adapter = GetAdapter(item.Collection);
                         if (item.Deleted)
                         {
+                            var shouldDeleteLocalObject = true;
                             Guid? deletedOrderId = null;
                             Guid? deletedOrderCompanyProfileId = null;
                             if (string.Equals(
@@ -368,6 +369,8 @@ public sealed class ProfileSyncService
                                         adapter,
                                         parsedDeletedOrderId,
                                         ct);
+                                shouldDeleteLocalObject =
+                                    deletedOrderCompanyProfileId.HasValue;
                             }
                             if (deletedOrderCompanyProfileId.HasValue)
                             {
@@ -384,7 +387,10 @@ public sealed class ProfileSyncService
                                         $"Hosted order deletion could not be applied because its authority is {adoption}.");
                                 }
                             }
-                            await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
+                            if (shouldDeleteLocalObject)
+                            {
+                                await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
+                            }
                         }
                         else
                         {
@@ -407,11 +413,18 @@ public sealed class ProfileSyncService
                             }
                         }
 
-                        await _localState.SaveObjectRevisionAsync(
-                            profileId,
-                            item.Collection,
-                            item.ObjectId,
-                            item.Revision);
+                        if (item.Deleted ||
+                            !string.Equals(
+                                item.Collection,
+                                ProfileSyncCollections.TradeOrders,
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            await _localState.SaveObjectRevisionAsync(
+                                profileId,
+                                item.Collection,
+                                item.ObjectId,
+                                item.Revision);
+                        }
                         appliedObjectCount++;
                         SetStatus(CurrentStatus with
                         {
@@ -770,7 +783,7 @@ public sealed class ProfileSyncService
         }
     }
 
-    private async Task<Guid> ResolveDeletedOrderCompanyProfileIdAsync(
+    private async Task<Guid?> ResolveDeletedOrderCompanyProfileIdAsync(
         IProfileSyncCollectionAdapter adapter,
         Guid orderId,
         CancellationToken cancellationToken)
@@ -787,8 +800,7 @@ public sealed class ProfileSyncService
                 StringComparison.OrdinalIgnoreCase));
         if (local == null)
         {
-            throw new InvalidOperationException(
-                $"Hosted Trade order '{orderId:D}' was deleted without recoverable company identity.");
+            return null;
         }
         return ReadOrderCompanyProfileId(local);
     }
@@ -1011,11 +1023,17 @@ public sealed class ProfileSyncService
                 conflict.Collection,
                 conflict.ObjectId);
             await adapter.ApplyRemoteObjectAsync(conflict.RemoteObject, ct);
-            await _localState.SaveObjectRevisionAsync(
-                profileId,
-                conflict.Collection,
-                conflict.ObjectId,
-                conflict.RemoteRevision);
+            if (!string.Equals(
+                    conflict.Collection,
+                    ProfileSyncCollections.TradeOrders,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                await _localState.SaveObjectRevisionAsync(
+                    profileId,
+                    conflict.Collection,
+                    conflict.ObjectId,
+                    conflict.RemoteRevision);
+            }
         }
 
         _conflicts.Remove(conflict);

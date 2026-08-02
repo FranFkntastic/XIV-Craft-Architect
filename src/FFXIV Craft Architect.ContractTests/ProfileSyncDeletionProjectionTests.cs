@@ -39,6 +39,37 @@ public sealed class ProfileSyncDeletionProjectionTests
     }
 
     [Fact]
+    public async Task RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var orderId = Guid.NewGuid();
+        var store = new HostedOrderProjectionStore();
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        var adapter = new RecordingOrderAdapter(null);
+        var service = new ProfileSyncService(
+            new ProfileHostClient(
+                new HttpClient(new RevisionZeroDeletionHandler(orderId))
+                {
+                    BaseAddress = new Uri(Host)
+                },
+                new ProfileHostClientOptions(Host)),
+            localState,
+            new WebSettingsService(indexedDb),
+            store,
+            [adapter]);
+
+        await service.InitializeAsync();
+
+        Assert.Equal(1, service.CurrentStatus.LastSyncRevision);
+        Assert.Equal(0, adapter.DeleteCount);
+        Assert.Empty(store.GetAll());
+    }
+
+    [Fact]
     public async Task DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection()
     {
         var profileId = Guid.NewGuid().ToString("D");
@@ -98,6 +129,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
         Assert.True(store.TryPublishRemoteOrder(order, 4));
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(order.CompanyProfileId);
         var indexedDb = new IndexedDbService(runtime);
         var localState = new ProfileSyncLocalStateService(
             indexedDb,
@@ -190,6 +222,292 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(6, store.Get(order.Id)?.ObjectRevision);
     }
 
+    [Fact]
+    public async Task CollaborationResponseFromReplacedHostScopeCannotPersist()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Original host");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await localState.LoadConnectionSettingsAsync();
+        await localState.SaveObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"),
+            4);
+        var profileSync = CreateProfileSync(localState, indexedDb, store);
+        SetReadyStatus(profileSync, profileId);
+        var committed = CreatePublishedOrder(order, revision: 4);
+        var collaboration = new TradeCompanyCollaborationService(
+            new TradeCompanyCollaborationClient(
+                new HttpClient(new PortablePublicationHandler(
+                    committed,
+                    revision: 5,
+                    () => runtime.SaveRawSetting(
+                        ProfileSyncSettingsKeys.HostUrl,
+                        JsonSerializer.Serialize("https://replacement.example/api/"))))
+                {
+                    BaseAddress = new Uri(Host)
+                },
+                localState),
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            localState,
+            profileSync,
+            store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            collaboration.PublishPortableLinkAsync(order, new CommissionBriefDocument()));
+
+        Assert.Equal(0, runtime.SaveTradeOrderCount);
+        Assert.Same(order, store.Get(order.Id)?.Order);
+        Assert.Equal(4, store.Get(order.Id)?.ObjectRevision);
+    }
+
+    [Fact]
+    public async Task AdapterReconcilesDurableWinnerAfterOlderWriteFinishesLast()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var companyId = Guid.NewGuid();
+        var original = CreateOrder(Guid.NewGuid(), companyId, "Revision four");
+        var revisionFive = CreateOrder(original.Id, companyId, "Revision five");
+        var revisionSix = CreateOrder(original.Id, companyId, "Revision six");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        Assert.True(store.TryPublishRemoteOrder(original, 4));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(companyId);
+        var firstWriteEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstWrite = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var blocked = false;
+        runtime.BeforeSaveTradeOrderAsync = async order =>
+        {
+            if (!blocked && order.Title == "Revision five")
+            {
+                blocked = true;
+                firstWriteEntered.SetResult();
+                await releaseFirstWrite.Task;
+            }
+        };
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await localState.LoadConnectionSettingsAsync();
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            store,
+            localState);
+
+        var older = adapter.ApplyRemoteObjectAsync(Envelope(revisionFive, 5), default);
+        await firstWriteEntered.Task;
+        var newer = adapter.ApplyRemoteObjectAsync(Envelope(revisionSix, 6), default);
+        await newer;
+        releaseFirstWrite.SetResult();
+        await older;
+
+        Assert.Equal("Revision six", runtime.DurableOrder?.Title);
+        Assert.Equal(
+            6,
+            await localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                original.Id.ToString("D")));
+    }
+
+    [Fact]
+    public async Task AdapterAlreadyCurrentReplayRepairsMissingDurableOrder()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision five");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 5, DateTime.UtcNow);
+        Assert.True(store.TryPublishRemoteOrder(order, 5));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(order.CompanyProfileId);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await localState.LoadConnectionSettingsAsync();
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            store,
+            localState);
+
+        await adapter.ApplyRemoteObjectAsync(Envelope(order, 5), default);
+
+        Assert.Same(order, runtime.DurableOrder);
+        Assert.Equal(1, runtime.SaveTradeOrderCount);
+    }
+
+    [Fact]
+    public async Task CollaborationReconcilesDurableWinnerAfterOlderWriteFinishesLast()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var firstWriteEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstWrite = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var blocked = false;
+        runtime.BeforeSaveTradeOrderAsync = async candidate =>
+        {
+            if (!blocked && candidate.Title == "Revision five")
+            {
+                blocked = true;
+                firstWriteEntered.SetResult();
+                await releaseFirstWrite.Task;
+            }
+        };
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await localState.LoadConnectionSettingsAsync();
+        await localState.SaveObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"),
+            4);
+        var profileSync = CreateProfileSync(localState, indexedDb, store);
+        SetReadyStatus(profileSync, profileId);
+        var revisionFive = CreatePublishedOrder(order, revision: 4);
+        revisionFive.Title = "Revision five";
+        var revisionSix = CreatePublishedOrder(order, revision: 4);
+        revisionSix.Title = "Revision six";
+        var persistence = new TradeOperationsPersistenceService(
+            indexedDb,
+            new TradeCompanyProfilePackageService());
+        var olderService = CreateCollaboration(
+            revisionFive,
+            5,
+            localState,
+            profileSync,
+            persistence,
+            store);
+        var newerService = CreateCollaboration(
+            revisionSix,
+            6,
+            localState,
+            profileSync,
+            persistence,
+            store);
+
+        var older = olderService.PublishPortableLinkAsync(order, new CommissionBriefDocument());
+        await firstWriteEntered.Task;
+        var newer = newerService.PublishPortableLinkAsync(order, new CommissionBriefDocument());
+        await newer;
+        releaseFirstWrite.SetResult();
+        await older;
+
+        Assert.Equal("Revision six", runtime.DurableOrder?.Title);
+        Assert.Equal(
+            6,
+            await localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                order.Id.ToString("D")));
+    }
+
+    [Fact]
+    public async Task ConnectionScopeChangeDuringPersistenceRollsBackProjectionAndDurableOrder()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var switched = false;
+        runtime.BeforeSaveTradeOrderAsync = candidate =>
+        {
+            if (!switched && candidate.Title == "Revision five")
+            {
+                switched = true;
+                runtime.SaveRawSetting(
+                    ProfileSyncSettingsKeys.HostUrl,
+                    JsonSerializer.Serialize("https://replacement.example/api/"));
+            }
+            return Task.CompletedTask;
+        };
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await localState.LoadConnectionSettingsAsync();
+        await localState.SaveObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"),
+            4);
+        var profileSync = CreateProfileSync(localState, indexedDb, store);
+        SetReadyStatus(profileSync, profileId);
+        var committed = CreatePublishedOrder(order, revision: 4);
+        committed.Title = "Revision five";
+        var service = CreateCollaboration(
+            committed,
+            5,
+            localState,
+            profileSync,
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            store);
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.PublishPortableLinkAsync(order, new CommissionBriefDocument()));
+
+        Assert.Contains("scope", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Revision four", runtime.DurableOrder?.Title);
+        Assert.Same(order, store.Get(order.Id)?.Order);
+        Assert.Equal(4, store.Get(order.Id)?.ObjectRevision);
+    }
+
+    [Fact]
+    public void OwnerProjectionIsPreservedThenClearedAndRehydratedByRevision()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Owner revision four");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        var ownerFour = Owner(order, 4, 8);
+        Assert.True(store.TryPublishOwner(ownerFour));
+        var authority = store.CaptureAuthorityScope();
+
+        Assert.Equal(
+            HostedOrderCommittedProjectionResult.AlreadyCurrent,
+            store.TryAdoptCommittedOrder(authority, order, 4));
+        Assert.Same(ownerFour, store.GetOwnerProjection(order.Id));
+
+        var revisionFive = CreateOrder(order.Id, order.CompanyProfileId, "Owner pending");
+        Assert.Equal(
+            HostedOrderCommittedProjectionResult.Adopted,
+            store.TryAdoptCommittedOrder(authority, revisionFive, 5));
+        Assert.Null(store.GetOwnerProjection(order.Id));
+
+        var ownerFive = Owner(revisionFive, 5, 9);
+        Assert.True(store.TryPublishOwner(ownerFive));
+        Assert.Same(ownerFive, store.GetOwnerProjection(order.Id));
+    }
+
     private static DeletionFixture CreateDeletionFixture(
         string profileId,
         TradeOrder order,
@@ -233,6 +551,28 @@ public sealed class ProfileSyncDeletionProjectionTests
             store,
             []);
 
+    private static TradeCompanyCollaborationService CreateCollaboration(
+        TradeOrder committed,
+        long revision,
+        ProfileSyncLocalStateService localState,
+        ProfileSyncService profileSync,
+        TradeOperationsPersistenceService persistence,
+        HostedOrderProjectionStore store) =>
+        new(
+            new TradeCompanyCollaborationClient(
+                new HttpClient(new PortablePublicationHandler(
+                    committed,
+                    revision,
+                    () => { }))
+                {
+                    BaseAddress = new Uri(Host)
+                },
+                localState),
+            persistence,
+            localState,
+            profileSync,
+            store);
+
     private static void SetReadyStatus(ProfileSyncService service, string profileId)
     {
         var property = typeof(ProfileSyncService).GetProperty(
@@ -271,13 +611,24 @@ public sealed class ProfileSyncDeletionProjectionTests
             Title = title
         };
 
+    private static CompanyCommissionOwnerProjection Owner(
+        TradeOrder order,
+        long objectRevision,
+        long companyRevision) =>
+        new()
+        {
+            Order = order,
+            ObjectRevision = new CompanyRecordRevision(objectRevision),
+            CompanyRevision = new CompanyRecordRevision(companyRevision)
+        };
+
     private static TradeOrder CreatePublishedOrder(TradeOrder source, long revision)
     {
         var published = TradeOrderWorkflow.CopyOrder(source);
         published.CommissionPublication = new TradeCommissionPublication
         {
             PublicId = "public-id",
-            PublicUrl = "https://profiles.example/brief/public-id",
+            PublicUrl = "https://profiles.example/brief?id=public-id",
             Version = 1,
             PublishedAtUtc = DateTime.UtcNow,
             Ownership = new TradeCompanyPublicationOwnership(
@@ -303,20 +654,53 @@ public sealed class ProfileSyncDeletionProjectionTests
         HostedOrderProjectionStore Store,
         RecordingOrderAdapter Adapter);
 
-    private sealed class RecordingOrderAdapter(ProfileSyncObjectEnvelope local)
+    private sealed class RecordingOrderAdapter(ProfileSyncObjectEnvelope? local)
         : IProfileSyncCollectionAdapter
     {
         public string Collection => ProfileSyncCollections.TradeOrders;
         public int DeleteCount { get; private set; }
         public Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(
             CancellationToken ct) =>
-            Task.FromResult<IReadOnlyList<ProfileSyncObjectEnvelope>>([local]);
+            Task.FromResult<IReadOnlyList<ProfileSyncObjectEnvelope>>(
+                local == null ? [] : [local]);
         public Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct) =>
             throw new NotSupportedException();
         public Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
         {
             DeleteCount++;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RevisionZeroDeletionHandler(Guid orderId) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (!request.RequestUri!.AbsolutePath.EndsWith("/profile-host/changes"))
+            {
+                throw new NotSupportedException(request.RequestUri.ToString());
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new ProfileSyncChangesResponse
+                {
+                    ServerRevision = 1,
+                    HasMore = false,
+                    Objects =
+                    [
+                        new ProfileSyncObjectEnvelope
+                        {
+                            Collection = ProfileSyncCollections.TradeOrders,
+                            ObjectId = orderId.ToString("D"),
+                            Revision = 1,
+                            Deleted = true,
+                            UpdatedAtUtc = DateTime.UtcNow
+                        }
+                    ]
+                })
+            });
         }
     }
 
@@ -378,7 +762,7 @@ public sealed class ProfileSyncDeletionProjectionTests
             {
                 PublicId = committed.CommissionPublication!.PublicId,
                 PublicUrl = committed.CommissionPublication.PublicUrl!,
-                EditorToken = "editor-token",
+                EditorToken = string.Empty,
                 Version = committed.CommissionPublication.Version,
                 PublishedAtUtc = committed.CommissionPublication.PublishedAtUtc,
                 OrderRecord = new TradeCompanyRecordEnvelope(
@@ -406,7 +790,14 @@ public sealed class ProfileSyncDeletionProjectionTests
 
     private sealed class StorageRuntime(Dictionary<string, string> settings) : IJSRuntime
     {
+        private readonly HashSet<Guid> _companyIds = [];
         public int SaveTradeOrderCount { get; private set; }
+        public TradeOrder? DurableOrder { get; private set; }
+        public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
+
+        public void SaveRawSetting(string key, string value) => settings[key] = value;
+
+        public void AddCompany(Guid companyId) => _companyIds.Add(companyId);
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
             InvokeAsync<TValue>(identifier, CancellationToken.None, args);
@@ -416,13 +807,23 @@ public sealed class ProfileSyncDeletionProjectionTests
             CancellationToken cancellationToken,
             object?[]? args)
         {
+            if (identifier == "IndexedDB.saveTradeOrder")
+            {
+                return SaveTradeOrderAsync<TValue>((TradeOrder)args![0]!);
+            }
             object? result = identifier switch
             {
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(settings, StringComparer.Ordinal),
                 "IndexedDB.loadSetting" => settings.GetValueOrDefault((string)args![0]!),
+                "IndexedDB.loadTradeCompanyProfiles" => _companyIds
+                    .Select(companyId => new TradeCompanyProfile
+                    {
+                        Id = companyId,
+                        Name = "Test company"
+                    })
+                    .ToList(),
                 "IndexedDB.saveSettingsBatch" => SaveBatch((Dictionary<string, string>)args![0]!),
                 "IndexedDB.saveSetting" => SaveSetting((string)args![0]!, (string)args[1]!),
-                "IndexedDB.saveTradeOrder" => SaveTradeOrder(),
                 _ => throw new NotSupportedException(identifier)
             };
             return ValueTask.FromResult((TValue)result!);
@@ -443,10 +844,15 @@ public sealed class ProfileSyncDeletionProjectionTests
             return true;
         }
 
-        private bool SaveTradeOrder()
+        private async ValueTask<TValue> SaveTradeOrderAsync<TValue>(TradeOrder order)
         {
+            if (BeforeSaveTradeOrderAsync != null)
+            {
+                await BeforeSaveTradeOrderAsync(order);
+            }
             SaveTradeOrderCount++;
-            return true;
+            DurableOrder = order;
+            return (TValue)(object)true;
         }
     }
 }

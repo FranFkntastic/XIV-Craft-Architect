@@ -24,6 +24,7 @@ public enum HostedOrderCommittedProjectionResult
 
 public sealed class HostedOrderProjectionStore
 {
+    private const int CommittedWinnerReconciliationLimit = 4;
     private readonly object _gate = new();
     private readonly Dictionary<Guid, HostedOrderProjectionSnapshot> _orders = [];
     private string? _profileId;
@@ -274,6 +275,93 @@ public sealed class HostedOrderProjectionStore
             RestoreStateChanged?.Invoke(RestoreState);
         }
         return result;
+    }
+
+    public async Task<HostedOrderCommittedProjectionResult> AdoptAndPersistCommittedOrderAsync(
+        HostedOrderAuthorityScope authority,
+        TradeOrder order,
+        long objectRevision,
+        Func<HostedOrderProjectionSnapshot, Task> persist,
+        Func<Task<bool>>? authorityIsCurrent = null,
+        Func<Task>? rollback = null)
+    {
+        ArgumentNullException.ThrowIfNull(persist);
+        authorityIsCurrent ??= () => Task.FromResult(IsCurrentAuthority(authority));
+        if (!await authorityIsCurrent())
+        {
+            return HostedOrderCommittedProjectionResult.ScopeChanged;
+        }
+
+        var adoption = TryAdoptCommittedOrder(authority, order, objectRevision);
+        if (adoption is not (
+            HostedOrderCommittedProjectionResult.Adopted or
+            HostedOrderCommittedProjectionResult.AlreadyCurrent))
+        {
+            return adoption;
+        }
+
+        var candidate = Get(order.Id);
+        for (var attempt = 0; attempt < CommittedWinnerReconciliationLimit; attempt++)
+        {
+            if (candidate == null)
+            {
+                return HostedOrderCommittedProjectionResult.Stale;
+            }
+            if (!await authorityIsCurrent())
+            {
+                return HostedOrderCommittedProjectionResult.ScopeChanged;
+            }
+
+            await persist(candidate);
+            if (!await authorityIsCurrent())
+            {
+                if (rollback != null)
+                {
+                    await rollback();
+                }
+                return HostedOrderCommittedProjectionResult.ScopeChanged;
+            }
+
+            var winner = Get(order.Id);
+            if (winner == null)
+            {
+                return HostedOrderCommittedProjectionResult.Stale;
+            }
+            if (winner.ObjectRevision == candidate.ObjectRevision &&
+                winner.Deleted == candidate.Deleted)
+            {
+                return adoption;
+            }
+            candidate = winner;
+        }
+
+        throw new InvalidOperationException(
+            "The hosted order changed repeatedly while browser persistence reconciled its committed winner.");
+    }
+
+    public bool TryRollbackCommittedOrder(
+        HostedOrderAuthorityScope authority,
+        long expectedCommittedRevision,
+        HostedOrderProjectionSnapshot previous)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        var rolledBack = false;
+        lock (_gate)
+        {
+            if (!IsCurrentAuthorityUnderLock(authority) ||
+                !_orders.TryGetValue(previous.OrderId, out var current) ||
+                current.ObjectRevision != expectedCommittedRevision)
+            {
+                return false;
+            }
+            _orders[previous.OrderId] = previous;
+            rolledBack = true;
+        }
+        if (rolledBack)
+        {
+            Changed?.Invoke(previous);
+        }
+        return rolledBack;
     }
 
     public bool TryPublishOwner(CompanyCommissionOwnerProjection projection)

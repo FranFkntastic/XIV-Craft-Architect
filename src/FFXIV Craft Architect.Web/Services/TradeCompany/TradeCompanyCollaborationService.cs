@@ -240,6 +240,8 @@ public sealed class TradeCompanyCollaborationService(
             authority,
             hostedOrder,
             published.OrderRecord.RecordRevision.Value,
+            order,
+            revision,
             "The company brief was attached by Profile Hosting, but browser storage could not apply the authoritative order.");
         return published.Link;
     }
@@ -298,6 +300,9 @@ public sealed class TradeCompanyCollaborationService(
         try
         {
             var authority = await CaptureOrderAuthorityAsync();
+            var rollbackRevision = await localState.LoadObjectRevisionAsync(
+                ProfileSyncCollections.TradeOrders,
+                order.Id.ToString("D"));
             var receipt = accept
                 ? await client.AcceptAsync(
                     order.CompanyProfileId,
@@ -323,6 +328,8 @@ public sealed class TradeCompanyCollaborationService(
                     authority,
                     receipt.UpdatedOrder,
                     receipt.UpdatedOrderRevision.Value,
+                    order,
+                    rollbackRevision,
                     "The hosted assignment was accepted, but the order could not be saved locally.");
             }
 
@@ -368,41 +375,59 @@ public sealed class TradeCompanyCollaborationService(
         OrderCommandAuthority authority,
         TradeOrder order,
         long revision,
+        TradeOrder rollbackOrder,
+        long rollbackRevision,
         string persistenceFailure)
     {
-        if (!await IsCurrentAuthorityAsync(authority))
-        {
-            throw new InvalidOperationException(
-                "The committed order response belongs to a previous hosted profile scope.");
-        }
-        var adoption = hostedOrders.TryAdoptCommittedOrder(
+        var previousProjection = hostedOrders.Get(order.Id);
+        var adoption = await hostedOrders.AdoptAndPersistCommittedOrderAsync(
             authority.Projection,
             order,
-            revision);
-        if (adoption == HostedOrderCommittedProjectionResult.AlreadyCurrent)
-        {
-            return;
-        }
-        if (adoption != HostedOrderCommittedProjectionResult.Adopted ||
-            !await IsCurrentAuthorityAsync(authority))
+            revision,
+            async candidate =>
+            {
+                var persisted = candidate.Deleted
+                    ? await tradeOperations.DeleteOrderAsync(candidate.OrderId)
+                    : await tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
+                if (!persisted)
+                {
+                    throw new InvalidOperationException(persistenceFailure);
+                }
+                await localState.SaveObjectRevisionAsync(
+                    ProfileSyncCollections.TradeOrders,
+                    candidate.OrderId.ToString("D"),
+                    candidate.ObjectRevision);
+            },
+            () => IsCurrentAuthorityAsync(authority),
+            async () =>
+            {
+                if (previousProjection != null)
+                {
+                    hostedOrders.TryRollbackCommittedOrder(
+                        authority.Projection,
+                        revision,
+                        previousProjection);
+                }
+                if (!await tradeOperations.ApplyCanonicalOrderAsync(rollbackOrder))
+                {
+                    throw new InvalidOperationException(
+                        "The previous durable order could not be restored after its hosted scope changed.");
+                }
+                if (rollbackRevision > 0)
+                {
+                    await localState.SaveObjectRevisionAsync(
+                        ProfileSyncCollections.TradeOrders,
+                        rollbackOrder.Id.ToString("D"),
+                        rollbackRevision);
+                }
+            });
+        if (adoption is not (
+            HostedOrderCommittedProjectionResult.Adopted or
+            HostedOrderCommittedProjectionResult.AlreadyCurrent))
         {
             throw new InvalidOperationException(
                 $"The committed order response was not applied because its authority is {adoption}.");
         }
-
-        if (!await tradeOperations.ApplyCanonicalOrderAsync(order))
-        {
-            throw new InvalidOperationException(persistenceFailure);
-        }
-        if (!await IsCurrentAuthorityAsync(authority))
-        {
-            throw new InvalidOperationException(
-                "The hosted order authority changed before its revision could be saved.");
-        }
-        await localState.SaveObjectRevisionAsync(
-            ProfileSyncCollections.TradeOrders,
-            order.Id.ToString("D"),
-            revision);
     }
 
     private async Task<bool> IsCurrentAuthorityAsync(OrderCommandAuthority authority)
