@@ -17,6 +17,9 @@ public sealed class TradeCommissionOperationsService(
     AppState appState)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private sealed record OrderCommandAuthority(
+        HostedOrderAuthorityScope Projection,
+        HostedProfileConnectionSettings Connection);
     private readonly Dictionary<Guid, string> _errors = [];
     private readonly HashSet<Guid> _missingCanonicalOwners = [];
     private readonly Dictionary<Guid, IReadOnlyList<TradeDiscordNotificationDiagnostic>>
@@ -83,16 +86,18 @@ public sealed class TradeCommissionOperationsService(
 
         try
         {
+            var authority = await CaptureOrderAuthorityAsync();
             var companyId = order.CompanyCommission?.CompanyId ??
                 throw new InvalidOperationException(
                     "The cached order does not contain canonical company ownership.");
             var commissionId = order.CompanyCommission.CommissionId;
             var projection = await client.LoadOwnerProjectionAsync(
+                authority.Connection,
                 companyId.Value,
                 commissionId,
                 cancellationToken);
             ValidateProjection(order, projection);
-            await ApplyProjectionAsync(projection);
+            await ApplyProjectionAsync(authority, projection);
         }
         catch (MissingCompanyCommissionOwnerException exception)
         {
@@ -637,6 +642,7 @@ public sealed class TradeCommissionOperationsService(
         var commandProjection = current;
         try
         {
+            var authority = await CaptureOrderAuthorityAsync();
             for (var attempt = 0; attempt < 2; attempt++)
             {
                 ValidateProjection(current.Order, commandProjection);
@@ -647,18 +653,20 @@ public sealed class TradeCommissionOperationsService(
                     response = await client.ExecuteAsync(
                         route,
                         createCommand(context),
-                        cancellationToken);
+                        cancellationToken,
+                        authority.Connection);
                 }
                 catch (CompanyCommissionRevisionConflictException)
                     when (attempt == 0 && CanReplayAfterRevisionConflict(route))
                 {
                     var commission = RequireCommission(commandProjection);
                     commandProjection = await client.LoadOwnerProjectionAsync(
+                        authority.Connection,
                         commission.CompanyId.Value,
                         commission.CommissionId,
                         cancellationToken);
                     ValidateProjection(current.Order, commandProjection);
-                    await ApplyProjectionAsync(commandProjection);
+                    await ApplyProjectionAsync(authority, commandProjection);
                     continue;
                 }
 
@@ -685,7 +693,7 @@ public sealed class TradeCommissionOperationsService(
                 {
                     ValidateCapabilityUrl(updated, response.ClaimUrl, "claim");
                 }
-                await ApplyProjectionAsync(updated);
+                await ApplyProjectionAsync(authority, updated);
                 return new TradeCommissionOperatorResult(
                     true,
                     updated,
@@ -723,22 +731,92 @@ public sealed class TradeCommissionOperationsService(
             _ => false,
         };
 
-    private async Task ApplyProjectionAsync(CompanyCommissionOwnerProjection projection)
+    private async Task<OrderCommandAuthority> CaptureOrderAuthorityAsync()
     {
-        if (!await tradeOperations.ApplyCanonicalOrderAsync(projection.Order))
+        var projection = hostedOrders.CaptureAuthorityScope();
+        var connection = await localState.LoadConnectionSettingsAsync();
+        if (string.IsNullOrWhiteSpace(projection.ProfileId) ||
+            string.IsNullOrWhiteSpace(connection.ConnectionScopeId) ||
+            !string.Equals(
+                projection.ProfileId,
+                profileSync.CurrentStatus.ProfileId,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                projection.ProfileId,
+                connection.ProfileScopeId,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                projection.ConnectionScopeId,
+                connection.ConnectionScopeId,
+                StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "The owner projection was authoritative, but browser storage could not apply its Trade order.");
+                "The hosted order authority is not ready for this commission operation.");
         }
+        return new OrderCommandAuthority(projection, connection.Snapshot());
+    }
 
-        await localState.SaveObjectRevisionAsync(
-            ProfileSyncCollections.TradeOrders,
-            projection.Order.Id.ToString("D"),
-            projection.ObjectRevision.Value);
-        hostedOrders.TryPublishOwner(projection);
+    private async Task ApplyProjectionAsync(
+        OrderCommandAuthority authority,
+        CompanyCommissionOwnerProjection projection)
+    {
+        var adoption = await hostedOrders.AdoptAndPersistCommittedOwnerAsync(
+            authority.Projection,
+            projection,
+            async winner =>
+            {
+                var persisted = winner.Deleted
+                    ? await tradeOperations.DeleteOrderAsync(winner.OrderId)
+                    : await tradeOperations.ApplyCanonicalOrderAsync(winner.Order!);
+                if (!persisted)
+                {
+                    throw new InvalidOperationException(
+                        "The owner projection was authoritative, but browser storage could not apply its Trade order.");
+                }
+                if (!await IsCurrentAuthorityAsync(authority))
+                {
+                    throw new InvalidOperationException(
+                        "The hosted order authority changed while commission persistence was in progress.");
+                }
+                await localState.SaveObjectRevisionAsync(
+                    authority.Connection,
+                    ProfileSyncCollections.TradeOrders,
+                    winner.OrderId.ToString("D"),
+                    winner.ObjectRevision);
+            },
+            () => IsCurrentAuthorityAsync(authority));
+        if (adoption is not (
+            HostedOrderCommittedProjectionResult.Adopted or
+            HostedOrderCommittedProjectionResult.AlreadyCurrent))
+        {
+            throw new InvalidOperationException(
+                $"The committed commission projection could not be applied because its authority is {adoption}.");
+        }
         _errors.Remove(projection.Order.Id);
         _missingCanonicalOwners.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
+    }
+
+    private async Task ApplyProjectionAsync(CompanyCommissionOwnerProjection projection) =>
+        await ApplyProjectionAsync(
+            await CaptureOrderAuthorityAsync(),
+            projection);
+
+    private async Task<bool> IsCurrentAuthorityAsync(OrderCommandAuthority authority)
+    {
+        if (!hostedOrders.IsCurrentAuthority(authority.Projection))
+        {
+            return false;
+        }
+        var connection = await localState.LoadConnectionSettingsAsync();
+        return string.Equals(
+                   authority.Connection.ConnectionScopeId,
+                   connection.ConnectionScopeId,
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   authority.Connection.ProfileScopeId,
+                   connection.ProfileScopeId,
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private static IReadOnlyList<TradeRequestedOrderOutput> GetRequestedOutputs(

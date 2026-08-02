@@ -69,7 +69,8 @@ public sealed class TradeCommissionOperationsClient(
     public async Task<TradeCommissionOwnerMutationResponse> ExecuteAsync<TCommand>(
         string route,
         TCommand command,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
         where TCommand : ICompanyCommissionCommand
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(route);
@@ -79,7 +80,8 @@ public sealed class TradeCommissionOperationsClient(
             $"{command.Context.CommissionId:D}/commands/{route}",
             command,
             typeof(TCommand),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
         {
             var problem = await ReadProblemAsync(response, cancellationToken);
