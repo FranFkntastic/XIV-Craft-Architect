@@ -5,14 +5,9 @@ namespace FFXIV_Craft_Architect.SpecTests;
 
 public sealed class CompanyCommissionGateRevisionSpecificationTests
 {
-    private static readonly DateTime StartedAt =
-        new(2026, 8, 1, 14, 0, 0, DateTimeKind.Utc);
-
-    private static readonly CompanyCommissionActor Commissioner =
-        new("commissioner", CompanyCommissionActorKind.Commissioner, "Commissioner");
-
-    private static readonly CompanyCommissionActor Crafter =
-        new("crafter", CompanyCommissionActorKind.Crafter, "Crafter");
+    private static readonly DateTime StartedAt = new(2026, 8, 1, 14, 0, 0, DateTimeKind.Utc);
+    private static readonly CompanyCommissionActor Commissioner = new("commissioner", CompanyCommissionActorKind.Commissioner, "Commissioner");
+    private static readonly CompanyCommissionActor Crafter = new("crafter", CompanyCommissionActorKind.Crafter, "Crafter");
 
     public static void AssertAll()
     {
@@ -34,27 +29,13 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
     {
         switch (scenario)
         {
-            case GateRevisionScenario.UnchangedBoundFacts:
-                TermsRevisionPreservesSatisfiedGatesWhoseBoundFactsDidNotChange();
-                break;
-            case GateRevisionScenario.PaymentChanged:
-                PaymentChangeResetsOnlyPaymentEvidence();
-                break;
-            case GateRevisionScenario.PartialPaymentAfterRevision:
-                UnchangedPartialPaymentEvidenceCanCompleteAfterTermsRevision();
-                break;
-            case GateRevisionScenario.MaterialQuantityChanged:
-                CompanyMaterialPromiseChangeResetsOnlyHandoffEvidence();
-                break;
-            case GateRevisionScenario.MaterialQualityChanged:
-                CompanyMaterialQualityChangeResetsOnlyHandoffEvidence();
-                break;
-            case GateRevisionScenario.PaymentClearsFirst:
-                PaymentAndCompanyMaterialGatesCanClearInEitherOrder(paymentFirst: true);
-                break;
-            case GateRevisionScenario.MaterialsClearFirst:
-                PaymentAndCompanyMaterialGatesCanClearInEitherOrder(paymentFirst: false);
-                break;
+            case GateRevisionScenario.UnchangedBoundFacts: TermsRevisionPreservesSatisfiedGatesWhoseBoundFactsDidNotChange(); break;
+            case GateRevisionScenario.PaymentChanged: PaymentChangeResetsOnlyPaymentEvidence(); break;
+            case GateRevisionScenario.PartialPaymentAfterRevision: UnchangedPartialPaymentEvidenceCanCompleteAfterTermsRevision(); break;
+            case GateRevisionScenario.MaterialQuantityChanged: CompanyMaterialPromiseChangeResetsOnlyHandoffEvidence(); break;
+            case GateRevisionScenario.MaterialQualityChanged: CompanyMaterialQualityChangeResetsOnlyHandoffEvidence(); break;
+            case GateRevisionScenario.PaymentClearsFirst: PaymentAndCompanyMaterialGatesCanClearInEitherOrder(paymentFirst: true); break;
+            case GateRevisionScenario.MaterialsClearFirst: PaymentAndCompanyMaterialGatesCanClearInEitherOrder(paymentFirst: false); break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
         }
@@ -66,27 +47,16 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
 
         Assert.True(order.CompanyCommission!.ClearedToWork);
         Assert.Equal(TradeOrderStatus.Assigned, order.Status);
-        Assert.All(
-            order.CompanyCommission.OutputProgress,
-            progress => Assert.Equal(0, progress.CompletedQuantity));
+        Assert.All(order.CompanyCommission.OutputProgress, progress => Assert.Equal(0, progress.CompletedQuantity));
     }
 
     public void CrafterProgressProjectsToPublicAndParticipantBriefs()
     {
         var order = CompleteBothGates(CreateClaimedOrder());
         var progress = Assert.Single(order.CompanyCommission!.OutputProgress);
-        var transition = CompanyCommissionCommandWorkflow.Apply(
-            order,
-            new ReportCompanyCommissionProgressCommand(
-                Context(order),
-                [new CompanyCommissionProgressQuantity(
-                    progress.LineId,
-                    progress.ItemId,
-                    CompletedQuantity: 1,
-                    ReadyQuantity: 1)],
-                "Ready for handoff."),
-            Crafter,
-            StartedAt.AddMinutes(5));
+        var report = new CompanyCommissionProgressQuantity(progress.LineId, progress.ItemId, CompletedQuantity: 1, ReadyQuantity: 1);
+        var command = new ReportCompanyCommissionProgressCommand(Context(order), [report], "Ready for handoff.");
+        var transition = CompanyCommissionCommandWorkflow.Apply(order, command, Crafter, StartedAt.AddMinutes(5));
         order = transition.UpdatedOrder;
 
         var publicBrief = CompanyCommissionProjectionService.CreatePublicBrief(order, "Test Company");
@@ -105,24 +75,14 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
     {
         var order = PreparePartialGateEvidence(CreateClaimedOrder());
         var original = order.CompanyCommission!;
-        var nextTerms = original.CurrentTerms with
-        {
-            Version = 2,
-            DeliveryInstructions = "Deliver in Gridania."
-        };
+        var nextTerms = original.CurrentTerms with { Version = 2, DeliveryInstructions = "Deliver in Gridania." };
 
         order = Amend(order, nextTerms);
         var revised = order.CompanyCommission!;
-        var participant = CompanyCommissionProjectionService.CreateParticipantBrief(
-            order,
-            "Test Company");
+        var participant = CompanyCommissionProjectionService.CreateParticipantBrief(order, "Test Company");
 
-        Assert.Equal(
-            original.Gates.Payment.CommissionerSent,
-            revised.Gates.Payment.CommissionerSent);
-        Assert.Equal(
-            original.Gates.CompanyMaterials.ReadyAtUtc,
-            revised.Gates.CompanyMaterials.ReadyAtUtc);
+        Assert.Equal(original.Gates.Payment.CommissionerSent, revised.Gates.Payment.CommissionerSent);
+        Assert.Equal(original.Gates.CompanyMaterials.ReadyAtUtc, revised.Gates.CompanyMaterials.ReadyAtUtc);
         Assert.NotNull(participant.Payment.CommissionerSent);
         Assert.Null(participant.Payment.CrafterReceived);
         Assert.True(participant.CompanyMaterialsReadyForHandoff);
@@ -140,19 +100,11 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
                 MaterialAdjustment = original.CurrentTerms.Payment.MaterialAdjustment + 25,
                 Total = original.CurrentTerms.Payment.Total + 25
             },
-            Materials =
-            [
-                original.CurrentTerms.Materials[0] with
-                {
-                    Quantity = original.CurrentTerms.Materials[0].Quantity + 1
-                }
-            ]
+            Materials = [original.CurrentTerms.Materials[0] with { Quantity = original.CurrentTerms.Materials[0].Quantity + 1 }]
         };
 
         order = Amend(order, nextTerms);
-        var participant = CompanyCommissionProjectionService.CreateParticipantBrief(
-            order,
-            "Test Company");
+        var participant = CompanyCommissionProjectionService.CreateParticipantBrief(order, "Test Company");
 
         Assert.Null(participant.Payment.CommissionerSent);
         Assert.Null(participant.Payment.CrafterReceived);
@@ -195,12 +147,8 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
 
         Assert.Equal(2, revised.CurrentTermsVersion);
         Assert.Equal(2, revised.Gates.Payment.TermsVersion);
-        Assert.Equal(
-            original.Gates.Payment.CommissionerSent,
-            revised.Gates.Payment.CommissionerSent);
-        Assert.Equal(
-            original.Gates.Payment.CrafterReceived,
-            revised.Gates.Payment.CrafterReceived);
+        Assert.Equal(original.Gates.Payment.CommissionerSent, revised.Gates.Payment.CommissionerSent);
+        Assert.Equal(original.Gates.Payment.CrafterReceived, revised.Gates.Payment.CrafterReceived);
         Assert.Equal(original.Gates.Payment.State, revised.Gates.Payment.State);
         Assert.Equal(original.Gates.CompanyMaterials, revised.Gates.CompanyMaterials);
         Assert.True(revised.ClearedToWork);
@@ -214,11 +162,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         var nextTerms = original.CurrentTerms with
         {
             Version = 2,
-            Payment = original.CurrentTerms.Payment with
-            {
-                MaterialAdjustment = 25,
-                Total = original.CurrentTerms.Payment.Total + 25
-            }
+            Payment = original.CurrentTerms.Payment with { MaterialAdjustment = 25, Total = original.CurrentTerms.Payment.Total + 25 }
         };
 
         var revised = Amend(order, nextTerms).CompanyCommission!;
@@ -233,33 +177,14 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
     private static void UnchangedPartialPaymentEvidenceCanCompleteAfterTermsRevision()
     {
         var order = CreateClaimedOrder();
-        order = Apply(
-            order,
-            new RecordCompanyCommissionPaymentCommand(
-                Context(order),
-                "Advance payment sent."),
-            Commissioner,
-            1);
+        order = RecordPayment(order);
         var originalAttestation = order.CompanyCommission!.Gates.Payment.CommissionerSent;
-        var nextTerms = order.CompanyCommission.CurrentTerms with
-        {
-            Version = 2,
-            DeliveryInstructions = "Deliver in Gridania."
-        };
+        var nextTerms = order.CompanyCommission.CurrentTerms with { Version = 2, DeliveryInstructions = "Deliver in Gridania." };
         order = Amend(order, nextTerms);
 
-        order = Apply(
-            order,
-            new ConfirmCompanyCommissionPaymentReceivedCommand(
-                Context(order),
-                2,
-                "Advance payment received."),
-            Crafter,
-            11);
+        order = ConfirmPayment(order, minute: 11);
 
-        Assert.Equal(
-            CompanyCommissionClearanceState.Satisfied,
-            order.CompanyCommission!.Gates.Payment.State);
+        Assert.Equal(CompanyCommissionClearanceState.Satisfied, order.CompanyCommission!.Gates.Payment.State);
         Assert.Equal(2, order.CompanyCommission.Gates.Payment.TermsVersion);
         Assert.Equal(originalAttestation, order.CompanyCommission.Gates.Payment.CommissionerSent);
         Assert.Equal(1, order.CompanyCommission.Gates.Payment.CommissionerSent!.TermsVersion);
@@ -271,21 +196,13 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         var order = CompleteBothGates(CreateClaimedOrder());
         var original = order.CompanyCommission!;
         var changedMaterial = original.CurrentTerms.Materials[0] with { Quantity = 4 };
-        var nextTerms = original.CurrentTerms with
-        {
-            Version = 2,
-            Materials = [changedMaterial]
-        };
+        var nextTerms = original.CurrentTerms with { Version = 2, Materials = [changedMaterial] };
 
         var revised = Amend(order, nextTerms).CompanyCommission!;
 
         Assert.Equal(2, revised.Gates.Payment.TermsVersion);
-        Assert.Equal(
-            original.Gates.Payment.CommissionerSent,
-            revised.Gates.Payment.CommissionerSent);
-        Assert.Equal(
-            original.Gates.Payment.CrafterReceived,
-            revised.Gates.Payment.CrafterReceived);
+        Assert.Equal(original.Gates.Payment.CommissionerSent, revised.Gates.Payment.CommissionerSent);
+        Assert.Equal(original.Gates.Payment.CrafterReceived, revised.Gates.Payment.CrafterReceived);
         Assert.Equal(original.Gates.Payment.State, revised.Gates.Payment.State);
         Assert.Equal(CompanyCommissionClearanceState.Pending, revised.Gates.CompanyMaterials.State);
         Assert.Null(revised.Gates.CompanyMaterials.ReadyAtUtc);
@@ -298,19 +215,13 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         var order = CompleteBothGates(CreateClaimedOrder());
         var original = order.CompanyCommission!;
         var changedMaterial = original.CurrentTerms.Materials[0] with { RequiresHq = true };
-        var nextTerms = original.CurrentTerms with
-        {
-            Version = 2,
-            Materials = [changedMaterial]
-        };
+        var nextTerms = original.CurrentTerms with { Version = 2, Materials = [changedMaterial] };
 
         var revised = Amend(order, nextTerms).CompanyCommission!;
 
         Assert.Equal(2, revised.Gates.Payment.TermsVersion);
         Assert.Equal(original.Gates.Payment.State, revised.Gates.Payment.State);
-        Assert.Equal(
-            CompanyCommissionClearanceState.Pending,
-            revised.Gates.CompanyMaterials.State);
+        Assert.Equal(CompanyCommissionClearanceState.Pending, revised.Gates.CompanyMaterials.State);
         Assert.Null(revised.Gates.CompanyMaterials.ReadyAtUtc);
         Assert.Null(revised.Gates.CompanyMaterials.ReceivedAtUtc);
     }
@@ -329,101 +240,36 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
     private static TradeOrder CompleteBothGates(TradeOrder order) =>
         CompleteMaterials(CompletePayment(order));
 
-    private static TradeOrder PreparePartialGateEvidence(TradeOrder order)
-    {
-        order = Apply(
-            order,
-            new RecordCompanyCommissionPaymentCommand(
-                Context(order),
-                "Advance payment sent."),
-            Commissioner,
-            1);
-        return Apply(
-            order,
-            new MarkCompanyCommissionMaterialsReadyCommand(
-                Context(order),
-                order.CompanyCommission!.Gates.CompanyMaterials.PromisedQuantities),
-            Commissioner,
-            2);
-    }
+    private static TradeOrder PreparePartialGateEvidence(TradeOrder order) => MarkMaterials(RecordPayment(order), minute: 2);
 
-    private static TradeOrder CompletePayment(TradeOrder order)
-    {
-        order = Apply(
-            order,
-            new RecordCompanyCommissionPaymentCommand(
-                Context(order),
-                "Advance payment sent."),
-            Commissioner,
-            1);
-        return Apply(
-            order,
-            new ConfirmCompanyCommissionPaymentReceivedCommand(
-                Context(order),
-                order.CompanyCommission!.CurrentTermsVersion,
-                "Advance payment received."),
-            Crafter,
-            2);
-    }
+    private static TradeOrder CompletePayment(TradeOrder order) => ConfirmPayment(RecordPayment(order));
 
-    private static TradeOrder CompleteMaterials(TradeOrder order)
-    {
-        var quantities = order.CompanyCommission!.Gates.CompanyMaterials.PromisedQuantities;
-        order = Apply(
-            order,
-            new MarkCompanyCommissionMaterialsReadyCommand(Context(order), quantities),
-            Commissioner,
-            3);
-        return Apply(
-            order,
-            new AcknowledgeCompanyCommissionMaterialsCommand(Context(order), quantities),
-            Crafter,
-            4);
-    }
+    private static TradeOrder CompleteMaterials(TradeOrder order) => AcknowledgeMaterials(MarkMaterials(order));
 
-    private static TradeOrder Apply(
-        TradeOrder order,
-        ICompanyCommissionCommand command,
-        CompanyCommissionActor actor,
-        int minute) =>
-        CompanyCommissionCommandWorkflow.Apply(
-            order,
-            command,
-            actor,
-            StartedAt.AddMinutes(minute)).UpdatedOrder;
+    private static TradeOrder RecordPayment(TradeOrder order, int minute = 1) =>
+        Apply(order, new RecordCompanyCommissionPaymentCommand(Context(order), "Advance payment sent."), Commissioner, minute);
 
-    private static TradeOrder Amend(
-        TradeOrder order,
-        CompanyCommissionTermsVersion terms) =>
-        Apply(
-            order,
-            new AmendCompanyCommissionTermsCommand(
-                Context(order),
-                terms,
-                "Update commission terms."),
-            Commissioner,
-            10);
+    private static TradeOrder ConfirmPayment(TradeOrder order, int minute = 2) =>
+        Apply(order, new ConfirmCompanyCommissionPaymentReceivedCommand(Context(order), order.CompanyCommission!.CurrentTermsVersion, "Advance payment received."), Crafter, minute);
+
+    private static TradeOrder MarkMaterials(TradeOrder order, int minute = 3) =>
+        Apply(order, new MarkCompanyCommissionMaterialsReadyCommand(Context(order), order.CompanyCommission!.Gates.CompanyMaterials.PromisedQuantities), Commissioner, minute);
+
+    private static TradeOrder AcknowledgeMaterials(TradeOrder order, int minute = 4) =>
+        Apply(order, new AcknowledgeCompanyCommissionMaterialsCommand(Context(order), order.CompanyCommission!.Gates.CompanyMaterials.PromisedQuantities), Crafter, minute);
+
+    private static TradeOrder Apply(TradeOrder order, ICompanyCommissionCommand command, CompanyCommissionActor actor, int minute) =>
+        CompanyCommissionCommandWorkflow.Apply(order, command, actor, StartedAt.AddMinutes(minute)).UpdatedOrder;
+
+    private static TradeOrder Amend(TradeOrder order, CompanyCommissionTermsVersion terms) =>
+        Apply(order, new AmendCompanyCommissionTermsCommand(Context(order), terms, "Update commission terms."), Commissioner, 10);
 
     private static TradeOrder CreateClaimedOrder()
     {
         var orderId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        var companyId = new CompanyId(
-            Guid.Parse("22222222-2222-2222-2222-222222222222"));
-        var output = new CompanyCommissionOutputTerm(
-            Guid.Parse("33333333-3333-3333-3333-333333333333"),
-            10,
-            "Test output",
-            1,
-            false);
-        var material = new CompanyCommissionMaterialTerm(
-            Guid.Parse("44444444-4444-4444-4444-444444444444"),
-            20,
-            "Test material",
-            3,
-            false,
-            CommissionMaterialResponsibility.Provided,
-            100,
-            300);
+        var companyId = new CompanyId(Guid.Parse("22222222-2222-2222-2222-222222222222"));
+        var output = new CompanyCommissionOutputTerm(Guid.Parse("33333333-3333-3333-3333-333333333333"), 10, "Test output", 1, false);
+        var material = new CompanyCommissionMaterialTerm(Guid.Parse("44444444-4444-4444-4444-444444444444"), 20, "Test material", 3, false, CommissionMaterialResponsibility.Provided, 100, 300);
         var terms = new CompanyCommissionTermsVersion
         {
             Version = 1,
@@ -431,27 +277,11 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
             CreatedBy = Commissioner,
             Outputs = [output],
             Materials = [material],
-            Payment = new CompanyCommissionPaymentTerms(
-                CompanyCommissionPaymentSchedule.Advance,
-                "Advance commission",
-                300,
-                0,
-                100,
-                400),
+            Payment = new CompanyCommissionPaymentTerms(CompanyCommissionPaymentSchedule.Advance, "Advance commission", 300, 0, 100, 400),
             DeliveryInstructions = "Deliver in Limsa.",
-            PricingEvidence = new CompanyCommissionPricingEvidence(
-                "Selected routes",
-                "Aether",
-                "Siren",
-                StartedAt)
+            PricingEvidence = new CompanyCommissionPricingEvidence("Selected routes", "Aether", "Siren", StartedAt)
         };
-        var materialQuantities = new[]
-        {
-            new CompanyCommissionMaterialQuantity(
-                material.LineId,
-                material.ItemId,
-                material.Quantity)
-        };
+        var materialQuantities = new[] { new CompanyCommissionMaterialQuantity(material.LineId, material.ItemId, material.Quantity) };
 
         return new TradeOrder
         {
@@ -485,42 +315,14 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
                     ViewState = CompanyCommissionPublicViewState.Published
                 },
                 ActiveClaimCapabilityRevision = 1,
-                ActiveClaim = new CompanyCommissionClaim(
-                    Guid.Parse("66666666-6666-6666-6666-666666666666"),
-                    1,
-                    StartedAt,
-                    Guid.Parse("55555555-5555-5555-5555-555555555555"),
-                    null),
-                ParticipantGrant = new CompanyCommissionParticipantGrant(
-                    Guid.Parse("77777777-7777-7777-7777-777777777777"),
-                    Guid.Parse("66666666-6666-6666-6666-666666666666"),
-                    1,
-                    1,
-                    StartedAt),
+                ActiveClaim = new CompanyCommissionClaim(Guid.Parse("66666666-6666-6666-6666-666666666666"), 1, StartedAt, Guid.Parse("55555555-5555-5555-5555-555555555555"), null),
+                ParticipantGrant = new CompanyCommissionParticipantGrant(Guid.Parse("77777777-7777-7777-7777-777777777777"), Guid.Parse("66666666-6666-6666-6666-666666666666"), 1, 1, StartedAt),
                 ParticipantAcknowledgedTermsVersion = 1,
                 Gates = new CompanyCommissionGateState(
-                    new CompanyCommissionIdentityClearance(
-                        CompanyCommissionClearanceState.Satisfied,
-                        OwnershipConfirmedAtUtc: StartedAt,
-                        ConfirmedByActorId: Commissioner.ActorId),
-                    new CompanyCommissionPaymentClearance(
-                        CompanyCommissionClearanceState.Pending,
-                        TermsVersion: 1),
-                    new CompanyCommissionMaterialClearance(
-                        CompanyCommissionClearanceState.Pending,
-                        materialQuantities)),
-                OutputProgress =
-                [
-                    new CompanyCommissionOutputProgress(
-                        output.LineId,
-                        output.ItemId,
-                        output.RequiredQuantity,
-                        0,
-                        0,
-                        0,
-                        StartedAt,
-                        Commissioner)
-                ],
+                    new CompanyCommissionIdentityClearance(CompanyCommissionClearanceState.Satisfied, OwnershipConfirmedAtUtc: StartedAt, ConfirmedByActorId: Commissioner.ActorId),
+                    new CompanyCommissionPaymentClearance(CompanyCommissionClearanceState.Pending, TermsVersion: 1),
+                    new CompanyCommissionMaterialClearance(CompanyCommissionClearanceState.Pending, materialQuantities)),
+                OutputProgress = [new CompanyCommissionOutputProgress(output.LineId, output.ItemId, output.RequiredQuantity, 0, 0, 0, StartedAt, Commissioner)],
                 DeliveryReadiness = new CompanyCommissionDeliveryReadiness(false),
                 SettlementState = CompanyCommissionSettlementState.NotDue
             }
@@ -528,13 +330,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
     }
 
     private static CompanyCommissionCommandContext Context(TradeOrder order) =>
-        new(
-            order.CompanyCommission!.CompanyId,
-            order.Id,
-            new CompanyRecordRevision(1),
-            new CompanyRecordRevision(1),
-            Guid.NewGuid(),
-            CompanyCommissionProtocol.Version1);
+        new(order.CompanyCommission!.CompanyId, order.Id, new CompanyRecordRevision(1), new CompanyRecordRevision(1), Guid.NewGuid(), CompanyCommissionProtocol.Version1);
 
     public enum GateRevisionScenario
     {
