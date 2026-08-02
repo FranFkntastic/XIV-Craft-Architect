@@ -5,6 +5,7 @@ using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -509,6 +510,7 @@ public sealed class ProfileHostContractTests
                 .GetRequiredService<IHostApplicationLifetime>()
                 .StopApplication();
             await application.DisposeAsync();
+            SqliteConnection.ClearAllPools();
             const int maximumDeleteAttempts = 50;
             for (var attempt = 0;
                  attempt < maximumDeleteAttempts && File.Exists(databasePath);
