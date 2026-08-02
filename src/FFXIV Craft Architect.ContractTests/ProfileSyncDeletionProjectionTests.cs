@@ -126,7 +126,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         var nextProfileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Publish me");
         var store = new HostedOrderProjectionStore();
-        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
         Assert.True(store.TryPublishRemoteOrder(order, 4));
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
         runtime.AddCompany(order.CompanyProfileId);
@@ -151,7 +156,8 @@ public sealed class ProfileSyncDeletionProjectionTests
                     nextProfileId,
                     false,
                     0,
-                    DateTime.UtcNow)))
+                    DateTime.UtcNow,
+                    ConnectionScope(nextProfileId))))
             {
                 BaseAddress = new Uri(Host)
             },
@@ -180,7 +186,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
         var store = new HostedOrderProjectionStore();
-        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
         Assert.True(store.TryPublishRemoteOrder(order, 4));
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
         var indexedDb = new IndexedDbService(runtime);
@@ -228,7 +239,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Original host");
         var store = new HostedOrderProjectionStore();
-        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
         Assert.True(store.TryPublishRemoteOrder(order, 4));
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
         var indexedDb = new IndexedDbService(runtime);
@@ -269,6 +285,106 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(0, runtime.SaveTradeOrderCount);
         Assert.Same(order, store.Get(order.Id)?.Order);
         Assert.Equal(4, store.Get(order.Id)?.ObjectRevision);
+        Assert.Equal(
+            0,
+            await localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                order.Id.ToString("D")));
+    }
+
+    [Fact]
+    public async Task AdapterRejectsReplacementHostBeforeProjectionOrPersistence()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Original host");
+        var replacement = CreateOrder(order.Id, order.CompanyProfileId, "Replacement host");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(order.CompanyProfileId);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await localState.LoadConnectionSettingsAsync();
+        runtime.SaveRawSetting(
+            ProfileSyncSettingsKeys.HostUrl,
+            JsonSerializer.Serialize("https://replacement.example/api/"));
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            store,
+            localState);
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            adapter.ApplyRemoteObjectAsync(Envelope(replacement, 5), default));
+
+        Assert.Contains("scope", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, runtime.SaveTradeOrderCount);
+        Assert.Same(order, store.Get(order.Id)?.Order);
+        Assert.Equal(
+            0,
+            await localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                order.Id.ToString("D")));
+    }
+
+    [Fact]
+    public async Task AdapterHostReplacementDuringPersistenceCannotWriteReplacementRevisionNamespace()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
+        var replacement = CreateOrder(order.Id, order.CompanyProfileId, "Revision five");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(order.CompanyProfileId);
+        runtime.BeforeSaveTradeOrderAsync = _ =>
+        {
+            runtime.SaveRawSetting(
+                ProfileSyncSettingsKeys.HostUrl,
+                JsonSerializer.Serialize("https://replacement.example/api/"));
+            return Task.CompletedTask;
+        };
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await localState.LoadConnectionSettingsAsync();
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            store,
+            localState);
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            adapter.ApplyRemoteObjectAsync(Envelope(replacement, 5), default));
+
+        Assert.Contains("authority", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Revision five", runtime.DurableOrder?.Title);
+        Assert.Equal(5, store.Get(order.Id)?.ObjectRevision);
+        Assert.Equal(
+            0,
+            await localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                order.Id.ToString("D")));
     }
 
     [Fact]
@@ -280,7 +396,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         var revisionFive = CreateOrder(original.Id, companyId, "Revision five");
         var revisionSix = CreateOrder(original.Id, companyId, "Revision six");
         var store = new HostedOrderProjectionStore();
-        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
         Assert.True(store.TryPublishRemoteOrder(original, 4));
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
         runtime.AddCompany(companyId);
@@ -332,7 +453,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision five");
         var store = new HostedOrderProjectionStore();
-        store.BeginProfileRestore(profileId, false, 5, DateTime.UtcNow);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            5,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
         Assert.True(store.TryPublishRemoteOrder(order, 5));
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
         runtime.AddCompany(order.CompanyProfileId);
@@ -360,7 +486,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
         var store = new HostedOrderProjectionStore();
-        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
         Assert.True(store.TryPublishRemoteOrder(order, 4));
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
         var firstWriteEntered = new TaskCompletionSource(
@@ -428,12 +559,17 @@ public sealed class ProfileSyncDeletionProjectionTests
     }
 
     [Fact]
-    public async Task ConnectionScopeChangeDuringPersistenceRollsBackProjectionAndDurableOrder()
+    public async Task ConnectionScopeChangeDuringPersistenceCannotWriteReplacementRevisionNamespace()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
         var store = new HostedOrderProjectionStore();
-        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
         Assert.True(store.TryPublishRemoteOrder(order, 4));
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
         var switched = false;
@@ -475,10 +611,15 @@ public sealed class ProfileSyncDeletionProjectionTests
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.PublishPortableLinkAsync(order, new CommissionBriefDocument()));
 
-        Assert.Contains("scope", failure.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("Revision four", runtime.DurableOrder?.Title);
-        Assert.Same(order, store.Get(order.Id)?.Order);
-        Assert.Equal(4, store.Get(order.Id)?.ObjectRevision);
+        Assert.Contains("authority", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Revision five", runtime.DurableOrder?.Title);
+        Assert.Equal(5, store.Get(order.Id)?.ObjectRevision);
+        Assert.Equal(
+            0,
+            await localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                order.Id.ToString("D")));
     }
 
     [Fact]
@@ -487,7 +628,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Owner revision four");
         var store = new HostedOrderProjectionStore();
-        store.BeginProfileRestore(profileId, false, 4, DateTime.UtcNow);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
         var ownerFour = Owner(order, 4, 8);
         Assert.True(store.TryPublishOwner(ownerFour));
         var authority = store.CaptureAuthorityScope();
@@ -515,7 +661,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         Action? beforeDeleteResponse = null)
     {
         var store = new HostedOrderProjectionStore();
-        store.BeginProfileRestore(profileId, false, 0, DateTime.UtcNow);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            0,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
         var indexedDb = new IndexedDbService(runtime);
         var localState = new ProfileSyncLocalStateService(
@@ -602,6 +753,9 @@ public sealed class ProfileSyncDeletionProjectionTests
             [ProfileSyncSettingsKeys.ConnectedProfileId] = JsonSerializer.Serialize(profileId),
             ["profileHost.connectedProfileName"] = JsonSerializer.Serialize("Test profile")
         };
+
+    private static string ConnectionScope(string profileId) =>
+        $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}";
 
     private static TradeOrder CreateOrder(Guid orderId, Guid companyProfileId, string title) =>
         new()

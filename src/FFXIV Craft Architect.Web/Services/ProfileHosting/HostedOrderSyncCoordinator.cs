@@ -223,7 +223,8 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 hasTrustedProjection: sameProfile &&
                                       _hostedOrders.RestoreState.ShowsCompleteProjection,
                 cursor,
-                DateTime.UtcNow);
+                DateTime.UtcNow,
+                settings.ConnectionScopeId!);
             IJSObjectReference? controller = null;
             try
             {

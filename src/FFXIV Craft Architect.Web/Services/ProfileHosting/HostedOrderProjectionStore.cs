@@ -11,7 +11,10 @@ public sealed record HostedOrderProjectionSnapshot(
     CompanyCommissionOwnerProjection? OwnerProjection,
     bool Deleted);
 
-public readonly record struct HostedOrderAuthorityScope(string? ProfileId, long Epoch);
+public readonly record struct HostedOrderAuthorityScope(
+    string? ProfileId,
+    string? ConnectionScopeId,
+    long Epoch);
 
 public enum HostedOrderCommittedProjectionResult
 {
@@ -28,6 +31,7 @@ public sealed class HostedOrderProjectionStore
     private readonly object _gate = new();
     private readonly Dictionary<Guid, HostedOrderProjectionSnapshot> _orders = [];
     private string? _profileId;
+    private string? _connectionScopeId;
     private long _scopeEpoch;
     private HostedOrderRestoreState _restoreState = HostedOrderRestoreState.Inactive(DateTime.UtcNow);
 
@@ -50,7 +54,10 @@ public sealed class HostedOrderProjectionStore
     {
         lock (_gate)
         {
-            return new HostedOrderAuthorityScope(_profileId, _scopeEpoch);
+            return new HostedOrderAuthorityScope(
+                _profileId,
+                _connectionScopeId,
+                _scopeEpoch);
         }
     }
 
@@ -66,13 +73,16 @@ public sealed class HostedOrderProjectionStore
         string profileId,
         bool hasTrustedProjection,
         long lastAppliedRevision,
-        DateTime now)
+        DateTime now,
+        string connectionScopeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionScopeId);
         HostedOrderRestoreState next;
         var reset = false;
         lock (_gate)
         {
+            connectionScopeId = connectionScopeId.Trim();
             var retainIdentityOnly = !string.IsNullOrWhiteSpace(_profileId) &&
                                      string.Equals(
                                          _profileId,
@@ -83,13 +93,18 @@ public sealed class HostedOrderProjectionStore
                 _profileId,
                 profileId,
                 StringComparison.OrdinalIgnoreCase);
-            var scopeChanged = _profileId != null && profileChanged;
+            var connectionChanged = !string.Equals(
+                _connectionScopeId,
+                connectionScopeId,
+                StringComparison.OrdinalIgnoreCase);
+            var scopeChanged = _profileId != null &&
+                               (profileChanged || connectionChanged);
             if (scopeChanged)
             {
                 _orders.Clear();
                 reset = true;
             }
-            if (profileChanged)
+            if (profileChanged || connectionChanged)
             {
                 _scopeEpoch++;
             }
@@ -97,6 +112,7 @@ public sealed class HostedOrderProjectionStore
             var retainedTrust = !scopeChanged &&
                                 (_restoreState.HasTrustedProjection || hasTrustedProjection);
             _profileId = profileId;
+            _connectionScopeId = connectionScopeId;
             var nextRevision = scopeChanged
                 ? lastAppliedRevision
                 : Math.Max(_restoreState.LastAppliedRevision, lastAppliedRevision);
@@ -166,6 +182,7 @@ public sealed class HostedOrderProjectionStore
             }
 
             _profileId = profileId;
+            _connectionScopeId = profileId;
             _scopeEpoch++;
             _orders.Clear();
             _restoreState = profileId == null
@@ -282,8 +299,7 @@ public sealed class HostedOrderProjectionStore
         TradeOrder order,
         long objectRevision,
         Func<HostedOrderProjectionSnapshot, Task> persist,
-        Func<Task<bool>>? authorityIsCurrent = null,
-        Func<Task>? rollback = null)
+        Func<Task<bool>>? authorityIsCurrent = null)
     {
         ArgumentNullException.ThrowIfNull(persist);
         authorityIsCurrent ??= () => Task.FromResult(IsCurrentAuthority(authority));
@@ -315,10 +331,6 @@ public sealed class HostedOrderProjectionStore
             await persist(candidate);
             if (!await authorityIsCurrent())
             {
-                if (rollback != null)
-                {
-                    await rollback();
-                }
                 return HostedOrderCommittedProjectionResult.ScopeChanged;
             }
 
@@ -327,8 +339,7 @@ public sealed class HostedOrderProjectionStore
             {
                 return HostedOrderCommittedProjectionResult.Stale;
             }
-            if (winner.ObjectRevision == candidate.ObjectRevision &&
-                winner.Deleted == candidate.Deleted)
+            if (HasSameVersionTuple(winner, candidate))
             {
                 return adoption;
             }
@@ -337,31 +348,6 @@ public sealed class HostedOrderProjectionStore
 
         throw new InvalidOperationException(
             "The hosted order changed repeatedly while browser persistence reconciled its committed winner.");
-    }
-
-    public bool TryRollbackCommittedOrder(
-        HostedOrderAuthorityScope authority,
-        long expectedCommittedRevision,
-        HostedOrderProjectionSnapshot previous)
-    {
-        ArgumentNullException.ThrowIfNull(previous);
-        var rolledBack = false;
-        lock (_gate)
-        {
-            if (!IsCurrentAuthorityUnderLock(authority) ||
-                !_orders.TryGetValue(previous.OrderId, out var current) ||
-                current.ObjectRevision != expectedCommittedRevision)
-            {
-                return false;
-            }
-            _orders[previous.OrderId] = previous;
-            rolledBack = true;
-        }
-        if (rolledBack)
-        {
-            Changed?.Invoke(previous);
-        }
-        return rolledBack;
     }
 
     public bool TryPublishOwner(CompanyCommissionOwnerProjection projection)
@@ -555,7 +541,22 @@ public sealed class HostedOrderProjectionStore
         string.Equals(
             authority.ProfileId,
             _profileId,
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            authority.ConnectionScopeId,
+            _connectionScopeId,
             StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasSameVersionTuple(
+        HostedOrderProjectionSnapshot left,
+        HostedOrderProjectionSnapshot right) =>
+        left.ObjectRevision == right.ObjectRevision &&
+        left.CompanyRevision == right.CompanyRevision &&
+        left.Deleted == right.Deleted &&
+        ReferenceEquals(left.Order, right.Order) &&
+        left.OwnerProjection?.ObjectRevision == right.OwnerProjection?.ObjectRevision &&
+        left.OwnerProjection?.CompanyRevision == right.OwnerProjection?.CompanyRevision &&
+        ReferenceEquals(left.OwnerProjection, right.OwnerProjection);
 
     private void AdvanceRestoreRevisionUnderLock(long objectRevision)
     {

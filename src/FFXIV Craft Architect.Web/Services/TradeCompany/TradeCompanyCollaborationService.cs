@@ -15,7 +15,7 @@ public sealed class TradeCompanyCollaborationService(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private sealed record OrderCommandAuthority(
         HostedOrderAuthorityScope Projection,
-        string ConnectionScopeId);
+        HostedProfileConnectionSettings Connection);
     private readonly Dictionary<Guid, IReadOnlyList<TradeCommissionInterest>> _interests = [];
     private readonly Dictionary<Guid, TradeCommissionPublicationProjection> _publications = [];
 
@@ -240,8 +240,6 @@ public sealed class TradeCompanyCollaborationService(
             authority,
             hostedOrder,
             published.OrderRecord.RecordRevision.Value,
-            order,
-            revision,
             "The company brief was attached by Profile Hosting, but browser storage could not apply the authoritative order.");
         return published.Link;
     }
@@ -300,9 +298,6 @@ public sealed class TradeCompanyCollaborationService(
         try
         {
             var authority = await CaptureOrderAuthorityAsync();
-            var rollbackRevision = await localState.LoadObjectRevisionAsync(
-                ProfileSyncCollections.TradeOrders,
-                order.Id.ToString("D"));
             var receipt = accept
                 ? await client.AcceptAsync(
                     order.CompanyProfileId,
@@ -328,8 +323,6 @@ public sealed class TradeCompanyCollaborationService(
                     authority,
                     receipt.UpdatedOrder,
                     receipt.UpdatedOrderRevision.Value,
-                    order,
-                    rollbackRevision,
                     "The hosted assignment was accepted, but the order could not be saved locally.");
             }
 
@@ -368,18 +361,15 @@ public sealed class TradeCompanyCollaborationService(
         }
         return new OrderCommandAuthority(
             projection,
-            connection.ConnectionScopeId);
+            connection.Snapshot());
     }
 
     private async Task AdoptCommittedOrderAsync(
         OrderCommandAuthority authority,
         TradeOrder order,
         long revision,
-        TradeOrder rollbackOrder,
-        long rollbackRevision,
         string persistenceFailure)
     {
-        var previousProjection = hostedOrders.Get(order.Id);
         var adoption = await hostedOrders.AdoptAndPersistCommittedOrderAsync(
             authority.Projection,
             order,
@@ -393,34 +383,18 @@ public sealed class TradeCompanyCollaborationService(
                 {
                     throw new InvalidOperationException(persistenceFailure);
                 }
+                if (!await IsCurrentAuthorityAsync(authority))
+                {
+                    throw new InvalidOperationException(
+                        "The hosted order authority changed while browser persistence was in progress.");
+                }
                 await localState.SaveObjectRevisionAsync(
+                    authority.Connection,
                     ProfileSyncCollections.TradeOrders,
                     candidate.OrderId.ToString("D"),
                     candidate.ObjectRevision);
             },
-            () => IsCurrentAuthorityAsync(authority),
-            async () =>
-            {
-                if (previousProjection != null)
-                {
-                    hostedOrders.TryRollbackCommittedOrder(
-                        authority.Projection,
-                        revision,
-                        previousProjection);
-                }
-                if (!await tradeOperations.ApplyCanonicalOrderAsync(rollbackOrder))
-                {
-                    throw new InvalidOperationException(
-                        "The previous durable order could not be restored after its hosted scope changed.");
-                }
-                if (rollbackRevision > 0)
-                {
-                    await localState.SaveObjectRevisionAsync(
-                        ProfileSyncCollections.TradeOrders,
-                        rollbackOrder.Id.ToString("D"),
-                        rollbackRevision);
-                }
-            });
+            () => IsCurrentAuthorityAsync(authority));
         if (adoption is not (
             HostedOrderCommittedProjectionResult.Adopted or
             HostedOrderCommittedProjectionResult.AlreadyCurrent))
@@ -438,7 +412,7 @@ public sealed class TradeCompanyCollaborationService(
         }
         var connection = await localState.LoadConnectionSettingsAsync();
         return string.Equals(
-            authority.ConnectionScopeId,
+            authority.Connection.ConnectionScopeId,
             connection.ConnectionScopeId,
             StringComparison.OrdinalIgnoreCase);
     }

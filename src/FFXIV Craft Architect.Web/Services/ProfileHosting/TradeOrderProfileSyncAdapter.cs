@@ -51,8 +51,16 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             order.CompanyProfileId,
             "order",
             envelope.ObjectId);
+        var connection = await _localState.LoadConnectionSettingsAsync();
         var authority = _projections.CaptureAuthorityScope();
-        var previous = _projections.Get(order.Id);
+        if (!string.Equals(
+                authority.ConnectionScopeId,
+                connection.ConnectionScopeId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Hosted Trade order '{envelope.ObjectId}' belongs to a previous connection scope.");
+        }
         var adoption = await _projections.AdoptAndPersistCommittedOrderAsync(
             authority,
             order,
@@ -67,25 +75,18 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
                     throw new InvalidOperationException(
                         $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
                 }
+                if (!await IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId))
+                {
+                    throw new InvalidOperationException(
+                        $"Hosted Trade order '{envelope.ObjectId}' changed authority while browser persistence was in progress.");
+                }
                 await _localState.SaveObjectRevisionAsync(
+                    connection,
                     ProfileSyncCollections.TradeOrders,
                     candidate.OrderId.ToString("D"),
                     candidate.ObjectRevision);
             },
-            rollback: previous?.Order == null
-                ? null
-                : async () =>
-                {
-                    _projections.TryRollbackCommittedOrder(
-                        authority,
-                        envelope.Revision,
-                        previous);
-                    await _tradeOperations.ApplyCanonicalOrderAsync(previous.Order);
-                    await _localState.SaveObjectRevisionAsync(
-                        ProfileSyncCollections.TradeOrders,
-                        previous.OrderId.ToString("D"),
-                        previous.ObjectRevision);
-                });
+            () => IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId));
         if (adoption is not (
             HostedOrderCommittedProjectionResult.Adopted or
             HostedOrderCommittedProjectionResult.AlreadyCurrent))
@@ -93,6 +94,21 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
             throw new InvalidOperationException(
                 $"Hosted Trade order '{envelope.ObjectId}' could not be applied because its authority is {adoption}.");
         }
+    }
+
+    private async Task<bool> IsCurrentAuthorityAsync(
+        HostedOrderAuthorityScope authority,
+        string? connectionScopeId)
+    {
+        if (!_projections.IsCurrentAuthority(authority))
+        {
+            return false;
+        }
+        var current = await _localState.LoadConnectionSettingsAsync();
+        return string.Equals(
+            connectionScopeId,
+            current.ConnectionScopeId,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)

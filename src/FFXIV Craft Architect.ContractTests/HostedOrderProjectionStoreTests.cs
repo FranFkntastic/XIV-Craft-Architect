@@ -50,6 +50,144 @@ public sealed class HostedOrderProjectionStoreTests
         }
     }
 
+    [Fact]
+    public void SameProfileConnectionReplacementInvalidatesCapturedAuthorityAndRevisionFloor()
+    {
+        var store = new HostedOrderProjectionStore();
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Old authority");
+        var resets = 0;
+        store.Reset += () => resets++;
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            20,
+            Now,
+            $"https://first.example/|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(order, 20));
+        var oldAuthority = store.CaptureAuthorityScope();
+
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            2,
+            Now.AddSeconds(1),
+            $"https://replacement.example/|{profileId}");
+
+        Assert.Null(store.Get(order.Id));
+        Assert.Equal(1, resets);
+        Assert.Equal(2, store.RestoreState.LastAppliedRevision);
+        Assert.Equal(HostedOrderRestoreStage.ScopeChanging, store.RestoreState.Stage);
+        Assert.Equal(
+            HostedOrderCommittedProjectionResult.ScopeChanged,
+            store.TryAdoptCommittedOrder(oldAuthority, order, 21));
+
+        var replacement = CreateOrder(order.Id, order.CompanyProfileId, "New authority");
+        Assert.True(store.TryPublishRemoteOrder(replacement, 3));
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            1,
+            Now.AddSeconds(2),
+            $"https://replacement.example/|{profileId}");
+
+        Assert.Same(replacement, store.Get(order.Id)?.Order);
+        Assert.Equal(3, store.RestoreState.LastAppliedRevision);
+        Assert.Equal(1, resets);
+    }
+
+    [Fact]
+    public async Task PersistenceReconcilesSameRevisionOwnerUpgrade()
+    {
+        var store = new HostedOrderProjectionStore();
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Canonical");
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            Now,
+            $"https://profiles.example/|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var authority = store.CaptureAuthorityScope();
+        var firstWriteEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstWrite = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var persisted = new List<HostedOrderProjectionSnapshot>();
+
+        var persistence = store.AdoptAndPersistCommittedOrderAsync(
+            authority,
+            order,
+            4,
+            async candidate =>
+            {
+                persisted.Add(candidate);
+                if (persisted.Count == 1)
+                {
+                    firstWriteEntered.SetResult();
+                    await releaseFirstWrite.Task;
+                }
+            });
+        await firstWriteEntered.Task;
+        var owner = new CompanyCommissionOwnerProjection
+        {
+            Order = order,
+            ObjectRevision = new CompanyRecordRevision(4),
+            CompanyRevision = new CompanyRecordRevision(9)
+        };
+        Assert.True(store.TryPublishOwner(owner));
+        releaseFirstWrite.SetResult();
+
+        Assert.Equal(HostedOrderCommittedProjectionResult.AlreadyCurrent, await persistence);
+        Assert.Equal(2, persisted.Count);
+        Assert.Null(persisted[0].OwnerProjection);
+        Assert.Same(owner, persisted[1].OwnerProjection);
+        Assert.Equal(4, store.RestoreState.LastAppliedRevision);
+    }
+
+    [Fact]
+    public async Task PersistenceReconcilesNewerTombstoneAfterBlockedLiveWrite()
+    {
+        var store = new HostedOrderProjectionStore();
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Live revision");
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            Now,
+            $"https://profiles.example/|{profileId}");
+        var authority = store.CaptureAuthorityScope();
+        var firstWriteEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstWrite = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var persisted = new List<HostedOrderProjectionSnapshot>();
+
+        var persistence = store.AdoptAndPersistCommittedOrderAsync(
+            authority,
+            order,
+            5,
+            async candidate =>
+            {
+                persisted.Add(candidate);
+                if (persisted.Count == 1)
+                {
+                    firstWriteEntered.SetResult();
+                    await releaseFirstWrite.Task;
+                }
+            });
+        await firstWriteEntered.Task;
+        Assert.True(store.TryPublishTombstone(order.Id, 6, order.CompanyProfileId));
+        releaseFirstWrite.SetResult();
+
+        Assert.Equal(HostedOrderCommittedProjectionResult.Adopted, await persistence);
+        Assert.Equal([false, true], persisted.Select(candidate => candidate.Deleted));
+        Assert.True(store.Get(order.Id)?.Deleted);
+        Assert.Equal(6, store.RestoreState.LastAppliedRevision);
+    }
+
     private static void NewerCanonicalOrderWinsAndTombstoneCannotRollBack()
     {
         var store = new HostedOrderProjectionStore();
@@ -134,14 +272,15 @@ public sealed class HostedOrderProjectionStoreTests
     {
         var store = new HostedOrderProjectionStore();
         var profileId = Guid.NewGuid().ToString("D");
+        var connectionScopeId = $"https://profiles.example/|{profileId}";
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Trusted order");
-        store.BeginProfileRestore(profileId, false, 0, Now);
+        store.BeginProfileRestore(profileId, false, 0, Now, connectionScopeId);
         Assert.True(store.TryPublishRemoteOrder(order, objectRevision: 4));
         Assert.True(store.TryPublishRestoreState(store.RestoreState.Apply(
             ReadyStatus(profileId, revision: 4),
             Now.AddSeconds(1))));
 
-        store.BeginProfileRestore(profileId, false, 4, Now.AddSeconds(2));
+        store.BeginProfileRestore(profileId, false, 4, Now.AddSeconds(2), connectionScopeId);
 
         Assert.Same(order, store.Get(order.Id)?.Order);
         Assert.Equal(HostedOrderRestoreStage.Reconnecting, store.RestoreState.Stage);
@@ -154,10 +293,20 @@ public sealed class HostedOrderProjectionStoreTests
         var firstProfile = Guid.NewGuid().ToString("D");
         var secondProfile = Guid.NewGuid().ToString("D");
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Old scope");
-        store.BeginProfileRestore(firstProfile, false, 20, Now);
+        store.BeginProfileRestore(
+            firstProfile,
+            false,
+            20,
+            Now,
+            $"https://profiles.example/|{firstProfile}");
         Assert.True(store.TryPublishRemoteOrder(order, objectRevision: 20));
 
-        store.BeginProfileRestore(secondProfile, false, 2, Now.AddSeconds(1));
+        store.BeginProfileRestore(
+            secondProfile,
+            false,
+            2,
+            Now.AddSeconds(1),
+            $"https://profiles.example/|{secondProfile}");
 
         Assert.Null(store.Get(order.Id));
         Assert.Equal(HostedOrderRestoreStage.ScopeChanging, store.RestoreState.Stage);
@@ -169,7 +318,12 @@ public sealed class HostedOrderProjectionStoreTests
     {
         var store = new HostedOrderProjectionStore();
         var profileId = Guid.NewGuid().ToString("D");
-        store.BeginProfileRestore(profileId, false, 7, Now);
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            7,
+            Now,
+            $"https://profiles.example/|{profileId}");
 
         Assert.False(store.TryPublishRestoreState(store.RestoreState with
         {

@@ -306,6 +306,12 @@ public sealed class ProfileSyncService
             lastRevision = ResolveSyncStartRevision(
                 persistedRevision,
                 replayAfterRevision);
+            _hostedOrders.BeginProfileRestore(
+                profileId,
+                hasTrustedProjection: false,
+                lastRevision,
+                DateTime.UtcNow,
+                settings.ConnectionScopeId!);
             var mayTrustSavedProjection =
                 !_hostedOrders.RestoreState.RequiresIdentityOnly &&
                 _hostedOrders.RestoreState.Stage != HostedOrderRestoreStage.ScopeChanging;
@@ -317,7 +323,8 @@ public sealed class ProfileSyncService
                 profileId,
                 hasTrustedProjection: trustedOrderCount > 0,
                 lastRevision,
-                DateTime.UtcNow);
+                DateTime.UtcNow,
+                settings.ConnectionScopeId!);
             var syncAuthority = _hostedOrders.CaptureAuthorityScope();
             var serverRevision = lastRevision;
             var hasMore = true;
@@ -1344,16 +1351,15 @@ public sealed class ProfileSyncService
     {
         CurrentStatus = status;
         var currentRestore = _hostedOrders.RestoreState;
-        if (status.ProfileId != null && currentRestore.ProfileId == null)
-        {
-            _hostedOrders.BeginProfileRestore(
+        if (status.ProfileId != null &&
+            string.Equals(
+                currentRestore.ProfileId,
                 status.ProfileId,
-                hasTrustedProjection: false,
-                status.LastSyncRevision,
-                DateTime.UtcNow);
-            currentRestore = _hostedOrders.RestoreState;
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _hostedOrders.TryPublishRestoreState(
+                currentRestore.Apply(status, DateTime.UtcNow));
         }
-        _hostedOrders.TryPublishRestoreState(currentRestore.Apply(status, DateTime.UtcNow));
         StatusChanged?.Invoke();
     }
 
