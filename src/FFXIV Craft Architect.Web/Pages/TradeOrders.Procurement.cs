@@ -56,14 +56,11 @@ public partial class TradeOrders
         }
 
         var workPackage = GetSelectedOrderPricingWorkPackage();
-        var useCanonicalTerms = !TradeProcurementSourceMutationPolicy.CanUseLivePlan(
-            HasCanonicalCommission,
-            CanEditCanonicalWorkPackage);
         return TradeProcurementRowBuilder.BuildRows(
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
-            useCanonicalTerms ? null : WorkerProjections.Shell.PlanId,
-            useCanonicalTerms ? null : GetCurrentLiveProcurementSnapshot());
+            WorkerProjections.Shell.PlanId,
+            GetCurrentLiveProcurementSnapshot());
     }
 
     private TradeOrder GetSelectedOrderPricingWorkPackage()
@@ -158,21 +155,26 @@ public partial class TradeOrders
         _activeOpsTab = tabIndex;
         if (tabIndex != ProcurementTabIndex ||
             _selectedOrder == null ||
-            IsSelectedOrderLinkedPlanActive() ||
             _isLoadingSelectedOrderSupplyPlan)
         {
             return;
         }
 
+        if (!HasLinkedCraftPlan(_selectedOrder))
+        {
+            return;
+        }
+
         _isLoadingSelectedOrderSupplyPlan = true;
+        await InvokeAsync(StateHasChanged);
         try
         {
-            if (!await LoadSelectedOrderCraftPlanForNavigationAsync())
+            if (!IsSelectedOrderLinkedPlanActive() &&
+                !await LoadSelectedOrderCraftPlanForNavigationAsync())
             {
                 return;
             }
 
-            ClearLiveProcurementSnapshot();
             await EnsureLiveProcurementSnapshotAsync();
         }
         finally
@@ -209,6 +211,13 @@ public partial class TradeOrders
             var currentKey = CreateLiveProcurementKey();
             if (!currentKey.HasValue || !currentKey.Value.Equals(key.Value))
             {
+                return;
+            }
+
+            if (snapshot is not { HasPlan: true } ||
+                !string.Equals(snapshot.PlanId, key.Value.PlanId, StringComparison.Ordinal))
+            {
+                ClearLiveProcurementSnapshot();
                 return;
             }
 
@@ -679,7 +688,7 @@ public partial class TradeOrders
     private bool CanEditProcurementSource(TradeOrderProcurementRow row)
     {
         return !_isCommissionCommandRunning &&
-            TradeProcurementSourceMutationPolicy.CanUseLivePlan(
+            TradeProcurementSourceMutationPolicy.CanMutateLivePlan(
                 HasCanonicalCommission,
                 CanEditCanonicalWorkPackage) &&
             TradeProcurementSourceMutationPolicy.CanChangeSource(row);

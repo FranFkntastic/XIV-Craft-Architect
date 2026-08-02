@@ -121,7 +121,7 @@ public partial class TradeOrders
                         orderId,
                         "Requested outputs were saved, but the order could not be loaded."))
                 {
-                    _activeOpsTab = ProcurementTabIndex;
+                    await SetActiveOpsTabAsync(ProcurementTabIndex);
                 }
             }
 

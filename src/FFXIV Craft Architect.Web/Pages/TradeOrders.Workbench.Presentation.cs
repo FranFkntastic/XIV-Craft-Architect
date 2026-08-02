@@ -152,7 +152,7 @@ public partial class TradeOrders
         [
             new("Requested", "Done", commission.CurrentTerms.Outputs.Count > 0, false),
             new("Claimed", claimed ? "Done" : "Next", claimed, !claimed),
-            new("Planned", planned ? "Done · open" : "Next", planned, claimed && !planned, OpensPlan: true),
+            new("Planned", planned ? "Done" : "Next", planned, claimed && !planned, OpensPlan: true),
             new("Clear to start", cleared ? "Done" : waitingToStart ? "Current" : "Next", cleared, waitingToStart),
             new(
                 "Crafting",
@@ -226,11 +226,7 @@ public partial class TradeOrders
             : "Status unavailable";
     }
 
-    private Task OpenPlanWorkbenchAsync()
-    {
-        _activeOpsTab = PlanTabIndex;
-        return Task.CompletedTask;
-    }
+    private Task OpenPlanWorkbenchAsync() => SetActiveOpsTabAsync(PlanTabIndex);
 
     private Task OpenWorkWorkbenchAsync()
     {

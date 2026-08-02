@@ -220,6 +220,16 @@
   background: #3b341f;
 }
 
+.trade-orders-rail-order.is-device-only {
+  color: #bcbcbc;
+  cursor: default;
+  opacity: 0.78;
+}
+
+.trade-orders-rail-order.is-device-only:hover {
+  background: transparent;
+}
+
 .trade-orders-rail-title {
   grid-area: title;
   overflow: hidden;
@@ -2064,6 +2074,27 @@
   border: 1px solid #383838;
   border-radius: 5px 5px 0 0;
   background: #242424;
+}
+
+.trade-orders-plan-restore {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 72px;
+  border: 1px solid #3b3b3b;
+  border-radius: 4px;
+  padding: 12px;
+  background: #202020;
+}
+
+.trade-orders-plan-restore div {
+  display: grid;
+  gap: 2px;
+}
+
+.trade-orders-plan-restore span {
+  color: #aaa;
+  font-size: .72rem;
 }
 
 .trade-orders-timeline-item {

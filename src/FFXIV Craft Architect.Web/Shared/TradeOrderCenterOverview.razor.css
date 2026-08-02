@@ -131,7 +131,7 @@
 
 .trade-order-overview__path {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 6px;
   padding: 10px;
 }
@@ -149,6 +149,8 @@
 
 button.trade-order-overview__step {
   cursor: pointer;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 button.trade-order-overview__step:hover,

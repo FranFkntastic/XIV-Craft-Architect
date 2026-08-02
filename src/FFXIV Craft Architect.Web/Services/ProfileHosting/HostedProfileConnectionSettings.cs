@@ -19,6 +19,10 @@ public sealed class HostedProfileConnectionSettings
         !string.IsNullOrWhiteSpace(AccessKey) &&
         ProfileScopeId != null;
 
+    public string? ConnectionScopeId => IsConfigured
+        ? $"{ProfileHostClient.NormalizeHostUrl(HostUrl!)}|{ProfileScopeId}"
+        : null;
+
     public HostedProfileConnectionSettings Snapshot() =>
         new()
         {

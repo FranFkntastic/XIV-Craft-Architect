@@ -71,6 +71,7 @@ public partial class TradeOrders
     private string? _loadError;
     private Guid? _pendingNavigationOrderId;
     private bool _isArchiveCollapsed = true;
+    private bool _isDeviceOnlyCollapsed = true;
     private HashSet<string> _collapsedAttentionGroups = new(StringComparer.Ordinal);
     private WorkerTradeProjection? _liveProcurementSnapshot;
     private LiveProcurementKey? _liveProcurementKey;
@@ -194,6 +195,25 @@ public partial class TradeOrders
             .Where(OrderMatchesSearch));
 
     private IReadOnlyList<TradeOrder> FilteredArchivedOrders => ArchivedOrders
+        .Where(OrderMatchesSearch)
+        .ToArray();
+
+    private IReadOnlyList<TradeOrder> DeviceOnlyOrders
+    {
+        get
+        {
+            if (!OrderRestoreState.ShowsCompleteProjection || _companyProfile == null)
+            {
+                return Array.Empty<TradeOrder>();
+            }
+
+            return TradeOrderWorkspaceCompositionPolicy.GetDeviceOnlyOrders(
+                _orders,
+                HostedOrders.GetAll(_companyProfile.Id));
+        }
+    }
+
+    private IReadOnlyList<TradeOrder> FilteredDeviceOnlyOrders => DeviceOnlyOrders
         .Where(OrderMatchesSearch)
         .ToArray();
 

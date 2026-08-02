@@ -289,6 +289,11 @@ public partial class TradeOrders
         _isArchiveCollapsed = !_isArchiveCollapsed;
     }
 
+    private void ToggleDeviceOnlyGroup()
+    {
+        _isDeviceOnlyCollapsed = !_isDeviceOnlyCollapsed;
+    }
+
     private void ExpandGroupForOrder(TradeOrder order)
     {
         if (IsOrderArchivedForAttention(order))

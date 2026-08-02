@@ -184,6 +184,9 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return;
             }
 
+            // Resolve any authenticated authority adoption before capturing the
+            // settings that bind cursor replay, owner projection, and SSE.
+            await _profileSync.PrepareAuthorityAsync(cancellationToken);
             var settings = await _localState.LoadConnectionSettingsAsync();
             var profileId = settings.ProfileScopeId;
             if (settings.IsConfigured &&

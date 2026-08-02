@@ -52,9 +52,17 @@ public static class TradeProcurementRowBuilder
     {
         ArgumentNullException.ThrowIfNull(order);
 
-        if (!CanUseLiveProjection(order, activePlanId, liveSnapshot))
+        var expectsLivePlan = !string.IsNullOrWhiteSpace(order.CraftPlanId) &&
+            string.Equals(order.CraftPlanId, activePlanId, StringComparison.Ordinal);
+        if (!TradeProcurementSourceMutationPolicy.CanReadLivePlan(
+                order.CraftPlanId,
+                activePlanId,
+                liveSnapshot?.HasPlan == true,
+                liveSnapshot?.PlanId))
         {
-            return TradeOrderWorkflow.BuildProcurementRows(order, draft);
+            return expectsLivePlan
+                ? Array.Empty<TradeOrderProcurementRow>()
+                : TradeOrderWorkflow.BuildProcurementRows(order, draft);
         }
 
         var snapshot = liveSnapshot!;
@@ -67,16 +75,6 @@ public static class TradeProcurementRowBuilder
             .Select(row => ToTradeRow(row, lines, responsibilities))
             .OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-    }
-
-    private static bool CanUseLiveProjection(
-        TradeOrder order,
-        string? activePlanId,
-        WorkerTradeProjection? liveSnapshot)
-    {
-        return liveSnapshot != null &&
-            !string.IsNullOrWhiteSpace(order.CraftPlanId) &&
-            string.Equals(order.CraftPlanId, activePlanId, StringComparison.Ordinal);
     }
 
     private static Dictionary<(int ItemId, bool RequiresHq), CommissionMaterialResponsibility> BuildResponsibilityLookup(
