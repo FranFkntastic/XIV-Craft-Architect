@@ -62,67 +62,6 @@ public static class TradeCommissionOperationsPresentation
         return WorkAttention;
     }
 
-    public static string GetNextAction(CompanyCommissionOwnerProjection projection)
-    {
-        var order = projection.Order;
-        var commission = RequireCommission(projection);
-        if (order.Status == TradeOrderStatus.AwaitingDelivery)
-        {
-            return "Review delivery";
-        }
-
-        if (order.Status == TradeOrderStatus.InProgress)
-        {
-            return "Crafting";
-        }
-
-        if (commission.ActiveClaim == null)
-        {
-            return "Awaiting claim";
-        }
-
-        if (commission.Gates.Identity.State == CompanyCommissionClearanceState.Pending)
-        {
-            return "Review identity";
-        }
-
-        if (GetPendingPaymentPolicyRequest(projection) != null)
-        {
-            return "Review payment timing";
-        }
-
-        if (commission.Gates.Payment.State == CompanyCommissionClearanceState.Pending)
-        {
-            return "Record payment";
-        }
-
-        if (commission.Gates.CompanyMaterials.State == CompanyCommissionClearanceState.Pending)
-        {
-            return commission.Gates.CompanyMaterials.ReadyAtUtc.HasValue
-                ? "Awaiting receipt"
-                : "Prepare materials";
-        }
-
-        if (commission.DeliveryReadiness.IsReady ||
-            order.Status == TradeOrderStatus.AwaitingDelivery)
-        {
-            return "Review delivery";
-        }
-
-        if (order.Status == TradeOrderStatus.Completed &&
-            commission.SettlementState != CompanyCommissionSettlementState.Satisfied)
-        {
-            return "Record settlement";
-        }
-
-        if (!commission.ClearedToWork)
-        {
-            return "Clear prerequisites";
-        }
-
-        return "Crafting";
-    }
-
     public static PendingPaymentPolicyRequest? GetPendingPaymentPolicyRequest(
         CompanyCommissionOwnerProjection projection)
     {

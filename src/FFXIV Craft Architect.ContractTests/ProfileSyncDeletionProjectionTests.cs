@@ -83,15 +83,50 @@ public sealed class ProfileSyncDeletionProjectionTests
     }
     private static async Task CollaborationResponseAfterProfileSwitchCannotPublishOrPersist()
     {
-        var fixture = new ProjectionFixture("Publish me");
-        var nextProfileId = NewId();
-        fixture.Runtime.AddCompany(fixture.Order.CompanyProfileId);
-        await fixture.PrepareCollaborationAsync();
-        var collaboration = fixture.CreateCollaboration(5, () => fixture.Store.BeginProfileRestore(
-            nextProfileId, false, 0, DateTime.UtcNow, ConnectionScope(nextProfileId)));
+        var fixture = await Ready();
+        var collaboration = fixture.CreateCollaboration(5, () => ChangeProfile(fixture));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             collaboration.PublishPortableLinkAsync(fixture.Order, new CommissionBriefDocument()));
-        Check(() => Assert.Equal(0, fixture.Runtime.SaveTradeOrderCount), () => Assert.Null(fixture.Store.Get(fixture.Order.Id)), () => Assert.Equal(nextProfileId, fixture.Store.CaptureAuthorityScope().ProfileId));
+        Check(() => Assert.Equal(0, fixture.Runtime.SaveTradeOrderCount), () => Assert.Null(fixture.Store.Get(fixture.Order.Id)));
+
+        var publishFixture = await Ready();
+        var publish = publishFixture.CreateUnusedCollaboration(new StubHandler(request => Publication(request, publishFixture, () => ChangeProfile(publishFixture))));
+        var publishResult = await publish.PublishToDiscordAsync(publishFixture.Order, new CommissionBriefDocument());
+        Check(() => Assert.False(publishResult.Success), () => Assert.Contains("authority", publishResult.Message!, StringComparison.OrdinalIgnoreCase), () => Assert.Null(publish.GetPublication(publishFixture.Order.Id)));
+
+        var retryFixture = await Ready();
+        var retry = retryFixture.CreateUnusedCollaboration(new StubHandler(request => Publication(request, retryFixture, retryFixture.ReplaceHost)));
+        var retryResult = await retry.RetryDiscordPublicationAsync(retryFixture.Order, "public-id");
+        Check(() => Assert.False(retryResult.Success), () => Assert.Contains("authority", retryResult.Message!, StringComparison.OrdinalIgnoreCase), () => Assert.Null(retry.GetPublication(retryFixture.Order.Id)));
+
+        var portableFixture = await Ready();
+        var portable = portableFixture.CreateUnusedCollaboration(new StubHandler(request => Revoked(request, portableFixture, () => ChangeProfile(portableFixture))));
+        var portableFailure = await Assert.ThrowsAsync<InvalidOperationException>(() => portable.RevokePortableLinkAsync(portableFixture.Order, "public-id"));
+        Assert.Contains("authority", portableFailure.Message, StringComparison.OrdinalIgnoreCase);
+
+        var refreshFixture = await Ready();
+        var refresh = refreshFixture.CreateUnusedCollaboration(new StubHandler(request => request.RequestUri!.AbsolutePath.EndsWith("/claims") ? RefreshedClaims(request, refreshFixture) : Publication(request, refreshFixture, () => { })));
+        var refreshFailure = await Assert.ThrowsAsync<InvalidOperationException>(() => refresh.RefreshAsync(refreshFixture.Order.CompanyProfileId, refreshFixture.Order.Id));
+        Check(() => Assert.Contains("authority", refreshFailure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Empty(refresh.GetPendingInterests(refreshFixture.Order.Id)), () => Assert.Null(refresh.GetPublication(refreshFixture.Order.Id)));
+
+        var ensureFixture = await Ready();
+        var captured = (await ensureFixture.LocalState.LoadConnectionSettingsAsync()).Snapshot();
+        ensureFixture.ReplaceHost();
+        var ensureFailure = await Assert.ThrowsAsync<InvalidOperationException>(() => ensureFixture.ProfileSync.EnsureHostedObjectRevisionAsync(ProfileSyncCollections.TradeOrders, Key(ensureFixture.Order), captured));
+        Assert.Contains("authority", ensureFailure.Message, StringComparison.OrdinalIgnoreCase);
+
+        var revokeFixture = await Ready();
+        var revoke = revokeFixture.CreateUnusedCollaboration(new StubHandler(request => request.Method == HttpMethod.Delete ? Revoked(request, revokeFixture, revokeFixture.ReplaceHost) : Publication(request, revokeFixture, () => { })));
+        var initial = await revoke.PublishToDiscordAsync(revokeFixture.Order, new CommissionBriefDocument());
+        var revokeFailure = await Assert.ThrowsAsync<InvalidOperationException>(() => revoke.RevokePublicationAsync(new(new(revokeFixture.Order.CompanyProfileId), revokeFixture.Order.Id, new(4)), "public-id"));
+        Check(() => Assert.True(initial.Success), () => Assert.NotNull(initial.Publication), () => Assert.Contains("authority", revokeFailure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Null(revoke.GetPublication(revokeFixture.Order.Id)));
+
+        static async Task<ProjectionFixture> Ready() { var candidate = new ProjectionFixture("Collaboration authority"); await candidate.PrepareCollaborationAsync(); return candidate; }
+        static void ChangeProfile(ProjectionFixture candidate) { var profileId = NewId(); candidate.Store.BeginProfileRestore(profileId, false, 0, DateTime.UtcNow, ConnectionScope(profileId)); }
+        static HttpResponseMessage Publication(HttpRequestMessage request, ProjectionFixture candidate, Action change) { AssertCapturedRequest(request); change(); return Ok(new { OrderId = candidate.Order.Id, PublicId = "public-id", Version = 1, PublishedAtUtc = DateTime.UtcNow, State = "Pending", DestinationLabel = "Test", Message = (string?)null }); }
+        static HttpResponseMessage RefreshedClaims(HttpRequestMessage request, ProjectionFixture candidate) { AssertCapturedRequest(request); ChangeProfile(candidate); return Ok(Array.Empty<object>()); }
+        static HttpResponseMessage Revoked(HttpRequestMessage request, ProjectionFixture candidate, Action change) { AssertCapturedRequest(request); change(); return new(HttpStatusCode.NoContent); }
+        static void AssertCapturedRequest(HttpRequestMessage request) { Assert.Equal(new Uri(Host).Host, request.RequestUri!.Host); Assert.Equal("access-key", request.Headers.GetValues("X-Profile-Key").Single()); }
     }
     private static async Task DelayedCollaborationResponseCannotPersistOverNewerProjection()
     {
@@ -196,7 +231,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         var gate = fixture.BlockFirstSave("Revision five");
         await fixture.PrepareCollaborationAsync();
         var revisionFive = fixture.PublishedOrder("Revision five");
-        var revisionSix = fixture.PublishedOrder("Revision six");
+        var revisionSix = fixture.PublishedOrder("Revision six", 5);
         var olderService = fixture.CreateCollaboration(revisionFive, 5);
         var newerService = fixture.CreateCollaboration(revisionSix, 6);
         var older = olderService.PublishPortableLinkAsync(fixture.Order, new CommissionBriefDocument());
@@ -348,7 +383,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         public ProfileSyncService ProfileSync { get; }
         public TradeOrderProfileSyncAdapter Adapter { get; }
         public TradeOrder OrderAt(string title) => CreateOrder(Order.Id, Order.CompanyProfileId, title);
-        public TradeOrder PublishedOrder(string title) => CreatePublishedOrder(Order, 4, title);
+        public TradeOrder PublishedOrder(string title, long publicationRevision = 4) => CreatePublishedOrder(Order, publicationRevision, title);
         public async Task PrepareCollaborationAsync()
         {
             await LocalState.LoadConnectionSettingsAsync();
@@ -362,9 +397,9 @@ public sealed class ProfileSyncDeletionProjectionTests
             CreateCollaboration(CreatePublishedOrder(Order, 4), revision, beforeResponse);
         public TradeCompanyCollaborationService CreateCollaboration(TradeOrder committed, long revision) =>
             CreateCollaboration(committed, revision, () => { });
-        public TradeCompanyCollaborationService CreateUnusedCollaboration() =>
+        public TradeCompanyCollaborationService CreateUnusedCollaboration(HttpMessageHandler? handler = null) =>
             new(new TradeCompanyCollaborationClient(
-                    new HttpClient(UnusedHandler()) { BaseAddress = new Uri(Host) }, LocalState),
+                    new HttpClient(handler ?? UnusedHandler()) { BaseAddress = new Uri(Host) }, LocalState),
                 new TradeOperationsPersistenceService(IndexedDb, new TradeCompanyProfilePackageService()),
                 LocalState, ProfileSync, Store);
         private TradeCompanyCollaborationService CreateCollaboration(

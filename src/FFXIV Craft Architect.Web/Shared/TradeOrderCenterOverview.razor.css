@@ -47,21 +47,6 @@
   color: #e8e8e8;
 }
 
-.trade-order-overview__attention {
-  display: grid;
-  grid-template-columns: minmax(190px, .8fr) minmax(280px, 1.2fr) auto;
-  align-items: center;
-  gap: 12px;
-  border: 1px solid #806a30;
-  border-radius: 6px;
-  background: #30291a;
-  padding: 12px;
-}
-
-.trade-order-overview__attention p {
-  color: #c8b985;
-}
-
 .trade-order-overview__crafter-update {
   display: grid;
   grid-template-columns: minmax(220px, auto) minmax(160px, 1fr) auto;
@@ -89,34 +74,10 @@
   text-align: right;
 }
 
-.trade-order-overview__blockers {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.trade-order-overview__blockers > div {
-  min-width: 150px;
-  flex: 1 1 180px;
-  border: 1px solid #574a28;
-  border-radius: 4px;
-  background: #25221b;
-  padding: 7px 9px;
-}
-
-.trade-order-overview__blockers strong,
-.trade-order-overview__blockers span,
 .trade-order-overview__output span,
 .trade-order-overview__section-heading > span {
   display: block;
 }
-
-.trade-order-overview__blockers strong {
-  color: #f0cc62;
-  font-size: .72rem;
-}
-
-.trade-order-overview__blockers span,
 .trade-order-overview__output span,
 .trade-order-overview__section-heading > span {
   color: #aaa;
@@ -218,7 +179,6 @@ button.trade-order-overview__step:focus-visible {
 
 @container (max-width: 620px) {
   .trade-order-overview__header,
-  .trade-order-overview__attention,
   .trade-order-overview__crafter-update,
   .trade-order-overview__output,
   .trade-order-overview__path {

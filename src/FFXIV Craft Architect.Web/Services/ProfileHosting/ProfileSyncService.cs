@@ -182,15 +182,36 @@ public sealed class ProfileSyncService
         string objectId,
         CancellationToken ct = default) =>
         RunSerializedAsync(
-            () => EnsureHostedObjectRevisionCoreAsync(collection, objectId, ct),
+            () => EnsureHostedObjectRevisionCoreAsync(collection, objectId, null, ct),
             ct);
+
+    public Task<long> EnsureHostedObjectRevisionAsync(
+        string collection,
+        string objectId,
+        HostedProfileConnectionSettings capturedAuthority,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(capturedAuthority);
+        var snapshot = capturedAuthority.Snapshot();
+        return RunSerializedAsync(
+            () => EnsureHostedObjectRevisionCoreAsync(collection, objectId, snapshot, ct),
+            ct);
+    }
 
     private async Task<long> EnsureHostedObjectRevisionCoreAsync(
         string collection,
         string objectId,
+        HostedProfileConnectionSettings? capturedAuthority,
         CancellationToken ct)
     {
-        var settings = await _localState.LoadConnectionSettingsAsync();
+        var current = await _localState.LoadConnectionSettingsAsync();
+        if (capturedAuthority != null &&
+            !IsSameConnectionAuthority(current, capturedAuthority))
+        {
+            throw new InvalidOperationException(
+                "The hosted profile authority changed before revision recovery began.");
+        }
+        var settings = capturedAuthority ?? current;
         var profileId = settings.ProfileScopeId;
         await EnsurePendingSavesLoadedAsync(settings);
         if (!settings.IsConfigured || profileId == null)
@@ -222,12 +243,20 @@ public sealed class ProfileSyncService
             settings.HostUrl!,
             settings.AccessKey!,
             ct);
+        if (capturedAuthority != null)
+        {
+            await RequireConnectionAuthorityAsync(capturedAuthority);
+        }
         var remoteObject = remoteBootstrap.Objects.FirstOrDefault(item =>
             string.Equals(item.Collection, collection, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(item.ObjectId, objectId, StringComparison.Ordinal));
         if (remoteObject == null)
         {
-            await QueueLocalSaveCoreAsync(collection, objectId, ct);
+            await QueueLocalSaveCoreAsync(
+                collection,
+                objectId,
+                ct,
+                capturedAuthority);
             return await _localState.LoadObjectRevisionAsync(
                 profileId,
                 collection,
@@ -869,14 +898,22 @@ public sealed class ProfileSyncService
     private async Task QueueLocalSaveCoreAsync(
         string collection,
         string objectId,
-        CancellationToken ct)
+        CancellationToken ct,
+        HostedProfileConnectionSettings? capturedAuthority = null)
     {
         if (IsSuppressed)
         {
             return;
         }
 
-        var settings = await _localState.LoadConnectionSettingsAsync();
+        var current = await _localState.LoadConnectionSettingsAsync();
+        if (capturedAuthority != null &&
+            !IsSameConnectionAuthority(current, capturedAuthority))
+        {
+            throw new InvalidOperationException(
+                "The hosted profile authority changed before revision recovery could publish the local order.");
+        }
+        var settings = capturedAuthority ?? current;
         var profileId = settings.ProfileScopeId;
         await EnsurePendingSavesLoadedAsync(settings);
         if (!settings.IsConfigured || profileId == null)
@@ -912,6 +949,26 @@ public sealed class ProfileSyncService
             CurrentStatus.LastSyncedAtUtc,
             _conflicts.Count > 0 ? "Conflicts need review" : CurrentStatus.Message));
     }
+
+    private async Task RequireConnectionAuthorityAsync(
+        HostedProfileConnectionSettings expected)
+    {
+        var current = await _localState.LoadConnectionSettingsAsync();
+        if (!IsSameConnectionAuthority(current, expected))
+        {
+            throw new InvalidOperationException(
+                "The hosted profile authority changed while revision recovery was in progress.");
+        }
+    }
+
+    private static bool IsSameConnectionAuthority(
+        HostedProfileConnectionSettings left,
+        HostedProfileConnectionSettings right) =>
+        string.Equals(
+            left.ConnectionScopeId,
+            right.ConnectionScopeId,
+            StringComparison.Ordinal) &&
+        string.Equals(left.AccessKey, right.AccessKey, StringComparison.Ordinal);
 
     public Task ConnectAsync(
         HostedProfileConnectionSettings settings,

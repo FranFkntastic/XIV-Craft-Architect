@@ -20,8 +20,7 @@ public sealed class HostedOrderProjectionStoreTests
 
     [Theory]
     [MemberData(nameof(Scenarios))]
-    public async Task ProjectionStorePreservesCanonicalIdentityAndRestoreTruth(
-        ProjectionStoreScenario scenario)
+    public async Task ProjectionStorePreservesCanonicalIdentityAndRestoreTruth(ProjectionStoreScenario scenario)
     {
         await (scenario switch
         {
@@ -40,15 +39,13 @@ public sealed class HostedOrderProjectionStoreTests
             ProjectionStoreScenario.OwnerTombstonePersistence => PersistenceReconcilesTombstoneAfterBlockedWrite(ownerCandidate: true),
             ProjectionStoreScenario.CenterOperationWinner => CenterOperationReconcilesNewerOwnerDuringDurableWrite(),
             ProjectionStoreScenario.CenterOperationAuthoritySwitch => CenterOperationRejectsHostAndProfileReplacement(),
+            ProjectionStoreScenario.CenterOperationCommittedFailure => CenterOperationRetainsCommittedProjectionOnAdoptionFailure(),
+            ProjectionStoreScenario.StaleMissingOwner => StaleMissingOwnerCannotClearReplacementProjection(),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null)
         });
     }
 
-    private static Task Run(Action scenario)
-    {
-        scenario();
-        return Task.CompletedTask;
-    }
+    private static Task Run(Action scenario) { scenario(); return Task.CompletedTask; }
 
     private static void ConnectionReplacementInvalidatesAuthority(bool pathCase)
     {
@@ -70,8 +67,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.Equal(1, resets);
         Assert.Equal(replacementRevision, store.RestoreState.LastAppliedRevision);
         Assert.Equal(HostedOrderRestoreStage.ScopeChanging, store.RestoreState.Stage);
-        Assert.Equal(
-            HostedOrderCommittedProjectionResult.ScopeChanged,
+        Assert.Equal(HostedOrderCommittedProjectionResult.ScopeChanged,
             store.TryAdoptCommittedOrder(oldAuthority, order, oldRevision + 1));
 
         if (pathCase)
@@ -107,14 +103,11 @@ public sealed class HostedOrderProjectionStoreTests
 
     private static async Task PersistenceReconcilesTombstoneAfterBlockedWrite(bool ownerCandidate)
     {
-        var race = ProjectionPersistenceRace.Create(
-            ownerCandidate ? "Owner candidate" : "Live revision",
+        var race = ProjectionPersistenceRace.Create(ownerCandidate ? "Owner candidate" : "Live revision",
             publishOrder: ownerCandidate);
         var persistence = ownerCandidate
-            ? race.Store.AdoptAndPersistCommittedOwnerAsync(
-                race.Authority, CreateOwner(race.Order, 4, 9), race.PersistAsync)
-            : race.Store.AdoptAndPersistCommittedOrderAsync(
-                race.Authority, race.Order, 5, race.PersistAsync);
+            ? race.Store.AdoptAndPersistCommittedOwnerAsync(race.Authority, CreateOwner(race.Order, 4, 9), race.PersistAsync)
+            : race.Store.AdoptAndPersistCommittedOrderAsync(race.Authority, race.Order, 5, race.PersistAsync);
         await race.FirstWriteEntered.Task;
         var tombstoneRevision = ownerCandidate ? 5 : 6;
         Assert.True(race.Store.TryPublishTombstone(race.Order.Id, tombstoneRevision, race.Order.CompanyProfileId));
@@ -154,14 +147,8 @@ public sealed class HostedOrderProjectionStoreTests
                 var fixture = await CenterOperationFixture.CreateAsync();
                 fixture.Handler.Projection = fixture.Owner("Revision five", 5, 9);
                 Action switchAuthority = () => fixture.ReplaceAuthority(replaceProfile);
-                if (operation == CenterAuthorityOperation.Identity)
-                {
-                    fixture.Runtime.BeforeSaveTradeCrafter = switchAuthority;
-                }
-                else
-                {
-                    fixture.Handler.BeforeResponse = _ => switchAuthority();
-                }
+                fixture.Runtime.BeforeSaveTradeCrafter = operation == CenterAuthorityOperation.Identity ? switchAuthority : null;
+                fixture.Handler.BeforeResponse = operation == CenterAuthorityOperation.Identity ? null : _ => switchAuthority();
 
                 var result = await fixture.InvokeAsync(operation);
                 Assert.False(result.Success);
@@ -173,6 +160,46 @@ public sealed class HostedOrderProjectionStoreTests
                 }
             }
         }
+    }
+
+    private static async Task StaleMissingOwnerCannotClearReplacementProjection()
+    {
+        var sameAuthority = await CenterOperationFixture.CreateAsync();
+        sameAuthority.Handler.OwnerMissing = true;
+        sameAuthority.Handler.BeforeResponse = request => { if (request.Method == HttpMethod.Get) { Assert.True(sameAuthority.Store.TryPublishOwner(sameAuthority.Owner("Same-authority revision five", 5, 9))); } };
+
+        await sameAuthority.Service.RefreshAsync(sameAuthority.Current.Order);
+
+        Assert.Equal("Same-authority revision five",
+            sameAuthority.Store.GetOwnerProjection(sameAuthority.Current.Order.Id)?.Order.Title);
+        Assert.False(sameAuthority.Service.IsCanonicalOwnerMissing(sameAuthority.Current.Order.Id));
+        Assert.Null(sameAuthority.Service.GetErrorForOrder(sameAuthority.Current.Order.Id));
+
+        foreach (var replaceProfile in new[] { false, true })
+        {
+            var fixture = await CenterOperationFixture.CreateAsync();
+            fixture.Handler.OwnerMissing = true;
+            fixture.Handler.BeforeResponse = request => { if (request.Method == HttpMethod.Get) { fixture.ReplaceAuthority(replaceProfile, "Replacement winner"); } };
+
+            await fixture.Service.RefreshAsync(fixture.Current.Order);
+            Assert.Equal("Replacement winner", fixture.Store.GetOwnerProjection(fixture.Current.Order.Id)?.Order.Title);
+            Assert.False(fixture.Service.IsCanonicalOwnerMissing(fixture.Current.Order.Id));
+            Assert.Null(fixture.Service.GetErrorForOrder(fixture.Current.Order.Id));
+        }
+    }
+
+    private static async Task CenterOperationRetainsCommittedProjectionOnAdoptionFailure()
+    {
+        var fixture = await CenterOperationFixture.CreateAsync();
+        fixture.Handler.Projection = fixture.Owner("Host-committed revision five", 5, 9);
+        fixture.Handler.BeforeResponse = request => { if (request.Method == HttpMethod.Post) { fixture.ReplaceAuthority(replaceProfile: true); } };
+
+        var result = await fixture.Service.AcceptDeliveryAsync(fixture.Current);
+
+        Assert.False(result.Success);
+        Assert.True(result.HostCommitted);
+        Assert.Equal("Host-committed revision five", result.Projection?.Order.Title);
+        Assert.Contains("authority", result.Message!, StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task VerifyDurableAuthorityRepair(bool replacementHasWinner)
@@ -316,71 +343,34 @@ public sealed class HostedOrderProjectionStoreTests
     }
 
     private static ProfileSyncStatus ReadyStatus(string profileId, long revision) =>
-        new(true, true, revision, 0, 0, Now, "Synced")
-        {
-            ProfileId = profileId,
-            Stage = ProfileSyncStage.Ready
-        };
+        new(true, true, revision, 0, 0, Now, "Synced") { ProfileId = profileId, Stage = ProfileSyncStage.Ready };
 
-    private static TradeOrder CreateOrder(
-        Guid orderId,
-        Guid companyProfileId,
-        string title) =>
-        new()
-        {
-            Id = orderId,
-            CompanyProfileId = companyProfileId,
-            Title = title
-        };
+    private static TradeOrder CreateOrder(Guid orderId, Guid companyProfileId, string title) =>
+        new() { Id = orderId, CompanyProfileId = companyProfileId, Title = title };
 
-    private static bool Publish(
-        HostedOrderProjectionStore store,
-        Guid orderId,
-        Guid companyProfileId,
-        string title,
-        long revision) =>
+    private static bool Publish(HostedOrderProjectionStore store, Guid orderId, Guid companyProfileId, string title, long revision) =>
         store.TryPublishRemoteOrder(CreateOrder(orderId, companyProfileId, title), revision);
 
-    private static CompanyCommissionOwnerProjection CreateOwner(
-        TradeOrder order,
-        long objectRevision,
-        long companyRevision) =>
-        new()
-        {
-            Order = order,
-            ObjectRevision = new(objectRevision),
-            CompanyRevision = new(companyRevision)
-        };
+    private static CompanyCommissionOwnerProjection CreateOwner(TradeOrder order, long objectRevision, long companyRevision) =>
+        new() { Order = order, ObjectRevision = new(objectRevision), CompanyRevision = new(companyRevision) };
 
-    private static HostedOrderProjectionStore RestoringStore(
-        string profileId,
-        long revision,
-        string connectionScope)
+    private static HostedOrderProjectionStore RestoringStore(string profileId, long revision, string connectionScope)
     {
         var store = new HostedOrderProjectionStore();
         Restore(store, profileId, revision, connectionScope);
         return store;
     }
 
-    private static void Restore(
-        HostedOrderProjectionStore store,
-        string profileId,
-        long revision,
-        string connectionScope,
-        int seconds = 0) =>
+    private static void Restore(HostedOrderProjectionStore store, string profileId, long revision, string connectionScope, int seconds = 0) =>
         store.BeginProfileRestore(profileId, false, revision, Now.AddSeconds(seconds), connectionScope);
 
-    private sealed class ProjectionPersistenceRace(
-        HostedOrderProjectionStore store,
-        TradeOrder order)
+    private sealed class ProjectionPersistenceRace(HostedOrderProjectionStore store, TradeOrder order)
     {
         public HostedOrderProjectionStore Store { get; } = store;
         public TradeOrder Order { get; } = order;
         public HostedOrderAuthorityScope Authority { get; } = store.CaptureAuthorityScope();
-        public TaskCompletionSource FirstWriteEntered { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource ReleaseFirstWrite { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource FirstWriteEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirstWrite { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public List<HostedOrderProjectionSnapshot> Persisted { get; } = [];
 
         public static ProjectionPersistenceRace Create(string title, bool publishOrder = false)
@@ -418,15 +408,18 @@ public sealed class HostedOrderProjectionStoreTests
         }
         public void ReplaceAuthority(bool replaceProfile, string? winnerTitle = null)
         {
-            if (!replaceProfile)
+            const string replacementHost = "https://replacement.example/api/";
+            var profileId = replaceProfile ? Guid.NewGuid().ToString("D") : Store.RestoreState.ProfileId!;
+            Runtime.SaveRawSetting(
+                replaceProfile ? ProfileSyncSettingsKeys.ConnectedProfileId : ProfileSyncSettingsKeys.HostUrl,
+                JsonSerializer.Serialize(replaceProfile ? profileId : replacementHost));
+            if (!replaceProfile && winnerTitle == null)
             {
-                Runtime.SaveRawSetting(ProfileSyncSettingsKeys.HostUrl, JsonSerializer.Serialize("https://replacement.example/api/"));
                 return;
             }
 
-            var profileId = Guid.NewGuid().ToString("D");
-            Runtime.SaveRawSetting(ProfileSyncSettingsKeys.ConnectedProfileId, JsonSerializer.Serialize(profileId));
-            Store.BeginProfileRestore(profileId, false, 0, Now, $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
+            var host = replaceProfile ? Host : replacementHost;
+            Store.BeginProfileRestore(profileId, false, 0, Now, $"{ProfileHostClient.NormalizeHostUrl(host)}|{profileId}");
             if (winnerTitle != null)
             {
                 Assert.True(Store.TryPublishOwner(Owner(winnerTitle, 1, 1)));
@@ -449,17 +442,15 @@ public sealed class HostedOrderProjectionStoreTests
             var indexedDb = new IndexedDbService(runtime);
             var localState = new ProfileSyncLocalStateService(indexedDb, new ProfileHostClientOptions(Host));
             await localState.LoadConnectionSettingsAsync();
-            var store = new HostedOrderProjectionStore();
-            store.BeginProfileRestore(profileId, false, 4, Now, $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
+            var store = RestoringStore(profileId, 4, $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
             Assert.True(store.TryPublishOwner(current));
             var recovery = CreateOwner(current.Order, 5, 9);
-            recovery.Order.CompanyCommission = recovery.Order.CompanyCommission! with
-            { RecoveryGrant = new(Guid.NewGuid(), Guid.NewGuid(), 1, Now) };
+            recovery.Order.CompanyCommission = recovery.Order.CompanyCommission! with { RecoveryGrant = new(Guid.NewGuid(), Guid.NewGuid(), 1, Now) };
             var handler = new OwnerMutationHandler { Projection = current, RecoveryProjection = recovery };
             var http = new HttpClient(handler) { BaseAddress = new Uri(Host) };
             var profileSync = new ProfileSyncService(new ProfileHostClient(http, new ProfileHostClientOptions(Host)), localState, new WebSettingsService(indexedDb), store, []);
-            typeof(ProfileSyncService).GetProperty(nameof(ProfileSyncService.CurrentStatus), BindingFlags.Instance | BindingFlags.Public)!.SetValue(
-                profileSync, new ProfileSyncStatus(true, true, 4, 0, 0, Now, "Synced") { ProfileId = profileId, Stage = ProfileSyncStage.Ready });
+            typeof(ProfileSyncService).GetProperty(nameof(ProfileSyncService.CurrentStatus), BindingFlags.Instance | BindingFlags.Public)!
+                .SetValue(profileSync, ReadyStatus(profileId, 4));
             var service = new TradeCommissionOperationsService(new TradeCommissionOperationsClient(new HttpClient(handler) { BaseAddress = new Uri(Host) }, localState),
                 new TradeCompanyCollaborationClient(http, localState), new TradeOperationsPersistenceService(indexedDb, new TradeCompanyProfilePackageService()),
                 localState, profileSync, store, new AppState());
@@ -494,11 +485,20 @@ public sealed class HostedOrderProjectionStoreTests
         public required CompanyCommissionOwnerProjection Projection { get; set; }
         public required CompanyCommissionOwnerProjection RecoveryProjection { get; set; }
         public Action<HttpRequestMessage>? BeforeResponse { get; set; }
+        public bool OwnerMissing { get; set; }
         public Uri? LastRequestUri { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequestUri = request.RequestUri;
             BeforeResponse?.Invoke(request);
+            if (OwnerMissing && request.Method == HttpMethod.Get)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+                {
+                    Content = JsonContent.Create(new
+                    { Error = "commission_missing", Message = "The commission is missing." })
+                });
+            }
             object body = request.RequestUri!.AbsolutePath switch
             {
                 var path when path.EndsWith("/reset-participant-recovery") => new TradeCommissionRecoveryResetResponse(
@@ -506,12 +506,7 @@ public sealed class HostedOrderProjectionStoreTests
                     RecoveryProjection, "https://public.example/commission#recover=test"),
                 var path when path.EndsWith("/issue-claim-link") => new TradeCommissionClaimLinkResponse(
                     "https://public.example/commission#claim=test"),
-                _ => new
-                {
-                    Status = CompanyCommissionMutationStatus.Applied,
-                    Order = Projection.Order,
-                    Projection
-                }
+                _ => new { Status = CompanyCommissionMutationStatus.Applied, Order = Projection.Order, Projection }
             };
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(body) });
         }
@@ -537,6 +532,7 @@ public sealed class HostedOrderProjectionStoreTests
             {
                 return SaveOrderAsync<TValue>((TradeOrder)args![0]!);
             }
+
             object? result = identifier switch
             {
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(_settings),
@@ -555,11 +551,7 @@ public sealed class HostedOrderProjectionStoreTests
         private bool SaveCrafter() { BeforeSaveTradeCrafter?.Invoke(); return true; }
         private async ValueTask<TValue> SaveOrderAsync<TValue>(TradeOrder order)
         {
-            if (BeforeSaveTradeOrderAsync != null)
-            {
-                await BeforeSaveTradeOrderAsync(order);
-            }
-
+            await (BeforeSaveTradeOrderAsync?.Invoke(order) ?? Task.CompletedTask);
             SaveTradeOrderCount++; DurableOrder = order; return (TValue)(object)true;
         }
     }
@@ -570,6 +562,7 @@ public sealed class HostedOrderProjectionStoreTests
     {
         CanonicalRevisionAndTombstone, CompanyProfileIsImmutable, ProfileResetClearsRevisionHistory, OwnerUpgradeAtSameRevision, SameProfileReconnect,
         ScopeChange, RestoreRevisionCannotRollBack, CompanySnapshotComposition, SameProfileConnectionReplacement, ConnectionScopePathCase,
-        SameRevisionOwnerPersistence, LiveTombstonePersistence, OwnerTombstonePersistence, CenterOperationWinner, CenterOperationAuthoritySwitch
+        SameRevisionOwnerPersistence, LiveTombstonePersistence, OwnerTombstonePersistence, CenterOperationWinner, CenterOperationAuthoritySwitch,
+        CenterOperationCommittedFailure, StaleMissingOwner
     }
 }
