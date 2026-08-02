@@ -669,18 +669,32 @@
                                     <td class="text-right">@conflict.LocalRevision.ToString("N0")</td>
                                     <td class="text-right">@conflict.RemoteRevision.ToString("N0")</td>
                                     <td class="text-right">
-                                        <MudButton Variant="Variant.Text"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   OnClick="() => AcceptRemoteConflictAsync(conflict)">
-                                            Apply Remote
-                                        </MudButton>
-                                        <MudButton Variant="Variant.Text"
-                                                   Color="Color.Primary"
-                                                   Size="Size.Small"
-                                                   OnClick="() => KeepLocalConflictAsync(conflict)">
-                                            Keep Local
-                                        </MudButton>
+                                        @if (conflict.CanApplyRemote)
+                                        {
+                                            <MudButton Variant="Variant.Text"
+                                                       Color="Color.Secondary"
+                                                       Size="Size.Small"
+                                                       OnClick="() => AcceptRemoteConflictAsync(conflict)">
+                                                @(conflict.CanKeepLocal ? "Apply Remote" : "Use Hosted Plan")
+                                            </MudButton>
+                                        }
+                                        else if (!conflict.CanKeepLocal)
+                                        {
+                                            <MudText Typo="Typo.caption"
+                                                     Color="Color.Warning"
+                                                     Class="d-inline-block mr-2">
+                                                Linked plan needs recovery
+                                            </MudText>
+                                        }
+                                        @if (conflict.CanKeepLocal)
+                                        {
+                                            <MudButton Variant="Variant.Text"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       OnClick="() => KeepLocalConflictAsync(conflict)">
+                                                Keep Local
+                                            </MudButton>
+                                        }
                                     </td>
                                 </tr>
                             }
@@ -1753,7 +1767,11 @@
         try
         {
             await ProfileSync.AcceptRemoteConflictAsync(conflict);
-            SetProfileHostStatus("Remote version applied.", Color.Success);
+            SetProfileHostStatus(
+                conflict.CanKeepLocal
+                    ? "Remote version applied."
+                    : "Hosted plan applied. Local changes were preserved as a separate plan.",
+                Color.Success);
         }
         catch (Exception ex)
         {

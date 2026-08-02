@@ -54,7 +54,9 @@ public sealed record ProfileSyncConflict(
     string ObjectId,
     long LocalRevision,
     long RemoteRevision,
-    ProfileSyncObjectEnvelope RemoteObject);
+    ProfileSyncObjectEnvelope RemoteObject,
+    bool CanApplyRemote = true,
+    bool CanKeepLocal = true);
 
 public sealed record ProfileSyncBootstrapPreview(
     int LocalObjectCount,
@@ -333,18 +335,26 @@ public sealed class ProfileSyncService
                 localObject.PayloadJson,
                 StringComparison.Ordinal))
         {
+            await AdoptLinkedPlanConflictBaseRevisionAsync(
+                profileId,
+                remoteObject);
             await AddPendingSaveAsync(profileId, collection, objectId);
             _conflicts.RemoveAll(item => IsSameIdentity(
                 item.Collection,
                 item.ObjectId,
                 collection,
                 objectId));
+            var capabilities = await ResolveConflictCapabilitiesAsync(
+                remoteObject,
+                ct);
             _conflicts.Add(new ProfileSyncConflict(
                 collection,
                 objectId,
                 0,
                 remoteObject.Revision,
-                remoteObject));
+                remoteObject,
+                capabilities.CanApplyRemote,
+                capabilities.CanKeepLocal));
             SetStatus(CurrentStatus with
             {
                 ConflictCount = _conflicts.Count,
@@ -526,6 +536,27 @@ public sealed class ProfileSyncService
                             try
                             {
                                 await adapter.ApplyRemoteObjectAsync(item, ct);
+                            }
+                            catch (ProfileSyncObjectReconciliationException reconciliation) when (
+                                string.Equals(reconciliation.Collection, item.Collection, StringComparison.OrdinalIgnoreCase) &&
+                                string.Equals(reconciliation.ObjectId, item.ObjectId, StringComparison.Ordinal))
+                            {
+                                if (reconciliation.Reconciliation ==
+                                    ProfileSyncObjectReconciliation.PromoteLocalAuthority)
+                                {
+                                    await AddPendingSaveAsync(
+                                        profileId,
+                                        item.Collection,
+                                        item.ObjectId);
+                                }
+                                else
+                                {
+                                    await RecordRemoteObjectConflictAsync(
+                                        profileId,
+                                        item,
+                                        ct);
+                                    continue;
+                                }
                             }
                             catch (MissingTradeCompanyProfileException exception)
                             {
@@ -804,6 +835,9 @@ public sealed class ProfileSyncService
                 }
             }
 
+            await AdoptLinkedPlanConflictBaseRevisionAsync(
+                profileId,
+                remotePlan);
             await AddPendingSaveAsync(
                 profileId,
                 ProfileSyncCollections.Plans,
@@ -813,6 +847,9 @@ public sealed class ProfileSyncService
                 item.ObjectId,
                 ProfileSyncCollections.Plans,
                 retained.ObjectId));
+            var capabilities = await ResolveConflictCapabilitiesAsync(
+                remotePlan,
+                ct);
             _conflicts.Add(new ProfileSyncConflict(
                 ProfileSyncCollections.Plans,
                 retained.ObjectId,
@@ -821,7 +858,9 @@ public sealed class ProfileSyncService
                     ProfileSyncCollections.Plans,
                     retained.ObjectId),
                 remotePlan.Revision,
-                remotePlan));
+                remotePlan,
+                capabilities.CanApplyRemote,
+                capabilities.CanKeepLocal));
         }
         await _localState.SaveLinkedPlanSealMigrationCompleteAsync(profileId);
     }
@@ -1363,6 +1402,12 @@ public sealed class ProfileSyncService
         ProfileSyncConflict conflict,
         CancellationToken ct)
     {
+        if (!conflict.CanApplyRemote)
+        {
+            throw new InvalidOperationException(
+                "This hosted conflict cannot be applied directly.");
+        }
+
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId
             ?? throw new InvalidOperationException(
@@ -1374,7 +1419,27 @@ public sealed class ProfileSyncService
                 profileId,
                 conflict.Collection,
                 conflict.ObjectId);
-            await adapter.ApplyRemoteObjectAsync(conflict.RemoteObject, ct);
+            if (conflict.RemoteObject.Deleted)
+            {
+                await ApplyAcceptedRemoteDeletionAsync(
+                    adapter,
+                    conflict.RemoteObject,
+                    ct);
+            }
+            else
+            {
+                if (adapter is PlansProfileSyncAdapter plansAdapter &&
+                    await plansAdapter.IsLinkedOrderPlanAsync(conflict.ObjectId))
+                {
+                    await plansAdapter.AdoptProtectedRemoteObjectAsync(
+                        conflict.RemoteObject,
+                        ct);
+                }
+                else
+                {
+                    await adapter.ApplyRemoteObjectAsync(conflict.RemoteObject, ct);
+                }
+            }
             if (!string.Equals(
                     conflict.Collection,
                     ProfileSyncCollections.TradeOrders,
@@ -1407,11 +1472,18 @@ public sealed class ProfileSyncService
         ProfileSyncConflict conflict,
         CancellationToken ct)
     {
+        if (!conflict.CanKeepLocal)
+        {
+            throw new InvalidOperationException(
+                "This hosted linked plan is immutable. Use the hosted plan; the local version will be preserved as a separate plan.");
+        }
+
         var settings = await _localState.LoadConnectionSettingsAsync();
         var profileId = settings.ProfileScopeId;
         if (!settings.IsConfigured || profileId == null)
         {
-            return;
+            throw new InvalidOperationException(
+                "A connected hosted profile is required to keep the local version.");
         }
 
         var adapter = GetAdapter(conflict.Collection);
@@ -1419,7 +1491,8 @@ public sealed class ProfileSyncService
             .FirstOrDefault(item => item.ObjectId == conflict.ObjectId);
         if (localObject == null)
         {
-            return;
+            throw new InvalidOperationException(
+                "The local object is no longer available to publish.");
         }
 
         var response = await _client.PutObjectAsync(
@@ -1446,7 +1519,12 @@ public sealed class ProfileSyncService
                 conflict.Collection,
                 conflict.ObjectId);
             RefreshStatusMessage("Local version kept");
+            return;
         }
+
+        throw new InvalidOperationException(
+            response.ErrorMessage ??
+            "The hosted version changed before the local version could be kept.");
     }
 
     public IDisposable SuppressNotifications()
@@ -1562,6 +1640,19 @@ public sealed class ProfileSyncService
                     ExpectedRevision = expectedRevision
                 },
                 ct);
+
+            if (await ShouldRepairLegacyLinkedPlanAsync(
+                    pending,
+                    response))
+            {
+                response = await RepairLegacyLinkedPlanAsync(
+                    settings,
+                    profileId,
+                    pending,
+                    localObject,
+                    response,
+                    ct);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1579,12 +1670,21 @@ public sealed class ProfileSyncService
                 item.ObjectId,
                 pending.Collection,
                 pending.ObjectId));
+            var capabilities = await ResolveConflictCapabilitiesAsync(
+                response.RemoteObject,
+                ct);
+            var conflictLocalRevision = await _localState.LoadObjectRevisionAsync(
+                profileId,
+                pending.Collection,
+                pending.ObjectId);
             _conflicts.Add(new ProfileSyncConflict(
                 pending.Collection,
                 pending.ObjectId,
-                expectedRevision,
+                conflictLocalRevision,
                 response.RemoteObject.Revision,
-                response.RemoteObject));
+                response.RemoteObject,
+                capabilities.CanApplyRemote,
+                capabilities.CanKeepLocal));
         }
         else if (response.Success && response.Object != null)
         {
@@ -1597,6 +1697,11 @@ public sealed class ProfileSyncService
                 profileId,
                 pending.Collection,
                 pending.ObjectId);
+            _conflicts.RemoveAll(item => IsSameIdentity(
+                item.Collection,
+                item.ObjectId,
+                pending.Collection,
+                pending.ObjectId));
         }
 
         return true;
@@ -1632,6 +1737,190 @@ public sealed class ProfileSyncService
         _pendingSaves.Add(new ProfileSyncPendingSave(collection, objectId));
         await PersistPendingSavesAsync(profileId);
     }
+
+    private async Task RecordRemoteObjectConflictAsync(
+        string profileId,
+        ProfileSyncObjectEnvelope remoteObject,
+        CancellationToken ct)
+    {
+        await AdoptLinkedPlanConflictBaseRevisionAsync(profileId, remoteObject);
+        var localRevision = await _localState.LoadObjectRevisionAsync(
+            profileId,
+            remoteObject.Collection,
+            remoteObject.ObjectId);
+        await AddPendingSaveAsync(
+            profileId,
+            remoteObject.Collection,
+            remoteObject.ObjectId);
+        _conflicts.RemoveAll(item => IsSameIdentity(
+            item.Collection,
+            item.ObjectId,
+            remoteObject.Collection,
+            remoteObject.ObjectId));
+        var capabilities = await ResolveConflictCapabilitiesAsync(remoteObject, ct);
+        _conflicts.Add(new ProfileSyncConflict(
+            remoteObject.Collection,
+            remoteObject.ObjectId,
+            localRevision,
+            remoteObject.Revision,
+            remoteObject,
+            capabilities.CanApplyRemote,
+            capabilities.CanKeepLocal));
+    }
+
+    private async Task<ProfileSyncConflictCapabilities> ResolveConflictCapabilitiesAsync(
+        ProfileSyncObjectEnvelope remoteObject,
+        CancellationToken ct)
+    {
+        var adapter = GetAdapter(remoteObject.Collection);
+        if (adapter is PlansProfileSyncAdapter plansAdapter &&
+            await plansAdapter.LoadLinkedOrderIdAsync(remoteObject.ObjectId) is { } localOrderId)
+        {
+            if (remoteObject.Deleted)
+            {
+                return new ProfileSyncConflictCapabilities(
+                    CanApplyRemote: false,
+                    CanKeepLocal: true);
+            }
+
+            var remotePlan = ProfileSyncPlanPayloadCodec.Deserialize(
+                remoteObject.PayloadJson,
+                remoteObject.ObjectId);
+            return new ProfileSyncConflictCapabilities(
+                CanApplyRemote: remotePlan.LinkedOrderId == localOrderId,
+                CanKeepLocal: false);
+        }
+
+        if (remoteObject.Deleted &&
+            string.Equals(
+                remoteObject.Collection,
+                ProfileSyncCollections.TradeOrders,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var canDeleteOrder = Guid.TryParse(remoteObject.ObjectId, out var orderId) &&
+                                 adapter is IHostedOrderProfileSyncAdapter &&
+                                 await ResolveDeletedOrderCompanyProfileIdAsync(
+                                     adapter,
+                                     orderId,
+                                     ct) != null;
+            return new ProfileSyncConflictCapabilities(
+                CanApplyRemote: canDeleteOrder,
+                CanKeepLocal: true);
+        }
+
+        return new ProfileSyncConflictCapabilities(
+            CanApplyRemote: true,
+            CanKeepLocal: true);
+    }
+
+    private async Task ApplyAcceptedRemoteDeletionAsync(
+        IProfileSyncCollectionAdapter adapter,
+        ProfileSyncObjectEnvelope remoteObject,
+        CancellationToken ct)
+    {
+        if (string.Equals(
+                remoteObject.Collection,
+                ProfileSyncCollections.TradeOrders,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Guid.TryParse(remoteObject.ObjectId, out var orderId) ||
+                await ResolveDeletedOrderCompanyProfileIdAsync(adapter, orderId, ct) is not { } companyId ||
+                adapter is not IHostedOrderProfileSyncAdapter hostedOrderAdapter)
+            {
+                throw new InvalidOperationException(
+                    "The hosted order deletion cannot be applied without its local company identity.");
+            }
+
+            await hostedOrderAdapter.ApplyRemoteDeletionAsync(
+                orderId,
+                companyId,
+                remoteObject.Revision,
+                ct);
+            return;
+        }
+
+        await adapter.DeleteLocalObjectAsync(remoteObject.ObjectId, ct);
+    }
+
+    private async Task<bool> ShouldRepairLegacyLinkedPlanAsync(
+        ProfileSyncPendingSave pending,
+        ProfileSyncPutResponse response) =>
+        response.Conflict &&
+        response.RemoteObject != null &&
+        (response.RemoteObject.Deleted ||
+         string.Equals(
+             response.ErrorCode,
+             "linked_plan_promotion_mismatch",
+             StringComparison.Ordinal)) &&
+        GetAdapter(pending.Collection) is PlansProfileSyncAdapter plansAdapter &&
+        await plansAdapter.IsLinkedOrderPlanAsync(pending.ObjectId);
+
+    private async Task<ProfileSyncPutResponse> RepairLegacyLinkedPlanAsync(
+        HostedProfileConnectionSettings settings,
+        string profileId,
+        ProfileSyncPendingSave pending,
+        ProfileSyncObjectEnvelope localObject,
+        ProfileSyncPutResponse conflict,
+        CancellationToken ct)
+    {
+        if (conflict.RemoteObject == null)
+        {
+            return conflict;
+        }
+
+        var baseRevision = conflict.RemoteObject.Revision;
+        if (!conflict.RemoteObject.Deleted)
+        {
+            var deletion = await _client.DeleteObjectAsync(
+                settings.HostUrl!,
+                settings.AccessKey!,
+                pending.Collection,
+                pending.ObjectId,
+                conflict.RemoteObject.Revision,
+                ct);
+            if (!deletion.Success || deletion.Object == null)
+            {
+                return deletion;
+            }
+            baseRevision = deletion.Object.Revision;
+        }
+
+        await _localState.SaveObjectRevisionAsync(
+            profileId,
+            pending.Collection,
+            pending.ObjectId,
+            baseRevision);
+        return await _client.PutObjectAsync(
+            settings.HostUrl!,
+            settings.AccessKey!,
+            pending.Collection,
+            pending.ObjectId,
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = localObject.PayloadJson,
+                ExpectedRevision = baseRevision
+            },
+            ct);
+    }
+
+    private async Task AdoptLinkedPlanConflictBaseRevisionAsync(
+        string profileId,
+        ProfileSyncObjectEnvelope remoteObject)
+    {
+        if (GetAdapter(remoteObject.Collection) is PlansProfileSyncAdapter plansAdapter &&
+            await plansAdapter.IsLinkedOrderPlanAsync(remoteObject.ObjectId))
+        {
+            await _localState.SaveObjectRevisionAsync(
+                profileId,
+                remoteObject.Collection,
+                remoteObject.ObjectId,
+                remoteObject.Revision);
+        }
+    }
+
+    private sealed record ProfileSyncConflictCapabilities(
+        bool CanApplyRemote,
+        bool CanKeepLocal);
 
     private async Task RemovePendingSaveAsync(
         string profileId,

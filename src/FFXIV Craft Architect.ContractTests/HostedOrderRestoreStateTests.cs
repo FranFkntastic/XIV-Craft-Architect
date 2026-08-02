@@ -28,6 +28,7 @@ public sealed class HostedOrderRestoreStateTests
                 SuccessfulRestoreMakesEvenZeroOrdersAuthoritative();
                 await TradeOrderPlanRestoreContractScenarios.AssertAllAsync();
                 await ProfileSyncDeletionProjectionTests.AssertAllAsync();
+                await PlansProfileSyncAdapterTests.AssertAllAsync();
                 CompanyCommissionProjectionPresentationContractTests.AssertAll();
                 await DiscordCommissionMessageLifecycleTests.AssertAllAsync();
                 break;

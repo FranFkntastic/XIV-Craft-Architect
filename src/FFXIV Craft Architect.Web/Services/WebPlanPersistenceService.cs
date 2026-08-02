@@ -37,10 +37,7 @@ public sealed class WebPlanPersistenceService
         ArgumentNullException.ThrowIfNull(snapshot);
         var existing = await _indexedDb.LoadPlanAsync(snapshot.Id);
         if (existing?.LinkedOrderId.HasValue == true &&
-            !string.Equals(
-                JsonSerializer.Serialize(existing, ComparisonJson),
-                JsonSerializer.Serialize(snapshot, ComparisonJson),
-                StringComparison.Ordinal))
+            !HasSameStoredSnapshot(existing, snapshot))
         {
             return false;
         }
@@ -91,6 +88,41 @@ public sealed class WebPlanPersistenceService
             NormalizeRevisionContent(left),
             NormalizeRevisionContent(right),
             StringComparison.Ordinal);
+    }
+
+    public static bool HasSameStoredSnapshot(StoredPlan left, StoredPlan right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        return string.Equals(
+            JsonSerializer.Serialize(left, ComparisonJson),
+            JsonSerializer.Serialize(right, ComparisonJson),
+            StringComparison.Ordinal);
+    }
+
+    public async Task<bool> PreserveLocalAndAdoptLinkedSnapshotAsync(StoredPlan replacement)
+    {
+        ArgumentNullException.ThrowIfNull(replacement);
+        var existing = await _indexedDb.LoadPlanAsync(replacement.Id);
+        if (existing?.LinkedOrderId is not { } linkedOrderId ||
+            replacement.LinkedOrderId != linkedOrderId)
+        {
+            return false;
+        }
+
+        var preserved = JsonSerializer.Deserialize<StoredPlan>(
+            JsonSerializer.Serialize(existing, ComparisonJson),
+            ComparisonJson)
+            ?? throw new InvalidOperationException("Linked plan preservation failed.");
+        var now = DateTime.UtcNow;
+        preserved.Id = Guid.NewGuid().ToString("D");
+        preserved.Name = $"{existing.Name} (local changes)";
+        preserved.CreatedAt = now;
+        preserved.ModifiedAt = now;
+        preserved.SavedAt = now;
+        preserved.LinkedOrderId = null;
+
+        return await _indexedDb.SavePlansBatchAsync([preserved, replacement]);
     }
 
     private static string NormalizeRevisionContent(StoredPlan snapshot)
