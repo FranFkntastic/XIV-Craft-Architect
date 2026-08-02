@@ -413,6 +413,48 @@ export function createCommandAuthorization(projection, access, capability = {}, 
     };
 }
 
+export function resolveParticipantPreworkChoices(projection) {
+    if (projection?.kind !== "participant") {
+        return {
+            paymentPending: false,
+            materialsPending: false,
+            materialsReady: false,
+            choices: []
+        };
+    }
+
+    const paymentPending = projection.public.gates.payment === "Pending";
+    const materialsPending = projection.public.gates.companyMaterials === "Pending";
+    const termsVersion = projection.public.terms.version;
+    const paymentReceiptIsCurrent =
+        projection.payment?.crafterReceived?.termsVersion === termsVersion;
+    const materialsReady = materialsPending &&
+        latestActivityRevision(projection.activity, "CompanyMaterialsReady", termsVersion) >
+            latestActivityRevision(projection.activity, "CompanyMaterialsReceived", termsVersion);
+    const choices = [];
+
+    if (paymentPending && !paymentReceiptIsCurrent) {
+        choices.push("confirm-advance-payment");
+    }
+    if (materialsReady) {
+        choices.push("acknowledge-company-materials");
+    }
+    if (paymentPending) {
+        choices.push("request-payment-schedule-change");
+        if (paymentReceiptIsCurrent) {
+            choices.push("retract-advance-payment-confirmation");
+        }
+    }
+
+    return { paymentPending, materialsPending, materialsReady, choices };
+}
+
+function latestActivityRevision(activity, kind, termsVersion) {
+    return (activity ?? [])
+        .filter(item => item.kind === kind && item.termsVersion === termsVersion)
+        .reduce((latest, item) => Math.max(latest, item.commissionRevision), 0);
+}
+
 export function adaptBriefProjection(payload) {
     const isParticipant = Boolean(payload?.public);
     const publicBrief = adaptPublicBrief(isParticipant ? payload.public : payload);

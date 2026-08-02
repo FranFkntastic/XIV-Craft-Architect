@@ -29,6 +29,39 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Assert.DoesNotContain("AWAITING DELIVERY", payload, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void OrderCenterKeepsLifecycleAndPlanMutationsOutOfCalculationDetails()
+    {
+        var repositoryRoot = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Pages",
+            "TradeOrders.razor"));
+        var detailsStart = source.IndexOf(
+            "<details class=\"trade-orders-work-details\"",
+            StringComparison.Ordinal);
+        var detailsEnd = source.IndexOf("</details>", detailsStart, StringComparison.Ordinal);
+
+        Assert.True(detailsStart >= 0 && detailsEnd > detailsStart);
+        var centerBeforeDetails = source[..detailsStart];
+        var calculationDetails = source[detailsStart..detailsEnd];
+
+        Assert.Contains("Crafter confirmed payment receipt", centerBeforeDetails, StringComparison.Ordinal);
+        Assert.Contains("crafterReceipt.TermsVersion", centerBeforeDetails, StringComparison.Ordinal);
+        Assert.Contains("OnClick=\"DeleteSelectedOrderAsync\"", centerBeforeDetails, StringComparison.Ordinal);
+        Assert.Contains("OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled)", centerBeforeDetails, StringComparison.Ordinal);
+        Assert.DoesNotContain("@bind-Value", calculationDetails, StringComparison.Ordinal);
+        Assert.DoesNotContain("ValueChanged=", calculationDetails, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenSupplyPlanAsync", calculationDetails, StringComparison.Ordinal);
+        Assert.DoesNotContain("DeleteSelectedOrderAsync", calculationDetails, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenCloseOrderDialogAsync", calculationDetails, StringComparison.Ordinal);
+        Assert.DoesNotContain("Edit Supply Plan", source, StringComparison.Ordinal);
+        Assert.Contains("Text=\"Plan\"", source, StringComparison.Ordinal);
+        Assert.Contains("ChangeProcurementRowResponsibilityValueAsync", source, StringComparison.Ordinal);
+    }
+
     private static string SerializePublication(CompanyCommissionPublicBrief brief)
     {
         var projection = new CommittedCompanyCommissionDiscordProjection(
@@ -111,5 +144,18 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             Closed = false,
             ProjectionRevision = 12
         };
+    }
+
+    private static string LocateRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null &&
+               !File.Exists(Path.Combine(directory.FullName, "FFXIV Craft Architect.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ??
+            throw new DirectoryNotFoundException("Could not locate the repository root.");
     }
 }

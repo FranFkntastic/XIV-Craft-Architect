@@ -5,7 +5,8 @@ import {
     ParticipantAccessStore,
     clearCapabilityFragment,
     createCommandAuthorization,
-    readCapabilityFragment
+    readCapabilityFragment,
+    resolveParticipantPreworkChoices
 } from "./commission-client.js";
 
 const byId = id => document.getElementById(id);
@@ -519,44 +520,34 @@ function resolveNextStep() {
             tone: "waiting"
         };
     }
-    if (brief.gates.payment === "Pending") {
-        const participantPayment = projection.payment;
-        if (participantPayment && !participantPayment.crafterReceived) {
-            return {
-                title: "Confirm advance payment",
-                body: `Confirm receipt of ${formatGil(brief.terms.payment.total)} against terms v${brief.terms.version}. Work unlocks only after both parties record the same exchange.`,
-                tone: "waiting",
-                actions: [{
-                    label: `I received ${formatGil(brief.terms.payment.total)}`,
-                    primary: true,
-                    run: openPaymentReceiptForm
-                }, {
-                    label: "Request schedule change",
-                    run: openPaymentRequestForm
-                }]
-            };
-        }
+    const prework = resolveParticipantPreworkChoices(projection);
+    if (prework.paymentPending || prework.materialsPending) {
+        const bothPending = prework.paymentPending && prework.materialsPending;
+        const paymentConfirmed =
+            projection.payment?.crafterReceived?.termsVersion === brief.terms.version;
+        const title = bothPending
+            ? "Complete the remaining start requirements"
+            : prework.paymentPending
+                ? paymentConfirmed
+                    ? "Waiting for commissioner confirmation"
+                    : "Confirm advance payment"
+                : prework.materialsReady
+                    ? "Confirm the complete material bundle"
+                    : "Waiting for company materials";
+        const body = bothPending
+            ? "Payment and complete material handoff can be confirmed in either order. Crafting begins when both are complete."
+            : prework.paymentPending
+                ? paymentConfirmed
+                    ? "You confirmed receipt. Work unlocks when the commissioner records that the same advance payment was sent."
+                    : `Confirm receipt of ${formatGil(brief.terms.payment.total)} against terms v${brief.terms.version}. Work unlocks only after both parties record the same exchange.`
+                : prework.materialsReady
+                    ? "The commissioner marked every promised quantity ready. Confirm receipt only after the complete bundle has been handed over."
+                    : "The commissioner must mark the complete promised bundle ready before you can acknowledge receipt.";
         return {
-            title: "Waiting for commissioner confirmation",
-            body: "You confirmed receipt. Work unlocks when the commissioner records that the same advance payment was sent.",
+            title,
+            body,
             tone: "waiting",
-            actions: [{
-                label: "Request schedule change",
-                run: openPaymentRequestForm
-            }, {
-                label: "Retract my confirmation",
-                run: openPaymentRetractionForm
-            }]
-        };
-    }
-    if (brief.gates.companyMaterials === "Pending") {
-        const ready = areCompanyMaterialsReady(projection);
-        return {
-            title: ready ? "Confirm the complete material bundle" : "Waiting for company materials",
-            body: ready
-                ? "The commissioner marked every promised quantity ready. Confirm receipt only after the complete bundle has been handed over."
-                : "The commissioner must mark the complete promised bundle ready before you can acknowledge receipt.",
-            tone: "waiting"
+            actions: prework.choices.map(createPreworkAction)
         };
     }
     if (!brief.clearedToWork) {
@@ -598,6 +589,29 @@ function resolveNextStep() {
     };
 }
 
+function createPreworkAction(choice) {
+    switch (choice) {
+        case "confirm-advance-payment":
+            return {
+                label: `I received ${formatGil(state.projection.public.terms.payment.total)}`,
+                primary: true,
+                run: openPaymentReceiptForm
+            };
+        case "acknowledge-company-materials":
+            return {
+                label: "I received the complete material bundle",
+                primary: true,
+                run: acknowledgeMaterials
+            };
+        case "request-payment-schedule-change":
+            return { label: "Request schedule change", run: openPaymentRequestForm };
+        case "retract-advance-payment-confirmation":
+            return { label: "Retract my confirmation", run: openPaymentRetractionForm };
+        default:
+            throw new Error(`Unknown pre-work choice: ${choice}`);
+    }
+}
+
 function requiresTermsAcknowledgement(projection) {
     const accepted = Math.max(
         latestActivityRevision(projection, "PaymentPolicyChangeAccepted"),
@@ -607,13 +621,16 @@ function requiresTermsAcknowledgement(projection) {
 }
 
 function areCompanyMaterialsReady(projection) {
-    return latestActivityRevision(projection, "CompanyMaterialsReady") >
-        latestActivityRevision(projection, "CompanyMaterialsReceived");
+    const termsVersion = projection.public.terms.version;
+    return latestActivityRevision(projection, "CompanyMaterialsReady", termsVersion) >
+        latestActivityRevision(projection, "CompanyMaterialsReceived", termsVersion);
 }
 
-function latestActivityRevision(projection, kind) {
+function latestActivityRevision(projection, kind, termsVersion = null) {
     return projection.activity
-        .filter(item => item.kind === kind)
+        .filter(item =>
+            item.kind === kind &&
+            (termsVersion == null || item.termsVersion === termsVersion))
         .reduce((latest, item) => Math.max(latest, item.commissionRevision), 0);
 }
 

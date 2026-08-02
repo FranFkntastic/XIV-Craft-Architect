@@ -648,42 +648,6 @@
   grid-area: copy;
 }
 
-.trade-orders-payment-policy {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.65rem;
-  align-items: center;
-  border: 1px solid #343434;
-  border-radius: 6px;
-  background: #202020;
-  margin-top: 10px;
-  padding: 10px;
-}
-
-.trade-orders-payment-policy-controls {
-  display: grid;
-  grid-template-columns: auto minmax(10.5rem, 13rem);
-  gap: 0.6rem;
-  align-items: center;
-}
-
-.trade-orders-payment-policy span {
-  display: block;
-  color: #b8b8b8;
-  font-size: 0.68rem;
-  line-height: 1.1;
-}
-
-.trade-orders-payment-policy strong {
-  display: block;
-  color: #f0f0f0;
-  font-size: 0.82rem;
-  line-height: 1.2;
-  margin-top: 4px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .trade-orders-payment-subtotals {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1361,22 +1325,12 @@
   padding-left: 18px;
 }
 
-.trade-orders-status-panel,
-.trade-orders-close-panel,
 .trade-orders-panel {
   border: 1px solid #343434;
   border-radius: 6px;
   background: #252525;
   margin-top: 12px;
   padding: 12px;
-}
-
-.trade-orders-close-panel {
-  border-color: #463030;
-}
-
-.trade-orders-close-panel .mud-button-root + .mud-button-root {
-  margin-top: 8px;
 }
 
 .trade-orders-history {
@@ -2240,12 +2194,7 @@
     transform: rotate(90deg);
   }
 
-  .trade-orders-payment-policy {
-    grid-template-columns: 1fr;
-  }
-
   .trade-orders-payment-metrics,
-  .trade-orders-payment-policy-controls,
   .trade-orders-parallel-gates,
   .trade-orders-start-gate-action {
     grid-template-columns: 1fr;

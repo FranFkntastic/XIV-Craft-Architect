@@ -440,6 +440,10 @@
                                                           <div class="trade-orders-start-gate-evidence">
                                                               <strong>Company marked payment sent</strong>
                                                               <span>@operationsCommission.Gates.Payment.CommissionerSent.Note</span>
+                                                              <small>
+                                                                  @operationsCommission.Gates.Payment.CommissionerSent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                                                                  - terms v@(operationsCommission.Gates.Payment.CommissionerSent.TermsVersion)
+                                                              </small>
                                                           </div>
                                                           @if (operationsOwner.Order.Status == TradeOrderStatus.Assigned)
                                                           {
@@ -459,10 +463,29 @@
                                                                       Retract confirmation
                                                                   </MudButton>
                                                               </details>
-                                                          }
+                                                           }
+                                                       }
+                                                      @if (operationsCommission.Gates.Payment.CrafterReceived is { } crafterReceipt &&
+                                                           crafterReceipt.TermsVersion == operationsCommission.CurrentTermsVersion)
+                                                      {
+                                                          <div class="trade-orders-start-gate-evidence">
+                                                              <strong>Crafter confirmed payment receipt</strong>
+                                                              <span>@crafterReceipt.Note</span>
+                                                              <small>
+                                                                  @crafterReceipt.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                                                                  - terms v@(crafterReceipt.TermsVersion)
+                                                              </small>
+                                                          </div>
                                                       }
-                                                     <small>Crafter confirmation remains independent and may arrive before or after material handoff.</small>
-                                                 }
+                                                      else
+                                                      {
+                                                          <div class="trade-orders-start-gate-evidence">
+                                                              <strong>Crafter confirmation pending</strong>
+                                                              <span>No crafter receipt confirmation is recorded for terms v@(operationsCommission.CurrentTermsVersion).</span>
+                                                          </div>
+                                                      }
+                                                      <small>Crafter confirmation remains independent and may arrive before or after material handoff.</small>
+                                                  }
                                              </section>
 
                                              <section class="trade-orders-start-gate" aria-labelledby="materials-gate-title">
@@ -820,6 +843,30 @@
                                      }
 
                                }
+                               @if (HasCanonicalCommission)
+                               {
+                                   <section class="trade-orders-operation-card trade-orders-order-actions">
+                                       <MudText Typo="Typo.subtitle2">Order actions</MudText>
+                                       @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
+                                       {
+                                           <MudButton Variant="Variant.Outlined"
+                                                      Color="Color.Error"
+                                                      Disabled="@_isDeletingSelectedOrder"
+                                                      OnClick="DeleteSelectedOrderAsync">
+                                               @(_isDeletingSelectedOrder ? "Deleting..." : "Delete order permanently")
+                                           </MudButton>
+                                       }
+                                       else
+                                       {
+                                           <MudButton Variant="Variant.Outlined"
+                                                      Color="Color.Error"
+                                                      Disabled="@(_isCommissionCommandRunning || _isDeletingSelectedOrder)"
+                                                      OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
+                                               @(IsSelectedCanonicalOwnerMissing ? "Remove stale order" : "Cancel order")
+                                           </MudButton>
+                                       }
+                                   </section>
+                               }
                                <details class="trade-orders-work-details" open="@(!HasCanonicalCommission)">
                                    <summary>Terms and calculation details</summary>
                                    <div class="trade-orders-work-details-content">
@@ -848,29 +895,6 @@
                                 @if (paymentSummary.Materials.Count > 0 && paymentSummary.EstimatedProcurementTotal <= 0)
                                 {
                                     <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">Material lines are captured, but pricing evidence is missing. Run market analysis from the linked craft plan before using payment totals.</MudAlert>
-                                }
-                                @if (!HasCanonicalCommission)
-                                {
-                                    <div class="trade-orders-payment-policy">
-                                        <div>
-                                            <span>Payment policy</span>
-                                            <strong>@GetSelectedOrderPaymentPolicyLabel()</strong>
-                                        </div>
-                                        <div class="trade-orders-payment-policy-controls">
-                                            <MudSwitch T="bool"
-                                                       Value="@SelectedOrderUsesCompanyPaymentPolicy"
-                                                       ValueChanged="SetSelectedOrderUseCompanyPolicyAsync"
-                                                       Color="Color.Primary"
-                                                       Dense="true"
-                                                       Label="Use company default" />
-                                            <CompactSelectField Id="selected-order-payment-contract"
-                                                                Label="Payment contract"
-                                                                Value="@SelectedOrderPaymentContract.ToString()"
-                                                                ValueChanged="SetSelectedOrderPaymentContractValueAsync"
-                                                                Options="PaymentContractOptions"
-                                                                Disabled="@SelectedOrderUsesCompanyPaymentPolicy" />
-                                        </div>
-                                    </div>
                                 }
                                 @if (paymentSummary.Materials.Count > 0)
                                 {
@@ -956,12 +980,6 @@
                                             </MudText>
                                         </div>
                                         <div class="trade-orders-payment-copy-actions">
-                                            <MudButton Variant="Variant.Text"
-                                                       Color="Color.Primary"
-                                                       Size="Size.Small"
-                                                       OnClick="OpenSupplyPlanAsync">
-                                                Edit Supply Plan
-                                            </MudButton>
                                             <MudButton Variant="Variant.Outlined"
                                                        Color="Color.Secondary"
                                                        Size="Size.Small"
@@ -1021,90 +1039,6 @@
                                 else
                                 {
                                     <MudAlert Severity="Severity.Info" Dense="true">Create a linked craft plan, then run market analysis to populate payment evidence.</MudAlert>
-                                }
-                                @if (HasCanonicalCommission)
-                                {
-                                    <section class="trade-orders-close-panel">
-                                        <MudText Typo="Typo.subtitle2">Order Actions</MudText>
-                                        @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
-                                        {
-                                            <MudButton Variant="Variant.Outlined"
-                                                       Color="Color.Error"
-                                                       FullWidth="true"
-                                                       Disabled="@_isDeletingSelectedOrder"
-                                                       OnClick="DeleteSelectedOrderAsync">
-                                                @(_isDeletingSelectedOrder ? "Deleting..." : "Delete Order Permanently")
-                                            </MudButton>
-                                        }
-                                        else
-                                        {
-                                            <MudButton Variant="Variant.Outlined"
-                                                       Color="Color.Error"
-                                                       FullWidth="true"
-                                                       Disabled="@(_isCommissionCommandRunning || _isDeletingSelectedOrder)"
-                                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
-                                                @(IsSelectedCanonicalOwnerMissing ? "Remove Stale Order" : "Cancel Order")
-                                            </MudButton>
-                                        }
-                                    </section>
-                                }
-                                else
-                                {
-                                    <section class="trade-orders-status-panel">
-                                        <MudText Typo="Typo.subtitle2">Status</MudText>
-                                        @if (IsSelectedOrderArchived)
-                                        {
-                                            <MudText Typo="Typo.body2" Color="Color.Secondary">Archived as @FormatStatus(_selectedOrder.Status).</MudText>
-                                        }
-                                        else
-                                        {
-                                            <CompactSelectField Id="selected-order-status"
-                                                                Label="Order status"
-                                                                @bind-Value="DetailStatusValue"
-                                                                Options="GetActiveStatusOptions()" />
-                                            <MudButton Variant="Variant.Filled"
-                                                       Color="Color.Primary"
-                                                       FullWidth="true"
-                                                       OnClick="SaveSelectedOrderAsync"
-                                                       Disabled="@(string.IsNullOrWhiteSpace(_detailTitle))">
-                                                Save Status
-                                            </MudButton>
-                                        }
-                                    </section>
-                                    <section class="trade-orders-close-panel">
-                                        <MudText Typo="Typo.subtitle2">Close Order</MudText>
-                                        @if (TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
-                                        {
-                                            <MudButton Variant="Variant.Outlined"
-                                                       Color="Color.Secondary"
-                                                       FullWidth="true"
-                                                       OnClick="ReopenSelectedOrderAsync">
-                                                Reopen Order
-                                            </MudButton>
-                                            <MudButton Variant="Variant.Outlined"
-                                                       Color="Color.Error"
-                                                       FullWidth="true"
-                                                       Disabled="@_isDeletingSelectedOrder"
-                                                       OnClick="DeleteSelectedOrderAsync">
-                                                @(_isDeletingSelectedOrder ? "Deleting..." : "Delete Order Permanently")
-                                            </MudButton>
-                                        }
-                                        else
-                                        {
-                                            <MudButton Variant="Variant.Filled"
-                                                       Color="Color.Success"
-                                                       FullWidth="true"
-                                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Completed))">
-                                                Complete Order
-                                            </MudButton>
-                                            <MudButton Variant="Variant.Outlined"
-                                                       Color="Color.Error"
-                                                       FullWidth="true"
-                                                       OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
-                                                Cancel Order
-                                            </MudButton>
-                                        }
-                                    </section>
                                 }
                                    </div>
                                </details>
