@@ -67,6 +67,7 @@ public partial class TradeOrders
     private List<GarlandSearchResult> _selectedOrderOutputSearchResults = [];
     private bool _isSearchingSelectedOrderOutputs;
     private bool _isSavingSelectedOrderOutputs;
+    private bool _isChangingProcurementSource;
     private string _detailTitle = string.Empty;
     private Guid? _detailCrafterId;
     private TradeOrderStatus _detailStatus;
@@ -86,6 +87,13 @@ public partial class TradeOrders
     private IJSObjectReference? _tradeOrdersLayoutRegistration;
     private DotNetObjectReference<TradeOrders>? _tradeOrdersReference;
     private bool _isDisposed;
+
+    private bool IsPlanMutationTransactionRunning =>
+        _isSavingSelectedOrderOutputs ||
+        _isSavingSelectedOrderCraftPlan ||
+        _isRepricingSelectedOrder ||
+        _isChangingProcurementSource ||
+        _isCommissionCommandRunning;
 
     private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
     [
@@ -227,6 +235,7 @@ public partial class TradeOrders
         HostedOrders.Reset += OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged += OnHostedOrderRestoreStateChanged;
         ProfileSync.StatusChanged += OnProfileSyncStatusChanged;
+        WorkerProjections.Changed += OnWorkerProjectionChangedForPlanRestoration;
         _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
         await LoadAsync();
         try
@@ -298,6 +307,7 @@ public partial class TradeOrders
         HostedOrders.Reset -= OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged -= OnHostedOrderRestoreStateChanged;
         ProfileSync.StatusChanged -= OnProfileSyncStatusChanged;
+        WorkerProjections.Changed -= OnWorkerProjectionChangedForPlanRestoration;
         if (_tradeOrdersLayoutRegistration != null)
         {
             await _tradeOrdersLayoutRegistration.InvokeVoidAsync("dispose");
@@ -407,6 +417,32 @@ public partial class TradeOrders
                 "Canonical commissions can only change through commission operations.",
                 Severity.Error);
             return false;
+        }
+
+        var linkedPlanChanged =
+            _selectedOrder?.Id != order.Id ||
+            !string.Equals(_selectedOrder.CraftPlanId, order.CraftPlanId, StringComparison.Ordinal) ||
+            _selectedOrder.CraftPlanSavedAtUtc != order.CraftPlanSavedAtUtc ||
+            _selectedOrder.CraftPlanLinkKind != order.CraftPlanLinkKind;
+        if (linkedPlanChanged &&
+            order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated &&
+            !string.IsNullOrWhiteSpace(order.CraftPlanId))
+        {
+            var linkedPlan = await PlanPersistence.LoadPlanPayloadAsync(order.CraftPlanId);
+            if (linkedPlan == null ||
+                !order.CraftPlanSavedAtUtc.HasValue ||
+                linkedPlan.SavedAt != order.CraftPlanSavedAtUtc.Value ||
+                linkedPlan.LinkedOrderId != order.Id)
+            {
+                Snackbar.Add(
+                    "The exact linked plan revision is unavailable, so the order was not saved.",
+                    Severity.Error);
+                return false;
+            }
+
+            await ProfileSync.QueueLocalSaveAsync(
+                ProfileSyncCollections.Plans,
+                linkedPlan.Id);
         }
 
         if (!await TradeOperationsPersistence.SaveOrderAsync(order))

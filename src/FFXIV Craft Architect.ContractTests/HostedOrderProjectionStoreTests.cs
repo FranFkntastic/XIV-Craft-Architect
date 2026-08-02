@@ -453,7 +453,7 @@ public sealed class HostedOrderProjectionStoreTests
                 .SetValue(profileSync, ReadyStatus(profileId, 4));
             var service = new TradeCommissionOperationsService(new TradeCommissionOperationsClient(new HttpClient(handler) { BaseAddress = new Uri(Host) }, localState),
                 new TradeCompanyCollaborationClient(http, localState), new TradeOperationsPersistenceService(indexedDb, new TradeCompanyProfilePackageService()),
-                localState, profileSync, store, new AppState());
+                localState, profileSync, store, new WebPlanPersistenceService(indexedDb), new AppState());
             return new(current, store, runtime, localState, handler, service);
         }
         private static TradeOrder CreateCommissionOrder(Guid companyProfileId) => new()

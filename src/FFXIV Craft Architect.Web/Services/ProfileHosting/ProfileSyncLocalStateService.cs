@@ -13,6 +13,7 @@ public sealed class ProfileSyncLocalStateService
     private const string ObjectRevisionSuffix = "objectRevision.";
     private const string HostedObjectSuffix = "hostedObject.";
     private const string PendingSavesSuffix = "pendingSaves";
+    private const string LinkedPlanSealMigrationSuffix = "migration.linkedPlanSeal.v2";
     private static readonly IReadOnlySet<string> PortableSettingKeys = new HashSet<string>(
         [
             "market.default_datacenter",
@@ -251,6 +252,21 @@ public sealed class ProfileSyncLocalStateService
         {
             throw new InvalidOperationException(
                 "Browser storage could not persist pending hosted-profile writes.");
+        }
+    }
+
+    public async Task<bool> IsLinkedPlanSealMigrationCompleteAsync(string profileId) =>
+        await _indexedDb.LoadRequiredSettingAsync(
+            await BuildProfileStateKeyAsync(profileId, LinkedPlanSealMigrationSuffix),
+            false);
+
+    public async Task SaveLinkedPlanSealMigrationCompleteAsync(string profileId)
+    {
+        var key = await BuildProfileStateKeyAsync(profileId, LinkedPlanSealMigrationSuffix);
+        if (!await _indexedDb.SaveSettingAsync(key, true))
+        {
+            throw new InvalidOperationException(
+                "Browser storage could not persist the linked-plan migration state.");
         }
     }
 

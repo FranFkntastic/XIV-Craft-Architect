@@ -144,14 +144,22 @@ public sealed class TradeOrderLifecycleService(
             .Select(draft => (ProfileSyncCollections.TradePayrollDrafts, draft.Id)));
 
         var allOrders = await LoadAllOrdersAsync(cancellationToken);
+        var linkedPlanIds = await LoadLinkedPlanIdsAsync(
+            new HashSet<Guid> { order.Id },
+            cancellationToken);
+        linkedPlanIds.UnionWith(await LoadHostedLinkedPlanIdsAsync(
+            new HashSet<Guid> { order.Id },
+            cancellationToken));
         if (order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated &&
             !string.IsNullOrWhiteSpace(order.CraftPlanId) &&
             !allOrders.Any(other =>
                 other.Id != order.Id &&
                 string.Equals(other.CraftPlanId, order.CraftPlanId, StringComparison.Ordinal)))
         {
-            identities.Add((ProfileSyncCollections.Plans, order.CraftPlanId));
+            linkedPlanIds.Add(order.CraftPlanId);
         }
+        identities.AddRange(linkedPlanIds.Select(planId =>
+            (ProfileSyncCollections.Plans, planId)));
 
         await profileSync.DeleteObjectsAsync(identities, cancellationToken);
         await indexedDb.DeleteTradeOrderCraftSnapshotsForOrderAsync(order.Id);
@@ -164,13 +172,6 @@ public sealed class TradeOrderLifecycleService(
         var companies = await tradeOperations.LoadCompanyProfilesAsync();
         var orders = await LoadAllOrdersAsync(cancellationToken, companies);
         var drafts = await LoadAllPayrollDraftsAsync(cancellationToken, companies);
-        var generatedPlanIds = orders
-            .Where(order => order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated)
-            .Select(order => order.CraftPlanId)
-            .Where(planId => !string.IsNullOrWhiteSpace(planId))
-            .Select(planId => planId!)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
         var snapshots = await indexedDb.LoadAllTradeOrderCraftSnapshotsAsync();
         var connection = await localState.LoadConnectionSettingsAsync();
         ProfileHostBootstrapPayload? hosted = null;
@@ -185,10 +186,24 @@ public sealed class TradeOrderLifecycleService(
                 Objects = exported.Objects
                     .Where(item => item.Collection is
                         ProfileSyncCollections.TradeOrders or
-                        ProfileSyncCollections.TradePayrollDrafts)
+                        ProfileSyncCollections.TradePayrollDrafts or
+                        ProfileSyncCollections.Plans)
                     .ToArray()
             };
         }
+        var orderIdSet = orders.Select(order => order.Id).ToHashSet();
+        var generatedPlanIds = orders
+            .Where(order => order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated)
+            .Select(order => order.CraftPlanId)
+            .Where(planId => !string.IsNullOrWhiteSpace(planId))
+            .Select(planId => planId!)
+            .Concat(await LoadLinkedPlanIdsAsync(orderIdSet, cancellationToken))
+            .Concat((hosted?.Objects ?? [])
+                .Where(item => item.Collection == ProfileSyncCollections.Plans)
+                .Where(item => IsLinkedToAnyOrder(item, orderIdSet))
+                .Select(item => item.ObjectId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
         return new TradeCommissionResetBackup(
             1,
             DateTime.UtcNow,
@@ -242,6 +257,13 @@ public sealed class TradeOrderLifecycleService(
             .Select(order => order.CraftPlanId)
             .Where(planId => !string.IsNullOrWhiteSpace(planId))
             .Select(planId => planId!)
+            .Concat(await LoadLinkedPlanIdsAsync(
+                orders.Select(order => order.Id).ToHashSet(),
+                cancellationToken))
+            .Concat((backup.HostedProfile?.Objects ?? [])
+                .Where(item => item.Collection == ProfileSyncCollections.Plans)
+                .Where(item => IsLinkedToAnyOrder(item, orders.Select(order => order.Id).ToHashSet()))
+                .Select(item => item.ObjectId))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var identities = orderIds
@@ -331,6 +353,68 @@ public sealed class TradeOrderLifecycleService(
             drafts.AddRange(await payrollPersistence.LoadDraftsAsync(company.Id));
         }
         return drafts;
+    }
+
+    private async Task<HashSet<string>> LoadLinkedPlanIdsAsync(
+        IReadOnlySet<Guid> orderIds,
+        CancellationToken cancellationToken)
+    {
+        var planIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var summary in await indexedDb.LoadPlanSummariesAsync())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var plan = await indexedDb.LoadPlanAsync(summary.Id);
+            if (plan?.LinkedOrderId is { } orderId && orderIds.Contains(orderId))
+            {
+                planIds.Add(plan.Id);
+            }
+        }
+        return planIds;
+    }
+
+    private async Task<HashSet<string>> LoadHostedLinkedPlanIdsAsync(
+        IReadOnlySet<Guid> orderIds,
+        CancellationToken cancellationToken)
+    {
+        var planIds = new HashSet<string>(StringComparer.Ordinal);
+        var connection = await localState.LoadConnectionSettingsAsync();
+        if (!connection.IsConfigured)
+        {
+            return planIds;
+        }
+
+        var hosted = await profileHostClient.ExportBootstrapAsync(
+            connection.HostUrl!,
+            connection.AccessKey!,
+            cancellationToken);
+        foreach (var plan in hosted.Objects.Where(item =>
+                     item.Collection == ProfileSyncCollections.Plans &&
+                     IsLinkedToAnyOrder(item, orderIds)))
+        {
+            planIds.Add(plan.ObjectId);
+        }
+        return planIds;
+    }
+
+    private static bool IsLinkedToAnyOrder(
+        ProfileSyncObjectEnvelope envelope,
+        IReadOnlySet<Guid> orderIds)
+    {
+        if (envelope.Deleted)
+        {
+            return false;
+        }
+        try
+        {
+            var plan = ProfileSyncPlanPayloadCodec.Deserialize(
+                envelope.PayloadJson,
+                envelope.ObjectId);
+            return plan.LinkedOrderId is { } orderId && orderIds.Contains(orderId);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static CompanyCommissionOwnerProjection RequireProjection(

@@ -396,6 +396,7 @@ public sealed class StoredPlan
         MarketAcquisitionLens.MinimumUpfrontCost;
     public string? SourcePlanId { get; set; }
     public string? SourcePlanName { get; set; }
+    public Guid? LinkedOrderId { get; set; }
 }
 
 public sealed record StoredProcurementRoute(

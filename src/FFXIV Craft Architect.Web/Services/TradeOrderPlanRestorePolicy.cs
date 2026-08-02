@@ -1,3 +1,4 @@
+using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services;
@@ -28,7 +29,8 @@ public readonly record struct TradeOrderPlanRestoreRequest(
     long Generation,
     Guid OrderId,
     string PlanId,
-    long WorkerRevision);
+    long WorkerRevision,
+    DateTime? PlanSavedAtUtc = null);
 
 public static class TradeOrderPlanRestorePolicy
 {
@@ -41,12 +43,14 @@ public static class TradeOrderPlanRestorePolicy
         string? selectedPlanId,
         int activeTab,
         int planTab,
-        bool disposed) =>
+        bool disposed,
+        DateTime? selectedPlanSavedAtUtc = null) =>
         !disposed &&
         request.Generation == currentGeneration &&
         selectedOrderId == request.OrderId &&
         activeTab == planTab &&
-        string.Equals(request.PlanId, selectedPlanId, StringComparison.Ordinal);
+        string.Equals(request.PlanId, selectedPlanId, StringComparison.Ordinal) &&
+        request.PlanSavedAtUtc == selectedPlanSavedAtUtc;
 
     public static bool CanAdoptExactPlan(
         TradeOrderPlanRestoreRequest request,
@@ -56,7 +60,8 @@ public static class TradeOrderPlanRestorePolicy
         int activeTab,
         int planTab,
         bool disposed,
-        long currentWorkerRevision) =>
+        long currentWorkerRevision,
+        DateTime? selectedPlanSavedAtUtc = null) =>
         IsCurrent(
             request,
             currentGeneration,
@@ -64,8 +69,17 @@ public static class TradeOrderPlanRestorePolicy
             selectedPlanId,
             activeTab,
             planTab,
-            disposed) &&
+            disposed,
+            selectedPlanSavedAtUtc) &&
         currentWorkerRevision == request.WorkerRevision;
+
+    public static bool IsExactSavedRevision(
+        TradeOrderPlanRestoreRequest request,
+        StoredPlan plan) =>
+        string.Equals(request.PlanId, plan.Id, StringComparison.Ordinal) &&
+        request.PlanSavedAtUtc.HasValue &&
+        request.PlanSavedAtUtc.Value == plan.SavedAt &&
+        (!plan.LinkedOrderId.HasValue || plan.LinkedOrderId.Value == request.OrderId);
 
     public static TradeOrderPlanMissingDisposition ResolveMissingExactPlan(
         bool waitsForProfilePlanAuthority,

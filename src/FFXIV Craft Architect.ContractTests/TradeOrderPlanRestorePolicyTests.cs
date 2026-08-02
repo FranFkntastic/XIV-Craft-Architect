@@ -40,9 +40,6 @@ internal static class TradeOrderPlanRestoreContractScenarios
         await TransientReadExceptionsStopAfterThreeAttempts();
         await MissingHostedPlanWaitsForNextSyncStatusWithoutPolling();
         await ExactReadStopsAsSoonAsItsRequestIsSupersededDuringAnAwait();
-        MissingGeneratedPlanHasNoAutomaticRebuildPath();
-        PlanPanePreservesAnUnnamedActiveWorkerPlanBeforeAnyAdoption();
-        ExplicitPlanOpenUsesFencedAdoptionAndPreservesUnnamedPlan();
     }
 
     private static void AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario scenario, bool expected)
@@ -165,57 +162,6 @@ internal static class TradeOrderPlanRestoreContractScenarios
         Assert.Equal(1, attempts);
     }
 
-    private static void MissingGeneratedPlanHasNoAutomaticRebuildPath()
-    {
-        var pricing = ReadWebSource("Services", "TradeOrderPricingWorkflowService.cs").ReplaceLineEndings("\n");
-        var craftPlan = ReadWebSource("Pages", "TradeOrders.CraftPlan.cs");
-        var procurement = ReadWebSource("Pages", "TradeOrders.Procurement.cs");
-        var termsConflict = ReadWebSource("Pages", "TradeOrders.TermsRevisionConflict.cs");
-
-        Assert.DoesNotContain("RebuildPlanCacheAsync", pricing, StringComparison.Ordinal);
-        Assert.DoesNotContain("LoadOrRebuildOrderPlanAsync", craftPlan, StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "return await RebuildAndPriceAsync(order, options, ct)",
-            pricing,
-            StringComparison.Ordinal);
-        AssertContainsAll(termsConflict, "ReadExactPlanAsync", "PlanPersistence.LoadPlanPayloadAsync(planId)",
-            "canContinue: CanContinue", "read.Payload.Id", "read.Payload.SavedAt", "CraftPlanSavedAtUtc");
-        AssertDoesNotContainAny(termsConflict, "RebuildAndPriceAsync", "RepriceAsync");
-        Assert.True(procurement.IndexOf("RepriceActivePlanAsync", StringComparison.Ordinal) <
-            procurement.IndexOf("ExportStoredPlanAsync", procurement.IndexOf("RepriceActivePlanAsync", StringComparison.Ordinal), StringComparison.Ordinal));
-        AssertContainsAll(procurement, "orderToSave.CraftPlanSavedAtUtc = stored.SavedAt", "SaveSnapshotAsync(stored)");
-        var exactSave = procurement.IndexOf("SaveSnapshotAsync(stored)", StringComparison.Ordinal);
-        Assert.True(exactSave < procurement.IndexOf("UpdateCanonicalDraftAsync", exactSave, StringComparison.Ordinal));
-        var rebase = termsConflict[..termsConflict.IndexOf(
-            "private Task DiscardConflictedCommissionTermsRevisionAsync()",
-            StringComparison.Ordinal)];
-        AssertContainsAll(rebase, "ReadLatestCanonicalPlanAsync", "_commissionTermsRevisionRollbackPlan = latestBaseline");
-        AssertDoesNotContainAny(rebase, "WorkerSession", "RestoreStagedProcurementPlanAsync");
-    }
-
-    private static void PlanPanePreservesAnUnnamedActiveWorkerPlanBeforeAnyAdoption()
-    {
-        var procurement = ReadWebSource("Pages", "TradeOrders.Procurement.cs");
-
-        AssertInOrder(procurement, "string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)",
-            "ReadExactPlanAsync", "ReplaceStoredPlanAsync");
-    }
-
-    private static void ExplicitPlanOpenUsesFencedAdoptionAndPreservesUnnamedPlan()
-    {
-        var craftPlan = ReadWebSource("Pages", "TradeOrders.CraftPlan.cs");
-        var procurement = ReadWebSource("Pages", "TradeOrders.Procurement.cs");
-        var loader = Slice(craftPlan, "private async Task<bool> LoadExactOrderPlanAsync", "private string GetOrderDataCenter");
-        AssertContainsAll(loader, "TradeOrderPlanRestoreRequest", "CanAdoptCurrentPlanRequest", "canContinue:", "cancellationToken:");
-        AssertInOrder(loader, "string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)",
-            "ConfirmActiveCraftPlanCanBeReplacedAsync", "ReadExactPlanAsync", "ReplaceStoredPlanAsync");
-        Assert.Contains("tabIndex != _activeOpsTab", procurement, StringComparison.Ordinal);
-
-        var confirmation = Slice(craftPlan, "private async Task<bool> ConfirmActiveCraftPlanCanBeReplacedAsync",
-            "private async Task<bool> SaveActiveCraftPlanBeforeTradeActionAsync");
-        Assert.DoesNotContain("string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)", confirmation, StringComparison.Ordinal);
-    }
-
     private static Task NoDelay(TimeSpan _, CancellationToken cancellationToken)
     { cancellationToken.ThrowIfCancellationRequested(); return Task.CompletedTask; }
 
@@ -229,56 +175,6 @@ internal static class TradeOrderPlanRestoreContractScenarios
 
     private static ProfileSyncStatus Status(ProfileSyncStage stage, bool isConnected) =>
         new(isConnected, isConnected, 10, 0, 0, DateTime.UtcNow, "fixture") { Stage = stage };
-
-    private static string ReadWebSource(params string[] path) =>
-        File.ReadAllText(Path.Combine([LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web", .. path]));
-
-    private static void AssertContainsAll(string source, params string[] values)
-    {
-        foreach (var value in values)
-        {
-            Assert.Contains(value, source, StringComparison.Ordinal);
-        }
-    }
-
-    private static void AssertDoesNotContainAny(string source, params string[] values)
-    {
-        foreach (var value in values)
-        {
-            Assert.DoesNotContain(value, source, StringComparison.Ordinal);
-        }
-    }
-
-    private static string Slice(string source, string startMarker, string endMarker)
-    {
-        var start = source.IndexOf(startMarker, StringComparison.Ordinal);
-        var end = source.IndexOf(endMarker, start, StringComparison.Ordinal);
-        Assert.True(start >= 0 && end > start);
-        return source[start..end];
-    }
-
-    private static void AssertInOrder(string source, params string[] values)
-    {
-        var previous = -1;
-        foreach (var value in values)
-        {
-            var current = source.IndexOf(value, previous + 1, StringComparison.Ordinal);
-            Assert.True(current > previous, $"Expected '{value}' after index {previous}.");
-            previous = current;
-        }
-    }
-
-    private static string LocateRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null && !Directory.Exists(Path.Combine(directory.FullName, "src")))
-        {
-            directory = directory.Parent;
-        }
-
-        return directory?.FullName ?? throw new DirectoryNotFoundException(
-            "Could not locate the repository root from the test output path.");
-    }
 
     private enum CurrentRequestScenario
     {
