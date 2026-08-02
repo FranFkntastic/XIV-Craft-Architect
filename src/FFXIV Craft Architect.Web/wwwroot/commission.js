@@ -315,7 +315,7 @@ function render() {
     const terms = brief.terms;
 
     document.title = `${brief.title} — Company Commission`;
-    setText("statusChip", formatStatus(brief));
+    setText("statusChip", formatStatus(projection));
     setText(
         "briefIdentity",
         `${brief.companyDisplayName} · Commission ${brief.reference} · Terms v${terms.version}`);
@@ -347,12 +347,14 @@ function buildSubtitle(projection) {
     return formatDeliveryInstructions(projection.public.terms.deliveryInstructions);
 }
 
-function formatStatus(brief) {
+function formatStatus(projection) {
+    const brief = projection.public;
     if (brief.isTestFixture) return "TEST - NOT CLAIMABLE";
     if (brief.viewState === "Revoked") return "REVOKED";
     if (brief.status === "Canceled") return "CANCELED";
     if (brief.closed) return "COMPLETED";
     if (brief.status === "Completed") return "DELIVERY ACCEPTED";
+    if (requiresTermsAcknowledgement(projection)) return "TERMS REVIEW REQUIRED";
     if (brief.status === "AwaitingDelivery") return "READY FOR DELIVERY";
     if (brief.status === "InProgress") return "CRAFTING";
     if (!brief.isClaimed) return "OPEN - ONE CLAIM SLOT";
@@ -583,9 +585,15 @@ function resolveNextStep() {
         actions: [{
             label: "Focus progress",
             primary: true,
-            run: () => byId("progressForm").scrollIntoView({ behavior: "smooth", block: "center" })
+            run: focusProgress
         }]
     };
+}
+
+function focusProgress() {
+    const form = byId("progressForm");
+    form.scrollIntoView({ behavior: "smooth", block: "center" });
+    form.querySelector("input:not([disabled])")?.focus({ preventScroll: true });
 }
 
 function createPreworkAction(choice) {
@@ -729,6 +737,7 @@ function renderOutputs() {
     const brief = projection.public;
     const canEdit = canUseActiveParticipantMutations(projection) &&
         brief.clearedToWork &&
+        !requiresTermsAcknowledgement(projection) &&
         !brief.deliveryReadiness.isReady;
     const progressByLine = new Map(brief.outputProgress.map(item => [item.lineId, item]));
     const target = byId("outputs");
@@ -784,12 +793,15 @@ function renderProgressQuantity(kind, output, value, canEdit) {
         "label",
         "sr-only",
         `${kind === "completed" ? "Completed" : "Ready"} ${output.name}`);
+    const inputId = `progress-${kind}-${output.lineId}`;
     const input = createInput("number", `${kind}-${output.lineId}`, {
         min: 0,
         max: output.requiredQuantity,
         value: value ?? 0,
         required: true
     });
+    label.htmlFor = inputId;
+    input.id = inputId;
     input.className = "quantity-input";
     input.dataset.lineId = output.lineId;
     input.dataset.itemId = String(output.itemId);
@@ -1565,6 +1577,13 @@ async function runParticipantCommand(command, payload, successMessage) {
         showNotice(
             "Participant action unavailable",
             "This browser lacks active participant authority, or the commission is no longer open to ordinary participant changes.");
+        return;
+    }
+    if (["report-progress", "declare-readiness", "withdraw-readiness"].includes(command) &&
+        requiresTermsAcknowledgement(state.projection)) {
+        showNotice(
+            "Accept the current terms first",
+            "Review and accept the revised terms before continuing work on this commission.");
         return;
     }
     if (command === "release-claim" && !canReleaseBeforeWork(state.projection)) {
