@@ -294,6 +294,46 @@ public sealed class ProfileSyncDeletionProjectionTests
     }
 
     [Fact]
+    public async Task CollaborationCannotSendAcrossCaseDistinctConnectionPath()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Case-sensitive host path");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            $"https://profiles.example/API/|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        var profileSync = CreateProfileSync(localState, indexedDb, store);
+        SetReadyStatus(profileSync, profileId);
+        var collaboration = new TradeCompanyCollaborationService(
+            new TradeCompanyCollaborationClient(
+                new HttpClient(new UnusedHandler()) { BaseAddress = new Uri(Host) },
+                localState),
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            localState,
+            profileSync,
+            store);
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            collaboration.PublishPortableLinkAsync(
+                order,
+                new CommissionBriefDocument()));
+
+        Assert.Contains("authority", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, runtime.SaveTradeOrderCount);
+    }
+
+    [Fact]
     public async Task AdapterRejectsReplacementHostBeforeProjectionOrPersistence()
     {
         var profileId = Guid.NewGuid().ToString("D");
@@ -478,6 +518,65 @@ public sealed class ProfileSyncDeletionProjectionTests
 
         Assert.Same(order, runtime.DurableOrder);
         Assert.Equal(1, runtime.SaveTradeOrderCount);
+    }
+
+    [Fact]
+    public async Task AdapterTombstoneReconcilesNewerLiveOrderAfterBlockedDelete()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var companyId = Guid.NewGuid();
+        var order = CreateOrder(Guid.NewGuid(), companyId, "Revision four");
+        var revisionSix = CreateOrder(order.Id, companyId, "Revision six");
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(companyId);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await localState.LoadConnectionSettingsAsync();
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            store,
+            localState);
+        await adapter.ApplyRemoteObjectAsync(Envelope(order, 4), default);
+        var deleteEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDelete = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.BeforeDeleteTradeOrderAsync = async _ =>
+        {
+            deleteEntered.SetResult();
+            await releaseDelete.Task;
+        };
+
+        var deletion = adapter.ApplyRemoteDeletionAsync(
+            order.Id,
+            companyId,
+            5,
+            default);
+        await deleteEntered.Task;
+        Assert.True(store.TryPublishRemoteOrder(revisionSix, 6));
+        releaseDelete.SetResult();
+        await deletion;
+
+        Assert.Equal("Revision six", runtime.DurableOrder?.Title);
+        Assert.Equal(6, store.Get(order.Id)?.ObjectRevision);
+        Assert.Equal(
+            6,
+            await localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                order.Id.ToString("D")));
     }
 
     [Fact]
@@ -948,6 +1047,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         public int SaveTradeOrderCount { get; private set; }
         public TradeOrder? DurableOrder { get; private set; }
         public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
+        public Func<Guid, Task>? BeforeDeleteTradeOrderAsync { get; set; }
 
         public void SaveRawSetting(string key, string value) => settings[key] = value;
 
@@ -964,6 +1064,10 @@ public sealed class ProfileSyncDeletionProjectionTests
             if (identifier == "IndexedDB.saveTradeOrder")
             {
                 return SaveTradeOrderAsync<TValue>((TradeOrder)args![0]!);
+            }
+            if (identifier == "IndexedDB.deleteTradeOrder")
+            {
+                return DeleteTradeOrderAsync<TValue>((Guid)args![0]!);
             }
             object? result = identifier switch
             {
@@ -1006,6 +1110,19 @@ public sealed class ProfileSyncDeletionProjectionTests
             }
             SaveTradeOrderCount++;
             DurableOrder = order;
+            return (TValue)(object)true;
+        }
+
+        private async ValueTask<TValue> DeleteTradeOrderAsync<TValue>(Guid orderId)
+        {
+            if (BeforeDeleteTradeOrderAsync != null)
+            {
+                await BeforeDeleteTradeOrderAsync(orderId);
+            }
+            if (DurableOrder?.Id == orderId)
+            {
+                DurableOrder = null;
+            }
             return (TValue)(object)true;
         }
     }

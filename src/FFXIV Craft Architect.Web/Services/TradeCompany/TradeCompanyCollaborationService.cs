@@ -220,6 +220,11 @@ public sealed class TradeCompanyCollaborationService(
             throw new InvalidOperationException(
                 "The hosted order differs from this browser and needs conflict review before publishing.");
         }
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The hosted order authority changed before publication began.");
+        }
 
         var published = await client.PublishPortableLinkAsync(
             order.CompanyProfileId,
@@ -227,7 +232,8 @@ public sealed class TradeCompanyCollaborationService(
             revision,
             brief,
             $"portable-link:{order.Id:D}:{revision}",
-            cancellationToken);
+            cancellationToken,
+            authority.Connection);
         var expectedOwnership = new TradeCompanyPublicationOwnership(
             new CompanyId(order.CompanyProfileId),
             order.Id,
@@ -305,11 +311,13 @@ public sealed class TradeCompanyCollaborationService(
                     crafterId ?? throw new InvalidOperationException(
                         "Choose a hosted company crafter before accepting interest."),
                     $"discord-claim:{claim.ClaimId}:{crafterId:D}",
-                    cancellationToken)
+                    cancellationToken,
+                    authority.Connection)
                 : await client.DeclineAsync(
                     order.CompanyProfileId,
                     claim.ClaimId,
-                    cancellationToken);
+                    cancellationToken,
+                    authority.Connection);
 
             if (receipt.UpdatedOrder != null)
             {
@@ -354,7 +362,11 @@ public sealed class TradeCompanyCollaborationService(
             !string.Equals(
                 projection.ProfileId,
                 connection.ProfileScopeId,
-                StringComparison.OrdinalIgnoreCase))
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                projection.ConnectionScopeId,
+                connection.ConnectionScopeId,
+                StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "The hosted order authority is not ready for this command.");
@@ -414,7 +426,7 @@ public sealed class TradeCompanyCollaborationService(
         return string.Equals(
             authority.Connection.ConnectionScopeId,
             connection.ConnectionScopeId,
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.Ordinal);
     }
 
     private async Task<long> ResolveHostedOrderRevisionAsync(

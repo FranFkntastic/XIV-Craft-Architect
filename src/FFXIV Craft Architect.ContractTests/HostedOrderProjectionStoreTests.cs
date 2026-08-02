@@ -97,6 +97,35 @@ public sealed class HostedOrderProjectionStoreTests
     }
 
     [Fact]
+    public void ConnectionScopePathCaseIsAuthoritySignificant()
+    {
+        var store = new HostedOrderProjectionStore();
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Upper path authority");
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            8,
+            Now,
+            $"https://profiles.example/api/A|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(order, 8));
+        var upperPathAuthority = store.CaptureAuthorityScope();
+
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            1,
+            Now.AddSeconds(1),
+            $"https://profiles.example/api/a|{profileId}");
+
+        Assert.Null(store.Get(order.Id));
+        Assert.Equal(1, store.RestoreState.LastAppliedRevision);
+        Assert.Equal(
+            HostedOrderCommittedProjectionResult.ScopeChanged,
+            store.TryAdoptCommittedOrder(upperPathAuthority, order, 9));
+    }
+
+    [Fact]
     public async Task PersistenceReconcilesSameRevisionOwnerUpgrade()
     {
         var store = new HostedOrderProjectionStore();
@@ -186,6 +215,54 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.Equal([false, true], persisted.Select(candidate => candidate.Deleted));
         Assert.True(store.Get(order.Id)?.Deleted);
         Assert.Equal(6, store.RestoreState.LastAppliedRevision);
+    }
+
+    [Fact]
+    public async Task OwnerPersistenceReconcilesTombstoneThatArrivesDuringDurableWrite()
+    {
+        var store = new HostedOrderProjectionStore();
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Owner candidate");
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            Now,
+            $"https://profiles.example/|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var authority = store.CaptureAuthorityScope();
+        var owner = new CompanyCommissionOwnerProjection
+        {
+            Order = order,
+            ObjectRevision = new CompanyRecordRevision(4),
+            CompanyRevision = new CompanyRecordRevision(9)
+        };
+        var firstWriteEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstWrite = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var persisted = new List<HostedOrderProjectionSnapshot>();
+
+        var persistence = store.AdoptAndPersistCommittedOwnerAsync(
+            authority,
+            owner,
+            async candidate =>
+            {
+                persisted.Add(candidate);
+                if (persisted.Count == 1)
+                {
+                    firstWriteEntered.SetResult();
+                    await releaseFirstWrite.Task;
+                }
+            });
+        await firstWriteEntered.Task;
+        Assert.True(store.TryPublishTombstone(order.Id, 5, order.CompanyProfileId));
+        releaseFirstWrite.SetResult();
+
+        Assert.Equal(HostedOrderCommittedProjectionResult.Adopted, await persistence);
+        Assert.Equal([false, true], persisted.Select(candidate => candidate.Deleted));
+        Assert.True(store.Get(order.Id)?.Deleted);
+        Assert.Equal(5, store.RestoreState.LastAppliedRevision);
     }
 
     private static void NewerCanonicalOrderWinsAndTombstoneCannotRollBack()

@@ -3,7 +3,9 @@ using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
-public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
+public sealed class TradeOrderProfileSyncAdapter :
+    IProfileSyncCollectionAdapter,
+    IHostedOrderProfileSyncAdapter
 {
     private static readonly JsonSerializerOptions JsonOptions =
         ProfileSyncJson.CreateOptions();
@@ -56,7 +58,7 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
         if (!string.Equals(
                 authority.ConnectionScopeId,
                 connection.ConnectionScopeId,
-                StringComparison.OrdinalIgnoreCase))
+                StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 $"Hosted Trade order '{envelope.ObjectId}' belongs to a previous connection scope.");
@@ -96,6 +98,61 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
         }
     }
 
+    public async Task ApplyRemoteDeletionAsync(
+        Guid orderId,
+        Guid companyProfileId,
+        long revision,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var connection = await _localState.LoadConnectionSettingsAsync();
+        var authority = _projections.CaptureAuthorityScope();
+        if (!string.Equals(
+                authority.ConnectionScopeId,
+                connection.ConnectionScopeId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Hosted Trade order '{orderId:D}' belongs to a previous connection scope.");
+        }
+
+        var adoption = await _projections.AdoptAndPersistCommittedTombstoneAsync(
+            authority,
+            orderId,
+            companyProfileId,
+            revision,
+            async candidate =>
+            {
+                ct.ThrowIfCancellationRequested();
+                var persisted = candidate.Deleted
+                    ? await _tradeOperations.DeleteOrderAsync(candidate.OrderId)
+                    : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
+                if (!persisted)
+                {
+                    throw new InvalidOperationException(
+                        $"Browser storage could not apply hosted Trade order '{orderId:D}'.");
+                }
+                if (!await IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId))
+                {
+                    throw new InvalidOperationException(
+                        $"Hosted Trade order '{orderId:D}' changed authority while browser persistence was in progress.");
+                }
+                await _localState.SaveObjectRevisionAsync(
+                    connection,
+                    ProfileSyncCollections.TradeOrders,
+                    candidate.OrderId.ToString("D"),
+                    candidate.ObjectRevision);
+            },
+            () => IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId));
+        if (adoption is not (
+            HostedOrderCommittedProjectionResult.Adopted or
+            HostedOrderCommittedProjectionResult.AlreadyCurrent))
+        {
+            throw new InvalidOperationException(
+                $"Hosted Trade order '{orderId:D}' deletion could not be applied because its authority is {adoption}.");
+        }
+    }
+
     private async Task<bool> IsCurrentAuthorityAsync(
         HostedOrderAuthorityScope authority,
         string? connectionScopeId)
@@ -108,7 +165,7 @@ public sealed class TradeOrderProfileSyncAdapter : IProfileSyncCollectionAdapter
         return string.Equals(
             connectionScopeId,
             current.ConnectionScopeId,
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.Ordinal);
     }
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)

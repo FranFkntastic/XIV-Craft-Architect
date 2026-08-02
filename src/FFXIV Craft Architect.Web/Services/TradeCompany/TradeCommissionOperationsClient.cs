@@ -17,12 +17,28 @@ public sealed class TradeCommissionOperationsClient(
         Guid commissionId,
         CancellationToken cancellationToken = default)
     {
+        var connection = await localState.LoadConnectionSettingsAsync();
+        return await LoadOwnerProjectionAsync(
+            connection,
+            companyId,
+            commissionId,
+            cancellationToken);
+    }
+
+    public async Task<CompanyCommissionOwnerProjection> LoadOwnerProjectionAsync(
+        HostedProfileConnectionSettings connection,
+        Guid companyId,
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
         using var response = await SendAsync(
             HttpMethod.Get,
             $"trade/v1/companies/{companyId:D}/commissions/{commissionId:D}/owner",
             content: null,
             contentType: null,
-            cancellationToken);
+            cancellationToken,
+            connection);
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             var problem = await ReadProblemAsync(response, cancellationToken);
@@ -141,9 +157,11 @@ public sealed class TradeCommissionOperationsClient(
         string relativePath,
         object? content,
         Type? contentType,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
-        var connection = await localState.LoadConnectionSettingsAsync();
+        var connection = capturedConnection ??
+                         await localState.LoadConnectionSettingsAsync();
         if (!connection.IsConfigured)
         {
             throw new InvalidOperationException(

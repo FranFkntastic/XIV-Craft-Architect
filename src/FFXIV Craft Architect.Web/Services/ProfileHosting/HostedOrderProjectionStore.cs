@@ -96,7 +96,7 @@ public sealed class HostedOrderProjectionStore
             var connectionChanged = !string.Equals(
                 _connectionScopeId,
                 connectionScopeId,
-                StringComparison.OrdinalIgnoreCase);
+                StringComparison.Ordinal);
             var scopeChanged = _profileId != null &&
                                (profileChanged || connectionChanged);
             if (scopeChanged)
@@ -307,8 +307,77 @@ public sealed class HostedOrderProjectionStore
         {
             return HostedOrderCommittedProjectionResult.ScopeChanged;
         }
-
         var adoption = TryAdoptCommittedOrder(authority, order, objectRevision);
+        return await ReconcileCommittedProjectionAsync(
+            authority,
+            order.Id,
+            adoption,
+            persist,
+            authorityIsCurrent);
+    }
+
+    public async Task<HostedOrderCommittedProjectionResult> AdoptAndPersistCommittedTombstoneAsync(
+        HostedOrderAuthorityScope authority,
+        Guid orderId,
+        Guid companyProfileId,
+        long objectRevision,
+        Func<HostedOrderProjectionSnapshot, Task> persist,
+        Func<Task<bool>>? authorityIsCurrent = null)
+    {
+        ArgumentNullException.ThrowIfNull(persist);
+        authorityIsCurrent ??= () => Task.FromResult(IsCurrentAuthority(authority));
+        if (!await authorityIsCurrent())
+        {
+            return HostedOrderCommittedProjectionResult.ScopeChanged;
+        }
+        var adoption = TryAdoptCommittedTombstone(
+            authority,
+            orderId,
+            companyProfileId,
+            objectRevision);
+        return await ReconcileCommittedProjectionAsync(
+            authority,
+            orderId,
+            adoption,
+            persist,
+            authorityIsCurrent);
+    }
+
+    public async Task<HostedOrderCommittedProjectionResult> AdoptAndPersistCommittedOwnerAsync(
+        HostedOrderAuthorityScope authority,
+        CompanyCommissionOwnerProjection projection,
+        Func<HostedOrderProjectionSnapshot, Task> persist,
+        Func<Task<bool>>? authorityIsCurrent = null)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        ArgumentNullException.ThrowIfNull(persist);
+        authorityIsCurrent ??= () => Task.FromResult(IsCurrentAuthority(authority));
+        if (!await authorityIsCurrent())
+        {
+            return HostedOrderCommittedProjectionResult.ScopeChanged;
+        }
+        var adoption = TryAdoptCommittedOwner(authority, projection);
+        return await ReconcileCommittedProjectionAsync(
+            authority,
+            projection.Order.Id,
+            adoption,
+            persist,
+            authorityIsCurrent);
+    }
+
+    private async Task<HostedOrderCommittedProjectionResult> ReconcileCommittedProjectionAsync(
+        HostedOrderAuthorityScope authority,
+        Guid orderId,
+        HostedOrderCommittedProjectionResult adoption,
+        Func<HostedOrderProjectionSnapshot, Task> persist,
+        Func<Task<bool>>? authorityIsCurrent)
+    {
+        ArgumentNullException.ThrowIfNull(persist);
+        authorityIsCurrent ??= () => Task.FromResult(IsCurrentAuthority(authority));
+        if (!await authorityIsCurrent())
+        {
+            return HostedOrderCommittedProjectionResult.ScopeChanged;
+        }
         if (adoption is not (
             HostedOrderCommittedProjectionResult.Adopted or
             HostedOrderCommittedProjectionResult.AlreadyCurrent))
@@ -316,7 +385,7 @@ public sealed class HostedOrderProjectionStore
             return adoption;
         }
 
-        var candidate = Get(order.Id);
+        var candidate = Get(orderId);
         for (var attempt = 0; attempt < CommittedWinnerReconciliationLimit; attempt++)
         {
             if (candidate == null)
@@ -334,7 +403,7 @@ public sealed class HostedOrderProjectionStore
                 return HostedOrderCommittedProjectionResult.ScopeChanged;
             }
 
-            var winner = Get(order.Id);
+            var winner = Get(orderId);
             if (winner == null)
             {
                 return HostedOrderCommittedProjectionResult.Stale;
@@ -361,6 +430,64 @@ public sealed class HostedOrderProjectionStore
             projection.Order,
             projection,
             Deleted: false));
+    }
+
+    public HostedOrderCommittedProjectionResult TryAdoptCommittedOwner(
+        HostedOrderAuthorityScope authority,
+        CompanyCommissionOwnerProjection projection)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        var candidate = new HostedOrderProjectionSnapshot(
+            projection.Order.Id,
+            projection.Order.CompanyProfileId,
+            projection.ObjectRevision.Value,
+            projection.CompanyRevision.Value,
+            projection.Order,
+            projection,
+            Deleted: false);
+        HostedOrderCommittedProjectionResult result;
+        lock (_gate)
+        {
+            if (!IsCurrentAuthorityUnderLock(authority))
+            {
+                return HostedOrderCommittedProjectionResult.ScopeChanged;
+            }
+
+            var current = _orders.GetValueOrDefault(candidate.OrderId);
+            try
+            {
+                if (current != null)
+                {
+                    ValidateIdentity(current, candidate);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                return HostedOrderCommittedProjectionResult.IdentityMismatch;
+            }
+
+            if (current != null &&
+                (candidate.ObjectRevision < current.ObjectRevision ||
+                 (candidate.ObjectRevision == current.ObjectRevision && current.Deleted)))
+            {
+                return HostedOrderCommittedProjectionResult.Stale;
+            }
+            if (current != null && HasSameVersionTuple(current, candidate))
+            {
+                return HostedOrderCommittedProjectionResult.AlreadyCurrent;
+            }
+
+            result = TryAcceptUnderLock(candidate)
+                ? HostedOrderCommittedProjectionResult.Adopted
+                : HostedOrderCommittedProjectionResult.AlreadyCurrent;
+        }
+
+        if (result == HostedOrderCommittedProjectionResult.Adopted)
+        {
+            Changed?.Invoke(candidate);
+            RestoreStateChanged?.Invoke(RestoreState);
+        }
+        return result;
     }
 
     public bool TryPublishTombstone(
@@ -545,7 +672,7 @@ public sealed class HostedOrderProjectionStore
         string.Equals(
             authority.ConnectionScopeId,
             _connectionScopeId,
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.Ordinal);
 
     private static bool HasSameVersionTuple(
         HostedOrderProjectionSnapshot left,

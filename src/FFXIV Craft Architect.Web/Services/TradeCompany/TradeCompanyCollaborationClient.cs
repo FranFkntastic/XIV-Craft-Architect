@@ -210,7 +210,8 @@ public sealed class TradeCompanyCollaborationClient(
         long orderRevision,
         CommissionBriefDocument brief,
         string idempotencyKey,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
@@ -222,7 +223,8 @@ public sealed class TradeCompanyCollaborationClient(
                 Brief = brief,
                 IdempotencyKey = idempotencyKey
             },
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         var published = await response.Content.ReadFromJsonAsync<CommissionBriefCreateResponse>(
             JsonOptions,
@@ -278,14 +280,16 @@ public sealed class TradeCompanyCollaborationClient(
         string claimId,
         Guid crafterId,
         string idempotencyKey,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         var parsedClaimId = ParseClaimId(claimId);
         using var response = await SendAsync(
             HttpMethod.Post,
             $"trade/v1/companies/{companyProfileId:D}/discord/claims/{parsedClaimId:D}/accept",
             new DiscordAcceptInterestBody(crafterId, idempotencyKey),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         return await ReadReceiptAsync(response, accepted: true, cancellationToken);
     }
@@ -293,14 +297,16 @@ public sealed class TradeCompanyCollaborationClient(
     public async Task<TradeCommissionInterestResolutionReceipt> DeclineAsync(
         Guid companyProfileId,
         string claimId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
         var parsedClaimId = ParseClaimId(claimId);
         using var response = await SendAsync(
             HttpMethod.Post,
             $"trade/v1/companies/{companyProfileId:D}/discord/claims/{parsedClaimId:D}/decline",
             new DiscordDeclineInterestBody($"discord-decline:{parsedClaimId:D}"),
-            cancellationToken);
+            cancellationToken,
+            capturedConnection);
         await EnsureSuccessAsync(response, cancellationToken);
         return await ReadReceiptAsync(response, accepted: false, cancellationToken);
     }
@@ -327,9 +333,11 @@ public sealed class TradeCompanyCollaborationClient(
         HttpMethod method,
         string relativePath,
         object? content,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HostedProfileConnectionSettings? capturedConnection = null)
     {
-        var connection = await localState.LoadConnectionSettingsAsync();
+        var connection = capturedConnection ??
+                         await localState.LoadConnectionSettingsAsync();
         if (!connection.IsConfigured)
         {
             throw new InvalidOperationException(

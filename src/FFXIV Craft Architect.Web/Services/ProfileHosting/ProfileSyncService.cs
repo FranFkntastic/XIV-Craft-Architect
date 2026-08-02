@@ -359,6 +359,7 @@ public sealed class ProfileSyncService
                         }
 
                         var adapter = GetAdapter(item.Collection);
+                        var orderDeletionPersisted = false;
                         if (item.Deleted)
                         {
                             var shouldDeleteLocalObject = true;
@@ -381,17 +382,30 @@ public sealed class ProfileSyncService
                             }
                             if (deletedOrderCompanyProfileId.HasValue)
                             {
-                                var adoption = _hostedOrders.TryAdoptCommittedTombstone(
-                                    syncAuthority,
-                                    deletedOrderId!.Value,
-                                    deletedOrderCompanyProfileId.Value,
-                                    item.Revision);
-                                if (adoption is not (
-                                    HostedOrderCommittedProjectionResult.Adopted or
-                                    HostedOrderCommittedProjectionResult.AlreadyCurrent))
+                                if (adapter is IHostedOrderProfileSyncAdapter hostedOrderAdapter)
                                 {
-                                    throw new InvalidOperationException(
-                                        $"Hosted order deletion could not be applied because its authority is {adoption}.");
+                                    await hostedOrderAdapter.ApplyRemoteDeletionAsync(
+                                        deletedOrderId!.Value,
+                                        deletedOrderCompanyProfileId.Value,
+                                        item.Revision,
+                                        ct);
+                                    shouldDeleteLocalObject = false;
+                                    orderDeletionPersisted = true;
+                                }
+                                else
+                                {
+                                    var adoption = _hostedOrders.TryAdoptCommittedTombstone(
+                                        syncAuthority,
+                                        deletedOrderId!.Value,
+                                        deletedOrderCompanyProfileId.Value,
+                                        item.Revision);
+                                    if (adoption is not (
+                                        HostedOrderCommittedProjectionResult.Adopted or
+                                        HostedOrderCommittedProjectionResult.AlreadyCurrent))
+                                    {
+                                        throw new InvalidOperationException(
+                                            $"Hosted order deletion could not be applied because its authority is {adoption}.");
+                                    }
                                 }
                             }
                             if (shouldDeleteLocalObject)
@@ -420,7 +434,7 @@ public sealed class ProfileSyncService
                             }
                         }
 
-                        if (item.Deleted ||
+                        if ((item.Deleted && !orderDeletionPersisted) ||
                             !string.Equals(
                                 item.Collection,
                                 ProfileSyncCollections.TradeOrders,
@@ -719,6 +733,7 @@ public sealed class ProfileSyncService
 
         await EnsurePendingSavesLoadedAsync(settings);
         var authority = _hostedOrders.CaptureAuthorityScope();
+        var reconciledOrderDeletions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var remote = await _client.ExportBootstrapAsync(
             settings.HostUrl!,
             settings.AccessKey!,
@@ -758,29 +773,51 @@ public sealed class ProfileSyncService
                 Guid.TryParse(item.ObjectId, out var orderId))
             {
                 var companyProfileId = ReadOrderCompanyProfileId(remoteObject);
-                var adoption = _hostedOrders.TryAdoptCommittedTombstone(
-                    authority,
-                    orderId,
-                    companyProfileId,
-                    response.Object.Revision);
-                if (adoption is not (
-                    HostedOrderCommittedProjectionResult.Adopted or
-                    HostedOrderCommittedProjectionResult.AlreadyCurrent))
+                var adapter = GetAdapter(item.Collection);
+                if (adapter is IHostedOrderProfileSyncAdapter hostedOrderAdapter)
                 {
-                    throw new InvalidOperationException(
-                        $"The confirmed order deletion could not be adopted because its authority is {adoption}.");
+                    await hostedOrderAdapter.ApplyRemoteDeletionAsync(
+                        orderId,
+                        companyProfileId,
+                        response.Object.Revision,
+                        ct);
+                    reconciledOrderDeletions.Add(
+                        $"{item.Collection}\0{item.ObjectId}");
+                }
+                else
+                {
+                    var adoption = _hostedOrders.TryAdoptCommittedTombstone(
+                        authority,
+                        orderId,
+                        companyProfileId,
+                        response.Object.Revision);
+                    if (adoption is not (
+                        HostedOrderCommittedProjectionResult.Adopted or
+                        HostedOrderCommittedProjectionResult.AlreadyCurrent))
+                    {
+                        throw new InvalidOperationException(
+                            $"The confirmed order deletion could not be adopted because its authority is {adoption}.");
+                    }
                 }
             }
-            await _localState.SaveObjectRevisionAsync(
-                profileId,
-                item.Collection,
-                item.ObjectId,
-                response.Object.Revision);
+            if (!reconciledOrderDeletions.Contains(
+                    $"{item.Collection}\0{item.ObjectId}"))
+            {
+                await _localState.SaveObjectRevisionAsync(
+                    profileId,
+                    item.Collection,
+                    item.ObjectId,
+                    response.Object.Revision);
+            }
         }
 
         foreach (var item in distinct)
         {
-            await GetAdapter(item.Collection).DeleteLocalObjectAsync(item.ObjectId, ct);
+            if (!reconciledOrderDeletions.Contains(
+                    $"{item.Collection}\0{item.ObjectId}"))
+            {
+                await GetAdapter(item.Collection).DeleteLocalObjectAsync(item.ObjectId, ct);
+            }
             await RemovePendingSaveAsync(profileId, item.Collection, item.ObjectId);
             _conflicts.RemoveAll(conflict => IsSameIdentity(
                 conflict.Collection,
