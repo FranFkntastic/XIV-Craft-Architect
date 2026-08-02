@@ -10,10 +10,6 @@ public sealed record TradeOrderCenterOutputPresentation(
     int CompletedQuantity,
     int ReadyQuantity);
 
-public sealed record TradeOrderCenterBlockerPresentation(
-    string Label,
-    string Detail);
-
 public sealed record TradeOrderCenterCrafterUpdatePresentation(
     int CompletedQuantity,
     int ReadyQuantity,
@@ -36,21 +32,16 @@ public sealed record TradeOrderCenterOverviewPresentation(
     string Crafter,
     int TermsVersion,
     IReadOnlyList<TradeOrderCenterOutputPresentation> Outputs,
-    IReadOnlyList<TradeOrderCenterBlockerPresentation> Blockers,
     TradeOrderCenterCrafterUpdatePresentation? LatestCrafterUpdate,
     IReadOnlyList<TradeOrderProgressStepPresentation> Progress,
     bool CanReviseTerms);
 
 public partial class TradeOrders
 {
-    private const int WorkTabIndex = 0;
-    private const int PlanTabIndex = 1;
-    private const int HistoryTabIndex = 2;
-    private const int ShareTabIndex = 3;
+    private const int PlanTabIndex = 0;
+    private const int HistoryTabIndex = 1;
+    private const int ShareTabIndex = 2;
 
-    // Compatibility aliases keep existing command handlers pointed at the stable
-    // four-tab workbench while their behavior remains unchanged.
-    private const int PaymentTabIndex = WorkTabIndex;
     private const int ProcurementTabIndex = PlanTabIndex;
     private const int TimelineTabIndex = HistoryTabIndex;
     private const int SharingTabIndex = ShareTabIndex;
@@ -86,7 +77,6 @@ public partial class TradeOrders
             })
             .ToArray();
 
-        var blockers = BuildCenterBlockers(commission);
         return new TradeOrderCenterOverviewPresentation(
             order.Title,
             FormatWorkbenchStatus(order, commission),
@@ -94,7 +84,6 @@ public partial class TradeOrders
             FormatCanonicalCommissionCrafter(order, commission),
             commission.CurrentTermsVersion,
             outputs,
-            blockers,
             BuildLatestCrafterUpdate(commission),
             BuildCenterProgress(order, commission),
             owner != null &&
@@ -126,43 +115,6 @@ public partial class TradeOrders
             string.IsNullOrWhiteSpace(latestReport.Comment) ? null : latestReport.Comment.Trim());
     }
 
-    private static IReadOnlyList<TradeOrderCenterBlockerPresentation> BuildCenterBlockers(
-        TradeCompanyCommission commission)
-    {
-        var blockers = new List<TradeOrderCenterBlockerPresentation>();
-        if (commission.Gates.Identity.State == CompanyCommissionClearanceState.Pending)
-        {
-            blockers.Add(new("Identity", "Company roster confirmation required"));
-        }
-        if (commission.ActiveClaim != null &&
-            commission.ParticipantAcknowledgedTermsVersion != commission.CurrentTermsVersion)
-        {
-            blockers.Add(new(
-                "Terms",
-                $"Crafter acknowledgement required for terms v{commission.CurrentTermsVersion}"));
-        }
-        if (commission.Gates.Payment.State == CompanyCommissionClearanceState.Pending)
-        {
-            blockers.Add(new(
-                "Payment",
-                $"{commission.Gates.Payment.ConfirmationCount} of 2 confirmations"));
-        }
-        if (commission.Gates.CompanyMaterials.State == CompanyCommissionClearanceState.Pending)
-        {
-            var provided = commission.CurrentTerms.Materials
-                .Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided)
-                .ToArray();
-            var detail = provided.Length switch
-            {
-                0 => "Company material handoff pending",
-                1 => $"{provided[0].Name} x{provided[0].Quantity:N0} not handed off",
-                _ => $"{provided.Length:N0} company-provided material lines not handed off"
-            };
-            blockers.Add(new("Company materials", detail));
-        }
-        return blockers;
-    }
-
     private static IReadOnlyList<TradeOrderProgressStepPresentation> BuildCenterProgress(
         TradeOrder order,
         TradeCompanyCommission commission)
@@ -185,7 +137,7 @@ public partial class TradeOrders
             new("Requested", "Done", commission.CurrentTerms.Outputs.Count > 0, false),
             new("Claimed", claimed ? "Done" : "Next", claimed, !claimed),
             new("Planned", planned ? "Done" : "Next", planned, claimed && !planned, OpensPlan: true),
-            new("Clear to start", cleared ? "Done" : waitingToStart ? "Current" : "Next", cleared, waitingToStart),
+            new("Requirements", cleared ? "Done" : waitingToStart ? "Current" : "Next", cleared, waitingToStart),
             new(
                 "Crafting",
                 craftingComplete ? "Done" : craftingStarted ? "Current" : cleared ? "Next" : "Later",
@@ -260,9 +212,4 @@ public partial class TradeOrders
 
     private Task OpenPlanWorkbenchAsync() => SetActiveOpsTabAsync(PlanTabIndex);
 
-    private Task OpenWorkWorkbenchAsync()
-    {
-        _activeOpsTab = WorkTabIndex;
-        return Task.CompletedTask;
-    }
 }
