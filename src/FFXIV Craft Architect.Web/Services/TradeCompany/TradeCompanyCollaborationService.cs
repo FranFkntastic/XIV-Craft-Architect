@@ -13,6 +13,9 @@ public sealed class TradeCompanyCollaborationService(
     HostedOrderProjectionStore hostedOrders)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private sealed record OrderCommandAuthority(
+        HostedOrderAuthorityScope Projection,
+        string ConnectionScopeId);
     private readonly Dictionary<Guid, IReadOnlyList<TradeCommissionInterest>> _interests = [];
     private readonly Dictionary<Guid, TradeCommissionPublicationProjection> _publications = [];
 
@@ -208,7 +211,7 @@ public sealed class TradeCompanyCollaborationService(
             throw new InvalidOperationException(reason);
         }
 
-        var authority = CaptureOrderAuthority();
+        var authority = await CaptureOrderAuthorityAsync();
         var revision = await ResolveHostedOrderRevisionAsync(
             order,
             cancellationToken);
@@ -294,7 +297,7 @@ public sealed class TradeCompanyCollaborationService(
 
         try
         {
-            var authority = CaptureOrderAuthority();
+            var authority = await CaptureOrderAuthorityAsync();
             var receipt = accept
                 ? await client.AcceptAsync(
                     order.CompanyProfileId,
@@ -338,29 +341,42 @@ public sealed class TradeCompanyCollaborationService(
         }
     }
 
-    private HostedOrderAuthorityScope CaptureOrderAuthority()
+    private async Task<OrderCommandAuthority> CaptureOrderAuthorityAsync()
     {
-        var authority = hostedOrders.CaptureAuthorityScope();
-        if (string.IsNullOrWhiteSpace(authority.ProfileId) ||
+        var projection = hostedOrders.CaptureAuthorityScope();
+        var connection = await localState.LoadConnectionSettingsAsync();
+        if (string.IsNullOrWhiteSpace(projection.ProfileId) ||
+            string.IsNullOrWhiteSpace(connection.ConnectionScopeId) ||
             !string.Equals(
-                authority.ProfileId,
+                projection.ProfileId,
                 profileSync.CurrentStatus.ProfileId,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                projection.ProfileId,
+                connection.ProfileScopeId,
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
                 "The hosted order authority is not ready for this command.");
         }
-        return authority;
+        return new OrderCommandAuthority(
+            projection,
+            connection.ConnectionScopeId);
     }
 
     private async Task AdoptCommittedOrderAsync(
-        HostedOrderAuthorityScope authority,
+        OrderCommandAuthority authority,
         TradeOrder order,
         long revision,
         string persistenceFailure)
     {
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The committed order response belongs to a previous hosted profile scope.");
+        }
         var adoption = hostedOrders.TryAdoptCommittedOrder(
-            authority,
+            authority.Projection,
             order,
             revision);
         if (adoption == HostedOrderCommittedProjectionResult.AlreadyCurrent)
@@ -368,7 +384,7 @@ public sealed class TradeCompanyCollaborationService(
             return;
         }
         if (adoption != HostedOrderCommittedProjectionResult.Adopted ||
-            !hostedOrders.IsCurrentAuthority(authority))
+            !await IsCurrentAuthorityAsync(authority))
         {
             throw new InvalidOperationException(
                 $"The committed order response was not applied because its authority is {adoption}.");
@@ -378,7 +394,7 @@ public sealed class TradeCompanyCollaborationService(
         {
             throw new InvalidOperationException(persistenceFailure);
         }
-        if (!hostedOrders.IsCurrentAuthority(authority))
+        if (!await IsCurrentAuthorityAsync(authority))
         {
             throw new InvalidOperationException(
                 "The hosted order authority changed before its revision could be saved.");
@@ -387,6 +403,19 @@ public sealed class TradeCompanyCollaborationService(
             ProfileSyncCollections.TradeOrders,
             order.Id.ToString("D"),
             revision);
+    }
+
+    private async Task<bool> IsCurrentAuthorityAsync(OrderCommandAuthority authority)
+    {
+        if (!hostedOrders.IsCurrentAuthority(authority.Projection))
+        {
+            return false;
+        }
+        var connection = await localState.LoadConnectionSettingsAsync();
+        return string.Equals(
+            authority.ConnectionScopeId,
+            connection.ConnectionScopeId,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<long> ResolveHostedOrderRevisionAsync(
