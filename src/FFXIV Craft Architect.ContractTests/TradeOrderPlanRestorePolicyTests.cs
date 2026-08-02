@@ -17,6 +17,12 @@ internal static class TradeOrderPlanRestoreContractScenarios
         AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.Disposed, false);
         AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.NewerRequest, false);
         WorkerChangeBeforeAdoptionInvalidatesTheRequest();
+        ExplicitLoaderRequestRejectsSelectionOrWorkerChange(
+            selectionStillMatches: false,
+            workerRevision: 12);
+        ExplicitLoaderRequestRejectsSelectionOrWorkerChange(
+            selectionStillMatches: true,
+            workerRevision: 13);
         MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
             true, ProfileSyncStage.Inactive, false, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead);
         MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
@@ -36,6 +42,7 @@ internal static class TradeOrderPlanRestoreContractScenarios
         await ExactReadStopsAsSoonAsItsRequestIsSupersededDuringAnAwait();
         MissingGeneratedPlanHasNoAutomaticRebuildPath();
         PlanPanePreservesAnUnnamedActiveWorkerPlanBeforeAnyAdoption();
+        ExplicitPlanOpenUsesFencedAdoptionAndPreservesUnnamedPlan();
     }
 
     private static void AdoptionRequiresTheOriginalSelectionAndPlanIntent(
@@ -78,6 +85,23 @@ internal static class TradeOrderPlanRestoreContractScenarios
             planTab: 0,
             disposed: false,
             currentWorkerRevision: 13));
+    }
+
+    private static void ExplicitLoaderRequestRejectsSelectionOrWorkerChange(
+        bool selectionStillMatches,
+        long workerRevision)
+    {
+        var request = new TradeOrderPlanRestoreRequest(7, OrderA, "plan-a", 12);
+
+        Assert.False(TradeOrderPlanRestorePolicy.CanAdoptExactPlan(
+            request,
+            currentGeneration: 7,
+            selectedOrderId: selectionStillMatches ? OrderA : OrderB,
+            selectedPlanId: "plan-a",
+            activeTab: 2,
+            planTab: 2,
+            disposed: false,
+            currentWorkerRevision: workerRevision));
     }
 
     private static void MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
@@ -248,6 +272,64 @@ internal static class TradeOrderPlanRestoreContractScenarios
         Assert.True(preservation >= 0);
         Assert.True(exactRead > preservation);
         Assert.True(adoption > exactRead);
+    }
+
+    private static void ExplicitPlanOpenUsesFencedAdoptionAndPreservesUnnamedPlan()
+    {
+        var repositoryRoot = LocateRepositoryRoot();
+        var craftPlan = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Pages",
+            "TradeOrders.CraftPlan.cs"));
+        var procurement = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Pages",
+            "TradeOrders.Procurement.cs"));
+        var start = craftPlan.IndexOf(
+            "private async Task<bool> LoadExactOrderPlanAsync",
+            StringComparison.Ordinal);
+        var end = craftPlan.IndexOf(
+            "private string GetOrderDataCenter",
+            start,
+            StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        var loader = craftPlan[start..end];
+
+        var preserveUnnamed = loader.IndexOf(
+            "string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)",
+            StringComparison.Ordinal);
+        var confirm = loader.IndexOf(
+            "ConfirmActiveCraftPlanCanBeReplacedAsync",
+            StringComparison.Ordinal);
+        var exactRead = loader.IndexOf("ReadExactPlanAsync", StringComparison.Ordinal);
+        var replace = loader.IndexOf("ReplaceStoredPlanAsync", StringComparison.Ordinal);
+
+        Assert.Contains("TradeOrderPlanRestoreRequest", loader, StringComparison.Ordinal);
+        Assert.Contains("CanAdoptCurrentPlanRequest", loader, StringComparison.Ordinal);
+        Assert.Contains("canContinue:", loader, StringComparison.Ordinal);
+        Assert.Contains("cancellationToken:", loader, StringComparison.Ordinal);
+        Assert.True(preserveUnnamed >= 0);
+        Assert.True(confirm > preserveUnnamed);
+        Assert.True(exactRead > confirm);
+        Assert.True(replace > exactRead);
+        Assert.Contains("tabIndex != _activeOpsTab", procurement, StringComparison.Ordinal);
+
+        var confirmStart = craftPlan.IndexOf(
+            "private async Task<bool> ConfirmActiveCraftPlanCanBeReplacedAsync",
+            StringComparison.Ordinal);
+        var confirmEnd = craftPlan.IndexOf(
+            "private async Task<bool> SaveActiveCraftPlanBeforeTradeActionAsync",
+            confirmStart,
+            StringComparison.Ordinal);
+        Assert.True(confirmStart >= 0 && confirmEnd > confirmStart);
+        Assert.DoesNotContain(
+            "string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId)",
+            craftPlan[confirmStart..confirmEnd],
+            StringComparison.Ordinal);
     }
 
     private static Task NoDelay(TimeSpan _, CancellationToken cancellationToken)

@@ -351,12 +351,13 @@ public partial class TradeOrders
 
     private async Task OpenSelectedOrderCraftPlanAsync()
     {
-        if (_selectedOrder == null || _isOpeningSelectedOrderCraftPlan)
+        var order = _selectedOrder;
+        if (order == null || _isOpeningSelectedOrderCraftPlan)
         {
             return;
         }
 
-        if (!HasLinkedCraftPlan(_selectedOrder))
+        if (!HasLinkedCraftPlan(order))
         {
             Snackbar.Add("Create a linked craft plan before opening it.", Severity.Warning);
             return;
@@ -366,14 +367,9 @@ public partial class TradeOrders
 
         try
         {
-            if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
-                "Opening this order plan",
-                _selectedOrder.CraftPlanId))
-            {
-                return;
-            }
-
-            if (!await LoadExactOrderPlanAsync(_selectedOrder))
+            if (!await LoadExactOrderPlanAsync(
+                    order,
+                    "Opening this order plan"))
             {
                 return;
             }
@@ -417,25 +413,21 @@ public partial class TradeOrders
 
     private async Task<bool> LoadSelectedOrderCraftPlanForNavigationAsync()
     {
-        if (_selectedOrder == null)
+        var order = _selectedOrder;
+        if (order == null)
         {
             return false;
         }
 
-        if (!HasLinkedCraftPlan(_selectedOrder))
+        if (!HasLinkedCraftPlan(order))
         {
             Snackbar.Add("Create a linked craft plan before opening Craft Architect details.", Severity.Warning);
             return false;
         }
 
-        if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
-            "Opening Craft Architect details for this order",
-            _selectedOrder.CraftPlanId))
-        {
-            return false;
-        }
-
-        if (!await LoadExactOrderPlanAsync(_selectedOrder))
+        if (!await LoadExactOrderPlanAsync(
+                order,
+                "Opening Craft Architect details for this order"))
         {
             return false;
         }
@@ -552,11 +544,6 @@ public partial class TradeOrders
             return true;
         }
 
-        if (string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId))
-        {
-            return true;
-        }
-
         return await SaveActiveCraftPlanBeforeTradeActionAsync();
     }
 
@@ -602,27 +589,129 @@ public partial class TradeOrders
         return true;
     }
 
-    private async Task<bool> LoadExactOrderPlanAsync(TradeOrder order)
+    private async Task<bool> LoadExactOrderPlanAsync(
+        TradeOrder order,
+        string actionLabel)
     {
-        var read = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync(
-            _ => PlanPersistence.LoadPlanPayloadAsync(order.CraftPlanId!),
-            () => ProfileSync.CurrentStatus,
-            waitsForProfilePlanAuthority: order.CompanyCommission != null);
-        if (read.Payload != null)
+        if (_isDisposed || !HasLinkedCraftPlan(order))
         {
-            await PlanLifecycle.ReplaceStoredPlanAsync(
-                read.Payload,
-                trackStoredPlanIdentity: true);
-            return true;
+            return false;
         }
 
-        Snackbar.Add(
-            read.Outcome == TradeOrderPlanReadOutcome.WaitForHostedPlan
-                ? "The saved craft plan is still arriving. Try again in a moment."
-                : "The exact saved craft plan is unavailable here. The order was left unchanged so its acquisition choices aren't replaced.",
-            Severity.Warning);
+        InvalidateSelectedOrderPlanRestoration();
+        var requiredTab = _activeOpsTab;
+        var request = new TradeOrderPlanRestoreRequest(
+            Interlocked.Increment(ref _selectedOrderPlanRestoreGeneration),
+            order.Id,
+            order.CraftPlanId!,
+            WorkerProjections.Shell.Revision);
+        using var cancellation = new CancellationTokenSource();
+        var priorCancellation = Interlocked.Exchange(
+            ref _selectedOrderPlanRestoreCancellation,
+            cancellation);
+        priorCancellation?.Cancel();
 
-        return false;
+        try
+        {
+            if (!CanAdoptCurrentPlanRequest(request, requiredTab))
+            {
+                return false;
+            }
+
+            if (WorkerProjections.Shell.HasSession &&
+                string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId))
+            {
+                Snackbar.Add(
+                    "Your unsaved active plan is being preserved. Save or discard it before opening this order's plan.",
+                    Severity.Warning);
+                return false;
+            }
+
+            if (IsSelectedOrderLinkedPlanActive())
+            {
+                return true;
+            }
+
+            var canReplaceActivePlan = await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                actionLabel,
+                request.PlanId);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!CanAdoptCurrentPlanRequest(request, requiredTab))
+            {
+                return false;
+            }
+            if (!canReplaceActivePlan)
+            {
+                return false;
+            }
+
+            var read = await TradeOrderPlanRestorePolicy.ReadExactPlanAsync(
+                _ => PlanPersistence.LoadPlanPayloadAsync(request.PlanId),
+                () => ProfileSync.CurrentStatus,
+                waitsForProfilePlanAuthority: order.CompanyCommission != null,
+                cancellationToken: cancellation.Token,
+                canContinue: () => CanAdoptCurrentPlanRequest(request, requiredTab));
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!CanAdoptCurrentPlanRequest(request, requiredTab))
+            {
+                return false;
+            }
+
+            if (read.Payload == null)
+            {
+                Snackbar.Add(
+                    read.Outcome == TradeOrderPlanReadOutcome.WaitForHostedPlan
+                        ? "The saved craft plan is still arriving. Try again in a moment."
+                        : "The exact saved craft plan is unavailable here. The order was left unchanged so its acquisition choices aren't replaced.",
+                    Severity.Warning);
+                return false;
+            }
+
+            if (!CanAdoptCurrentPlanRequest(request, requiredTab))
+            {
+                return false;
+            }
+            await PlanLifecycle.ReplaceStoredPlanAsync(
+                read.Payload,
+                trackStoredPlanIdentity: true,
+                derivation: PlanDerivationDispatch.Deferred,
+                cancellationToken: cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!IsCurrentPlanRequest(request, requiredTab) ||
+                !string.Equals(
+                    WorkerProjections.Shell.PlanId,
+                    request.PlanId,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            request = request with { WorkerRevision = WorkerProjections.Shell.Revision };
+            return CanAdoptCurrentPlanRequest(request, requiredTab);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (IsCurrentPlanRequest(request, requiredTab))
+            {
+                Snackbar.Add(
+                    "The exact saved craft plan could not be opened. The active plan was left unchanged.",
+                    Severity.Error);
+            }
+            Console.Error.WriteLine($"Linked Trade order plan open failed: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            Interlocked.CompareExchange(
+                ref _selectedOrderPlanRestoreCancellation,
+                null,
+                cancellation);
+        }
+
     }
 
     private string GetOrderDataCenter(TradeOrder order)

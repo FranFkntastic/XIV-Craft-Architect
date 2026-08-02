@@ -153,7 +153,7 @@ public partial class TradeOrders
 
     private async Task SetActiveOpsTabAsync(int tabIndex)
     {
-        if (tabIndex != ProcurementTabIndex)
+        if (tabIndex != _activeOpsTab)
         {
             InvalidateSelectedOrderPlanRestoration();
         }
@@ -380,26 +380,36 @@ public partial class TradeOrders
         }
     }
 
-    private bool IsCurrentPlanRestoreRequest(TradeOrderPlanRestoreRequest request) =>
+    private bool IsCurrentPlanRequest(
+        TradeOrderPlanRestoreRequest request,
+        int requiredTab) =>
         TradeOrderPlanRestorePolicy.IsCurrent(
             request,
             Interlocked.Read(ref _selectedOrderPlanRestoreGeneration),
             _selectedOrder?.Id,
             _selectedOrder?.CraftPlanId,
             _activeOpsTab,
-            ProcurementTabIndex,
+            requiredTab,
             _isDisposed);
 
-    private bool CanAdoptCurrentPlanRestoreRequest(TradeOrderPlanRestoreRequest request) =>
+    private bool CanAdoptCurrentPlanRequest(
+        TradeOrderPlanRestoreRequest request,
+        int requiredTab) =>
         TradeOrderPlanRestorePolicy.CanAdoptExactPlan(
             request,
             Interlocked.Read(ref _selectedOrderPlanRestoreGeneration),
             _selectedOrder?.Id,
             _selectedOrder?.CraftPlanId,
             _activeOpsTab,
-            ProcurementTabIndex,
+            requiredTab,
             _isDisposed,
             WorkerProjections.Shell.Revision);
+
+    private bool IsCurrentPlanRestoreRequest(TradeOrderPlanRestoreRequest request) =>
+        IsCurrentPlanRequest(request, ProcurementTabIndex);
+
+    private bool CanAdoptCurrentPlanRestoreRequest(TradeOrderPlanRestoreRequest request) =>
+        CanAdoptCurrentPlanRequest(request, ProcurementTabIndex);
 
     private void QueuePlanRestoreRetryIfCurrent(TradeOrderPlanRestoreRequest request)
     {
