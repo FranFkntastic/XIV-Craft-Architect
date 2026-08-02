@@ -177,6 +177,7 @@ public sealed class ProfileHostContractTests
         Assert.Equal($"id: {put.ServerRevision}", lines[0]);
         Assert.Equal("event: profile-revision", lines[1]);
         Assert.Equal($"data: {{\"serverRevision\":{put.ServerRevision}}}", lines[2]);
+        await reader.ReadToEndAsync(timeout.Token);
 
         timeout.Cancel();
         streamClient.CancelPendingRequests();
@@ -488,6 +489,8 @@ public sealed class ProfileHostContractTests
                         {
                             ["ProfileHost:Enabled"] = "true",
                             ["ProfileHost:DatabasePath"] = databasePath,
+                            ["ProfileHost:ChangeStreamLease"] = "00:00:00.250",
+                            ["ProfileHost:ChangeStreamHeartbeat"] = "00:00:00.050",
                         });
                     });
                 });

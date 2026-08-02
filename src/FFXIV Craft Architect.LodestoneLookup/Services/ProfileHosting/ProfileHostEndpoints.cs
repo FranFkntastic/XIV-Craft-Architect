@@ -453,7 +453,13 @@ public static class ProfileHostEndpoints
         context.Response.Headers.Append("X-Accel-Buffering", "no");
         await context.Response.StartAsync(cancellationToken);
 
-        var leaseEndsAt = DateTimeOffset.UtcNow.AddMinutes(1);
+        var lease = options.ChangeStreamLease > TimeSpan.Zero
+            ? options.ChangeStreamLease
+            : TimeSpan.FromMinutes(1);
+        var heartbeat = options.ChangeStreamHeartbeat > TimeSpan.Zero
+            ? options.ChangeStreamHeartbeat
+            : TimeSpan.FromSeconds(15);
+        var leaseEndsAt = DateTimeOffset.UtcNow.Add(lease);
         while (!cancellationToken.IsCancellationRequested)
         {
             var remainingLease = leaseEndsAt - DateTimeOffset.UtcNow;
@@ -477,9 +483,9 @@ public static class ProfileHostEndpoints
             }
 
             var heartbeatDelay = Task.Delay(
-                remainingLease < TimeSpan.FromSeconds(15)
+                remainingLease < heartbeat
                     ? remainingLease
-                    : TimeSpan.FromSeconds(15),
+                    : heartbeat,
                 cancellationToken);
             var completed = await Task.WhenAny(observation.Changed, heartbeatDelay);
             if (completed == heartbeatDelay)
