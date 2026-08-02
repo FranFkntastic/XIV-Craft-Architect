@@ -87,7 +87,8 @@ builder.Services.AddScoped<TradeCompanyCollaborationClient>();
 builder.Services.AddScoped<TradeCompanyCollaborationService>();
 builder.Services.AddScoped<TradeCommissionOperationsClient>();
 builder.Services.AddScoped<TradeCommissionOperationsService>();
-builder.Services.AddScoped<CommissionBriefClient>();
+builder.Services.AddScoped(services => new CommissionBriefClient(
+    services.GetRequiredService<ProfileHostClientOptions>()));
 builder.Services.AddScoped<CommissionBriefLocalStateService>();
 builder.Services.AddSingleton(new ProfileHostClientOptions(
     ResolveProfileHostBaseAddress(

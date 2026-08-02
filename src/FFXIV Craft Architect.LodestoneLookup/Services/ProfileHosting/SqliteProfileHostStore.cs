@@ -7,6 +7,14 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 public sealed class SqliteProfileHostStore
 {
+    private const int MaximumImportedActiveAccessKeys = 64;
+    private sealed record ImportedAccessKey(
+        string Id,
+        string ProfileId,
+        string StoredHash,
+        string CreatedAtUtc,
+        string? RevokedAtUtc);
+
     private readonly ProfileHostOptions _options;
     private readonly ProfileHostChangeSignal? _changeSignal;
 
@@ -242,6 +250,280 @@ public sealed class SqliteProfileHostStore
         command.Parameters.AddWithValue("$keyHash", storedHash);
         command.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
         await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<ProfileAccessKeyImportResult> ImportActiveAccessKeysAsync(
+        string sourceDatabasePath,
+        string profileId,
+        string expectedDisplayName,
+        ProfileAccessKeyHasher hasher,
+        CancellationToken ct)
+    {
+        if (!Guid.TryParseExact(profileId, "D", out var parsedProfileId) ||
+            parsedProfileId == Guid.Empty)
+        {
+            throw new InvalidOperationException(
+                "Profile id must be a non-empty UUID in canonical form.");
+        }
+
+        if (string.IsNullOrWhiteSpace(expectedDisplayName) || expectedDisplayName.Length > 120)
+        {
+            throw new InvalidOperationException(
+                "Expected display name must contain 1 to 120 characters.");
+        }
+
+        if (string.IsNullOrWhiteSpace(sourceDatabasePath))
+        {
+            throw new InvalidOperationException("Source database path is required.");
+        }
+
+        profileId = parsedProfileId.ToString("D");
+        var sourcePath = Path.GetFullPath(sourceDatabasePath);
+        var targetPath = Path.GetFullPath(_options.DatabasePath);
+        if (string.Equals(sourcePath, targetPath, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Source and target databases must be distinct.");
+        }
+
+        if (!File.Exists(sourcePath))
+        {
+            throw new InvalidOperationException("The source profile database does not exist.");
+        }
+
+        if (!File.Exists(targetPath))
+        {
+            throw new InvalidOperationException("The target profile database does not exist.");
+        }
+
+        // Hold an immediate transaction on the source through the target commit.
+        // That freezes credential revocation/rotation and also makes a filesystem
+        // alias of the target fail on the second write reservation.
+        await using var source = await OpenDatabaseAsync(sourcePath, SqliteOpenMode.ReadWrite, ct);
+        await using var sourceTransaction = source.BeginTransaction(
+            IsolationLevel.Serializable,
+            deferred: false);
+        await ValidateActiveProfileAsync(
+            source,
+            sourceTransaction,
+            profileId,
+            expectedDisplayName,
+            "source",
+            ct);
+        var sourceKeys = await LoadActiveAccessKeysAsync(
+            source,
+            sourceTransaction,
+            profileId,
+            ct);
+        ValidateSourceAccessKeys(sourceKeys, hasher);
+
+        await using var target = await OpenDatabaseAsync(targetPath, SqliteOpenMode.ReadWrite, ct);
+        await using var targetTransaction = (SqliteTransaction)await target.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+        await ValidateActiveProfileAsync(
+            target,
+            targetTransaction,
+            profileId,
+            expectedDisplayName,
+            "target",
+            ct);
+
+        var targetKeys = await LoadRelevantTargetAccessKeysAsync(
+            target,
+            targetTransaction,
+            sourceKeys,
+            ct);
+        var alreadyPresentIds = new List<string>();
+        var keysToInsert = new List<ImportedAccessKey>();
+        foreach (var sourceKey in sourceKeys)
+        {
+            var idMatches = targetKeys
+                .Where(key => string.Equals(key.Id, sourceKey.Id, StringComparison.Ordinal))
+                .ToArray();
+            var hashMatches = targetKeys
+                .Where(key => string.Equals(key.StoredHash, sourceKey.StoredHash, StringComparison.Ordinal))
+                .ToArray();
+
+            if (idMatches.Length == 1 &&
+                hashMatches.Length == 1 &&
+                ReferenceEquals(idMatches[0], hashMatches[0]) &&
+                string.Equals(idMatches[0].ProfileId, profileId, StringComparison.Ordinal) &&
+                string.Equals(idMatches[0].CreatedAtUtc, sourceKey.CreatedAtUtc, StringComparison.Ordinal) &&
+                idMatches[0].RevokedAtUtc is null)
+            {
+                alreadyPresentIds.Add(sourceKey.Id);
+                continue;
+            }
+
+            if (idMatches.Length != 0 || hashMatches.Length != 0)
+            {
+                await targetTransaction.RollbackAsync(ct);
+                throw new InvalidOperationException(
+                    "An imported access key conflicts with existing target credential metadata.");
+            }
+
+            keysToInsert.Add(sourceKey);
+        }
+
+        foreach (var sourceKey in keysToInsert)
+        {
+            await using var insert = target.CreateCommand();
+            insert.Transaction = targetTransaction;
+            insert.CommandText =
+                """
+                INSERT INTO profile_access_keys (id, profile_id, key_hash, created_at_utc, last_used_at_utc, revoked_at_utc)
+                VALUES ($id, $profileId, $keyHash, $createdAtUtc, NULL, NULL);
+                """;
+            insert.Parameters.AddWithValue("$id", sourceKey.Id);
+            insert.Parameters.AddWithValue("$profileId", profileId);
+            insert.Parameters.AddWithValue("$keyHash", sourceKey.StoredHash);
+            insert.Parameters.AddWithValue("$createdAtUtc", sourceKey.CreatedAtUtc);
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+
+        await targetTransaction.CommitAsync(ct);
+        await sourceTransaction.CommitAsync(ct);
+        return new ProfileAccessKeyImportResult(
+            profileId,
+            sourceKeys.Count,
+            keysToInsert.Select(key => key.Id).ToArray(),
+            alreadyPresentIds.ToArray());
+    }
+
+    private static async Task ValidateActiveProfileAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string profileId,
+        string expectedDisplayName,
+        string databaseRole,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT display_name, disabled_at_utc
+            FROM hosted_profiles
+            WHERE id = $profileId;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct) ||
+            !reader.IsDBNull(1) ||
+            !string.Equals(reader.GetString(0), expectedDisplayName, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"The {databaseRole} database does not contain the expected active profile identity.");
+        }
+    }
+
+    private static async Task<List<ImportedAccessKey>> LoadActiveAccessKeysAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string profileId,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT id, key_hash, created_at_utc
+            FROM profile_access_keys
+            WHERE profile_id = $profileId AND revoked_at_utc IS NULL
+            ORDER BY id
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$limit", MaximumImportedActiveAccessKeys + 1);
+
+        var keys = new List<ImportedAccessKey>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            keys.Add(new ImportedAccessKey(
+                reader.GetString(0),
+                profileId,
+                reader.GetString(1),
+                reader.GetString(2),
+                null));
+        }
+
+        return keys;
+    }
+
+    private static void ValidateSourceAccessKeys(
+        IReadOnlyCollection<ImportedAccessKey> sourceKeys,
+        ProfileAccessKeyHasher hasher)
+    {
+        if (sourceKeys.Count == 0)
+        {
+            throw new InvalidOperationException("The source profile has no active access keys to import.");
+        }
+
+        if (sourceKeys.Count > MaximumImportedActiveAccessKeys)
+        {
+            throw new InvalidOperationException(
+                $"The source profile exceeds the {MaximumImportedActiveAccessKeys}-key import limit.");
+        }
+
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var hashes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in sourceKeys)
+        {
+            if (!Guid.TryParseExact(key.Id, "D", out var parsedKeyId) ||
+                parsedKeyId == Guid.Empty ||
+                !string.Equals(key.Id, parsedKeyId.ToString("D"), StringComparison.Ordinal) ||
+                !hasher.IsSupportedStoredHash(key.StoredHash) ||
+                !DateTimeOffset.TryParse(
+                    key.CreatedAtUtc,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind,
+                    out _) ||
+                !ids.Add(key.Id) ||
+                !hashes.Add(key.StoredHash))
+            {
+                throw new InvalidOperationException(
+                    "The source profile contains malformed or duplicate active credential metadata.");
+            }
+        }
+    }
+
+    private static async Task<List<ImportedAccessKey>> LoadRelevantTargetAccessKeysAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyCollection<ImportedAccessKey> sourceKeys,
+        CancellationToken ct)
+    {
+        var sourceIds = sourceKeys.Select(key => key.Id).ToHashSet(StringComparer.Ordinal);
+        var sourceHashes = sourceKeys.Select(key => key.StoredHash).ToHashSet(StringComparer.Ordinal);
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT id, profile_id, key_hash, created_at_utc, revoked_at_utc
+            FROM profile_access_keys;
+            """;
+
+        var keys = new List<ImportedAccessKey>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetString(0);
+            var storedHash = reader.GetString(2);
+            if (!sourceIds.Contains(id) && !sourceHashes.Contains(storedHash))
+            {
+                continue;
+            }
+
+            keys.Add(new ImportedAccessKey(
+                id,
+                reader.GetString(1),
+                storedHash,
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4)));
+        }
+
+        return keys;
     }
 
     public async Task CreatePairingCodeAsync(
@@ -1120,9 +1402,18 @@ public sealed class SqliteProfileHostStore
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken ct)
     {
+        return await OpenDatabaseAsync(_options.DatabasePath, SqliteOpenMode.ReadWriteCreate, ct);
+    }
+
+    private static async Task<SqliteConnection> OpenDatabaseAsync(
+        string databasePath,
+        SqliteOpenMode mode,
+        CancellationToken ct)
+    {
         var connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = _options.DatabasePath,
+            DataSource = databasePath,
+            Mode = mode,
             Pooling = false
         }.ToString();
         var connection = new SqliteConnection(connectionString);
@@ -1144,3 +1435,9 @@ public sealed record HostedProfileObject(
 public sealed record ProfileHostEnsureResult(
     ProfileHostProfileResponse Profile,
     bool Created);
+
+public sealed record ProfileAccessKeyImportResult(
+    string ProfileId,
+    int SourceActiveKeyCount,
+    IReadOnlyList<string> InsertedKeyIds,
+    IReadOnlyList<string> AlreadyPresentKeyIds);

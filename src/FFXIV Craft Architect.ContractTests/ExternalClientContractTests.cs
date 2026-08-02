@@ -206,6 +206,32 @@ public sealed class ExternalClientContractTests
         Assert.False(handler.Headers.ContainsKey("X-Profile-Key"));
     }
 
+    [Fact]
+    public async Task CommissionBriefClient_UsesCanonicalProfileHostBase()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK, """
+            {
+              "publicId": "brief-1",
+              "publicUrl": "https://xivcraftarchitect.com/commission.html?id=brief-1",
+              "version": 3,
+              "publishedAtUtc": "2026-08-01T12:00:00Z"
+            }
+            """);
+        var client = new CommissionBriefClient(
+            new ProfileHostClientOptions("https://xivcraftarchitect.com/api"),
+            new HttpClient(handler));
+
+        var link = await client.ResolvePortableLinkAsync("brief-1");
+
+        Assert.Equal("brief-1", link.PublicId);
+        Assert.Equal(HttpMethod.Get, handler.Method);
+        Assert.Equal(
+            "https://xivcraftarchitect.com/api/xivdata/commission-briefs/brief-1/link",
+            handler.RequestUri?.AbsoluteUri);
+        Assert.False(handler.Headers.ContainsKey("X-Api-Key"));
+        Assert.False(handler.Headers.ContainsKey("X-Profile-Key"));
+    }
+
     private sealed class RecordingHandler(
         HttpStatusCode statusCode,
         string body,
