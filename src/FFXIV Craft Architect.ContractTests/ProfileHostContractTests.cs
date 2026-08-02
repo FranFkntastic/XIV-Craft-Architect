@@ -504,9 +504,19 @@ public sealed class ProfileHostContractTests
         public async ValueTask DisposeAsync()
         {
             await application.DisposeAsync();
-            if (File.Exists(databasePath))
+            const int maximumDeleteAttempts = 50;
+            for (var attempt = 0;
+                 attempt < maximumDeleteAttempts && File.Exists(databasePath);
+                 attempt++)
             {
-                File.Delete(databasePath);
+                try
+                {
+                    File.Delete(databasePath);
+                }
+                catch (IOException) when (attempt < maximumDeleteAttempts - 1)
+                {
+                    await Task.Delay(100);
+                }
             }
         }
     }

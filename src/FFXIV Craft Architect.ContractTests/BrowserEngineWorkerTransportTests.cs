@@ -263,7 +263,8 @@ public sealed class BrowserEngineWorkerTransportTests
             "src",
             "FFXIV Craft Architect.Web",
             "wwwroot",
-            "profile-sync-session.js"));
+            "profile-sync-session.js"))
+            .Replace("\r\n", "\n", StringComparison.Ordinal);
 
         Assert.Contains("navigator.locks.request(", session, StringComparison.Ordinal);
         Assert.Contains("new BroadcastChannel(channelName)", session, StringComparison.Ordinal);
