@@ -26,6 +26,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         scenarios.CrafterProgressProjectsToPublicAndParticipantBriefs();
         scenarios.UnrelatedRevisionPreservesPartialPaymentAndReadyMaterialBindings();
         scenarios.ChangedPaymentAndMaterialFactsInvalidatePartialGateEvidence();
+        scenarios.TerminalCommissionsRejectStartGateMutations();
     }
 
     public void TermsRevisionAndParallelGatesPreserveOnlyMatchingEvidence(
@@ -156,6 +157,28 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         Assert.Null(participant.Payment.CommissionerSent);
         Assert.Null(participant.Payment.CrafterReceived);
         Assert.False(participant.CompanyMaterialsReadyForHandoff);
+    }
+
+    private void TerminalCommissionsRejectStartGateMutations()
+    {
+        foreach (var status in TradeOrderStatusWorkflow.ArchiveStatuses)
+        {
+            var order = CreateClaimedOrder();
+            order.Status = status;
+            var quantities = order.CompanyCommission!.Gates.CompanyMaterials.PromisedQuantities;
+            ICompanyCommissionCommand[] commands =
+            [
+                new RecordCompanyCommissionPaymentCommand(Context(order), "Payment sent."),
+                new MarkCompanyCommissionMaterialsReadyCommand(Context(order), quantities)
+            ];
+
+            foreach (var command in commands)
+            {
+                var exception = Assert.Throws<InvalidOperationException>(() =>
+                    CompanyCommissionCommandWorkflow.Apply(order, command, Commissioner, StartedAt));
+                Assert.Contains("completed or canceled", exception.Message, StringComparison.Ordinal);
+            }
+        }
     }
 
     private static void TermsRevisionPreservesSatisfiedGatesWhoseBoundFactsDidNotChange()

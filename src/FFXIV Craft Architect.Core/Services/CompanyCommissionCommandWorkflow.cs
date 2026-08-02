@@ -569,6 +569,7 @@ public static class CompanyCommissionCommandWorkflow
         CompanyCommissionActor actor)
     {
         RequireClaim(commission);
+        RequireMutableStartGates(source);
         Require(
             !string.IsNullOrWhiteSpace(command.Note),
             "A truthful payment observation note is required.");
@@ -728,6 +729,7 @@ public static class CompanyCommissionCommandWorkflow
         DateTime nowUtc)
     {
         RequireClaim(commission);
+        RequireMutableStartGates(source);
         RequireExactMaterials(commission, command.Quantities);
         return Transition(
             source,
@@ -1428,6 +1430,11 @@ public static class CompanyCommissionCommandWorkflow
             throw new InvalidOperationException(message);
         }
     }
+
+    private static void RequireMutableStartGates(TradeOrder source) =>
+        Require(
+            !TradeOrderStatusWorkflow.IsArchived(source.Status),
+            "Payment and material handoff cannot change after the commission is completed or canceled.");
 
     private static TradeOrder Copy(TradeOrder source) =>
         TradeOrderWorkflow.CopyOrder(source);

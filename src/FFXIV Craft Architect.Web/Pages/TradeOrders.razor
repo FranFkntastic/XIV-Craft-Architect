@@ -417,7 +417,8 @@
                                                  </div>
                                                  @if (operationsCommission.Gates.Payment.State != CompanyCommissionClearanceState.NotRequired)
                                                  {
-                                                     @if (operationsCommission.Gates.Payment.CommissionerSent == null)
+                                                     @if (operationsCommission.Gates.Payment.CommissionerSent == null &&
+                                                          !TradeOrderStatusWorkflow.IsArchived(operationsOwner.Order.Status))
                                                      {
                                                          <div class="trade-orders-start-gate-action">
                                                              <MudTextField @bind-Value="_commissionPaymentObservation"
@@ -435,14 +436,14 @@
                                                              </MudButton>
                                                          </div>
                                                      }
-                                                      else
-                                                      {
-                                                          <div class="trade-orders-start-gate-evidence">
-                                                              <strong>Company marked payment sent</strong>
-                                                              <span>@operationsCommission.Gates.Payment.CommissionerSent.Note</span>
-                                                              <small>
-                                                                  @operationsCommission.Gates.Payment.CommissionerSent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-                                                                  - terms v@(operationsCommission.Gates.Payment.CommissionerSent.TermsVersion)
+                                                       else if (operationsCommission.Gates.Payment.CommissionerSent is { } commissionerSent)
+                                                       {
+                                                           <div class="trade-orders-start-gate-evidence">
+                                                               <strong>Company marked payment sent</strong>
+                                                               <span>@commissionerSent.Note</span>
+                                                               <small>
+                                                                   @commissionerSent.RecordedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                                                                   - terms v@(commissionerSent.TermsVersion)
                                                               </small>
                                                           </div>
                                                           @if (operationsOwner.Order.Status == TradeOrderStatus.Assigned)
@@ -505,8 +506,9 @@
                                                      <span>Status</span>
                                                      <strong>@FormatCommissionMaterialHandoff(operationsCommission.Gates.CompanyMaterials)</strong>
                                                  </div>
-                                                 @if (operationsCommission.Gates.CompanyMaterials.State == CompanyCommissionClearanceState.Pending &&
-                                                      operationsCommission.Gates.CompanyMaterials.ReadyAtUtc == null)
+                                                  @if (operationsCommission.Gates.CompanyMaterials.State == CompanyCommissionClearanceState.Pending &&
+                                                       operationsCommission.Gates.CompanyMaterials.ReadyAtUtc == null &&
+                                                       !TradeOrderStatusWorkflow.IsArchived(operationsOwner.Order.Status))
                                                  {
                                                      <div class="trade-orders-start-gate-action is-end">
                                                          <MudButton Variant="Variant.Filled"
