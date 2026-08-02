@@ -6,6 +6,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Dialogs;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Shared.TablePrimitives;
 
 using Microsoft.AspNetCore.Components;
@@ -153,15 +154,48 @@ public partial class TradeOrders
     private async Task SetActiveOpsTabAsync(int tabIndex)
     {
         _activeOpsTab = tabIndex;
-        if (tabIndex != ProcurementTabIndex ||
-            _selectedOrder == null ||
-            _isLoadingSelectedOrderSupplyPlan)
+        if (tabIndex != ProcurementTabIndex || _selectedOrder == null)
         {
             return;
         }
 
-        if (!HasLinkedCraftPlan(_selectedOrder))
+        _selectedOrderPlanRestoreRetryRequested = true;
+        await RestoreSelectedOrderPlanAsync();
+    }
+
+    private void OnProfileSyncStatusChanged()
+    {
+        if (_isDisposed)
         {
+            return;
+        }
+
+        _ = InvokeAsync(ScheduleSelectedOrderPlanRestoration);
+    }
+
+    private void ScheduleSelectedOrderPlanRestoration()
+    {
+        if (_isDisposed ||
+            _activeOpsTab != ProcurementTabIndex ||
+            _selectedOrder == null ||
+            !HasLinkedCraftPlan(_selectedOrder) ||
+            GetCurrentLiveProcurementSnapshot() != null)
+        {
+            return;
+        }
+
+        _selectedOrderPlanRestoreRetryRequested = true;
+        if (!_isLoadingSelectedOrderSupplyPlan)
+        {
+            _ = InvokeAsync(RestoreSelectedOrderPlanAsync);
+        }
+    }
+
+    private async Task RestoreSelectedOrderPlanAsync()
+    {
+        if (_isLoadingSelectedOrderSupplyPlan)
+        {
+            _selectedOrderPlanRestoreRetryRequested = true;
             return;
         }
 
@@ -169,17 +203,75 @@ public partial class TradeOrders
         await InvokeAsync(StateHasChanged);
         try
         {
-            if (!IsSelectedOrderLinkedPlanActive() &&
-                !await LoadSelectedOrderCraftPlanForNavigationAsync())
+            while (_selectedOrderPlanRestoreRetryRequested && !_isDisposed)
             {
-                return;
-            }
+                _selectedOrderPlanRestoreRetryRequested = false;
+                var order = _selectedOrder;
+                if (order == null ||
+                    _activeOpsTab != ProcurementTabIndex ||
+                    !HasLinkedCraftPlan(order) ||
+                    GetCurrentLiveProcurementSnapshot() != null)
+                {
+                    return;
+                }
 
-            await EnsureLiveProcurementSnapshotAsync();
+                _selectedOrderPlanRestoreError = null;
+                if (!IsSelectedOrderLinkedPlanActive())
+                {
+                    if (WorkerProjections.Shell.HasSession &&
+                        string.IsNullOrWhiteSpace(WorkerProjections.Shell.PlanId))
+                    {
+                        _selectedOrderPlanRestoreError =
+                            "Your unsaved active plan is being preserved. Save or discard it before editing this order's plan.";
+                        return;
+                    }
+
+                    if (!await ConfirmActiveCraftPlanCanBeReplacedAsync(
+                            "Opening this order plan",
+                            order.CraftPlanId))
+                    {
+                        _selectedOrderPlanRestoreError =
+                            "The active plan could not be saved, so this order's plan was not opened.";
+                        return;
+                    }
+
+                    if (!await LoadOrRebuildOrderPlanAsync(order, showFailure: false))
+                    {
+                        if (ProfileSync.CurrentStatus.Stage is
+                                ProfileSyncStage.Ready or ProfileSyncStage.Failed ||
+                            !ProfileSync.CurrentStatus.IsConnected)
+                        {
+                            _selectedOrderPlanRestoreError =
+                                "The linked craft plan could not be restored from saved plan data.";
+                        }
+                        continue;
+                    }
+                }
+
+                await EnsureLiveProcurementSnapshotAsync();
+                if (_selectedOrder?.Id == order.Id &&
+                    GetCurrentLiveProcurementSnapshot() == null)
+                {
+                    _selectedOrderPlanRestoreError =
+                        "The linked craft plan loaded, but its complete procurement projection is unavailable.";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _selectedOrderPlanRestoreError =
+                "The linked craft plan could not be restored. Saved order details are unchanged.";
+            Console.Error.WriteLine(
+                $"Linked Trade order plan restoration failed: {ex.Message}");
         }
         finally
         {
             _isLoadingSelectedOrderSupplyPlan = false;
+            await InvokeAsync(StateHasChanged);
+            if (_selectedOrderPlanRestoreRetryRequested)
+            {
+                _ = InvokeAsync(RestoreSelectedOrderPlanAsync);
+            }
         }
     }
 

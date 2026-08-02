@@ -213,6 +213,8 @@ public partial class TradeOrders
 
     private void SelectOrder(TradeOrder order)
     {
+        ClearLiveProcurementSnapshot();
+        _selectedOrderPlanRestoreError = null;
         _selectedOrder = order;
         _pendingImport = null;
         _showNewOrderPanel = false;
@@ -229,6 +231,7 @@ public partial class TradeOrders
         PrepareCompanyCommissionEditor(order);
         AppState.SelectTradeOrder(order.Id);
         PersistSelectedOrderInNavigation(order.Id);
+        ScheduleSelectedOrderPlanRestoration();
     }
 
     private bool IsSelectedOrderArchived => _selectedOrder != null && TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status);

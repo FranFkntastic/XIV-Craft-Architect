@@ -602,7 +602,9 @@ public partial class TradeOrders
         return true;
     }
 
-    private async Task<bool> LoadOrRebuildOrderPlanAsync(TradeOrder order)
+    private async Task<bool> LoadOrRebuildOrderPlanAsync(
+        TradeOrder order,
+        bool showFailure = true)
     {
         var stored = await PlanPersistence.LoadPlanPayloadAsync(order.CraftPlanId!);
         if (stored != null)
@@ -619,7 +621,7 @@ public partial class TradeOrders
                 GetOrderDataCenter(order),
                 order.SourceSnapshot.World ?? string.Empty,
                 ForceRefreshMarketData: false));
-        if (!result.Ready)
+        if (!result.Ready && showFailure)
         {
             Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
         }
