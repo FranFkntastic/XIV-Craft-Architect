@@ -124,7 +124,7 @@ public partial class TradeOrders
         var termsAcknowledged = commission.ActiveClaim == null ||
             commission.ParticipantAcknowledgedTermsVersion == commission.CurrentTermsVersion;
         var cleared = commission.ClearedToWork && termsAcknowledged;
-        var craftingStarted = order.Status is TradeOrderStatus.InProgress or
+        var craftingStarted = cleared || order.Status is TradeOrderStatus.InProgress or
             TradeOrderStatus.AwaitingDelivery or
             TradeOrderStatus.Completed;
         var craftingComplete = order.Status is TradeOrderStatus.AwaitingDelivery or
