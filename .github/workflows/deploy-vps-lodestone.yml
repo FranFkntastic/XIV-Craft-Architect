@@ -145,6 +145,7 @@ jobs:
             true|false) ;;
             *) echo "The VPS returned an invalid Profile Host authority state." >&2; exit 1 ;;
           esac
+          echo "Profile Host canonicalization marker present: $canonicalized"
           reconsolidation_requested="${{ github.event_name == 'workflow_dispatch' && inputs.reconsolidate_profile_host || false }}"
           case "$reconsolidation_requested" in
             true|false) ;;
@@ -701,13 +702,16 @@ jobs:
           trap cleanup EXIT
 
           backup_sqlite() {
-            python3 - "$1" "$2" <<'PY'
+            sudo python3 - "$1" "$2" <<'PY'
           import sqlite3
           import sys
           source = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
           destination = sqlite3.connect(sys.argv[2])
           try:
               source.backup(destination)
+              result = destination.execute("PRAGMA quick_check").fetchone()
+              if result is None or result[0] != "ok":
+                  raise SystemExit(f"SQLite backup validation failed: {result!r}")
           finally:
               destination.close()
               source.close()
