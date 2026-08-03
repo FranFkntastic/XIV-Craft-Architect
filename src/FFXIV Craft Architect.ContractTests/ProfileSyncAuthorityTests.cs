@@ -9,12 +9,13 @@ using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
-internal static class ProfileSyncAuthorityScenarios
+public sealed class ProfileSyncAuthorityTests
 {
     private const string CanonicalHost = "https://xivcraftarchitect.com/api/";
     private const string DevelopmentHost = "https://dev.xivcraftarchitect.com/api/";
 
-    public static async Task LegacyStateMigratesOnceUnderExactAuthorityPath()
+    [Fact]
+    public async Task LegacyStateMigratesOnceUnderExactAuthorityPath()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var pending = new[] { new ProfileSyncPendingSave(ProfileSyncCollections.TradeOrders, "order-1") };
@@ -53,7 +54,10 @@ internal static class ProfileSyncAuthorityScenarios
         Assert.NotEqual(upper.ConnectionScopeId, lower.ConnectionScopeId);
     }
 
-    public static async Task CanonicalAdoptionIsAuthenticatedAndAdoptsReturnedIdentity(
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, false)]
+    [InlineData(HttpStatusCode.OK, true)]
+    public async Task CanonicalAdoptionIsAuthenticatedAndAdoptsReturnedIdentity(
         HttpStatusCode statusCode,
         bool shouldAdopt)
     {
@@ -81,7 +85,8 @@ internal static class ProfileSyncAuthorityScenarios
         Assert.Equal(shouldAdopt ? "Canonical profile" : "Staging profile", settings.ConnectedProfileName);
     }
 
-    public static void CommissionedLocalResidueRemainsVisibleButOutsideCanonicalOrders()
+    [Fact]
+    public void CommissionedLocalResidueRemainsVisibleButOutsideCanonicalOrders()
     {
         var companyId = Guid.NewGuid();
         var hostedOrder = new TradeOrder { Id = Guid.NewGuid(), CompanyProfileId = companyId };

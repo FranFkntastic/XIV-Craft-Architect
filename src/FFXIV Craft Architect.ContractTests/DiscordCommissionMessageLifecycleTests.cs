@@ -26,43 +26,16 @@ public sealed class DiscordCommissionMessageLifecycleTests
     private static readonly Guid OutputLineId =
         Guid.Parse("55555555-5555-5555-5555-555555555555");
 
-    public static async Task AssertAllAsync()
-    {
-        ResolutionStatusPreservesPersistedCompletedAndCanceledValues();
-        PreWorkReleaseReturnsCommissionToOpen();
-        foreach (var boundary in new[]
-                 {
-                     "partial-payment",
-                     "materials-ready",
-                     "materials-satisfied",
-                     "output-progress",
-                     "work-status"
-                 })
-        {
-            PostWorkReleaseRequiresPrivateResolution(boundary);
-        }
-        OperatorReopenCreatesAClaimableCommissionWithoutDiscardingProgressEvidence();
-        OperatorCanReopenACanceledPublishedCommission();
-        await DiscordDeletesCanceledAndHeldMessagesThenCreatesFreshMessagesOnReopen();
-        await CancellationOvertakesAnInFlightCreateBeforeReopenPostsFresh();
-        await StartupReconciliationMigratesAnOldProjectionExactlyOnce();
-        await StartupReconciliationDeletesADeletedOrderProjectionExactlyOnce();
-        await ExistingCollaborationSchemaGainsAProjectionFormatRevision();
-        await RetryingAnOldFailedPublicationAdoptsTheCurrentFormat();
-        await MissingVisibleEditRecreatesExactlyOneMessage();
-        await SuppressionOvertakesMissingEditRecovery();
-        ProjectionReconciliationUsesCanonicalOrderState();
-        ReconciliationRequiresAnOperator();
-    }
-
-    private static void ResolutionStatusPreservesPersistedCompletedAndCanceledValues()
+    [Fact]
+    public void ResolutionStatusPreservesPersistedCompletedAndCanceledValues()
     {
         Assert.Equal(5, (int)TradeOrderStatus.Completed);
         Assert.Equal(6, (int)TradeOrderStatus.Canceled);
         Assert.Equal(7, (int)TradeOrderStatus.ResolutionRequired);
     }
 
-    private static void PreWorkReleaseReturnsCommissionToOpen()
+    [Fact]
+    public void PreWorkReleaseReturnsCommissionToOpen()
     {
         var source = CreateAssignedOrder();
 
@@ -79,7 +52,13 @@ public sealed class DiscordCommissionMessageLifecycleTests
         Assert.Equal(CompanyCommissionActivityKind.ClaimReleased, transition.ActivityKind);
     }
 
-    private static void PostWorkReleaseRequiresPrivateResolution(string boundary)
+    [Theory]
+    [InlineData("partial-payment")]
+    [InlineData("materials-ready")]
+    [InlineData("materials-satisfied")]
+    [InlineData("output-progress")]
+    [InlineData("work-status")]
+    public void PostWorkReleaseRequiresPrivateResolution(string boundary)
     {
         var source = CreateAssignedOrder(boundary);
 
@@ -101,7 +80,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
             commission.OutputProgress);
     }
 
-    private static void OperatorReopenCreatesAClaimableCommissionWithoutDiscardingProgressEvidence()
+    [Fact]
+    public void OperatorReopenCreatesAClaimableCommissionWithoutDiscardingProgressEvidence()
     {
         var held = CompanyCommissionCommandWorkflow.Apply(
             CreateAssignedOrder("output-progress"),
@@ -128,7 +108,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         Assert.Equal(CompanyCommissionActivityVisibility.CompanyOnly, transition.Visibility);
     }
 
-    private static void OperatorCanReopenACanceledPublishedCommission()
+    [Fact]
+    public void OperatorCanReopenACanceledPublishedCommission()
     {
         var canceled = CreateAssignedOrder();
         canceled.Status = TradeOrderStatus.Canceled;
@@ -144,7 +125,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         Assert.Equal(CompanyCommissionActivityKind.CommissionReopened, transition.ActivityKind);
     }
 
-    private static async Task DiscordDeletesCanceledAndHeldMessagesThenCreatesFreshMessagesOnReopen()
+    [Fact]
+    public async Task DiscordDeletesCanceledAndHeldMessagesThenCreatesFreshMessagesOnReopen()
     {
         var databasePath = Path.Combine(
             Path.GetTempPath(),
@@ -228,7 +210,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
-    private static async Task CancellationOvertakesAnInFlightCreateBeforeReopenPostsFresh()
+    [Fact]
+    public async Task CancellationOvertakesAnInFlightCreateBeforeReopenPostsFresh()
     {
         var databasePath = Path.Combine(
             Path.GetTempPath(),
@@ -292,7 +275,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
-    private static async Task StartupReconciliationMigratesAnOldProjectionExactlyOnce()
+    [Fact]
+    public async Task StartupReconciliationMigratesAnOldProjectionExactlyOnce()
     {
         var databasePath = Path.Combine(
             Path.GetTempPath(),
@@ -352,7 +336,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
-    private static async Task StartupReconciliationDeletesADeletedOrderProjectionExactlyOnce()
+    [Fact]
+    public async Task StartupReconciliationDeletesADeletedOrderProjectionExactlyOnce()
     {
         var databasePath = Path.Combine(
             Path.GetTempPath(),
@@ -425,7 +410,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
-    private static async Task MissingVisibleEditRecreatesExactlyOneMessage()
+    [Fact]
+    public async Task MissingVisibleEditRecreatesExactlyOneMessage()
     {
         var databasePath = Path.Combine(
             Path.GetTempPath(),
@@ -467,7 +453,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
-    private static async Task RetryingAnOldFailedPublicationAdoptsTheCurrentFormat()
+    [Fact]
+    public async Task RetryingAnOldFailedPublicationAdoptsTheCurrentFormat()
     {
         var databasePath = Path.Combine(
             Path.GetTempPath(),
@@ -513,7 +500,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
-    private static async Task ExistingCollaborationSchemaGainsAProjectionFormatRevision()
+    [Fact]
+    public async Task ExistingCollaborationSchemaGainsAProjectionFormatRevision()
     {
         var databasePath = Path.Combine(
             Path.GetTempPath(),
@@ -578,7 +566,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
-    private static async Task SuppressionOvertakesMissingEditRecovery()
+    [Fact]
+    public async Task SuppressionOvertakesMissingEditRecovery()
     {
         var databasePath = Path.Combine(
             Path.GetTempPath(),
@@ -629,7 +618,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
         }
     }
 
-    private static void ReconciliationRequiresAnOperator()
+    [Fact]
+    public void ReconciliationRequiresAnOperator()
     {
         Assert.False(DiscordCollaborationEndpoints.CanManagePublications(
             new TradeCompanyAccessContext(
@@ -648,7 +638,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
                 TradeCompanyRole.Owner)));
     }
 
-    private static void ProjectionReconciliationUsesCanonicalOrderState()
+    [Fact]
+    public void ProjectionReconciliationUsesCanonicalOrderState()
     {
         Assert.Equal(
             DiscordPublicationState.Open,

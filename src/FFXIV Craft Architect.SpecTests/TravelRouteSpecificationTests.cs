@@ -11,12 +11,6 @@ public sealed class TravelRouteSpecificationTests
     }
 
     [Fact]
-    public void ToleranceElevenAllowsNoTravelPremium()
-    {
-        Assert.Equal(0m, MarketRouteScoring.GetMaximumPremiumRate(11));
-    }
-
-    [Fact]
     public void FiniteTravelPremiumCurveNarrowsMonotonically()
     {
         decimal[] expected = [1.00m, 0.75m, 0.50m, 0.35m, 0.25m, 0.18m, 0.12m, 0.08m, 0.05m, 0.02m, 0m];

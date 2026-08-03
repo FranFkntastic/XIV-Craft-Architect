@@ -14,7 +14,7 @@ public sealed class TradeProcurementRowBuilderTests
     [InlineData(PlanRowScenario.OrdinaryOrderLivePlan)]
     [InlineData(PlanRowScenario.ReadOnlyCommissionLivePlan)]
     [InlineData(PlanRowScenario.EditableCommissionLivePlan)]
-    public async Task PlanRowsPreserveSourceIntentAndCanonicalEditability(PlanRowScenario scenario)
+    public void PlanRowsPreserveSourceIntentAndCanonicalEditability(PlanRowScenario scenario)
     {
         switch (scenario)
         {
@@ -38,14 +38,6 @@ public sealed class TradeProcurementRowBuilderTests
             case PlanRowScenario.ReadOnlyCommissionLivePlan:
                 LivePlanMutationFollowsCanonicalWorkPackageEditability(true, false, false);
                 ReadOnlyCommissionStillConsumesLivePlanStructure();
-                await ProfileSyncAuthorityScenarios.LegacyStateMigratesOnceUnderExactAuthorityPath();
-                await ProfileSyncAuthorityScenarios.CanonicalAdoptionIsAuthenticatedAndAdoptsReturnedIdentity(
-                    System.Net.HttpStatusCode.Unauthorized,
-                    shouldAdopt: false);
-                await ProfileSyncAuthorityScenarios.CanonicalAdoptionIsAuthenticatedAndAdoptsReturnedIdentity(
-                    System.Net.HttpStatusCode.OK,
-                    shouldAdopt: true);
-                ProfileSyncAuthorityScenarios.CommissionedLocalResidueRemainsVisibleButOutsideCanonicalOrders();
                 break;
             case PlanRowScenario.EditableCommissionLivePlan:
                 LivePlanMutationFollowsCanonicalWorkPackageEditability(true, true, true);
