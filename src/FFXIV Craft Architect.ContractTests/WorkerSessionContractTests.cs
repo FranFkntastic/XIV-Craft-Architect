@@ -40,6 +40,15 @@ public sealed class WorkerSessionContractTests
                             Quantity = 4,
                             Source = AcquisitionSource.MarketBuyNq,
                             CanBuyFromMarket = true
+                        },
+                        new PlanNode
+                        {
+                            NodeId = "route-anchor",
+                            ItemId = 45,
+                            Name = "Route anchor",
+                            Quantity = 1,
+                            Source = AcquisitionSource.MarketBuyNq,
+                            CanBuyFromMarket = true
                         }
                     ]
                 }
@@ -66,19 +75,13 @@ public sealed class WorkerSessionContractTests
                 TrackStoredPlanIdentity: false,
                 MigratedFromLegacy: true));
 
-        Assert.True(restored.Accepted);
-        Assert.Equal(1, restored.Revision);
+        Assert.Equal((true, 1L), (restored.Accepted, restored.Revision));
         var shell = restored.Projection.Deserialize<WorkerSessionShellProjection>(WireOptions);
         Assert.NotNull(shell);
-        Assert.True(shell.HasSession);
-        Assert.Equal("Worker plan", shell.PlanName);
-        Assert.Equal(2, shell.PlanNodeCount);
-        Assert.True(shell.MigratedFromLegacy);
+        Assert.Equal((true, "Worker plan", 3, true), (shell.HasSession, shell.PlanName, shell.PlanNodeCount, shell.MigratedFromLegacy));
 
         var stale = await SendAsync("shell", expectedRevision: 0, new { });
-        Assert.False(stale.Accepted);
-        Assert.Equal("stale-revision", stale.RejectionCode);
-        Assert.Equal(1, stale.Revision);
+        Assert.Equal((false, "stale-revision", 1L), (stale.Accepted, stale.RejectionCode, stale.Revision));
 
         var recipe = await SendAsync(
             WorkerSessionCommandKinds.RecipeProjection,
@@ -90,7 +93,7 @@ public sealed class WorkerSessionContractTests
         Assert.NotNull(recipeProjection);
         Assert.Single(recipeProjection.ProjectItems);
         Assert.Single(recipeProjection.Roots);
-        Assert.Single(recipeProjection.Roots[0].Children);
+        Assert.Equal(2, recipeProjection.Roots[0].Children.Count);
 
         var acquisition = await SendAsync(
             WorkerSessionCommandKinds.AcquisitionProjection,
@@ -115,8 +118,7 @@ public sealed class WorkerSessionContractTests
                     Name = "Second target",
                     Quantity = 3
                 }));
-        Assert.True(mutated.Accepted);
-        Assert.Equal(2, mutated.Revision);
+        Assert.Equal((true, 2L), (mutated.Accepted, mutated.Revision));
         var mutation =
             mutated.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
         Assert.NotNull(mutation);
@@ -171,34 +173,10 @@ public sealed class WorkerSessionContractTests
         Assert.Equal(WorkerSessionOperationDisposition.Busy, blockedShell?.Operation?.Disposition);
         Assert.Equal(marketOperationId, blockedShell?.Operation?.OperationId);
 
-        var world = new WorldShoppingSummary
-        {
-            DataCenter = "Aether",
-            WorldName = "Sargatanas",
-            TotalCost = 40,
-            AveragePricePerUnit = 10,
-            TotalQuantityPurchased = 4,
-            HasSufficientStock = true,
-            Listings =
-            [
-                new ShoppingListingEntry
-                {
-                    Quantity = 4,
-                    NeededFromStack = 4,
-                    PricePerUnit = 10
-                }
-            ]
-        };
-        var unavailableWorld = new WorldShoppingSummary
-        {
-            DataCenter = "Aether",
-            WorldName = "Sargatanas",
-            TotalCost = 0,
-            AveragePricePerUnit = 0,
-            TotalQuantityPurchased = 0,
-            HasSufficientStock = false,
-            Listings = []
-        };
+        var cheapChildWorld = World("Sargatanas", quantity: 4, unitPrice: 10);
+        var expensiveChildWorld = World("Gilgamesh", quantity: 4, unitPrice: 100);
+        var routeAnchorWorld = World("Gilgamesh", quantity: 1, unitPrice: 10);
+        var unavailableWorld = World("Sargatanas", quantity: 0, unitPrice: 0);
         var staged = await SendAsync(
             WorkerSessionCommandKinds.MarketEvidencePublicationStage,
             expectedRevision: 2,
@@ -210,40 +188,21 @@ public sealed class WorkerSessionContractTests
                 "North America",
                 MarketAcquisitionLens.MinimumUpfrontCost,
                 [
-                    new MarketItemAnalysis
-                    {
-                        ItemId = 43,
-                        Name = "Child",
-                        QuantityNeeded = 4,
-                        Scope = MarketFetchScope.SelectedDataCenter
-                    }
+                    Analysis(43, "Child", quantity: 4),
+                    Analysis(45, "Route anchor", quantity: 1)
                 ],
                 [
-                    new DetailedShoppingPlan
-                    {
-                        ItemId = 43,
-                        Name = "Child",
-                        QuantityNeeded = 4,
-                        WorldOptions = [world],
-                        RecommendedWorld = world
-                    },
-                    new DetailedShoppingPlan
-                    {
-                        ItemId = 42,
-                        Name = "Root",
-                        QuantityNeeded = 2,
-                        WorldOptions = [unavailableWorld],
-                        RecommendedWorld = unavailableWorld,
-                        Error = "Unavailable in the selected scope."
-                    }
+                    ShoppingPlan(43, "Child", 4, cheapChildWorld, expensiveChildWorld),
+                    ShoppingPlan(45, "Route anchor", 1, routeAnchorWorld),
+                    ShoppingPlan(42, "Root", 2, unavailableWorld,
+                        error: "Unavailable in the selected scope.")
                 ],
                 new HashSet<int> { 42 },
-                FetchedCount: 1,
+                FetchedCount: 2,
                 ResetStaging: true,
                 CompleteStaging: false),
             marketOperationId);
-        Assert.True(staged.Accepted);
-        Assert.Equal(2, staged.Revision);
+        Assert.Equal((true, 2L), (staged.Accepted, staged.Revision));
 
         var interleaved = await SendAsync(
             WorkerSessionCommandKinds.MarketEvidencePublicationStage,
@@ -280,13 +239,12 @@ public sealed class WorkerSessionContractTests
                 FetchedCount: 0,
                 CompleteStaging: true),
             marketOperationId);
-        Assert.True(completed.Accepted, completed.Message);
-        Assert.Equal(3, completed.Revision);
+        Assert.Equal((true, 3L), (completed.Accepted, completed.Revision));
         var accepted =
             completed.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
         Assert.NotNull(accepted);
-        Assert.Equal(1, accepted.Shell.MarketAnalysisCount);
-        Assert.Equal(2, accepted.Shell.ShoppingPlanCount);
+        Assert.Equal(2, accepted.Shell.MarketAnalysisCount);
+        Assert.Equal(3, accepted.Shell.ShoppingPlanCount);
         Assert.True(accepted.DurablePatch?.ReplacePlanStateJson);
         Assert.False(accepted.DurablePatch?.ReplacePlanJson);
         Assert.True(accepted.DurablePatch?.ReplaceMarketEvidence);
@@ -294,7 +252,7 @@ public sealed class WorkerSessionContractTests
             accepted.PublicProjection.Deserialize<WorkerMarketEvidenceCommitProjection>(
                 WireOptions);
         Assert.NotNull(published);
-        Assert.Equal(2, published.AnalyzedCount);
+        Assert.Equal(3, published.AnalyzedCount);
 
         var marketOperationCompleted = await SendAsync(
             WorkerSessionCommandKinds.OperationComplete,
@@ -318,7 +276,7 @@ public sealed class WorkerSessionContractTests
                 browserResult,
                 out var browserOutcome));
         Assert.NotNull(browserOutcome);
-        Assert.Equal(2, browserOutcome.AnalyzedCount);
+        Assert.Equal(3, browserOutcome.AnalyzedCount);
 
         var compactMarket = await SendAsync(
             WorkerSessionCommandKinds.MarketProjection,
@@ -362,7 +320,7 @@ public sealed class WorkerSessionContractTests
         var fullDetailProjection =
             fullDetailMarket.Projection.Deserialize<WorkerMarketProjection>(WireOptions);
         Assert.NotNull(fullDetailProjection);
-        var selectedItemId = Assert.Single(fullDetailProjection.ItemAnalyses).ItemId;
+        var selectedItemId = fullDetailProjection.ItemAnalyses.First().ItemId;
         var selectedDetailMarket = await SendAsync(
             WorkerSessionCommandKinds.MarketProjection,
             expectedRevision: 3,
@@ -423,8 +381,7 @@ public sealed class WorkerSessionContractTests
                 StartFromHomeDataCenter: false,
                 MarketTravelPriority.DataCenterTransfersFirst),
             procurementOperationId);
-        Assert.True(generatedRoute.Accepted, generatedRoute.Message);
-        Assert.Equal(4, generatedRoute.Revision);
+        Assert.Equal((true, 4L), (generatedRoute.Accepted, generatedRoute.Revision));
         var generatedMutation =
             generatedRoute.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
         Assert.NotNull(generatedMutation);
@@ -435,14 +392,33 @@ public sealed class WorkerSessionContractTests
             generatedMutation.PublicProjection.Deserialize<WorkerProcurementOutcome>(WireOptions);
         Assert.NotNull(generatedOutcome);
         Assert.True(generatedOutcome.Procurement.IncludeSplitPurchases);
+        var childRouteDecision = Assert.Single(
+            generatedOutcome.Procurement.RouteDecision?.ItemPremiums ?? [], item => item.ItemId == 43);
+        Assert.Equal((40L, 400L),
+            (childRouteDecision.CheapestEligibleGilCost, childRouteDecision.SelectedGilCost));
+
+        var routeAcquisition = await SendAsync(WorkerSessionCommandKinds.AcquisitionProjection,
+            expectedRevision: 4, new WorkerAcquisitionProjectionRequest("All"));
+        var routeAcquisitionProjection =
+            routeAcquisition.Projection.Deserialize<WorkerAcquisitionProjection>(WireOptions);
+        var acquisitionChild = Assert.Single(
+            routeAcquisitionProjection?.Rows ?? [],
+            row => row.ItemId == 43);
+        Assert.Equal(40, acquisitionChild.CalculatedTotalCost);
+
+        var routeTrade = await SendAsync(WorkerSessionCommandKinds.TradeProjection,
+            expectedRevision: 4, new WorkerTradeProjectionRequest(IncludeCraftLabor: false));
+        var routeTradeProjection =
+            routeTrade.Projection.Deserialize<WorkerTradeProjection>(WireOptions);
+        var tradeChild = Assert.Single(routeTradeProjection?.MaterialLines ?? [], line => line.ItemId == 43);
+        Assert.Equal((10m, "Acquisition evaluation"), (tradeChild.UnitCost, tradeChild.EvidenceSource));
 
         var selectedTolerance = await SendAsync(
             WorkerSessionCommandKinds.ProcurementToleranceMutation,
             expectedRevision: 4,
             new WorkerProcurementToleranceMutation(11),
             procurementOperationId);
-        Assert.True(selectedTolerance.Accepted, selectedTolerance.Message);
-        Assert.Equal(5, selectedTolerance.Revision);
+        Assert.Equal((true, 5L), (selectedTolerance.Accepted, selectedTolerance.Revision));
         var toleranceMutation =
             selectedTolerance.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
         Assert.NotNull(toleranceMutation);
@@ -461,8 +437,7 @@ public sealed class WorkerSessionContractTests
             WorkerSessionCommandKinds.PlanIdentityMutation,
             expectedRevision: 5,
             new WorkerPlanIdentityMutation("named-plan", "Named worker plan"));
-        Assert.True(identified.Accepted, identified.Message);
-        Assert.Equal(6, identified.Revision);
+        Assert.Equal((true, 6L), (identified.Accepted, identified.Revision));
         var identityMutation =
             identified.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions);
         Assert.NotNull(identityMutation);
@@ -505,10 +480,10 @@ public sealed class WorkerSessionContractTests
         var storedMarket = MarketIntelligencePayloadCodec.Deserialize(
             export.StoredPlan.MarketIntelligenceJson);
         Assert.NotNull(storedMarket);
-        Assert.Single(storedMarket.ItemAnalyses);
-        Assert.Equal(2, storedMarket.Recommendations.Count);
+        Assert.Equal(2, storedMarket.ItemAnalyses.Count);
+        Assert.Equal(3, storedMarket.Recommendations.Count);
         Assert.NotNull(storedMarket.RecipeBasis);
-        Assert.Equal(2, storedMarket.RecipeBasis.MarketAnalysisDemandItems.Count);
+        Assert.Equal(3, storedMarket.RecipeBasis.MarketAnalysisDemandItems.Count);
 
         var reloaded = await SendAsync(
             "restore",
@@ -531,9 +506,9 @@ public sealed class WorkerSessionContractTests
         Assert.True(
             reloadedMarketProjection.HasAnalysis,
             reloaded.Message ?? "Reloaded market projection did not contain analysis.");
-        Assert.Equal(2, reloadedMarketProjection.Items.Count);
-        Assert.Single(reloadedMarketProjection.ItemAnalyses);
-        Assert.Equal(2, reloadedMarketProjection.ShoppingPlans.Count);
+        Assert.Equal(3, reloadedMarketProjection.Items.Count);
+        Assert.Equal(2, reloadedMarketProjection.ItemAnalyses.Count);
+        Assert.Equal(3, reloadedMarketProjection.ShoppingPlans.Count);
 
         var reexported = await SendAsync(
             "export",
@@ -572,6 +547,32 @@ public sealed class WorkerSessionContractTests
         Assert.Equal(export.StoredPlan.DataCenter, reexport.StoredPlan.DataCenter);
     }
 
+    private static MarketItemAnalysis Analysis(int id, string name, int quantity) => new()
+    { ItemId = id, Name = name, QuantityNeeded = quantity, Scope = MarketFetchScope.SelectedDataCenter };
+    private static DetailedShoppingPlan ShoppingPlan(
+        int id, string name, int quantity, WorldShoppingSummary recommended,
+        WorldShoppingSummary? alternate = null,
+        string? error = null) => new()
+        {
+            ItemId = id,
+            Name = name,
+            QuantityNeeded = quantity,
+            RecommendedWorld = recommended,
+            WorldOptions = alternate == null ? [recommended] : [recommended, alternate],
+            Error = error
+        };
+    private static WorldShoppingSummary World(string name, int quantity, long unitPrice) => new()
+    {
+        DataCenter = "Aether",
+        WorldName = name,
+        TotalCost = quantity * unitPrice,
+        AveragePricePerUnit = unitPrice,
+        TotalQuantityPurchased = quantity,
+        HasSufficientStock = quantity > 0,
+        Listings = quantity > 0
+              ? [new ShoppingListingEntry { Quantity = quantity, NeededFromStack = quantity, PricePerUnit = unitPrice }]
+              : []
+    };
     private static async Task<WorkerSessionResultEnvelope> SendAsync<TPayload>(
         string commandKind,
         long expectedRevision,

@@ -427,12 +427,26 @@ public sealed class CommissionCostBasisResolver
         }
 
         var unitCost = acquisition.Cost / item.TotalQuantity;
-        var source = FormatAcquisitionSource(shoppingPlan, acquisition);
+        var source = FormatSelectedAcquisitionSource(shoppingPlan, acquisition);
         return new SelectedUnitCost(
             unitCost,
             source.Label,
             source.Description,
             acquisition.World?.MarketUploadedAtUtc);
+    }
+
+    private static (string Label, string Description) FormatSelectedAcquisitionSource(
+        DetailedShoppingPlan shoppingPlan,
+        MarketPurchaseCostEstimate acquisition)
+    {
+        if (shoppingPlan.RecommendedSplit is { Count: > 0 } && acquisition.World == null)
+        {
+            return ("Acquisition evaluation", "the selected split acquisition quote");
+        }
+
+        return acquisition.World != null
+            ? ("Acquisition evaluation", $"the selected acquisition quote from {acquisition.World.WorldName}")
+            : ("Acquisition evaluation", "the selected acquisition quote");
     }
 
     private static SelectedUnitCost? SelectOnHandReferenceUnitCost(
