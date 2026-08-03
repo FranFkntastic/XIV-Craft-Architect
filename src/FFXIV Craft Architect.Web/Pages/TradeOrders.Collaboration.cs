@@ -201,6 +201,11 @@ public partial class TradeOrders
             {
                 _interestCrafterSelections.TryAdd(claim.ClaimId, claim.MatchedCrafterId);
             }
+
+            if (order.CommissionPublication == null)
+            {
+                return;
+            }
         }
 
         _ = RefreshCollaborationAsync(order);

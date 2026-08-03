@@ -21,7 +21,7 @@ public static class TradeCompanyCommissionMigrationService
             CompanyCommissionActorKind.Commissioner,
             "Trade Architect");
         return PreserveCurrentLineIdentity(
-            CreateTerms(source, brief, actor, createdAtUtc),
+            CreateTerms(source, brief, actor, createdAtUtc, companyPaymentPolicy: null),
             currentTerms) with
         {
             Version = currentTerms.Version,
@@ -53,7 +53,7 @@ public static class TradeCompanyCommissionMigrationService
             throw new InvalidOperationException(
                 "A canonical commission is required to create a terms revision.");
         return PreserveCurrentLineIdentity(
-            CreateTerms(source, brief, actor, createdAtUtc),
+            CreateTerms(source, brief, actor, createdAtUtc, companyPaymentPolicy: null),
             currentTerms) with
         {
             Version = version,
@@ -89,7 +89,8 @@ public static class TradeCompanyCommissionMigrationService
                     throw new InvalidOperationException(
                         "A company-owned immutable brief is required."),
                 initialCommissionRevision: 0,
-                boundAtUtc);
+                boundAtUtc,
+                companyPaymentPolicy: null);
         }
 
         var canonicalCompanyId = publishedBrief.Ownership?.CompanyId ??
@@ -190,7 +191,8 @@ public static class TradeCompanyCommissionMigrationService
         PublishedCommissionBrief? publishedBrief,
         CompanyId canonicalCompanyId,
         long initialCommissionRevision,
-        DateTime migratedAtUtc)
+        DateTime migratedAtUtc,
+        TradePaymentPolicy? companyPaymentPolicy)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Id == Guid.Empty || source.CompanyProfileId == Guid.Empty)
@@ -245,7 +247,7 @@ public static class TradeCompanyCommissionMigrationService
             CompanyCommissionActorKind.Migration,
             "Hosted migration");
         var brief = publishedBrief?.Brief;
-        var terms = CreateTerms(copy, brief, migrationActor, migratedAtUtc);
+        var terms = CreateTerms(copy, brief, migrationActor, migratedAtUtc, companyPaymentPolicy);
         var outputs = terms.Outputs;
         var lifecycleProvesWorkBegan = copy.Status is
             TradeOrderStatus.InProgress or
@@ -379,7 +381,8 @@ public static class TradeCompanyCommissionMigrationService
         TradeOrder order,
         CommissionBriefDocument? brief,
         CompanyCommissionActor actor,
-        DateTime createdAtUtc)
+        DateTime createdAtUtc,
+        TradePaymentPolicy? companyPaymentPolicy)
     {
         var outputs = brief?.Outputs.Count > 0
             ? brief.Outputs.Select((output, index) => new CompanyCommissionOutputTerm(
@@ -440,6 +443,17 @@ public static class TradeCompanyCommissionMigrationService
                     material.TotalCost)))
                 .ToArray();
         var payment = brief?.Payment;
+        var authoringPolicy = brief == null
+            ? order.PaymentPolicyOverride ?? companyPaymentPolicy ??
+                throw new InvalidOperationException(
+                    "The canonical Trade company payment policy is required to migrate an unpublished legacy order.")
+            : null;
+        var authoringPayment = authoringPolicy == null
+            ? null
+            : TradeCommissionPaymentSummary.FromOrder(
+                order,
+                draft: null,
+                authoringPolicy).Active;
         var evidence = brief?.Evidence;
 
         return new CompanyCommissionTermsVersion
@@ -450,15 +464,17 @@ public static class TradeCompanyCommissionMigrationService
             Outputs = outputs,
             Materials = materials,
             Payment = new CompanyCommissionPaymentTerms(
-                payment?.Schedule ?? CompanyCommissionPaymentSchedule.Advance,
-                payment?.ContractLabel ?? "Commission",
-                payment?.MaterialReimbursement ?? 0,
-                payment?.MaterialBonus ?? 0,
-                payment?.CraftLabor ?? 0,
-                payment?.Total ?? 0,
-                CustomTerms: payment?.CustomTerms,
-                CraftSynthCount: payment?.CraftSynthCount ?? 0,
-                GilPerSynth: payment?.GilPerSynth ?? 0),
+                payment?.Schedule ?? order.PaymentSchedule,
+                payment?.ContractLabel ?? (authoringPayment?.Contract == TradePaymentContractMode.LaborStandard
+                    ? "Labor standard"
+                    : "Legacy commission"),
+                payment?.MaterialReimbursement ?? authoringPayment?.MaterialReimbursementTotal ?? 0,
+                payment?.MaterialBonus ?? authoringPayment?.CommissionAmount ?? 0,
+                payment?.CraftLabor ?? authoringPayment?.CraftLaborTotal ?? 0,
+                payment?.Total ?? authoringPayment?.Total ?? 0,
+                CustomTerms: payment?.CustomTerms ?? order.CustomPaymentTerms,
+                CraftSynthCount: payment?.CraftSynthCount ?? authoringPayment?.CraftSynthCount ?? 0,
+                GilPerSynth: payment?.GilPerSynth ?? authoringPayment?.GilPerSynth ?? 0),
             DeliveryInstructions = brief?.DeliveryInstructions ?? string.Empty,
             PricingEvidence = new CompanyCommissionPricingEvidence(
                 evidence?.CostBasis ?? order.SourceSnapshot.CostBasis?.ToString() ?? "Unspecified",

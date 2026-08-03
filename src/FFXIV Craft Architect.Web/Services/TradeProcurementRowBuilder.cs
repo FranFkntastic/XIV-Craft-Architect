@@ -68,11 +68,13 @@ public static class TradeProcurementRowBuilder
         var snapshot = liveSnapshot!;
         var responsibilities = BuildResponsibilityLookup(draft);
         var lines = snapshot.MaterialLines
-            .GroupBy(line => line.ItemId)
-            .ToDictionary(group => group.Key, group => group.First());
+            .GroupBy(ToMaterialKey)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single());
+        var retainedEvidence = BuildRetainedEvidenceLookup(order, snapshot.PlanId);
 
         return snapshot.AcquisitionRows
-            .Select(row => ToTradeRow(row, lines, responsibilities))
+            .Select(row => ToTradeRow(row, lines, retainedEvidence, responsibilities))
             .OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
@@ -87,11 +89,21 @@ public static class TradeProcurementRowBuilder
 
     private static TradeOrderProcurementRow ToTradeRow(
         WorkerAcquisitionRowProjection row,
-        IReadOnlyDictionary<int, CommissionPayrollInputLine> lines,
+        IReadOnlyDictionary<MaterialKey, CommissionPayrollInputLine> lines,
+        IReadOnlyDictionary<MaterialKey, TradeOrderMaterialSnapshot> retainedEvidence,
         IReadOnlyDictionary<(int ItemId, bool RequiresHq), CommissionMaterialResponsibility> responsibilities)
     {
-        lines.TryGetValue(row.ItemId, out var line);
         var quantity = Math.Max(row.TotalQuantity, 0);
+        var key = new MaterialKey(row.ItemId, row.MustBeHq, Math.Max(row.ActiveQuantity, 0));
+        lines.TryGetValue(key, out var line);
+        retainedEvidence.TryGetValue(key, out var retained);
+        if (line == null || !TradeOrderWorkflow.IsResolvedMaterialEvidence(
+                line.UnitCost,
+                line.UnitCost * line.Quantity,
+                line.EvidenceSource))
+        {
+            line = retained == null ? line : ToPayrollLine(retained);
+        }
         var totalCost = line != null
             ? line.UnitCost * line.Quantity
             : row.CalculatedTotalCost;
@@ -126,6 +138,43 @@ public static class TradeProcurementRowBuilder
             HasChildren: row.HasChildren,
             AvailableSources: row.AvailableSources);
     }
+
+    private static IReadOnlyDictionary<MaterialKey, TradeOrderMaterialSnapshot> BuildRetainedEvidenceLookup(
+        TradeOrder order,
+        string? livePlanId)
+    {
+        var source = order.SourceSnapshot;
+        if (string.IsNullOrWhiteSpace(livePlanId) ||
+            source == null ||
+            !string.Equals(order.CraftPlanId, livePlanId, StringComparison.Ordinal) ||
+            !string.Equals(source.SourcePlanId, livePlanId, StringComparison.Ordinal))
+        {
+            return new Dictionary<MaterialKey, TradeOrderMaterialSnapshot>();
+        }
+
+        return source.Materials
+            .Where(material => TradeOrderWorkflow.IsResolvedMaterialEvidence(
+                material.UnitCost,
+                material.TotalCost,
+                material.EvidenceSource))
+            .GroupBy(ToMaterialKey)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single());
+    }
+
+    private static MaterialKey ToMaterialKey(CommissionPayrollInputLine line) =>
+        new(line.ItemId, line.RequiresHq, line.Quantity);
+
+    private static MaterialKey ToMaterialKey(TradeOrderMaterialSnapshot material) =>
+        new(material.ItemId, material.RequiresHq, material.Quantity);
+
+    private static CommissionPayrollInputLine ToPayrollLine(TradeOrderMaterialSnapshot material) =>
+        new(material.ItemId, material.Name, material.Quantity, material.UnitCost,
+            material.RequiresHq, CommissionMaterialResponsibility.Crafter,
+            material.EvidenceSource, material.UnitCostExplanation,
+            material.EvidenceTimestampUtc, material.Warnings ?? []);
+
+    private readonly record struct MaterialKey(int ItemId, bool RequiresHq, int Quantity);
 
     private static CommissionMaterialResponsibility GetResponsibility(
         WorkerAcquisitionRowProjection row,

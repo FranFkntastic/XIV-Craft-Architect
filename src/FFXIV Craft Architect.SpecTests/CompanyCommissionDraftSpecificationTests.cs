@@ -1,6 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
-
 namespace FFXIV_Craft_Architect.SpecTests;
 
 public sealed class CompanyCommissionDraftSpecificationTests
@@ -35,18 +34,15 @@ public sealed class CompanyCommissionDraftSpecificationTests
                 CraftPlanName: null,
                 CraftPlanSavedAtUtc: null,
                 TradeOrderCraftPlanLinkKind.Unknown));
-
         var transition = CompanyCommissionCommandWorkflow.Apply(
             order,
             command,
             actor,
             new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc));
-
         Assert.Equal(2, transition.UpdatedOrder.CompanyCommission!.CurrentTerms.Outputs[0].RequiredQuantity);
         Assert.Equal(2, transition.UpdatedOrder.SourceSnapshot.RootItems[0].Quantity);
         Assert.Equal(2, transition.UpdatedOrder.CompanyCommission.OutputProgress[0].RequiredQuantity);
         Assert.Null(transition.UpdatedOrder.CraftPlanId);
-
         var published = TradeOrderWorkflow.CopyOrder(transition.UpdatedOrder);
         published.CompanyCommission = published.CompanyCommission! with
         {
@@ -67,8 +63,19 @@ public sealed class CompanyCommissionDraftSpecificationTests
         var updated = TradeCompanyCommissionMigrationService.CreateDraftTerms(timingOrder, brief, current, new DateTime(2026, 8, 1, 12, 15, 0, DateTimeKind.Utc));
         Assert.Equal((current.Outputs[0].LineId, current.Materials[0].LineId), (updated.Outputs[0].LineId, updated.Materials[0].LineId));
         Assert.Equal((CompanyCommissionPaymentSchedule.Custom, "Half at handoff; half on delivery."), (updated.Payment.Schedule, updated.Payment.CustomTerms));
+        var historical = CreateDraftOrder();
+        historical.CompanyCommission = null;
+        historical.PaymentPolicyOverride = null;
+        historical.PaymentSchedule = CompanyCommissionPaymentSchedule.Custom;
+        historical.CustomPaymentTerms = "Half now; half later.";
+        historical.SourceSnapshot.CraftLabor = [new("test", 10, "Test output", 1, 1)];
+        Assert.Throws<InvalidOperationException>(() => TradeCompanyCommissionMigrationService.ConvertLegacyOrder(historical, null, new(historical.CompanyProfileId), 0, DateTime.UtcNow, null));
+        var companyPolicy = new TradePaymentPolicy(TradePaymentContractMode.LaborStandard, 20, 250);
+        var migratedPayment = TradeCompanyCommissionMigrationService.ConvertLegacyOrder(historical, null, new(historical.CompanyProfileId), 0, DateTime.UtcNow, companyPolicy).CompanyCommission!.CurrentTerms.Payment;
+        Assert.Equal((CompanyCommissionPaymentSchedule.Custom, "Half now; half later.", "Labor standard", 300m, 250m, 550m, 1, 250m), (migratedPayment.Schedule, migratedPayment.CustomTerms, migratedPayment.ContractLabel, migratedPayment.MaterialReimbursement, migratedPayment.CraftLabor, migratedPayment.Total, migratedPayment.CraftSynthCount, migratedPayment.GilPerSynth));
+        historical.PaymentPolicyOverride = TradePaymentPolicy.LegacyDefault;
+        Assert.Equal("Legacy commission", TradeCompanyCommissionMigrationService.ConvertLegacyOrder(historical, null, new(historical.CompanyProfileId), 0, DateTime.UtcNow, companyPolicy).CompanyCommission!.CurrentTerms.Payment.ContractLabel);
     }
-
     [Fact]
     public void PublicationPreservesExactTermsAndRecordsOneOpeningAcrossReplay()
     {
@@ -95,7 +102,6 @@ public sealed class CompanyCommissionDraftSpecificationTests
             Brief = brief,
             Ownership = ownership
         };
-
         var opened = TradeCompanyCommissionMigrationService.BindPublishedBrief(
             order,
             published,
@@ -104,7 +110,6 @@ public sealed class CompanyCommissionDraftSpecificationTests
             opened,
             published,
             published.PublishedAtUtc.AddSeconds(1));
-
         Assert.Equal(TradeOrderStatus.ReadyToAssign, replayed.Status);
         Assert.Equal(1, replayed.CompanyCommission!.CurrentTermsVersion);
         Assert.Single(replayed.CompanyCommission.TermsVersions);
@@ -114,7 +119,6 @@ public sealed class CompanyCommissionDraftSpecificationTests
         Assert.Single(
             replayed.CompanyCommission.Activity,
             item => item.Kind == CompanyCommissionActivityKind.CommissionOpened);
-
         brief.Payment = brief.Payment with
         {
             Schedule = CompanyCommissionPaymentSchedule.Advance
@@ -125,7 +129,6 @@ public sealed class CompanyCommissionDraftSpecificationTests
                 published,
                 published.PublishedAtUtc));
     }
-
     private static TradeOrder CreateDraftOrder()
     {
         var orderId = Guid.Parse("11111111-1111-1111-1111-111111111111");
@@ -235,7 +238,6 @@ public sealed class CompanyCommissionDraftSpecificationTests
             }
         };
     }
-
     private static TradeOrder CreateDraftOrderWithPublication(
         TradeCompanyPublicationOwnership ownership)
     {
@@ -250,7 +252,6 @@ public sealed class CompanyCommissionDraftSpecificationTests
         };
         return order;
     }
-
     private static CommissionBriefDocument BuildBrief(TradeOrder order)
     {
         var commission = order.CompanyCommission!;
@@ -280,7 +281,6 @@ public sealed class CompanyCommissionDraftSpecificationTests
                 terms.PricingEvidence.CapturedAtUtc)
         };
     }
-
     private static CompanyCommissionCommandContext Context(TradeOrder order) =>
         new(
             order.CompanyCommission!.CompanyId,

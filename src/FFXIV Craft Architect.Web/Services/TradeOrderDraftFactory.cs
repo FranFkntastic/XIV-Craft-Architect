@@ -63,6 +63,7 @@ public sealed class TradeOrderDraftFactory
         var order = new TradeOrder
         {
             Id = orderId,
+            AuthoringSchemaVersion = TradeOrder.CurrentAuthoringSchemaVersion,
             CompanyProfileId = request.CompanyProfileId,
             Title = title,
             Status = status,
@@ -127,6 +128,7 @@ public sealed class TradeOrderDraftFactory
         var order = new TradeOrder
         {
             Id = orderId,
+            AuthoringSchemaVersion = TradeOrder.CurrentAuthoringSchemaVersion,
             CompanyProfileId = request.CompanyProfileId,
             Title = title,
             Status = status,
