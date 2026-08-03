@@ -138,8 +138,31 @@ public partial class TradeOrders
     private bool SelectedOrderUsesCompanyPaymentPolicy =>
         _selectedOrder?.PaymentPolicyOverride == null;
 
-    private TradePaymentContractMode SelectedOrderPaymentContract =>
-        GetSelectedOrderEffectivePaymentPolicy()?.ActiveContract ?? TradePaymentContractMode.LegacyCommission;
+    private TradePaymentContractMode SelectedOrderPaymentContract
+    {
+        get
+        {
+            if (IsEditingCommissionTermsRevision &&
+                _commissionTermsRevisionBrief?.Payment is { } revisionPayment)
+            {
+                return ResolveCanonicalPaymentContract(revisionPayment.ContractLabel);
+            }
+
+            if (_selectedOrder?.CompanyCommission?.CurrentTerms.Payment is { } canonicalPayment)
+            {
+                return ResolveCanonicalPaymentContract(canonicalPayment.ContractLabel);
+            }
+
+            return GetSelectedOrderEffectivePaymentPolicy()?.ActiveContract ??
+                TradePaymentContractMode.LegacyCommission;
+        }
+    }
+
+    private CompanyCommissionPaymentSchedule SelectedOrderPaymentSchedule =>
+        _selectedOrderPaymentSchedule;
+
+    private string SelectedOrderCustomPaymentTerms =>
+        _selectedOrderCustomPaymentTerms;
 
     private string GetSelectedOrderPaymentPolicyLabel()
     {
@@ -148,10 +171,27 @@ public partial class TradeOrders
             return "Company default";
         }
 
+        if (IsEditingCommissionTermsRevision &&
+            _commissionTermsRevisionBrief?.Payment is { } revisionPayment)
+        {
+            return $"Revision basis: {revisionPayment.ContractLabel}";
+        }
+
+        if (_selectedOrder.CompanyCommission?.CurrentTerms.Payment is { } canonicalPayment)
+        {
+            var state = CanEditCanonicalDraft ? "Draft basis" : "Accepted basis";
+            return $"{state}: {canonicalPayment.ContractLabel}";
+        }
+
         var policy = GetSelectedOrderEffectivePaymentPolicy() ?? TradePaymentPolicy.LegacyDefault;
         var source = SelectedOrderUsesCompanyPaymentPolicy ? "Company default" : "Order override";
         return $"{source}: {FormatPaymentContract(policy.ActiveContract)}";
     }
+
+    private static TradePaymentContractMode ResolveCanonicalPaymentContract(string contractLabel) =>
+        contractLabel.Contains("labor", StringComparison.OrdinalIgnoreCase)
+            ? TradePaymentContractMode.LaborStandard
+            : TradePaymentContractMode.LegacyCommission;
 
     private async Task SetSelectedOrderUseCompanyPolicyAsync(bool useCompanyPolicy)
     {
@@ -166,7 +206,9 @@ public partial class TradeOrders
                 _selectedOrder,
                 TradeOrderWorkflow.ResolvePaymentPolicy(_selectedOrder, _companyProfile?.PaymentPolicy));
 
-        await SaveSelectedPaymentPolicyOrderAsync(orderToSave);
+        await SaveSelectedPaymentPolicyOrderAsync(
+            orderToSave,
+            recalculateCanonicalPayment: true);
     }
 
     private async Task SetSelectedOrderPaymentContractAsync(TradePaymentContractMode contract)
@@ -181,14 +223,174 @@ public partial class TradeOrders
             _selectedOrder,
             current with { ActiveContract = contract });
 
-        await SaveSelectedPaymentPolicyOrderAsync(orderToSave);
+        await SaveSelectedPaymentPolicyOrderAsync(
+            orderToSave,
+            recalculateCanonicalPayment: true);
     }
 
-    private async Task SaveSelectedPaymentPolicyOrderAsync(TradeOrder orderToSave)
+    private async Task SetSelectedOrderPaymentScheduleAsync(
+        CompanyCommissionPaymentSchedule schedule)
     {
+        if (_selectedOrder == null)
+        {
+            return;
+        }
+
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+        orderToSave.PaymentSchedule = schedule;
+        _selectedOrderPaymentSchedule = schedule;
+        _selectedOrderPaymentTermsDirty = true;
+        if (IsEditingCommissionTermsRevision)
+        {
+            _commissionTermsRevisionPaymentDirty = true;
+        }
+        if (schedule != CompanyCommissionPaymentSchedule.Custom)
+        {
+            orderToSave.CustomPaymentTerms = null;
+            _selectedOrderCustomPaymentTerms = string.Empty;
+        }
+        else
+        {
+            orderToSave.CustomPaymentTerms = _selectedOrderCustomPaymentTerms;
+            if (IsEditingCommissionTermsRevision && _commissionTermsRevisionBrief != null)
+            {
+                _commissionTermsRevisionBrief.Payment = _commissionTermsRevisionBrief.Payment with
+                {
+                    Schedule = schedule,
+                    CustomTerms = _selectedOrderCustomPaymentTerms
+                };
+                _commissionTermsRevisionDirty = true;
+            }
+            return;
+        }
+
+        await SaveSelectedPaymentPolicyOrderAsync(
+            orderToSave,
+            schedule,
+            orderToSave.CustomPaymentTerms,
+            "Payment timing saved to the commission draft");
+    }
+
+    private async Task SaveSelectedOrderCustomPaymentTermsAsync()
+    {
+        if (_selectedOrder == null ||
+            SelectedOrderPaymentSchedule != CompanyCommissionPaymentSchedule.Custom ||
+            string.IsNullOrWhiteSpace(_selectedOrderCustomPaymentTerms))
+        {
+            return;
+        }
+
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_selectedOrder);
+        orderToSave.PaymentSchedule = CompanyCommissionPaymentSchedule.Custom;
+        orderToSave.CustomPaymentTerms = _selectedOrderCustomPaymentTerms.Trim();
+        await SaveSelectedPaymentPolicyOrderAsync(
+            orderToSave,
+            orderToSave.PaymentSchedule,
+            orderToSave.CustomPaymentTerms,
+            "Custom payment timing saved to the commission draft");
+    }
+
+    private void SetSelectedOrderCustomPaymentTerms(string? value)
+    {
+        if (_selectedOrder == null)
+        {
+            return;
+        }
+
+        _selectedOrderCustomPaymentTerms = value ?? string.Empty;
+        _selectedOrderPaymentTermsDirty = true;
+        if (IsEditingCommissionTermsRevision)
+        {
+            _commissionTermsRevisionPaymentDirty = true;
+        }
+        if (IsEditingCommissionTermsRevision && _commissionTermsRevisionBrief != null)
+        {
+            _commissionTermsRevisionBrief.Payment = _commissionTermsRevisionBrief.Payment with
+            {
+                CustomTerms = value
+            };
+            _commissionTermsRevisionDirty = true;
+        }
+    }
+
+    private async Task SaveSelectedPaymentPolicyOrderAsync(
+        TradeOrder orderToSave,
+        CompanyCommissionPaymentSchedule? schedule = null,
+        string? customTerms = null,
+        string successMessage = "Payment basis saved to the commission draft",
+        bool recalculateCanonicalPayment = false)
+    {
+        if (HasSelectedLocalHostedCollision)
+        {
+            Snackbar.Add(
+                "Rebase the local edits onto the hosted copy, or use the hosted copy before saving.",
+                Severity.Warning);
+            return;
+        }
+
         if (TradeOrderStatusWorkflow.IsArchived(orderToSave.Status))
         {
             Snackbar.Add("Reopen archived orders before editing payment policy.", Severity.Warning);
+            return;
+        }
+
+        if (orderToSave.CompanyCommission != null)
+        {
+            if (!CanEditCanonicalWorkPackage)
+            {
+                Snackbar.Add(
+                    "Published payment terms can only change through Revise terms.",
+                    Severity.Warning);
+                return;
+            }
+
+            if (IsEditingCommissionTermsRevision)
+            {
+                _commissionTermsRevisionPaymentDirty = true;
+            }
+
+            var canonicalWorkPackage = IsEditingCommissionTermsRevision
+                ? orderToSave
+                : TradeOrderWorkflow.CopyOrder(
+                    SelectedCommissionOwner?.Order ?? orderToSave);
+            if (recalculateCanonicalPayment)
+            {
+                canonicalWorkPackage.PaymentPolicyOverride =
+                    orderToSave.PaymentPolicyOverride;
+            }
+            canonicalWorkPackage.PaymentSchedule = orderToSave.PaymentSchedule;
+            canonicalWorkPackage.CustomPaymentTerms = orderToSave.CustomPaymentTerms;
+
+            var brief = recalculateCanonicalPayment
+                ? BuildCommissionBrief(
+                    canonicalWorkPackage,
+                    TradeCommissionPaymentSummary.FromOrder(
+                        canonicalWorkPackage,
+                        GetSelectedOrderResponsibilityProjection(),
+                        GetOrderEffectivePaymentPolicy(canonicalWorkPackage)))
+                : IsEditingCommissionTermsRevision && _commissionTermsRevisionBrief != null
+                    ? _commissionTermsRevisionBrief
+                    : BuildCanonicalCommissionBrief(
+                        SelectedCommissionOwner?.Order ?? canonicalWorkPackage,
+                        SelectedCommissionOwner?.Order.CompanyCommission ??
+                            canonicalWorkPackage.CompanyCommission!);
+            if (schedule.HasValue)
+            {
+                brief.Payment = brief.Payment with
+                {
+                    Schedule = schedule.Value,
+                    CustomTerms = schedule == CompanyCommissionPaymentSchedule.Custom
+                        ? customTerms?.Trim()
+                        : null
+                };
+            }
+            if (await UpdateCanonicalDraftAsync(
+                    canonicalWorkPackage,
+                    brief,
+                    successMessage))
+            {
+                _selectedOrderPaymentTermsDirty = false;
+            }
             return;
         }
 
@@ -200,6 +402,8 @@ public partial class TradeOrders
             Snackbar.Add("Failed to save payment policy.", Severity.Error);
             return;
         }
+
+        _selectedOrderPaymentTermsDirty = false;
 
         await LoadAsync();
         if (string.IsNullOrWhiteSpace(_loadError))
@@ -238,6 +442,131 @@ public partial class TradeOrders
         await CopyTextToClipboardAsync(
             TradeOrderPaymentCopyFormatter.BuildSummary(CreateOrderPaymentCopyContext(_selectedOrder)),
             "Payment summary copied");
+    }
+
+    private async Task RetrySelectedDeviceOnlyOrderSyncAsync()
+    {
+        if (!IsSelectedDeviceOnlyOrder ||
+            _selectedOrder == null ||
+            _isRetryingSelectedDeviceOnlyOrderSync)
+        {
+            return;
+        }
+
+        if (HasSelectedLocalDraftEditorChanges)
+        {
+            Snackbar.Add(
+                "Save the current draft edits before retrying sync.",
+                Severity.Warning);
+            return;
+        }
+
+        _isRetryingSelectedDeviceOnlyOrderSync = true;
+        var orderId = _selectedOrder.Id;
+        try
+        {
+            if (_selectedOrder.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.OrderGenerated &&
+                !string.IsNullOrWhiteSpace(_selectedOrder.CraftPlanId))
+            {
+                var linkedPlan = await PlanPersistence.LoadPlanPayloadAsync(
+                    _selectedOrder.CraftPlanId);
+                if (linkedPlan == null ||
+                    linkedPlan.LinkedOrderId != orderId ||
+                    !_selectedOrder.CraftPlanSavedAtUtc.HasValue ||
+                    linkedPlan.SavedAt != _selectedOrder.CraftPlanSavedAtUtc.Value)
+                {
+                    Snackbar.Add(
+                        "The draft's exact generated plan is unavailable. Reconstruct the plan before retrying sync.",
+                        Severity.Warning);
+                    return;
+                }
+
+                await ProfileSync.QueueLocalSaveAsync(
+                    ProfileSyncCollections.Plans,
+                    linkedPlan.Id);
+            }
+
+            await ProfileSync.QueueLocalSaveAsync(
+                ProfileSyncCollections.TradeOrders,
+                orderId.ToString("D"));
+            await ProfileSync.SyncNowAsync();
+            await LoadAsync();
+            if (HostedOrders.Get(orderId) is { Deleted: false, Order: not null } hosted)
+            {
+                if (HasSelectedLocalDraftEditorChanges || HasSelectedLocalHostedCollision)
+                {
+                    _selectedLocalHostedCollision = hosted;
+                    Snackbar.Add(
+                        "The hosted copy arrived while you were editing. Rebase or discard the local buffer.",
+                        Severity.Warning);
+                    return;
+                }
+
+                SelectOrder(hosted.OwnerProjection?.Order ?? hosted.Order);
+                Snackbar.Add("Draft joined the hosted order workspace.", Severity.Success);
+                return;
+            }
+
+            SelectOrderAfterReload(
+                orderId,
+                "The local draft is still saved, but it could not be reloaded.");
+            var conflict = ProfileSync.Conflicts.Any(item =>
+                string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
+                string.Equals(item.ObjectId, orderId.ToString("D"), StringComparison.OrdinalIgnoreCase));
+            Snackbar.Add(
+                conflict
+                    ? "The hosted order changed. Resolve the sync conflict before this draft can join the workspace."
+                    : "Draft is saved on this device and waiting to sync.",
+                conflict ? Severity.Warning : Severity.Info);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add($"Draft sync could not be retried: {exception.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isRetryingSelectedDeviceOnlyOrderSync = false;
+        }
+    }
+
+    private async Task DiscardSelectedDeviceOnlyDraftAsync()
+    {
+        if (!CanDiscardSelectedDeviceOnlyDraft ||
+            _selectedOrder == null ||
+            _isDiscardingSelectedDeviceOnlyDraft)
+        {
+            return;
+        }
+
+        var order = _selectedOrder;
+        var confirmed = await DialogService.ShowMessageBox(
+            "Discard Local Draft",
+            $"Discard '{order.Title}' from this device and remove its generated plan? This cannot be undone.",
+            yesText: "Discard Draft",
+            cancelText: "Keep Draft");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        _isDiscardingSelectedDeviceOnlyDraft = true;
+        try
+        {
+            await OrderLifecycle.DiscardLocalDraftAsync(order);
+            await LoadAsync();
+            _selectedOrder = null;
+            AppState.SelectTradeOrder(null);
+            ClearSelectedOrderNavigation();
+            Snackbar.Add("Local draft discarded.", Severity.Success);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add($"Local draft could not be discarded: {exception.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isDiscardingSelectedDeviceOnlyDraft = false;
+        }
     }
 
     private async Task OpenCloseOrderDialogAsync(TradeOrderStatus status)

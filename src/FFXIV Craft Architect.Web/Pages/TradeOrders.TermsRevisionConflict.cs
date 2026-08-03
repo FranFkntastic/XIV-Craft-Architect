@@ -87,6 +87,17 @@ public partial class TradeOrders
             rebased.CommissionPublication = owner.Order.CommissionPublication;
             rebased.CompanyCommission = latestCommission;
             rebased.UpdatedAtUtc = owner.Order.UpdatedAtUtc;
+            if (!_commissionTermsRevisionPaymentDirty)
+            {
+                rebased.PaymentPolicyOverride = owner.Order.PaymentPolicyOverride;
+                rebased.PaymentSchedule = latestCommission.CurrentTerms.Payment.Schedule;
+                rebased.CustomPaymentTerms = latestCommission.CurrentTerms.Payment.CustomTerms;
+                if (_commissionTermsRevisionBrief != null)
+                {
+                    _commissionTermsRevisionBrief.Payment =
+                        BuildCanonicalCommissionBrief(owner.Order, latestCommission).Payment;
+                }
+            }
 
             _commissionTermsRevisionWorkPackage = rebased;
             _selectedOrder = rebased;

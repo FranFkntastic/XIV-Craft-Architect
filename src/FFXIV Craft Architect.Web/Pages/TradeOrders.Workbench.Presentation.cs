@@ -34,7 +34,7 @@ public sealed record TradeOrderCenterOverviewPresentation(
     IReadOnlyList<TradeOrderCenterOutputPresentation> Outputs,
     TradeOrderCenterCrafterUpdatePresentation? LatestCrafterUpdate,
     IReadOnlyList<TradeOrderProgressStepPresentation> Progress,
-    bool CanReviseTerms);
+    string? TermsActionLabel);
 
 public partial class TradeOrders
 {
@@ -88,9 +88,18 @@ public partial class TradeOrders
             BuildCenterProgress(order, commission),
             owner != null &&
             CanMutateHostedOrder &&
-            !TradeOrderStatusWorkflow.IsArchived(order.Status) &&
-            commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published &&
-            !IsEditingCommissionTermsRevision);
+            !HasSelectedLocalHostedCollision &&
+            !TradeOrderStatusWorkflow.IsArchived(order.Status)
+                ? commission.PublicMetadata.ViewState switch
+                {
+                    CompanyCommissionPublicViewState.Draft => "Edit draft terms",
+                    CompanyCommissionPublicViewState.Published
+                        when !IsEditingCommissionTermsRevision &&
+                             CanReviseCanonicalTerms(commission) =>
+                        "Revise terms",
+                    _ => null
+                }
+                : null);
     }
 
     private static TradeOrderCenterCrafterUpdatePresentation? BuildLatestCrafterUpdate(
