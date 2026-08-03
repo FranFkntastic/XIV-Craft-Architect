@@ -124,10 +124,7 @@ public sealed class TradeOrderLifecycleService(
         }
 
         await RetractDiscordPublicationAsync(order, cancellationToken);
-        var identities = new List<(string Collection, string ObjectId)>
-        {
-            (ProfileSyncCollections.TradeOrders, order.Id.ToString("D"))
-        };
+        var identities = new List<(string Collection, string ObjectId)>();
         var drafts = await payrollPersistence.LoadDraftsAsync(order.CompanyProfileId);
         identities.AddRange(drafts
             .Where(draft => draft.OrderId == order.Id)
@@ -150,10 +147,30 @@ public sealed class TradeOrderLifecycleService(
         }
         identities.AddRange(linkedPlanIds.Select(planId =>
             (ProfileSyncCollections.Plans, planId)));
+        // The order is the user's durable cleanup handle. Delete generated
+        // dependents first so any partial failure leaves that handle available
+        // for a safe retry instead of stranding an orphaned plan or payroll draft.
+        identities.Add((ProfileSyncCollections.TradeOrders, order.Id.ToString("D")));
 
         await profileSync.DeleteObjectsAsync(identities, cancellationToken);
         await indexedDb.DeleteTradeOrderCraftSnapshotsForOrderAsync(order.Id);
         appState.NotifyTradeOperationsDataChanged();
+    }
+
+    public async Task DiscardLocalDraftAsync(
+        TradeOrder order,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        if (order.CompanyCommission != null || order.CommissionPublication != null)
+        {
+            throw new InvalidOperationException(
+                "Only an unpublished local draft can be discarded directly.");
+        }
+
+        var disposable = TradeOrderWorkflow.CopyOrder(order);
+        disposable.Status = TradeOrderStatus.Canceled;
+        await DeleteOrderAsync(disposable, cancellationToken);
     }
 
     public async Task<TradeCommissionResetBackup> CreateResetBackupAsync(

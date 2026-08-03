@@ -214,6 +214,7 @@ public partial class TradeOrders
 
     private void SelectOrder(TradeOrder order)
     {
+        _selectedLocalHostedCollision = null;
         InvalidateSelectedOrderPlanRestoration();
         ClearLiveProcurementSnapshot();
         _selectedOrderPlanRestoreError = null;
@@ -225,6 +226,10 @@ public partial class TradeOrders
         _detailCrafterId = order.AssignedCrafterId;
         _detailStatus = order.Status;
         _detailNotes = order.Notes;
+        var paymentTiming = order.CompanyCommission?.CurrentTerms.Payment;
+        _selectedOrderPaymentSchedule = paymentTiming?.Schedule ?? order.PaymentSchedule;
+        _selectedOrderCustomPaymentTerms = paymentTiming?.CustomTerms ?? order.CustomPaymentTerms ?? string.Empty;
+        _selectedOrderPaymentTermsDirty = false;
         _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(order);
         _selectedOrderOutputSearchQuery = string.Empty;
         _selectedOrderOutputSearchResults = [];
@@ -301,6 +306,12 @@ public partial class TradeOrders
 
     private void ExpandGroupForOrder(TradeOrder order)
     {
+        if (IsDeviceOnlyOrder(order))
+        {
+            _isDeviceOnlyCollapsed = false;
+            return;
+        }
+
         if (IsOrderArchivedForAttention(order))
         {
             _isArchiveCollapsed = false;
@@ -376,7 +387,9 @@ public partial class TradeOrders
 
     private bool SelectOrderAfterReload(Guid orderId, string missingMessage)
     {
-        var reloadedOrder = VisibleOrders.FirstOrDefault(order => order.Id == orderId);
+        var reloadedOrder = VisibleOrders.FirstOrDefault(order => order.Id == orderId) ??
+            DeviceOnlyOrders.FirstOrDefault(order =>
+                order.Id == orderId && order.CompanyCommission == null);
         if (reloadedOrder == null)
         {
             _selectedOrder = null;

@@ -155,12 +155,27 @@
                                     <div class="trade-orders-rail-list">
                                         @foreach (var order in FilteredDeviceOnlyOrders)
                                         {
-                                            <div class="trade-orders-rail-order is-device-only"
-                                                 title="Stored on this device; not editable in the hosted order workspace">
-                                                <span class="trade-orders-rail-title">@order.Title</span>
-                                                <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
-                                                <span class="trade-orders-status-chip">Device only</span>
-                                            </div>
+                                            @if (order.CompanyCommission == null)
+                                            {
+                                                <button type="button"
+                                                        class="@GetRailOrderClass(order) is-device-only"
+                                                        aria-current="@(_selectedOrder?.Id == order.Id ? "true" : null)"
+                                                        title="Saved on this device; select to retry sync or discard the draft"
+                                                        @onclick="() => SelectOrder(order)">
+                                                    <span class="trade-orders-rail-title">@order.Title</span>
+                                                    <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
+                                                    <span class="trade-orders-status-chip">Saved here</span>
+                                                </button>
+                                            }
+                                            else
+                                            {
+                                                <div class="trade-orders-rail-order is-device-only"
+                                                     title="Stale commissioned identity; hosted terms remain hidden">
+                                                    <span class="trade-orders-rail-title">@order.Title</span>
+                                                    <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
+                                                    <span class="trade-orders-status-chip">Cleanup only</span>
+                                                </div>
+                                            }
                                         }
                                     </div>
                                 }
@@ -366,7 +381,7 @@
                             <section class="trade-orders-workspace-card">
                                 <TradeOrderCenterOverview Model="centerOverview"
                                                           OnOpenPlan="OpenPlanWorkbenchAsync"
-                                                          OnReviseTerms="ShowCommissionTermsRevision">
+                                                          OnEditTerms="OpenSelectedOrderTermsAsync">
                                     <RequirementsContent>
                                         @{
                                             var paymentSummary = GetSelectedOrderPaymentSummary();
@@ -1116,14 +1131,89 @@
                                  }
                                  else
                                  {
-                                     <MudButton Variant="Variant.Filled"
-                                                Color="Color.Primary"
-                                                OnClick="SaveSelectedOrderAsync"
-                                                Disabled="@(IsSelectedOrderArchived || string.IsNullOrWhiteSpace(_detailTitle))">
-                                         Save Order
-                                     </MudButton>
+                                     <div class="trade-orders-inline-actions">
+                                         <MudButton Variant="Variant.Outlined"
+                                                    Color="Color.Secondary"
+                                                    StartIcon="@Icons.Material.Filled.EditNote"
+                                                    OnClick="OpenSelectedOrderTermsAsync"
+                                                    Disabled="@(IsSelectedOrderArchived || HasSelectedLocalHostedCollision)">
+                                             Edit draft terms
+                                         </MudButton>
+                                         <MudButton Variant="Variant.Filled"
+                                                    Color="Color.Primary"
+                                                    OnClick="SaveSelectedOrderAsync"
+                                                    Disabled="@(IsSelectedOrderArchived || HasSelectedLocalHostedCollision || string.IsNullOrWhiteSpace(_detailTitle))">
+                                             Save Order
+                                         </MudButton>
+                                     </div>
                                  }
                              </div>
+                             @if (HasSelectedLocalHostedCollision)
+                             {
+                                 <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                                     <div class="trade-orders-device-only-draft-state">
+                                         <div>
+                                             <strong>Hosted copy arrived while you were editing</strong>
+                                             <span>
+                                                 @(_selectedLocalHostedCollision?.Order?.CompanyCommission == null
+                                                     ? "Your unsaved fields are preserved. Rebase them onto the hosted copy before saving, or discard them."
+                                                     : "This order became a canonical commission, so the local buffer cannot be merged safely. Use the hosted copy to discard it.")
+                                             </span>
+                                         </div>
+                                         <div class="trade-orders-inline-actions">
+                                             @if (_selectedLocalHostedCollision?.Order?.CompanyCommission == null)
+                                             {
+                                                 <MudButton Variant="Variant.Filled"
+                                                            Color="Color.Primary"
+                                                            Size="Size.Small"
+                                                            OnClick="RebaseSelectedLocalEditsOntoHostedCopy">
+                                                     Rebase edits
+                                                 </MudButton>
+                                             }
+                                             <MudButton Variant="Variant.Outlined"
+                                                        Color="Color.Warning"
+                                                        Size="Size.Small"
+                                                        OnClick="AdoptHostedCopyForSelectedLocalOrder">
+                                                 Use hosted copy
+                                             </MudButton>
+                                         </div>
+                                     </div>
+                                 </MudAlert>
+                             }
+                             @if (IsSelectedDeviceOnlyOrder)
+                             {
+                                 <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                                     <div class="trade-orders-device-only-draft-state">
+                                         <div>
+                                             <strong>Saved on this device</strong>
+                                             <span>This order has not joined the hosted order workspace yet.</span>
+                                         </div>
+                                         <div class="trade-orders-inline-actions">
+                                             <MudButton Variant="Variant.Filled"
+                                                        Color="Color.Primary"
+                                                        Size="Size.Small"
+                                                        Disabled="@(_isRetryingSelectedDeviceOnlyOrderSync || HasSelectedLocalDraftEditorChanges)"
+                                                        OnClick="RetrySelectedDeviceOnlyOrderSyncAsync">
+                                                 @(_isRetryingSelectedDeviceOnlyOrderSync
+                                                     ? "Retrying..."
+                                                     : HasSelectedLocalDraftEditorChanges
+                                                         ? "Save edits first"
+                                                         : "Retry sync")
+                                             </MudButton>
+                                             @if (CanDiscardSelectedDeviceOnlyDraft)
+                                             {
+                                                 <MudButton Variant="Variant.Text"
+                                                            Color="Color.Error"
+                                                            Size="Size.Small"
+                                                            Disabled="@_isDiscardingSelectedDeviceOnlyDraft"
+                                                            OnClick="DiscardSelectedDeviceOnlyDraftAsync">
+                                                     @(_isDiscardingSelectedDeviceOnlyDraft ? "Discarding..." : "Discard draft")
+                                                 </MudButton>
+                                             }
+                                         </div>
+                                     </div>
+                                 </MudAlert>
+                             }
                              @if (SelectedCanonicalCommission is { } centerCommission)
                              {
                                  <div class="trade-orders-commission-identity-strip">
@@ -1334,7 +1424,7 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.Build"
                                                    OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
-                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || GetOrderRootItems(_selectedOrder).Count == 0)">
+                                                   Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || !CanEditSelectedOrderPlan || GetOrderRootItems(_selectedOrder).Count == 0)">
                                             @GetCraftPlanBuildButtonText(_selectedOrder)
                                         </MudButton>
                                         <MudButton Variant="Variant.Outlined"
@@ -1342,7 +1432,7 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.PriceCheck"
                                                    OnClick="RepriceSelectedOrderAsync"
-                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || !HasLinkedCraftPlan(_selectedOrder))">
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || !CanEditSelectedOrderPlan || !HasLinkedCraftPlan(_selectedOrder))">
                                             @(_isRepricingSelectedOrder ? "Repricing..." : "Reprice Order")
                                         </MudButton>
                                         <MudButton Variant="Variant.Outlined"
@@ -1462,6 +1552,68 @@
                                         @(_isPlanPaneExpanded ? "Restore pane" : "Expand pane")
                                     </MudButton>
                                 </div>
+                                @{
+                                    var planPaymentIsEditable = CanEditSelectedOrderPlan;
+                                    var displayedPlanPayment = HasCanonicalCommission
+                                        ? IsEditingCommissionTermsRevision
+                                            ? _commissionTermsRevisionBrief?.Payment.Total ??
+                                              SelectedCanonicalCommission?.CurrentTerms.Payment.Total ??
+                                              paymentSummary.TotalPayment
+                                            : SelectedCanonicalCommission?.CurrentTerms.Payment.Total ??
+                                              paymentSummary.TotalPayment
+                                        : paymentSummary.TotalPayment;
+                                }
+                                <section class="trade-orders-plan-terms" aria-label="Plan payment terms">
+                                    <div class="trade-orders-plan-payment-total">
+                                        <span>@(planPaymentIsEditable ? "Predicted payment" : "Accepted payment")</span>
+                                        <strong>@FormatGil(displayedPlanPayment)</strong>
+                                        <small>@GetSelectedOrderPaymentPolicyLabel()</small>
+                                    </div>
+                                    <CompactSelectField Id="selected-order-payment-contract"
+                                                        Label="Payment basis"
+                                                        Value="@SelectedOrderPaymentContract.ToString()"
+                                                        ValueChanged="SetSelectedOrderPaymentContractValueAsync"
+                                                        Options="PaymentContractOptions"
+                                                        Disabled="@(!planPaymentIsEditable || IsPlanMutationTransactionRunning)" />
+                                    <CompactSelectField Id="selected-order-payment-schedule"
+                                                        Label="Payment timing"
+                                                        Value="@SelectedOrderPaymentSchedule.ToString()"
+                                                        ValueChanged="SetSelectedOrderPaymentScheduleValueAsync"
+                                                        Options="PaymentScheduleOptions"
+                                                        Disabled="@(!planPaymentIsEditable || IsPlanMutationTransactionRunning)" />
+                                    @if (SelectedOrderPaymentSchedule == CompanyCommissionPaymentSchedule.Custom)
+                                    {
+                                        <div class="trade-orders-plan-custom-payment">
+                                            <MudTextField T="string"
+                                                          id="selected-order-custom-payment-terms"
+                                                          Label="Custom payment timing"
+                                                          Value="@SelectedOrderCustomPaymentTerms"
+                                                          ValueChanged="SetSelectedOrderCustomPaymentTerms"
+                                                          Variant="Variant.Outlined"
+                                                          Margin="Margin.Dense"
+                                                          Immediate="true"
+                                                          Disabled="@(!planPaymentIsEditable || IsPlanMutationTransactionRunning)" />
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Primary"
+                                                       Size="Size.Small"
+                                                       Disabled="@(!planPaymentIsEditable || IsPlanMutationTransactionRunning || string.IsNullOrWhiteSpace(SelectedOrderCustomPaymentTerms))"
+                                                       OnClick="SaveSelectedOrderCustomPaymentTermsAsync">
+                                                Save timing
+                                            </MudButton>
+                                        </div>
+                                    }
+                                    @if (!HasLinkedCraftPlan(_selectedOrder))
+                                    {
+                                        <MudButton Variant="Variant.Filled"
+                                                   Color="Color.Primary"
+                                                   Size="Size.Small"
+                                                   StartIcon="@Icons.Material.Filled.Build"
+                                                   Disabled="@(!CanBeginSelectedOrderPlanReconstruction || IsPlanMutationTransactionRunning)"
+                                                   OnClick="BeginSelectedOrderPlanReconstructionAsync">
+                                            @(_isSavingSelectedOrderCraftPlan ? "Building..." : "Build craft plan")
+                                        </MudButton>
+                                    }
+                                </section>
                                 @if (HasLinkedCraftPlan(_selectedOrder) && GetCurrentLiveProcurementSnapshot() is null)
                                 {
                                     @if (_isLoadingSelectedOrderSupplyPlan ||
@@ -1486,6 +1638,16 @@
                                                        OnClick="@(() => SetActiveOpsTabAsync(ProcurementTabIndex))">
                                                 Try again
                                             </MudButton>
+                                            @if (CanBeginSelectedOrderPlanReconstruction)
+                                            {
+                                                <MudButton Variant="Variant.Outlined"
+                                                           Color="Color.Warning"
+                                                           Size="Size.Small"
+                                                           Disabled="@IsPlanMutationTransactionRunning"
+                                                           OnClick="BeginSelectedOrderPlanReconstructionAsync">
+                                                    Reconstruct as new plan
+                                                </MudButton>
+                                            }
                                         </MudAlert>
                                     }
                                 }
@@ -1515,7 +1677,7 @@
                                                    Size="Size.Small"
                                                    StartIcon="@Icons.Material.Filled.Refresh"
                                                    OnClick="RepriceSelectedOrderAsync"
-                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || IsSelectedOrderArchived || HasCanonicalCommission && !CanEditCanonicalDraft || !HasLinkedCraftPlan(_selectedOrder))">
+                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || !CanEditSelectedOrderPlan || !HasLinkedCraftPlan(_selectedOrder))">
                                             @(_isRepricingSelectedOrder ? "Refreshing..." : "Refresh Prices")
                                         </MudButton>
                                     </section>

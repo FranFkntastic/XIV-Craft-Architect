@@ -26,6 +26,7 @@ public static class TradeOrderWorkspaceCompositionPolicy
         ArgumentNullException.ThrowIfNull(hostedOrders);
 
         var hostedOrderIds = hostedOrders
+            .Where(snapshot => !snapshot.Deleted && snapshot.Order != null)
             .Select(snapshot => snapshot.OrderId)
             .ToHashSet();
         return localOrders

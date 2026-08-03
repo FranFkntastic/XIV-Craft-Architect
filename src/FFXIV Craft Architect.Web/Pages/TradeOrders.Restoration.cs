@@ -13,6 +13,14 @@ public partial class TradeOrders
 
     private bool EnsureHostedOrderMutationAvailable()
     {
+        if (HasSelectedLocalHostedCollision)
+        {
+            Snackbar.Add(
+                "Resolve the local edit collision before changing the hosted order.",
+                Severity.Warning);
+            return false;
+        }
+
         if (CanMutateHostedOrder)
         {
             return true;
@@ -73,7 +81,14 @@ public partial class TradeOrders
         {
             if (snapshot.Deleted || snapshot.Order == null)
             {
-                ClearUnavailableSelectedOrder("This order is no longer available.");
+                if (_selectedOrder.CompanyCommission != null)
+                {
+                    ClearUnavailableSelectedOrder("This order is no longer available.");
+                }
+                else
+                {
+                    _selectedLocalHostedCollision = null;
+                }
             }
             else if (!ShouldPreserveCanonicalEditor())
             {
@@ -82,6 +97,10 @@ public partial class TradeOrders
                 SelectOrder(snapshot.OwnerProjection?.Order ?? snapshot.Order);
                 _activeOpsTab = selectedTab;
                 _isPlanPaneExpanded = planExpanded;
+            }
+            else if (_selectedOrder.CompanyCommission == null)
+            {
+                _selectedLocalHostedCollision = snapshot;
             }
         }
 
@@ -117,14 +136,26 @@ public partial class TradeOrders
         }
         else if (state.ShowsCompleteProjection &&
                  _selectedOrder != null &&
-                 _companyProfile != null &&
-                 !TradeOrderWorkspaceCompositionPolicy.IsHostedOrder(
-                     _selectedOrder.Id,
-                     _companyProfile.Id,
-                     HostedOrders.GetAll(_companyProfile.Id)))
+                 _companyProfile != null)
         {
-            ClearUnavailableSelectedOrder(
-                "That device-only order is stored separately from the hosted workspace.");
+            var hosted = HostedOrders.Get(_selectedOrder.Id);
+            if (hosted is { Deleted: false, Order: not null } &&
+                hosted.CompanyProfileId == _companyProfile.Id)
+            {
+                if (HasSelectedLocalDraftEditorChanges)
+                {
+                    _selectedLocalHostedCollision = hosted;
+                }
+                else
+                {
+                    SelectOrder(hosted.OwnerProjection?.Order ?? hosted.Order);
+                }
+            }
+            else if (_selectedOrder.CompanyCommission != null)
+            {
+                ClearUnavailableSelectedOrder(
+                    "That device-only order is stored separately from the hosted workspace.");
+            }
         }
         StateHasChanged();
     }
@@ -138,8 +169,90 @@ public partial class TradeOrders
         _commissionTermsRevisionBrief = null;
         _commissionTermsRevisionRollbackPlan = null;
         _commissionTermsRevisionDirty = false;
+        _commissionTermsRevisionPaymentDirty = false;
+        _selectedOrderPaymentTermsDirty = false;
+        _selectedLocalHostedCollision = null;
         AppState.SelectTradeOrder(null);
         ClearSelectedOrderNavigation();
         Snackbar.Add(message, Severity.Info);
+    }
+
+    private void AdoptHostedCopyForSelectedLocalOrder()
+    {
+        if (_selectedLocalHostedCollision is not { Deleted: false, Order: not null } hosted ||
+            _selectedOrder?.Id != hosted.OrderId)
+        {
+            return;
+        }
+
+        var selectedTab = _activeOpsTab;
+        var planExpanded = _isPlanPaneExpanded;
+        SelectOrder(hosted.OwnerProjection?.Order ?? hosted.Order);
+        _activeOpsTab = selectedTab;
+        _isPlanPaneExpanded = planExpanded;
+    }
+
+    private void RebaseSelectedLocalEditsOntoHostedCopy()
+    {
+        if (_selectedLocalHostedCollision is not { Deleted: false, Order: not null } hosted ||
+            hosted.Order.CompanyCommission != null ||
+            _selectedOrder is not { CompanyCommission: null } local ||
+            local.Id != hosted.OrderId)
+        {
+            return;
+        }
+
+        var titleDirty = !string.Equals(
+            _detailTitle.Trim(),
+            local.Title,
+            StringComparison.Ordinal);
+        var crafterDirty = _detailCrafterId != local.AssignedCrafterId;
+        var statusDirty = _detailStatus != local.Status;
+        var notesDirty = !string.Equals(_detailNotes, local.Notes, StringComparison.Ordinal);
+        var outputsDirty = HasSelectedOrderOutputChanges;
+        var paymentDirty = _selectedOrderPaymentTermsDirty;
+        var title = _detailTitle;
+        var crafterId = _detailCrafterId;
+        var status = _detailStatus;
+        var notes = _detailNotes;
+        var outputEditors = _selectedOrderOutputEditors.ToList();
+        var paymentSchedule = _selectedOrderPaymentSchedule;
+        var customPaymentTerms = _selectedOrderCustomPaymentTerms;
+        var selectedTab = _activeOpsTab;
+        var planExpanded = _isPlanPaneExpanded;
+
+        SelectOrder(hosted.Order);
+        if (titleDirty)
+        {
+            _detailTitle = title;
+        }
+        if (crafterDirty)
+        {
+            _detailCrafterId = crafterId;
+        }
+        if (statusDirty)
+        {
+            _detailStatus = status;
+        }
+        if (notesDirty)
+        {
+            _detailNotes = notes;
+        }
+        if (outputsDirty)
+        {
+            _selectedOrderOutputEditors = outputEditors;
+        }
+        if (paymentDirty)
+        {
+            _selectedOrderPaymentSchedule = paymentSchedule;
+            _selectedOrderCustomPaymentTerms = customPaymentTerms;
+            _selectedOrderPaymentTermsDirty = true;
+        }
+
+        _activeOpsTab = selectedTab;
+        _isPlanPaneExpanded = planExpanded;
+        Snackbar.Add(
+            "Local edits rebased onto the hosted copy. Review and save them.",
+            Severity.Info);
     }
 }

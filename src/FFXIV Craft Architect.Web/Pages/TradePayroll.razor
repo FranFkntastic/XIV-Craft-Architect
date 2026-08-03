@@ -382,7 +382,7 @@
         var isNewOrder = _linkedOrder == null;
         var orderToSave = isNewOrder
             ? CreateAssignedOrderFromCurrentPlan(now)
-            : CopyOrder(_linkedOrder!);
+            : TradeOrderWorkflow.CopyOrder(_linkedOrder!);
         if (orderToSave == null)
         {
             return;
@@ -501,7 +501,7 @@
             return;
         }
 
-        var orderToSave = CopyOrder(_linkedOrder);
+        var orderToSave = TradeOrderWorkflow.CopyOrder(_linkedOrder);
         orderToSave.PayrollDraftId = _workflowDraft.Id;
         orderToSave.UpdatedAtUtc = DateTime.UtcNow;
         AddPayrollLinkedHistoryIfMissing(orderToSave, DateTime.UtcNow);
@@ -786,27 +786,6 @@
             CreatedAtUtc = createdAtUtc
         });
         order.History = history;
-    }
-
-    private static TradeOrder CopyOrder(TradeOrder order)
-    {
-        return new TradeOrder
-        {
-            Id = order.Id,
-            CompanyProfileId = order.CompanyProfileId,
-            Title = order.Title,
-            Status = order.Status,
-            AssignedCrafterId = order.AssignedCrafterId,
-            CommissionedAtUtc = order.CommissionedAtUtc,
-            CreatedAtUtc = order.CreatedAtUtc,
-            UpdatedAtUtc = order.UpdatedAtUtc,
-            Notes = order.Notes,
-            SourceSnapshot = order.SourceSnapshot,
-            History = order.History.ToArray(),
-            PayrollDraftId = order.PayrollDraftId,
-            RemoteId = order.RemoteId,
-            SyncState = order.SyncState
-        };
     }
 
     private sealed class TradePayrollLineEditor

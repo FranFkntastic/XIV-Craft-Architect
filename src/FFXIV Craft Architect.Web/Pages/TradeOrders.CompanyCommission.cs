@@ -30,6 +30,7 @@ public partial class TradeOrders
     private CommissionBriefDocument? _commissionTermsRevisionBrief;
     private StoredPlan? _commissionTermsRevisionRollbackPlan;
     private bool _commissionTermsRevisionDirty;
+    private bool _commissionTermsRevisionPaymentDirty;
 
     private CompanyCommissionOwnerProjection? SelectedCommissionOwner =>
         _selectedOrder == null
@@ -84,6 +85,51 @@ public partial class TradeOrders
     private bool CanEditCanonicalWorkPackage =>
         CanEditCanonicalDraft || IsEditingCommissionTermsRevision;
 
+    private static bool CanReviseCanonicalTerms(TradeCompanyCommission commission) =>
+        commission.OutputProgress.All(item =>
+            item.CompletedQuantity == 0 &&
+            item.ReadyQuantity == 0 &&
+            item.AcceptedQuantity == 0) &&
+        !commission.DeliveryReadiness.IsReady;
+
+    private bool CanEditSelectedOrderPlan =>
+        _selectedOrder != null &&
+        !HasSelectedLocalHostedCollision &&
+        !TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status) &&
+        (_selectedOrder.CompanyCommission == null || CanEditCanonicalWorkPackage);
+
+    private bool CanBeginSelectedOrderPlanReconstruction =>
+        _selectedOrder != null &&
+        !IsPlanMutationTransactionRunning &&
+        !TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status) &&
+        GetOrderRootItems(_selectedOrder).Count > 0 &&
+        (_selectedOrder.CompanyCommission == null ||
+         CanEditCanonicalWorkPackage ||
+         CanMutateHostedOrder &&
+         SelectedCanonicalCommission is
+         {
+             PublicMetadata.ViewState: CompanyCommissionPublicViewState.Published
+         } commission &&
+         CanReviseCanonicalTerms(commission));
+
+    private async Task OpenSelectedOrderTermsAsync()
+    {
+        if (HasSelectedLocalHostedCollision)
+        {
+            _ = EnsureHostedOrderMutationAvailable();
+            return;
+        }
+
+        if (SelectedCanonicalCommission?.PublicMetadata.ViewState ==
+                CompanyCommissionPublicViewState.Published &&
+            !IsEditingCommissionTermsRevision)
+        {
+            ShowCommissionTermsRevision();
+        }
+
+        await SetActiveOpsTabAsync(PlanTabIndex);
+    }
+
     private static string GetSettlementChipClass(
         CompanyCommissionSettlementState state) =>
         state == CompanyCommissionSettlementState.Satisfied
@@ -116,6 +162,7 @@ public partial class TradeOrders
             commission);
         _commissionTermsRevisionRollbackPlan = null;
         _commissionTermsRevisionDirty = false;
+        _commissionTermsRevisionPaymentDirty = false;
         CaptureCommissionTermsRevisionBase(owner, commission);
         _selectedOrder = _commissionTermsRevisionWorkPackage;
         _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(_selectedOrder);
@@ -158,6 +205,8 @@ public partial class TradeOrders
                     terms.Outputs.Sum(output => output.RequiredQuantity),
                     terms.Payment.CraftSynthCount)
             ];
+        copy.PaymentSchedule = terms.Payment.Schedule;
+        copy.CustomPaymentTerms = terms.Payment.CustomTerms;
         return copy;
     }
 
@@ -206,6 +255,7 @@ public partial class TradeOrders
             _commissionTermsRevisionBrief = null;
             _commissionTermsRevisionRollbackPlan = null;
             _commissionTermsRevisionDirty = false;
+            _commissionTermsRevisionPaymentDirty = false;
             _showCommissionTermsRevision = false;
             ResetCommissionTermsRevisionBase();
 
@@ -238,6 +288,7 @@ public partial class TradeOrders
         _commissionTermsRevisionBrief = null;
         _commissionTermsRevisionRollbackPlan = null;
         _commissionTermsRevisionDirty = false;
+        _commissionTermsRevisionPaymentDirty = false;
         ResetCommissionTermsRevisionBase();
         var provisional = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ProvisionalCrafter;
         _commissionIdentityCrafterId = provisional == null
@@ -475,6 +526,7 @@ public partial class TradeOrders
             {
                 _commissionTermsRevisionReason = string.Empty;
                 _commissionTermsRevisionDirty = false;
+                _commissionTermsRevisionPaymentDirty = false;
                 _showCommissionTermsRevision = false;
                 ResetCommissionTermsRevisionBase();
             }

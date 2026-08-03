@@ -7,13 +7,13 @@
                 <span class="trade-order-overview__status">@Model.Status</span>
             </div>
         </div>
-        @if (Model.CanReviseTerms)
+        @if (!string.IsNullOrWhiteSpace(Model.TermsActionLabel))
         {
             <MudButton Variant="Variant.Outlined"
                        Color="Color.Primary"
                        StartIcon="@Icons.Material.Filled.EditNote"
-                       OnClick="OnReviseTerms">
-                Revise terms
+                       OnClick="OnEditTerms">
+                @Model.TermsActionLabel
             </MudButton>
         }
         <div class="trade-order-overview__meta">
@@ -102,7 +102,7 @@
     public EventCallback OnOpenPlan { get; set; }
 
     [Parameter]
-    public EventCallback OnReviseTerms { get; set; }
+    public EventCallback OnEditTerms { get; set; }
 
     private static string GetStepClass(TradeOrderProgressStepPresentation step) =>
         $"trade-order-overview__step{(step.IsComplete ? " is-complete" : string.Empty)}{(step.IsCurrent ? " is-current" : string.Empty)}";
