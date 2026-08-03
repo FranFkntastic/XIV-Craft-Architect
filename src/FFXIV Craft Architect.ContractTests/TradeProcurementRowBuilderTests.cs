@@ -120,15 +120,17 @@ public sealed class TradeProcurementRowBuilderTests
             CraftPlanId = "plan-1",
             SourceSnapshot = new TradeOrderSourceSnapshot
             {
+                SourcePlanId = "plan-1",
                 Materials =
                 [
                     new TradeOrderMaterialSnapshot(
-                        999,
-                        "Incomplete canonical leaf",
-                        1,
+                        1_000,
+                        "Cobalt Ingot",
+                        4,
                         false,
                         25,
-                        25)
+                        100,
+                        "Acquisition evaluation")
                 ]
             }
         };
@@ -146,7 +148,13 @@ public sealed class TradeProcurementRowBuilderTests
             MarketAnalysisVersion: 1,
             CraftedItems: [],
             RootItems: [],
-            MaterialLines: [],
+            MaterialLines:
+            [
+                new CommissionPayrollInputLine(
+                    1_000, "Cobalt Ingot", 4, 0, false,
+                    CommissionMaterialResponsibility.Crafter,
+                    "Plan price", "Restored plan has no price", null, [])
+            ],
             ActiveProcurementItems: [],
             AcquisitionRows:
             [
@@ -157,7 +165,7 @@ public sealed class TradeProcurementRowBuilderTests
                     hasChildren: true,
                     isActiveProcurement: true,
                     isFullySuppressed: false,
-                    suppressedBy: []),
+                    suppressedBy: []) with { ActiveQuantity = 4 },
                 ProjectionRow(
                     itemId: 1_001,
                     itemName: "Cobalt Rivets",
@@ -195,6 +203,8 @@ public sealed class TradeProcurementRowBuilderTests
             ingot =>
             {
                 Assert.Equal("Cobalt Ingot", ingot.ItemName);
+                Assert.Equal((10, 4, 25m, 100m, "Acquisition evaluation"),
+                    (ingot.Quantity, ingot.ActiveQuantity, ingot.UnitCost, ingot.TotalCost, ingot.EvidenceSource));
                 Assert.True(TradeProcurementRowBuilder.ShouldIncludePlanRow(ingot));
             },
             suppressedPrecraft =>
@@ -203,43 +213,33 @@ public sealed class TradeProcurementRowBuilderTests
                 Assert.True(suppressedPrecraft.IsFullySuppressed);
                 Assert.True(TradeProcurementRowBuilder.ShouldIncludePlanRow(suppressedPrecraft));
             });
+        order.SourceSnapshot.SourcePlanId = "different-plan";
+        var mismatched = TradeProcurementRowBuilder.BuildRows(order, null, "plan-1", snapshot);
+        Assert.Equal((0m, 0m),
+            (mismatched.Single(row => row.ItemId == 1_000).UnitCost,
+             mismatched.Single(row => row.ItemId == 1_000).TotalCost));
     }
 
     private static WorkerAcquisitionRowProjection ProjectionRow(
-        int itemId,
-        string itemName,
-        AcquisitionSource source,
-        bool hasChildren,
-        bool isActiveProcurement,
-        bool isFullySuppressed,
+        int itemId, string itemName, AcquisitionSource source, bool hasChildren,
+        bool isActiveProcurement, bool isFullySuppressed,
         IReadOnlyList<string> suppressedBy) =>
         new(
             NodeId: itemId.ToString(),
-            ItemId: itemId,
-            ItemName: itemName,
+            ItemId: itemId, ItemName: itemName,
             IconId: 0,
-            Source: source,
-            SourceReason: AcquisitionSourceReason.UserSelected,
+            Source: source, SourceReason: AcquisitionSourceReason.UserSelected,
             MustBeHq: false,
-            HasChildren: hasChildren,
-            CanCraft: true,
-            CanBeHq: false,
-            CanBuyFromMarket: true,
-            CanBuyFromVendor: false,
-            TotalQuantity: 10,
+            HasChildren: hasChildren, CanCraft: true, CanBeHq: false,
+            CanBuyFromMarket: true, CanBuyFromVendor: false, TotalQuantity: 10,
             ActiveQuantity: isActiveProcurement ? 10 : 0,
             UsedIn: "Cobalt Joint Plate",
-            HasSuppressedOccurrences: isFullySuppressed,
-            IsFullySuppressed: isFullySuppressed,
+            HasSuppressedOccurrences: isFullySuppressed, IsFullySuppressed: isFullySuppressed,
             SuppressedBy: suppressedBy,
-            IsActiveProcurement: isActiveProcurement,
-            HasEditableOccurrences: !isFullySuppressed,
-            IsMarketCandidate: true,
-            MarketEvidence: "Test evidence",
-            EstimatedCost: "100 gil each",
+            IsActiveProcurement: isActiveProcurement, HasEditableOccurrences: !isFullySuppressed,
+            IsMarketCandidate: true, MarketEvidence: "Test evidence", EstimatedCost: "100 gil each",
             IsMarketUnavailable: false,
-            UnitPrice: 100,
-            CalculatedTotalCost: 1_000,
+            UnitPrice: 100, CalculatedTotalCost: 1_000,
             AvailableSources: [AcquisitionSource.Craft, AcquisitionSource.MarketBuyNq],
             Options: []);
 

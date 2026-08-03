@@ -1,31 +1,40 @@
 using System.Reflection;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using FFXIV_Craft_Architect.Web.Pages;
-
 namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class CompanyCommissionProjectionPresentationContractTests
 {
     private static readonly DateTime CapturedAt = new(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc);
-
     public static void AssertAll()
     {
         var scenarios = new CompanyCommissionProjectionPresentationContractTests();
         scenarios.DiscordPublicationUsesCraftingLanguageAndCurrentOutputProgress();
         scenarios.DiscordPublicationCallsTheDeliveryStateReadyForDelivery();
-        scenarios.OrderCenterKeepsLifecycleAndPlanMutationsOutOfCalculationDetails();
+        scenarios.OrderCenterAndDraftMigrationKeepAuthorityBoundariesExplicit();
     }
     public void DiscordPublicationUsesCraftingLanguageAndCurrentOutputProgress() =>
         AssertPublication(TradeOrderStatus.Assigned, ["CRAFTING", "3 crafted, 2 ready"], "READY TO WORK", "IN PROGRESS");
-
     public void DiscordPublicationCallsTheDeliveryStateReadyForDelivery() =>
         AssertPublication(TradeOrderStatus.AwaitingDelivery, ["READY FOR DELIVERY"], "AWAITING DELIVERY");
-
-    public void OrderCenterKeepsLifecycleAndPlanMutationsOutOfCalculationDetails()
+    public void OrderCenterAndDraftMigrationKeepAuthorityBoundariesExplicit()
     {
         var repositoryRoot = LocateRepositoryRoot();
+        Assert.Equal(2, ReadWebSource(repositoryRoot, "Services", "TradeOrderDraftFactory.cs").Split("AuthoringSchemaVersion = TradeOrder.CurrentAuthoringSchemaVersion").Length - 1);
+        var (legacy, modern) = (JsonSerializer.Deserialize<TradeOrder>("{}")!, new TradeOrder { AuthoringSchemaVersion = TradeOrder.CurrentAuthoringSchemaVersion });
+        Assert.Equal(0, legacy.AuthoringSchemaVersion);
+        Assert.True(CompanyCommissionSchemaMigrationHostedService.RequiresMigration(legacy));
+        Assert.False(CompanyCommissionSchemaMigrationHostedService.RequiresMigration(modern));
+        Assert.False(CompanyCommissionSchemaMigrationHostedService.RequiresMigration(new TradeOrder { AuthoringSchemaVersion = 2 }));
+        Assert.Equal(modern.AuthoringSchemaVersion, TradeOrderWorkflow.CopyOrder(modern).AuthoringSchemaVersion);
+        modern.Status = TradeOrderStatus.Assigned;
+        modern.AssignedCrafterId = Guid.NewGuid();
+        modern.CompanyCommission = CreateClearedAssignedCommission() with { ActiveClaim = null };
+        Assert.True(CompanyCommissionSchemaMigrationHostedService.RequiresMigration(modern));
         var source = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.razor");
         var pageStyles = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.razor.css").ReplaceLineEndings("\n");
         var overviewStyles = ReadWebSource(repositoryRoot, "Shared", "TradeOrderCenterOverview.razor.css");
@@ -34,7 +43,6 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         var selectedOrderStart = source.LastIndexOf("else if (BuildSelectedOrderCenterOverview() is { } centerOverview)", detailsStart, StringComparison.Ordinal);
         var cardStart = source.IndexOf("<section class=\"trade-orders-workspace-card\">", selectedOrderStart, StringComparison.Ordinal);
         var detailsEnd = source.IndexOf("</details>", detailsStart, StringComparison.Ordinal);
-
         Assert.True(workspaceStart >= 0 && selectedOrderStart > workspaceStart && cardStart > selectedOrderStart && detailsStart > cardStart && detailsEnd > detailsStart);
         var centerBeforeDetails = source[..detailsStart];
         var calculationDetails = source[detailsStart..detailsEnd];
@@ -63,7 +71,6 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             ".trade-order-overview__crafter-update,",
             "button.trade-order-overview__step:focus-visible",
             "outline: 2px solid #f0cc62");
-
         var commission = CreateClearedAssignedCommission();
         var order = new TradeOrder { Title = "Cobalt Joint Plate", Status = TradeOrderStatus.Assigned, CompanyCommission = commission };
         Assert.True(commission.ClearedToWork);
@@ -77,7 +84,6 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Assert.Equal("Crafting", status);
         Assert.Contains(progress, step => step.Label == "Crafting" && step.State == "Current" && step.IsCurrent);
     }
-
     private static TradeCompanyCommission CreateClearedAssignedCommission()
     {
         var lineId = Guid.Parse("55555555-5555-5555-5555-555555555555");
@@ -110,20 +116,16 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             Activity = []
         };
     }
-
     private static void AssertPublication(TradeOrderStatus status, string[] contains, params string[] omits)
     {
         var payload = SerializePublication(CreateBrief(status, clearedToWork: true));
         Contains(payload, contains);
         Omits(payload, omits);
     }
-
     private static void Contains(string source, params string[] values) =>
         Array.ForEach(values, value => Assert.Contains(value, source, StringComparison.Ordinal));
-
     private static void Omits(string source, params string[] values) =>
         Array.ForEach(values, value => Assert.DoesNotContain(value, source, StringComparison.Ordinal));
-
     private static string SerializePublication(CompanyCommissionPublicBrief brief) =>
         JsonSerializer.Serialize(
             CompanyCommissionDiscordMessage.CreatePublication(new(
@@ -132,7 +134,6 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
                 CompanyCommissionActivityKind.ProgressReported, CapturedAt,
                 "Progress updated.", new Uri("https://example.test/commission"), null)),
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
-
     private static CompanyCommissionPublicBrief CreateBrief(TradeOrderStatus status, bool clearedToWork)
     {
         var lineId = Guid.Parse("33333333-3333-3333-3333-333333333333");
@@ -162,7 +163,6 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             ProjectionRevision = 12
         };
     }
-
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
