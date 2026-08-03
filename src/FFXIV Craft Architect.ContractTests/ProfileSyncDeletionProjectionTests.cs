@@ -16,6 +16,7 @@ public sealed class ProfileSyncDeletionProjectionTests
     internal static async Task AssertAllAsync()
     {
         Func<Task>[] scenarios = [
+            CommittedOrderPutsAdoptWithoutAdvancingCursor,
             ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder, RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant,
             DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection, ConfirmedDeletionCannotCrossCompanyIdentity,
             CollaborationResponseAfterProfileSwitchCannotPublishOrPersist, DelayedCollaborationResponseCannotPersistOverNewerProjection,
@@ -31,6 +32,16 @@ public sealed class ProfileSyncDeletionProjectionTests
 
         OwnerProjectionIsPreservedThenClearedAndRehydratedByRevision();
     }
+    private static async Task CommittedOrderPutsAdoptWithoutAdvancingCursor()
+    {
+        foreach (var conflictFirst in new[] { false, true })
+        {
+            var f = CreatePutAdoptionFixture(conflictFirst); await f.Service.QueueLocalSaveAsync(ProfileSyncCollections.TradeOrders, Key(f.LocalOrder));
+            await (conflictFirst ? f.Service.KeepLocalConflictAsync(Assert.Single(f.Service.Conflicts)) : Task.CompletedTask);
+            var projection = f.Store.Get(f.LocalOrder.Id); Check(() => Assert.Equal(f.CommittedOrder.Title, projection?.Order?.Title), () => Assert.Equal(f.CommittedRevision, projection?.ObjectRevision), () => Assert.Equal(f.RetainedOrder.Title, f.Store.Get(f.RetainedOrder.Id)?.Order?.Title), () => Assert.True(f.Store.RestoreState.IsAuthoritative), () => Assert.Equal(f.CommittedOrder.Title, f.Runtime.DurableOrder?.Title), () => Assert.Equal(0, f.Service.CurrentStatus.LastSyncRevision), () => Assert.Empty(f.Service.PendingSaves), () => Assert.Empty(f.Service.Conflicts));
+            Assert.Equal(f.CommittedRevision, await f.LocalState.LoadObjectRevisionAsync(f.ProfileId, ProfileSyncCollections.TradeOrders, Key(f.LocalOrder))); Assert.Equal(0, await f.LocalState.LoadLastSyncRevisionAsync(f.ProfileId));
+        }
+    }
     private static async Task ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder()
     {
         var profileId = NewId();
@@ -38,7 +49,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         var fixture = CreateDeletionFixture(profileId, order, 5);
         await fixture.Service.DeleteObjectAsync(ProfileSyncCollections.TradeOrders, Key(order));
         var tombstone = Assert.Single(fixture.Store.GetAll(order.CompanyProfileId));
-        Check(() => Assert.Equal(order.Id, tombstone.OrderId), () => Assert.Equal(5, tombstone.ObjectRevision), () => Assert.True(tombstone.Deleted), () => Assert.Equal(1, fixture.Adapter.DeleteCount), () => Assert.DoesNotContain(TradeOrderWorkspaceCompositionPolicy.GetDeviceOnlyOrders([order], fixture.Store.GetAll(order.CompanyProfileId)), candidate => candidate.Id == order.Id));
+        Check(() => Assert.Equal(order.Id, tombstone.OrderId), () => Assert.Equal(5, tombstone.ObjectRevision), () => Assert.True(tombstone.Deleted), () => Assert.Equal(1, fixture.Adapter.DeleteCount), () => Assert.Contains(TradeOrderWorkspaceCompositionPolicy.GetDeviceOnlyOrders([order], fixture.Store.GetAll(order.CompanyProfileId)), candidate => candidate.Id == order.Id));
     }
     private static async Task RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant()
     {
@@ -290,6 +301,15 @@ public sealed class ProfileSyncDeletionProjectionTests
             localState, new WebSettingsService(indexedDb), store, [adapter]);
         return new(service, store, adapter);
     }
+    private static PutAdoptionFixture CreatePutAdoptionFixture(bool conflictFirst)
+    {
+        var profileId = NewId(); var companyProfileId = Guid.NewGuid(); var localOrder = CreateOrder(Guid.NewGuid(), companyProfileId, "Local order"); var committedRevision = conflictFirst ? 5 : 1;
+        var committedOrder = CreateOrder(localOrder.Id, companyProfileId, conflictFirst ? "Host committed kept-local order" : "Host committed order"); var putCount = 0; var handler = new StubHandler(request => { Assert.Equal(HttpMethod.Put, request.Method); return Ok(conflictFirst && ++putCount == 1 ? new ProfileSyncPutResponse { Conflict = true, ServerRevision = committedRevision - 1, RemoteObject = Envelope(CreateOrder(localOrder.Id, companyProfileId, "Remote conflict"), committedRevision - 1) } : new ProfileSyncPutResponse { Success = true, ServerRevision = committedRevision, Object = Envelope(committedOrder, committedRevision) }); });
+        var store = new HostedOrderProjectionStore(); store.BeginProfileRestore(profileId, true, 0, DateTime.UtcNow, ConnectionScope(profileId));
+        var retainedOrder = CreateOrder(Guid.NewGuid(), companyProfileId, "Retained hosted order"); Assert.True(store.TryPublishRemoteOrder(retainedOrder, 1)); Assert.True(store.TryPublishRestoreState(store.RestoreState.Apply(new ProfileSyncStatus(true, true, 0, 0, 0, DateTime.UtcNow, "Synced") { ProfileId = profileId, Stage = ProfileSyncStage.Ready }, DateTime.UtcNow)));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId)); runtime.AddCompany(companyProfileId); runtime.SeedOrder(localOrder); var indexedDb = new IndexedDbService(runtime); var localState = CreateLocalState(indexedDb); var adapter = new TradeOrderProfileSyncAdapter(new TradeOperationsPersistenceService(indexedDb, new TradeCompanyProfilePackageService()), store, localState);
+        return new(profileId, localOrder, retainedOrder, committedOrder, committedRevision, new ProfileSyncService(CreateHostClient(handler), localState, new WebSettingsService(indexedDb), store, [adapter]), store, localState, runtime);
+    }
     private static ProfileSyncLocalStateService CreateLocalState(IndexedDbService indexedDb) =>
         new(indexedDb, new ProfileHostClientOptions(Host));
     private static ProfileHostClient CreateHostClient(HttpMessageHandler handler) =>
@@ -446,6 +466,7 @@ public sealed class ProfileSyncDeletionProjectionTests
     }
     private sealed record DeletionFixture(
         ProfileSyncService Service, HostedOrderProjectionStore Store, RecordingOrderAdapter Adapter);
+    private sealed record PutAdoptionFixture(string ProfileId, TradeOrder LocalOrder, TradeOrder RetainedOrder, TradeOrder CommittedOrder, long CommittedRevision, ProfileSyncService Service, HostedOrderProjectionStore Store, ProfileSyncLocalStateService LocalState, StorageRuntime Runtime);
     private sealed class RecordingOrderAdapter(ProfileSyncObjectEnvelope? local) : IProfileSyncCollectionAdapter
     {
         public string Collection => ProfileSyncCollections.TradeOrders;
@@ -533,6 +554,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         public Func<Guid, Task>? BeforeDeleteTradeOrderAsync { get; set; }
         public void SaveRawSetting(string key, string value) => settings[key] = value;
         public void AddCompany(Guid companyId) => _companyIds.Add(companyId);
+        public void SeedOrder(TradeOrder order) => DurableOrder = order;
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
             InvokeAsync<TValue>(identifier, CancellationToken.None, args);
         public ValueTask<TValue> InvokeAsync<TValue>(
@@ -554,6 +576,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 "IndexedDB.loadSetting" => settings.GetValueOrDefault((string)args![0]!),
                 "IndexedDB.loadTradeCompanyProfiles" => _companyIds.Select(companyId =>
                     new TradeCompanyProfile { Id = companyId, Name = "Test company" }).ToList(),
+                "IndexedDB.loadTradeOrders" => DurableOrder?.CompanyProfileId == (Guid)args![0]! ? new List<TradeOrder> { DurableOrder } : new List<TradeOrder>(),
                 "IndexedDB.saveSettingsBatch" => SaveBatch((Dictionary<string, string>)args![0]!),
                 "IndexedDB.saveSetting" => SaveSetting((string)args![0]!, (string)args[1]!),
                 _ => throw new NotSupportedException(identifier)

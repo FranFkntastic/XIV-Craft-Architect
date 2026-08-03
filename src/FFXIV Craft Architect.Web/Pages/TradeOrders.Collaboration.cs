@@ -32,6 +32,11 @@ public partial class TradeOrders
     {
         get
         {
+            if (HasSelectedLocalHostedCollision)
+            {
+                return "Resolve the local edit collision before publishing.";
+            }
+
             if (SelectedCommissionOwner?.Order is not { } order ||
                 order.CompanyCommission is not { } commission)
             {
@@ -41,6 +46,11 @@ public partial class TradeOrders
             if (commission.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft)
             {
                 return "The canonical brief has already been published.";
+            }
+
+            if (_selectedOrderPaymentTermsDirty)
+            {
+                return "Save the payment timing before publishing.";
             }
 
             if (HasActiveCompanyPublication)
@@ -118,6 +128,11 @@ public partial class TradeOrders
             if (HasLiveCommissionPublication && !HasFailedCompanyPublication)
             {
                 return "This commission already has a live crafter brief.";
+            }
+
+            if (_selectedOrderPaymentTermsDirty)
+            {
+                return "Save the payment timing before publishing.";
             }
 
             if (HasActiveCompanyPublication)
@@ -419,6 +434,11 @@ public partial class TradeOrders
     private async Task<bool> TrySaveCanonicalCommissionDraftDetailsAsync(
         bool showSuccess = true)
     {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return false;
+        }
+
         var owner = SelectedCommissionOwner;
         var commission = owner?.Order.CompanyCommission;
         if (owner == null || commission == null || !CanEditCanonicalWorkPackage)
@@ -813,6 +833,7 @@ public partial class TradeOrders
         bool? isTestFixture = null)
     {
         var source = order.SourceSnapshot ?? new TradeOrderSourceSnapshot();
+        var paymentTiming = GetEditablePaymentTiming(order);
         var evidenceCapturedAt = payment.Materials
             .Where(material => material.EvidenceTimestampUtc.HasValue)
             .Select(material => material.EvidenceTimestampUtc!.Value)
@@ -858,13 +879,32 @@ public partial class TradeOrders
                 payment.Active.Total,
                 payment.Active.CommissionPercent,
                 payment.Active.CraftSynthCount,
-                payment.Active.GilPerSynth),
+                payment.Active.GilPerSynth,
+                paymentTiming.Schedule,
+                paymentTiming.CustomTerms),
             Evidence = new CommissionBriefEvidence(
                 FormatCommissionCostBasis(source),
                 FormatCommissionMarketScope(source),
                 FormatCommissionLocation(source),
                 evidenceCapturedAt)
         };
+    }
+
+    private (CompanyCommissionPaymentSchedule Schedule, string? CustomTerms)
+        GetEditablePaymentTiming(TradeOrder order)
+    {
+        if (IsEditingCommissionTermsRevision &&
+            _commissionTermsRevisionBrief?.Payment is { } revisionPayment)
+        {
+            return (revisionPayment.Schedule, revisionPayment.CustomTerms);
+        }
+
+        if (order.CompanyCommission?.CurrentTerms.Payment is { } canonicalPayment)
+        {
+            return (canonicalPayment.Schedule, canonicalPayment.CustomTerms);
+        }
+
+        return (order.PaymentSchedule, order.CustomPaymentTerms);
     }
 
     private CommissionBriefDocument BuildCanonicalCommissionBrief(

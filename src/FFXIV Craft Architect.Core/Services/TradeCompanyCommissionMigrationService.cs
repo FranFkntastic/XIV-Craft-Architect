@@ -20,7 +20,7 @@ public static class TradeCompanyCommissionMigrationService
             "trade-architect",
             CompanyCommissionActorKind.Commissioner,
             "Trade Architect");
-        return PreserveCurrentTermIdentity(
+        return PreserveCurrentLineIdentity(
             CreateTerms(source, brief, actor, createdAtUtc),
             currentTerms) with
         {
@@ -52,7 +52,7 @@ public static class TradeCompanyCommissionMigrationService
         var currentTerms = source.CompanyCommission?.CurrentTerms ??
             throw new InvalidOperationException(
                 "A canonical commission is required to create a terms revision.");
-        return PreserveCurrentTermIdentity(
+        return PreserveCurrentLineIdentity(
             CreateTerms(source, brief, actor, createdAtUtc),
             currentTerms) with
         {
@@ -471,7 +471,7 @@ public static class TradeCompanyCommissionMigrationService
 
     }
 
-    private static CompanyCommissionTermsVersion PreserveCurrentTermIdentity(
+    private static CompanyCommissionTermsVersion PreserveCurrentLineIdentity(
         CompanyCommissionTermsVersion candidate,
         CompanyCommissionTermsVersion current)
     {
@@ -493,12 +493,7 @@ public static class TradeCompanyCommissionMigrationService
         return candidate with
         {
             Outputs = outputs,
-            Materials = materials,
-            Payment = candidate.Payment with
-            {
-                Schedule = current.Payment.Schedule,
-                CustomTerms = current.Payment.CustomTerms
-            }
+            Materials = materials
         };
     }
 

@@ -33,6 +33,7 @@ public partial class TradeOrders
     private List<TradePayrollWorkflowDraft> _payrollDrafts = [];
     private TradeOrder? _pendingImport;
     private TradeOrder? _selectedOrder;
+    private HostedOrderProjectionSnapshot? _selectedLocalHostedCollision;
     private bool _showNewOrderPanel;
     private string _newOrderTitle = string.Empty;
     private Guid? _newOrderCrafterId;
@@ -48,6 +49,8 @@ public partial class TradeOrders
     private bool _isRepricingSelectedOrder;
     private bool _isSavingSelectedOrderCraftPlan;
     private bool _isDeletingSelectedOrder;
+    private bool _isRetryingSelectedDeviceOnlyOrderSync;
+    private bool _isDiscardingSelectedDeviceOnlyDraft;
     private bool _isRefreshingLiveProcurement;
     private bool _isLoadingSelectedOrderSupplyPlan;
     private bool _selectedOrderPlanRestoreRetryRequested;
@@ -72,6 +75,10 @@ public partial class TradeOrders
     private Guid? _detailCrafterId;
     private TradeOrderStatus _detailStatus;
     private string? _detailNotes;
+    private CompanyCommissionPaymentSchedule _selectedOrderPaymentSchedule =
+        CompanyCommissionPaymentSchedule.Advance;
+    private string _selectedOrderCustomPaymentTerms = string.Empty;
+    private bool _selectedOrderPaymentTermsDirty;
     private string _manualNote = string.Empty;
     private string? _loadError;
     private Guid? _pendingNavigationOrderId;
@@ -104,6 +111,12 @@ public partial class TradeOrders
     [
         new(nameof(CommissionMaterialResponsibility.Crafter), "Crafter"),
         new(nameof(CommissionMaterialResponsibility.Provided), "Provided")
+    ];
+    private static readonly IReadOnlyList<CompactSelectOption> PaymentScheduleOptions =
+    [
+        new(nameof(CompanyCommissionPaymentSchedule.Advance), "Advance payment"),
+        new(nameof(CompanyCommissionPaymentSchedule.OnDelivery), "Payment on delivery"),
+        new(nameof(CompanyCommissionPaymentSchedule.Custom), "Custom timing")
     ];
 
     private string NewOrderCrafterValue
@@ -156,6 +169,11 @@ public partial class TradeOrders
             ? SetSelectedOrderPaymentContractAsync(contract)
             : Task.CompletedTask;
 
+    private Task SetSelectedOrderPaymentScheduleValueAsync(string value) =>
+        Enum.TryParse<CompanyCommissionPaymentSchedule>(value, out var schedule)
+            ? SetSelectedOrderPaymentScheduleAsync(schedule)
+            : Task.CompletedTask;
+
     private async Task SetOrderMaterialResponsibilityValueAsync(
         TradeCommissionPaymentMaterial material,
         string value)
@@ -179,8 +197,15 @@ public partial class TradeOrders
         _selectedOrder != null &&
         TradeRequestedOrderEditorMapper.HasChanges(_selectedOrder, _selectedOrderOutputEditors);
 
+    private bool HasSelectedLocalDraftEditorChanges =>
+        _selectedOrder is { CompanyCommission: null } &&
+        (HasSelectedOrderOutputChanges ||
+         HasSelectedOrderDetailChanges() ||
+         _selectedOrderPaymentTermsDirty);
+
     private bool CanSaveSelectedOrderOutputs =>
         CanEditSelectedOrderOutputs &&
+        !HasSelectedLocalHostedCollision &&
         HasSelectedOrderOutputChanges &&
         _selectedOrderOutputEditors.Count > 0 &&
         !_isSavingSelectedOrderOutputs;
@@ -228,6 +253,22 @@ public partial class TradeOrders
     private IReadOnlyList<TradeOrder> FilteredDeviceOnlyOrders => DeviceOnlyOrders
         .Where(OrderMatchesSearch)
         .ToArray();
+
+    private bool IsDeviceOnlyOrder(TradeOrder order) =>
+        DeviceOnlyOrders.Any(candidate => candidate.Id == order.Id);
+
+    private bool IsSelectedDeviceOnlyOrder =>
+        _selectedOrder is { CompanyCommission: null } selected &&
+        IsDeviceOnlyOrder(selected);
+
+    private bool CanDiscardSelectedDeviceOnlyDraft =>
+        IsSelectedDeviceOnlyOrder &&
+        _selectedOrder?.CommissionPublication == null;
+
+    private bool HasSelectedLocalHostedCollision =>
+        _selectedOrder is { CompanyCommission: null } selected &&
+        _selectedLocalHostedCollision is { Deleted: false, Order: not null } collision &&
+        collision.OrderId == selected.Id;
 
     protected override async Task OnInitializedAsync()
     {
@@ -384,6 +425,11 @@ public partial class TradeOrders
 
     private bool ShouldPreserveCanonicalEditor()
     {
+        if (HasSelectedLocalDraftEditorChanges)
+        {
+            return true;
+        }
+
         if (IsEditingCommissionTermsRevision)
         {
             return _commissionTermsRevisionDirty ||
@@ -394,6 +440,7 @@ public partial class TradeOrders
         return CanEditCanonicalDraft &&
                (HasSelectedOrderOutputChanges ||
                 HasCanonicalDraftDetailChanges ||
+                _selectedOrderPaymentTermsDirty ||
                 HasSelectedOrderDetailChanges());
     }
 
@@ -406,6 +453,14 @@ public partial class TradeOrders
 
     private async Task<bool> SaveOrderAndNotifyAsync(TradeOrder order)
     {
+        if (HasSelectedLocalHostedCollision && _selectedOrder?.Id == order.Id)
+        {
+            Snackbar.Add(
+                "Rebase the local edits onto the hosted copy, or use the hosted copy before saving.",
+                Severity.Warning);
+            return false;
+        }
+
         if (_companyProfile == null)
         {
             return false;

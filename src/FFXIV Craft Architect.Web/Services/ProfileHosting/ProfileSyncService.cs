@@ -1508,11 +1508,20 @@ public sealed class ProfileSyncService
             ct);
         if (response.Success && response.Object != null)
         {
-            await _localState.SaveObjectRevisionAsync(
-                profileId,
-                conflict.Collection,
-                conflict.ObjectId,
-                response.Object.Revision);
+            if (!await AdoptCommittedTradeOrderPutAsync(
+                    settings,
+                    adapter,
+                    conflict.Collection,
+                    conflict.ObjectId,
+                    response.Object,
+                    ct))
+            {
+                await _localState.SaveObjectRevisionAsync(
+                    profileId,
+                    conflict.Collection,
+                    conflict.ObjectId,
+                    response.Object.Revision);
+            }
             _conflicts.Remove(conflict);
             await RemovePendingSaveAsync(
                 profileId,
@@ -1688,11 +1697,20 @@ public sealed class ProfileSyncService
         }
         else if (response.Success && response.Object != null)
         {
-            await _localState.SaveObjectRevisionAsync(
-                profileId,
-                pending.Collection,
-                pending.ObjectId,
-                response.Object.Revision);
+            if (!await AdoptCommittedTradeOrderPutAsync(
+                    settings,
+                    adapter,
+                    pending.Collection,
+                    pending.ObjectId,
+                    response.Object,
+                    ct))
+            {
+                await _localState.SaveObjectRevisionAsync(
+                    profileId,
+                    pending.Collection,
+                    pending.ObjectId,
+                    response.Object.Revision);
+            }
             await RemovePendingSaveAsync(
                 profileId,
                 pending.Collection,
@@ -1704,6 +1722,41 @@ public sealed class ProfileSyncService
                 pending.ObjectId));
         }
 
+        return true;
+    }
+
+    private async Task<bool> AdoptCommittedTradeOrderPutAsync(
+        HostedProfileConnectionSettings expectedAuthority,
+        IProfileSyncCollectionAdapter adapter,
+        string collection,
+        string objectId,
+        ProfileSyncObjectEnvelope committed,
+        CancellationToken ct)
+    {
+        if (adapter is not IHostedOrderProfileSyncAdapter ||
+            !string.Equals(
+                collection,
+                ProfileSyncCollections.TradeOrders,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!IsSameIdentity(
+                committed.Collection,
+                committed.ObjectId,
+                collection,
+                objectId) ||
+            committed.Deleted ||
+            committed.Revision <= 0)
+        {
+            throw new InvalidOperationException(
+                $"The profile host returned the wrong committed Trade order for '{objectId}'.");
+        }
+
+        _ = ReadOrderCompanyProfileId(committed);
+        await RequireConnectionAuthorityAsync(expectedAuthority);
+        await adapter.ApplyRemoteObjectAsync(committed, ct);
         return true;
     }
 

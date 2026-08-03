@@ -26,6 +26,14 @@ public partial class TradeOrders
             return;
         }
 
+        if (HasSelectedLocalHostedCollision)
+        {
+            Snackbar.Add(
+                "Rebase the local edits onto the hosted copy, or use the hosted copy before saving.",
+                Severity.Warning);
+            return;
+        }
+
         if (!TradeOrderWorkflow.CanEditRequestedOutputs(_selectedOrder))
         {
             Snackbar.Add("Requested outputs can only be edited before work starts.", Severity.Warning);
@@ -156,6 +164,14 @@ public partial class TradeOrders
             return;
         }
 
+        if (HasSelectedLocalHostedCollision)
+        {
+            Snackbar.Add(
+                "Rebase the local edits onto the hosted copy, or use the hosted copy before saving.",
+                Severity.Warning);
+            return;
+        }
+
         if (_selectedOrder.CompanyCommission != null)
         {
             Snackbar.Add(
@@ -253,7 +269,9 @@ public partial class TradeOrders
 
     private async Task CreateOrReplaceSelectedOrderCraftPlanAsync()
     {
-        if (_selectedOrder == null || _companyProfile == null || _isSavingSelectedOrderCraftPlan)
+        if (_selectedOrder == null ||
+            _companyProfile == null ||
+            IsPlanMutationTransactionRunning)
         {
             return;
         }
@@ -264,7 +282,7 @@ public partial class TradeOrders
             return;
         }
 
-        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
+        if (!CanEditSelectedOrderPlan)
         {
             Snackbar.Add(
                 "Published work packages can only change through Revise Terms.",
@@ -340,6 +358,26 @@ public partial class TradeOrders
             _isSavingSelectedOrderCraftPlan = false;
             ScheduleSelectedOrderPlanRestoration();
         }
+    }
+
+    private async Task BeginSelectedOrderPlanReconstructionAsync()
+    {
+        if (!CanBeginSelectedOrderPlanReconstruction ||
+            IsPlanMutationTransactionRunning)
+        {
+            return;
+        }
+
+        if (_selectedOrder?.CompanyCommission != null && !CanEditCanonicalWorkPackage)
+        {
+            ShowCommissionTermsRevision();
+            if (!IsEditingCommissionTermsRevision)
+            {
+                return;
+            }
+        }
+
+        await CreateOrReplaceSelectedOrderCraftPlanAsync();
     }
 
     private async Task<bool> ConfirmCraftPlanReplacementAsync(TradeOrderCraftPlanReplacementAssessment assessment)
@@ -466,7 +504,7 @@ public partial class TradeOrders
             return;
         }
 
-        if (_selectedOrder.CompanyCommission != null && !CanEditCanonicalDraft)
+        if (!CanEditSelectedOrderPlan)
         {
             Snackbar.Add(
                 "Published pricing is part of the accepted terms. Use Revise Terms to refresh it.",

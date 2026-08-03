@@ -24,6 +24,8 @@ public static class TradeOrderWorkflow
             Notes = order.Notes,
             SourceSnapshot = CopySourceSnapshot(order.SourceSnapshot),
             PaymentPolicyOverride = order.PaymentPolicyOverride,
+            PaymentSchedule = order.PaymentSchedule,
+            CustomPaymentTerms = order.CustomPaymentTerms,
             History = (order.History ?? Array.Empty<TradeOrderHistoryEvent>()).ToArray(),
             PayrollDraftId = order.PayrollDraftId,
             CraftPlanId = order.CraftPlanId,

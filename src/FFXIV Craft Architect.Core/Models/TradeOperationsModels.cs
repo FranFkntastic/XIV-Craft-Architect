@@ -179,6 +179,9 @@ public sealed class TradeOrder
     public string? Notes { get; set; }
     public TradeOrderSourceSnapshot SourceSnapshot { get; set; } = new();
     public TradePaymentPolicy? PaymentPolicyOverride { get; set; }
+    public CompanyCommissionPaymentSchedule PaymentSchedule { get; set; } =
+        CompanyCommissionPaymentSchedule.Advance;
+    public string? CustomPaymentTerms { get; set; }
     public IReadOnlyList<TradeOrderHistoryEvent> History { get; set; } = Array.Empty<TradeOrderHistoryEvent>();
     public string? PayrollDraftId { get; set; }
     public string? CraftPlanId { get; set; }
