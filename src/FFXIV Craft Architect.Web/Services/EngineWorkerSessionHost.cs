@@ -1625,10 +1625,6 @@ public static partial class ManagedHost
             .Where(item => item.TotalQuantity > 0)
             .ToArray();
         var evidence = session.BorrowMarketEvidence();
-        var overlay = session.BorrowProcurementOverlay();
-        var costPlans = overlay?.ShoppingPlans is { Count: > 0 }
-            ? overlay.ShoppingPlans
-            : evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>();
         var acquisition = CaptureAcquisitionProjection(new WorkerSessionCommandEnvelope(
             WorkerSessionProtocol.ContractVersion,
             WorkerSessionCommandKinds.AcquisitionProjection,
@@ -1640,7 +1636,7 @@ public static partial class ManagedHost
             new CommissionCostBasisResolver().BuildSelectedSourceLines(
                 activeDemand,
                 evidence.ItemAnalyses,
-                costPlans),
+                evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>()),
             acquisition.Rows);
 
         var warnings = new List<string>();

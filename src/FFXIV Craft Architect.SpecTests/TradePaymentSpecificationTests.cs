@@ -155,7 +155,7 @@ public sealed class TradePaymentSpecificationTests
 
         Assert.True(hqLine.RequiresHq);
         Assert.Equal(150m, hqLine.UnitCost);
-        Assert.Equal("Procurement route", hqLine.EvidenceSource);
+        Assert.Equal("Acquisition evaluation", hqLine.EvidenceSource);
         Assert.Equal(20m, vendorLine.UnitCost);
         Assert.Equal("Vendor price", vendorLine.EvidenceSource);
 
