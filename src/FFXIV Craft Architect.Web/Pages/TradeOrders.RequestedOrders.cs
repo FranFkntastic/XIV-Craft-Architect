@@ -257,6 +257,11 @@ public partial class TradeOrders
                 return;
             }
 
+            pricingResult.UpdatedOrder.PaymentPolicyOverride =
+                TradeOrderWorkflow.ResolvePaymentPolicy(
+                    pricingResult.UpdatedOrder,
+                    _companyProfile.PaymentPolicy);
+
             var saved = await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder);
             if (!saved)
             {
@@ -320,6 +325,11 @@ public partial class TradeOrders
             Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
             return;
         }
+
+        pricingResult.UpdatedOrder.PaymentPolicyOverride =
+            TradeOrderWorkflow.ResolvePaymentPolicy(
+                pricingResult.UpdatedOrder,
+                _companyProfile.PaymentPolicy);
 
         var saved = await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder);
         if (!saved)

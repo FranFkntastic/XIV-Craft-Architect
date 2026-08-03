@@ -97,8 +97,7 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
                 hosted.Object.ObjectId);
             return;
         }
-        if (order.CompanyCommission != null &&
-            !TradeCompanyCommissionMigrationService.RequiresAssignedClaimRepair(order))
+        if (!RequiresMigration(order))
         {
             return;
         }
@@ -112,12 +111,6 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
                     order.CommissionPublication.PublicId,
                     cancellationToken);
             companyId = published?.Ownership?.CompanyId ?? companyId;
-            var migrated = TradeCompanyCommissionMigrationService.ConvertLegacyOrder(
-                order,
-                published,
-                companyId,
-                initialCommissionRevision: 0,
-                timeProvider.GetUtcNow().UtcDateTime);
             if (!Guid.TryParse(hosted.ProfileId, out var hostProfileId) ||
                 hostProfileId == Guid.Empty)
             {
@@ -130,6 +123,18 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
                 hostProfileId,
                 TradeCompanyRole.Owner,
                 hostProfileId);
+            var companyPaymentPolicy = order.CompanyCommission == null && published == null
+                ? (await companies.LoadCompanyProfileAsync(access, cancellationToken))?.PaymentPolicy ??
+                    throw new InvalidOperationException(
+                        "The canonical Trade company profile is unavailable for legacy order migration.")
+                : null;
+            var migrated = TradeCompanyCommissionMigrationService.ConvertLegacyOrder(
+                order,
+                published,
+                companyId,
+                initialCommissionRevision: 0,
+                timeProvider.GetUtcNow().UtcDateTime,
+                companyPaymentPolicy);
             var companyRevision = await companies.LoadCompanyRevisionAsync(
                 access,
                 cancellationToken);
@@ -171,4 +176,9 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
                 order.Id);
         }
     }
+
+    internal static bool RequiresMigration(TradeOrder order) =>
+        order.CompanyCommission == null
+            ? order.AuthoringSchemaVersion < TradeOrder.CurrentAuthoringSchemaVersion
+            : TradeCompanyCommissionMigrationService.RequiresAssignedClaimRepair(order);
 }

@@ -14,6 +14,7 @@ public static class TradeOrderWorkflow
         return new TradeOrder
         {
             Id = order.Id,
+            AuthoringSchemaVersion = order.AuthoringSchemaVersion,
             CompanyProfileId = order.CompanyProfileId,
             Title = order.Title,
             Status = order.Status,

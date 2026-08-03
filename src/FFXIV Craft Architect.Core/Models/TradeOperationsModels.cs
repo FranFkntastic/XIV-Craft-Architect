@@ -168,7 +168,10 @@ public enum TradeOrderCraftPlanLinkKind
 
 public sealed class TradeOrder
 {
+    public const int CurrentAuthoringSchemaVersion = 1;
+
     public Guid Id { get; set; } = Guid.NewGuid();
+    public int AuthoringSchemaVersion { get; set; }
     public Guid CompanyProfileId { get; set; }
     public string Title { get; set; } = string.Empty;
     public TradeOrderStatus Status { get; set; } = TradeOrderStatus.ReadyToAssign;
