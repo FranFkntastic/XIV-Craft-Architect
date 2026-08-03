@@ -3,46 +3,19 @@ using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
-internal static class TradeOrderPlanRestoreContractScenarios
+public sealed class TradeOrderPlanRestorePolicyTests
 {
     private static readonly Guid OrderA = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly Guid OrderB = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
-    public static async Task AssertAllAsync()
-    {
-        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.Current, true);
-        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.SelectionChanged, false);
-        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.PlanChanged, false);
-        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.TabChanged, false);
-        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.Disposed, false);
-        AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario.NewerRequest, false);
-        WorkerChangeBeforeAdoptionInvalidatesTheRequest();
-        ExplicitLoaderRequestRejectsSelectionOrWorkerChange(
-            selectionStillMatches: false,
-            workerRevision: 12);
-        ExplicitLoaderRequestRejectsSelectionOrWorkerChange(
-            selectionStillMatches: true,
-            workerRevision: 13);
-        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
-            true, ProfileSyncStage.Inactive, false, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead);
-        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
-            true, ProfileSyncStage.ApplyingChanges, true, 1, TradeOrderPlanMissingDisposition.WaitForHostedPlan);
-        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
-            true, ProfileSyncStage.Ready, true, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead);
-        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
-            true, ProfileSyncStage.Failed, true, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead);
-        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
-            false, ProfileSyncStage.Inactive, false, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead);
-        MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
-            true, ProfileSyncStage.Ready, true, 3, TradeOrderPlanMissingDisposition.ExactPlanUnavailable);
-        await ExactReadAdoptsPayloadThatArrivesOnThirdAttempt();
-        await TransientReadExceptionsAreBoundedAndCanRecover();
-        await TransientReadExceptionsStopAfterThreeAttempts();
-        await MissingHostedPlanWaitsForNextSyncStatusWithoutPolling();
-        await ExactReadStopsAsSoonAsItsRequestIsSupersededDuringAnAwait();
-    }
-
-    private static void AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario scenario, bool expected)
+    [Theory]
+    [InlineData(CurrentRequestScenario.Current, true)]
+    [InlineData(CurrentRequestScenario.SelectionChanged, false)]
+    [InlineData(CurrentRequestScenario.PlanChanged, false)]
+    [InlineData(CurrentRequestScenario.TabChanged, false)]
+    [InlineData(CurrentRequestScenario.Disposed, false)]
+    [InlineData(CurrentRequestScenario.NewerRequest, false)]
+    public void AdoptionRequiresTheOriginalSelectionAndPlanIntent(CurrentRequestScenario scenario, bool expected)
     {
         var selectedOrderId = scenario == CurrentRequestScenario.SelectionChanged ? OrderB : OrderA;
         var selectedPlanId = scenario == CurrentRequestScenario.PlanChanged ? "plan-b" : "plan-a";
@@ -53,10 +26,14 @@ internal static class TradeOrderPlanRestoreContractScenarios
             disposed: scenario == CurrentRequestScenario.Disposed));
     }
 
-    private static void WorkerChangeBeforeAdoptionInvalidatesTheRequest()
+    [Fact]
+    public void WorkerChangeBeforeAdoptionInvalidatesTheRequest()
         => Assert.False(CanAdopt(workerRevision: 13));
 
-    private static void ExplicitLoaderRequestRejectsSelectionOrWorkerChange(bool selectionStillMatches, long workerRevision) =>
+    [Theory]
+    [InlineData(false, 12)]
+    [InlineData(true, 13)]
+    public void ExplicitLoaderRequestRejectsSelectionOrWorkerChange(bool selectionStillMatches, long workerRevision) =>
         Assert.False(CanAdopt(selectedOrderId: selectionStillMatches ? OrderA : OrderB,
             activeTab: 2, planTab: 2, workerRevision: workerRevision));
 
@@ -66,7 +43,14 @@ internal static class TradeOrderPlanRestoreContractScenarios
         TradeOrderPlanRestorePolicy.CanAdoptExactPlan(new(7, OrderA, "plan-a", 12), generation,
             selectedOrderId ?? OrderA, selectedPlanId, activeTab, planTab, disposed, workerRevision);
 
-    private static void MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
+    [Theory]
+    [InlineData(true, ProfileSyncStage.Inactive, false, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead)]
+    [InlineData(true, ProfileSyncStage.ApplyingChanges, true, 1, TradeOrderPlanMissingDisposition.WaitForHostedPlan)]
+    [InlineData(true, ProfileSyncStage.Ready, true, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead)]
+    [InlineData(true, ProfileSyncStage.Failed, true, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead)]
+    [InlineData(false, ProfileSyncStage.Inactive, false, 1, TradeOrderPlanMissingDisposition.RetryExactPlanRead)]
+    [InlineData(true, ProfileSyncStage.Ready, true, 3, TradeOrderPlanMissingDisposition.ExactPlanUnavailable)]
+    public void MissingPlanOnlyWaitsForAuthorityOrRetriesTheExactSavedObject(
         bool waitsForProfilePlanAuthority,
         ProfileSyncStage stage,
         bool isConnected,
@@ -81,7 +65,8 @@ internal static class TradeOrderPlanRestoreContractScenarios
                 attempt));
     }
 
-    private static async Task ExactReadAdoptsPayloadThatArrivesOnThirdAttempt()
+    [Fact]
+    public async Task ExactReadAdoptsPayloadThatArrivesOnThirdAttempt()
     {
         var attempts = 0;
         var payload = new object();
@@ -93,7 +78,8 @@ internal static class TradeOrderPlanRestoreContractScenarios
         Assert.Equal(3, result.Attempts);
     }
 
-    private static async Task TransientReadExceptionsAreBoundedAndCanRecover()
+    [Fact]
+    public async Task TransientReadExceptionsAreBoundedAndCanRecover()
     {
         var attempts = 0;
         var payload = new object();
@@ -108,7 +94,8 @@ internal static class TradeOrderPlanRestoreContractScenarios
         Assert.Equal(3, attempts);
     }
 
-    private static async Task TransientReadExceptionsStopAfterThreeAttempts()
+    [Fact]
+    public async Task TransientReadExceptionsStopAfterThreeAttempts()
     {
         var attempts = 0;
 
@@ -127,7 +114,8 @@ internal static class TradeOrderPlanRestoreContractScenarios
         Assert.Equal("IndexedDB attempt 3", result.LastException?.Message);
     }
 
-    private static async Task MissingHostedPlanWaitsForNextSyncStatusWithoutPolling()
+    [Fact]
+    public async Task MissingHostedPlanWaitsForNextSyncStatusWithoutPolling()
     {
         var attempts = 0;
 
@@ -143,7 +131,8 @@ internal static class TradeOrderPlanRestoreContractScenarios
         Assert.Equal(1, attempts);
     }
 
-    private static async Task ExactReadStopsAsSoonAsItsRequestIsSupersededDuringAnAwait()
+    [Fact]
+    public async Task ExactReadStopsAsSoonAsItsRequestIsSupersededDuringAnAwait()
     {
         var attempts = 0;
         var requestIsCurrent = true;
@@ -176,7 +165,7 @@ internal static class TradeOrderPlanRestoreContractScenarios
     private static ProfileSyncStatus Status(ProfileSyncStage stage, bool isConnected) =>
         new(isConnected, isConnected, 10, 0, 0, DateTime.UtcNow, "fixture") { Stage = stage };
 
-    private enum CurrentRequestScenario
+    public enum CurrentRequestScenario
     {
         Current,
         SelectionChanged,

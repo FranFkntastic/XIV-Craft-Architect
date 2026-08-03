@@ -16,7 +16,7 @@ public sealed class HostedOrderRestoreStateTests
     [InlineData(RestoreScenario.UnverifiableFailure)]
     [InlineData(RestoreScenario.OfflineReconnect)]
     [InlineData(RestoreScenario.ScopeChange)]
-    public async Task RestoreStateExposesOnlyTruthfulDataForEachLifecycle(
+    public void RestoreStateExposesOnlyTruthfulDataForEachLifecycle(
         RestoreScenario scenario)
     {
         switch (scenario)
@@ -26,11 +26,6 @@ public sealed class HostedOrderRestoreStateTests
                 break;
             case RestoreScenario.SuccessfulEmptyRestore:
                 SuccessfulRestoreMakesEvenZeroOrdersAuthoritative();
-                await TradeOrderPlanRestoreContractScenarios.AssertAllAsync();
-                await ProfileSyncDeletionProjectionTests.AssertAllAsync();
-                await PlansProfileSyncAdapterTests.AssertAllAsync();
-                CompanyCommissionProjectionPresentationContractTests.AssertAll();
-                await DiscordCommissionMessageLifecycleTests.AssertAllAsync();
                 break;
             case RestoreScenario.OrdinaryReconnect:
                 OrdinaryReconnectRetainsCompleteProjectionAndReportsRealProgress();

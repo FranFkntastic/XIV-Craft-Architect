@@ -376,8 +376,8 @@ function validateBuildManifest(manifest) {
       JSON.stringify(requiredOutcomes(manifest.target.slot))) {
     throw new Error('Build manifest required outcomes are incomplete or reordered.');
   }
-  if (manifest?.acceptance?.dotnet?.specTestCases !== 60 ||
-      manifest?.acceptance?.dotnet?.contractTestCases !== 159) {
+  if (manifest?.acceptance?.dotnet?.specTestCases !== 72 ||
+      manifest?.acceptance?.dotnet?.contractTestCases !== 236) {
     throw new Error('Build manifest .NET test inventory is incomplete.');
   }
   if (JSON.stringify(manifest?.acceptance?.worker) !== JSON.stringify(expectedTarget.worker)) {
@@ -581,7 +581,7 @@ export async function createArtifact(options, behavior = {}) {
       harnessTreeSha256: harnessTreeSha,
       fixtureTreeSha256: fixtureTreeSha,
       requiredOutcomes: requiredOutcomes(slot),
-      dotnet: { specTestCases: 60, contractTestCases: 159 },
+      dotnet: { specTestCases: 72, contractTestCases: 236 },
       worker: target.worker
     }
   };
