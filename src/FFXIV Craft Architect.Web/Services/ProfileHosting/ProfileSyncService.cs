@@ -1105,9 +1105,19 @@ public sealed class ProfileSyncService
             var expectedObject = remote.Objects.FirstOrDefault(candidate =>
                 string.Equals(candidate.Collection, expectation.Collection, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(candidate.ObjectId, expectation.ObjectId, StringComparison.Ordinal));
+            var isConfirmedOrderTombstone = expectedObject is
+            {
+                Deleted: true
+            } &&
+                expectedObject.Revision > expectation.Revision &&
+                string.Equals(
+                    expectation.Collection,
+                    ProfileSyncCollections.TradeOrders,
+                    StringComparison.OrdinalIgnoreCase);
             if (expectedObject == null ||
-                expectedObject.Deleted ||
-                expectedObject.Revision != expectation.Revision)
+                (!isConfirmedOrderTombstone &&
+                    (expectedObject.Deleted ||
+                     expectedObject.Revision != expectation.Revision)))
             {
                 throw new InvalidOperationException(
                     $"Hosted {expectation.Collection}/{expectation.ObjectId} changed before deletion; its current state was preserved.");
@@ -1125,6 +1135,34 @@ public sealed class ProfileSyncService
                 string.Equals(candidate.ObjectId, item.ObjectId, StringComparison.Ordinal));
             if (remoteObject == null)
             {
+                continue;
+            }
+
+            if (remoteObject.Deleted)
+            {
+                var completedOrderExpectation = expectations.FirstOrDefault(expectation =>
+                    string.Equals(
+                        expectation.Collection,
+                        ProfileSyncCollections.TradeOrders,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(expectation.ObjectId, item.ObjectId, StringComparison.Ordinal) &&
+                    remoteObject.Revision > expectation.Revision);
+                if (completedOrderExpectation != null &&
+                    Guid.TryParse(item.ObjectId, out var deletedOrderId))
+                {
+                    var adapter = GetAdapter(item.Collection);
+                    var companyProfileId = await ResolveDeletedOrderCompanyProfileIdAsync(
+                        adapter,
+                        deletedOrderId,
+                        ct) ?? throw new InvalidOperationException(
+                            $"Hosted TradeOrders/{item.ObjectId} was already deleted, but its local company identity could not be verified.");
+                    pendingOrderDeletions.Add((
+                        $"{item.Collection}\0{item.ObjectId}",
+                        deletedOrderId,
+                        companyProfileId,
+                        remoteObject.Revision,
+                        adapter as IHostedOrderProfileSyncAdapter));
+                }
                 continue;
             }
 
