@@ -86,12 +86,15 @@ public sealed class MarketRegionScopeContractTests
         var pricing = File.ReadAllText(Path.Combine(web, "Services", "TradeOrderPricingWorkflowService.cs"));
         var lifecycle = File.ReadAllText(Path.Combine(web, "Services", "PlanLifecycleWorkflowService.cs"));
         var procurement = File.ReadAllText(Path.Combine(web, "Pages", "ProcurementPlan.razor"));
+        var tradeProcurement = File.ReadAllText(Path.Combine(web, "Pages", "TradeOrders.Procurement.cs"));
 
         Assert.Contains("_viewSettings.DefaultMarketFetchScope", pricing, StringComparison.Ordinal);
         Assert.Contains("useCurrentSettingsContext: true", pricing, StringComparison.Ordinal);
         Assert.DoesNotContain("order.SourceSnapshot.MarketFetchScope ??", pricing, StringComparison.Ordinal);
         Assert.Contains("var requestedScope = marketScope;", lifecycle, StringComparison.Ordinal);
         Assert.Contains("_route.Scope", procurement, StringComparison.Ordinal);
+        Assert.Contains("MarketFetchScope.EntireRegion", tradeProcurement, StringComparison.Ordinal);
+        Assert.Contains("$\"{order.SourceSnapshot.Region} region\"", tradeProcurement, StringComparison.Ordinal);
     }
 
     private static string LocateRepositoryRoot()

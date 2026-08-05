@@ -801,9 +801,13 @@ public partial class TradeOrders
 
     private static string FormatProcurementEvidenceContext(TradeOrder order)
     {
-        var scope = string.IsNullOrWhiteSpace(order.SourceSnapshot.DataCenter)
-            ? order.SourceSnapshot.Region
-            : order.SourceSnapshot.DataCenter;
+        var scope = order.SourceSnapshot.MarketFetchScope == MarketFetchScope.EntireRegion
+            ? string.IsNullOrWhiteSpace(order.SourceSnapshot.Region)
+                ? "Entire region"
+                : $"{order.SourceSnapshot.Region} region"
+            : string.IsNullOrWhiteSpace(order.SourceSnapshot.DataCenter)
+                ? order.SourceSnapshot.Region
+                : order.SourceSnapshot.DataCenter;
         var refreshed = order.SourceSnapshot.ImportedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
         return string.IsNullOrWhiteSpace(scope)
             ? $"Refreshed {refreshed}"
