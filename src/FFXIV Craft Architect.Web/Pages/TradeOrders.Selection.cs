@@ -214,14 +214,25 @@ public partial class TradeOrders
 
     private void SelectOrder(TradeOrder order)
     {
+        var isSameOrder = _selectedOrder?.Id == order.Id;
+        var isSameLinkedPlan = isSameOrder &&
+            !string.IsNullOrWhiteSpace(_selectedOrder?.CraftPlanId) &&
+            string.Equals(_selectedOrder.CraftPlanId, order.CraftPlanId, StringComparison.Ordinal) &&
+            _selectedOrder.CraftPlanSavedAtUtc == order.CraftPlanSavedAtUtc;
         _selectedLocalHostedCollision = null;
-        InvalidateSelectedOrderPlanRestoration();
-        ClearLiveProcurementSnapshot();
+        if (!isSameLinkedPlan)
+        {
+            InvalidateSelectedOrderPlanRestoration();
+            ClearLiveProcurementSnapshot();
+        }
         _selectedOrderPlanRestoreError = null;
         _selectedOrder = order;
         _pendingImport = null;
         _showNewOrderPanel = false;
-        _activeOpsTab = 0;
+        if (!isSameOrder)
+        {
+            _activeOpsTab = 0;
+        }
         _detailTitle = order.Title;
         _detailCrafterId = order.AssignedCrafterId;
         _detailStatus = order.Status;
