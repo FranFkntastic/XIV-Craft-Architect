@@ -380,8 +380,7 @@
         {
             var defaultDc = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
             var region = await Settings.GetAsync("market.region", "North America") ?? "North America";
-            var comparisonRegion =
-                await Settings.GetAsync("market.comparison_region", string.Empty);
+            var comparisonRegions = await LoadComparisonRegionsAsync();
             var secretDebugToolsEnabled = await Settings.GetAsync("debug.secret_tools_enabled", false);
             var deferAutomaticRoute = await Settings.GetAsync("debug.defer_automatic_route_reconciliation", false);
             var defaultScope = ParseMarketFetchScope(
@@ -405,7 +404,7 @@
                 selectedDataCenter,
                 region,
                 defaultScope,
-                comparisonRegion);
+                comparisonRegions);
             AppState.SetProcurementSettings(
                 procurementEnableSplits,
                 procurementTravelTolerance,
@@ -414,6 +413,24 @@
             AppState.SetProcurementTravelPriority(procurementTravelPriority);
         }
         catch { /* Ignore settings load errors */ }
+    }
+
+    private async Task<IReadOnlyList<string>> LoadComparisonRegionsAsync()
+    {
+        var comparisonRegions = await Settings.GetAsync(
+            "market.comparison_regions",
+            Array.Empty<string>());
+        if (comparisonRegions is { Length: > 0 })
+        {
+            return comparisonRegions;
+        }
+
+        var legacyComparisonRegion = await Settings.GetAsync(
+            "market.comparison_region",
+            string.Empty);
+        return string.IsNullOrWhiteSpace(legacyComparisonRegion)
+            ? Array.Empty<string>()
+            : [legacyComparisonRegion];
     }
 
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)

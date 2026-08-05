@@ -13,15 +13,32 @@ public sealed class MarketRegionScopeContractTests
     }
 
     [Fact]
-    public void GetDataCenters_CapsAnalysisAtPrimaryPlusOneComparisonRegion()
+    public void GetDataCenters_IncludesEverySelectedComparisonRegion()
     {
         var dataCenters = MarketFetchScopeResolver.GetDataCenters(
             MarketFetchScope.EntireRegion,
             "Aether",
             "North America",
-            ["Europe", "Japan"]);
+            ["Europe", "Japan", "Oceania"]);
 
-        Assert.Equal(["Aether", "Primal", "Crystal", "Dynamis", "Chaos", "Light"], dataCenters);
+        Assert.Equal(
+            [
+                "Aether", "Primal", "Crystal", "Dynamis",
+                "Chaos", "Light",
+                "Elemental", "Gaia", "Mana", "Meteor",
+                "Materia"
+            ],
+            dataCenters);
+    }
+
+    [Fact]
+    public void NormalizeSelectedRegions_PreservesAllKnownComparisonsAndRemovesDuplicates()
+    {
+        var regions = MarketFetchScopeResolver.NormalizeSelectedRegions(
+            "North America",
+            ["Japan", "Europe", "Japan", "Unknown", "Oceania"]);
+
+        Assert.Equal(["North America", "Japan", "Europe", "Oceania"], regions);
     }
     [Fact]
     public void GetDataCenters_SelectedDataCenterNeverExpandsAcrossRegions()
@@ -91,6 +108,12 @@ public sealed class MarketRegionScopeContractTests
         Assert.Contains("_route.Scope", procurement, StringComparison.Ordinal);
         Assert.Contains("MarketFetchScope.EntireRegion", tradeProcurement, StringComparison.Ordinal);
         Assert.Contains("$\"{order.SourceSnapshot.Region} region\"", tradeProcurement, StringComparison.Ordinal);
+
+        var options = File.ReadAllText(Path.Combine(web, "Dialogs", "OptionsDialog.razor"));
+        var controls = File.ReadAllText(Path.Combine(web, "Shared", "MarketAnalysisControlsPanel.razor"));
+        Assert.Contains("CompactMultiSelectField", options, StringComparison.Ordinal);
+        Assert.Contains("market.comparison_regions", options, StringComparison.Ordinal);
+        Assert.DoesNotContain("Search entire region", controls, StringComparison.Ordinal);
     }
 
     private static string LocateRepositoryRoot()

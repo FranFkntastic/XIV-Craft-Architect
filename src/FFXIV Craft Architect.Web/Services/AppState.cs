@@ -17,13 +17,12 @@ public sealed class AppState
 
     public string SelectedDataCenter { get; private set; } = "Aether";
     public string SelectedRegion { get; private set; } = "North America";
-    public string? ComparisonRegion { get; private set; }
+    public IReadOnlyList<string> ComparisonRegions { get; private set; } =
+        Array.Empty<string>();
     public IReadOnlyList<string> AnalysisRegions =>
         MarketFetchScopeResolver.NormalizeSelectedRegions(
             SelectedRegion,
-            string.IsNullOrWhiteSpace(ComparisonRegion)
-                ? null
-                : [ComparisonRegion]);
+            ComparisonRegions);
     public MarketFetchScope DefaultMarketFetchScope { get; private set; } =
         MarketFetchScope.EntireRegion;
     public bool ProcurementEnableSplitWorldPurchases { get; private set; } = true;
@@ -75,7 +74,7 @@ public sealed class AppState
         string dataCenter,
         string region,
         MarketFetchScope defaultFetchScope,
-        string? comparisonRegion = null)
+        IReadOnlyCollection<string>? comparisonRegions = null)
     {
         SelectedRegion = MarketFetchScopeResolver
             .NormalizeSelectedRegions(region, null)
@@ -83,14 +82,10 @@ public sealed class AppState
         SelectedDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
             SelectedRegion,
             dataCenter);
-        ComparisonRegion = MarketFetchScopeResolver
-            .NormalizeSelectedRegions(
-                SelectedRegion,
-                string.IsNullOrWhiteSpace(comparisonRegion)
-                    ? null
-                    : [comparisonRegion])
+        ComparisonRegions = MarketFetchScopeResolver
+            .NormalizeSelectedRegions(SelectedRegion, comparisonRegions)
             .Skip(1)
-            .FirstOrDefault();
+            .ToArray();
         DefaultMarketFetchScope = defaultFetchScope;
         NotifySettingsChanged();
     }
