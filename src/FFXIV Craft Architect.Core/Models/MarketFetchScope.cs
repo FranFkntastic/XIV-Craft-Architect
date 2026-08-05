@@ -8,6 +8,8 @@ public enum MarketFetchScope
 
 public static class MarketFetchScopeResolver
 {
+    public const int MaximumAnalysisRegions = 4;
+
     private static readonly IReadOnlyDictionary<string, string[]> RegionDataCenters =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
@@ -88,7 +90,7 @@ public static class MarketFetchScopeResolver
     public static IReadOnlyList<string> NormalizeSelectedRegions(
         string selectedRegion,
         IReadOnlyCollection<string>? selectedRegions,
-        int maximumRegions = 2)
+        int maximumRegions = MaximumAnalysisRegions)
     {
         maximumRegions = Math.Max(1, maximumRegions);
         var normalized = new List<string>(maximumRegions);

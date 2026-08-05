@@ -30,17 +30,21 @@
                             Class="ma-full-width" />
     </div>
 
-    <div class="ma-region-toggle-block">
-        <MudCheckBox T="bool"
-                     Value="SearchEntireRegion"
-                     ValueChanged="OnSearchEntireRegionChanged"
-                     Dense="true"
-                     Color="Color.Primary"
-                     Class="ma-region-toggle">
-            <MudText Typo="Typo.body2" Class="ma-region-toggle-text">Search entire region</MudText>
-        </MudCheckBox>
-        <MudText Typo="Typo.caption" Class="ma-region-toggle-caption">
-            Slower, but finds the best prices across all data centers in @FormatAnalysisRegions().
+    <div class="ma-scope-receipt" role="region" aria-label="Market search scope">
+        <div class="ma-scope-receipt-heading">
+            <MudText Typo="Typo.caption">Market search scope</MudText>
+            <MudButton Variant="Variant.Text"
+                       Color="Color.Primary"
+                       Size="Size.Small"
+                       OnClick="OnOpenMarketOptionsRequested">
+                Change
+            </MudButton>
+        </div>
+        <MudText Typo="Typo.body2" Class="ma-scope-receipt-value">
+            @FormatScopeLabel()
+        </MudText>
+        <MudText Typo="Typo.caption" Class="ma-scope-receipt-caption">
+            @FormatScopeDetail()
         </MudText>
     </div>
 
@@ -100,7 +104,8 @@
     [Parameter] public MarketAcquisitionLens Lens { get; set; }
     [Parameter] public MarketAnalysisEvidenceOverlay EvidenceOverlay { get; set; } =
         MarketAnalysisEvidenceOverlay.CompetitivenessOverlay;
-    [Parameter] public bool SearchEntireRegion { get; set; }
+    [Parameter] public MarketFetchScope Scope { get; set; } = MarketFetchScope.EntireRegion;
+    [Parameter] public string SelectedDataCenter { get; set; } = "Aether";
     [Parameter] public string SelectedRegion { get; set; } = "North America";
     [Parameter] public IReadOnlyList<string> AnalysisRegions { get; set; } = [];
     [Parameter] public string? ScopeWarning { get; set; }
@@ -114,7 +119,7 @@
 
     [Parameter] public EventCallback<MarketAcquisitionLens> OnLensChangedRequested { get; set; }
     [Parameter] public EventCallback<MarketAnalysisEvidenceOverlay> OnEvidenceOverlayChangedRequested { get; set; }
-    [Parameter] public EventCallback<bool> OnSearchEntireRegionChangedRequested { get; set; }
+    [Parameter] public EventCallback OnOpenMarketOptionsRequested { get; set; }
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
     [Parameter] public EventCallback OnRefreshPricesRequested { get; set; }
     [Parameter] public EventCallback OnGoToProcurementRequested { get; set; }
@@ -129,8 +134,16 @@
             .ToArray();
         return regions.Length == 0
             ? SelectedRegion
-            : string.Join(" and ", regions);
+            : string.Join(", ", regions);
     }
+
+    private string FormatScopeLabel() => Scope == MarketFetchScope.EntireRegion
+        ? $"Entire {SelectedRegion} region"
+        : $"{SelectedDataCenter} data center";
+
+    private string FormatScopeDetail() => Scope == MarketFetchScope.EntireRegion
+        ? $"Region-wide pricing across {FormatAnalysisRegions()}."
+        : $"Pricing limited to {SelectedDataCenter} in {SelectedRegion}.";
 
     private static readonly IReadOnlyList<CompactSelectOption> LensOptions =
     [
@@ -142,9 +155,6 @@
         new(nameof(MarketAnalysisEvidenceOverlay.CompetitivenessOverlay), "Deals vs typical price"),
         new(nameof(MarketAnalysisEvidenceOverlay.PriceBandOverlay), "Price bands")
     ];
-
-    private Task OnSearchEntireRegionChanged(bool searchEntireRegion) =>
-        OnSearchEntireRegionChangedRequested.InvokeAsync(searchEntireRegion);
 
     private async Task OnLensValueChanged(string value)
     {

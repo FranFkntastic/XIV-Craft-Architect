@@ -19,6 +19,7 @@ public sealed class ProfileSyncLocalStateService
             "market.default_datacenter",
             "market.region",
             "market.comparison_region",
+            "market.comparison_regions",
             "market.home_world",
             "market.default_search_scope",
             "market.include_cross_world",

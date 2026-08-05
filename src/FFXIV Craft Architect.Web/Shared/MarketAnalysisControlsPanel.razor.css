@@ -20,24 +20,37 @@
     width: 100%;
 }
 
-.ma-region-toggle-block {
+.ma-scope-receipt {
     margin-bottom: 16px;
-}
-
-.ma-region-toggle {
-    background: #1e1e1e;
+    padding: 10px;
+    border: 1px solid #3d5b3e;
     border-radius: 6px;
-    padding: 4px 8px;
-    width: 100%;
+    background: rgba(38, 58, 39, 0.5);
 }
 
-.ma-region-toggle-text {
-    color: #ccc;
+.ma-scope-receipt-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--ca-text-muted);
 }
 
-.ma-region-toggle-caption {
+.ma-scope-receipt-heading ::deep .mud-button-root {
+    min-width: 0;
+    padding: 0 4px;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.ma-scope-receipt-value {
+    margin-top: 4px;
+    color: #b7e08a;
+    font-weight: 700;
+}
+
+.ma-scope-receipt-caption {
     color: var(--ca-text-muted);
     display: block;
     margin-top: 4px;
-    margin-left: 32px;
 }
