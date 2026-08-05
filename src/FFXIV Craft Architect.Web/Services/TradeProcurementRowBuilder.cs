@@ -5,6 +5,18 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public static class TradeProcurementRowBuilder
 {
+    public static bool IsRequestedOutputRow(
+        TradeOrder order,
+        TradeOrderProcurementRow row)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        ArgumentNullException.ThrowIfNull(row);
+        return row.IsLiveAcquisitionRow &&
+            order.SourceSnapshot?.RootItems.Any(output =>
+                output.ItemId == row.ItemId &&
+                output.MustBeHq == row.RequiresHq) == true;
+    }
+
     public static bool IsPlanPrecraftRow(TradeOrderProcurementRow row)
     {
         ArgumentNullException.ThrowIfNull(row);

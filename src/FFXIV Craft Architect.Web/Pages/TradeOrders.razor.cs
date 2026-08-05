@@ -50,7 +50,7 @@ public partial class TradeOrders
     private bool _isSavingSelectedOrderCraftPlan;
     private bool _isDeletingSelectedOrder;
     private bool _isRetryingSelectedDeviceOnlyOrderSync;
-    private bool _isDiscardingSelectedDeviceOnlyDraft;
+    private bool _isDiscardingSelectedDraft;
     private bool _isRefreshingLiveProcurement;
     private bool _isLoadingSelectedOrderSupplyPlan;
     private bool _selectedOrderPlanRestoreRetryRequested;
@@ -261,9 +261,26 @@ public partial class TradeOrders
         _selectedOrder is { CompanyCommission: null } selected &&
         IsDeviceOnlyOrder(selected);
 
-    private bool CanDiscardSelectedDeviceOnlyDraft =>
-        IsSelectedDeviceOnlyOrder &&
-        _selectedOrder?.CommissionPublication == null;
+    private TradeOrderLifecycleAction SelectedLifecycleAction =>
+        _selectedOrder == null
+            ? TradeOrderLifecycleAction.None
+            : TradeOrderWorkflow.GetLifecycleAction(_selectedOrder);
+
+    private bool HasSelectedLifecycleAction =>
+        SelectedLifecycleAction != TradeOrderLifecycleAction.None;
+
+    private bool CanDiscardSelectedDraft =>
+        SelectedLifecycleAction == TradeOrderLifecycleAction.DiscardDraft;
+
+    private string SelectedLifecycleActionLabel =>
+        SelectedLifecycleAction switch
+        {
+            TradeOrderLifecycleAction.DiscardDraft =>
+                _isDiscardingSelectedDraft ? "Discarding..." : "Discard Draft",
+            TradeOrderLifecycleAction.CancelCommission =>
+                IsSelectedCanonicalOwnerMissing ? "Remove Stale Order" : "Cancel Commission",
+            _ => string.Empty
+        };
 
     private bool HasSelectedLocalHostedCollision =>
         _selectedOrder is { CompanyCommission: null } selected &&

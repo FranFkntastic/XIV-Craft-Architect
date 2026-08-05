@@ -1,0 +1,79 @@
+<div class="@RootClass">
+    <span class="compact-multi-select-field-label" id="@LabelId">@Label</span>
+    <details class="compact-multi-select-field-details">
+        <summary class="compact-multi-select-field-summary"
+                 id="@ControlId"
+                 aria-labelledby="@LabelId">
+            @Summary
+        </summary>
+        <div class="compact-multi-select-field-options"
+             role="group"
+             aria-labelledby="@LabelId">
+            @foreach (var option in Options)
+            {
+                <label class="compact-multi-select-field-option">
+                    <input type="checkbox"
+                           checked="@IsSelected(option.Value)"
+                           disabled="@(Disabled || option.Disabled)"
+                           @onchange="args => OnOptionChangedAsync(option.Value, args)" />
+                    <span>@option.Label</span>
+                </label>
+            }
+        </div>
+    </details>
+</div>
+
+@code {
+    private readonly string _generatedId = $"compact-multi-select-{Guid.NewGuid():N}";
+
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter] public string? Id { get; set; }
+    [Parameter] public IReadOnlyCollection<string> Values { get; set; } = Array.Empty<string>();
+    [Parameter] public EventCallback<IReadOnlyList<string>> ValuesChanged { get; set; }
+    [Parameter] public IReadOnlyList<CompactSelectOption> Options { get; set; } = [];
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? Class { get; set; }
+
+    private string ControlId => string.IsNullOrWhiteSpace(Id) ? _generatedId : Id;
+    private string LabelId => $"{ControlId}-label";
+    private string Summary => Values.Count == 0
+        ? "No comparison"
+        : string.Join(", ", Options
+            .Where(option => Values.Contains(option.Value, StringComparer.OrdinalIgnoreCase))
+            .Select(option => option.Label));
+
+    private string RootClass => string.Join(" ", new[]
+    {
+        "compact-multi-select-field",
+        Class
+    }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+    private bool IsSelected(string value) =>
+        Values.Contains(value, StringComparer.OrdinalIgnoreCase);
+
+    private async Task OnOptionChangedAsync(string value, ChangeEventArgs args)
+    {
+        var selected = Values
+            .Where(candidate => Options.Any(option =>
+                string.Equals(option.Value, candidate, StringComparison.OrdinalIgnoreCase)))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var isChecked = args.Value is bool boolValue
+            ? boolValue
+            : bool.TryParse(args.Value?.ToString(), out var parsed) && parsed;
+
+        if (isChecked)
+        {
+            selected.Add(value);
+        }
+        else
+        {
+            selected.Remove(value);
+        }
+
+        var ordered = Options
+            .Where(option => selected.Contains(option.Value))
+            .Select(option => option.Value)
+            .ToArray();
+        await ValuesChanged.InvokeAsync(ordered);
+    }
+}

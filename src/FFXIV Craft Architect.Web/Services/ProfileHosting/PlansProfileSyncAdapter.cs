@@ -166,6 +166,21 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
         }
     }
 
+    public async Task DeleteLocalObjectForOrderDeletionAsync(
+        string objectId,
+        Guid deletingOrderId,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!await _planPersistence.DeletePlanForLinkedOrderAsync(
+                objectId,
+                deletingOrderId))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not delete plan '{objectId}' with order '{deletingOrderId:D}'.");
+        }
+    }
+
     public Task<bool> IsDeleteProtectedAsync(string objectId) =>
         _planPersistence.IsDeleteProtectedAsync(objectId);
 

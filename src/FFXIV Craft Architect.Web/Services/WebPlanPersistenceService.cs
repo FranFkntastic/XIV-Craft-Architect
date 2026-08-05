@@ -146,6 +146,19 @@ public sealed class WebPlanPersistenceService
         return await _indexedDb.DeletePlanAsync(planId);
     }
 
+    public async Task<bool> DeletePlanForLinkedOrderAsync(
+        string planId,
+        Guid deletingOrderId)
+    {
+        var existing = await _indexedDb.LoadPlanAsync(planId);
+        if (existing?.LinkedOrderId != deletingOrderId)
+        {
+            return false;
+        }
+
+        return await _indexedDb.DeletePlanAsync(planId);
+    }
+
     public async Task<bool> IsDeleteProtectedAsync(string planId)
     {
         var existing = await _indexedDb.LoadPlanAsync(planId);

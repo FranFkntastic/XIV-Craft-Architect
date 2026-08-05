@@ -23,6 +23,7 @@ public class WebSettingsService : ISettingsService
         ["market.default_datacenter"] = "Aether",
         ["market.region"] = "North America",
         ["market.comparison_region"] = "",
+        ["market.comparison_regions"] = Array.Empty<string>(),
         ["market.home_world"] = "",
         ["market.default_search_scope"] = "EntireRegion",
         ["market.include_cross_world"] = true,

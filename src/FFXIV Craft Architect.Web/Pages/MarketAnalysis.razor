@@ -1,12 +1,14 @@
 @page "/market"
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Web.Services
+@using FFXIV_Craft_Architect.Web.Dialogs
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
 @inject ISettingsService Settings
 @inject ISnackbar Snackbar
 @inject NavigationManager NavigationManager
 @inject AppState AppState
+@inject IDialogService DialogService
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="pa-0 ma-page-container">
@@ -14,7 +16,8 @@
         <MarketAnalysisControlsPanel
             Lens="@(_market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost)"
             EvidenceOverlay="_evidenceOverlay"
-            SearchEntireRegion="SearchesEntireRegion"
+            Scope="@(_market?.Scope ?? AppState.DefaultMarketFetchScope)"
+            SelectedDataCenter="@(_market?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter)"
             SelectedRegion="@(_market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion)"
             AnalysisRegions="@GetSelectedAnalysisRegions()"
             HasShoppingPlans="@(_market?.HasAnalysis == true)"
@@ -26,7 +29,7 @@
             CanRefreshPrices="CanRefreshPrices"
             OnLensChangedRequested="OnLensChanged"
             OnEvidenceOverlayChangedRequested="SetEvidenceOverlay"
-            OnSearchEntireRegionChangedRequested="SetSearchEntireRegion"
+            OnOpenMarketOptionsRequested="OpenMarketOptionsAsync"
             OnRunAnalysisRequested="RunMarketAnalysisAsync"
             OnRefreshPricesRequested="RefreshPricesAsync"
             OnGoToProcurementRequested="GoToProcurement" />
@@ -102,6 +105,7 @@
     protected override async Task OnInitializedAsync()
     {
         WorkerProjections.Changed += ProjectionChanged;
+        AppState.OnStateChanged += AppStateChanged;
         if (WorkerProjections.Market is { } retained &&
             retained.Revision == WorkerProjections.Shell.Revision)
         {
@@ -123,6 +127,14 @@
         ApplyRequestedItem();
         _selectedItemId ??= _market?.Items.FirstOrDefault()?.ItemId;
         _market = await LoadSelectedMarketDetailsAsync(_market, _selectedItemId);
+    }
+
+    private void AppStateChanged(AppStateChange change)
+    {
+        if (change.HasScope(AppStateChangeScope.Settings))
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
     }
 
     protected override void OnParametersSet()
@@ -302,63 +314,21 @@
         await Settings.SetAsync("market.analysis_evidence_overlay", overlay.ToString());
     }
 
-    private async Task SetSearchEntireRegion(bool searchEntireRegion)
+    private async Task OpenMarketOptionsAsync()
     {
-        var requestedScope = searchEntireRegion
-            ? MarketFetchScope.EntireRegion
-            : MarketFetchScope.SelectedDataCenter;
-        var previousScope = AppState.DefaultMarketFetchScope;
-        if (requestedScope == previousScope &&
-            (_market?.HasAnalysis != true || _market.Scope == requestedScope))
+        var parameters = new DialogParameters
         {
-            return;
-        }
-
-        await Settings.SetAsync("market.default_search_scope", requestedScope.ToString());
-        AppState.SetMarketEvidenceSettings(
-            AppState.SelectedDataCenter,
-            AppState.SelectedRegion,
-            requestedScope,
-            AppState.ComparisonRegion);
-
-        if (_market?.HasAnalysis == true && _market.Scope != requestedScope)
-        {
-            var published = await RunMarketAnalysisAsync(
-                forceRefreshData: false,
-                showCompletionSnackbar: true,
-                requestedScope: requestedScope);
-            if (!published)
+            [nameof(OptionsDialog.InitialPanelIndex)] = 1
+        };
+        var dialog = DialogService.Show<OptionsDialog>(
+            "Options",
+            parameters,
+            new DialogOptions
             {
-                await Settings.SetAsync("market.default_search_scope", previousScope.ToString());
-                AppState.SetMarketEvidenceSettings(
-                    AppState.SelectedDataCenter,
-                    AppState.SelectedRegion,
-                    previousScope,
-                    AppState.ComparisonRegion);
-            }
-        }
-        else if (_market is not null && _market.Scope != requestedScope)
-        {
-            try
-            {
-                await WorkerSession.MutateActiveContextAsync(
-                    new WorkerActiveContextMutation(
-                        AppState.SelectedDataCenter,
-                        AppState.SelectedRegion,
-                        requestedScope));
-                _market = await WorkerSession.GetMarketProjectionAsync();
-            }
-            catch (Exception ex)
-            {
-                await Settings.SetAsync("market.default_search_scope", previousScope.ToString());
-                AppState.SetMarketEvidenceSettings(
-                    AppState.SelectedDataCenter,
-                    AppState.SelectedRegion,
-                    previousScope,
-                    AppState.ComparisonRegion);
-                Snackbar.Add($"Market scope could not be changed: {ex.Message}", Severity.Error);
-            }
-        }
+                CloseOnEscapeKey = true,
+                MaxWidth = MaxWidth.Small
+            });
+        await dialog.Result;
     }
 
     private async Task OnLensChanged(MarketAcquisitionLens lens)
@@ -517,5 +487,6 @@
     public void Dispose()
     {
         WorkerProjections.Changed -= ProjectionChanged;
+        AppState.OnStateChanged -= AppStateChanged;
     }
 }

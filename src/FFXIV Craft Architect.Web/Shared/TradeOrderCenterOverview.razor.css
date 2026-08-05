@@ -15,6 +15,7 @@
 }
 
 .trade-order-overview__title-row,
+.trade-order-overview__actions,
 .trade-order-overview__meta,
 .trade-order-overview__section-heading {
   display: flex;
@@ -23,6 +24,11 @@
 }
 
 .trade-order-overview__title-row {
+  flex-wrap: wrap;
+}
+
+.trade-order-overview__actions {
+  justify-content: flex-end;
   flex-wrap: wrap;
 }
 
@@ -183,6 +189,10 @@ button.trade-order-overview__step:focus-visible {
   .trade-order-overview__output,
   .trade-order-overview__path {
     grid-template-columns: 1fr;
+  }
+
+  .trade-order-overview__actions {
+    justify-content: flex-start;
   }
 
   .trade-order-overview__output > div:not(:first-child) {

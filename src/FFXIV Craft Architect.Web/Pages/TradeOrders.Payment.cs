@@ -529,19 +529,31 @@ public partial class TradeOrders
         }
     }
 
-    private async Task DiscardSelectedDeviceOnlyDraftAsync()
+    private Task InvokeSelectedOrderLifecycleActionAsync() =>
+        SelectedLifecycleAction switch
+        {
+            TradeOrderLifecycleAction.DiscardDraft => DiscardSelectedDraftAsync(),
+            TradeOrderLifecycleAction.CancelCommission =>
+                OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled),
+            _ => Task.CompletedTask
+        };
+
+    private async Task DiscardSelectedDraftAsync()
     {
-        if (!CanDiscardSelectedDeviceOnlyDraft ||
+        if (!CanDiscardSelectedDraft ||
             _selectedOrder == null ||
-            _isDiscardingSelectedDeviceOnlyDraft)
+            _isDiscardingSelectedDraft)
         {
             return;
         }
 
         var order = _selectedOrder;
+        var location = IsSelectedDeviceOnlyOrder
+            ? "from this device"
+            : "from the hosted workspace and every connected browser";
         var confirmed = await DialogService.ShowMessageBox(
-            "Discard Local Draft",
-            $"Discard '{order.Title}' from this device and remove its generated plan? This cannot be undone.",
+            "Discard Draft",
+            $"Discard '{order.Title}' {location} and remove its generated plans? This cannot be undone.",
             yesText: "Discard Draft",
             cancelText: "Keep Draft");
         if (confirmed != true)
@@ -549,23 +561,31 @@ public partial class TradeOrders
             return;
         }
 
-        _isDiscardingSelectedDeviceOnlyDraft = true;
+        _isDiscardingSelectedDraft = true;
         try
         {
-            await OrderLifecycle.DiscardLocalDraftAsync(order);
+            await OrderLifecycle.DiscardDraftAsync(order);
             await LoadAsync();
             _selectedOrder = null;
             AppState.SelectTradeOrder(null);
             ClearSelectedOrderNavigation();
-            Snackbar.Add("Local draft discarded.", Severity.Success);
+            Snackbar.Add("Draft discarded.", Severity.Success);
         }
         catch (Exception exception)
         {
-            Snackbar.Add($"Local draft could not be discarded: {exception.Message}", Severity.Error);
+            await LoadAsync();
+            var current = VisibleOrders.FirstOrDefault(candidate => candidate.Id == order.Id);
+            if (current != null)
+            {
+                SelectOrder(current);
+            }
+            Snackbar.Add(
+                $"Draft cleanup did not finish. The current order was preserved: {exception.Message}",
+                Severity.Error);
         }
         finally
         {
-            _isDiscardingSelectedDeviceOnlyDraft = false;
+            _isDiscardingSelectedDraft = false;
         }
     }
 

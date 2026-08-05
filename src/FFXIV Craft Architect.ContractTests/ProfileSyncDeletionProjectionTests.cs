@@ -50,9 +50,30 @@ public sealed class ProfileSyncDeletionProjectionTests
         await service.InitializeAsync();
         Check(() => Assert.Equal(1, service.CurrentStatus.LastSyncRevision), () => Assert.Equal(0, adapter.DeleteCount), () => Assert.Empty(store.GetAll()));
     }
+    private static async Task ExpectedRevisionRefusesChangedOrderBeforeDeletion()
+    {
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Published winner");
+        var fixture = CreateDeletionFixture(NewId(), order, 5);
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.DeleteObjectsAsync([(ProfileSyncCollections.TradeOrders, Key(order))], [new ProfileSyncDeleteExpectation(ProfileSyncCollections.TradeOrders, Key(order), Revision: 3)]));
+        Check(() => Assert.Contains("changed before deletion", failure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Equal(0, fixture.Adapter.DeleteCount));
+        var profileId = NewId(); var plan = new ProfileSyncObjectEnvelope { Collection = ProfileSyncCollections.Plans, ObjectId = "generated-plan", Revision = 2 }; var remoteOrder = Envelope(order, 4); var deletions = new List<string>();
+        var runtime = new StorageRuntime(ConnectionSettings(profileId)); var indexedDb = new IndexedDbService(runtime); var localState = CreateLocalState(indexedDb); var store = new HostedOrderProjectionStore();
+        var service = new ProfileSyncService(CreateHostClient(new StubHandler(request => request.Method == HttpMethod.Get ? Ok(new ProfileHostBootstrapPayload { Objects = [plan, remoteOrder] }) : RecordConflict(request, deletions))), localState, new WebSettingsService(indexedDb), store, [new RecordingOrderAdapter(remoteOrder), new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan)]);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteObjectsAsync([(ProfileSyncCollections.Plans, plan.ObjectId), (ProfileSyncCollections.TradeOrders, Key(order))], [new ProfileSyncDeleteExpectation(ProfileSyncCollections.TradeOrders, Key(order), 4)]));
+        Assert.Contains($"/{ProfileSyncCollections.TradeOrders}/", Assert.Single(deletions), StringComparison.Ordinal);
+        var retryProfileId = NewId(); var retryOrder = Envelope(order, 4); var retryOrderTombstone = Tombstone(Key(order), 5); var retryPlanTombstone = Tombstone(plan.ObjectId, 3, ProfileSyncCollections.Plans); var retryCall = 0;
+        var retryRuntime = new StorageRuntime(ConnectionSettings(retryProfileId)); var retryIndexedDb = new IndexedDbService(retryRuntime); var retryLocalState = CreateLocalState(retryIndexedDb); var retryStore = new HostedOrderProjectionStore(); retryStore.BeginProfileRestore(retryProfileId, false, 0, DateTime.UtcNow, ConnectionScope(retryProfileId)); var retryOrderAdapter = new RecordingOrderAdapter(retryOrder);
+        var retryService = new ProfileSyncService(CreateHostClient(new StubHandler(_ => ++retryCall switch { 1 => Ok(new ProfileHostBootstrapPayload { Objects = [plan, retryOrder] }), 2 => Ok(new ProfileSyncPutResponse { Success = true, ServerRevision = 5, Object = retryOrderTombstone }), 3 => Ok(new ProfileSyncPutResponse { Conflict = true }), 4 => Ok(new ProfileHostBootstrapPayload { Objects = [plan, retryOrderTombstone] }), 5 => Ok(new ProfileSyncPutResponse { Success = true, ServerRevision = 3, Object = retryPlanTombstone }), _ => throw new InvalidOperationException($"Unexpected retry request {retryCall}.") })), retryLocalState, new WebSettingsService(retryIndexedDb), retryStore, [retryOrderAdapter, new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan)]);
+        var retryObjects = new[] { (ProfileSyncCollections.Plans, plan.ObjectId), (ProfileSyncCollections.TradeOrders, Key(order)) }; var retryExpectation = new[] { new ProfileSyncDeleteExpectation(ProfileSyncCollections.TradeOrders, Key(order), 4) };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => retryService.DeleteObjectsAsync(retryObjects, retryExpectation));
+        Check(() => Assert.Equal(3, retryCall), () => Assert.Equal(0, retryOrderAdapter.DeleteCount));
+        await retryService.DeleteObjectsAsync(retryObjects); Check(() => Assert.Equal(5, retryCall), () => Assert.Equal(1, retryOrderAdapter.DeleteCount), () => Assert.True(retryStore.Get(order.Id)?.Deleted));
+    }
     [Fact]
     public async Task DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection()
     {
+        await ExpectedRevisionRefusesChangedOrderBeforeDeletion();
         var profileId = NewId();
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
         TradeOrder? newer = null;
@@ -465,6 +486,13 @@ public sealed class ProfileSyncDeletionProjectionTests
     private sealed record DeletionFixture(
         ProfileSyncService Service, HostedOrderProjectionStore Store, RecordingOrderAdapter Adapter);
     private sealed record PutAdoptionFixture(string ProfileId, TradeOrder LocalOrder, TradeOrder RetainedOrder, TradeOrder CommittedOrder, long CommittedRevision, ProfileSyncService Service, HostedOrderProjectionStore Store, ProfileSyncLocalStateService LocalState, StorageRuntime Runtime);
+    private sealed class RecordingCollectionAdapter(string collection, ProfileSyncObjectEnvelope local) : IProfileSyncCollectionAdapter
+    {
+        public string Collection => collection;
+        public Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<ProfileSyncObjectEnvelope>>([local]);
+        public Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct) => throw new NotSupportedException();
+        public Task DeleteLocalObjectAsync(string objectId, CancellationToken ct) => Task.CompletedTask;
+    }
     private sealed class RecordingOrderAdapter(ProfileSyncObjectEnvelope? local) : IProfileSyncCollectionAdapter
     {
         public string Collection => ProfileSyncCollections.TradeOrders;
@@ -526,6 +554,11 @@ public sealed class ProfileSyncDeletionProjectionTests
             ServerRevision = revision,
             Object = Tombstone(remote.ObjectId, revision, remote.Collection)
         });
+    }
+    private static HttpResponseMessage RecordConflict(HttpRequestMessage request, List<string> deletions)
+    {
+        deletions.Add(request.RequestUri!.AbsolutePath);
+        return Ok(new ProfileSyncPutResponse { Conflict = true });
     }
     private static ProfileSyncObjectEnvelope Tombstone(
         string objectId, long revision, string collection = ProfileSyncCollections.TradeOrders) => new()

@@ -518,7 +518,7 @@ public partial class TradeOrders
         if (!_procurementSortState.Column.HasValue)
         {
             return rows
-                .OrderBy(row => IsSupplyPrecraftRow(row) ? 0 : 1)
+                .OrderBy(row => IsRequestedOutputRow(row) ? 0 : IsSupplyPrecraftRow(row) ? 1 : 2)
                 .ThenBy(row => row.UsedIn, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -607,7 +607,14 @@ public partial class TradeOrders
             builder.AddContent(sequence++, "HQ");
             builder.CloseElement();
         }
-        if (IsSupplyPrecraftRow(row))
+        if (IsRequestedOutputRow(row))
+        {
+            builder.OpenElement(sequence++, "span");
+            builder.AddAttribute(sequence++, "class", "trade-orders-output-chip");
+            builder.AddContent(sequence++, "Output");
+            builder.CloseElement();
+        }
+        else if (IsSupplyPrecraftRow(row))
         {
             builder.OpenElement(sequence++, "span");
             builder.AddAttribute(sequence++, "class", "trade-orders-precraft-chip");
@@ -627,16 +634,14 @@ public partial class TradeOrders
         IReadOnlyList<TradeOrderProcurementRow> rows)
     {
         return rows
-            .Where(row => !IsRequestedOutputReferenceRow(row))
             .Where(TradeProcurementRowBuilder.ShouldIncludePlanRow)
             .ToArray();
     }
 
-    private bool IsRequestedOutputReferenceRow(TradeOrderProcurementRow row)
+    private bool IsRequestedOutputRow(TradeOrderProcurementRow row)
     {
         return _selectedOrder != null &&
-            row.IsLiveAcquisitionRow &&
-            GetOrderRootItems(_selectedOrder).Any(output => output.ItemId == row.ItemId);
+            TradeProcurementRowBuilder.IsRequestedOutputRow(_selectedOrder, row);
     }
 
     private static bool IsSupplyPrecraftRow(TradeOrderProcurementRow row)
@@ -814,11 +819,12 @@ public partial class TradeOrders
             : $"{scope} | refreshed {refreshed}";
     }
 
-    private static string FormatProcurementFooter(IReadOnlyList<TradeOrderProcurementRow> rows)
+    private string FormatProcurementFooter(IReadOnlyList<TradeOrderProcurementRow> rows)
     {
         var attentionCount = rows.Count(ProcurementRowNeedsAttention);
         var materialCount = CountActiveProcurementRows(rows);
-        var precraftCount = rows.Count(IsSupplyPrecraftRow);
+        var precraftCount = rows.Count(row =>
+            IsSupplyPrecraftRow(row) && !IsRequestedOutputRow(row));
         var state = attentionCount == 0
             ? "all pricing evidence current"
             : $"{attentionCount:N0} {(attentionCount == 1 ? "line needs" : "lines need")} attention";

@@ -83,23 +83,24 @@
                 <MudDivider Class="my-4" />
 
                 <CompactSelectField Id="options-market-scope"
-                                    Label="Default search scope"
+                                    Label="Market search scope"
                                     @bind-Value="DefaultMarketFetchScopeValue"
                                     Options="MarketFetchScopeOptions"
                                     Class="options-select my-3" />
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    Used when building plans and as the startup Market Analysis scope.
+                    Controls Market Analysis, Procurement, and new or explicitly repriced commissions.
                 </MudText>
 
                 @if (_defaultMarketFetchScope == MarketFetchScope.EntireRegion)
                 {
-                    <CompactSelectField Id="options-comparison-region"
-                                        Label="Compare another region"
-                                        @bind-Value="_comparisonRegion"
-                                        Options="GetComparisonRegionOptions()"
-                                        Class="options-select mt-4" />
+                    <CompactMultiSelectField Id="options-comparison-regions"
+                                             Label="Compare other regions"
+                                             Values="_comparisonRegions"
+                                             ValuesChanged="OnComparisonRegionsChanged"
+                                             Options="GetComparisonRegionOptions()"
+                                             Class="options-select mt-4" />
                     <MudText Typo="Typo.caption" Color="Color.Secondary">
-                        Optional. Market Analysis compares every eligible world in both regions; procurement still commits to one region.
+                        Optional. Market Analysis compares eligible worlds in every selected region; procurement still commits to one region.
                     </MudText>
                 }
 
@@ -939,7 +940,9 @@
     </DialogContent>
     <DialogActions>
         <MudButton OnClick="Cancel">Cancel</MudButton>
-        <MudButton Color="Color.Primary" OnClick="Save">Save</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Save" Disabled="@_isSaving">
+            @(_isSaving ? "Applying..." : "Save")
+        </MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -1042,11 +1045,18 @@
     
     private string _defaultDataCenter = "Aether";
     private string _selectedRegion = "North America";
-    private string _comparisonRegion = string.Empty;
+    private IReadOnlyList<string> _comparisonRegions = Array.Empty<string>();
     private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.EntireRegion;
     private bool _procurementEnableSplitWorldPurchases = true;
     private bool _procurementStartFromHomeDataCenter;
     private MarketTravelPriority _procurementTravelPriority = MarketTravelPriority.DataCenterTransfersFirst;
+    private bool _isSaving;
+
+    private sealed record MarketSettingsSnapshot(
+        string DataCenter,
+        string Region,
+        MarketFetchScope Scope,
+        IReadOnlyList<string> ComparisonRegions);
 
     private string DefaultMarketFetchScopeValue
     {
@@ -1151,9 +1161,7 @@
             : initialTab.Panel;
         _defaultDataCenter = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
-        _comparisonRegion =
-            await Settings.GetAsync("market.comparison_region", string.Empty) ??
-            string.Empty;
+        _comparisonRegions = await LoadComparisonRegionsAsync();
         foreach (var region in MarketFetchScopeResolver.GetRegions())
         {
             var savedDataCenter = await Settings.GetAsync(
@@ -1168,16 +1176,7 @@
             _selectedRegion,
             _defaultDataCenter);
         _lastDataCenterByRegion[_selectedRegion] = _defaultDataCenter;
-        if (string.Equals(
-                _comparisonRegion,
-                _selectedRegion,
-                StringComparison.OrdinalIgnoreCase) ||
-            !MarketFetchScopeResolver.GetRegions().Contains(
-                _comparisonRegion,
-                StringComparer.OrdinalIgnoreCase))
-        {
-            _comparisonRegion = string.Empty;
-        }
+        _comparisonRegions = NormalizeComparisonRegions(_comparisonRegions, _selectedRegion);
         _defaultMarketFetchScope = ParseMarketFetchScope(
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
         _procurementEnableSplitWorldPurchases = await Settings.GetAsync("procurement.enable_split_world_purchases", true);
@@ -1319,13 +1318,7 @@
         }
 
         _selectedRegion = region;
-        if (string.Equals(
-                _comparisonRegion,
-                region,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            _comparisonRegion = string.Empty;
-        }
+        _comparisonRegions = NormalizeComparisonRegions(_comparisonRegions, region);
         _lastDataCenterByRegion.TryGetValue(region, out var lastDataCenter);
         _defaultDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
             region,
@@ -1347,14 +1340,44 @@
         $"market.last_datacenter.{region.Replace(" ", "_").ToLowerInvariant()}";
 
     private IReadOnlyList<CompactSelectOption> GetComparisonRegionOptions() =>
-        [
-            new(string.Empty, "No comparison"),
-            .. RegionOptions.Where(option =>
-                !string.Equals(
-                    option.Value,
-                    _selectedRegion,
-                    StringComparison.OrdinalIgnoreCase))
-        ];
+        RegionOptions
+            .Where(option => !string.Equals(
+                option.Value,
+                _selectedRegion,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+    private Task OnComparisonRegionsChanged(IReadOnlyList<string> comparisonRegions)
+    {
+        _comparisonRegions = NormalizeComparisonRegions(comparisonRegions, _selectedRegion);
+        return Task.CompletedTask;
+    }
+
+    private static IReadOnlyList<string> NormalizeComparisonRegions(
+        IEnumerable<string>? comparisonRegions,
+        string selectedRegion) =>
+        MarketFetchScopeResolver
+            .NormalizeSelectedRegions(selectedRegion, comparisonRegions?.ToArray())
+            .Skip(1)
+            .ToArray();
+
+    private async Task<IReadOnlyList<string>> LoadComparisonRegionsAsync()
+    {
+        var comparisonRegions = await Settings.GetAsync(
+            "market.comparison_regions",
+            Array.Empty<string>());
+        if (comparisonRegions is { Length: > 0 })
+        {
+            return comparisonRegions;
+        }
+
+        var legacyComparisonRegion = await Settings.GetAsync(
+            "market.comparison_region",
+            string.Empty);
+        return string.IsNullOrWhiteSpace(legacyComparisonRegion)
+            ? Array.Empty<string>()
+            : [legacyComparisonRegion];
+    }
 
     private async Task LoadCompanyProfileAsync()
     {
@@ -1988,86 +2011,193 @@
     
     private async Task Save()
     {
-        _defaultDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
-            _selectedRegion,
-            _defaultDataCenter);
-        _lastDataCenterByRegion[_selectedRegion] = _defaultDataCenter;
-
-        if (_companyProfile != null)
+        if (_isSaving)
         {
-            if (string.IsNullOrWhiteSpace(_companyName))
-            {
-                Snackbar.Add("Company name is required.", Severity.Error);
-                return;
-            }
-
-            var paymentPolicy = BuildCompanyPaymentPolicy();
-            if (paymentPolicy == null)
-            {
-                return;
-            }
-
-            if (_activePanel == OptionsPanel.Company &&
-                _companyNotificationRouteEditor != null &&
-                !await _companyNotificationRouteEditor.SavePendingChangesAsync())
-            {
-                return;
-            }
-
-            _companyProfile.Name = _companyName.Trim();
-            _companyProfile.Description = NormalizeOptionalText(_companyDescription);
-            _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
-            _companyProfile.PaymentPolicy = paymentPolicy;
-            var companySaved = await SaveCompanyProfileAsync(_companyProfile);
-            if (!companySaved)
-            {
-                Snackbar.Add("Failed to save company profile.", Severity.Error);
-                return;
-            }
+            return;
         }
 
-        AppState.SetMarketEvidenceSettings(
+        _isSaving = true;
+        try
+        {
+            _defaultDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
+                _selectedRegion,
+                _defaultDataCenter);
+            _lastDataCenterByRegion[_selectedRegion] = _defaultDataCenter;
+            _comparisonRegions = NormalizeComparisonRegions(_comparisonRegions, _selectedRegion);
+
+            if (_companyProfile != null)
+            {
+                if (string.IsNullOrWhiteSpace(_companyName))
+                {
+                    Snackbar.Add("Company name is required.", Severity.Error);
+                    return;
+                }
+
+                var paymentPolicy = BuildCompanyPaymentPolicy();
+                if (paymentPolicy == null)
+                {
+                    return;
+                }
+
+                if (_activePanel == OptionsPanel.Company &&
+                    _companyNotificationRouteEditor != null &&
+                    !await _companyNotificationRouteEditor.SavePendingChangesAsync())
+                {
+                    return;
+                }
+
+                _companyProfile.Name = _companyName.Trim();
+                _companyProfile.Description = NormalizeOptionalText(_companyDescription);
+                _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
+                _companyProfile.PaymentPolicy = paymentPolicy;
+                var companySaved = await SaveCompanyProfileAsync(_companyProfile);
+                if (!companySaved)
+                {
+                    Snackbar.Add("Failed to save company profile.", Severity.Error);
+                    return;
+                }
+            }
+
+            var marketSettingsChanged = await ApplyMarketSettingsAsync();
+            AppState.SetProcurementSettings(
+                _procurementEnableSplitWorldPurchases,
+                AppState.ProcurementTravelTolerance,
+                AppState.TemporaryWorldBlacklistDurationMinutes);
+            AppState.SetProcurementHomeDataCenterOrigin(_procurementStartFromHomeDataCenter);
+            AppState.SetProcurementTravelPriority(_procurementTravelPriority);
+
+            await Settings.SetAsync("procurement.enable_split_world_purchases", _procurementEnableSplitWorldPurchases);
+            await Settings.SetAsync("procurement.start_from_home_data_center", _procurementStartFromHomeDataCenter);
+            await Settings.SetAsync("procurement.travel_priority", _procurementTravelPriority.ToString());
+            await Settings.SetAsync("marketmafioso.enabled", _marketMafiosoEnabled);
+            await Settings.SetAsync("marketmafioso.workshop_host_url", _marketMafiosoApiUrl.Trim());
+            await Settings.SetAsync("marketmafioso.api_key", _marketMafiosoApiKey.Trim());
+            await Settings.SetAsync("marketmafioso.target_character", _marketMafiosoTargetCharacter.Trim());
+            await Settings.SetAsync("marketmafioso.target_world", _marketMafiosoTargetWorld.Trim());
+            await Settings.SetAsync("marketmafioso.auto_sync_evidence", _marketMafiosoAutoSyncEvidence);
+            MarketMafiosoIntegrationState.SetEnabled(_marketMafiosoEnabled);
+            if (WorkerProjections.Shell.HasSession && !marketSettingsChanged)
+            {
+                PlanLifecycle.Schedule(new PlanDerivationRequest(
+                    UseCurrentSettingsContext: true));
+            }
+
+            Snackbar.Add("Settings saved", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Settings could not be saved: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task<bool> ApplyMarketSettingsAsync()
+    {
+        var previous = new MarketSettingsSnapshot(
+            AppState.SelectedDataCenter,
+            AppState.SelectedRegion,
+            AppState.DefaultMarketFetchScope,
+            AppState.ComparisonRegions.ToArray());
+        var requested = new MarketSettingsSnapshot(
             _defaultDataCenter,
             _selectedRegion,
             _defaultMarketFetchScope,
-            _comparisonRegion);
-        AppState.SetProcurementSettings(
-            _procurementEnableSplitWorldPurchases,
-            AppState.ProcurementTravelTolerance,
-            AppState.TemporaryWorldBlacklistDurationMinutes);
-        AppState.SetProcurementHomeDataCenterOrigin(_procurementStartFromHomeDataCenter);
-        AppState.SetProcurementTravelPriority(_procurementTravelPriority);
+            _comparisonRegions.ToArray());
+        var changed = !AreMarketSettingsEqual(previous, requested);
 
-        // Persist settings via ISettingsService
-        await Settings.SetAsync("market.default_datacenter", _defaultDataCenter);
-        await Settings.SetAsync("market.region", _selectedRegion);
-        await Settings.SetAsync("market.comparison_region", _comparisonRegion);
+        AppState.SetMarketEvidenceSettings(
+            requested.DataCenter,
+            requested.Region,
+            requested.Scope,
+            requested.ComparisonRegions);
+
+        if (!changed)
+        {
+            return false;
+        }
+
+        try
+        {
+            await PersistMarketSettingsAsync(requested);
+            if (WorkerProjections.Shell.HasSession)
+            {
+                PlanLifecycle.Cancel();
+                await PlanLifecycle.EnsureDerivedAsync(
+                    new PlanDerivationRequest(UseCurrentSettingsContext: true));
+            }
+
+            return true;
+        }
+        catch
+        {
+            AppState.SetMarketEvidenceSettings(
+                previous.DataCenter,
+                previous.Region,
+                previous.Scope,
+                previous.ComparisonRegions);
+            _defaultDataCenter = previous.DataCenter;
+            _selectedRegion = previous.Region;
+            _defaultMarketFetchScope = previous.Scope;
+            _comparisonRegions = previous.ComparisonRegions;
+
+            if (WorkerProjections.Shell.HasSession)
+            {
+                try
+                {
+                    await WorkerSession.MutateActiveContextAsync(
+                        new WorkerActiveContextMutation(
+                            previous.DataCenter,
+                            previous.Region,
+                            previous.Scope));
+                }
+                catch
+                {
+                    // Preserve the original failure; the Worker will retain its last
+                    // truthful publication if the rollback command is unavailable.
+                }
+            }
+
+            try
+            {
+                await PersistMarketSettingsAsync(previous);
+            }
+            catch
+            {
+                // Surface the original market transition failure to the user.
+            }
+
+            throw;
+        }
+    }
+
+    private async Task PersistMarketSettingsAsync(MarketSettingsSnapshot settings)
+    {
+        await Settings.SetAsync("market.default_datacenter", settings.DataCenter);
+        await Settings.SetAsync("market.region", settings.Region);
+        await Settings.SetAsync("market.comparison_regions", settings.ComparisonRegions.ToArray());
+        await Settings.SetAsync("market.comparison_region", string.Empty);
         foreach (var (region, dataCenter) in _lastDataCenterByRegion)
         {
             await Settings.SetAsync(
                 GetRegionDataCenterSettingKey(region),
                 dataCenter);
         }
-        await Settings.SetAsync("market.default_search_scope", _defaultMarketFetchScope.ToString());
-        await Settings.SetAsync("procurement.enable_split_world_purchases", _procurementEnableSplitWorldPurchases);
-        await Settings.SetAsync("procurement.start_from_home_data_center", _procurementStartFromHomeDataCenter);
-        await Settings.SetAsync("procurement.travel_priority", _procurementTravelPriority.ToString());
-        await Settings.SetAsync("marketmafioso.enabled", _marketMafiosoEnabled);
-        await Settings.SetAsync("marketmafioso.workshop_host_url", _marketMafiosoApiUrl.Trim());
-        await Settings.SetAsync("marketmafioso.api_key", _marketMafiosoApiKey.Trim());
-        await Settings.SetAsync("marketmafioso.target_character", _marketMafiosoTargetCharacter.Trim());
-        await Settings.SetAsync("marketmafioso.target_world", _marketMafiosoTargetWorld.Trim());
-        await Settings.SetAsync("marketmafioso.auto_sync_evidence", _marketMafiosoAutoSyncEvidence);
-        MarketMafiosoIntegrationState.SetEnabled(_marketMafiosoEnabled);
-        if (WorkerProjections.Shell.HasSession)
-        {
-            PlanLifecycle.Schedule(new PlanDerivationRequest(
-                UseCurrentSettingsContext: true));
-        }
-        
-        Snackbar.Add("Settings saved", Severity.Success);
-        MudDialog.Close(DialogResult.Ok(true));
+        await Settings.SetAsync("market.default_search_scope", settings.Scope.ToString());
     }
+
+    private static bool AreMarketSettingsEqual(
+        MarketSettingsSnapshot left,
+        MarketSettingsSnapshot right) =>
+        string.Equals(left.DataCenter, right.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.Region, right.Region, StringComparison.OrdinalIgnoreCase) &&
+        left.Scope == right.Scope &&
+        left.ComparisonRegions.SequenceEqual(
+            right.ComparisonRegions,
+            StringComparer.OrdinalIgnoreCase);
 
     private async Task ToggleSecretDebugToolsAsync()
     {

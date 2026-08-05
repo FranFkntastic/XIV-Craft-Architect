@@ -7,15 +7,18 @@
                 <span class="trade-order-overview__status">@Model.Status</span>
             </div>
         </div>
-        @if (!string.IsNullOrWhiteSpace(Model.TermsActionLabel))
-        {
-            <MudButton Variant="Variant.Outlined"
-                       Color="Color.Primary"
-                       StartIcon="@Icons.Material.Filled.EditNote"
-                       OnClick="OnEditTerms">
-                @Model.TermsActionLabel
-            </MudButton>
-        }
+        <div class="trade-order-overview__actions">
+            @if (!string.IsNullOrWhiteSpace(Model.TermsActionLabel))
+            {
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.EditNote"
+                           OnClick="OnEditTerms">
+                    @Model.TermsActionLabel
+                </MudButton>
+            }
+            @HeaderActions
+        </div>
         <div class="trade-order-overview__meta">
             <span>Claimant <strong>@Model.Claimant</strong></span>
             <span>Crafter <strong>@Model.Crafter</strong></span>
@@ -97,6 +100,9 @@
 
     [Parameter]
     public RenderFragment? RequirementsContent { get; set; }
+
+    [Parameter]
+    public RenderFragment? HeaderActions { get; set; }
 
     [Parameter]
     public EventCallback OnOpenPlan { get; set; }
