@@ -8,17 +8,8 @@ using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
-internal static class PlansProfileSyncAdapterTests
+public sealed class PlansProfileSyncAdapterTests
 {
-    internal static async Task AssertAllAsync()
-    {
-        await LinkedPlanDeletionRequiresTheSameOrderInTheDeletionBoundary();
-        await RemoteUnsealedReplayPreservesMatchingLocalSealWithoutWeakeningCollisionGuard();
-        await ProtectedPlanConflictDoesNotBlockLaterPagesAndSurvivesRestart();
-        await AcceptRemoteTombstoneDeletesInsteadOfApplyingEmptyPayload();
-        await LegacyPlanRepairResumesFromRemoteTombstoneAfterInterruptedDelete();
-    }
-
     private static async Task LinkedPlanDeletionRequiresTheSameOrderInTheDeletionBoundary()
     {
         var planId = Guid.NewGuid().ToString("D");
@@ -33,8 +24,10 @@ internal static class PlansProfileSyncAdapterTests
         Assert.DoesNotContain(planId, runtime.Plans);
     }
 
-    private static async Task RemoteUnsealedReplayPreservesMatchingLocalSealWithoutWeakeningCollisionGuard()
+    [Fact]
+    public async Task RemoteUnsealedReplayPreservesMatchingLocalSealWithoutWeakeningCollisionGuard()
     {
+        await LinkedPlanDeletionRequiresTheSameOrderInTheDeletionBoundary();
         var planId = Guid.NewGuid().ToString("D");
         var linkedOrderId = Guid.NewGuid();
         var existing = CreatePlan(planId, "same-content", linkedOrderId);
@@ -86,7 +79,8 @@ internal static class PlansProfileSyncAdapterTests
         Assert.IsNotType<ProfileSyncObjectReconciliationException>(storageFailure);
     }
 
-    private static async Task ProtectedPlanConflictDoesNotBlockLaterPagesAndSurvivesRestart()
+    [Fact]
+    public async Task ProtectedPlanConflictDoesNotBlockLaterPagesAndSurvivesRestart()
     {
         const string host = "https://profiles.example/api/";
         var profileId = Guid.NewGuid().ToString("D");
@@ -211,7 +205,8 @@ internal static class PlansProfileSyncAdapterTests
                     !plan.LinkedOrderId.HasValue);
     }
 
-    private static async Task AcceptRemoteTombstoneDeletesInsteadOfApplyingEmptyPayload()
+    [Fact]
+    public async Task AcceptRemoteTombstoneDeletesInsteadOfApplyingEmptyPayload()
     {
         const string host = "https://profiles.example/api/";
         var profileId = Guid.NewGuid().ToString("D");
@@ -249,7 +244,8 @@ internal static class PlansProfileSyncAdapterTests
         Assert.Empty(adapter.AppliedObjectIds);
     }
 
-    private static async Task LegacyPlanRepairResumesFromRemoteTombstoneAfterInterruptedDelete()
+    [Fact]
+    public async Task LegacyPlanRepairResumesFromRemoteTombstoneAfterInterruptedDelete()
     {
         const string host = "https://profiles.example/api/";
         var profileId = Guid.NewGuid().ToString("D");

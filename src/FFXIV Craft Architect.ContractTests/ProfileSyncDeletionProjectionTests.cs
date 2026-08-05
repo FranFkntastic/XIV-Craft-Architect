@@ -13,27 +13,8 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class ProfileSyncDeletionProjectionTests
 {
     private const string Host = "https://profiles.example/api/";
-    internal static async Task AssertAllAsync()
-    {
-        Func<Task>[] scenarios = [
-            CommittedOrderPutsAdoptWithoutAdvancingCursor,
-            ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder, RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant,
-            ExpectedRevisionRefusesChangedOrderBeforeDeletion,
-            DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection, ConfirmedDeletionCannotCrossCompanyIdentity,
-            CollaborationResponseAfterProfileSwitchCannotPublishOrPersist, DelayedCollaborationResponseCannotPersistOverNewerProjection,
-            CollaborationResponseFromReplacedHostScopeCannotPersist, CollaborationCannotSendAcrossCaseDistinctConnectionPath,
-            AdapterRejectsReplacementHostBeforeProjectionOrPersistence, AdapterHostReplacementDuringPersistenceCannotWriteReplacementRevisionNamespace,
-            AdapterReconcilesDurableWinnerAfterOlderWriteFinishesLast, AdapterAlreadyCurrentReplayRepairsMissingDurableOrder,
-            AdapterTombstoneReconcilesNewerLiveOrderAfterBlockedDelete, CollaborationReconcilesDurableWinnerAfterOlderWriteFinishesLast,
-            ConnectionScopeChangeDuringPersistenceCannotWriteReplacementRevisionNamespace];
-        foreach (var scenario in scenarios)
-        {
-            await scenario();
-        }
-
-        OwnerProjectionIsPreservedThenClearedAndRehydratedByRevision();
-    }
-    private static async Task CommittedOrderPutsAdoptWithoutAdvancingCursor()
+    [Fact]
+    public async Task CommittedOrderPutsAdoptWithoutAdvancingCursor()
     {
         foreach (var conflictFirst in new[] { false, true })
         {
@@ -43,7 +24,8 @@ public sealed class ProfileSyncDeletionProjectionTests
             Assert.Equal(f.CommittedRevision, await f.LocalState.LoadObjectRevisionAsync(f.ProfileId, ProfileSyncCollections.TradeOrders, Key(f.LocalOrder))); Assert.Equal(0, await f.LocalState.LoadLastSyncRevisionAsync(f.ProfileId));
         }
     }
-    private static async Task ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder()
+    [Fact]
+    public async Task ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder()
     {
         var profileId = NewId();
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Retiring order");
@@ -52,7 +34,8 @@ public sealed class ProfileSyncDeletionProjectionTests
         var tombstone = Assert.Single(fixture.Store.GetAll(order.CompanyProfileId));
         Check(() => Assert.Equal(order.Id, tombstone.OrderId), () => Assert.Equal(5, tombstone.ObjectRevision), () => Assert.True(tombstone.Deleted), () => Assert.Equal(1, fixture.Adapter.DeleteCount), () => Assert.Contains(TradeOrderWorkspaceCompositionPolicy.GetDeviceOnlyOrders([order], fixture.Store.GetAll(order.CompanyProfileId)), candidate => candidate.Id == order.Id));
     }
-    private static async Task RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant()
+    [Fact]
+    public async Task RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant()
     {
         var profileId = NewId();
         var orderId = Guid.NewGuid();
@@ -67,7 +50,6 @@ public sealed class ProfileSyncDeletionProjectionTests
         await service.InitializeAsync();
         Check(() => Assert.Equal(1, service.CurrentStatus.LastSyncRevision), () => Assert.Equal(0, adapter.DeleteCount), () => Assert.Empty(store.GetAll()));
     }
-
     private static async Task ExpectedRevisionRefusesChangedOrderBeforeDeletion()
     {
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Published winner");
@@ -81,8 +63,10 @@ public sealed class ProfileSyncDeletionProjectionTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteObjectsAsync([(ProfileSyncCollections.Plans, plan.ObjectId), (ProfileSyncCollections.TradeOrders, Key(order))], [new ProfileSyncDeleteExpectation(ProfileSyncCollections.TradeOrders, Key(order), 4)]));
         Assert.Contains($"/{ProfileSyncCollections.TradeOrders}/", Assert.Single(deletions), StringComparison.Ordinal);
     }
-    private static async Task DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection()
+    [Fact]
+    public async Task DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection()
     {
+        await ExpectedRevisionRefusesChangedOrderBeforeDeletion();
         var profileId = NewId();
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Revision four");
         TradeOrder? newer = null;
@@ -97,7 +81,8 @@ public sealed class ProfileSyncDeletionProjectionTests
             fixture.Service.DeleteObjectAsync(ProfileSyncCollections.TradeOrders, Key(order)));
         Check(() => Assert.Same(newer, fixture.Store.Get(order.Id)?.Order), () => Assert.Equal(6, fixture.Store.Get(order.Id)?.ObjectRevision), () => Assert.Equal(0, fixture.Adapter.DeleteCount));
     }
-    private static async Task ConfirmedDeletionCannotCrossCompanyIdentity()
+    [Fact]
+    public async Task ConfirmedDeletionCannotCrossCompanyIdentity()
     {
         var remoteOrder = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Remote company");
         var otherCompanyOrder = CreateOrder(remoteOrder.Id, Guid.NewGuid(), "Other company");
@@ -107,7 +92,8 @@ public sealed class ProfileSyncDeletionProjectionTests
             fixture.Service.DeleteObjectAsync(ProfileSyncCollections.TradeOrders, Key(remoteOrder)));
         Check(() => Assert.Same(otherCompanyOrder, fixture.Store.Get(remoteOrder.Id)?.Order), () => Assert.Empty(fixture.Store.GetAll(remoteOrder.CompanyProfileId)), () => Assert.Equal(0, fixture.Adapter.DeleteCount));
     }
-    private static async Task CollaborationResponseAfterProfileSwitchCannotPublishOrPersist()
+    [Fact]
+    public async Task CollaborationResponseAfterProfileSwitchCannotPublishOrPersist()
     {
         var fixture = await Ready();
         var collaboration = fixture.CreateCollaboration(5, () => ChangeProfile(fixture));
@@ -154,7 +140,8 @@ public sealed class ProfileSyncDeletionProjectionTests
         static HttpResponseMessage Revoked(HttpRequestMessage request, ProjectionFixture candidate, Action change) { AssertCapturedRequest(request); change(); return new(HttpStatusCode.NoContent); }
         static void AssertCapturedRequest(HttpRequestMessage request) { Assert.Equal(new Uri(Host).Host, request.RequestUri!.Host); Assert.Equal("access-key", request.Headers.GetValues("X-Profile-Key").Single()); }
     }
-    private static async Task DelayedCollaborationResponseCannotPersistOverNewerProjection()
+    [Fact]
+    public async Task DelayedCollaborationResponseCannotPersistOverNewerProjection()
     {
         var fixture = new ProjectionFixture("Revision four");
         await fixture.PrepareCollaborationAsync();
@@ -165,7 +152,8 @@ public sealed class ProfileSyncDeletionProjectionTests
             collaboration.PublishPortableLinkAsync(fixture.Order, new CommissionBriefDocument()));
         Check(() => Assert.Equal(0, fixture.Runtime.SaveTradeOrderCount), () => Assert.Same(newer, fixture.Store.Get(fixture.Order.Id)?.Order), () => Assert.Equal(6, fixture.Store.Get(fixture.Order.Id)?.ObjectRevision));
     }
-    private static async Task CollaborationResponseFromReplacedHostScopeCannotPersist()
+    [Fact]
+    public async Task CollaborationResponseFromReplacedHostScopeCannotPersist()
     {
         var fixture = new ProjectionFixture("Original host");
         await fixture.PrepareCollaborationAsync();
@@ -175,7 +163,8 @@ public sealed class ProfileSyncDeletionProjectionTests
         var localRevision = await fixture.LoadRevisionAsync();
         Check(() => Assert.Equal(0, fixture.Runtime.SaveTradeOrderCount), () => Assert.Same(fixture.Order, fixture.Store.Get(fixture.Order.Id)?.Order), () => Assert.Equal(4, fixture.Store.Get(fixture.Order.Id)?.ObjectRevision), () => Assert.Equal(0, localRevision));
     }
-    private static async Task CollaborationCannotSendAcrossCaseDistinctConnectionPath()
+    [Fact]
+    public async Task CollaborationCannotSendAcrossCaseDistinctConnectionPath()
     {
         var profileId = NewId();
         var fixture = new ProjectionFixture(
@@ -187,7 +176,8 @@ public sealed class ProfileSyncDeletionProjectionTests
             collaboration.PublishPortableLinkAsync(fixture.Order, new CommissionBriefDocument()));
         Check(() => Assert.Contains("authority", failure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Equal(0, fixture.Runtime.SaveTradeOrderCount));
     }
-    private static async Task AdapterRejectsReplacementHostBeforeProjectionOrPersistence()
+    [Fact]
+    public async Task AdapterRejectsReplacementHostBeforeProjectionOrPersistence()
     {
         var fixture = new ProjectionFixture("Original host", addCompany: true);
         var replacement = fixture.OrderAt("Replacement host");
@@ -198,7 +188,8 @@ public sealed class ProfileSyncDeletionProjectionTests
         var localRevision = await fixture.LoadRevisionAsync();
         Check(() => Assert.Contains("scope", failure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Equal(0, fixture.Runtime.SaveTradeOrderCount), () => Assert.Same(fixture.Order, fixture.Store.Get(fixture.Order.Id)?.Order), () => Assert.Equal(0, localRevision));
     }
-    private static async Task AdapterHostReplacementDuringPersistenceCannotWriteReplacementRevisionNamespace()
+    [Fact]
+    public async Task AdapterHostReplacementDuringPersistenceCannotWriteReplacementRevisionNamespace()
     {
         var fixture = new ProjectionFixture("Revision four", addCompany: true);
         var replacement = fixture.OrderAt("Revision five");
@@ -213,7 +204,8 @@ public sealed class ProfileSyncDeletionProjectionTests
         var localRevision = await fixture.LoadRevisionAsync();
         Check(() => Assert.Contains("authority", failure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Equal("Revision five", fixture.Runtime.DurableOrder?.Title), () => Assert.Equal(5, fixture.Store.Get(fixture.Order.Id)?.ObjectRevision), () => Assert.Equal(0, localRevision));
     }
-    private static async Task AdapterReconcilesDurableWinnerAfterOlderWriteFinishesLast()
+    [Fact]
+    public async Task AdapterReconcilesDurableWinnerAfterOlderWriteFinishesLast()
     {
         var fixture = new ProjectionFixture("Revision four", addCompany: true);
         var revisionFive = fixture.OrderAt("Revision five");
@@ -228,14 +220,16 @@ public sealed class ProfileSyncDeletionProjectionTests
         var localRevision = await fixture.LoadRevisionAsync();
         Check(() => Assert.Equal("Revision six", fixture.Runtime.DurableOrder?.Title), () => Assert.Equal(6, localRevision));
     }
-    private static async Task AdapterAlreadyCurrentReplayRepairsMissingDurableOrder()
+    [Fact]
+    public async Task AdapterAlreadyCurrentReplayRepairsMissingDurableOrder()
     {
         var fixture = new ProjectionFixture("Revision five", revision: 5, addCompany: true);
         await fixture.LocalState.LoadConnectionSettingsAsync();
         await fixture.Adapter.ApplyRemoteObjectAsync(Envelope(fixture.Order, 5), default);
         Check(() => Assert.Same(fixture.Order, fixture.Runtime.DurableOrder), () => Assert.Equal(1, fixture.Runtime.SaveTradeOrderCount));
     }
-    private static async Task AdapterTombstoneReconcilesNewerLiveOrderAfterBlockedDelete()
+    [Fact]
+    public async Task AdapterTombstoneReconcilesNewerLiveOrderAfterBlockedDelete()
     {
         var fixture = new ProjectionFixture("Revision four", addCompany: true);
         var revisionSix = fixture.OrderAt("Revision six");
@@ -251,7 +245,8 @@ public sealed class ProfileSyncDeletionProjectionTests
         var localRevision = await fixture.LoadRevisionAsync();
         Check(() => Assert.Equal("Revision six", fixture.Runtime.DurableOrder?.Title), () => Assert.Equal(6, fixture.Store.Get(fixture.Order.Id)?.ObjectRevision), () => Assert.Equal(6, localRevision));
     }
-    private static async Task CollaborationReconcilesDurableWinnerAfterOlderWriteFinishesLast()
+    [Fact]
+    public async Task CollaborationReconcilesDurableWinnerAfterOlderWriteFinishesLast()
     {
         var fixture = new ProjectionFixture("Revision four");
         var gate = fixture.BlockFirstSave("Revision five");
@@ -268,7 +263,8 @@ public sealed class ProfileSyncDeletionProjectionTests
         var localRevision = await fixture.LoadRevisionAsync();
         Check(() => Assert.Equal("Revision six", fixture.Runtime.DurableOrder?.Title), () => Assert.Equal(6, localRevision));
     }
-    private static async Task ConnectionScopeChangeDuringPersistenceCannotWriteReplacementRevisionNamespace()
+    [Fact]
+    public async Task ConnectionScopeChangeDuringPersistenceCannotWriteReplacementRevisionNamespace()
     {
         var fixture = new ProjectionFixture("Revision four");
         var switched = false;
@@ -289,7 +285,8 @@ public sealed class ProfileSyncDeletionProjectionTests
         var localRevision = await fixture.LoadRevisionAsync();
         Check(() => Assert.Contains("authority", failure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Equal("Revision five", fixture.Runtime.DurableOrder?.Title), () => Assert.Equal(5, fixture.Store.Get(fixture.Order.Id)?.ObjectRevision), () => Assert.Equal(0, localRevision));
     }
-    private static void OwnerProjectionIsPreservedThenClearedAndRehydratedByRevision()
+    [Fact]
+    public void OwnerProjectionIsPreservedThenClearedAndRehydratedByRevision()
     {
         var fixture = new ProjectionFixture("Owner revision four");
         var ownerFour = Owner(fixture.Order, 4, 8);

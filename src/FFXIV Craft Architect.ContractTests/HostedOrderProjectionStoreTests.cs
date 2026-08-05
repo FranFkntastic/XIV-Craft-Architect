@@ -15,11 +15,24 @@ public sealed class HostedOrderProjectionStoreTests
 {
     private static readonly DateTime Now = new(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc);
 
-    public static IEnumerable<object[]> Scenarios =>
-        Enum.GetValues<ProjectionStoreScenario>().Select(scenario => new object[] { scenario });
-
     [Theory]
-    [MemberData(nameof(Scenarios))]
+    [InlineData(ProjectionStoreScenario.CanonicalRevisionAndTombstone)]
+    [InlineData(ProjectionStoreScenario.CompanyProfileIsImmutable)]
+    [InlineData(ProjectionStoreScenario.ProfileResetClearsRevisionHistory)]
+    [InlineData(ProjectionStoreScenario.OwnerUpgradeAtSameRevision)]
+    [InlineData(ProjectionStoreScenario.SameProfileReconnect)]
+    [InlineData(ProjectionStoreScenario.ScopeChange)]
+    [InlineData(ProjectionStoreScenario.RestoreRevisionCannotRollBack)]
+    [InlineData(ProjectionStoreScenario.CompanySnapshotComposition)]
+    [InlineData(ProjectionStoreScenario.SameProfileConnectionReplacement)]
+    [InlineData(ProjectionStoreScenario.ConnectionScopePathCase)]
+    [InlineData(ProjectionStoreScenario.SameRevisionOwnerPersistence)]
+    [InlineData(ProjectionStoreScenario.LiveTombstonePersistence)]
+    [InlineData(ProjectionStoreScenario.OwnerTombstonePersistence)]
+    [InlineData(ProjectionStoreScenario.CenterOperationWinner)]
+    [InlineData(ProjectionStoreScenario.CenterOperationAuthoritySwitch)]
+    [InlineData(ProjectionStoreScenario.CenterOperationCommittedFailure)]
+    [InlineData(ProjectionStoreScenario.StaleMissingOwner)]
     public async Task ProjectionStorePreservesCanonicalIdentityAndRestoreTruth(ProjectionStoreScenario scenario)
     {
         await (scenario switch

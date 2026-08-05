@@ -6,30 +6,10 @@ using Microsoft.Data.Sqlite;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
-internal static class ProfileHostCredentialImportContractScenarios
+public sealed class ProfileHostCredentialImportContractTests
 {
-    public static async Task RunAsync()
-    {
-        ProvisioningCommand_ParsesExplicitCredentialImport();
-        await ImportActiveAccessKeys_IsAdditiveIdempotentAndCredentialOnly();
-        await ImportActiveAccessKeys_MalformedBatchWritesNothing();
-        await ImportActiveAccessKeys_TargetKeyConflictRollsBackWholeBatch();
-        foreach (var mismatch in new[]
-        {
-            "same-database",
-            "source-disabled",
-            "target-disabled",
-            "display-mismatch",
-            "profile-id-mismatch"
-        })
-        {
-            await ImportActiveAccessKeys_IdentityMismatchWritesNothing(mismatch);
-        }
-
-        await ImportActiveAccessKeys_SymbolicAliasOfTargetFailsClosed();
-    }
-
-    private static void ProvisioningCommand_ParsesExplicitCredentialImport()
+    [Fact]
+    public void ProvisioningCommand_ParsesExplicitCredentialImport()
     {
         var command = ProfileHostProvisioningCommand.TryParse(
         [
@@ -48,7 +28,8 @@ internal static class ProfileHostCredentialImportContractScenarios
         Assert.Equal("Sapphire Avenue", command.DisplayName);
     }
 
-    private static async Task ImportActiveAccessKeys_IsAdditiveIdempotentAndCredentialOnly()
+    [Fact]
+    public async Task ImportActiveAccessKeys_IsAdditiveIdempotentAndCredentialOnly()
     {
         await using var fixture = await CredentialDatabaseFixture.CreateAsync();
         var sourceRows = await ReadActiveKeysAsync(fixture.SourcePath, fixture.ProfileId);
@@ -109,7 +90,8 @@ internal static class ProfileHostCredentialImportContractScenarios
         Assert.False(targetSignal.Changed.IsCompleted);
     }
 
-    private static async Task ImportActiveAccessKeys_MalformedBatchWritesNothing()
+    [Fact]
+    public async Task ImportActiveAccessKeys_MalformedBatchWritesNothing()
     {
         await using var fixture = await CredentialDatabaseFixture.CreateAsync();
         var sourceRows = await ReadActiveKeysAsync(fixture.SourcePath, fixture.ProfileId);
@@ -130,7 +112,8 @@ internal static class ProfileHostCredentialImportContractScenarios
         Assert.Equal(targetKeysBefore, await ReadAllKeyIdsAsync(fixture.TargetPath));
     }
 
-    private static async Task ImportActiveAccessKeys_TargetKeyConflictRollsBackWholeBatch()
+    [Fact]
+    public async Task ImportActiveAccessKeys_TargetKeyConflictRollsBackWholeBatch()
     {
         await using var fixture = await CredentialDatabaseFixture.CreateAsync();
         var sourceRows = await ReadActiveKeysAsync(fixture.SourcePath, fixture.ProfileId);
@@ -153,7 +136,13 @@ internal static class ProfileHostCredentialImportContractScenarios
         Assert.Equal(targetKeysBefore, await ReadAllKeyIdsAsync(fixture.TargetPath));
     }
 
-    private static async Task ImportActiveAccessKeys_IdentityMismatchWritesNothing(string mismatch)
+    [Theory]
+    [InlineData("same-database")]
+    [InlineData("source-disabled")]
+    [InlineData("target-disabled")]
+    [InlineData("display-mismatch")]
+    [InlineData("profile-id-mismatch")]
+    public async Task ImportActiveAccessKeys_IdentityMismatchWritesNothing(string mismatch)
     {
         await using var fixture = await CredentialDatabaseFixture.CreateAsync();
         var sourcePath = fixture.SourcePath;
@@ -190,7 +179,8 @@ internal static class ProfileHostCredentialImportContractScenarios
         Assert.Equal(targetKeysBefore, await ReadAllKeyIdsAsync(fixture.TargetPath));
     }
 
-    private static async Task ImportActiveAccessKeys_SymbolicAliasOfTargetFailsClosed()
+    [Fact]
+    public async Task ImportActiveAccessKeys_SymbolicAliasOfTargetFailsClosed()
     {
         await using var fixture = await CredentialDatabaseFixture.CreateAsync();
         var aliasPath = fixture.TargetPath + ".alias";

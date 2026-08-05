@@ -10,17 +10,13 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class CompanyCommissionProjectionPresentationContractTests
 {
     private static readonly DateTime CapturedAt = new(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc);
-    public static void AssertAll()
-    {
-        var scenarios = new CompanyCommissionProjectionPresentationContractTests();
-        scenarios.DiscordPublicationUsesCraftingLanguageAndCurrentOutputProgress();
-        scenarios.DiscordPublicationCallsTheDeliveryStateReadyForDelivery();
-        scenarios.OrderCenterAndDraftMigrationKeepAuthorityBoundariesExplicit();
-    }
+    [Fact]
     public void DiscordPublicationUsesCraftingLanguageAndCurrentOutputProgress() =>
         AssertPublication(TradeOrderStatus.Assigned, ["CRAFTING", "3 crafted, 2 ready"], "READY TO WORK", "IN PROGRESS");
+    [Fact]
     public void DiscordPublicationCallsTheDeliveryStateReadyForDelivery() =>
         AssertPublication(TradeOrderStatus.AwaitingDelivery, ["READY FOR DELIVERY"], "AWAITING DELIVERY");
+    [Fact]
     public void OrderCenterAndDraftMigrationKeepAuthorityBoundariesExplicit()
     {
         var repositoryRoot = LocateRepositoryRoot();

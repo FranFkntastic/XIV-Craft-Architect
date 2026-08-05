@@ -4,8 +4,6 @@ using FFXIV_Craft_Architect.Core.Services;
 namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed record TradeOrderPricingWorkflowOptions(
-    string DataCenter,
-    string World,
     bool ForceRefreshMarketData);
 
 public sealed record TradeOrderPricingWorkflowResult(
@@ -115,10 +113,9 @@ public sealed class TradeOrderPricingWorkflowService
             var build = await _planLifecycle.BuildRecipeAsync(
                 new WorkerRecipeBuildRequest(
                     projectItems,
-                    options.DataCenter,
-                    ResolveOrderRegion(order, options.DataCenter),
-                    order.SourceSnapshot.MarketFetchScope ??
-                        _viewSettings.DefaultMarketFetchScope),
+                    _viewSettings.SelectedDataCenter,
+                    _viewSettings.SelectedRegion,
+                    _viewSettings.DefaultMarketFetchScope),
                 PlanDerivationDispatch.Deferred,
                 operation.Token,
                 workerOperation.OperationId);
@@ -155,7 +152,8 @@ public sealed class TradeOrderPricingWorkflowService
                 new MarketRefreshRequest(options.ForceRefreshMarketData),
                 operation,
                 workerOperation,
-                savedAt);
+                savedAt,
+                useCurrentSettingsContext: true);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
@@ -252,7 +250,8 @@ public sealed class TradeOrderPricingWorkflowService
                 operation,
                 workerOperation,
                 DateTime.UtcNow,
-                string.IsNullOrWhiteSpace(_projections.Shell.RestoreWarning)
+                useCurrentSettingsContext: true,
+                initialWarnings: string.IsNullOrWhiteSpace(_projections.Shell.RestoreWarning)
                     ? []
                     : [_projections.Shell.RestoreWarning]);
         }
@@ -339,7 +338,8 @@ public sealed class TradeOrderPricingWorkflowService
                     : new MarketRefreshRequest(marketItemIdsToRefresh),
                 operation,
                 workerOperation,
-                DateTime.UtcNow);
+                DateTime.UtcNow,
+                useCurrentSettingsContext: false);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
@@ -398,6 +398,7 @@ public sealed class TradeOrderPricingWorkflowService
         CancellableOperationLease operation,
         WorkerSessionOperationLease workerOperation,
         DateTime refreshedAt,
+        bool useCurrentSettingsContext,
         IReadOnlyList<string>? initialWarnings = null)
     {
         var source = await _worker.GetTradeProjectionAsync(
@@ -414,7 +415,8 @@ public sealed class TradeOrderPricingWorkflowService
             new PlanDerivationRequest(
                 refresh.ForceRefresh,
                 refresh.ItemIds,
-                refresh.SkipRefresh),
+                refresh.SkipRefresh,
+                UseCurrentSettingsContext: useCurrentSettingsContext),
             operation.Token,
             (message, progress) => operation.ReportStatus(
                 message,
@@ -561,15 +563,6 @@ public sealed class TradeOrderPricingWorkflowService
                 item.MustBeHq,
                 item.EstimatedSaleValue))
             .ToArray();
-
-    private string ResolveOrderRegion(TradeOrder order, string dataCenter)
-    {
-        return string.IsNullOrWhiteSpace(order.SourceSnapshot.Region)
-            ? MarketFetchScopeResolver.ResolveRegionForDataCenter(
-                dataCenter,
-                _viewSettings.SelectedRegion)
-            : order.SourceSnapshot.Region;
-    }
 
     private static TradeOrderPricingWorkflowResult CanceledResult(
         WorkerPlanOwnershipFence? activePlanFence = null) =>
