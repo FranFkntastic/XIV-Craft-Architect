@@ -13,6 +13,7 @@ public sealed class ProfileSyncLocalStateService
     private const string ObjectRevisionSuffix = "objectRevision.";
     private const string HostedObjectSuffix = "hostedObject.";
     private const string PendingSavesSuffix = "pendingSaves";
+    private const string PendingOrderCleanupSuffix = "pendingOrderCleanup";
     private const string LinkedPlanSealMigrationSuffix = "migration.linkedPlanSeal.v2";
     private static readonly IReadOnlySet<string> PortableSettingKeys = new HashSet<string>(
         [
@@ -251,6 +252,26 @@ public sealed class ProfileSyncLocalStateService
         {
             throw new InvalidOperationException(
                 "Browser storage could not persist pending hosted-profile writes.");
+        }
+    }
+
+    public async Task<IReadOnlyList<string>> LoadPendingOrderCleanupAsync(string profileId)
+    {
+        return await _indexedDb.LoadRequiredSettingAsync(
+                   await BuildProfileStateKeyAsync(profileId, PendingOrderCleanupSuffix),
+                   Array.Empty<string>())
+               ?? Array.Empty<string>();
+    }
+
+    public async Task SavePendingOrderCleanupAsync(
+        string profileId,
+        IReadOnlyList<string> orderObjectIds)
+    {
+        var key = await BuildProfileStateKeyAsync(profileId, PendingOrderCleanupSuffix);
+        if (!await _indexedDb.SaveSettingAsync(key, orderObjectIds))
+        {
+            throw new InvalidOperationException(
+                "Browser storage could not persist pending hosted-order cleanup.");
         }
     }
 

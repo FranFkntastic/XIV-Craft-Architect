@@ -464,12 +464,21 @@ public sealed class ProfileSyncService
 
                         var adapter = GetAdapter(item.Collection);
                         var orderDeletionPersisted = false;
+                        var orderDeletionDeferred = false;
                         if (item.Deleted)
                         {
-                            var shouldDeleteLocalObject = true;
+                            orderDeletionDeferred =
+                                string.Equals(
+                                    item.Collection,
+                                    ProfileSyncCollections.TradeOrders,
+                                    StringComparison.OrdinalIgnoreCase) &&
+                                (await _localState.LoadPendingOrderCleanupAsync(profileId))
+                                .Contains(item.ObjectId, StringComparer.OrdinalIgnoreCase);
+                            var shouldDeleteLocalObject = !orderDeletionDeferred;
                             Guid? deletedOrderId = null;
                             Guid? deletedOrderCompanyProfileId = null;
-                            if (string.Equals(
+                            if (!orderDeletionDeferred &&
+                                string.Equals(
                                     item.Collection,
                                     ProfileSyncCollections.TradeOrders,
                                     StringComparison.OrdinalIgnoreCase) &&
@@ -574,11 +583,12 @@ public sealed class ProfileSyncService
                             }
                         }
 
-                        if ((item.Deleted && !orderDeletionPersisted) ||
+                        if (!orderDeletionDeferred &&
+                            ((item.Deleted && !orderDeletionPersisted) ||
                             !string.Equals(
                                 item.Collection,
                                 ProfileSyncCollections.TradeOrders,
-                                StringComparison.OrdinalIgnoreCase))
+                                StringComparison.OrdinalIgnoreCase)))
                         {
                             await _localState.SaveObjectRevisionAsync(
                                 profileId,
@@ -1081,7 +1091,6 @@ public sealed class ProfileSyncService
 
         await EnsurePendingSavesLoadedAsync(settings);
         var authority = _hostedOrders.CaptureAuthorityScope();
-        var reconciledOrderDeletions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var pendingOrderDeletions = new List<(
             string Identity,
             Guid OrderId,
@@ -1124,84 +1133,133 @@ public sealed class ProfileSyncService
             }
         }
 
+        foreach (var remoteOrder in remote.Objects.Where(item =>
+                     !item.Deleted &&
+                     string.Equals(
+                         item.Collection,
+                         ProfileSyncCollections.TradeOrders,
+                         StringComparison.OrdinalIgnoreCase) &&
+                     Guid.TryParse(item.ObjectId, out var orderId) &&
+                     deletingOrderIds.Contains(orderId)))
+        {
+            await _localState.SaveObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                remoteOrder.ObjectId,
+                remoteOrder.Revision);
+        }
+        await UpdatePendingOrderCleanupAsync(profileId, deletingOrderIds, pending: true);
+
         var remoteDeletionOrder = distinct.OrderByDescending(item => string.Equals(
             item.Collection,
             ProfileSyncCollections.TradeOrders,
             StringComparison.OrdinalIgnoreCase));
-        foreach (var item in remoteDeletionOrder)
+        var confirmedOrderDeletionIds = new HashSet<Guid>();
+        try
         {
-            var remoteObject = remote.Objects.FirstOrDefault(candidate =>
-                string.Equals(candidate.Collection, item.Collection, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(candidate.ObjectId, item.ObjectId, StringComparison.Ordinal));
-            if (remoteObject == null)
+            foreach (var item in remoteDeletionOrder)
             {
-                continue;
-            }
+                var remoteObject = remote.Objects.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Collection, item.Collection, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(candidate.ObjectId, item.ObjectId, StringComparison.Ordinal));
+                if (remoteObject == null)
+                {
+                    continue;
+                }
 
-            if (remoteObject.Deleted)
-            {
-                if (Guid.TryParse(item.ObjectId, out var deletedOrderId) &&
-                    string.Equals(
+                if (remoteObject.Deleted)
+                {
+                    if (Guid.TryParse(item.ObjectId, out var deletedOrderId) &&
+                        string.Equals(
+                            item.Collection,
+                            ProfileSyncCollections.TradeOrders,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        confirmedOrderDeletionIds.Add(deletedOrderId);
+                        var adapter = GetAdapter(item.Collection);
+                        var companyProfileId = await ResolveDeletedOrderCompanyProfileIdAsync(
+                            adapter,
+                            deletedOrderId,
+                            ct) ?? throw new InvalidOperationException(
+                                $"Hosted TradeOrders/{item.ObjectId} was already deleted, but its local company identity could not be verified.");
+                        pendingOrderDeletions.Add((
+                            $"{item.Collection}\0{item.ObjectId}",
+                            deletedOrderId,
+                            companyProfileId,
+                            remoteObject.Revision,
+                            adapter as IHostedOrderProfileSyncAdapter));
+                    }
+                    continue;
+                }
+
+                var response = await _client.DeleteObjectAsync(
+                    settings.HostUrl!,
+                    settings.AccessKey!,
+                    item.Collection,
+                    item.ObjectId,
+                    remoteObject.Revision,
+                    ct);
+                if (response.Conflict)
+                {
+                    throw new InvalidOperationException(
+                        $"Hosted {item.Collection}/{item.ObjectId} changed while it was being deleted. Its current state was preserved.");
+                }
+                if (!response.Success || response.Object == null)
+                {
+                    throw new InvalidOperationException(
+                        $"The hosted profile did not confirm deletion of {item.Collection}/{item.ObjectId}.");
+                }
+
+                if (string.Equals(
                         item.Collection,
                         ProfileSyncCollections.TradeOrders,
-                        StringComparison.OrdinalIgnoreCase))
+                        StringComparison.OrdinalIgnoreCase) &&
+                    Guid.TryParse(item.ObjectId, out var orderId))
                 {
+                    confirmedOrderDeletionIds.Add(orderId);
+                    var companyProfileId = ReadOrderCompanyProfileId(remoteObject);
                     var adapter = GetAdapter(item.Collection);
-                    var companyProfileId = await ResolveDeletedOrderCompanyProfileIdAsync(
-                        adapter,
-                        deletedOrderId,
-                        ct) ?? throw new InvalidOperationException(
-                            $"Hosted TradeOrders/{item.ObjectId} was already deleted, but its local company identity could not be verified.");
                     pendingOrderDeletions.Add((
                         $"{item.Collection}\0{item.ObjectId}",
-                        deletedOrderId,
+                        orderId,
                         companyProfileId,
-                        remoteObject.Revision,
+                        response.Object.Revision,
                         adapter as IHostedOrderProfileSyncAdapter));
+                    continue;
                 }
-                continue;
-            }
 
-            var response = await _client.DeleteObjectAsync(
-                settings.HostUrl!,
-                settings.AccessKey!,
-                item.Collection,
-                item.ObjectId,
-                remoteObject.Revision,
-                ct);
-            if (response.Conflict)
-            {
-                throw new InvalidOperationException(
-                    $"Hosted {item.Collection}/{item.ObjectId} changed while it was being deleted. Its current state was preserved.");
-            }
-            if (!response.Success || response.Object == null)
-            {
-                throw new InvalidOperationException(
-                    $"The hosted profile did not confirm deletion of {item.Collection}/{item.ObjectId}.");
-            }
-
-            if (string.Equals(
+                await _localState.SaveObjectRevisionAsync(
+                    profileId,
                     item.Collection,
-                    ProfileSyncCollections.TradeOrders,
-                    StringComparison.OrdinalIgnoreCase) &&
-                Guid.TryParse(item.ObjectId, out var orderId))
-            {
-                var companyProfileId = ReadOrderCompanyProfileId(remoteObject);
-                var adapter = GetAdapter(item.Collection);
-                pendingOrderDeletions.Add((
-                    $"{item.Collection}\0{item.ObjectId}",
-                    orderId,
-                    companyProfileId,
-                    response.Object.Revision,
-                    adapter as IHostedOrderProfileSyncAdapter));
-                continue;
+                    item.ObjectId,
+                    response.Object.Revision);
             }
-
-            await _localState.SaveObjectRevisionAsync(
+        }
+        catch
+        {
+            await UpdatePendingOrderCleanupAsync(
                 profileId,
+                deletingOrderIds.Except(confirmedOrderDeletionIds).ToHashSet(),
+                pending: false);
+            throw;
+        }
+
+        var pendingOrderDeletionIdentities = pendingOrderDeletions
+            .Select(deletion => deletion.Identity)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in distinct)
+        {
+            if (!pendingOrderDeletionIdentities.Contains(
+                    $"{item.Collection}\0{item.ObjectId}"))
+            {
+                await DeleteLocalObjectAsync(item, deletingOrderIds, ct);
+            }
+            await RemovePendingSaveAsync(profileId, item.Collection, item.ObjectId);
+            _conflicts.RemoveAll(conflict => IsSameIdentity(
+                conflict.Collection,
+                conflict.ObjectId,
                 item.Collection,
-                item.ObjectId,
-                response.Object.Revision);
+                item.ObjectId));
         }
 
         foreach (var deletion in pendingOrderDeletions)
@@ -1213,7 +1271,6 @@ public sealed class ProfileSyncService
                     deletion.CompanyProfileId,
                     deletion.Revision,
                     ct);
-                reconciledOrderDeletions.Add(deletion.Identity);
                 continue;
             }
 
@@ -1234,21 +1291,38 @@ public sealed class ProfileSyncService
                 ProfileSyncCollections.TradeOrders,
                 deletion.OrderId.ToString("D"),
                 deletion.Revision);
+            await DeleteLocalObjectAsync(
+                (ProfileSyncCollections.TradeOrders, deletion.OrderId.ToString("D")),
+                deletingOrderIds,
+                ct);
+        }
+        await UpdatePendingOrderCleanupAsync(profileId, deletingOrderIds, pending: false);
+    }
+
+    private async Task UpdatePendingOrderCleanupAsync(
+        string profileId,
+        IReadOnlySet<Guid> orderIds,
+        bool pending)
+    {
+        if (orderIds.Count == 0)
+        {
+            return;
         }
 
-        foreach (var item in distinct)
+        var cleanup = (await _localState.LoadPendingOrderCleanupAsync(profileId))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var changed = false;
+        foreach (var orderId in orderIds)
         {
-            if (!reconciledOrderDeletions.Contains(
-                    $"{item.Collection}\0{item.ObjectId}"))
-            {
-                await DeleteLocalObjectAsync(item, deletingOrderIds, ct);
-            }
-            await RemovePendingSaveAsync(profileId, item.Collection, item.ObjectId);
-            _conflicts.RemoveAll(conflict => IsSameIdentity(
-                conflict.Collection,
-                conflict.ObjectId,
-                item.Collection,
-                item.ObjectId));
+            changed |= pending
+                ? cleanup.Add(orderId.ToString("D"))
+                : cleanup.Remove(orderId.ToString("D"));
+        }
+        if (changed)
+        {
+            await _localState.SavePendingOrderCleanupAsync(
+                profileId,
+                cleanup.OrderBy(id => id, StringComparer.OrdinalIgnoreCase).ToArray());
         }
     }
 
