@@ -1592,7 +1592,7 @@
                                         </MudButton>
                                     }
                                 </section>
-                                @if (HasLinkedCraftPlan(_selectedOrder) && GetCurrentLiveProcurementSnapshot() is null)
+                                @if (HasLinkedCraftPlan(_selectedOrder) && GetVisibleLiveProcurementSnapshot() is null)
                                 {
                                     @if (_isLoadingSelectedOrderSupplyPlan ||
                                          _isRefreshingLiveProcurement ||

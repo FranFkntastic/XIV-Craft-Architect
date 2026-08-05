@@ -62,7 +62,7 @@ public partial class TradeOrders
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
             WorkerProjections.Shell.PlanId,
-            GetCurrentLiveProcurementSnapshot());
+            GetVisibleLiveProcurementSnapshot());
     }
 
     private TradeOrder GetSelectedOrderPricingWorkPackage()
@@ -146,6 +146,22 @@ public partial class TradeOrders
     {
         var key = CreateLiveProcurementKey();
         return key.HasValue && key.Value.Equals(_liveProcurementKey)
+            ? _liveProcurementSnapshot
+            : null;
+    }
+
+    private WorkerTradeProjection? GetVisibleLiveProcurementSnapshot()
+    {
+        if (!IsSelectedOrderLinkedPlanActive() ||
+            _selectedOrder == null ||
+            !_liveProcurementKey.HasValue)
+        {
+            return null;
+        }
+
+        var key = _liveProcurementKey.Value;
+        return key.OrderId == _selectedOrder.Id &&
+               string.Equals(key.PlanId, _selectedOrder.CraftPlanId, StringComparison.Ordinal)
             ? _liveProcurementSnapshot
             : null;
     }
