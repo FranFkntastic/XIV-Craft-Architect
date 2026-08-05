@@ -21,11 +21,8 @@ public sealed class MarketRegionScopeContractTests
             "North America",
             ["Europe", "Japan"]);
 
-        Assert.Equal(
-            ["Aether", "Primal", "Crystal", "Dynamis", "Chaos", "Light"],
-            dataCenters);
+        Assert.Equal(["Aether", "Primal", "Crystal", "Dynamis", "Chaos", "Light"], dataCenters);
     }
-
     [Fact]
     public void GetDataCenters_SelectedDataCenterNeverExpandsAcrossRegions()
     {
@@ -64,7 +61,6 @@ public sealed class MarketRegionScopeContractTests
         Assert.Equal("Aether", result.Order.SourceSnapshot.DataCenter);
         Assert.Equal(requestedDataCenters, result.Order.SourceSnapshot.RequestedDataCenters);
     }
-
     [Fact]
     public void MarketConsumersUseWorkerContextWithoutIndependentScopeSettings()
     {
