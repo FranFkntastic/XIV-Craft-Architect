@@ -23,18 +23,6 @@
                 </div>
             }
 
-            <div class="pp-field-block">
-                <MudCheckBox T="bool"
-                             Value="SearchEntireRegion"
-                             ValueChanged="OnProcurementSearchEntireRegionChanged"
-                             Dense="true"
-                             Disabled="@(!RouteGenerationEnabled)"
-                             Color="Color.Primary">
-                    <span>Search the whole region</span>
-                </MudCheckBox>
-                <p>Uses listings from every data center in @SelectedRegion, which can lower cost but add transfers.</p>
-            </div>
-
             <div class="pp-field-block pp-travel-field">
                 <ProcurementTravelTradeoff TravelTolerance="TravelTolerance"
                                             RouteDecision="RouteDecision"
@@ -57,7 +45,7 @@
                         <span>@GetTravelPriorityLabel()</span>
                         <small>Set in Options</small>
                     </p>
-                    @if (SearchEntireRegion && StartFromHomeDataCenter)
+                    @if (StartFromHomeDataCenter)
                     {
                         <p class="pp-origin-note"><MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" /> <span>Starts from @SelectedDataCenter</span></p>
                     }
@@ -131,7 +119,6 @@
 </aside>
 
 @code {
-    [Parameter] public bool SearchEntireRegion { get; set; }
     [Parameter] public string SelectedRegion { get; set; } = "North America";
     [Parameter] public IReadOnlyList<string> AvailableRegions { get; set; } =
         Array.Empty<string>();
@@ -155,7 +142,6 @@
     [Parameter] public string NoticeMessage { get; set; } = string.Empty;
     [Parameter] public EventCallback OnRunAnalysisRequested { get; set; }
     [Parameter] public EventCallback OnClearExclusionsRequested { get; set; }
-    [Parameter] public EventCallback<bool> SearchEntireRegionChanged { get; set; }
     [Parameter] public EventCallback<string> SelectedRegionChanged { get; set; }
     [Parameter] public EventCallback<int> TravelToleranceChanged { get; set; }
     [Parameter] public EventCallback<int> TravelToleranceCommitted { get; set; }
@@ -176,9 +162,6 @@
         var count = ActiveTemporaryExclusionCount;
         return $"{count} temporary exclusion{(count == 1 ? string.Empty : "s")} active";
     }
-
-    private Task OnProcurementSearchEntireRegionChanged(bool value) =>
-        SearchEntireRegionChanged.InvokeAsync(value);
 
     private Task OnSelectedRegionChanged(string value) =>
         SelectedRegionChanged.InvokeAsync(value);

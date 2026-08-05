@@ -27,7 +27,6 @@
     }
     <div class="pp-grid-layout">
         <ProcurementControlsPanel
-            SearchEntireRegion="_searchEntireRegion"
             SelectedRegion="@_procurementRegion"
             AvailableRegions="AvailableProcurementRegions"
             SelectedDataCenter="@SelectedProcurementDataCenter"
@@ -48,7 +47,6 @@
             ShowNotice="@ShouldShowControlNotice()"
             NoticeSeverity="@GetNoticeSeverity()"
             NoticeMessage="@GetNoticeMessage()"
-            SearchEntireRegionChanged="SetSearchEntireRegion"
             SelectedRegionChanged="SetProcurementRegion"
             TravelToleranceChanged="PreviewTolerance"
             TravelToleranceCommitted="CommitToleranceAsync"
@@ -89,7 +87,6 @@
 
     private WorkerProcurementProjection? _route;
     private long _projectionRefreshRevision = -1;
-    private bool _searchEntireRegion = true;
     private string _procurementRegion = "North America";
     private bool _includeSplitPurchases = true;
     private bool _startFromHomeDataCenter;
@@ -150,9 +147,6 @@
             _isLoading = false;
         }
 
-        _searchEntireRegion = await Settings.GetAsync(
-            "procurement.search_entire_region",
-            true);
         _procurementRegion = await Settings.GetAsync(
             "procurement.region",
             WorkerProjections.Shell.SelectedRegion) ??
@@ -247,7 +241,6 @@
         }
 
         _procurementRegion = _route.SelectedRegion;
-        _searchEntireRegion = _route.SearchesEntireRegion;
         _travelTolerance = _route.TravelTolerance;
         _travelPriority = _route.TravelPriority;
         if (_route.IncludeSplitPurchases.HasValue)
@@ -305,9 +298,7 @@
         }
 
         return new WorkerProcurementRequest(
-            _searchEntireRegion
-                ? MarketFetchScope.EntireRegion
-                : MarketFetchScope.SelectedDataCenter,
+            _route.Scope,
             SelectedProcurementDataCenter,
             _procurementRegion,
             _route.Lens,
@@ -366,12 +357,6 @@
         }
     }
 
-    private async Task SetSearchEntireRegion(bool value)
-    {
-        _searchEntireRegion = value;
-        await Settings.SetAsync("procurement.search_entire_region", value);
-    }
-
     private async Task SetWorldExclusionDuration(int minutes)
     {
         _worldExclusionDurationMinutes = minutes;
@@ -382,9 +367,6 @@
 
     private async Task PersistControlsAsync()
     {
-        await Settings.SetAsync(
-            "procurement.search_entire_region",
-            _searchEntireRegion);
         await Settings.SetAsync("procurement.region", _procurementRegion);
         await Settings.SetAsync(
             "procurement.enable_split_world_purchases",
@@ -618,9 +600,7 @@
                 new WorkerMarketItemRefreshRequest(
                     action.Item.ItemId,
                     action.Item.ItemName,
-                    _searchEntireRegion
-                        ? MarketFetchScope.EntireRegion
-                        : MarketFetchScope.SelectedDataCenter,
+                    _route.Scope,
                     _route.SelectedDataCenter,
                     _route.SelectedRegion,
                     _route.Lens,

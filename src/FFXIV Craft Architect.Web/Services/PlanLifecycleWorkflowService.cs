@@ -349,9 +349,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         {
             var procurement = await _worker.GetProcurementProjectionAsync(
                 cancellationToken);
-            var requestedScope = _settings.ProcurementSearchEntireRegion
-                ? MarketFetchScope.EntireRegion
-                : MarketFetchScope.SelectedDataCenter;
+            var requestedScope = marketScope;
             var routeIsCurrent = !marketChanged &&
                 procurement is
                 {

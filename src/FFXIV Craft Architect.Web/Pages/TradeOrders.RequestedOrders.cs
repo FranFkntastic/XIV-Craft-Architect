@@ -236,6 +236,13 @@ public partial class TradeOrders
                 _newRequestedOrderTitle,
                 outputs,
                 AppState.SelectedDataCenter,
+                AppState.SelectedRegion,
+                AppState.DefaultMarketFetchScope,
+                MarketFetchScopeResolver.GetDataCenters(
+                    AppState.DefaultMarketFetchScope,
+                    AppState.SelectedDataCenter,
+                    AppState.SelectedRegion,
+                    AppState.AnalysisRegions),
                 World: null,
                 _newRequestedOrderNotes,
                 DateTime.UtcNow));
@@ -248,8 +255,6 @@ public partial class TradeOrders
             var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
                 draftResult.Order,
                 new TradeOrderPricingWorkflowOptions(
-                    AppState.SelectedDataCenter,
-                    draftResult.Order.SourceSnapshot.World ?? string.Empty,
                     ForceRefreshMarketData: false));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
@@ -317,8 +322,6 @@ public partial class TradeOrders
         var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
             orderToSave,
             new TradeOrderPricingWorkflowOptions(
-                GetOrderDataCenter(orderToSave),
-                orderToSave.SourceSnapshot.World ?? string.Empty,
                 ForceRefreshMarketData: false));
         if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
         {
