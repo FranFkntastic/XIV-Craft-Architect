@@ -1140,15 +1140,11 @@ public sealed class ProfileSyncService
 
             if (remoteObject.Deleted)
             {
-                var completedOrderExpectation = expectations.FirstOrDefault(expectation =>
+                if (Guid.TryParse(item.ObjectId, out var deletedOrderId) &&
                     string.Equals(
-                        expectation.Collection,
+                        item.Collection,
                         ProfileSyncCollections.TradeOrders,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(expectation.ObjectId, item.ObjectId, StringComparison.Ordinal) &&
-                    remoteObject.Revision > expectation.Revision);
-                if (completedOrderExpectation != null &&
-                    Guid.TryParse(item.ObjectId, out var deletedOrderId))
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     var adapter = GetAdapter(item.Collection);
                     var companyProfileId = await ResolveDeletedOrderCompanyProfileIdAsync(

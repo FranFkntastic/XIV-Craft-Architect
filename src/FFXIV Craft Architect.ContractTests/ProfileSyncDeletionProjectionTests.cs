@@ -68,7 +68,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         var retryObjects = new[] { (ProfileSyncCollections.Plans, plan.ObjectId), (ProfileSyncCollections.TradeOrders, Key(order)) }; var retryExpectation = new[] { new ProfileSyncDeleteExpectation(ProfileSyncCollections.TradeOrders, Key(order), 4) };
         await Assert.ThrowsAsync<InvalidOperationException>(() => retryService.DeleteObjectsAsync(retryObjects, retryExpectation));
         Check(() => Assert.Equal(3, retryCall), () => Assert.Equal(0, retryOrderAdapter.DeleteCount));
-        await retryService.DeleteObjectsAsync(retryObjects, retryExpectation); Check(() => Assert.Equal(5, retryCall), () => Assert.Equal(1, retryOrderAdapter.DeleteCount), () => Assert.True(retryStore.Get(order.Id)?.Deleted));
+        await retryService.DeleteObjectsAsync(retryObjects); Check(() => Assert.Equal(5, retryCall), () => Assert.Equal(1, retryOrderAdapter.DeleteCount), () => Assert.True(retryStore.Get(order.Id)?.Deleted));
     }
     [Fact]
     public async Task DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection()
