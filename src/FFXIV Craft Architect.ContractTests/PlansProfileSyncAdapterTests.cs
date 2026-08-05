@@ -23,24 +23,13 @@ internal static class PlansProfileSyncAdapterTests
     {
         var planId = Guid.NewGuid().ToString("D");
         var linkedOrderId = Guid.NewGuid();
-        var runtime = new PlanStorageRuntime(
-            CreatePlan(planId, "linked-content", linkedOrderId));
+        var runtime = new PlanStorageRuntime(CreatePlan(planId, "linked-content", linkedOrderId));
         var indexedDb = new IndexedDbService(runtime);
-        var adapter = new PlansProfileSyncAdapter(
-            indexedDb,
-            new WebPlanPersistenceService(indexedDb));
-
+        var adapter = new PlansProfileSyncAdapter(indexedDb, new WebPlanPersistenceService(indexedDb));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            adapter.DeleteLocalObjectForOrderDeletionAsync(
-                planId,
-                Guid.NewGuid(),
-                CancellationToken.None));
+            adapter.DeleteLocalObjectForOrderDeletionAsync(planId, Guid.NewGuid(), CancellationToken.None));
         Assert.Contains(planId, runtime.Plans);
-
-        await adapter.DeleteLocalObjectForOrderDeletionAsync(
-            planId,
-            linkedOrderId,
-            CancellationToken.None);
+        await adapter.DeleteLocalObjectForOrderDeletionAsync(planId, linkedOrderId, CancellationToken.None);
         Assert.DoesNotContain(planId, runtime.Plans);
     }
 
@@ -403,11 +392,7 @@ internal static class PlansProfileSyncAdapterTests
             return true;
         }
 
-        private bool DeletePlan(string planId)
-        {
-            Plans.Remove(planId);
-            return true;
-        }
+        private bool DeletePlan(string planId) => Plans.Remove(planId);
 
         private bool SaveBatch(Dictionary<string, string> values)
         {

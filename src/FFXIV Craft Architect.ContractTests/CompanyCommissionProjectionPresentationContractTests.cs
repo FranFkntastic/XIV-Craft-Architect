@@ -37,6 +37,7 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Assert.True(CompanyCommissionSchemaMigrationHostedService.RequiresMigration(modern));
         var source = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.razor");
         var pageStyles = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.razor.css").ReplaceLineEndings("\n");
+        var overviewSource = ReadWebSource(repositoryRoot, "Shared", "TradeOrderCenterOverview.razor");
         var overviewStyles = ReadWebSource(repositoryRoot, "Shared", "TradeOrderCenterOverview.razor.css");
         var detailsStart = source.IndexOf("<details class=\"trade-orders-work-details\"", StringComparison.Ordinal);
         var workspaceStart = source.LastIndexOf("<main class=\"trade-orders-workspace\">", detailsStart, StringComparison.Ordinal);
@@ -57,17 +58,21 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             "class=\"trade-orders-timeline-visibility\" role=\"group\" aria-label=\"Choose timeline entry visibility\"",
             "aria-pressed=\"@(_timelineComposerVisibility == CommissionTimelineVisibility.CompanyOnly)\"",
             "aria-pressed=\"@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared)\"");
+        var overviewStart = source.IndexOf("<TradeOrderCenterOverview", selectedOrderStart, StringComparison.Ordinal); var headerActionsStart = source.IndexOf("<HeaderActions>", overviewStart, StringComparison.Ordinal);
+        var lifecycleActionStart = source.IndexOf("OnClick=\"InvokeSelectedOrderLifecycleActionAsync\"", headerActionsStart, StringComparison.Ordinal); var requirementsStart = source.IndexOf("<RequirementsContent>", headerActionsStart, StringComparison.Ordinal);
+        Assert.True(overviewStart >= 0 && headerActionsStart > overviewStart && lifecycleActionStart > headerActionsStart && requirementsStart > lifecycleActionStart);
+        Contains(overviewSource, "trade-order-overview__actions", "@HeaderActions", "public RenderFragment? HeaderActions");
         Assert.Equal(1, source.Split("\"Refresh Prices\"", StringSplitOptions.None).Length - 1);
         Omits(source, "Reprice Order");
         var procurementSource = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Procurement.cs");
         Contains(procurementSource, "IsRequestedOutputRow(row)", "trade-orders-output-chip", "Output");
         Omits(procurementSource, "IsRequestedOutputReferenceRow");
-        Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"),
-            "Rebuild from Requested Outputs");
+        Contains(ReadWebSource(repositoryRoot, "Services", "TradeProcurementRowBuilder.cs"), "output.MustBeHq == row.RequiresHq");
+        Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"), "Rebuild from Requested Outputs");
         var lifecycleSource = ReadWebSource(repositoryRoot, "Services", "TradeCompany", "TradeOrderLifecycleService.cs");
-        var cancelDraft = lifecycleSource.IndexOf("CancelAndRetractAsync(", StringComparison.Ordinal);
-        var deleteDraft = lifecycleSource.IndexOf("DeleteOrderAsync(canceledOrder", cancelDraft, StringComparison.Ordinal);
+        var cancelDraft = lifecycleSource.IndexOf("commissions.CancelDraftAsync(", StringComparison.Ordinal); var deleteDraft = lifecycleSource.IndexOf("canceled.ObjectRevision.Value", cancelDraft, StringComparison.Ordinal);
         Assert.True(cancelDraft >= 0 && deleteDraft > cancelDraft);
+        Contains(lifecycleSource, "ProfileSyncDeleteExpectation");
         Contains(pageStyles, ".trade-orders-rail-group-title:focus-visible", ".trade-orders-rail-order:focus-visible",
             ".trade-orders-search-result:focus-visible", ".trade-orders-procurement-filter:focus-visible",
             ".trade-orders-timeline-filter:focus-visible",

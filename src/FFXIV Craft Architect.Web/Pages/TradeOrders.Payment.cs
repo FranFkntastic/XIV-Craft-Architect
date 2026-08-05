@@ -574,8 +574,13 @@ public partial class TradeOrders
         catch (Exception exception)
         {
             await LoadAsync();
+            var current = VisibleOrders.FirstOrDefault(candidate => candidate.Id == order.Id);
+            if (current != null)
+            {
+                SelectOrder(current);
+            }
             Snackbar.Add(
-                $"Draft cleanup did not finish. Any remaining order was preserved for retry: {exception.Message}",
+                $"Draft cleanup did not finish. The current order was preserved: {exception.Message}",
                 Severity.Error);
         }
         finally

@@ -40,6 +40,7 @@ public sealed class HostedOrderProjectionStoreTests
             ProjectionStoreScenario.CenterOperationWinner => CenterOperationReconcilesNewerOwnerDuringDurableWrite(),
             ProjectionStoreScenario.CenterOperationAuthoritySwitch => CenterOperationRejectsHostAndProfileReplacement(),
             ProjectionStoreScenario.CenterOperationCommittedFailure => CenterOperationRetainsCommittedProjectionOnAdoptionFailure(),
+            ProjectionStoreScenario.DraftDiscardRefusesPublishedWinner => DraftDiscardRefusesPublishedWinner(),
             ProjectionStoreScenario.StaleMissingOwner => StaleMissingOwnerCannotClearReplacementProjection(),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null)
         });
@@ -200,6 +201,17 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.True(result.HostCommitted);
         Assert.Equal("Host-committed revision five", result.Projection?.Order.Title);
         Assert.Contains("authority", result.Message!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task DraftDiscardRefusesPublishedWinner()
+    {
+        var fixture = await CenterOperationFixture.CreateAsync(draft: true);
+        var published = fixture.Owner("Published while confirmation was open", 5, 9);
+        published.Order.CompanyCommission = published.Order.CompanyCommission! with { PublicMetadata = published.Order.CompanyCommission.PublicMetadata with { ViewState = CompanyCommissionPublicViewState.Published } };
+        fixture.Handler.Projection = published;
+        var result = await fixture.Service.CancelDraftAsync(fixture.Current.Order, "Draft discarded before publication.");
+        Assert.False(result.Success);
+        Assert.Contains("no longer an unpublished draft", result.Message!, StringComparison.OrdinalIgnoreCase); Assert.Equal(0, fixture.Handler.PostCount); Assert.Equal((published.Order.Title, published.ObjectRevision), (fixture.Store.GetOwnerProjection(published.Order.Id)?.Order.Title, fixture.Store.GetOwnerProjection(published.Order.Id)?.ObjectRevision));
     }
 
     private static async Task VerifyDurableAuthorityRepair(bool replacementHasWinner)
@@ -434,10 +446,14 @@ public sealed class HostedOrderProjectionStoreTests
             { CompanyProfileId = Current.Order.CompanyProfileId, DisplayName = "Test", LodestoneCharacterId = "123" }, "123"),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null)
         };
-        public static async Task<CenterOperationFixture> CreateAsync()
+        public static async Task<CenterOperationFixture> CreateAsync(bool draft = false)
         {
             var profileId = Guid.NewGuid().ToString("D");
             var current = new CompanyCommissionOwnerProjection { Order = CreateCommissionOrder(Guid.NewGuid()), ObjectRevision = new(4), CompanyRevision = new(8) };
+            if (draft)
+            {
+                current.Order.CompanyCommission = current.Order.CompanyCommission! with { PublicMetadata = current.Order.CompanyCommission.PublicMetadata with { ViewState = CompanyCommissionPublicViewState.Draft } };
+            }
             var runtime = new CenterOperationRuntime(profileId);
             var indexedDb = new IndexedDbService(runtime);
             var localState = new ProfileSyncLocalStateService(indexedDb, new ProfileHostClientOptions(Host));
@@ -486,10 +502,12 @@ public sealed class HostedOrderProjectionStoreTests
         public required CompanyCommissionOwnerProjection RecoveryProjection { get; set; }
         public Action<HttpRequestMessage>? BeforeResponse { get; set; }
         public bool OwnerMissing { get; set; }
+        public int PostCount { get; private set; }
         public Uri? LastRequestUri { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             LastRequestUri = request.RequestUri;
+            PostCount += request.Method == HttpMethod.Post ? 1 : 0;
             BeforeResponse?.Invoke(request);
             if (OwnerMissing && request.Method == HttpMethod.Get)
             {
@@ -499,7 +517,7 @@ public sealed class HostedOrderProjectionStoreTests
                     { Error = "commission_missing", Message = "The commission is missing." })
                 });
             }
-            object body = request.RequestUri!.AbsolutePath switch
+            object body = request.Method == HttpMethod.Get ? Projection : request.RequestUri!.AbsolutePath switch
             {
                 var path when path.EndsWith("/reset-participant-recovery") => new TradeCommissionRecoveryResetResponse(
                     new CompanyCommissionMutationResult(CompanyCommissionMutationStatus.Applied),
@@ -563,6 +581,6 @@ public sealed class HostedOrderProjectionStoreTests
         CanonicalRevisionAndTombstone, CompanyProfileIsImmutable, ProfileResetClearsRevisionHistory, OwnerUpgradeAtSameRevision, SameProfileReconnect,
         ScopeChange, RestoreRevisionCannotRollBack, CompanySnapshotComposition, SameProfileConnectionReplacement, ConnectionScopePathCase,
         SameRevisionOwnerPersistence, LiveTombstonePersistence, OwnerTombstonePersistence, CenterOperationWinner, CenterOperationAuthoritySwitch,
-        CenterOperationCommittedFailure, StaleMissingOwner
+        CenterOperationCommittedFailure, DraftDiscardRefusesPublishedWinner, StaleMissingOwner
     }
 }

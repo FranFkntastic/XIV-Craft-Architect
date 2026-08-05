@@ -18,6 +18,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         Func<Task>[] scenarios = [
             CommittedOrderPutsAdoptWithoutAdvancingCursor,
             ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder, RevisionZeroDeletionWithoutLocalIdentityAdvancesWithoutInventingTenant,
+            ExpectedRevisionRefusesChangedOrderBeforeDeletion,
             DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection, ConfirmedDeletionCannotCrossCompanyIdentity,
             CollaborationResponseAfterProfileSwitchCannotPublishOrPersist, DelayedCollaborationResponseCannotPersistOverNewerProjection,
             CollaborationResponseFromReplacedHostScopeCannotPersist, CollaborationCannotSendAcrossCaseDistinctConnectionPath,
@@ -65,6 +66,15 @@ public sealed class ProfileSyncDeletionProjectionTests
             new WebSettingsService(indexedDb), store, [adapter]);
         await service.InitializeAsync();
         Check(() => Assert.Equal(1, service.CurrentStatus.LastSyncRevision), () => Assert.Equal(0, adapter.DeleteCount), () => Assert.Empty(store.GetAll()));
+    }
+
+    private static async Task ExpectedRevisionRefusesChangedOrderBeforeDeletion()
+    {
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Published winner");
+        var fixture = CreateDeletionFixture(NewId(), order, 5);
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Service.DeleteObjectsAsync([(ProfileSyncCollections.TradeOrders, Key(order))], [new ProfileSyncDeleteExpectation(ProfileSyncCollections.TradeOrders, Key(order), Revision: 3)]));
+        Check(() => Assert.Contains("changed before deletion", failure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Equal(0, fixture.Adapter.DeleteCount));
     }
     private static async Task DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection()
     {

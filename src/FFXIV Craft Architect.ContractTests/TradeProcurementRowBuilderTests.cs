@@ -58,62 +58,17 @@ public sealed class TradeProcurementRowBuilderTests
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
         }
     }
-
     private static void DirectlyAcquiredRequestedOutputRemainsAVisibleSupplyRow()
     {
-        var order = new TradeOrder
-        {
-            CraftPlanId = "spruce-plan",
-            SourceSnapshot = new TradeOrderSourceSnapshot
-            {
-                SourcePlanId = "spruce-plan",
-                RootItems = [new TradeOrderRootItemSnapshot(5395, "Spruce Lumber", 1_998, false, 0)]
-            }
-        };
-        var root = ProjectionRow(
-            itemId: 5395,
-            itemName: "Spruce Lumber",
-            source: AcquisitionSource.MarketBuyNq,
-            hasChildren: true,
-            isActiveProcurement: true,
-            isFullySuppressed: false,
-            suppressedBy: []) with
-        {
-            TotalQuantity = 1_998,
-            ActiveQuantity = 1_998,
-            UsedIn = "Order output"
-        };
-        var snapshot = new WorkerTradeProjection(
-            Revision: 1,
-            HasPlan: true,
-            PlanId: "spruce-plan",
-            PlanName: "Order - Spruce Lumber Commission",
-            SelectedDataCenter: "Aether",
-            SelectedRegion: "North America",
-            MarketFetchScope: MarketFetchScope.SelectedDataCenter,
-            RequestedDataCenters: ["Aether"],
-            MarketLens: MarketAcquisitionLens.MinimumUpfrontCost,
-            PlanSessionVersion: 1,
-            MarketAnalysisVersion: 1,
-            CraftedItems: [],
-            RootItems: [],
-            MaterialLines: [],
-            ActiveProcurementItems: [],
-            AcquisitionRows: [root],
-            CraftLabor: [],
-            Warnings: []);
-
-        var row = Assert.Single(TradeProcurementRowBuilder.BuildRows(
-            order,
-            draft: null,
-            activePlanId: "spruce-plan",
-            liveSnapshot: snapshot));
-
-        Assert.Equal((5395, "Spruce Lumber", 1_998, AcquisitionSource.MarketBuyNq),
-            (row.ItemId, row.ItemName, row.ActiveQuantity, row.Source));
+        var order = new TradeOrder { CraftPlanId = "spruce-plan", SourceSnapshot = new TradeOrderSourceSnapshot { SourcePlanId = "spruce-plan", RootItems = [new TradeOrderRootItemSnapshot(5395, "Spruce Lumber", 1_998, false, 0)] } };
+        var root = ProjectionRow(5395, "Spruce Lumber", AcquisitionSource.MarketBuyNq, true, true, false, []) with { TotalQuantity = 1_998, ActiveQuantity = 1_998, UsedIn = "Order output" };
+        var snapshot = new WorkerTradeProjection(1, true, "spruce-plan", "Order - Spruce Lumber Commission", "Aether", "North America", MarketFetchScope.SelectedDataCenter, ["Aether"], MarketAcquisitionLens.MinimumUpfrontCost, 1, 1, [], [], [], [], [root], [], []);
+        var row = Assert.Single(TradeProcurementRowBuilder.BuildRows(order, null, "spruce-plan", snapshot));
+        Assert.Equal((5395, "Spruce Lumber", 1_998, AcquisitionSource.MarketBuyNq), (row.ItemId, row.ItemName, row.ActiveQuantity, row.Source));
         Assert.True(TradeProcurementRowBuilder.ShouldIncludePlanRow(row));
+        Assert.True(TradeProcurementRowBuilder.IsRequestedOutputRow(order, row));
+        Assert.False(TradeProcurementRowBuilder.IsRequestedOutputRow(order, row with { RowKey = "5395:True", RequiresHq = true }));
     }
-
     private static void FullySuppressedPrecraftRemainsInPlan()
     {
         var row = Row(
@@ -122,14 +77,12 @@ public sealed class TradeProcurementRowBuilderTests
             isFullySuppressed: true,
             suppressedBy: ["Purchased assembly"],
             hasEditableOccurrences: false);
-
         Assert.True(TradeProcurementRowBuilder.IsPlanPrecraftRow(row));
         Assert.True(TradeProcurementRowBuilder.ShouldIncludePlanRow(row));
         Assert.Equal(
             "Not currently required because Purchased assembly is sourced directly",
             TradeProcurementRowBuilder.GetPlanRouteDescription(row));
     }
-
     private static void DirectlySourcedPrecraftRemainsRequiredWhileItsIngredientsAreSuppressed(
         AcquisitionSource source)
     {
@@ -139,13 +92,10 @@ public sealed class TradeProcurementRowBuilderTests
             isFullySuppressed: false,
             suppressedBy: [],
             hasEditableOccurrences: true);
-
         var description = TradeProcurementRowBuilder.GetPlanRouteDescription(row);
-
         Assert.StartsWith("Required item; its ingredients are not required", description);
         Assert.DoesNotContain("Not currently required", description);
     }
-
     private static void FullySuppressedPrecraftCanRecordWholeRowSourceIntent()
     {
         var row = Row(
@@ -154,7 +104,6 @@ public sealed class TradeProcurementRowBuilderTests
             isFullySuppressed: true,
             suppressedBy: ["Purchased assembly"],
             hasEditableOccurrences: false);
-
         Assert.True(TradeProcurementSourceMutationPolicy.CanChangeSource(row));
         Assert.False(TradeProcurementSourceMutationPolicy.CanChangeSource(
             row with { HasChildren = false }));

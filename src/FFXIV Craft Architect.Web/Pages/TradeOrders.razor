@@ -382,6 +382,17 @@
                                 <TradeOrderCenterOverview Model="centerOverview"
                                                           OnOpenPlan="OpenPlanWorkbenchAsync"
                                                           OnEditTerms="OpenSelectedOrderTermsAsync">
+                                    <HeaderActions>
+                                        @if (HasSelectedLifecycleAction)
+                                        {
+                                            <MudButton Variant="Variant.Outlined"
+                                                       Color="Color.Error"
+                                                       OnClick="InvokeSelectedOrderLifecycleActionAsync"
+                                                       Disabled="@(_isCommissionCommandRunning || _isDeletingSelectedOrder || _isDiscardingSelectedDraft || HasSelectedLocalHostedCollision)">
+                                                @SelectedLifecycleActionLabel
+                                            </MudButton>
+                                        }
+                                    </HeaderActions>
                                     <RequirementsContent>
                                         @{
                                             var paymentSummary = GetSelectedOrderPaymentSummary();
@@ -872,7 +883,7 @@
                                         <MudTextField @bind-Value="_commissionResolutionNote"
                                                       id="commission-resolution-note"
                                                       Label="Resolution note"
-                                                      HelperText="Record what was reconciled before reopening. Cancel remains available below."
+                                                      HelperText="Record what was reconciled before reopening. Cancel Commission remains available in the header."
                                                       Variant="Variant.Outlined"
                                                       Margin="Margin.Dense"
                                                       Lines="2"
@@ -1105,60 +1116,33 @@
                         <section class="trade-orders-workspace-card">
                             <div class="trade-orders-workspace-header">
                                  <div>
-                                     <MudText Typo="Typo.overline">
-                                         @(HasCanonicalCommission ? "Selected Commission" : "Selected Order")
-                                     </MudText>
+                                      <MudText Typo="Typo.overline">Selected Order</MudText>
                                      <MudText Typo="Typo.h6">@_selectedOrder.Title</MudText>
                                  </div>
-                                 @if (HasCanonicalCommission)
-                                 {
-                                     <div class="trade-orders-inline-actions">
-                                         <MudButton Variant="Variant.Outlined"
-                                                    Color="Color.Primary"
-                                                    StartIcon="@Icons.Material.Filled.EditNote"
-                                                    OnClick="ShowCommissionTermsRevision"
-                                                    Disabled="@(IsSelectedOrderArchived || IsEditingCommissionTermsRevision ||
-                                                        SelectedCanonicalCommission?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Published)">
-                                             @(IsEditingCommissionTermsRevision ? "Revision in Progress" : "Revise Terms")
-                                         </MudButton>
-                                         @if (HasSelectedLifecycleAction)
-                                         {
-                                             <MudButton Variant="Variant.Outlined"
-                                                        Color="Color.Error"
-                                                        OnClick="InvokeSelectedOrderLifecycleActionAsync"
-                                                        Disabled="@(_isCommissionCommandRunning || _isDeletingSelectedOrder || _isDiscardingSelectedDraft || HasSelectedLocalHostedCollision)">
-                                                 @SelectedLifecycleActionLabel
-                                             </MudButton>
-                                         }
-                                     </div>
-                                 }
-                                 else
-                                 {
-                                     <div class="trade-orders-inline-actions">
-                                         <MudButton Variant="Variant.Outlined"
-                                                    Color="Color.Secondary"
-                                                    StartIcon="@Icons.Material.Filled.EditNote"
-                                                    OnClick="OpenSelectedOrderTermsAsync"
-                                                    Disabled="@(IsSelectedOrderArchived || HasSelectedLocalHostedCollision)">
-                                             Edit draft terms
-                                         </MudButton>
-                                         <MudButton Variant="Variant.Filled"
-                                                    Color="Color.Primary"
-                                                    OnClick="SaveSelectedOrderAsync"
-                                                    Disabled="@(IsSelectedOrderArchived || HasSelectedLocalHostedCollision || string.IsNullOrWhiteSpace(_detailTitle))">
-                                             Save Order
-                                         </MudButton>
-                                         @if (HasSelectedLifecycleAction)
-                                         {
-                                             <MudButton Variant="Variant.Outlined"
-                                                        Color="Color.Error"
-                                                        OnClick="InvokeSelectedOrderLifecycleActionAsync"
-                                                        Disabled="@(_isDeletingSelectedOrder || _isDiscardingSelectedDraft || HasSelectedLocalHostedCollision)">
-                                                 @SelectedLifecycleActionLabel
-                                             </MudButton>
-                                         }
-                                     </div>
-                                 }
+                                  <div class="trade-orders-inline-actions">
+                                      <MudButton Variant="Variant.Outlined"
+                                                 Color="Color.Secondary"
+                                                 StartIcon="@Icons.Material.Filled.EditNote"
+                                                 OnClick="OpenSelectedOrderTermsAsync"
+                                                 Disabled="@(IsSelectedOrderArchived || HasSelectedLocalHostedCollision)">
+                                          Edit draft terms
+                                      </MudButton>
+                                      <MudButton Variant="Variant.Filled"
+                                                 Color="Color.Primary"
+                                                 OnClick="SaveSelectedOrderAsync"
+                                                 Disabled="@(IsSelectedOrderArchived || HasSelectedLocalHostedCollision || string.IsNullOrWhiteSpace(_detailTitle))">
+                                          Save Order
+                                      </MudButton>
+                                      @if (HasSelectedLifecycleAction)
+                                      {
+                                          <MudButton Variant="Variant.Outlined"
+                                                     Color="Color.Error"
+                                                     OnClick="InvokeSelectedOrderLifecycleActionAsync"
+                                                     Disabled="@(_isDeletingSelectedOrder || _isDiscardingSelectedDraft || HasSelectedLocalHostedCollision)">
+                                              @SelectedLifecycleActionLabel
+                                          </MudButton>
+                                      }
+                                  </div>
                              </div>
                              @if (HasSelectedLocalHostedCollision)
                              {

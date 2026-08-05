@@ -116,7 +116,8 @@ public sealed class TradeOrderLifecycleService(
 
     public async Task DeleteOrderAsync(
         TradeOrder order,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        long? expectedHostedOrderRevision = null)
     {
         if (!TradeOrderStatusWorkflow.IsArchived(order.Status))
         {
@@ -152,7 +153,19 @@ public sealed class TradeOrderLifecycleService(
         // for a safe retry instead of stranding an orphaned plan or payroll draft.
         identities.Add((ProfileSyncCollections.TradeOrders, order.Id.ToString("D")));
 
-        await profileSync.DeleteObjectsAsync(identities, cancellationToken);
+        var expectations = expectedHostedOrderRevision.HasValue
+            ? new[]
+            {
+                new ProfileSyncDeleteExpectation(
+                    ProfileSyncCollections.TradeOrders,
+                    order.Id.ToString("D"),
+                    expectedHostedOrderRevision.Value)
+            }
+            : Array.Empty<ProfileSyncDeleteExpectation>();
+        await profileSync.DeleteObjectsAsync(
+            identities,
+            expectations,
+            cancellationToken);
         await indexedDb.DeleteTradeOrderCraftSnapshotsForOrderAsync(order.Id);
         appState.NotifyTradeOperationsDataChanged();
     }
@@ -171,19 +184,33 @@ public sealed class TradeOrderLifecycleService(
 
         if (order.CompanyCommission != null)
         {
-            var cancellation = await CancelAndRetractAsync(
+            var cancellation = await commissions.CancelDraftAsync(
                 order,
                 "Draft discarded before publication.",
                 cancellationToken);
-            if (cancellation.RemovedOrphanedLocalOrder)
+            if (!cancellation.Success &&
+                cancellation.Projection == null &&
+                commissions.IsCanonicalOwnerMissing(order.Id))
             {
+                var localOrphan = TradeOrderWorkflow.CopyOrder(order);
+                localOrphan.Status = TradeOrderStatus.Canceled;
+                await DeleteOrderAsync(localOrphan, cancellationToken);
+                appState.NotifyTradeOperationsDataChanged();
                 return;
             }
 
-            var canceledOrder = cancellation.Order
-                ?? throw new InvalidOperationException(
-                    "The draft was canceled, but its cleanup handle is unavailable.");
-            await DeleteOrderAsync(canceledOrder, cancellationToken);
+            var canceled = RequireProjection(cancellation, "discard the draft");
+            if (canceled.Order.Status != TradeOrderStatus.Canceled ||
+                canceled.Order.CompanyCommission?.PublicMetadata.ViewState !=
+                CompanyCommissionPublicViewState.Draft)
+            {
+                throw new InvalidOperationException(
+                    "The hosted commission did not confirm a canceled unpublished draft.");
+            }
+            await DeleteOrderAsync(
+                canceled.Order,
+                cancellationToken,
+                canceled.ObjectRevision.Value);
             return;
         }
 

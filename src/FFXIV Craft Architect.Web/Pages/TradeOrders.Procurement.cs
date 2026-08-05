@@ -641,8 +641,7 @@ public partial class TradeOrders
     private bool IsRequestedOutputRow(TradeOrderProcurementRow row)
     {
         return _selectedOrder != null &&
-            row.IsLiveAcquisitionRow &&
-            GetOrderRootItems(_selectedOrder).Any(output => output.ItemId == row.ItemId);
+            TradeProcurementRowBuilder.IsRequestedOutputRow(_selectedOrder, row);
     }
 
     private static bool IsSupplyPrecraftRow(TradeOrderProcurementRow row)

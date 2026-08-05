@@ -3,6 +3,11 @@ using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
+public sealed record ProfileSyncDeleteExpectation(
+    string Collection,
+    string ObjectId,
+    long Revision);
+
 public sealed record ProfileSyncStatus(
     bool IsConnected,
     bool HostReachable,
@@ -1007,12 +1012,19 @@ public sealed class ProfileSyncService
     public Task DeleteObjectsAsync(
         IReadOnlyList<(string Collection, string ObjectId)> objects,
         CancellationToken ct = default) =>
+        DeleteObjectsAsync(objects, [], ct);
+
+    public Task DeleteObjectsAsync(
+        IReadOnlyList<(string Collection, string ObjectId)> objects,
+        IReadOnlyList<ProfileSyncDeleteExpectation> expectations,
+        CancellationToken ct = default) =>
         RunSerializedAsync(
-            () => DeleteObjectsCoreAsync(objects, ct),
+            () => DeleteObjectsCoreAsync(objects, expectations, ct),
             ct);
 
     private async Task DeleteObjectsCoreAsync(
         IReadOnlyList<(string Collection, string ObjectId)> objects,
+        IReadOnlyList<ProfileSyncDeleteExpectation> expectations,
         CancellationToken ct)
     {
         if (objects.Count == 0)
@@ -1043,6 +1055,12 @@ public sealed class ProfileSyncService
         var profileId = settings.ProfileScopeId;
         if (!settings.IsConfigured || profileId == null)
         {
+            if (expectations.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "The hosted object revision cannot be verified while profile hosting is disconnected.");
+            }
+
             foreach (var item in distinct)
             {
                 if (await _localState.HasKnownHostedObjectAsync(
@@ -1068,6 +1086,28 @@ public sealed class ProfileSyncService
             settings.HostUrl!,
             settings.AccessKey!,
             ct);
+        foreach (var expectation in expectations)
+        {
+            if (!distinct.Any(item =>
+                    string.Equals(item.Collection, expectation.Collection, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(item.ObjectId, expectation.ObjectId, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"The guarded hosted deletion omitted {expectation.Collection}/{expectation.ObjectId}.");
+            }
+
+            var expectedObject = remote.Objects.FirstOrDefault(candidate =>
+                string.Equals(candidate.Collection, expectation.Collection, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(candidate.ObjectId, expectation.ObjectId, StringComparison.Ordinal));
+            if (expectedObject == null ||
+                expectedObject.Deleted ||
+                expectedObject.Revision != expectation.Revision)
+            {
+                throw new InvalidOperationException(
+                    $"Hosted {expectation.Collection}/{expectation.ObjectId} changed before deletion; its current state was preserved.");
+            }
+        }
+
         foreach (var item in distinct)
         {
             var remoteObject = remote.Objects.FirstOrDefault(candidate =>
@@ -1088,7 +1128,7 @@ public sealed class ProfileSyncService
             if (response.Conflict)
             {
                 throw new InvalidOperationException(
-                    $"Hosted {item.Collection}/{item.ObjectId} changed while it was being deleted. Try the action again.");
+                    $"Hosted {item.Collection}/{item.ObjectId} changed while it was being deleted. Its current state was preserved.");
             }
             if (!response.Success || response.Object == null)
             {
