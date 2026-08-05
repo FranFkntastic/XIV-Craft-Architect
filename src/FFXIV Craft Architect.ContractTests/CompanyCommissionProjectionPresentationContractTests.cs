@@ -61,10 +61,10 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Assert.Equal(1, source.Split("\"Refresh Prices\"", StringSplitOptions.None).Length - 1);
         Omits(source, "Reprice Order");
         var procurementSource = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Procurement.cs");
-        Contains(procurementSource, "IsRequestedOutputRow(row)", "trade-orders-output-chip", "Output");
+        Contains(procurementSource, "IsRequestedOutputRow(row)", "trade-orders-output-chip", "Output", "GetVisibleLiveProcurementSnapshot()");
         Omits(procurementSource, "IsRequestedOutputReferenceRow");
         Contains(ReadWebSource(repositoryRoot, "Services", "TradeProcurementRowBuilder.cs"), "output.MustBeHq == row.RequiresHq");
-        Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"), "Rebuild from Requested Outputs");
+        Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"), "Rebuild from Requested Outputs", "isSameLinkedPlan", "if (!isSameOrder)");
         var lifecycleSource = ReadWebSource(repositoryRoot, "Services", "TradeCompany", "TradeOrderLifecycleService.cs");
         var cancelDraft = lifecycleSource.IndexOf("commissions.CancelDraftAsync(", StringComparison.Ordinal); var deleteDraft = lifecycleSource.IndexOf("canceled.ObjectRevision.Value", cancelDraft, StringComparison.Ordinal);
         Assert.True(cancelDraft >= 0 && deleteDraft > cancelDraft);
