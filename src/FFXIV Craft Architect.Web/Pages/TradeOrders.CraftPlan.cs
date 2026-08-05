@@ -83,8 +83,6 @@ public partial class TradeOrders
             var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
                 orderToSave,
                 new TradeOrderPricingWorkflowOptions(
-                    GetOrderDataCenter(_selectedOrder),
-                    _selectedOrder.SourceSnapshot.World ?? string.Empty,
                     ForceRefreshMarketData: false));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
@@ -312,8 +310,6 @@ public partial class TradeOrders
             var result = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
                 _selectedOrder,
                 new TradeOrderPricingWorkflowOptions(
-                    GetOrderDataCenter(_selectedOrder),
-                    _selectedOrder.SourceSnapshot.World ?? string.Empty,
                     ForceRefreshMarketData: false));
             if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
             {
@@ -538,8 +534,6 @@ public partial class TradeOrders
             pricingResult = await TradeOrderPricingWorkflow.RepriceAsync(
                 _selectedOrder,
                 new TradeOrderPricingWorkflowOptions(
-                    GetOrderDataCenter(_selectedOrder),
-                    _selectedOrder.SourceSnapshot.World ?? string.Empty,
                     ForceRefreshMarketData: true));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {

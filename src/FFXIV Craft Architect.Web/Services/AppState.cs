@@ -26,8 +26,6 @@ public sealed class AppState
                 : [ComparisonRegion]);
     public MarketFetchScope DefaultMarketFetchScope { get; private set; } =
         MarketFetchScope.EntireRegion;
-    public bool SearchEntireRegion { get; private set; } = true;
-    public bool ProcurementSearchEntireRegion { get; private set; } = true;
     public bool ProcurementEnableSplitWorldPurchases { get; private set; } = true;
     public int ProcurementTravelTolerance { get; private set; }
     public bool ProcurementStartFromHomeDataCenter { get; private set; }
@@ -77,7 +75,6 @@ public sealed class AppState
         string dataCenter,
         string region,
         MarketFetchScope defaultFetchScope,
-        bool searchEntireRegion,
         string? comparisonRegion = null)
     {
         SelectedRegion = MarketFetchScopeResolver
@@ -95,17 +92,14 @@ public sealed class AppState
             .Skip(1)
             .FirstOrDefault();
         DefaultMarketFetchScope = defaultFetchScope;
-        SearchEntireRegion = searchEntireRegion;
         NotifySettingsChanged();
     }
 
     public void SetProcurementSettings(
-        bool searchEntireRegion,
         bool enableSplitWorldPurchases,
         int travelTolerance,
         int temporaryWorldBlacklistDurationMinutes)
     {
-        ProcurementSearchEntireRegion = searchEntireRegion;
         ProcurementEnableSplitWorldPurchases = enableSplitWorldPurchases;
         ProcurementTravelTolerance = Math.Clamp(travelTolerance, 0, 11);
         TemporaryWorldBlacklistDurationMinutes =

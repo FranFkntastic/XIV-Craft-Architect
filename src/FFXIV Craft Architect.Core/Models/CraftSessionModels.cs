@@ -33,23 +33,23 @@ public enum CraftEvidenceOwner
 
 public enum CraftSettingsKey
 {
-    Unknown,
-    Region,
-    DefaultDataCenter,
-    DefaultMarketFetchScope,
-    RecommendationMode,
-    MarketAcquisitionLens,
-    HomeWorld,
-    IncludeCrossWorld,
-    ExcludeCongestedWorlds,
-    ParallelApiRequests,
-    WarmCacheForCraftedItems,
-    MarketCacheTtlHours,
-    ProcurementSearchEntireRegion,
-    ProcurementEnableSplitWorldPurchases,
-    ProcurementTravelTolerance,
-    ProcurementWorldExclusionDurationMinutes,
-    ProcurementStartFromHomeDataCenter
+    Unknown = 0,
+    Region = 1,
+    DefaultDataCenter = 2,
+    DefaultMarketFetchScope = 3,
+    RecommendationMode = 4,
+    MarketAcquisitionLens = 5,
+    HomeWorld = 6,
+    IncludeCrossWorld = 7,
+    ExcludeCongestedWorlds = 8,
+    ParallelApiRequests = 9,
+    WarmCacheForCraftedItems = 10,
+    MarketCacheTtlHours = 11,
+    // 12 was the retired procurement scope duplicate. Preserve later wire values.
+    ProcurementEnableSplitWorldPurchases = 13,
+    ProcurementTravelTolerance = 14,
+    ProcurementWorldExclusionDurationMinutes = 15,
+    ProcurementStartFromHomeDataCenter = 16
 }
 
 public enum CraftOperationWorkflow
@@ -189,7 +189,6 @@ public static class CraftSettingsKeyMap
         ["market.warm_cache_for_crafted_items"] = CraftSettingsKey.WarmCacheForCraftedItems,
         ["market.cache_ttl_hours"] = CraftSettingsKey.MarketCacheTtlHours,
         ["planning.default_recommendation_mode"] = CraftSettingsKey.RecommendationMode,
-        ["procurement.search_entire_region"] = CraftSettingsKey.ProcurementSearchEntireRegion,
         ["procurement.enable_split_world_purchases"] = CraftSettingsKey.ProcurementEnableSplitWorldPurchases,
         ["procurement.travel_tolerance"] = CraftSettingsKey.ProcurementTravelTolerance,
         ["procurement.world_exclusion_duration_minutes"] = CraftSettingsKey.ProcurementWorldExclusionDurationMinutes,

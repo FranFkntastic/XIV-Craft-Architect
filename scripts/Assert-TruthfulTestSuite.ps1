@@ -8,6 +8,11 @@ $testProjects = @(
     Join-Path $root 'src/FFXIV Craft Architect.SpecTests'
     Join-Path $root 'src/FFXIV Craft Architect.ContractTests'
 )
+$maximumFiles = 36
+$maximumMethods = 215
+$maximumCases = 310
+$maximumLines = 11750
+$maximumFileLines = 1050
 
 if (Test-Path -LiteralPath $legacyProject) {
     throw 'Legacy FFXIV Craft Architect.Tests project still exists.'
@@ -23,13 +28,25 @@ foreach ($project in $testProjects) {
         Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' }
 }
 
-$methodCount = 0
+$factCount = 0
+$theoryCount = 0
+$caseCount = 0
 $lineCount = 0
 $violations = @()
 foreach ($file in $sourceFiles) {
     $text = Get-Content -LiteralPath $file.FullName -Raw
-    $lineCount += @(Get-Content -LiteralPath $file.FullName).Count
-    $methodCount += [regex]::Matches($text, '(?m)^\s*\[(Fact|Theory)(?:\([^\]]*\))?\]\s*$').Count
+    $fileLineCount = @(Get-Content -LiteralPath $file.FullName).Count
+    $fileFactCount = [regex]::Matches($text, '(?m)^\s*\[Fact(?:\([^\]]*\))?\]\s*$').Count
+    $fileTheoryCount = [regex]::Matches($text, '(?m)^\s*\[Theory(?:\([^\]]*\))?\]\s*$').Count
+    $fileInlineDataCount = [regex]::Matches($text, '(?m)^\s*\[InlineData(?:\([^\]]*\))?\]\s*$').Count
+    $lineCount += $fileLineCount
+    $factCount += $fileFactCount
+    $theoryCount += $fileTheoryCount
+    $caseCount += $fileFactCount + $fileInlineDataCount
+
+    if ($fileLineCount -gt $maximumFileLines) {
+        $violations += "$($file.FullName): file line ceiling exceeded: $fileLineCount > $maximumFileLines"
+    }
 
     if ($text -match '(?i)\bSkip\s*=') {
         $violations += "$($file.FullName): skipped test"
@@ -40,6 +57,18 @@ foreach ($file in $sourceFiles) {
     if ($text -match '\bMock<|\bnew\s+Mock\b') {
         $violations += "$($file.FullName): mock-based test"
     }
+    if ($text -match '\[(MemberData|ClassData)') {
+        $violations += "$($file.FullName): dynamically sized theory data hides the case count; use explicit InlineData"
+    }
+    if ($text -match '\b(class|static\s+class)\s+\w*Scenarios\b') {
+        $violations += "$($file.FullName): hidden scenario class; independently discover each scenario"
+    }
+    if ($text -match '\b(AssertAll|AssertAllAsync|RunAll)\s*\(') {
+        $violations += "$($file.FullName): aggregate scenario entrypoint; independently discover each scenario"
+    }
+    if ($text -match '(?m)^\s*(public|internal)\s+static\s+async\s+Task\s+RunAsync\s*\(\s*\)') {
+        $violations += "$($file.FullName): aggregate RunAsync entrypoint; independently discover each scenario"
+    }
     if ($text -match '\[(Fact|Theory)') {
         if ($text -notmatch '\bAssert\.') {
             $violations += "$($file.FullName): test file has no assertion"
@@ -47,14 +76,21 @@ foreach ($file in $sourceFiles) {
     }
 }
 
+$methodCount = $factCount + $theoryCount
 if ($methodCount -eq 0) {
     $violations += 'No test methods were discovered.'
 }
-if ($methodCount -gt 150) {
-    $violations += "Test method ceiling exceeded: $methodCount > 150."
+if ($sourceFiles.Count -gt $maximumFiles) {
+    $violations += "Test file ceiling exceeded: $($sourceFiles.Count) > $maximumFiles."
 }
-if ($lineCount -gt 11725) {
-    $violations += "Test source ceiling exceeded: $lineCount > 11725."
+if ($methodCount -gt $maximumMethods) {
+    $violations += "Test method ceiling exceeded: $methodCount > $maximumMethods."
+}
+if ($caseCount -gt $maximumCases) {
+    $violations += "Test case ceiling exceeded: $caseCount > $maximumCases."
+}
+if ($lineCount -gt $maximumLines) {
+    $violations += "Test source ceiling exceeded: $lineCount > $maximumLines."
 }
 
 $specProject = Get-Content -LiteralPath (Join-Path $testProjects[0] 'FFXIV Craft Architect.SpecTests.csproj') -Raw
@@ -69,4 +105,4 @@ if ($violations.Count -gt 0) {
     throw 'Truthful test-suite structure is invalid.'
 }
 
-Write-Output "Truthful suite structure valid: $methodCount test methods, $lineCount source lines."
+Write-Output "Truthful suite structure valid: $($sourceFiles.Count) files, $methodCount methods, $caseCount explicit cases, $lineCount source lines."
