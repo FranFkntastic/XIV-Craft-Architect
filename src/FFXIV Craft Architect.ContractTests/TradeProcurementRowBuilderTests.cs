@@ -14,7 +14,6 @@ public sealed class TradeProcurementRowBuilderTests
     [InlineData(PlanRowScenario.OrdinaryOrderLivePlan)]
     [InlineData(PlanRowScenario.ReadOnlyCommissionLivePlan)]
     [InlineData(PlanRowScenario.EditableCommissionLivePlan)]
-    [InlineData(PlanRowScenario.DirectlyAcquiredRequestedOutput)]
     public async Task PlanRowsPreserveSourceIntentAndCanonicalEditability(PlanRowScenario scenario)
     {
         switch (scenario)
@@ -50,8 +49,6 @@ public sealed class TradeProcurementRowBuilderTests
                 break;
             case PlanRowScenario.EditableCommissionLivePlan:
                 LivePlanMutationFollowsCanonicalWorkPackageEditability(true, true, true);
-                break;
-            case PlanRowScenario.DirectlyAcquiredRequestedOutput:
                 DirectlyAcquiredRequestedOutputRemainsAVisibleSupplyRow();
                 break;
             default:
@@ -296,7 +293,6 @@ public sealed class TradeProcurementRowBuilderTests
         SuppressedPrecraftSourceIntent,
         OrdinaryOrderLivePlan,
         ReadOnlyCommissionLivePlan,
-        EditableCommissionLivePlan,
-        DirectlyAcquiredRequestedOutput
+        EditableCommissionLivePlan
     }
 }

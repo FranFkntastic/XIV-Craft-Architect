@@ -40,7 +40,6 @@ public sealed class HostedOrderProjectionStoreTests
             ProjectionStoreScenario.CenterOperationWinner => CenterOperationReconcilesNewerOwnerDuringDurableWrite(),
             ProjectionStoreScenario.CenterOperationAuthoritySwitch => CenterOperationRejectsHostAndProfileReplacement(),
             ProjectionStoreScenario.CenterOperationCommittedFailure => CenterOperationRetainsCommittedProjectionOnAdoptionFailure(),
-            ProjectionStoreScenario.DraftDiscardRefusesPublishedWinner => DraftDiscardRefusesPublishedWinner(),
             ProjectionStoreScenario.StaleMissingOwner => StaleMissingOwnerCannotClearReplacementProjection(),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null)
         });
@@ -201,6 +200,7 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.True(result.HostCommitted);
         Assert.Equal("Host-committed revision five", result.Projection?.Order.Title);
         Assert.Contains("authority", result.Message!, StringComparison.OrdinalIgnoreCase);
+        await DraftDiscardRefusesPublishedWinner();
     }
 
     private static async Task DraftDiscardRefusesPublishedWinner()
@@ -581,6 +581,6 @@ public sealed class HostedOrderProjectionStoreTests
         CanonicalRevisionAndTombstone, CompanyProfileIsImmutable, ProfileResetClearsRevisionHistory, OwnerUpgradeAtSameRevision, SameProfileReconnect,
         ScopeChange, RestoreRevisionCannotRollBack, CompanySnapshotComposition, SameProfileConnectionReplacement, ConnectionScopePathCase,
         SameRevisionOwnerPersistence, LiveTombstonePersistence, OwnerTombstonePersistence, CenterOperationWinner, CenterOperationAuthoritySwitch,
-        CenterOperationCommittedFailure, DraftDiscardRefusesPublishedWinner, StaleMissingOwner
+        CenterOperationCommittedFailure, StaleMissingOwner
     }
 }
