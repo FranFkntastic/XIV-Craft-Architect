@@ -12,10 +12,36 @@ internal static class PlansProfileSyncAdapterTests
 {
     internal static async Task AssertAllAsync()
     {
+        await LinkedPlanDeletionRequiresTheSameOrderInTheDeletionBoundary();
         await RemoteUnsealedReplayPreservesMatchingLocalSealWithoutWeakeningCollisionGuard();
         await ProtectedPlanConflictDoesNotBlockLaterPagesAndSurvivesRestart();
         await AcceptRemoteTombstoneDeletesInsteadOfApplyingEmptyPayload();
         await LegacyPlanRepairResumesFromRemoteTombstoneAfterInterruptedDelete();
+    }
+
+    private static async Task LinkedPlanDeletionRequiresTheSameOrderInTheDeletionBoundary()
+    {
+        var planId = Guid.NewGuid().ToString("D");
+        var linkedOrderId = Guid.NewGuid();
+        var runtime = new PlanStorageRuntime(
+            CreatePlan(planId, "linked-content", linkedOrderId));
+        var indexedDb = new IndexedDbService(runtime);
+        var adapter = new PlansProfileSyncAdapter(
+            indexedDb,
+            new WebPlanPersistenceService(indexedDb));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            adapter.DeleteLocalObjectForOrderDeletionAsync(
+                planId,
+                Guid.NewGuid(),
+                CancellationToken.None));
+        Assert.Contains(planId, runtime.Plans);
+
+        await adapter.DeleteLocalObjectForOrderDeletionAsync(
+            planId,
+            linkedOrderId,
+            CancellationToken.None);
+        Assert.DoesNotContain(planId, runtime.Plans);
     }
 
     private static async Task RemoteUnsealedReplayPreservesMatchingLocalSealWithoutWeakeningCollisionGuard()
@@ -355,6 +381,7 @@ internal static class PlansProfileSyncAdapterTests
                 }).ToList(),
                 "IndexedDB.savePlan" => Save((StoredPlan)args![0]!),
                 "IndexedDB.savePlansBatch" => SavePlansBatch((IReadOnlyList<StoredPlan>)args![0]!),
+                "IndexedDB.deletePlan" => DeletePlan((string)args![0]!),
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(_settings, StringComparer.Ordinal),
                 "IndexedDB.loadSetting" => _settings.GetValueOrDefault((string)args![0]!),
                 "IndexedDB.loadTradeCompanyProfiles" => new List<TradeCompanyProfile>(),
@@ -373,6 +400,12 @@ internal static class PlansProfileSyncAdapterTests
                 return false;
             }
             Plans[plan.Id] = plan;
+            return true;
+        }
+
+        private bool DeletePlan(string planId)
+        {
+            Plans.Remove(planId);
             return true;
         }
 

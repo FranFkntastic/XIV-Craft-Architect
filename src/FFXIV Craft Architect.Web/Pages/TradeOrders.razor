@@ -886,7 +886,8 @@
                                         </MudButton>
                                     </section>
                                 }
-                                @if (HasCanonicalCommission)
+                                @if (HasCanonicalCommission &&
+                                     TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status))
                                 {
                                    <section class="trade-orders-operation-card trade-orders-order-actions">
                                        <MudText Typo="Typo.subtitle2">Order actions</MudText>
@@ -916,15 +917,6 @@
                                                       Disabled="@_isDeletingSelectedOrder"
                                                       OnClick="DeleteSelectedOrderAsync">
                                                @(_isDeletingSelectedOrder ? "Deleting..." : "Delete order permanently")
-                                           </MudButton>
-                                       }
-                                       else
-                                       {
-                                           <MudButton Variant="Variant.Outlined"
-                                                      Color="Color.Error"
-                                                      Disabled="@(_isCommissionCommandRunning || _isDeletingSelectedOrder)"
-                                                      OnClick="@(() => OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled))">
-                                               @(IsSelectedCanonicalOwnerMissing ? "Remove stale order" : "Cancel order")
                                            </MudButton>
                                        }
                                    </section>
@@ -1120,14 +1112,25 @@
                                  </div>
                                  @if (HasCanonicalCommission)
                                  {
-                                     <MudButton Variant="Variant.Outlined"
-                                                Color="Color.Primary"
-                                                StartIcon="@Icons.Material.Filled.EditNote"
-                                                OnClick="ShowCommissionTermsRevision"
-                                                Disabled="@(IsSelectedOrderArchived || IsEditingCommissionTermsRevision ||
-                                                    SelectedCanonicalCommission?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Published)">
-                                         @(IsEditingCommissionTermsRevision ? "Revision in Progress" : "Revise Terms")
-                                     </MudButton>
+                                     <div class="trade-orders-inline-actions">
+                                         <MudButton Variant="Variant.Outlined"
+                                                    Color="Color.Primary"
+                                                    StartIcon="@Icons.Material.Filled.EditNote"
+                                                    OnClick="ShowCommissionTermsRevision"
+                                                    Disabled="@(IsSelectedOrderArchived || IsEditingCommissionTermsRevision ||
+                                                        SelectedCanonicalCommission?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Published)">
+                                             @(IsEditingCommissionTermsRevision ? "Revision in Progress" : "Revise Terms")
+                                         </MudButton>
+                                         @if (HasSelectedLifecycleAction)
+                                         {
+                                             <MudButton Variant="Variant.Outlined"
+                                                        Color="Color.Error"
+                                                        OnClick="InvokeSelectedOrderLifecycleActionAsync"
+                                                        Disabled="@(_isCommissionCommandRunning || _isDeletingSelectedOrder || _isDiscardingSelectedDraft || HasSelectedLocalHostedCollision)">
+                                                 @SelectedLifecycleActionLabel
+                                             </MudButton>
+                                         }
+                                     </div>
                                  }
                                  else
                                  {
@@ -1145,6 +1148,15 @@
                                                     Disabled="@(IsSelectedOrderArchived || HasSelectedLocalHostedCollision || string.IsNullOrWhiteSpace(_detailTitle))">
                                              Save Order
                                          </MudButton>
+                                         @if (HasSelectedLifecycleAction)
+                                         {
+                                             <MudButton Variant="Variant.Outlined"
+                                                        Color="Color.Error"
+                                                        OnClick="InvokeSelectedOrderLifecycleActionAsync"
+                                                        Disabled="@(_isDeletingSelectedOrder || _isDiscardingSelectedDraft || HasSelectedLocalHostedCollision)">
+                                                 @SelectedLifecycleActionLabel
+                                             </MudButton>
+                                         }
                                      </div>
                                  }
                              </div>
@@ -1200,16 +1212,6 @@
                                                          ? "Save edits first"
                                                          : "Retry sync")
                                              </MudButton>
-                                             @if (CanDiscardSelectedDeviceOnlyDraft)
-                                             {
-                                                 <MudButton Variant="Variant.Text"
-                                                            Color="Color.Error"
-                                                            Size="Size.Small"
-                                                            Disabled="@_isDiscardingSelectedDeviceOnlyDraft"
-                                                            OnClick="DiscardSelectedDeviceOnlyDraftAsync">
-                                                     @(_isDiscardingSelectedDeviceOnlyDraft ? "Discarding..." : "Discard draft")
-                                                 </MudButton>
-                                             }
                                          </div>
                                      </div>
                                  </MudAlert>
@@ -1426,14 +1428,6 @@
                                                    OnClick="CreateOrReplaceSelectedOrderCraftPlanAsync"
                                                    Disabled="@(_isSavingSelectedOrderCraftPlan || _isRepricingSelectedOrder || !CanEditSelectedOrderPlan || GetOrderRootItems(_selectedOrder).Count == 0)">
                                             @GetCraftPlanBuildButtonText(_selectedOrder)
-                                        </MudButton>
-                                        <MudButton Variant="Variant.Outlined"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.PriceCheck"
-                                                   OnClick="RepriceSelectedOrderAsync"
-                                                   Disabled="@(_isRepricingSelectedOrder || _isSavingSelectedOrderCraftPlan || !CanEditSelectedOrderPlan || !HasLinkedCraftPlan(_selectedOrder))">
-                                            @(_isRepricingSelectedOrder ? "Repricing..." : "Reprice Order")
                                         </MudButton>
                                         <MudButton Variant="Variant.Outlined"
                                                    Color="Color.Secondary"

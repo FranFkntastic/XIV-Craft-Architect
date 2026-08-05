@@ -14,6 +14,7 @@ public sealed class TradeProcurementRowBuilderTests
     [InlineData(PlanRowScenario.OrdinaryOrderLivePlan)]
     [InlineData(PlanRowScenario.ReadOnlyCommissionLivePlan)]
     [InlineData(PlanRowScenario.EditableCommissionLivePlan)]
+    [InlineData(PlanRowScenario.DirectlyAcquiredRequestedOutput)]
     public async Task PlanRowsPreserveSourceIntentAndCanonicalEditability(PlanRowScenario scenario)
     {
         switch (scenario)
@@ -50,9 +51,67 @@ public sealed class TradeProcurementRowBuilderTests
             case PlanRowScenario.EditableCommissionLivePlan:
                 LivePlanMutationFollowsCanonicalWorkPackageEditability(true, true, true);
                 break;
+            case PlanRowScenario.DirectlyAcquiredRequestedOutput:
+                DirectlyAcquiredRequestedOutputRemainsAVisibleSupplyRow();
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
         }
+    }
+
+    private static void DirectlyAcquiredRequestedOutputRemainsAVisibleSupplyRow()
+    {
+        var order = new TradeOrder
+        {
+            CraftPlanId = "spruce-plan",
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                SourcePlanId = "spruce-plan",
+                RootItems = [new TradeOrderRootItemSnapshot(5395, "Spruce Lumber", 1_998, false, 0)]
+            }
+        };
+        var root = ProjectionRow(
+            itemId: 5395,
+            itemName: "Spruce Lumber",
+            source: AcquisitionSource.MarketBuyNq,
+            hasChildren: true,
+            isActiveProcurement: true,
+            isFullySuppressed: false,
+            suppressedBy: []) with
+        {
+            TotalQuantity = 1_998,
+            ActiveQuantity = 1_998,
+            UsedIn = "Order output"
+        };
+        var snapshot = new WorkerTradeProjection(
+            Revision: 1,
+            HasPlan: true,
+            PlanId: "spruce-plan",
+            PlanName: "Order - Spruce Lumber Commission",
+            SelectedDataCenter: "Aether",
+            SelectedRegion: "North America",
+            MarketFetchScope: MarketFetchScope.SelectedDataCenter,
+            RequestedDataCenters: ["Aether"],
+            MarketLens: MarketAcquisitionLens.MinimumUpfrontCost,
+            PlanSessionVersion: 1,
+            MarketAnalysisVersion: 1,
+            CraftedItems: [],
+            RootItems: [],
+            MaterialLines: [],
+            ActiveProcurementItems: [],
+            AcquisitionRows: [root],
+            CraftLabor: [],
+            Warnings: []);
+
+        var row = Assert.Single(TradeProcurementRowBuilder.BuildRows(
+            order,
+            draft: null,
+            activePlanId: "spruce-plan",
+            liveSnapshot: snapshot));
+
+        Assert.Equal((5395, "Spruce Lumber", 1_998, AcquisitionSource.MarketBuyNq),
+            (row.ItemId, row.ItemName, row.ActiveQuantity, row.Source));
+        Assert.True(TradeProcurementRowBuilder.ShouldIncludePlanRow(row));
     }
 
     private static void FullySuppressedPrecraftRemainsInPlan()
@@ -288,6 +347,7 @@ public sealed class TradeProcurementRowBuilderTests
         SuppressedPrecraftSourceIntent,
         OrdinaryOrderLivePlan,
         ReadOnlyCommissionLivePlan,
-        EditableCommissionLivePlan
+        EditableCommissionLivePlan,
+        DirectlyAcquiredRequestedOutput
     }
 }

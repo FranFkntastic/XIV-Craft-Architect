@@ -1068,7 +1068,8 @@ button.trade-orders-rail-order.is-device-only:hover {
   overflow-wrap: anywhere;
 }
 
-::deep .trade-orders-precraft-chip {
+::deep .trade-orders-precraft-chip,
+::deep .trade-orders-output-chip {
   flex: 0 0 auto;
   border-radius: 3px;
   background: #40361f;
@@ -1078,6 +1079,11 @@ button.trade-orders-rail-order.is-device-only:hover {
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+::deep .trade-orders-output-chip {
+  background: #233b26;
+  color: #9fd17e;
 }
 
 ::deep .trade-orders-procurement-status-dot {

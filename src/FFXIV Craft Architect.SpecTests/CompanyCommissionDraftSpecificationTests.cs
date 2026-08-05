@@ -5,6 +5,49 @@ namespace FFXIV_Craft_Architect.SpecTests;
 public sealed class CompanyCommissionDraftSpecificationTests
 {
     [Fact]
+    public void LifecycleActionUsesOneSlotAcrossDraftPublicationAndClosure()
+    {
+        var plainDraft = new TradeOrder { Status = TradeOrderStatus.Draft };
+        Assert.Equal(TradeOrderLifecycleAction.DiscardDraft,
+            TradeOrderWorkflow.GetLifecycleAction(plainDraft));
+        Assert.Equal(TradeOrderLifecycleAction.DiscardDraft,
+            TradeOrderWorkflow.GetLifecycleAction(new TradeOrder
+            {
+                Status = TradeOrderStatus.ReadyToAssign
+            }));
+
+        var hostedDraft = CreateDraftOrder();
+        Assert.Equal(TradeOrderLifecycleAction.DiscardDraft,
+            TradeOrderWorkflow.GetLifecycleAction(hostedDraft));
+        var canceledDraft = CompanyCommissionCommandWorkflow.Apply(
+            hostedDraft,
+            new CancelCompanyCommissionCommand(
+                Context(hostedDraft),
+                "Draft discarded before publication."),
+            new CompanyCommissionActor(
+                "commissioner",
+                CompanyCommissionActorKind.Commissioner,
+                "Commissioner"),
+            new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc));
+        Assert.Equal(TradeOrderStatus.Canceled, canceledDraft.UpdatedOrder.Status);
+
+        var published = TradeOrderWorkflow.CopyOrder(hostedDraft);
+        published.CompanyCommission = published.CompanyCommission! with
+        {
+            PublicMetadata = published.CompanyCommission.PublicMetadata with
+            {
+                ViewState = CompanyCommissionPublicViewState.Published
+            }
+        };
+        Assert.Equal(TradeOrderLifecycleAction.CancelCommission,
+            TradeOrderWorkflow.GetLifecycleAction(published));
+
+        published.Status = TradeOrderStatus.Canceled;
+        Assert.Equal(TradeOrderLifecycleAction.None,
+            TradeOrderWorkflow.GetLifecycleAction(published));
+    }
+
+    [Fact]
     public void DraftUpdateOwnsTermsAndReloadableWorkPackageThenClosesAfterPublication()
     {
         var order = CreateDraftOrder();

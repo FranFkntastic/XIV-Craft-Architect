@@ -104,6 +104,29 @@ public static class TradeOrderWorkflow
              order.Status == TradeOrderStatus.Assigned);
     }
 
+    public static TradeOrderLifecycleAction GetLifecycleAction(TradeOrder order)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+
+        if (TradeOrderStatusWorkflow.IsArchived(order.Status))
+        {
+            return TradeOrderLifecycleAction.None;
+        }
+
+        return order.CompanyCommission?.PublicMetadata.ViewState switch
+        {
+            CompanyCommissionPublicViewState.Draft => TradeOrderLifecycleAction.DiscardDraft,
+            CompanyCommissionPublicViewState.Published => TradeOrderLifecycleAction.CancelCommission,
+            _ when order.CompanyCommission != null => TradeOrderLifecycleAction.None,
+            _ when order.CommissionPublication?.RevokedAtUtc == null &&
+                order.CommissionPublication != null => TradeOrderLifecycleAction.CancelCommission,
+            _ when order.CommissionPublication == null &&
+                order.Status is TradeOrderStatus.Draft or TradeOrderStatus.ReadyToAssign =>
+                TradeOrderLifecycleAction.DiscardDraft,
+            _ => TradeOrderLifecycleAction.None
+        };
+    }
+
     public static TradeOrder WithRequestedOutputs(
         TradeOrder order,
         IReadOnlyList<TradeRequestedOrderOutput> outputs,

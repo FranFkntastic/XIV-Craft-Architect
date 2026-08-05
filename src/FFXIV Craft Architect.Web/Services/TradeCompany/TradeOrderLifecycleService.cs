@@ -157,15 +157,34 @@ public sealed class TradeOrderLifecycleService(
         appState.NotifyTradeOperationsDataChanged();
     }
 
-    public async Task DiscardLocalDraftAsync(
+    public async Task DiscardDraftAsync(
         TradeOrder order,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(order);
-        if (order.CompanyCommission != null || order.CommissionPublication != null)
+        if (TradeOrderWorkflow.GetLifecycleAction(order) !=
+            TradeOrderLifecycleAction.DiscardDraft)
         {
             throw new InvalidOperationException(
-                "Only an unpublished local draft can be discarded directly.");
+                "Only an unpublished draft can be discarded directly.");
+        }
+
+        if (order.CompanyCommission != null)
+        {
+            var cancellation = await CancelAndRetractAsync(
+                order,
+                "Draft discarded before publication.",
+                cancellationToken);
+            if (cancellation.RemovedOrphanedLocalOrder)
+            {
+                return;
+            }
+
+            var canceledOrder = cancellation.Order
+                ?? throw new InvalidOperationException(
+                    "The draft was canceled, but its cleanup handle is unavailable.");
+            await DeleteOrderAsync(canceledOrder, cancellationToken);
+            return;
         }
 
         var disposable = TradeOrderWorkflow.CopyOrder(order);

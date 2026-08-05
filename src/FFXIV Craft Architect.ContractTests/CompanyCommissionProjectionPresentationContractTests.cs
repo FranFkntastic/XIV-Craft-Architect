@@ -47,15 +47,27 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         var centerBeforeDetails = source[..detailsStart];
         var calculationDetails = source[detailsStart..detailsEnd];
         Contains(centerBeforeDetails, "Crafter confirmed payment receipt", "crafterReceipt.TermsVersion",
-            "OnClick=\"DeleteSelectedOrderAsync\"", "OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled)");
+            "OnClick=\"DeleteSelectedOrderAsync\"");
         Omits(centerBeforeDetails, "crafterReceipt.TermsVersion == operationsCommission.CurrentTermsVersion");
         Omits(calculationDetails, "@bind-Value", "ValueChanged=", "OpenSupplyPlanAsync",
             "DeleteSelectedOrderAsync", "OpenCloseOrderDialogAsync");
         Omits(source, "Edit Supply Plan");
         Contains(source, "Text=\"Plan\"", "ChangeProcurementRowResponsibilityValueAsync",
+            "OnClick=\"InvokeSelectedOrderLifecycleActionAsync\"", "@SelectedLifecycleActionLabel",
             "class=\"trade-orders-timeline-visibility\" role=\"group\" aria-label=\"Choose timeline entry visibility\"",
             "aria-pressed=\"@(_timelineComposerVisibility == CommissionTimelineVisibility.CompanyOnly)\"",
             "aria-pressed=\"@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared)\"");
+        Assert.Equal(1, source.Split("\"Refresh Prices\"", StringSplitOptions.None).Length - 1);
+        Omits(source, "Reprice Order");
+        var procurementSource = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Procurement.cs");
+        Contains(procurementSource, "IsRequestedOutputRow(row)", "trade-orders-output-chip", "Output");
+        Omits(procurementSource, "IsRequestedOutputReferenceRow");
+        Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"),
+            "Rebuild from Requested Outputs");
+        var lifecycleSource = ReadWebSource(repositoryRoot, "Services", "TradeCompany", "TradeOrderLifecycleService.cs");
+        var cancelDraft = lifecycleSource.IndexOf("CancelAndRetractAsync(", StringComparison.Ordinal);
+        var deleteDraft = lifecycleSource.IndexOf("DeleteOrderAsync(canceledOrder", cancelDraft, StringComparison.Ordinal);
+        Assert.True(cancelDraft >= 0 && deleteDraft > cancelDraft);
         Contains(pageStyles, ".trade-orders-rail-group-title:focus-visible", ".trade-orders-rail-order:focus-visible",
             ".trade-orders-search-result:focus-visible", ".trade-orders-procurement-filter:focus-visible",
             ".trade-orders-timeline-filter:focus-visible",

@@ -1023,6 +1023,17 @@ public sealed class ProfileSyncService
         var distinct = objects
             .DistinctBy(item => $"{item.Collection}\0{item.ObjectId}", StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var deletingOrderIds = distinct
+            .Where(item => string.Equals(
+                item.Collection,
+                ProfileSyncCollections.TradeOrders,
+                StringComparison.OrdinalIgnoreCase))
+            .Select(item => Guid.TryParse(item.ObjectId, out var orderId)
+                ? orderId
+                : (Guid?)null)
+            .Where(orderId => orderId.HasValue)
+            .Select(orderId => orderId!.Value)
+            .ToHashSet();
         foreach (var item in distinct)
         {
             _ = GetAdapter(item.Collection);
@@ -1045,7 +1056,7 @@ public sealed class ProfileSyncService
 
             foreach (var item in distinct)
             {
-                await GetAdapter(item.Collection).DeleteLocalObjectAsync(item.ObjectId, ct);
+                await DeleteLocalObjectAsync(item, deletingOrderIds, ct);
             }
             return;
         }
@@ -1135,7 +1146,7 @@ public sealed class ProfileSyncService
             if (!reconciledOrderDeletions.Contains(
                     $"{item.Collection}\0{item.ObjectId}"))
             {
-                await GetAdapter(item.Collection).DeleteLocalObjectAsync(item.ObjectId, ct);
+                await DeleteLocalObjectAsync(item, deletingOrderIds, ct);
             }
             await RemovePendingSaveAsync(profileId, item.Collection, item.ObjectId);
             _conflicts.RemoveAll(conflict => IsSameIdentity(
@@ -1144,6 +1155,26 @@ public sealed class ProfileSyncService
                 item.Collection,
                 item.ObjectId));
         }
+    }
+
+    private async Task DeleteLocalObjectAsync(
+        (string Collection, string ObjectId) item,
+        IReadOnlySet<Guid> deletingOrderIds,
+        CancellationToken ct)
+    {
+        var adapter = GetAdapter(item.Collection);
+        if (adapter is PlansProfileSyncAdapter plansAdapter &&
+            await plansAdapter.LoadLinkedOrderIdAsync(item.ObjectId) is { } linkedOrderId &&
+            deletingOrderIds.Contains(linkedOrderId))
+        {
+            await plansAdapter.DeleteLocalObjectForOrderDeletionAsync(
+                item.ObjectId,
+                linkedOrderId,
+                ct);
+            return;
+        }
+
+        await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
     }
 
     private async Task<Guid?> ResolveDeletedOrderCompanyProfileIdAsync(
