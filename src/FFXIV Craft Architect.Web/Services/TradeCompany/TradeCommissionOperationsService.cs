@@ -580,6 +580,47 @@ public sealed class TradeCommissionOperationsService(
             cancellationToken);
     }
 
+    public async Task<TradeCommissionOperatorResult> CancelDraftAsync(
+        TradeOrder selectedOrder,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(selectedOrder);
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return new TradeCommissionOperatorResult(
+                false,
+                GetForOrder(selectedOrder.Id),
+                "A draft-discard reason is required.");
+        }
+
+        await RefreshAsync(selectedOrder, cancellationToken);
+        var current = GetForOrder(selectedOrder.Id);
+        if (current == null)
+        {
+            return new TradeCommissionOperatorResult(
+                false,
+                null,
+                GetErrorForOrder(selectedOrder.Id) ??
+                "The current hosted commission could not be loaded before discarding it.");
+        }
+        if (TradeOrderWorkflow.GetLifecycleAction(current.Order) !=
+            TradeOrderLifecycleAction.DiscardDraft)
+        {
+            return Rejected(
+                current,
+                "This commission is no longer an unpublished draft. Its current state was preserved.");
+        }
+
+        return await ExecuteAsync(
+            current,
+            "cancel",
+            new { Reason = reason.Trim() },
+            context => new CancelCompanyCommissionCommand(context, reason.Trim()),
+            cancellationToken,
+            replayRevisionConflict: false);
+    }
+
     public Task<TradeCommissionOperatorResult> ReopenAsync(
         CompanyCommissionOwnerProjection current,
         string resolution,
@@ -791,7 +832,8 @@ public sealed class TradeCommissionOperationsService(
         Func<CompanyCommissionCommandContext, TCommand> createCommand,
         CancellationToken cancellationToken,
         OrderCommandAuthority? capturedAuthority = null,
-        int protocolVersion = CompanyCommissionProtocol.Version1)
+        int protocolVersion = CompanyCommissionProtocol.Version1,
+        bool replayRevisionConflict = true)
         where TCommand : ICompanyCommissionCommand
     {
         if (!CanPerformExternalAction(current.Order, out var reason))
@@ -823,7 +865,9 @@ public sealed class TradeCommissionOperationsService(
                         authority.Connection);
                 }
                 catch (CompanyCommissionRevisionConflictException)
-                    when (attempt == 0 && CanReplayAfterRevisionConflict(route))
+                    when (attempt == 0 &&
+                          replayRevisionConflict &&
+                          CanReplayAfterRevisionConflict(route))
                 {
                     var commission = RequireCommission(commandProjection);
                     commandProjection = await client.LoadOwnerProjectionAsync(

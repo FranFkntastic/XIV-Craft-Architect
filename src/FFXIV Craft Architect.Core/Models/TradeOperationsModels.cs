@@ -129,6 +129,13 @@ public enum TradeOrderStatus
     ResolutionRequired
 }
 
+public enum TradeOrderLifecycleAction
+{
+    None,
+    DiscardDraft,
+    CancelCommission
+}
+
 public static class TradeOrderStatusWorkflow
 {
     public static IReadOnlyList<TradeOrderStatus> ActiveStatuses { get; } =

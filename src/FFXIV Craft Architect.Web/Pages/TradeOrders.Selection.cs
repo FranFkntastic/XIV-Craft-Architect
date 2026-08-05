@@ -199,7 +199,7 @@ public partial class TradeOrders
 
         return order.CraftPlanLinkKind == TradeOrderCraftPlanLinkKind.Unknown
             ? "Replace Linked Plan"
-            : "Update Craft Plan";
+            : "Rebuild from Requested Outputs";
     }
 
     private static string GetLatestHistoryCue(TradeOrder order)

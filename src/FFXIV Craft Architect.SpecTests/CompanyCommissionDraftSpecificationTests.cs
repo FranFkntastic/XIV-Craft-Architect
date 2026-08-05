@@ -4,14 +4,27 @@ namespace FFXIV_Craft_Architect.SpecTests;
 
 public sealed class CompanyCommissionDraftSpecificationTests
 {
+    private static void LifecycleActionUsesOneSlotAcrossDraftPublicationAndClosure()
+    {
+        var plainDraft = new TradeOrder { Status = TradeOrderStatus.Draft };
+        Assert.Equal(TradeOrderLifecycleAction.DiscardDraft, TradeOrderWorkflow.GetLifecycleAction(plainDraft));
+        Assert.Equal(TradeOrderLifecycleAction.DiscardDraft, TradeOrderWorkflow.GetLifecycleAction(new TradeOrder { Status = TradeOrderStatus.ReadyToAssign }));
+        var hostedDraft = CreateDraftOrder();
+        Assert.Equal(TradeOrderLifecycleAction.DiscardDraft, TradeOrderWorkflow.GetLifecycleAction(hostedDraft));
+        var canceledDraft = CompanyCommissionCommandWorkflow.Apply(hostedDraft, new CancelCompanyCommissionCommand(Context(hostedDraft), "Draft discarded before publication."), new CompanyCommissionActor("commissioner", CompanyCommissionActorKind.Commissioner, "Commissioner"), new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc));
+        Assert.Equal(TradeOrderStatus.Canceled, canceledDraft.UpdatedOrder.Status);
+        var published = TradeOrderWorkflow.CopyOrder(hostedDraft);
+        published.CompanyCommission = published.CompanyCommission! with { PublicMetadata = published.CompanyCommission.PublicMetadata with { ViewState = CompanyCommissionPublicViewState.Published } };
+        Assert.Equal(TradeOrderLifecycleAction.CancelCommission, TradeOrderWorkflow.GetLifecycleAction(published));
+        published.Status = TradeOrderStatus.Canceled;
+        Assert.Equal(TradeOrderLifecycleAction.None, TradeOrderWorkflow.GetLifecycleAction(published));
+    }
     [Fact]
     public void DraftUpdateOwnsTermsAndReloadableWorkPackageThenClosesAfterPublication()
     {
+        LifecycleActionUsesOneSlotAcrossDraftPublicationAndClosure();
         var order = CreateDraftOrder();
-        var actor = new CompanyCommissionActor(
-            "commissioner",
-            CompanyCommissionActorKind.Commissioner,
-            "Commissioner");
+        var actor = new CompanyCommissionActor("commissioner", CompanyCommissionActorKind.Commissioner, "Commissioner");
         var terms = order.CompanyCommission!.CurrentTerms with
         {
             Outputs =
@@ -34,11 +47,7 @@ public sealed class CompanyCommissionDraftSpecificationTests
                 CraftPlanName: null,
                 CraftPlanSavedAtUtc: null,
                 TradeOrderCraftPlanLinkKind.Unknown));
-        var transition = CompanyCommissionCommandWorkflow.Apply(
-            order,
-            command,
-            actor,
-            new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc));
+        var transition = CompanyCommissionCommandWorkflow.Apply(order, command, actor, new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc));
         Assert.Equal(2, transition.UpdatedOrder.CompanyCommission!.CurrentTerms.Outputs[0].RequiredQuantity);
         Assert.Equal(2, transition.UpdatedOrder.SourceSnapshot.RootItems[0].Quantity);
         Assert.Equal(2, transition.UpdatedOrder.CompanyCommission.OutputProgress[0].RequiredQuantity);
@@ -51,12 +60,7 @@ public sealed class CompanyCommissionDraftSpecificationTests
                 ViewState = CompanyCommissionPublicViewState.Published
             }
         };
-        Assert.Throws<InvalidOperationException>(() =>
-            CompanyCommissionCommandWorkflow.Apply(
-                published,
-                command,
-                actor,
-                DateTime.UtcNow));
+        Assert.Throws<InvalidOperationException>(() => CompanyCommissionCommandWorkflow.Apply(published, command, actor, DateTime.UtcNow));
         var timingOrder = CreateDraftOrder();
         var current = timingOrder.CompanyCommission!.CurrentTerms; var brief = BuildBrief(timingOrder);
         brief.Payment = brief.Payment with { Schedule = CompanyCommissionPaymentSchedule.Custom, CustomTerms = "Half at handoff; half on delivery." };
@@ -81,10 +85,7 @@ public sealed class CompanyCommissionDraftSpecificationTests
     {
         var order = CreateDraftOrder();
         var companyId = order.CompanyCommission!.CompanyId;
-        var ownership = new TradeCompanyPublicationOwnership(
-            companyId,
-            order.Id,
-            new CompanyRecordRevision(3));
+        var ownership = new TradeCompanyPublicationOwnership(companyId, order.Id, new CompanyRecordRevision(3));
         order.CommissionPublication = new TradeCommissionPublication
         {
             PublicId = "canonical-brief",
@@ -102,32 +103,15 @@ public sealed class CompanyCommissionDraftSpecificationTests
             Brief = brief,
             Ownership = ownership
         };
-        var opened = TradeCompanyCommissionMigrationService.BindPublishedBrief(
-            order,
-            published,
-            published.PublishedAtUtc);
-        var replayed = TradeCompanyCommissionMigrationService.BindPublishedBrief(
-            opened,
-            published,
-            published.PublishedAtUtc.AddSeconds(1));
+        var opened = TradeCompanyCommissionMigrationService.BindPublishedBrief(order, published, published.PublishedAtUtc);
+        var replayed = TradeCompanyCommissionMigrationService.BindPublishedBrief(opened, published, published.PublishedAtUtc.AddSeconds(1));
         Assert.Equal(TradeOrderStatus.ReadyToAssign, replayed.Status);
         Assert.Equal(1, replayed.CompanyCommission!.CurrentTermsVersion);
         Assert.Single(replayed.CompanyCommission.TermsVersions);
-        Assert.Equal(
-            CompanyCommissionPaymentSchedule.OnDelivery,
-            replayed.CompanyCommission.CurrentTerms.Payment.Schedule);
-        Assert.Single(
-            replayed.CompanyCommission.Activity,
-            item => item.Kind == CompanyCommissionActivityKind.CommissionOpened);
-        brief.Payment = brief.Payment with
-        {
-            Schedule = CompanyCommissionPaymentSchedule.Advance
-        };
-        Assert.Throws<InvalidOperationException>(() =>
-            TradeCompanyCommissionMigrationService.BindPublishedBrief(
-                CreateDraftOrderWithPublication(ownership),
-                published,
-                published.PublishedAtUtc));
+        Assert.Equal(CompanyCommissionPaymentSchedule.OnDelivery, replayed.CompanyCommission.CurrentTerms.Payment.Schedule);
+        Assert.Single(replayed.CompanyCommission.Activity, item => item.Kind == CompanyCommissionActivityKind.CommissionOpened);
+        brief.Payment = brief.Payment with { Schedule = CompanyCommissionPaymentSchedule.Advance };
+        Assert.Throws<InvalidOperationException>(() => TradeCompanyCommissionMigrationService.BindPublishedBrief(CreateDraftOrderWithPublication(ownership), published, published.PublishedAtUtc));
     }
     private static TradeOrder CreateDraftOrder()
     {
@@ -135,25 +119,9 @@ public sealed class CompanyCommissionDraftSpecificationTests
         var companyGuid = Guid.Parse("22222222-2222-2222-2222-222222222222");
         var companyId = new CompanyId(companyGuid);
         var created = new DateTime(2026, 8, 1, 11, 0, 0, DateTimeKind.Utc);
-        var actor = new CompanyCommissionActor(
-            "commissioner",
-            CompanyCommissionActorKind.Commissioner,
-            "Commissioner");
-        var output = new CompanyCommissionOutputTerm(
-            Guid.Parse("33333333-3333-3333-3333-333333333333"),
-            10,
-            "Test output",
-            1,
-            false);
-        var material = new CompanyCommissionMaterialTerm(
-            Guid.Parse("44444444-4444-4444-4444-444444444444"),
-            20,
-            "Test material",
-            3,
-            false,
-            CommissionMaterialResponsibility.Provided,
-            100,
-            300);
+        var actor = new CompanyCommissionActor("commissioner", CompanyCommissionActorKind.Commissioner, "Commissioner");
+        var output = new CompanyCommissionOutputTerm(Guid.Parse("33333333-3333-3333-3333-333333333333"), 10, "Test output", 1, false);
+        var material = new CompanyCommissionMaterialTerm(Guid.Parse("44444444-4444-4444-4444-444444444444"), 20, "Test material", 3, false, CommissionMaterialResponsibility.Provided, 100, 300);
         var terms = new CompanyCommissionTermsVersion
         {
             Version = 1,
@@ -161,22 +129,10 @@ public sealed class CompanyCommissionDraftSpecificationTests
             CreatedBy = actor,
             Outputs = [output],
             Materials = [material],
-            Payment = new CompanyCommissionPaymentTerms(
-                CompanyCommissionPaymentSchedule.OnDelivery,
-                "Labor standard",
-                0,
-                60,
-                200,
-                260,
-                CraftSynthCount: 1,
-                GilPerSynth: 200),
+            Payment = new CompanyCommissionPaymentTerms(CompanyCommissionPaymentSchedule.OnDelivery, "Labor standard", 0, 60, 200, 260, CraftSynthCount: 1, GilPerSynth: 200),
             DeliveryInstructions = "Deliver in Limsa.",
             ContactInstructions = "Reply in Discord.",
-            PricingEvidence = new CompanyCommissionPricingEvidence(
-                "Selected routes",
-                "Aether",
-                "Siren",
-                created)
+            PricingEvidence = new CompanyCommissionPricingEvidence("Selected routes", "Aether", "Siren", created)
         };
         return new TradeOrder
         {
@@ -207,32 +163,13 @@ public sealed class CompanyCommissionDraftSpecificationTests
                 UpdatedAtUtc = created,
                 CurrentTermsVersion = 1,
                 TermsVersions = [terms],
-                PublicMetadata = new CompanyCommissionPublicMetadata
-                {
-                    PublicBriefId = "draft-test",
-                    ViewState = CompanyCommissionPublicViewState.Draft
-                },
+                PublicMetadata = new CompanyCommissionPublicMetadata { PublicBriefId = "draft-test", ViewState = CompanyCommissionPublicViewState.Draft },
                 ActiveClaimCapabilityRevision = 0,
                 Gates = new CompanyCommissionGateState(
                     new CompanyCommissionIdentityClearance(CompanyCommissionClearanceState.NotRequired),
-                    new CompanyCommissionPaymentClearance(
-                        CompanyCommissionClearanceState.NotRequired,
-                        TermsVersion: 1),
-                    new CompanyCommissionMaterialClearance(
-                        CompanyCommissionClearanceState.Pending,
-                        [new CompanyCommissionMaterialQuantity(material.LineId, material.ItemId, material.Quantity)])),
-                OutputProgress =
-                [
-                    new CompanyCommissionOutputProgress(
-                        output.LineId,
-                        output.ItemId,
-                        output.RequiredQuantity,
-                        0,
-                        0,
-                        0,
-                        created,
-                        actor)
-                ],
+                    new CompanyCommissionPaymentClearance(CompanyCommissionClearanceState.NotRequired, TermsVersion: 1),
+                    new CompanyCommissionMaterialClearance(CompanyCommissionClearanceState.Pending, [new CompanyCommissionMaterialQuantity(material.LineId, material.ItemId, material.Quantity)])),
+                OutputProgress = [new CompanyCommissionOutputProgress(output.LineId, output.ItemId, output.RequiredQuantity, 0, 0, 0, created, actor)],
                 DeliveryReadiness = new CompanyCommissionDeliveryReadiness(false),
                 SettlementState = CompanyCommissionSettlementState.NotDue
             }
@@ -242,14 +179,7 @@ public sealed class CompanyCommissionDraftSpecificationTests
         TradeCompanyPublicationOwnership ownership)
     {
         var order = CreateDraftOrder();
-        order.CommissionPublication = new TradeCommissionPublication
-        {
-            PublicId = "canonical-brief",
-            PublicUrl = "https://example.invalid/commission/canonical-brief",
-            Version = 7,
-            PublishedAtUtc = new DateTime(2026, 8, 1, 12, 30, 0, DateTimeKind.Utc),
-            Ownership = ownership
-        };
+        order.CommissionPublication = new TradeCommissionPublication { PublicId = "canonical-brief", PublicUrl = "https://example.invalid/commission/canonical-brief", Version = 7, PublishedAtUtc = new DateTime(2026, 8, 1, 12, 30, 0, DateTimeKind.Utc), Ownership = ownership };
         return order;
     }
     private static CommissionBriefDocument BuildBrief(TradeOrder order)
@@ -264,29 +194,9 @@ public sealed class CompanyCommissionDraftSpecificationTests
             DeliveryInstructions = terms.DeliveryInstructions,
             Outputs = [new CommissionBriefOutput(10, "Test output", 1, false)],
             CompanyMaterials = [new CommissionBriefMaterial(20, "Test material", 3, false, 100, 300)],
-            Payment = new CommissionBriefPayment(
-                terms.Payment.ContractLabel,
-                terms.Payment.MaterialReimbursement,
-                terms.Payment.MaterialAdjustment,
-                terms.Payment.CraftLabor,
-                terms.Payment.Total,
-                CraftSynthCount: terms.Payment.CraftSynthCount,
-                GilPerSynth: terms.Payment.GilPerSynth,
-                Schedule: terms.Payment.Schedule,
-                CustomTerms: terms.Payment.CustomTerms),
-            Evidence = new CommissionBriefEvidence(
-                terms.PricingEvidence.CostBasis,
-                terms.PricingEvidence.MarketScope,
-                terms.PricingEvidence.Location,
-                terms.PricingEvidence.CapturedAtUtc)
+            Payment = new CommissionBriefPayment(terms.Payment.ContractLabel, terms.Payment.MaterialReimbursement, terms.Payment.MaterialAdjustment, terms.Payment.CraftLabor, terms.Payment.Total, CraftSynthCount: terms.Payment.CraftSynthCount, GilPerSynth: terms.Payment.GilPerSynth, Schedule: terms.Payment.Schedule, CustomTerms: terms.Payment.CustomTerms),
+            Evidence = new CommissionBriefEvidence(terms.PricingEvidence.CostBasis, terms.PricingEvidence.MarketScope, terms.PricingEvidence.Location, terms.PricingEvidence.CapturedAtUtc)
         };
     }
-    private static CompanyCommissionCommandContext Context(TradeOrder order) =>
-        new(
-            order.CompanyCommission!.CompanyId,
-            order.Id,
-            new CompanyRecordRevision(1),
-            new CompanyRecordRevision(1),
-            Guid.NewGuid(),
-            CompanyCommissionProtocol.Version1);
+    private static CompanyCommissionCommandContext Context(TradeOrder order) => new(order.CompanyCommission!.CompanyId, order.Id, new CompanyRecordRevision(1), new CompanyRecordRevision(1), Guid.NewGuid(), CompanyCommissionProtocol.Version1);
 }
