@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.WebUtilities;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
-internal static class DiscordIdentityContractScenarios
+public sealed class DiscordIdentityContractTests
 {
     private const string DiscordUser = "111111111111111111";
     private const string OtherDiscordUser = "222222222222222222";
@@ -17,7 +17,8 @@ internal static class DiscordIdentityContractScenarios
         "participant_credential_contract_aaaaaaaaaaaaaaaa";
     private const string OtherParticipantCredential =
         "participant_credential_contract_bbbbbbbbbbbbbbbb";
-    public static async Task RunAsync()
+    [Fact]
+    public async Task OAuthLinksAndDiscordActionsRecheckCanonicalTradeAuthority()
     {
         var root = Path.Combine(
             Path.GetTempPath(),
@@ -25,7 +26,7 @@ internal static class DiscordIdentityContractScenarios
         Directory.CreateDirectory(root);
         try
         {
-            await RunAsync(root);
+            await VerifyDiscordIdentityContractAsync(root);
         }
         finally
         {
@@ -33,7 +34,7 @@ internal static class DiscordIdentityContractScenarios
             Directory.Delete(root, recursive: true);
         }
     }
-    private static async Task RunAsync(string root)
+    private static async Task VerifyDiscordIdentityContractAsync(string root)
     {
         var now = new MutableTimeProvider(
             DateTimeOffset.Parse("2026-08-02T12:00:00Z"));

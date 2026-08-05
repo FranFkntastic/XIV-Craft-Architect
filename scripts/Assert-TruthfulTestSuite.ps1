@@ -11,7 +11,7 @@ $testProjects = @(
 $maximumFiles = 36
 $maximumMethods = 215
 $maximumCases = 310
-$maximumLines = 11750
+$maximumLines = 12000
 $maximumFileLines = 1050
 
 if (Test-Path -LiteralPath $legacyProject) {
