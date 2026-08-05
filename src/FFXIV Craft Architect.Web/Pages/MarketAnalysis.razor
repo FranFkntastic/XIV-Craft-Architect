@@ -307,6 +307,13 @@
         var requestedScope = searchEntireRegion
             ? MarketFetchScope.EntireRegion
             : MarketFetchScope.SelectedDataCenter;
+        var previousScope = AppState.DefaultMarketFetchScope;
+        if (requestedScope == previousScope &&
+            (_market?.HasAnalysis != true || _market.Scope == requestedScope))
+        {
+            return;
+        }
+
         await Settings.SetAsync("market.default_search_scope", requestedScope.ToString());
         AppState.SetMarketEvidenceSettings(
             AppState.SelectedDataCenter,
@@ -316,10 +323,41 @@
 
         if (_market?.HasAnalysis == true && _market.Scope != requestedScope)
         {
-            await RunMarketAnalysisAsync(
+            var published = await RunMarketAnalysisAsync(
                 forceRefreshData: false,
                 showCompletionSnackbar: true,
                 requestedScope: requestedScope);
+            if (!published)
+            {
+                await Settings.SetAsync("market.default_search_scope", previousScope.ToString());
+                AppState.SetMarketEvidenceSettings(
+                    AppState.SelectedDataCenter,
+                    AppState.SelectedRegion,
+                    previousScope,
+                    AppState.ComparisonRegion);
+            }
+        }
+        else if (_market is not null && _market.Scope != requestedScope)
+        {
+            try
+            {
+                await WorkerSession.MutateActiveContextAsync(
+                    new WorkerActiveContextMutation(
+                        AppState.SelectedDataCenter,
+                        AppState.SelectedRegion,
+                        requestedScope));
+                _market = await WorkerSession.GetMarketProjectionAsync();
+            }
+            catch (Exception ex)
+            {
+                await Settings.SetAsync("market.default_search_scope", previousScope.ToString());
+                AppState.SetMarketEvidenceSettings(
+                    AppState.SelectedDataCenter,
+                    AppState.SelectedRegion,
+                    previousScope,
+                    AppState.ComparisonRegion);
+                Snackbar.Add($"Market scope could not be changed: {ex.Message}", Severity.Error);
+            }
         }
     }
 
@@ -348,9 +386,10 @@
         }
     }
 
-    private Task RunMarketAnalysisAsync() => RunMarketAnalysisAsync(
-        forceRefreshData: false,
-        showCompletionSnackbar: true);
+    private async Task RunMarketAnalysisAsync() =>
+        await RunMarketAnalysisAsync(
+            forceRefreshData: false,
+            showCompletionSnackbar: true);
 
     private async Task RefreshPricesAsync()
     {
@@ -398,14 +437,14 @@
         }
     }
 
-    private async Task RunMarketAnalysisAsync(
+    private async Task<bool> RunMarketAnalysisAsync(
         bool forceRefreshData,
         bool showCompletionSnackbar,
         MarketFetchScope? requestedScope = null)
     {
         if (!CanAnalyze || _market is null)
         {
-            return;
+            return false;
         }
 
         _isAnalyzing = true;
@@ -440,10 +479,12 @@
                     $"Analyzed {outcome.AnalyzedCount:N0} items with {outcome.FetchedCount:N0} market fetches.",
                     Severity.Success);
             }
+            return true;
         }
         catch (Exception ex)
         {
             Snackbar.Add($"Market analysis failed: {ex.Message}", Severity.Error);
+            return false;
         }
         finally
         {

@@ -261,6 +261,73 @@ public sealed class WorkerSessionContractTests
             marketOperationId);
         Assert.True(marketOperationCompleted.Accepted);
 
+        var beforeFailedRegionalPublish = await SendAsync(
+            WorkerSessionCommandKinds.MarketProjection,
+            expectedRevision: 3,
+            new WorkerMarketProjectionRequest(IncludeDetails: true));
+        var publishedBeforeFailedRegionalPublish = beforeFailedRegionalPublish.Projection
+            .Deserialize<WorkerMarketProjection>(WireOptions);
+        Assert.NotNull(publishedBeforeFailedRegionalPublish);
+
+        var failedRegionalOperationId =
+            Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd");
+        var failedRegionalOperation = await SendAsync(
+            WorkerSessionCommandKinds.OperationBegin,
+            expectedRevision: 3,
+            new WorkerSessionOperationBeginRequest(
+                failedRegionalOperationId,
+                WorkerSessionOperationKind.MarketAnalysis,
+                "market:3:EntireRegion:North America",
+                "Analyzing regional market prices..."),
+            failedRegionalOperationId);
+        Assert.True(failedRegionalOperation.Accepted);
+        var failedRegionalStage = await SendAsync(
+            WorkerSessionCommandKinds.MarketEvidencePublicationStage,
+            expectedRevision: 3,
+            new WorkerMarketEvidencePublicationRequest(
+                failedRegionalOperationId,
+                3,
+                MarketFetchScope.EntireRegion,
+                "Aether",
+                "North America",
+                MarketAcquisitionLens.MinimumUpfrontCost,
+                [Analysis(43, "Child", quantity: 4)],
+                [ShoppingPlan(43, "Child", 4, cheapChildWorld)],
+                new HashSet<int>(),
+                FetchedCount: 1,
+                ResetStaging: true,
+                CompleteStaging: false,
+                RequestedDataCenters: ["Aether", "Primal", "Crystal", "Dynamis"]),
+            failedRegionalOperationId);
+        Assert.Equal((true, 3L), (failedRegionalStage.Accepted, failedRegionalStage.Revision));
+        var failedRegionalAbort = await SendAsync(
+            WorkerSessionCommandKinds.OperationAbort,
+            expectedRevision: 3,
+            new WorkerSessionOperationControlRequest(failedRegionalOperationId),
+            failedRegionalOperationId);
+        Assert.True(failedRegionalAbort.Accepted);
+        var afterFailedRegionalPublish = await SendAsync(
+            WorkerSessionCommandKinds.MarketProjection,
+            expectedRevision: 3,
+            new WorkerMarketProjectionRequest(IncludeDetails: true));
+        var preservedMarket = afterFailedRegionalPublish.Projection
+            .Deserialize<WorkerMarketProjection>(WireOptions);
+        Assert.NotNull(preservedMarket);
+        Assert.Equal(publishedBeforeFailedRegionalPublish.Scope, preservedMarket.Scope);
+        Assert.Equal(
+            publishedBeforeFailedRegionalPublish.RequestedDataCenters,
+            preservedMarket.RequestedDataCenters);
+        Assert.Equal(
+            JsonSerializer.Serialize(
+                publishedBeforeFailedRegionalPublish.ItemAnalyses,
+                WireOptions),
+            JsonSerializer.Serialize(preservedMarket.ItemAnalyses, WireOptions));
+        Assert.Equal(
+            JsonSerializer.Serialize(
+                publishedBeforeFailedRegionalPublish.ShoppingPlans,
+                WireOptions),
+            JsonSerializer.Serialize(preservedMarket.ShoppingPlans, WireOptions));
+
         var projectionStore = new WorkerProjectionStore();
         Assert.True(projectionStore.TryPublish(staged));
         var browserResult = completed with
