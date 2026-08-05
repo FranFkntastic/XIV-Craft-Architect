@@ -14,7 +14,7 @@
         <MarketAnalysisControlsPanel
             Lens="@(_market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost)"
             EvidenceOverlay="_evidenceOverlay"
-            SearchEntireRegion="_searchEntireRegion"
+            SearchEntireRegion="SearchesEntireRegion"
             SelectedRegion="@(_market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion)"
             AnalysisRegions="@GetSelectedAnalysisRegions()"
             HasShoppingPlans="@(_market?.HasAnalysis == true)"
@@ -45,7 +45,7 @@
             WorldSortDescending="_worldSortDescending"
             SelectedItemId="_selectedItemId"
             ExpandedWorldKeys="_expandedWorldKeys"
-            ShowWorldsColumn="_searchEntireRegion"
+            ShowWorldsColumn="SearchesEntireRegion"
             IsRefreshingItem="@(_isRefreshingSelectedItem || _isAnalyzing || _isRefreshingPrices || HasActiveWorkerOperation)"
             IsLoadingDetails="_isLoadingMarketDetails"
             IsAnalyzing="_isAnalyzing"
@@ -67,7 +67,6 @@
     private bool _isRefreshingPrices;
     private bool _isRefreshingSelectedItem;
     private bool _isLoadingMarketDetails;
-    private bool _searchEntireRegion = true;
     private bool _secretDebugToolsEnabled;
     private bool _suppressProjectionRefresh;
     private MarketSortOption _marketSort = MarketSortOption.ByRecommended;
@@ -97,6 +96,9 @@
         WorkerProjections.Shell.HasSession &&
         _market?.HasAnalysis == true;
 
+    private bool SearchesEntireRegion =>
+        (_market?.Scope ?? AppState.DefaultMarketFetchScope) == MarketFetchScope.EntireRegion;
+
     protected override async Task OnInitializedAsync()
     {
         WorkerProjections.Changed += ProjectionChanged;
@@ -108,7 +110,6 @@
             _selectedItemId ??= _market.Items.FirstOrDefault()?.ItemId;
         }
 
-        _searchEntireRegion = await Settings.GetAsync("market.search_entire_region", true);
         _secretDebugToolsEnabled = await Settings.GetAsync("debug.secret_tools_enabled", false);
         var overlay = await Settings.GetAsync(
             "market.analysis_evidence_overlay",
@@ -303,8 +304,23 @@
 
     private async Task SetSearchEntireRegion(bool searchEntireRegion)
     {
-        _searchEntireRegion = searchEntireRegion;
-        await Settings.SetAsync("market.search_entire_region", searchEntireRegion);
+        var requestedScope = searchEntireRegion
+            ? MarketFetchScope.EntireRegion
+            : MarketFetchScope.SelectedDataCenter;
+        await Settings.SetAsync("market.default_search_scope", requestedScope.ToString());
+        AppState.SetMarketEvidenceSettings(
+            AppState.SelectedDataCenter,
+            AppState.SelectedRegion,
+            requestedScope,
+            AppState.ComparisonRegion);
+
+        if (_market?.HasAnalysis == true && _market.Scope != requestedScope)
+        {
+            await RunMarketAnalysisAsync(
+                forceRefreshData: false,
+                showCompletionSnackbar: true,
+                requestedScope: requestedScope);
+        }
     }
 
     private async Task OnLensChanged(MarketAcquisitionLens lens)
@@ -367,9 +383,7 @@
                 new WorkerMarketItemRefreshRequest(
                     itemId,
                     itemName,
-                    _searchEntireRegion
-                        ? MarketFetchScope.EntireRegion
-                        : MarketFetchScope.SelectedDataCenter,
+                    _market?.Scope ?? AppState.DefaultMarketFetchScope,
                     _market?.SelectedDataCenter ?? WorkerProjections.Shell.SelectedDataCenter,
                     _market?.SelectedRegion ?? WorkerProjections.Shell.SelectedRegion,
                     _market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
@@ -386,7 +400,8 @@
 
     private async Task RunMarketAnalysisAsync(
         bool forceRefreshData,
-        bool showCompletionSnackbar)
+        bool showCompletionSnackbar,
+        MarketFetchScope? requestedScope = null)
     {
         if (!CanAnalyze || _market is null)
         {
@@ -402,16 +417,15 @@
                 : "Checking saved market prices...");
         try
         {
+            var scope = requestedScope ?? _market.Scope;
             var outcome = await WorkerSession.RunMarketAnalysisAsync(
                 new WorkerMarketAnalysisRequest(
                     forceRefreshData,
-                    _searchEntireRegion
-                        ? MarketFetchScope.EntireRegion
-                        : MarketFetchScope.SelectedDataCenter,
+                    scope,
                     _market.SelectedDataCenter,
                     _market.SelectedRegion,
                     _market.Lens,
-                    SelectedRegions: GetSelectedAnalysisRegions()),
+                    SelectedRegions: GetRequestedAnalysisRegions(scope)),
                 reportStatus: (message, progress) =>
                     AppState.SetStatusForOperation(
                         operation,
@@ -445,6 +459,16 @@
                 dataCenters,
                 _market.SelectedRegion)
             : AppState.AnalysisRegions;
+
+    private IReadOnlyList<string> GetRequestedAnalysisRegions(MarketFetchScope scope) =>
+        scope == MarketFetchScope.EntireRegion
+            ? string.Equals(
+                _market?.SelectedRegion,
+                AppState.SelectedRegion,
+                StringComparison.OrdinalIgnoreCase)
+                ? AppState.AnalysisRegions
+                : [_market?.SelectedRegion ?? AppState.SelectedRegion]
+            : [_market?.SelectedRegion ?? AppState.SelectedRegion];
 
     private void GoToPlanner() => NavigationManager.NavigateTo("");
     private void GoToProcurement() => NavigationManager.NavigateTo("acquisition");

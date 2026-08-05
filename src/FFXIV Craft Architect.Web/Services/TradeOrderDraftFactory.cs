@@ -141,11 +141,11 @@ public sealed class TradeOrderDraftFactory
             {
                 SourceKind = TradeOrderSourceKind.TradeRequestedOutputs,
                 SourcePlanName = "Trade requested outputs",
-                MarketFetchScope = FFXIV_Craft_Architect.Core.Models.MarketFetchScope.SelectedDataCenter,
-                Region = MarketFetchScopeResolver.ResolveRegionForDataCenter(request.DataCenter, string.Empty),
+                MarketFetchScope = request.MarketFetchScope,
+                Region = request.Region,
                 DataCenter = request.DataCenter,
                 World = NormalizeOptionalText(request.World),
-                RequestedDataCenters = [request.DataCenter],
+                RequestedDataCenters = request.RequestedDataCenters.ToArray(),
                 ImportedAtUtc = request.CreatedAtUtc,
                 RootItems = rootItems,
                 Materials = []
@@ -234,6 +234,9 @@ public sealed record TradeRequestedOrderCreateRequest(
     string? Title,
     IReadOnlyList<TradeRequestedOrderOutput> Outputs,
     string DataCenter,
+    string Region,
+    MarketFetchScope MarketFetchScope,
+    IReadOnlyList<string> RequestedDataCenters,
     string? World,
     string? Notes,
     DateTime CreatedAtUtc);
