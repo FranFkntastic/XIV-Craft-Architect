@@ -30,7 +30,6 @@ public sealed class MarketRegionScopeContractTests
 
         Assert.Equal(["Light"], dataCenters);
     }
-
     [Fact]
     public void RequestedOrderDraftCapturesTheCurrentRegionalMarketContext()
     {
