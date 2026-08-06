@@ -12,12 +12,13 @@ PRODUCTION_HOST = "xivcraftarchitect.com"
 DEVELOPMENT_HOST = "dev.xivcraftarchitect.com"
 
 LEGACY_PREFIXES = (
-    "/api/lodestone",
-    "/api/xivdata",
-    "/api/discord",
     "/api/profile-host",
     "/api/trade",
-    "/api/craft/plans",
+    "/api/xivdata/commission-briefs",
+    "/api/lodestone",
+    "/api/xivdata",
+    "/api/craft",
+    "/api/discord",
 )
 
 # Keep the commission route before the broad XIV data route. Caddy path matchers
@@ -27,6 +28,7 @@ MANAGED_PREFIXES = (
     "/api/profile-host",
     "/api/trade",
     "/api/xivdata/commission-briefs",
+    "/api/identity",
     "/api/lodestone",
     "/api/xivdata",
     "/api/craft",
@@ -125,6 +127,7 @@ def _development_split() -> dict[str, str]:
         "/api/profile-host",
         "/api/trade",
         "/api/xivdata/commission-briefs",
+        "/api/identity",
     ):
         routes[prefix] = CANONICAL_PORT
     return routes
