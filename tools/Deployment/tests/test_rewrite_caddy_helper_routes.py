@@ -100,6 +100,7 @@ class RewriteCaddyHelperRoutesTests(unittest.TestCase):
                 "/api/profile-host": CANONICAL_PORT,
                 "/api/trade": CANONICAL_PORT,
                 "/api/xivdata/commission-briefs": CANONICAL_PORT,
+                "/api/identity": CANONICAL_PORT,
             }
         )
         self.assertEqual(expected_dev, route_ports(rewritten, DEVELOPMENT_HOST))
