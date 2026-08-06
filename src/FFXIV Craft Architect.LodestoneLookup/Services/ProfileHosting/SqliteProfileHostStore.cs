@@ -759,7 +759,8 @@ public sealed class SqliteProfileHostStore
         string profileId,
         long sinceRevision,
         CancellationToken ct,
-        int? limit = null)
+        int? limit = null,
+        IReadOnlyCollection<string>? collections = null)
     {
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
@@ -768,22 +769,31 @@ public sealed class SqliteProfileHostStore
             ct);
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
+        var collectionFilter = collections is { Count: > 0 }
+            ? " and collection in (select value from json_each($collections))"
+            : string.Empty;
         command.CommandText = limit.HasValue
-            ? """
+            ? $"""
             select collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc
             from sync_objects
-            where profile_id = $profileId and revision > $sinceRevision
+            where profile_id = $profileId and revision > $sinceRevision{collectionFilter}
             order by revision asc
             limit $limit;
             """
-            : """
+            : $"""
             select collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc
             from sync_objects
-            where profile_id = $profileId and revision > $sinceRevision
+            where profile_id = $profileId and revision > $sinceRevision{collectionFilter}
             order by revision asc;
             """;
         command.Parameters.AddWithValue("$profileId", profileId);
         command.Parameters.AddWithValue("$sinceRevision", sinceRevision);
+        if (collections is { Count: > 0 })
+        {
+            command.Parameters.AddWithValue(
+                "$collections",
+                JsonSerializer.Serialize(collections));
+        }
         if (limit.HasValue)
         {
             command.Parameters.AddWithValue("$limit", checked(limit.Value + 1));
@@ -829,6 +839,73 @@ public sealed class SqliteProfileHostStore
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
         return await GetServerRevisionAsync(connection, profileId, ct);
+    }
+
+    public async Task<ProfileSyncObjectEnvelope?> LoadHostedObjectAsync(
+        string profileId,
+        string collection,
+        string objectId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        ValidateCollection(collection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(objectId);
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        return await LoadObjectAsync(connection, profileId, collection, objectId, ct);
+    }
+
+    public async Task<IReadOnlyList<string>> LoadActiveProfileIdsAsync(
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select id
+            from hosted_profiles
+            where disabled_at_utc is null
+            order by id;
+            """;
+        var profileIds = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            profileIds.Add(reader.GetString(0));
+        }
+
+        return profileIds;
+    }
+
+    public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadRetentionCandidatesAsync(
+        string profileId,
+        DateTime modifiedBeforeUtc,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select collection, object_id, payload_json, revision, updated_at_utc, deleted, deleted_at_utc
+            from sync_objects
+            where profile_id = $profileId
+              and collection = $collection
+              and deleted = 0
+              and updated_at_utc < $cutoff
+            order by updated_at_utc asc;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$collection", ProfileSyncCollections.TradeOrders);
+        command.Parameters.AddWithValue("$cutoff", modifiedBeforeUtc.ToString("O"));
+        var objects = new List<ProfileSyncObjectEnvelope>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            objects.Add(ReadObject(reader));
+        }
+
+        return objects;
     }
 
     public async Task<ProfileSyncPutResponse> PutObjectAsync(

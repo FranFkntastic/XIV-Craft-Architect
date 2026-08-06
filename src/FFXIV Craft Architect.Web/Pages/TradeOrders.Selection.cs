@@ -6,6 +6,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web.Dialogs;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using FFXIV_Craft_Architect.Web.Shared.TablePrimitives;
 
@@ -48,9 +49,30 @@ public partial class TradeOrders
             .Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 
+    private bool ArchiveOrderMatchesSearch(ArchivedOrderRow order)
+    {
+        if (string.IsNullOrWhiteSpace(_orderSearchText))
+        {
+            return true;
+        }
+
+        var query = _orderSearchText.Trim();
+        return order.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+            FormatRailStatusChip(order.Status).Contains(query, StringComparison.OrdinalIgnoreCase) ||
+            order.OutputNames.Any(name => name.Contains(query, StringComparison.OrdinalIgnoreCase)) ||
+            order.Order != null && OrderMatchesSearch(order.Order);
+    }
+
     private string GetRailOrderClass(TradeOrder order)
     {
         return _selectedOrder?.Id == order.Id
+            ? "trade-orders-rail-order is-selected"
+            : "trade-orders-rail-order";
+    }
+
+    private string GetRailOrderClass(ArchivedOrderRow order)
+    {
+        return _selectedOrder?.Id == order.OrderId
             ? "trade-orders-rail-order is-selected"
             : "trade-orders-rail-order";
     }
@@ -96,6 +118,125 @@ public partial class TradeOrders
             _ => order.Status.ToString()
         };
     }
+
+    private static string FormatRailStatusChip(TradeOrderStatus status) =>
+        status switch
+        {
+            TradeOrderStatus.Completed => "Done",
+            TradeOrderStatus.Canceled => "Canceled",
+            _ => status.ToString()
+        };
+
+    private static string FormatArchiveOrderDate(ArchivedOrderRow order) =>
+        order.CommissionedAtUtc.ToLocalTime().ToString("yyyy-MM-dd");
+
+    private static string FormatArchiveOrderOutputs(ArchivedOrderRow order) =>
+        order.OutputNames.Count == 0
+            ? "No requested outputs"
+            : string.Join(", ", order.OutputNames);
+
+    private bool IsFetchingArchiveOrder(Guid orderId) =>
+        _fetchingArchiveOrderIds.Contains(orderId);
+
+    private async Task OpenArchiveOrderAsync(ArchivedOrderRow row)
+    {
+        if (row.Order != null)
+        {
+            SelectOrder(row.Order);
+            return;
+        }
+        if (row.SummaryRecord == null || !_fetchingArchiveOrderIds.Add(row.OrderId))
+        {
+            return;
+        }
+
+        try
+        {
+            var connection = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+            if (!connection.IsConfigured)
+            {
+                throw new InvalidOperationException(
+                    "Connect to the hosted profile before opening this archived order.");
+            }
+            if (!string.Equals(
+                    connection.ConnectionScopeId,
+                    row.SummaryRecord.ConnectionScopeId,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var envelope = await ProfileHostClient.GetObjectAsync(
+                connection.HostUrl!,
+                connection.AccessKey!,
+                ProfileSyncCollections.TradeOrders,
+                row.OrderId.ToString("D"),
+                CancellationToken.None);
+            var currentConnection = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+            if (!HasSameArchiveFetchAuthority(connection, currentConnection))
+            {
+                return;
+            }
+            if (envelope == null)
+            {
+                await ArchiveSummaries.RemoveAsync(connection.ConnectionScopeId!, row.OrderId);
+                Snackbar.Add(
+                    "This archived order is no longer available on the profile host.",
+                    Severity.Info);
+                return;
+            }
+            if (!string.Equals(
+                    envelope.Collection,
+                    ProfileSyncCollections.TradeOrders,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    envelope.ObjectId,
+                    row.OrderId.ToString("D"),
+                    StringComparison.OrdinalIgnoreCase) ||
+                envelope.Deleted ||
+                envelope.IsSummary)
+            {
+                throw new InvalidOperationException(
+                    "The profile host returned an invalid archived order payload.");
+            }
+
+            await TradeOrderSyncAdapter.ApplyRemoteObjectAsync(
+                envelope,
+                CancellationToken.None);
+            var hosted = HostedOrders.Get(row.OrderId);
+            if (hosted is not { Deleted: false, Order: not null })
+            {
+                throw new InvalidOperationException(
+                    "The archived order payload could not be adopted into this workspace.");
+            }
+
+            _orderHostedRevisions[row.OrderId] = hosted.ObjectRevision;
+            SelectOrder(hosted.OwnerProjection?.Order ?? hosted.Order);
+            ExpandGroupForOrder(hosted.Order);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(
+                $"Could not open archived order. {ex.Message}",
+                Severity.Warning);
+        }
+        finally
+        {
+            _fetchingArchiveOrderIds.Remove(row.OrderId);
+        }
+    }
+
+    private static bool HasSameArchiveFetchAuthority(
+        HostedProfileConnectionSettings captured,
+        HostedProfileConnectionSettings current) =>
+        string.Equals(
+            captured.ConnectionScopeId,
+            current.ConnectionScopeId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            captured.ProfileScopeId,
+            current.ProfileScopeId,
+            StringComparison.OrdinalIgnoreCase);
 
     private static bool CanOpenCraftPlan(TradeOrder order)
     {
@@ -331,6 +472,15 @@ public partial class TradeOrders
 
         _collapsedAttentionGroups.Remove(GetOrderAttentionKey(order));
     }
+
+    private sealed record ArchivedOrderRow(
+        Guid OrderId,
+        string Title,
+        TradeOrderStatus Status,
+        DateTime CommissionedAtUtc,
+        IReadOnlyList<string> OutputNames,
+        TradeOrder? Order,
+        TradeOrderArchiveSummaryRecord? SummaryRecord);
 
     private bool IsOrderArchivedForAttention(TradeOrder order)
     {

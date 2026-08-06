@@ -14,6 +14,132 @@ public sealed class ProfileSyncDeletionProjectionTests
 {
     private const string Host = "https://profiles.example/api/";
     [Fact]
+    public async Task ArchivedOrderSummaryPersistsRevisionWithoutPublishingFullOrder()
+    {
+        var profileId = NewId();
+        var companyProfileId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(companyProfileId);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = CreateLocalState(indexedDb);
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 0, DateTime.UtcNow, ConnectionScope(profileId));
+        var summaries = new TradeOrderArchiveSummaryStore(indexedDb);
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService(),
+                summaries),
+            store,
+            localState,
+            summaries);
+        var summary = new TradeOrderArchiveSummary
+        {
+            OrderId = orderId,
+            CompanyProfileId = companyProfileId,
+            Title = "Archived order",
+            Status = TradeOrderStatus.Completed,
+            CommissionedAtUtc = DateTime.UtcNow,
+            Outputs = [new("Tacos de Carne Asada", 3, true)]
+        };
+
+        await adapter.ApplyRemoteObjectAsync(new ProfileSyncObjectEnvelope
+        {
+            Collection = ProfileSyncCollections.TradeOrders,
+            ObjectId = orderId.ToString("D"),
+            PayloadJson = string.Empty,
+            SummaryJson = TradeOrderArchiveSummaryCodec.Serialize(summary),
+            Revision = 7
+        }, CancellationToken.None);
+
+        var persisted = Assert.Single(await new TradeOrderArchiveSummaryStore(indexedDb).LoadAsync());
+        Check(
+            () => Assert.Equal(7, persisted.HostedRevision),
+            () => Assert.Equal("Archived order", persisted.Summary.Title),
+            () => Assert.Null(store.Get(orderId)),
+            () => Assert.Null(runtime.DurableOrder));
+        Assert.Equal(7, await localState.LoadObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            orderId.ToString("D")));
+    }
+
+    [Fact]
+    public async Task FullArchivedOrderSupersedesStoredSummary()
+    {
+        var profileId = NewId();
+        var companyProfileId = Guid.NewGuid();
+        var order = CreateOrder(Guid.NewGuid(), companyProfileId, "Full archived order");
+        order.Status = TradeOrderStatus.Completed;
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(companyProfileId);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = CreateLocalState(indexedDb);
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 0, DateTime.UtcNow, ConnectionScope(profileId));
+        var summaries = new TradeOrderArchiveSummaryStore(indexedDb);
+        await summaries.UpsertAsync(new TradeOrderArchiveSummary
+        {
+            OrderId = order.Id,
+            CompanyProfileId = companyProfileId,
+            Title = "Summary title",
+            Status = TradeOrderStatus.Completed
+        }, 5, ConnectionScope(profileId));
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService(),
+                summaries),
+            store,
+            localState,
+            summaries);
+
+        await adapter.ApplyRemoteObjectAsync(Envelope(order, 4), CancellationToken.None);
+        Assert.Single(summaries.GetAll(ConnectionScope(profileId)));
+        await adapter.ApplyRemoteObjectAsync(Envelope(order, 6), CancellationToken.None);
+
+        Check(
+            () => Assert.Empty(summaries.GetAll(ConnectionScope(profileId))),
+            () => Assert.Equal(order.Title, store.Get(order.Id)?.Order?.Title),
+            () => Assert.Equal(order.Id, runtime.DurableOrder?.Id));
+    }
+
+    [Fact]
+    public async Task LocalOrderDeletionDropsStoredArchiveSummary()
+    {
+        var profileId = NewId();
+        var otherProfileId = NewId();
+        var orderId = Guid.NewGuid();
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var indexedDb = new IndexedDbService(runtime);
+        var summaries = new TradeOrderArchiveSummaryStore(indexedDb);
+        await summaries.UpsertAsync(new TradeOrderArchiveSummary
+        {
+            OrderId = orderId,
+            CompanyProfileId = Guid.NewGuid(),
+            Title = "Deleted archive",
+            Status = TradeOrderStatus.Canceled
+        }, 3, ConnectionScope(profileId));
+        await summaries.UpsertAsync(new TradeOrderArchiveSummary
+        {
+            OrderId = orderId,
+            CompanyProfileId = Guid.NewGuid(),
+            Title = "Other profile archive",
+            Status = TradeOrderStatus.Completed
+        }, 4, ConnectionScope(otherProfileId));
+        var persistence = new TradeOperationsPersistenceService(
+            indexedDb,
+            new TradeCompanyProfilePackageService(),
+            summaries,
+            CreateLocalState(indexedDb));
+
+        Assert.True(await persistence.DeleteOrderAsync(orderId));
+        Assert.Empty(summaries.GetAll(ConnectionScope(profileId)));
+        Assert.Single(summaries.GetAll(ConnectionScope(otherProfileId)));
+    }
+
+    [Fact]
     public async Task CommittedOrderPutsAdoptWithoutAdvancingCursor()
     {
         foreach (var conflictFirst in new[] { false, true })
@@ -62,13 +188,83 @@ public sealed class ProfileSyncDeletionProjectionTests
         var service = new ProfileSyncService(CreateHostClient(new StubHandler(request => request.Method == HttpMethod.Get ? Ok(new ProfileHostBootstrapPayload { Objects = [plan, remoteOrder] }) : RecordConflict(request, deletions))), localState, new WebSettingsService(indexedDb), store, [new RecordingOrderAdapter(remoteOrder), new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan)]);
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteObjectsAsync([(ProfileSyncCollections.Plans, plan.ObjectId), (ProfileSyncCollections.TradeOrders, Key(order))], [new ProfileSyncDeleteExpectation(ProfileSyncCollections.TradeOrders, Key(order), 4)]));
         Assert.Contains($"/{ProfileSyncCollections.TradeOrders}/", Assert.Single(deletions), StringComparison.Ordinal); Assert.Empty(await localState.LoadPendingOrderCleanupAsync(profileId));
-        var retryProfileId = NewId(); var retryOrder = Envelope(order, 4); var retryOrderTombstone = Tombstone(Key(order), 5); var retryPlanTombstone = Tombstone(plan.ObjectId, 6, ProfileSyncCollections.Plans); var retryCall = 0; var failLocalPlanDelete = true;
+        var retryProfileId = NewId(); var retryOrder = Envelope(order, 4); var retryOrderTombstone = Tombstone(Key(order), 5); var retryPlanTombstone = Tombstone(plan.ObjectId, 6, ProfileSyncCollections.Plans); var retryCall = 0; var retryBootstrapCall = 0; var retryPlanDeleteCall = 0; var failLocalPlanDelete = true;
         var retryRuntime = new StorageRuntime(ConnectionSettings(retryProfileId)); var retryIndexedDb = new IndexedDbService(retryRuntime); var retryLocalState = CreateLocalState(retryIndexedDb); var retryStore = new HostedOrderProjectionStore(); retryStore.BeginProfileRestore(retryProfileId, false, 0, DateTime.UtcNow, ConnectionScope(retryProfileId)); var retryOrderAdapter = new RecordingOrderAdapter(retryOrder);
-        var retryHandler = new StubHandler(_ => ++retryCall switch { 1 => Ok(new ProfileHostBootstrapPayload { Objects = [plan, retryOrder] }), 2 => Ok(new ProfileSyncPutResponse { Success = true, ServerRevision = 5, Object = retryOrderTombstone }), 3 => Ok(new ProfileSyncPutResponse { Conflict = true }), 4 => Ok(new ProfileSyncChangesResponse { Objects = [retryOrderTombstone], ServerRevision = 5 }), 5 => Ok(new ProfileSyncChangesResponse { ServerRevision = 5 }), 6 => Ok(new ProfileHostBootstrapPayload { Objects = [plan, retryOrderTombstone] }), 7 => Ok(new ProfileSyncPutResponse { Success = true, ServerRevision = 6, Object = retryPlanTombstone }), 8 => Ok(new ProfileHostBootstrapPayload { Objects = [retryPlanTombstone, retryOrderTombstone] }), _ => throw new InvalidOperationException($"Unexpected retry request {retryCall}.") }); var retryService = new ProfileSyncService(CreateHostClient(retryHandler), retryLocalState, new WebSettingsService(retryIndexedDb), retryStore, [retryOrderAdapter, new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan)]);
+        var retryHandler = new StubHandler(request =>
+        {
+            retryCall++;
+            var path = request.RequestUri!.AbsolutePath;
+            if (request.Method == HttpMethod.Get &&
+                path.EndsWith("/profile-host/changes", StringComparison.Ordinal))
+            {
+                var query = System.Web.HttpUtility.ParseQueryString(request.RequestUri.Query);
+                var collections = query["collections"];
+                if (string.Equals(
+                        collections,
+                        string.Join(",", ProfileSyncCollections.OrderAuthorityScope),
+                        StringComparison.Ordinal))
+                {
+                    return Ok(new ProfileSyncChangesResponse
+                    {
+                        Objects = [retryOrderTombstone],
+                        ServerRevision = 5
+                    });
+                }
+                if (string.Equals(
+                        collections,
+                        string.Join(",", ProfileSyncCollections.BackgroundScope),
+                        StringComparison.Ordinal))
+                {
+                    return Ok(new ProfileSyncChangesResponse { ServerRevision = 5 });
+                }
+                throw new InvalidOperationException(
+                    $"Unexpected changes collection filter '{collections}'.");
+            }
+            if (request.Method == HttpMethod.Get &&
+                path.EndsWith("/profile-host/bootstrap/export", StringComparison.Ordinal))
+            {
+                return ++retryBootstrapCall switch
+                {
+                    1 => Ok(new ProfileHostBootstrapPayload { Objects = [plan, retryOrder] }),
+                    2 => Ok(new ProfileHostBootstrapPayload { Objects = [plan, retryOrderTombstone] }),
+                    3 => Ok(new ProfileHostBootstrapPayload { Objects = [retryPlanTombstone, retryOrderTombstone] }),
+                    _ => throw new InvalidOperationException(
+                        $"Unexpected retry bootstrap request {retryBootstrapCall}.")
+                };
+            }
+            if (request.Method == HttpMethod.Delete &&
+                path.Contains($"/{ProfileSyncCollections.TradeOrders}/", StringComparison.Ordinal))
+            {
+                return Ok(new ProfileSyncPutResponse
+                {
+                    Success = true,
+                    ServerRevision = 5,
+                    Object = retryOrderTombstone
+                });
+            }
+            if (request.Method == HttpMethod.Delete &&
+                path.Contains($"/{ProfileSyncCollections.Plans}/", StringComparison.Ordinal))
+            {
+                return ++retryPlanDeleteCall switch
+                {
+                    1 => Ok(new ProfileSyncPutResponse { Conflict = true }),
+                    2 => Ok(new ProfileSyncPutResponse
+                    {
+                        Success = true,
+                        ServerRevision = 6,
+                        Object = retryPlanTombstone
+                    }),
+                    _ => throw new InvalidOperationException(
+                        $"Unexpected retry plan deletion {retryPlanDeleteCall}.")
+                };
+            }
+            throw new InvalidOperationException(
+                $"Unexpected retry request {retryCall}: {request.Method} {request.RequestUri}.");
+        }); var retryService = new ProfileSyncService(CreateHostClient(retryHandler), retryLocalState, new WebSettingsService(retryIndexedDb), retryStore, [retryOrderAdapter, new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan)]);
         var retryObjects = new[] { (ProfileSyncCollections.Plans, plan.ObjectId), (ProfileSyncCollections.TradeOrders, Key(order)) }; var retryExpectation = new[] { new ProfileSyncDeleteExpectation(ProfileSyncCollections.TradeOrders, Key(order), 4) };
         await Assert.ThrowsAsync<InvalidOperationException>(() => retryService.DeleteObjectsAsync(retryObjects, retryExpectation)); Assert.Contains(Key(order), await retryLocalState.LoadPendingOrderCleanupAsync(retryProfileId));
-        var reloadedService = new ProfileSyncService(CreateHostClient(retryHandler), retryLocalState, new WebSettingsService(retryIndexedDb), retryStore, [retryOrderAdapter, new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan)]); await reloadedService.SyncNowAsync(); Check(() => Assert.Equal(4, retryCall), () => Assert.Equal(0, retryOrderAdapter.DeleteCount), () => Assert.Equal(4, retryLocalState.LoadObjectRevisionAsync(retryProfileId, ProfileSyncCollections.TradeOrders, Key(order)).GetAwaiter().GetResult())); var secondStore = new HostedOrderProjectionStore(); var secondReloadedService = new ProfileSyncService(CreateHostClient(retryHandler), retryLocalState, new WebSettingsService(retryIndexedDb), secondStore, [retryOrderAdapter, new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan, () => failLocalPlanDelete ? (failLocalPlanDelete = false, Task.FromException(new InvalidOperationException("local plan delete failed"))).Item2 : Task.CompletedTask)]); await secondReloadedService.SyncNowAsync();
-        Check(() => Assert.Equal(5, retryCall), () => Assert.Equal(4, secondStore.Get(order.Id)?.ObjectRevision), () => Assert.Equal(0, retryOrderAdapter.DeleteCount)); await Assert.ThrowsAsync<InvalidOperationException>(() => secondReloadedService.DeleteObjectsAsync(retryObjects)); Check(() => Assert.Equal(7, retryCall), () => Assert.Equal(0, retryOrderAdapter.DeleteCount)); Assert.Contains(Key(order), await retryLocalState.LoadPendingOrderCleanupAsync(retryProfileId)); var thirdReloadedService = new ProfileSyncService(CreateHostClient(retryHandler), retryLocalState, new WebSettingsService(retryIndexedDb), secondStore, [retryOrderAdapter, new RecordingCollectionAdapter(ProfileSyncCollections.Plans, retryPlanTombstone)]); await thirdReloadedService.DeleteObjectsAsync(retryObjects); Check(() => Assert.Equal(8, retryCall), () => Assert.Equal(1, retryOrderAdapter.DeleteCount), () => Assert.True(secondStore.Get(order.Id)?.Deleted)); Assert.Empty(await retryLocalState.LoadPendingOrderCleanupAsync(retryProfileId));
+        var reloadedService = new ProfileSyncService(CreateHostClient(retryHandler), retryLocalState, new WebSettingsService(retryIndexedDb), retryStore, [retryOrderAdapter, new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan)]); await reloadedService.SyncNowAsync(); Check(() => Assert.Equal(5, retryCall), () => Assert.Equal(0, retryOrderAdapter.DeleteCount), () => Assert.Equal(4, retryLocalState.LoadObjectRevisionAsync(retryProfileId, ProfileSyncCollections.TradeOrders, Key(order)).GetAwaiter().GetResult())); var secondStore = new HostedOrderProjectionStore(); var secondReloadedService = new ProfileSyncService(CreateHostClient(retryHandler), retryLocalState, new WebSettingsService(retryIndexedDb), secondStore, [retryOrderAdapter, new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan, () => failLocalPlanDelete ? (failLocalPlanDelete = false, Task.FromException(new InvalidOperationException("local plan delete failed"))).Item2 : Task.CompletedTask)]); await secondReloadedService.SyncNowAsync();
+        Check(() => Assert.Equal(7, retryCall), () => Assert.Equal(4, secondStore.Get(order.Id)?.ObjectRevision), () => Assert.Equal(0, retryOrderAdapter.DeleteCount)); await Assert.ThrowsAsync<InvalidOperationException>(() => secondReloadedService.DeleteObjectsAsync(retryObjects)); Check(() => Assert.Equal(9, retryCall), () => Assert.Equal(0, retryOrderAdapter.DeleteCount)); Assert.Contains(Key(order), await retryLocalState.LoadPendingOrderCleanupAsync(retryProfileId)); var thirdReloadedService = new ProfileSyncService(CreateHostClient(retryHandler), retryLocalState, new WebSettingsService(retryIndexedDb), secondStore, [retryOrderAdapter, new RecordingCollectionAdapter(ProfileSyncCollections.Plans, retryPlanTombstone)]); await thirdReloadedService.DeleteObjectsAsync(retryObjects); Check(() => Assert.Equal(10, retryCall), () => Assert.Equal(1, retryOrderAdapter.DeleteCount), () => Assert.True(secondStore.Get(order.Id)?.Deleted)); Assert.Empty(await retryLocalState.LoadPendingOrderCleanupAsync(retryProfileId));
     }
     [Fact]
     public async Task DelayedStaleDeletionCannotOverwriteOrDeleteNewerProjection()
@@ -579,6 +775,7 @@ public sealed class ProfileSyncDeletionProjectionTests
     private sealed class StorageRuntime(Dictionary<string, string> settings) : IJSRuntime
     {
         private readonly HashSet<Guid> _companyIds = [];
+        private readonly Dictionary<string, TradeOrderArchiveSummaryRecord> _archiveSummaries = [];
         public int SaveTradeOrderCount { get; private set; }
         public TradeOrder? DurableOrder { get; private set; }
         public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
@@ -601,6 +798,19 @@ public sealed class ProfileSyncDeletionProjectionTests
                 return DeleteTradeOrderAsync<TValue>((Guid)args![0]!);
             }
 
+            if (identifier == "IndexedDB.saveTradeOrderArchiveSummary")
+            {
+                var record = (TradeOrderArchiveSummaryRecord)args![0]!;
+                _archiveSummaries[record.Id] = record;
+                return ValueTask.FromResult((TValue)(object)true);
+            }
+
+            if (identifier == "IndexedDB.deleteTradeOrderArchiveSummary")
+            {
+                _archiveSummaries.Remove((string)args![0]!);
+                return ValueTask.FromResult((TValue)(object)true);
+            }
+
             object? result = identifier switch
             {
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(settings, StringComparer.Ordinal),
@@ -608,6 +818,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 "IndexedDB.loadTradeCompanyProfiles" => _companyIds.Select(companyId =>
                     new TradeCompanyProfile { Id = companyId, Name = "Test company" }).ToList(),
                 "IndexedDB.loadTradeOrders" => DurableOrder?.CompanyProfileId == (Guid)args![0]! ? new List<TradeOrder> { DurableOrder } : new List<TradeOrder>(),
+                "IndexedDB.loadTradeOrderArchiveSummaries" => _archiveSummaries.Values.ToList(),
                 "IndexedDB.saveSettingsBatch" => SaveBatch((Dictionary<string, string>)args![0]!),
                 "IndexedDB.saveSetting" => SaveSetting((string)args![0]!, (string)args[1]!),
                 _ => throw new NotSupportedException(identifier)

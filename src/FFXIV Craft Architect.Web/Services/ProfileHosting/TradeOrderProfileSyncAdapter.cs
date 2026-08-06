@@ -12,15 +12,18 @@ public sealed class TradeOrderProfileSyncAdapter :
     private readonly TradeOperationsPersistenceService _tradeOperations;
     private readonly HostedOrderProjectionStore _projections;
     private readonly ProfileSyncLocalStateService _localState;
+    private readonly TradeOrderArchiveSummaryStore? _archiveSummaries;
 
     public TradeOrderProfileSyncAdapter(
         TradeOperationsPersistenceService tradeOperations,
         HostedOrderProjectionStore projections,
-        ProfileSyncLocalStateService localState)
+        ProfileSyncLocalStateService localState,
+        TradeOrderArchiveSummaryStore? archiveSummaries = null)
     {
         _tradeOperations = tradeOperations;
         _projections = projections;
         _localState = localState;
+        _archiveSummaries = archiveSummaries;
     }
 
     public string Collection => ProfileSyncCollections.TradeOrders;
@@ -41,6 +44,33 @@ public sealed class TradeOrderProfileSyncAdapter :
 
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
+        if (envelope.IsSummary)
+        {
+            var archiveSummaries = _archiveSummaries
+                ?? throw new InvalidOperationException(
+                    "Archived Trade order summary storage is unavailable.");
+            var summary = TradeOrderArchiveSummaryCodec.Deserialize(
+                envelope.SummaryJson ?? string.Empty,
+                envelope.ObjectId);
+            if (!TradeOrderStatusWorkflow.IsArchived(summary.Status))
+            {
+                throw new InvalidOperationException(
+                    $"Archived Trade order summary '{envelope.ObjectId}' has active status '{summary.Status}'.");
+            }
+            var summaryConnection = await _localState.LoadConnectionSettingsAsync();
+            var connectionScopeId = summaryConnection.ConnectionScopeId
+                ?? throw new InvalidOperationException(
+                    "Archived Trade order summary persistence requires a connected profile authority.");
+            await archiveSummaries.UpsertAsync(summary, envelope.Revision, connectionScopeId);
+            await _localState.SaveObjectRevisionAsync(
+                summaryConnection,
+                ProfileSyncCollections.TradeOrders,
+                envelope.ObjectId,
+                envelope.Revision);
+            return;
+        }
+
         var order = JsonSerializer.Deserialize<TradeOrder>(
             envelope.PayloadJson,
             JsonOptions);
@@ -70,7 +100,9 @@ public sealed class TradeOrderProfileSyncAdapter :
             async candidate =>
             {
                 var persisted = candidate.Deleted
-                    ? await _tradeOperations.DeleteOrderAsync(candidate.OrderId)
+                    ? await _tradeOperations.DeleteOrderAsync(
+                        candidate.OrderId,
+                        connection.ConnectionScopeId)
                     : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
                 if (!persisted)
                 {
@@ -95,6 +127,13 @@ public sealed class TradeOrderProfileSyncAdapter :
         {
             throw new InvalidOperationException(
                 $"Hosted Trade order '{envelope.ObjectId}' could not be applied because its authority is {adoption}.");
+        }
+        if (_archiveSummaries != null && connection.ConnectionScopeId != null)
+        {
+            await _archiveSummaries.RemoveIfSupersededAsync(
+                connection.ConnectionScopeId,
+                order.Id,
+                envelope.Revision);
         }
     }
 
@@ -125,7 +164,9 @@ public sealed class TradeOrderProfileSyncAdapter :
             {
                 ct.ThrowIfCancellationRequested();
                 var persisted = candidate.Deleted
-                    ? await _tradeOperations.DeleteOrderAsync(candidate.OrderId)
+                    ? await _tradeOperations.DeleteOrderAsync(
+                        candidate.OrderId,
+                        connection.ConnectionScopeId)
                     : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
                 if (!persisted)
                 {
@@ -151,6 +192,10 @@ public sealed class TradeOrderProfileSyncAdapter :
             throw new InvalidOperationException(
                 $"Hosted Trade order '{orderId:D}' deletion could not be applied because its authority is {adoption}.");
         }
+        if (_archiveSummaries != null)
+        {
+            await _archiveSummaries.RemoveAsync(connection.ConnectionScopeId!, orderId);
+        }
     }
 
     private async Task<bool> IsCurrentAuthorityAsync(
@@ -175,12 +220,16 @@ public sealed class TradeOrderProfileSyncAdapter :
             throw new InvalidOperationException($"Hosted Trade order id '{objectId}' is not a valid GUID.");
         }
 
-        if (!await _tradeOperations.DeleteOrderAsync(orderId))
+        var connection = await _localState.LoadConnectionSettingsAsync();
+        if (!await _tradeOperations.DeleteOrderAsync(orderId, connection.ConnectionScopeId))
         {
             throw new InvalidOperationException(
                 $"Browser storage could not delete hosted Trade order '{objectId}'.");
         }
-
+        if (_archiveSummaries != null && connection.ConnectionScopeId != null)
+        {
+            await _archiveSummaries.RemoveAsync(connection.ConnectionScopeId, orderId);
+        }
     }
 
     private static ProfileSyncObjectEnvelope ToEnvelope(TradeOrder order, DateTime updatedAtUtc)
