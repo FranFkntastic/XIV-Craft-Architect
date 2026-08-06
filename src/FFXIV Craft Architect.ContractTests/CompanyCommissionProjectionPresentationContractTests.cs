@@ -11,11 +11,18 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
 {
     private static readonly DateTime CapturedAt = new(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc);
     [Fact]
-    public void DiscordPublicationUsesCraftingLanguageAndCurrentOutputProgress() =>
-        AssertPublication(TradeOrderStatus.Assigned, ["CRAFTING", "3 crafted, 2 ready"], "READY TO WORK", "IN PROGRESS");
-    [Fact]
-    public void DiscordPublicationCallsTheDeliveryStateReadyForDelivery() =>
-        AssertPublication(TradeOrderStatus.AwaitingDelivery, ["READY FOR DELIVERY"], "AWAITING DELIVERY");
+    public void DiscordPublicationUsesCurrentCraftingAndDeliveryLanguage()
+    {
+        AssertPublication(
+            TradeOrderStatus.Assigned,
+            ["CRAFTING", "3 crafted, 2 ready"],
+            "READY TO WORK",
+            "IN PROGRESS");
+        AssertPublication(
+            TradeOrderStatus.AwaitingDelivery,
+            ["READY FOR DELIVERY"],
+            "AWAITING DELIVERY");
+    }
     [Fact]
     public void OrderCenterAndDraftMigrationKeepAuthorityBoundariesExplicit()
     {
@@ -188,4 +195,33 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
 
     private static string ReadWebSource(string repositoryRoot, params string[] relativePath) =>
         File.ReadAllText(Path.Combine(repositoryRoot, "src", "FFXIV Craft Architect.Web", Path.Combine(relativePath)));
+}
+
+public sealed class CompanyCommissionTermsRevisionConflictPolicyTests
+{
+    [Theory]
+    [InlineData(10, 3, 10, 3, false, false)]
+    [InlineData(10, 3, 11, 3, false, false)]
+    [InlineData(10, 3, 10, 4, false, false)]
+    [InlineData(10, 3, 11, 3, true, false)]
+    [InlineData(10, 3, 10, 4, true, true)]
+    [InlineData(11, 4, 11, 4, true, false)]
+    public void ConflictRequiresDirtyChangesAgainstNewerTerms(
+        long baseObjectRevision,
+        int baseTermsVersion,
+        long currentObjectRevision,
+        int currentTermsVersion,
+        bool hasLocalChanges,
+        bool expectedConflict)
+    {
+        Assert.Equal(
+            expectedConflict,
+            CompanyCommissionTermsRevisionConflictPolicy.HasConflict(
+                new CompanyCommissionTermsRevisionBase(
+                    new CompanyRecordRevision(baseObjectRevision),
+                    baseTermsVersion),
+                new CompanyRecordRevision(currentObjectRevision),
+                currentTermsVersion,
+                hasLocalChanges));
+    }
 }

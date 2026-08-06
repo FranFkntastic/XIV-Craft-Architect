@@ -31,6 +31,18 @@ public interface IDiscordPublicationRefresher
         CancellationToken cancellationToken = default);
 }
 
+internal sealed record DiscordInteractionClaimLink(
+    Uri ClaimUrl,
+    Guid CapabilityId,
+    long CapabilityRevision);
+
+internal interface IDiscordInteractionClaimLinkIssuer
+{
+    Task<DiscordInteractionClaimLink?> IssueInteractionClaimLinkAsync(
+        DiscordPublicationRecord publication,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed class DiscordPublicationService(
     ProfileHostedTradeCompanyService companies,
     DiscordCompanyOrderAdapter orders,
@@ -39,7 +51,9 @@ public sealed class DiscordPublicationService(
     SqliteDiscordCollaborationStore collaboration,
     DiscordCommissionOptions options,
     CommissionBriefOptions commissionBriefOptions,
-    TimeProvider timeProvider) : IDiscordPublicationRefresher
+    TimeProvider timeProvider) :
+    IDiscordPublicationRefresher,
+    IDiscordInteractionClaimLinkIssuer
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -110,7 +124,9 @@ public sealed class DiscordPublicationService(
             publicUrl,
             claimUrl,
             cancellationToken);
-        var initialPayload = CompanyCommissionDiscordMessage.CreatePublication(projection);
+        var initialPayload = CompanyCommissionDiscordMessage.CreatePublication(
+            projection,
+            actionToken);
         var created = await collaboration.CreatePublicationAsync(
             ownership,
             publicId,
@@ -465,7 +481,9 @@ public sealed class DiscordPublicationService(
             publicUrl,
             claimUrl,
             cancellationToken);
-        var payload = CompanyCommissionDiscordMessage.CreatePublication(projection);
+        var payload = CompanyCommissionDiscordMessage.CreatePublication(
+            projection,
+            publication.ActionToken);
         return await collaboration.RetryFailedPublicationAsync(
             access.CompanyId,
             publication.PublicationId,
@@ -622,7 +640,9 @@ public sealed class DiscordPublicationService(
             publicUrl,
             claimUrl,
             cancellationToken);
-        var payload = CompanyCommissionDiscordMessage.CreatePublication(projection);
+        var payload = CompanyCommissionDiscordMessage.CreatePublication(
+            projection,
+            publication.ActionToken);
         await collaboration.EnqueueProjectionAsync(
             publication.PublicationId,
             state,
@@ -675,6 +695,65 @@ public sealed class DiscordPublicationService(
         string publicUrl,
         DiscordPublicationState state,
         CancellationToken cancellationToken)
+        => (await IssueClaimLinkAsync(
+            order,
+            publicUrl,
+            state,
+            cancellationToken))?.ClaimUrl.AbsoluteUri;
+
+    Task<DiscordInteractionClaimLink?>
+        IDiscordInteractionClaimLinkIssuer.IssueInteractionClaimLinkAsync(
+            DiscordPublicationRecord publication,
+            CancellationToken cancellationToken) =>
+        IssueInteractionClaimLinkAsync(publication, cancellationToken);
+
+    private async Task<DiscordInteractionClaimLink?> IssueInteractionClaimLinkAsync(
+        DiscordPublicationRecord publication,
+        CancellationToken cancellationToken = default)
+    {
+        if (publication.State != DiscordPublicationState.Open)
+        {
+            return null;
+        }
+
+        var ownership = await companies.ResolvePublicationOwnershipAsync(
+            publication.PublicId,
+            cancellationToken);
+        if (ownership == null ||
+            ownership.CompanyId != publication.CompanyId ||
+            ownership.OrderId != publication.OrderId)
+        {
+            return null;
+        }
+
+        var access = await companies.ResolvePublicAccessAsync(
+            ownership,
+            cancellationToken);
+        var order = access == null
+            ? null
+            : await orders.LoadOrderAsync(
+                access,
+                publication.OrderId,
+                cancellationToken);
+        if (order == null ||
+            ResolvePublicationState(order.Order) != DiscordPublicationState.Open ||
+            !TryResolveCanonicalPublicUrl(publication.PublicId, out var publicUrl))
+        {
+            return null;
+        }
+
+        return await IssueClaimLinkAsync(
+            order.Order,
+            publicUrl,
+            DiscordPublicationState.Open,
+            cancellationToken);
+    }
+
+    private async Task<DiscordInteractionClaimLink?> IssueClaimLinkAsync(
+        TradeOrder order,
+        string publicUrl,
+        DiscordPublicationState state,
+        CancellationToken cancellationToken)
     {
         var commission = order.CompanyCommission;
         if (state != DiscordPublicationState.Open ||
@@ -705,10 +784,13 @@ public sealed class DiscordPublicationService(
             commission.ActiveClaimCapabilityRevision,
             timeProvider.GetUtcNow().UtcDateTime,
             cancellationToken);
-        return SqliteCompanyCommissionCapabilityStore.BuildFragmentUrl(
-            publicUrl,
-            "claim",
-            issued.PlaintextToken);
+        return new DiscordInteractionClaimLink(
+            new Uri(SqliteCompanyCommissionCapabilityStore.BuildFragmentUrl(
+                publicUrl,
+                "claim",
+                issued.PlaintextToken)),
+            issued.Resolution.CapabilityId,
+            issued.Resolution.CapabilityRevision);
     }
 
     private async Task DiscardUncommittedBriefAsync(

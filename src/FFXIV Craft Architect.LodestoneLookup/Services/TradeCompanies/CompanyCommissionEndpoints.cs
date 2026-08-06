@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
@@ -299,8 +300,9 @@ public static class CompanyCommissionEndpoints
                 string publicId,
                 string route,
                 PublicCompanyCommissionCommandEnvelope envelope,
-                SqliteCompanyCommissionCapabilityStore capabilities,
-                HostedCompanyCommissionService commissions,
+                 SqliteCompanyCommissionCapabilityStore capabilities,
+                 DiscordClaimContactCommitter claimContacts,
+                 HostedCompanyCommissionService commissions,
                 TimeProvider timeProvider,
                 CancellationToken cancellationToken) =>
             {
@@ -401,6 +403,14 @@ public static class CompanyCommissionEndpoints
                 var committedCancellationToken = committedWork.Token;
                 var now = timeProvider.GetUtcNow().UtcDateTime;
                 CompanyCommissionCapabilityResolution participantResolution = capability;
+                if (command is ClaimCompanyCommissionCommand)
+                {
+                    await claimContacts.CaptureAsync(
+                        capability,
+                        mutation,
+                        committedCancellationToken);
+                }
+
                 if (command is ClaimCompanyCommissionCommand or
                     RedeemCompanyCommissionParticipantRecoveryCommand)
                 {
@@ -416,7 +426,7 @@ public static class CompanyCommissionEndpoints
                             participant.CapabilityRevision,
                             newParticipantCredential!,
                             now,
-                            committedCancellationToken);
+                        committedCancellationToken);
                 }
 
                 if (command is ReleaseCompanyCommissionClaimCommand)

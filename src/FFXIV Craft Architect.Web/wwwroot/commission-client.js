@@ -122,6 +122,40 @@ export class CommissionBriefApiClient {
         return adaptResponse(response);
     }
 
+    async exchangeDiscordBootstrap(bootstrapToken, participantCredential) {
+        const bootstrap = optionalCapability(bootstrapToken, "Discord bootstrap");
+        const participant = optionalCapability(
+            participantCredential,
+            "Participant credential");
+        if (!bootstrap || !participant) {
+            throw new CommissionClientError(
+                "The Discord participant exchange is invalid.",
+                "invalid-bootstrap");
+        }
+
+        const response = await this.fetch(
+            "/api/identity/v1/discord/participant-exchanges",
+            {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json"
+                },
+                cache: "no-store",
+                redirect: "error",
+                body: JSON.stringify({
+                    bootstrapToken: bootstrap,
+                    participantCredential: participant
+                })
+            });
+        const result = await adaptResponse(response);
+        if (requiredText(result.publicBriefId, "Public brief ID") !== this.publicId) {
+            throw new CommissionClientError(
+                "The participant exchange returned a different commission.",
+                "bootstrap-authority-mismatch");
+        }
+    }
+
     watch(participantSecret, projectionTag, onProjectionChanged, onState = () => {}) {
         if (typeof onProjectionChanged !== "function") {
             throw new CommissionClientError(
@@ -372,16 +406,18 @@ export function readCapabilityFragment(location = window.location) {
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
     const claimCapability = optionalCapability(fragment.get("claim"), "Claim capability");
     const recoveryAuthority = optionalText(fragment.get("recover"));
-    if (claimCapability && recoveryAuthority) {
+    const bootstrapToken = optionalCapability(fragment.get("bootstrap"), "Discord bootstrap");
+    if ([claimCapability, recoveryAuthority, bootstrapToken].filter(Boolean).length > 1) {
         throw new CommissionClientError(
-            "This link contains both claim and recovery authority. Ask the commissioner for a fresh link.",
+            "This link contains conflicting authority. Ask for a fresh link.",
             "ambiguous-authority");
     }
     if (!recoveryAuthority) {
         return {
             claimCapability,
             recoveryCapability: null,
-            recoveryGrantId: null
+            recoveryGrantId: null,
+            bootstrapToken
         };
     }
 
@@ -398,7 +434,8 @@ export function readCapabilityFragment(location = window.location) {
             "Recovery grant ID"),
         recoveryCapability: optionalCapability(
             recoveryAuthority.slice(separator + 1),
-            "Recovery capability")
+            "Recovery capability"),
+        bootstrapToken: null
     };
 }
 

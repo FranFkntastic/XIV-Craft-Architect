@@ -176,7 +176,7 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
   const specTrx = path.join(value.temporaryRoot, 'spec-tests.trx');
   const contractTrx = path.join(value.temporaryRoot, 'contract-tests.trx');
   await writeFile(specTrx, passingTrx(72));
-  await writeFile(contractTrx, passingTrx(245));
+  await writeFile(contractTrx, passingTrx(246));
 
   const acceptanceManifest = path.join(outDir, 'acceptance-manifest.json');
   const verifyOptions = {

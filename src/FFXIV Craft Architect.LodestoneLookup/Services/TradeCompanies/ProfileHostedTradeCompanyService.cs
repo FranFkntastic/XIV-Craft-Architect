@@ -37,6 +37,30 @@ public sealed class ProfileHostedTradeCompanyService(
             hostProfileId);
     }
 
+    public async Task<TradeCompanyAccessContext?> ResolveProfileAccessAsync(
+        Guid hostProfileId,
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        if (hostProfileId == Guid.Empty ||
+            await profiles.LoadProfileAsync(
+                hostProfileId.ToString("D"),
+                cancellationToken) == null ||
+            await LoadCompanyProfileAsync(
+                hostProfileId.ToString("D"),
+                companyId,
+                cancellationToken) == null)
+        {
+            return null;
+        }
+
+        return new TradeCompanyAccessContext(
+            companyId,
+            hostProfileId,
+            TradeCompanyRole.Owner,
+            hostProfileId);
+    }
+
     public async Task<TradeCompanyRecordEnvelope?> LoadRecordAsync(
         TradeCompanyAccessContext access,
         string recordKind,
