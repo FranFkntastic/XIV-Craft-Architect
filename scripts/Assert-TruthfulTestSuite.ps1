@@ -9,7 +9,7 @@ $testProjects = @(
     Join-Path $root 'src/FFXIV Craft Architect.ContractTests'
 )
 $maximumFiles = 36
-$maximumMethods = 215
+$maximumMethods = 222
 $maximumCases = 310
 $maximumLines = 11750
 $maximumFileLines = 1050
