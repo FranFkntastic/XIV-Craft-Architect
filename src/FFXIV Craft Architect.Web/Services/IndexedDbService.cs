@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.Web.Services;
@@ -240,6 +241,26 @@ public sealed class IndexedDbService
             $"delete Trade order {orderId}",
             orderId);
 
+    public Task<bool> SaveTradeOrderArchiveSummaryAsync(
+        TradeOrderArchiveSummaryRecord record) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.saveTradeOrderArchiveSummary",
+            false,
+            $"save archived Trade order summary {record.OrderId}",
+            record);
+
+    public Task<List<TradeOrderArchiveSummaryRecord>> LoadTradeOrderArchiveSummariesAsync() =>
+        InvokeRequiredAsync<List<TradeOrderArchiveSummaryRecord>>(
+            "IndexedDB.loadTradeOrderArchiveSummaries",
+            "load archived Trade order summaries");
+
+    public Task<bool> DeleteTradeOrderArchiveSummaryAsync(Guid orderId) =>
+        InvokeOrDefaultAsync(
+            "IndexedDB.deleteTradeOrderArchiveSummary",
+            false,
+            $"delete archived Trade order summary {orderId}",
+            orderId);
+
     public Task<List<JsonElement>> LoadAllTradeOrderCraftSnapshotsAsync() =>
         InvokeRequiredAsync<List<JsonElement>>(
             "IndexedDB.loadAllTradeOrderCraftSnapshots",
@@ -328,6 +349,7 @@ public sealed class TradeIndexedDbDiagnostics
     public bool HasCompanyProfilesStore { get; set; }
     public bool HasCraftersStore { get; set; }
     public bool HasOrdersStore { get; set; }
+    public bool HasOrderArchiveSummariesStore { get; set; }
     public bool HasPayrollDraftsStore { get; set; }
     public string? ErrorMessage { get; set; }
 
@@ -336,6 +358,7 @@ public sealed class TradeIndexedDbDiagnostics
         HasCompanyProfilesStore &&
         HasCraftersStore &&
         HasOrdersStore &&
+        HasOrderArchiveSummariesStore &&
         HasPayrollDraftsStore;
 
     public string ToDisplayMessage()
@@ -343,7 +366,8 @@ public sealed class TradeIndexedDbDiagnostics
         var details =
             $"Trade storage diagnostics: database v{DatabaseVersion}; " +
             $"stores company={HasCompanyProfilesStore}, crafters={HasCraftersStore}, " +
-            $"orders={HasOrdersStore}, payrollDrafts={HasPayrollDraftsStore}.";
+            $"orders={HasOrdersStore}, orderArchiveSummaries={HasOrderArchiveSummariesStore}, " +
+            $"payrollDrafts={HasPayrollDraftsStore}.";
         if (!string.IsNullOrWhiteSpace(ErrorMessage))
         {
             return $"{details} {ErrorMessage}";

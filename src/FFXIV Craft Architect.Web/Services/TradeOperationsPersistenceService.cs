@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -11,13 +12,16 @@ public sealed class TradeOperationsPersistenceService
 
     private readonly IndexedDbService _indexedDb;
     private readonly TradeCompanyProfilePackageService _profilePackageService;
+    private readonly TradeOrderArchiveSummaryStore? _archiveSummaries;
 
     public TradeOperationsPersistenceService(
         IndexedDbService indexedDb,
-        TradeCompanyProfilePackageService profilePackageService)
+        TradeCompanyProfilePackageService profilePackageService,
+        TradeOrderArchiveSummaryStore? archiveSummaries = null)
     {
         _indexedDb = indexedDb;
         _profilePackageService = profilePackageService;
+        _archiveSummaries = archiveSummaries;
     }
 
     public async Task<TradeCompanyProfile> GetOrCreateActiveCompanyProfileAsync()
@@ -185,7 +189,12 @@ public sealed class TradeOperationsPersistenceService
 
     public async Task<bool> DeleteOrderAsync(Guid orderId)
     {
-        return await _indexedDb.DeleteTradeOrderAsync(orderId);
+        var deleted = await _indexedDb.DeleteTradeOrderAsync(orderId);
+        if (deleted && _archiveSummaries != null)
+        {
+            await _archiveSummaries.RemoveAsync(orderId);
+        }
+        return deleted;
     }
 
     private async Task<Guid?> LoadSelectedCompanyProfileIdAsync()

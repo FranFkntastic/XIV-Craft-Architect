@@ -14,6 +14,122 @@ public sealed class ProfileSyncDeletionProjectionTests
 {
     private const string Host = "https://profiles.example/api/";
     [Fact]
+    public async Task ArchivedOrderSummaryPersistsRevisionWithoutPublishingFullOrder()
+    {
+        var profileId = NewId();
+        var companyProfileId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(companyProfileId);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = CreateLocalState(indexedDb);
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 0, DateTime.UtcNow, ConnectionScope(profileId));
+        var summaries = new TradeOrderArchiveSummaryStore(indexedDb);
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService(),
+                summaries),
+            store,
+            localState,
+            summaries);
+        var summary = new TradeOrderArchiveSummary
+        {
+            OrderId = orderId,
+            CompanyProfileId = companyProfileId,
+            Title = "Archived order",
+            Status = TradeOrderStatus.Completed,
+            CommissionedAtUtc = DateTime.UtcNow,
+            Outputs = [new("Tacos de Carne Asada", 3, true)]
+        };
+
+        await adapter.ApplyRemoteObjectAsync(new ProfileSyncObjectEnvelope
+        {
+            Collection = ProfileSyncCollections.TradeOrders,
+            ObjectId = orderId.ToString("D"),
+            PayloadJson = string.Empty,
+            SummaryJson = TradeOrderArchiveSummaryCodec.Serialize(summary),
+            Revision = 7
+        }, CancellationToken.None);
+
+        var persisted = Assert.Single(await new TradeOrderArchiveSummaryStore(indexedDb).LoadAsync());
+        Check(
+            () => Assert.Equal(7, persisted.HostedRevision),
+            () => Assert.Equal("Archived order", persisted.Summary.Title),
+            () => Assert.Null(store.Get(orderId)),
+            () => Assert.Null(runtime.DurableOrder));
+        Assert.Equal(7, await localState.LoadObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            orderId.ToString("D")));
+    }
+
+    [Fact]
+    public async Task FullArchivedOrderSupersedesStoredSummary()
+    {
+        var profileId = NewId();
+        var companyProfileId = Guid.NewGuid();
+        var order = CreateOrder(Guid.NewGuid(), companyProfileId, "Full archived order");
+        order.Status = TradeOrderStatus.Completed;
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(companyProfileId);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = CreateLocalState(indexedDb);
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 0, DateTime.UtcNow, ConnectionScope(profileId));
+        var summaries = new TradeOrderArchiveSummaryStore(indexedDb);
+        await summaries.UpsertAsync(new TradeOrderArchiveSummary
+        {
+            OrderId = order.Id,
+            CompanyProfileId = companyProfileId,
+            Title = "Summary title",
+            Status = TradeOrderStatus.Completed
+        }, 5, ConnectionScope(profileId));
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService(),
+                summaries),
+            store,
+            localState,
+            summaries);
+
+        await adapter.ApplyRemoteObjectAsync(Envelope(order, 4), CancellationToken.None);
+        Assert.Single(summaries.GetAll(ConnectionScope(profileId)));
+        await adapter.ApplyRemoteObjectAsync(Envelope(order, 6), CancellationToken.None);
+
+        Check(
+            () => Assert.Empty(summaries.GetAll(ConnectionScope(profileId))),
+            () => Assert.Equal(order.Title, store.Get(order.Id)?.Order?.Title),
+            () => Assert.Equal(order.Id, runtime.DurableOrder?.Id));
+    }
+
+    [Fact]
+    public async Task LocalOrderDeletionDropsStoredArchiveSummary()
+    {
+        var profileId = NewId();
+        var orderId = Guid.NewGuid();
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var indexedDb = new IndexedDbService(runtime);
+        var summaries = new TradeOrderArchiveSummaryStore(indexedDb);
+        await summaries.UpsertAsync(new TradeOrderArchiveSummary
+        {
+            OrderId = orderId,
+            CompanyProfileId = Guid.NewGuid(),
+            Title = "Deleted archive",
+            Status = TradeOrderStatus.Canceled
+        }, 3, ConnectionScope(profileId));
+        var persistence = new TradeOperationsPersistenceService(
+            indexedDb,
+            new TradeCompanyProfilePackageService(),
+            summaries);
+
+        Assert.True(await persistence.DeleteOrderAsync(orderId));
+        Assert.Empty(summaries.GetAll(ConnectionScope(profileId)));
+    }
+
+    [Fact]
     public async Task CommittedOrderPutsAdoptWithoutAdvancingCursor()
     {
         foreach (var conflictFirst in new[] { false, true })
@@ -579,6 +695,7 @@ public sealed class ProfileSyncDeletionProjectionTests
     private sealed class StorageRuntime(Dictionary<string, string> settings) : IJSRuntime
     {
         private readonly HashSet<Guid> _companyIds = [];
+        private readonly Dictionary<Guid, TradeOrderArchiveSummaryRecord> _archiveSummaries = [];
         public int SaveTradeOrderCount { get; private set; }
         public TradeOrder? DurableOrder { get; private set; }
         public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
@@ -601,6 +718,19 @@ public sealed class ProfileSyncDeletionProjectionTests
                 return DeleteTradeOrderAsync<TValue>((Guid)args![0]!);
             }
 
+            if (identifier == "IndexedDB.saveTradeOrderArchiveSummary")
+            {
+                var record = (TradeOrderArchiveSummaryRecord)args![0]!;
+                _archiveSummaries[record.OrderId] = record;
+                return ValueTask.FromResult((TValue)(object)true);
+            }
+
+            if (identifier == "IndexedDB.deleteTradeOrderArchiveSummary")
+            {
+                _archiveSummaries.Remove((Guid)args![0]!);
+                return ValueTask.FromResult((TValue)(object)true);
+            }
+
             object? result = identifier switch
             {
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(settings, StringComparer.Ordinal),
@@ -608,6 +738,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 "IndexedDB.loadTradeCompanyProfiles" => _companyIds.Select(companyId =>
                     new TradeCompanyProfile { Id = companyId, Name = "Test company" }).ToList(),
                 "IndexedDB.loadTradeOrders" => DurableOrder?.CompanyProfileId == (Guid)args![0]! ? new List<TradeOrder> { DurableOrder } : new List<TradeOrder>(),
+                "IndexedDB.loadTradeOrderArchiveSummaries" => _archiveSummaries.Values.ToList(),
                 "IndexedDB.saveSettingsBatch" => SaveBatch((Dictionary<string, string>)args![0]!),
                 "IndexedDB.saveSetting" => SaveSetting((string)args![0]!, (string)args[1]!),
                 _ => throw new NotSupportedException(identifier)
