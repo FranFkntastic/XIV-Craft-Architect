@@ -84,10 +84,10 @@ public static class DiscordCommissionMessage
     public static object CreateEphemeral(
         string message,
         IReadOnlyList<DiscordEphemeralLink>? links = null) => new
-    {
-        content = Truncate(message, 1900),
-        flags = 64,
-        components = links is { Count: > 0 }
+        {
+            content = Truncate(message, 1900),
+            flags = 64,
+            components = links is { Count: > 0 }
             ? new[]
             {
                 new
@@ -106,11 +106,11 @@ public static class DiscordCommissionMessage
                 }
             }
             : null,
-        allowed_mentions = new
-        {
-            parse = Array.Empty<string>()
-        }
-    };
+            allowed_mentions = new
+            {
+                parse = Array.Empty<string>()
+            }
+        };
 
     private static object Field(string name, string value, bool inline) => new
     {
