@@ -211,7 +211,7 @@ public sealed class TradeOperationsPersistenceService
     {
         var changed = false;
         var normalizedPaymentPolicy = TradePaymentPolicyNormalizer.Normalize(
-            profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
+            profile.PaymentPolicy ?? TradePaymentPolicy.Default);
         if (profile.PaymentPolicy != normalizedPaymentPolicy)
         {
             profile.PaymentPolicy = normalizedPaymentPolicy;

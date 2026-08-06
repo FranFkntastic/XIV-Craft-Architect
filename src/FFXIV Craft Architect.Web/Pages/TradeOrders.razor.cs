@@ -102,11 +102,6 @@ public partial class TradeOrders
         _isChangingProcurementSource ||
         _isCommissionCommandRunning;
 
-    private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
-    [
-        new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
-        new(nameof(TradePaymentContractMode.LaborStandard), "Labor standard")
-    ];
     private static readonly IReadOnlyList<CompactSelectOption> MaterialResponsibilityOptions =
     [
         new(nameof(CommissionMaterialResponsibility.Crafter), "Crafter"),
@@ -163,11 +158,6 @@ public partial class TradeOrders
 
     private static Guid? ParseNullableGuid(string value) =>
         Guid.TryParse(value, out var parsed) ? parsed : null;
-
-    private Task SetSelectedOrderPaymentContractValueAsync(string value) =>
-        Enum.TryParse<TradePaymentContractMode>(value, out var contract)
-            ? SetSelectedOrderPaymentContractAsync(contract)
-            : Task.CompletedTask;
 
     private Task SetSelectedOrderPaymentScheduleValueAsync(string value) =>
         Enum.TryParse<CompanyCommissionPaymentSchedule>(value, out var schedule)

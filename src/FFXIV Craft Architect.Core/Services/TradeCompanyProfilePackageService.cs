@@ -89,7 +89,7 @@ public sealed class TradeCompanyProfilePackageService
     private static TradePaymentPolicy NormalizePaymentPolicy(TradePaymentPolicy? policy)
     {
         return TradePaymentPolicyNormalizer.Normalize(
-            policy ?? TradePaymentPolicy.LegacyDefault);
+            policy ?? TradePaymentPolicy.Default);
     }
 
     private static TradeCrafterProfile CopyCrafter(TradeCrafterProfile crafter)

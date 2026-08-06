@@ -222,7 +222,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        if (IsTradeRootRoute())
+        if (IsRetiredPayrollRoute())
         {
             NavigationManager.NavigateTo("trade/orders", replace: true);
             return;
@@ -231,13 +231,14 @@
         await EnsureLoadedAsync();
     }
 
-    private bool IsTradeRootRoute()
+    private bool IsRetiredPayrollRoute()
     {
         var path = NavigationManager
             .ToBaseRelativePath(NavigationManager.Uri)
             .Trim('/')
             .Split('?', 2)[0];
-        return string.Equals(path, "trade", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(path, "trade", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(path, "trade/payroll", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task EnsureLoadedAsync()

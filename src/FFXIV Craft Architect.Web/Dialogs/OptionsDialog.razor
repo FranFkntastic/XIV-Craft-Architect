@@ -354,20 +354,18 @@
 
                     <MudDivider Class="my-4" />
 
-                    <CompactSelectField Id="options-payment-contract"
-                                        Label="Default payment contract"
-                                        @bind-Value="CompanyPaymentContractValue"
-                                        Options="PaymentContractOptions"
-                                        Class="options-select my-2" />
                     <MudNumericField T="decimal"
-                                     id="legacy-material-commission-percent"
-                                     @bind-Value="_companyLegacyCommissionPercent"
-                                     Label="Legacy material commission percent"
+                                     id="material-value-bonus-percent"
+                                     @bind-Value="_companyMaterialValueBonusPercent"
+                                     Label="Material value bonus"
+                                     HelperText="A transparent percentage of estimated material value, paid alongside crafter reimbursement and synth labor."
                                      Variant="Variant.Outlined"
                                      Margin="Margin.Dense"
                                      HideSpinButtons="true"
                                      Min="0m"
                                      Max="100m"
+                                     Adornment="Adornment.End"
+                                     AdornmentText="%"
                                      Class="my-2" />
                     <MudNumericField T="decimal"
                                      id="labor-gil-per-synth"
@@ -996,11 +994,6 @@
         new(nameof(MarketTravelPriority.DataCenterTransfersFirst), "Avoid data-center transfers first"),
         new(nameof(MarketTravelPriority.WorldVisitsFirst), "Avoid total world visits first")
     ];
-    private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
-    [
-        new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
-        new(nameof(TradePaymentContractMode.LaborStandard), "Labor standard")
-    ];
     private readonly ElementReference[] _tabElements = new ElementReference[AllOptionsTabs.Count];
     private OptionsPanel _activePanel = OptionsPanel.General;
 
@@ -1082,18 +1075,6 @@
         }
     }
 
-    private string CompanyPaymentContractValue
-    {
-        get => _companyPaymentContract.ToString();
-        set
-        {
-            if (Enum.TryParse<TradePaymentContractMode>(value, out var parsed))
-            {
-                _companyPaymentContract = parsed;
-            }
-        }
-    }
-
     private static CompactSelectOption ToSelectOption(string value) => new(value, value);
     private string _marketMafiosoApiUrl = string.Empty;
     private string _marketMafiosoApiKey = string.Empty;
@@ -1114,8 +1095,7 @@
     private string? _companyLoadError;
     private bool _companyIsBusy;
     private CompanyDiscordNotificationRouteEditor? _companyNotificationRouteEditor;
-    private TradePaymentContractMode _companyPaymentContract = TradePaymentContractMode.LegacyCommission;
-    private decimal _companyLegacyCommissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
+    private decimal _companyMaterialValueBonusPercent = TradePaymentPolicy.DefaultMaterialValueBonusPercent;
     private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
     private string _profileHostUrl = string.Empty;
     private string _profileHostAccessKey = string.Empty;
@@ -1422,17 +1402,16 @@
         _companyDescription = profile.Description;
         _companyCommissionContact = profile.CommissionContact;
         var policy = TradePaymentPolicyNormalizer.Normalize(
-            profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
-        _companyPaymentContract = policy.ActiveContract;
-        _companyLegacyCommissionPercent = policy.LegacyCommissionPercent;
+            profile.PaymentPolicy ?? TradePaymentPolicy.Default);
+        _companyMaterialValueBonusPercent = policy.MaterialValueBonusPercent;
         _companyLaborGilPerSynth = policy.LaborGilPerSynth;
     }
 
     private TradePaymentPolicy? BuildCompanyPaymentPolicy()
     {
-        if (_companyLegacyCommissionPercent < 0 || _companyLegacyCommissionPercent > 100)
+        if (_companyMaterialValueBonusPercent < 0 || _companyMaterialValueBonusPercent > 100)
         {
-            Snackbar.Add("Legacy material commission percent must be between 0 and 100.", Severity.Error);
+            Snackbar.Add("Material value bonus must be between 0 and 100%.", Severity.Error);
             return null;
         }
 
@@ -1443,8 +1422,8 @@
         }
 
         return new TradePaymentPolicy(
-            _companyPaymentContract,
-            _companyLegacyCommissionPercent,
+            TradePaymentContractMode.LaborStandard,
+            _companyMaterialValueBonusPercent,
             _companyLaborGilPerSynth);
     }
 

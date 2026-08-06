@@ -38,7 +38,7 @@ public sealed class TradeCompanyProfile
     public TradeCompanyDiscordInstallationBinding? DiscordInstallation { get; set; }
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
-    public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.LegacyDefault;
+    public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.Default;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
@@ -52,7 +52,7 @@ public sealed class TradeCompanyProfile
             CreatedAtUtc = createdAtUtc,
             UpdatedAtUtc = createdAtUtc,
             SyncState = TradeSyncState.LocalOnly,
-            PaymentPolicy = TradePaymentPolicy.LegacyDefault
+            PaymentPolicy = TradePaymentPolicy.Default
         };
     }
 }

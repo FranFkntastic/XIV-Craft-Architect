@@ -35,7 +35,8 @@ public sealed class TradePaymentCalculator
         var labor = BuildLaborStandard(
             policy,
             laborInputs,
-            materialReimbursementTotal);
+            materialReimbursementTotal,
+            estimatedProcurementTotal);
         var active = policy.ActiveContract == TradePaymentContractMode.LaborStandard
             ? labor
             : legacy;
@@ -67,9 +68,9 @@ public sealed class TradePaymentCalculator
         IReadOnlyList<TradeCraftLaborInput> laborInputs,
         TradePaymentPolicy policy)
     {
-        if (policy.LegacyCommissionPercent is < 0 or > 100)
+        if (policy.MaterialValueBonusPercent is < 0 or > 100)
         {
-            throw new ArgumentOutOfRangeException(nameof(policy), "Legacy commission percent must be between 0 and 100.");
+            throw new ArgumentOutOfRangeException(nameof(policy), "Material value bonus percent must be between 0 and 100.");
         }
 
         if (policy.LaborGilPerSynth <= 0)
@@ -93,7 +94,7 @@ public sealed class TradePaymentCalculator
         decimal materialReimbursementTotal,
         decimal estimatedProcurementTotal)
     {
-        var percent = policy.LegacyCommissionPercent;
+        var percent = policy.LegacyCommissionPercent ?? policy.MaterialValueBonusPercent;
         var commission = RoundGil(estimatedProcurementTotal * percent / 100m);
 
         return new TradePaymentContractBreakdown(
@@ -113,7 +114,8 @@ public sealed class TradePaymentCalculator
     private static TradePaymentContractBreakdown BuildLaborStandard(
         TradePaymentPolicy policy,
         IReadOnlyList<TradeCraftLaborInput> laborInputs,
-        decimal materialReimbursementTotal)
+        decimal materialReimbursementTotal,
+        decimal estimatedProcurementTotal)
     {
         var activeInputs = laborInputs.Where(input => input.CraftCount > 0).ToArray();
         if (activeInputs.Length == 0)
@@ -139,6 +141,8 @@ public sealed class TradePaymentCalculator
             .ToArray();
         var craftLaborTotal = RoundGil(lines.Sum(line => line.LaborTotal));
         var synthCount = lines.Sum(line => line.CraftCount);
+        var materialBonus = RoundGil(
+            estimatedProcurementTotal * policy.MaterialValueBonusPercent / 100m);
         var warnings = lines
             .SelectMany(line => line.Warnings)
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
@@ -150,12 +154,12 @@ public sealed class TradePaymentCalculator
             TradePaymentContractMode.LaborStandard,
             IsAvailable: true,
             materialReimbursementTotal,
-            CommissionPercent: 0m,
-            CommissionAmount: 0m,
+            policy.MaterialValueBonusPercent,
+            materialBonus,
             craftLaborTotal,
             synthCount,
             gilPerSynth,
-            materialReimbursementTotal + craftLaborTotal,
+            materialReimbursementTotal + materialBonus + craftLaborTotal,
             lines,
             warnings);
     }
