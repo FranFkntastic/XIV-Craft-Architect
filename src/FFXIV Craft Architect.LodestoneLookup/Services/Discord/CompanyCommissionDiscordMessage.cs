@@ -15,7 +15,8 @@ public static class CompanyCommissionDiscordMessage
     private const int SuppressNotificationsFlag = 1 << 12;
 
     public static object CreatePublication(
-        CommittedCompanyCommissionDiscordProjection projection)
+        CommittedCompanyCommissionDiscordProjection projection,
+        string? actionToken = null)
     {
         var commission = projection.Commission;
         var state = ResolveProjectionState(commission);
@@ -33,6 +34,24 @@ public static class CompanyCommissionDiscordMessage
             }
 
             buttons.Add(LinkButton("Claim commission", projection.ClaimUrl.AbsoluteUri));
+        }
+        if (!string.IsNullOrWhiteSpace(actionToken))
+        {
+            if (state == DiscordPublicationState.Open)
+            {
+                buttons.Add(ActionButton(
+                    "Claim with Discord",
+                    $"claim-discord:{actionToken}",
+                    style: 1));
+            }
+
+            if (state is DiscordPublicationState.Open or DiscordPublicationState.Assigned)
+            {
+                buttons.Add(ActionButton(
+                    "Open my workspace",
+                    $"open-workspace:{actionToken}",
+                    style: 2));
+            }
         }
 
         return new
@@ -177,6 +196,14 @@ public static class CompanyCommissionDiscordMessage
         style = 5,
         label,
         url
+    };
+
+    private static object ActionButton(string label, string customId, int style) => new
+    {
+        type = 2,
+        style,
+        label,
+        custom_id = customId
     };
 
     private static object Field(string name, string value, bool inline) => new

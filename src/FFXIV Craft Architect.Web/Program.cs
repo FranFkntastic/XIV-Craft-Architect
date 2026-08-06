@@ -95,6 +95,7 @@ builder.Services.AddSingleton(new ProfileHostClientOptions(
         builder.Configuration["ProfileHost:BaseAddress"],
         builder.HostEnvironment.BaseAddress)));
 builder.Services.AddScoped<ProfileHostClient>();
+builder.Services.AddScoped<DiscordIdentityClient>();
 builder.Services.AddScoped<ProfileSyncLocalStateService>();
 builder.Services.AddScoped<HostedOrderProjectionStore>();
 builder.Services.AddScoped<HostedOrderSyncCoordinator>();

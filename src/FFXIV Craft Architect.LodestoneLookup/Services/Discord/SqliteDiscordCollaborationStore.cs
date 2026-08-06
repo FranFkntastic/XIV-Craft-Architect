@@ -306,6 +306,23 @@ public sealed class SqliteDiscordCollaborationStore(
         return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
     }
 
+    public async Task<DiscordPublicationRecord?> LoadPublicationByActionTokenAsync(
+        string actionToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(actionToken) || actionToken.Length > 100)
+        {
+            return null;
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = CreatePublicationSelect(connection);
+        command.CommandText += " WHERE action_token = $value;";
+        command.Parameters.AddWithValue("$value", actionToken);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadPublication(reader) : null;
+    }
+
     public async Task<DiscordPublicationRecord?> LoadPublicationByOrderAsync(
         CompanyId companyId,
         Guid orderId,

@@ -36,10 +36,18 @@ public sealed class CompanyCommissionDiscordDeliveryService(
                 "The company does not have a ready Discord trade-channel installation.");
         }
 
+        var existing = await collaboration.LoadPublicationByOrderAsync(
+            projection.CompanyId,
+            projection.Commission.CommissionId,
+            cancellationToken);
+        var actionToken = existing?.ActionToken ??
+            SqliteDiscordCollaborationStore.CreateActionToken();
         object payload;
         try
         {
-            payload = CompanyCommissionDiscordMessage.CreatePublication(projection);
+            payload = CompanyCommissionDiscordMessage.CreatePublication(
+                projection,
+                actionToken);
         }
         catch (InvalidOperationException exception)
         {
@@ -48,10 +56,6 @@ public sealed class CompanyCommissionDiscordDeliveryService(
 
         var state = CompanyCommissionDiscordMessage.ResolveProjectionState(
             projection.Commission);
-        var existing = await collaboration.LoadPublicationByOrderAsync(
-            projection.CompanyId,
-            projection.Commission.CommissionId,
-            cancellationToken);
         if (existing != null)
         {
             if (!string.Equals(
@@ -98,7 +102,6 @@ public sealed class CompanyCommissionDiscordDeliveryService(
                 updated ?? existing);
         }
 
-        var actionToken = SqliteDiscordCollaborationStore.CreateActionToken();
         return await collaboration.CreatePublicationAsync(
             new TradeCompanyPublicationOwnership(
                 projection.CompanyId,

@@ -7,6 +7,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.CraftAppraisal;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.XivData;
@@ -76,6 +77,49 @@ builder.Services.AddSingleton<ProfileArchiveBackupStore>();
 builder.Services.AddHostedService<ProfileHostRetentionService>();
 var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
     ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db");
+var discordIdentityOptions = new DiscordIdentityOptions
+{
+    Enabled = builder.Configuration.GetValue("DiscordIdentity:Enabled", false),
+    ClientId = builder.Configuration["DiscordIdentity:ClientId"] ?? string.Empty,
+    ClientSecret = builder.Configuration["DiscordIdentity:ClientSecret"] ?? string.Empty,
+    BootstrapSecret = builder.Configuration["DiscordIdentity:BootstrapSecret"] ?? string.Empty,
+    CallbackUri = builder.Configuration["DiscordIdentity:CallbackUri"] ?? string.Empty,
+    ApplicationBaseUri = builder.Configuration["DiscordIdentity:ApplicationBaseUri"]
+        ?? "https://dev.xivcraftarchitect.com/",
+    DatabasePath = builder.Configuration["DiscordIdentity:DatabasePath"]
+        ?? Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(profileDatabasePath))!,
+            "discord-identity.db"),
+    AuthorizationEndpoint = builder.Configuration["DiscordIdentity:AuthorizationEndpoint"]
+        ?? "https://discord.com/oauth2/authorize",
+    TokenEndpoint = builder.Configuration["DiscordIdentity:TokenEndpoint"]
+        ?? "https://discord.com/api/v10/oauth2/token",
+    UserEndpoint = builder.Configuration["DiscordIdentity:UserEndpoint"]
+        ?? "https://discord.com/api/v10/users/@me",
+    StateLifetime = TimeSpan.FromSeconds(Math.Clamp(
+        builder.Configuration.GetValue("DiscordIdentity:StateLifetimeSeconds", 300),
+        60,
+        900)),
+    ParticipantBootstrapLifetime = TimeSpan.FromSeconds(Math.Clamp(
+        builder.Configuration.GetValue("DiscordIdentity:ParticipantBootstrapLifetimeSeconds", 300),
+        30,
+        900))
+};
+discordIdentityOptions.Validate();
+builder.Services.AddSingleton(discordIdentityOptions);
+builder.Services.AddSingleton<SqliteDiscordIdentityStore>();
+builder.Services.AddSingleton<DiscordIdentityAuthorization>();
+builder.Services.AddSingleton<DiscordIdentityLinkService>();
+builder.Services.AddSingleton<IDiscordCanonicalInteractionAuthority, HostedDiscordInteractionAuthority>();
+builder.Services.AddSingleton<DiscordInteractionAccessResolver>();
+builder.Services.AddSingleton<IDiscordInteractionAccessResolver>(services =>
+    services.GetRequiredService<DiscordInteractionAccessResolver>());
+builder.Services.AddSingleton<IDiscordParticipantExchangeService>(services =>
+    services.GetRequiredService<DiscordInteractionAccessResolver>());
+builder.Services.AddHttpClient<IDiscordOAuthClient, DiscordOAuthClient>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+});
 builder.Services.AddSingleton(_ => new CommissionBriefOptions
 {
     Enabled = builder.Configuration.GetValue("CommissionBriefs:Enabled", true),
@@ -141,9 +185,13 @@ builder.Services.AddScoped<DiscordCompanyOrderAdapter>();
 builder.Services.AddScoped<DiscordPublicationService>();
 builder.Services.AddScoped<IDiscordPublicationRefresher>(
     services => services.GetRequiredService<DiscordPublicationService>());
+builder.Services.AddScoped<IDiscordInteractionClaimLinkIssuer>(
+    services => services.GetRequiredService<DiscordPublicationService>());
+builder.Services.AddScoped<DiscordCommissionInteractionService>();
 builder.Services.AddScoped<CompanyCommissionDiscordDeliveryService>();
 builder.Services.AddScoped<ICompanyCommissionDiscordDelivery>(
     services => services.GetRequiredService<CompanyCommissionDiscordDeliveryService>());
+builder.Services.AddScoped<DiscordClaimContactCommitter>();
 builder.Services.AddHttpClient<IDiscordApiClient, DiscordApiClient>((services, client) =>
 {
     var options = services.GetRequiredService<DiscordCommissionOptions>();
@@ -284,6 +332,7 @@ app.MapCompanyCommissionEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
 app.MapDiscordNotificationEndpoints();
+app.MapDiscordIdentityEndpoints();
 
 app.Run();
 

@@ -3,6 +3,8 @@ using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
+public sealed record DiscordEphemeralLink(string Label, Uri Url);
+
 public static class DiscordCommissionMessage
 {
     private const int SapphireColor = 0x2E6EA6;
@@ -79,15 +81,36 @@ public static class DiscordCommissionMessage
         };
     }
 
-    public static object CreateEphemeral(string message) => new
-    {
-        content = Truncate(message, 1900),
-        flags = 64,
-        allowed_mentions = new
+    public static object CreateEphemeral(
+        string message,
+        IReadOnlyList<DiscordEphemeralLink>? links = null) => new
         {
-            parse = Array.Empty<string>()
-        }
-    };
+            content = Truncate(message, 1900),
+            flags = 64,
+            components = links is { Count: > 0 }
+            ? new[]
+            {
+                new
+                {
+                    type = 1,
+                    components = links
+                        .Take(5)
+                        .Select(link => (object)new
+                        {
+                            type = 2,
+                            style = 5,
+                            label = Truncate(link.Label, 80),
+                            url = link.Url.AbsoluteUri
+                        })
+                        .ToArray()
+                }
+            }
+            : null,
+            allowed_mentions = new
+            {
+                parse = Array.Empty<string>()
+            }
+        };
 
     private static object Field(string name, string value, bool inline) => new
     {
@@ -138,6 +161,30 @@ public static class DiscordCommissionMessage
                 label = "Claim commission",
                 url = claimUrl
             });
+        }
+        if (!string.IsNullOrWhiteSpace(actionToken))
+        {
+            if (state == DiscordPublicationState.Open)
+            {
+                buttons.Add(new
+                {
+                    type = 2,
+                    style = 1,
+                    label = "Claim with Discord",
+                    custom_id = $"claim-discord:{actionToken}"
+                });
+            }
+
+            if (state is DiscordPublicationState.Open or DiscordPublicationState.Assigned)
+            {
+                buttons.Add(new
+                {
+                    type = 2,
+                    style = 2,
+                    label = "Open my workspace",
+                    custom_id = $"open-workspace:{actionToken}"
+                });
+            }
         }
         return
         [
