@@ -88,7 +88,11 @@ public sealed record HostedOrderRestoreState
                               reportedFailure is HostedOrderRestoreFailure.None or
                                   HostedOrderRestoreFailure.Offline;
         var failure = holdIdentityOnly ? Failure : reportedFailure;
-        var trusted = (HasTrustedProjection || status.Stage == ProfileSyncStage.Ready) &&
+        var orderScopeReady = status.OrderScopeReady ||
+                              status.Stage == ProfileSyncStage.Ready;
+        var trusted = (HasTrustedProjection ||
+                       status.Stage == ProfileSyncStage.Ready ||
+                       orderScopeReady) &&
                       failure is not HostedOrderRestoreFailure.Authentication and
                           not HostedOrderRestoreFailure.Incompatible and
                           not HostedOrderRestoreFailure.Unverifiable;
@@ -97,6 +101,10 @@ public sealed record HostedOrderRestoreState
             ProfileSyncStage.Ready => HostedOrderRestoreStage.Ready,
             _ when holdIdentityOnly => HostedOrderRestoreStage.IdentityOnly,
             _ when holdScopeChange => HostedOrderRestoreStage.ScopeChanging,
+            _ when orderScopeReady &&
+                    failure is HostedOrderRestoreFailure.None or
+                        HostedOrderRestoreFailure.Offline =>
+                HostedOrderRestoreStage.Ready,
             ProfileSyncStage.Failed when failure is HostedOrderRestoreFailure.Authentication or
                 HostedOrderRestoreFailure.Incompatible or
                 HostedOrderRestoreFailure.Unverifiable => HostedOrderRestoreStage.IdentityOnly,

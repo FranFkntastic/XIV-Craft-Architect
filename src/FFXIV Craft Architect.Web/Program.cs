@@ -98,11 +98,14 @@ builder.Services.AddScoped<ProfileHostClient>();
 builder.Services.AddScoped<ProfileSyncLocalStateService>();
 builder.Services.AddScoped<HostedOrderProjectionStore>();
 builder.Services.AddScoped<HostedOrderSyncCoordinator>();
+builder.Services.AddScoped<TradeOrderArchiveSummaryStore>();
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, SettingsProfileSyncAdapter>();
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, PlansProfileSyncAdapter>();
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, TradeCompanyProfileSyncAdapter>();
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, TradeCrafterProfileSyncAdapter>();
-builder.Services.AddScoped<IProfileSyncCollectionAdapter, TradeOrderProfileSyncAdapter>();
+builder.Services.AddScoped<TradeOrderProfileSyncAdapter>();
+builder.Services.AddScoped<IProfileSyncCollectionAdapter>(services =>
+    services.GetRequiredService<TradeOrderProfileSyncAdapter>());
 builder.Services.AddScoped<IProfileSyncCollectionAdapter, TradePayrollDraftProfileSyncAdapter>();
 builder.Services.AddScoped<ProfileSyncService>();
 builder.Services.AddScoped(_ => new LodestoneLookupClientOptions(ResolveLodestoneLookupBaseAddress(

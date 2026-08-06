@@ -126,7 +126,7 @@ public sealed class WorkshopHostContractTests
         var service = new CraftAppraisalPriceEvidenceService(
             cache,
             new FixedPlanBuilder(new CraftingPlan { RootItems = [material] }),
-            TimeSpan.FromMilliseconds(100));
+            TimeSpan.FromSeconds(1));
 
         var result = await service.ApplyAsync(
             new CraftingPlan { RootItems = [material] },

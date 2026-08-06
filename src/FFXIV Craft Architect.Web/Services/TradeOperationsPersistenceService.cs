@@ -1,5 +1,6 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services;
 
@@ -11,13 +12,19 @@ public sealed class TradeOperationsPersistenceService
 
     private readonly IndexedDbService _indexedDb;
     private readonly TradeCompanyProfilePackageService _profilePackageService;
+    private readonly TradeOrderArchiveSummaryStore? _archiveSummaries;
+    private readonly ProfileSyncLocalStateService? _profileSyncLocalState;
 
     public TradeOperationsPersistenceService(
         IndexedDbService indexedDb,
-        TradeCompanyProfilePackageService profilePackageService)
+        TradeCompanyProfilePackageService profilePackageService,
+        TradeOrderArchiveSummaryStore? archiveSummaries = null,
+        ProfileSyncLocalStateService? profileSyncLocalState = null)
     {
         _indexedDb = indexedDb;
         _profilePackageService = profilePackageService;
+        _archiveSummaries = archiveSummaries;
+        _profileSyncLocalState = profileSyncLocalState;
     }
 
     public async Task<TradeCompanyProfile> GetOrCreateActiveCompanyProfileAsync()
@@ -185,7 +192,20 @@ public sealed class TradeOperationsPersistenceService
 
     public async Task<bool> DeleteOrderAsync(Guid orderId)
     {
-        return await _indexedDb.DeleteTradeOrderAsync(orderId);
+        var connectionScopeId = _archiveSummaries != null && _profileSyncLocalState != null
+            ? (await _profileSyncLocalState.LoadConnectionSettingsAsync()).ConnectionScopeId
+            : null;
+        return await DeleteOrderAsync(orderId, connectionScopeId);
+    }
+
+    public async Task<bool> DeleteOrderAsync(Guid orderId, string? summaryConnectionScopeId)
+    {
+        var deleted = await _indexedDb.DeleteTradeOrderAsync(orderId);
+        if (deleted && _archiveSummaries != null && summaryConnectionScopeId != null)
+        {
+            await _archiveSummaries.RemoveAsync(summaryConnectionScopeId, orderId);
+        }
+        return deleted;
     }
 
     private async Task<Guid?> LoadSelectedCompanyProfileIdAsync()

@@ -18,7 +18,7 @@ public sealed class HostedOrderSyncCoordinatorTests
         {
             case OwnerProjectionScenario.AdoptionRequired:
                 MissingOrStaleOwnerProjectionRequiresAdoption();
-                TabReplayUsesOwnCursorWithoutRegressingSharedCursor();
+                TabReplayUsesOwnCursorAndOrderScopeReadinessIsTruthful();
                 break;
             case OwnerProjectionScenario.AdoptionForbidden:
                 DeletedAndNonCommissionOrdersNeverRequireAdoption();
@@ -126,14 +126,60 @@ public sealed class HostedOrderSyncCoordinatorTests
                 Projection(order, objectRevision: 5, companyRevision: 0)));
     }
 
-    private static void TabReplayUsesOwnCursorWithoutRegressingSharedCursor()
+    private static void TabReplayUsesOwnCursorAndOrderScopeReadinessIsTruthful()
     {
         Assert.Equal(405L, ResolveSyncStartRevision(446, 405));
         Assert.Equal(400L, ResolveSyncStartRevision(400, 405));
         Assert.Equal(446L, ResolveSyncStartRevision(446, null));
-        Assert.False(ShouldAdvancePersistedRevision(446, 405));
-        Assert.False(ShouldAdvancePersistedRevision(446, 446));
-        Assert.True(ShouldAdvancePersistedRevision(446, 447));
+
+        const string profileId = "7aaf1a42-43d0-4c63-a167-83e647ec04d1";
+        var now = new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc);
+        var state = HostedOrderRestoreState.BeginProfile(
+                profileId,
+                hasTrustedProjection: false,
+                lastAppliedRevision: 405,
+                scopeChanged: false,
+                now)
+            .Apply(
+                new ProfileSyncStatus(
+                    true,
+                    true,
+                    446,
+                    0,
+                    0,
+                    now,
+                    "Orders restored")
+                {
+                    ProfileId = profileId,
+                    Stage = ProfileSyncStage.ApplyingChanges,
+                    OrderScopeReady = true
+                },
+                now.AddSeconds(1));
+
+        Assert.Equal(HostedOrderRestoreStage.Ready, state.Stage);
+        Assert.True(state.HasTrustedProjection);
+        Assert.True(state.CanMutate);
+
+        state = state.Apply(
+            new ProfileSyncStatus(
+                true,
+                false,
+                446,
+                0,
+                0,
+                now,
+                "Background sync interrupted")
+            {
+                ProfileId = profileId,
+                Stage = ProfileSyncStage.Failed,
+                Failure = ProfileSyncFailure.Offline,
+                OrderScopeReady = true
+            },
+            now.AddSeconds(2));
+
+        Assert.Equal(HostedOrderRestoreStage.Ready, state.Stage);
+        Assert.True(state.ShowsCompleteProjection);
+        Assert.False(state.CanMutate);
     }
 
     private static bool NeedsOwnerAdoption(HostedOrderProjectionSnapshot snapshot) =>
@@ -151,14 +197,6 @@ public sealed class HostedOrderSyncCoordinatorTests
             nameof(ResolveSyncStartRevision),
             persistedRevision,
             replayAfterRevision)!;
-
-    private static bool ShouldAdvancePersistedRevision(
-        long persistedRevision,
-        long candidateRevision) =>
-        (bool)InvokeSyncPolicy(
-            nameof(ShouldAdvancePersistedRevision),
-            persistedRevision,
-            candidateRevision)!;
 
     private static object? InvokePolicy(string name, params object[] arguments)
     {

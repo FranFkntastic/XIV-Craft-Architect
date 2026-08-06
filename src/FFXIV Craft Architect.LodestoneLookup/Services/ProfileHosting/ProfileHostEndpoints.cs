@@ -147,6 +147,7 @@ public static class ProfileHostEndpoints
                 ProfileHostOptions options,
                 long? sinceRevision,
                 int? limit,
+                string? collections,
                 ProfileAuthenticationGate authentication,
                 SqliteProfileHostStore store,
                 ProfileAccessKeyHasher hasher,
@@ -177,15 +178,72 @@ public static class ProfileHostEndpoints
                     });
                 }
 
+                if (!TryParseCollectionFilter(collections, out var collectionFilter))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "unsupported_collection",
+                        message = "The changes filter names a collection that is not syncable."
+                    });
+                }
+
                 var changes = await store.LoadChangesAsync(
                     profile.ProfileId,
                     sinceRevision ?? 0,
                     cancellationToken,
-                    limit);
-                return Results.Ok(ToPortableChanges(changes));
+                    limit,
+                    collectionFilter);
+                return Results.Ok(ToSummarizedChanges(changes));
             });
 
         group.MapGet("/changes/stream", StreamChangesAsync);
+
+        group.MapGet(
+            "/objects/{collection}/{objectId}",
+            async (
+                string collection,
+                string objectId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (profile == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                if (!ProfileSyncCollections.All.Contains(collection))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "unsupported_collection",
+                        message = $"Collection '{collection}' is not syncable."
+                    });
+                }
+
+                var hosted = await store.LoadHostedObjectAsync(
+                    profile.ProfileId,
+                    collection,
+                    objectId,
+                    cancellationToken);
+                return hosted is null or { Deleted: true }
+                    ? Results.NotFound()
+                    : Results.Ok(hosted);
+            });
 
         group.MapPut(
             "/objects/{collection}/{objectId}",
@@ -385,6 +443,40 @@ public static class ProfileHostEndpoints
             HasMore = changes.HasMore,
             Objects = PortableObjects(changes.Objects)
         };
+
+    private static ProfileSyncChangesResponse ToSummarizedChanges(
+        ProfileSyncChangesResponse changes) =>
+        new()
+        {
+            ServerRevision = changes.ServerRevision,
+            HasMore = changes.HasMore,
+            Objects = PortableObjects(changes.Objects)
+                .Select(TradeOrderArchiveSummaryProjector.Apply)
+                .ToArray()
+        };
+
+    private static bool TryParseCollectionFilter(
+        string? collections,
+        out IReadOnlyList<string>? filter)
+    {
+        filter = null;
+        if (string.IsNullOrWhiteSpace(collections))
+        {
+            return true;
+        }
+
+        var parsed = collections
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (parsed.Length == 0 || parsed.Any(item => !ProfileSyncCollections.All.Contains(item)))
+        {
+            return false;
+        }
+
+        filter = parsed;
+        return true;
+    }
 
     private static IReadOnlyList<ProfileSyncObjectEnvelope> PortableObjects(
         IReadOnlyList<ProfileSyncObjectEnvelope> objects) =>

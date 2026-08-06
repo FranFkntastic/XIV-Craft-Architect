@@ -21,6 +21,20 @@ public static class ProfileSyncCollections
         TradeOrders,
         TradePayrollDrafts
     ];
+
+    public static readonly IReadOnlyList<string> OrderAuthorityScope =
+    [
+        TradeCompanyProfiles,
+        TradeCrafters,
+        TradeOrders,
+        TradePayrollDrafts
+    ];
+
+    public static readonly IReadOnlyList<string> BackgroundScope =
+    [
+        Settings,
+        Plans
+    ];
 }
 
 public static class ProfileSyncSettingsKeys
@@ -47,10 +61,13 @@ public sealed class ProfileSyncObjectEnvelope
     public string Collection { get; set; } = string.Empty;
     public string ObjectId { get; set; } = string.Empty;
     public string PayloadJson { get; set; } = "{}";
+    public string? SummaryJson { get; set; }
     public long Revision { get; set; }
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     public bool Deleted { get; set; }
     public DateTime? DeletedAtUtc { get; set; }
+
+    public bool IsSummary => SummaryJson != null;
 }
 
 public sealed class ProfileSyncPlanSnapshot

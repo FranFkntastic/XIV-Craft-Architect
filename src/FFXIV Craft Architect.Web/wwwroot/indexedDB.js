@@ -10,13 +10,13 @@ const PERSONAL_DB_VERSION = 1;
 const MARKET_DB_NAME = 'FFXIVCraftArchitect.Market';
 const MARKET_DB_VERSION = 1;
 const COMPANY_DB_NAME = 'FFXIVCraftArchitect.Company';
-const COMPANY_DB_VERSION = 1;
+const COMPANY_DB_VERSION = 3;
 const ENGINE_DB_NAME = 'FFXIVCraftArchitect.Engine';
 const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 25;
+const MODULE_REVISION = 27;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -27,6 +27,7 @@ const STORE_MARKET_CACHE = 'marketCache';
 const STORE_TRADE_COMPANY_PROFILES = 'tradeCompanyProfiles';
 const STORE_TRADE_CRAFTERS = 'tradeCrafters';
 const STORE_TRADE_ORDERS = 'tradeOrders';
+const STORE_TRADE_ORDER_ARCHIVE_SUMMARIES = 'tradeOrderArchiveSummaries';
 const STORE_TRADE_ORDER_CRAFT_SNAPSHOTS = 'tradeOrderCraftSnapshots';
 const STORE_TRADE_PAYROLL_DRAFTS = 'tradePayrollDrafts';
 const STORE_ENGINE_SESSION_MANIFESTS = 'engineSessionManifests';
@@ -322,6 +323,7 @@ function specializedSchemaIncompatibility(database) {
             STORE_TRADE_COMPANY_PROFILES,
             STORE_TRADE_CRAFTERS,
             STORE_TRADE_ORDERS,
+            STORE_TRADE_ORDER_ARCHIVE_SUMMARIES,
             STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
             STORE_TRADE_PAYROLL_DRAFTS
         ]
@@ -429,6 +431,9 @@ function createLegacyTradeStores(database) {
         store.createIndex('status', 'status', { unique: false });
         store.createIndex('commissionedAtUtc', 'commissionedAtUtc', { unique: false });
     }
+    if (!database.objectStoreNames.contains(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES)) {
+        database.createObjectStore(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES, { keyPath: 'id' });
+    }
     if (!database.objectStoreNames.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS)) {
         const store = database.createObjectStore(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS, { keyPath: 'id' });
         store.createIndex('companyProfileId', 'companyProfileId', { unique: false });
@@ -444,9 +449,29 @@ function createLegacyTradeStores(database) {
     }
 }
 
-function createCompanySchema(database) {
+function createCompanySchema(database, transaction, oldVersion) {
     createMetadataStore(database);
     createLegacyTradeStores(database);
+    if (oldVersion === 2) {
+        const source = transaction.objectStore(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES);
+        const request = source.getAll();
+        request.onsuccess = () => {
+            const records = request.result || [];
+            database.deleteObjectStore(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES);
+            const destination = database.createObjectStore(
+                STORE_TRADE_ORDER_ARCHIVE_SUMMARIES,
+                { keyPath: 'id' });
+            for (const record of records) {
+                if (record.connectionScopeId && record.orderId) {
+                    destination.put({
+                        ...record,
+                        id: `${record.connectionScopeId}\u001f${String(record.orderId).toLowerCase()}`
+                    });
+                }
+            }
+        };
+        request.onerror = () => transaction.abort();
+    }
 }
 
 async function loadLegacySnapshot() {
@@ -764,6 +789,7 @@ function createTradeStoreDiagnostics(database, errorMessage = null) {
         hasCompanyProfilesStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_COMPANY_PROFILES)),
         hasCraftersStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_CRAFTERS)),
         hasOrdersStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_ORDERS)),
+        hasOrderArchiveSummariesStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES)),
         hasOrderCraftSnapshotsStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS)),
         hasPayrollDraftsStore: Boolean(database?.objectStoreNames?.contains(STORE_TRADE_PAYROLL_DRAFTS)),
         errorMessage
@@ -1235,6 +1261,18 @@ async function loadTradeOrders(companyProfileId) {
 
 async function deleteTradeOrder(orderId) {
     return await deleteStoreRecord(STORE_TRADE_ORDERS, orderId);
+}
+
+async function saveTradeOrderArchiveSummary(summary) {
+    return await saveStoreRecord(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES, summary);
+}
+
+async function loadTradeOrderArchiveSummaries() {
+    return await loadStoreRecords(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES);
+}
+
+async function deleteTradeOrderArchiveSummary(orderId) {
+    return await deleteStoreRecord(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES, orderId);
 }
 
 async function saveTradeOrderCraftSnapshot(snapshot) {
@@ -2066,6 +2104,9 @@ window.IndexedDB = {
     saveTradeOrdersBatch,
     loadTradeOrders,
     deleteTradeOrder,
+    saveTradeOrderArchiveSummary,
+    loadTradeOrderArchiveSummaries,
+    deleteTradeOrderArchiveSummary,
     saveTradeOrderCraftSnapshot,
     loadTradeOrderCraftSnapshot,
     loadTradeOrderCraftSnapshotsForCompany,

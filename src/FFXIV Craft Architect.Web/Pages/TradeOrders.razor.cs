@@ -30,6 +30,9 @@ public partial class TradeOrders
     private TradeCompanyProfile? _companyProfile;
     private List<TradeCrafterProfile> _crafters = [];
     private List<TradeOrder> _orders = [];
+    private List<TradeOrderArchiveSummaryRecord> _archiveSummaryRecords = [];
+    private readonly Dictionary<Guid, long> _orderHostedRevisions = [];
+    private readonly HashSet<Guid> _fetchingArchiveOrderIds = [];
     private List<TradePayrollWorkflowDraft> _payrollDrafts = [];
     private TradeOrder? _pendingImport;
     private TradeOrder? _selectedOrder;
@@ -219,20 +222,21 @@ public partial class TradeOrders
     private IReadOnlyList<TradeOrder> VisibleOrders => ComposeVisibleOrders();
 
     private IReadOnlyList<OrderAttentionGroup> ActiveOrderGroups =>
-        BuildAttentionGroups(VisibleOrders.Where(order => !IsOrderArchivedForAttention(order)));
+        BuildAttentionGroups(VisibleOrders.Where(order =>
+            !IsOrderArchivedForAttention(order) &&
+            !IsSupersededByArchiveSummary(order)));
 
-    private IReadOnlyList<TradeOrder> ArchivedOrders => VisibleOrders
-        .Where(IsOrderArchivedForAttention)
-        .OrderByDescending(order => order.CommissionedAtUtc)
-        .ToArray();
+    private IReadOnlyList<ArchivedOrderRow> ArchivedOrders => ComposeArchivedOrderRows();
 
     private IReadOnlyList<OrderAttentionGroup> FilteredActiveOrderGroups =>
         BuildAttentionGroups(VisibleOrders
-            .Where(order => !IsOrderArchivedForAttention(order))
+            .Where(order =>
+                !IsOrderArchivedForAttention(order) &&
+                !IsSupersededByArchiveSummary(order))
             .Where(OrderMatchesSearch));
 
-    private IReadOnlyList<TradeOrder> FilteredArchivedOrders => ArchivedOrders
-        .Where(OrderMatchesSearch)
+    private IReadOnlyList<ArchivedOrderRow> FilteredArchivedOrders => ArchivedOrders
+        .Where(ArchiveOrderMatchesSearch)
         .ToArray();
 
     private IReadOnlyList<TradeOrder> DeviceOnlyOrders
@@ -292,6 +296,7 @@ public partial class TradeOrders
         HostedOrders.Changed += OnHostedOrderProjectionChanged;
         HostedOrders.Reset += OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged += OnHostedOrderRestoreStateChanged;
+        ArchiveSummaries.Changed += OnArchiveSummariesChanged;
         ProfileSync.StatusChanged += OnProfileSyncStatusChanged;
         WorkerProjections.Changed += OnWorkerProjectionChangedForPlanRestoration;
         _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
@@ -364,6 +369,7 @@ public partial class TradeOrders
         HostedOrders.Changed -= OnHostedOrderProjectionChanged;
         HostedOrders.Reset -= OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged -= OnHostedOrderRestoreStateChanged;
+        ArchiveSummaries.Changed -= OnArchiveSummariesChanged;
         ProfileSync.StatusChanged -= OnProfileSyncStatusChanged;
         WorkerProjections.Changed -= OnWorkerProjectionChangedForPlanRestoration;
         if (_tradeOrdersLayoutRegistration != null)
@@ -392,6 +398,8 @@ public partial class TradeOrders
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+            await RefreshArchiveSummariesAsync();
+            await LoadOrderHostedRevisionsAsync();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
             SelectPendingNavigationOrder();
             if (!hadPendingNavigation &&
@@ -411,6 +419,8 @@ public partial class TradeOrders
             _companyProfile = null;
             _crafters = [];
             _orders = [];
+            _archiveSummaryRecords = [];
+            _orderHostedRevisions.Clear();
             _payrollDrafts = [];
             _selectedOrder = null;
             _loadError = ex.Message;
