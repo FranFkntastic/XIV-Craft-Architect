@@ -261,7 +261,46 @@ public sealed class BrowserEngineWorkerTransportTests
             "ProfileHosting",
             "ProfileSyncService.cs"));
         Assert.Contains("Math.Min(persistedRevision, Math.Max(0, replayAfterRevision.Value))", syncService, StringComparison.Ordinal);
-        Assert.Contains("candidateRevision > persistedRevision", syncService, StringComparison.Ordinal);
+        Assert.Contains("private void StartBackgroundReplayPump(", syncService, StringComparison.Ordinal);
+        Assert.Contains("private async Task CompleteBackgroundSyncCoreAsync(", syncService, StringComparison.Ordinal);
+
+        var replayStart = syncService.IndexOf(
+            "private async Task<ReplayPageResult> ReplayChangesPageAsync(",
+            StringComparison.Ordinal);
+        var pumpStart = syncService.IndexOf(
+            "private void StartBackgroundReplayPump(",
+            StringComparison.Ordinal);
+        var completionStart = syncService.IndexOf(
+            "private async Task CompleteBackgroundSyncCoreAsync(",
+            StringComparison.Ordinal);
+        var backfillStart = syncService.IndexOf(
+            "private async Task BackfillRetainedOrderGeneratedPlansAsync(",
+            StringComparison.Ordinal);
+        Assert.True(
+            replayStart >= 0 && replayStart < pumpStart &&
+            pumpStart < completionStart && completionStart < backfillStart,
+            "Tiered replay methods must remain ordered so cursor-persistence guards inspect the intended paths.");
+
+        var replayPath = syncService[replayStart..pumpStart];
+        var pumpPath = syncService[pumpStart..completionStart];
+        var completionPath = syncService[completionStart..backfillStart];
+        Assert.DoesNotContain("SaveLastSyncRevisionAsync", replayPath, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveLastSyncRevisionAsync", pumpPath, StringComparison.Ordinal);
+        Assert.Contains("CompleteBackgroundSyncCoreAsync(", pumpPath, StringComparison.Ordinal);
+
+        var backfillPosition = completionPath.IndexOf(
+            "await BackfillRetainedOrderGeneratedPlansAsync(",
+            StringComparison.Ordinal);
+        var retryPosition = completionPath.IndexOf(
+            "await RetryPendingSavesAsync(",
+            StringComparison.Ordinal);
+        var persistPosition = completionPath.IndexOf(
+            "await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);",
+            StringComparison.Ordinal);
+        Assert.True(
+            backfillPosition >= 0 && backfillPosition < retryPosition &&
+            retryPosition < persistPosition,
+            "The complete cursor may advance only after backfill and pending-save retry finish.");
     }
     private static string LocateRepositoryRoot()
     {

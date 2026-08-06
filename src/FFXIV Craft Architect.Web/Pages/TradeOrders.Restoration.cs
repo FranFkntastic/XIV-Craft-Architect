@@ -36,6 +36,116 @@ public partial class TradeOrders
         order.CompanyCommission != null &&
         !OrderRestoreState.ShowsCompleteProjection;
 
+    private IReadOnlyList<ArchivedOrderRow> ComposeArchivedOrderRows()
+    {
+        var rows = VisibleOrders
+            .Where(IsOrderArchivedForAttention)
+            .ToDictionary(
+                order => order.Id,
+                order => new ArchivedOrderRow(
+                    order.Id,
+                    order.Title,
+                    order.Status,
+                    order.CommissionedAtUtc,
+                    GetOrderRootItems(order)
+                        .Select(item => item.Name)
+                        .Where(name => !string.IsNullOrWhiteSpace(name))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray(),
+                    order,
+                    null));
+
+        foreach (var record in _archiveSummaryRecords.Where(record =>
+                     _companyProfile != null &&
+                     record.CompanyProfileId == _companyProfile.Id &&
+                     TradeOrderStatusWorkflow.IsArchived(record.Summary.Status)))
+        {
+            if (rows.TryGetValue(record.OrderId, out var full) &&
+                full.Order != null &&
+                GetKnownHostedRevision(full.Order) >= record.HostedRevision)
+            {
+                continue;
+            }
+
+            rows[record.OrderId] = new ArchivedOrderRow(
+                record.OrderId,
+                record.Summary.Title,
+                record.Summary.Status,
+                record.Summary.CommissionedAtUtc,
+                record.Summary.Outputs
+                    .Select(output => output.Name)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                null,
+                record);
+        }
+
+        return rows.Values
+            .OrderByDescending(order => order.CommissionedAtUtc)
+            .ToArray();
+    }
+
+    private bool IsSupersededByArchiveSummary(TradeOrder order)
+    {
+        var summary = _archiveSummaryRecords.FirstOrDefault(record =>
+            record.OrderId == order.Id &&
+            _companyProfile != null &&
+            record.CompanyProfileId == _companyProfile.Id);
+        return summary != null && summary.HostedRevision > GetKnownHostedRevision(order);
+    }
+
+    private long GetKnownHostedRevision(TradeOrder order)
+    {
+        return HostedOrders.Get(order.Id)?.ObjectRevision ??
+            _orderHostedRevisions.GetValueOrDefault(order.Id);
+    }
+
+    private async Task LoadOrderHostedRevisionsAsync()
+    {
+        _orderHostedRevisions.Clear();
+        var connection = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+        if (connection.ProfileScopeId == null)
+        {
+            return;
+        }
+
+        foreach (var order in _orders)
+        {
+            var revision = await ProfileSyncLocalState.LoadObjectRevisionAsync(
+                connection.ProfileScopeId,
+                ProfileSyncCollections.TradeOrders,
+                order.Id.ToString("D"));
+            if (revision > 0)
+            {
+                _orderHostedRevisions[order.Id] = revision;
+            }
+        }
+    }
+
+    private async Task RefreshArchiveSummariesAsync()
+    {
+        await ArchiveSummaries.LoadAsync();
+        var connection = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+        _archiveSummaryRecords = ArchiveSummaries
+            .GetAll(connection.ConnectionScopeId)
+            .ToList();
+    }
+
+    private void OnArchiveSummariesChanged()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            await RefreshArchiveSummariesAsync();
+            StateHasChanged();
+        });
+    }
+
     private IReadOnlyList<TradeOrder> ComposeVisibleOrders()
     {
         var visible = OrderRestoreState.ShowsCompleteProjection
@@ -76,6 +186,7 @@ public partial class TradeOrders
         {
             return;
         }
+        _orderHostedRevisions[snapshot.OrderId] = snapshot.ObjectRevision;
 
         if (_selectedOrder?.Id == snapshot.OrderId)
         {
@@ -107,7 +218,7 @@ public partial class TradeOrders
         StateHasChanged();
     }
 
-    private void ApplyHostedOrderProjectionReset()
+    private async Task ApplyHostedOrderProjectionReset()
     {
         if (_isDisposed)
         {
@@ -119,6 +230,8 @@ public partial class TradeOrders
             ClearUnavailableSelectedOrder("The active order workspace changed.");
         }
 
+        _orderHostedRevisions.Clear();
+        await RefreshArchiveSummariesAsync();
         StateHasChanged();
     }
 
@@ -133,6 +246,11 @@ public partial class TradeOrders
             _selectedOrder?.CompanyCommission != null)
         {
             ClearUnavailableSelectedOrder("The active company workspace changed.");
+        }
+        if (state.Stage == HostedOrderRestoreStage.ScopeChanging)
+        {
+            _archiveSummaryRecords = [];
+            _orderHostedRevisions.Clear();
         }
         else if (state.ShowsCompleteProjection &&
                  _selectedOrder != null &&

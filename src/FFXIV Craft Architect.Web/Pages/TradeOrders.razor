@@ -14,6 +14,10 @@
 @inject TradePayrollPersistenceService TradePayrollPersistence
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncService ProfileSync
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.HostedOrderProjectionStore HostedOrders
+@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.TradeOrderArchiveSummaryStore ArchiveSummaries
+@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncLocalStateService ProfileSyncLocalState
+@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileHostClient ProfileHostClient
+@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.TradeOrderProfileSyncAdapter TradeOrderSyncAdapter
 @inject WebSettingsService WebSettings
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyCollaborationService TradeCollaboration
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCommissionOperationsService CommissionOperations
@@ -123,14 +127,16 @@
                                     <div class="trade-orders-rail-list">
                                         @foreach (var order in FilteredArchivedOrders)
                                         {
-                                             <button type="button"
-                                                     class="@GetRailOrderClass(order)"
-                                                     aria-current="@(_selectedOrder?.Id == order.Id ? "true" : null)"
-                                                     @onclick="() => SelectOrder(order)">
-                                                <span class="trade-orders-rail-title">@order.Title</span>
-                                                <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
-                                                <span class="trade-orders-status-chip">@FormatRailStatusChip(order)</span>
-                                            </button>
+                                              <button type="button"
+                                                      class="@GetRailOrderClass(order)"
+                                                      aria-current="@(_selectedOrder?.Id == order.OrderId ? "true" : null)"
+                                                      disabled="@IsFetchingArchiveOrder(order.OrderId)"
+                                                      @onclick="() => OpenArchiveOrderAsync(order)">
+                                                 <span class="trade-orders-rail-title">@order.Title</span>
+                                                 <span class="trade-orders-rail-meta">@FormatArchiveOrderDate(order)</span>
+                                                 <span class="trade-orders-rail-meta">@FormatArchiveOrderOutputs(order)</span>
+                                                 <span class="trade-orders-status-chip">@(IsFetchingArchiveOrder(order.OrderId) ? "Loading..." : FormatRailStatusChip(order.Status))</span>
+                                             </button>
                                         }
                                     </div>
                                 }
