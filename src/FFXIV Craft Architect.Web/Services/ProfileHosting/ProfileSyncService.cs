@@ -87,11 +87,13 @@ public sealed class ProfileSyncService
     private readonly ProfileHostClient _client;
     private readonly ProfileSyncLocalStateService _localState;
     private readonly HostedOrderProjectionStore _hostedOrders;
+    private readonly TradeOrderArchiveSummaryStore? _archiveSummaries;
     private readonly IReadOnlyDictionary<string, IProfileSyncCollectionAdapter> _adapters;
     private readonly List<ProfileSyncPendingSave> _pendingSaves = [];
     private readonly List<ProfileSyncConflict> _conflicts = [];
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private int _backgroundPumpActive;
+    private Task _backgroundPumpCompletion = Task.CompletedTask;
     private int _suppressionDepth;
     private string? _pendingSavesConnectionScopeId;
 
@@ -100,11 +102,13 @@ public sealed class ProfileSyncService
         ProfileSyncLocalStateService localState,
         WebSettingsService settings,
         HostedOrderProjectionStore hostedOrders,
-        IEnumerable<IProfileSyncCollectionAdapter> adapters)
+        IEnumerable<IProfileSyncCollectionAdapter> adapters,
+        TradeOrderArchiveSummaryStore? archiveSummaries = null)
     {
         _client = client;
         _localState = localState;
         _hostedOrders = hostedOrders;
+        _archiveSummaries = archiveSummaries;
         _adapters = adapters.ToDictionary(adapter => adapter.Collection, StringComparer.OrdinalIgnoreCase);
         settings.PortableSettingSaved += QueuePortableSettingSaveAsync;
     }
@@ -120,7 +124,18 @@ public sealed class ProfileSyncService
     public bool IsSuppressed => _suppressionDepth > 0;
 
     public Task InitializeAsync(CancellationToken ct = default) =>
-        RunSerializedAsync(() => SyncNowCoreAsync(null, null, ct), ct);
+        SyncAndAwaitBackgroundAsync(null, null, ct);
+
+    private async Task SyncAndAwaitBackgroundAsync(
+        long? targetRevision,
+        long? replayAfterRevision,
+        CancellationToken ct)
+    {
+        await RunSerializedAsync(
+            () => SyncNowCoreAsync(targetRevision, replayAfterRevision, ct),
+            ct);
+        await _backgroundPumpCompletion.WaitAsync(ct);
+    }
 
     public Task PrepareAuthorityAsync(CancellationToken ct = default) =>
         RunSerializedAsync(() => PrepareAuthorityCoreAsync(ct), ct);
@@ -180,17 +195,15 @@ public sealed class ProfileSyncService
     }
 
     public Task SyncNowAsync(CancellationToken ct = default) =>
-        RunSerializedAsync(() => SyncNowCoreAsync(null, null, ct), ct);
+        SyncAndAwaitBackgroundAsync(null, null, ct);
 
     public Task SyncFromRevisionAsync(
         long replayAfterRevision,
         long? targetRevision,
         CancellationToken ct = default) =>
-        RunSerializedAsync(
-            () => SyncNowCoreAsync(
-                targetRevision is > 0 ? targetRevision : null,
-                replayAfterRevision,
-                ct),
+        SyncAndAwaitBackgroundAsync(
+            targetRevision is > 0 ? targetRevision : null,
+            replayAfterRevision,
             ct);
 
     public Task<long> EnsureHostedObjectRevisionAsync(
@@ -748,6 +761,9 @@ public sealed class ProfileSyncService
             return;
         }
 
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _backgroundPumpCompletion = completion.Task;
         _ = Task.Run(async () =>
         {
             try
@@ -757,15 +773,30 @@ public sealed class ProfileSyncService
                 while (hasMore)
                 {
                     var page = await RunSerializedAsync(
-                        () => ReplayChangesPageAsync(
-                            settings,
-                            profileId,
-                            ProfileSyncCollections.BackgroundScope,
-                            cursor,
-                            targetRevision,
-                            CurrentStatus.AppliedObjectCount,
-                            CancellationToken.None),
+                        async () =>
+                        {
+                            if (!await IsBackgroundPumpAuthorityCurrentAsync(
+                                    settings,
+                                    profileId))
+                            {
+                                return null;
+                            }
+
+                            return await ReplayChangesPageAsync(
+                                settings,
+                                profileId,
+                                ProfileSyncCollections.BackgroundScope,
+                                cursor,
+                                targetRevision,
+                                CurrentStatus.AppliedObjectCount,
+                                CancellationToken.None);
+                        },
                         CancellationToken.None);
+                    if (page == null)
+                    {
+                        return;
+                    }
+
                     cursor = page.ServerRevision;
                     hasMore = page.HasMore;
                 }
@@ -796,8 +827,21 @@ public sealed class ProfileSyncService
             finally
             {
                 Interlocked.Exchange(ref _backgroundPumpActive, 0);
+                completion.TrySetResult();
             }
         });
+    }
+
+    private async Task<bool> IsBackgroundPumpAuthorityCurrentAsync(
+        HostedProfileConnectionSettings settings,
+        string profileId)
+    {
+        var current = await _localState.LoadConnectionSettingsAsync();
+        return IsSameConnectionAuthority(current, settings) &&
+               string.Equals(
+                   current.ProfileScopeId,
+                   profileId,
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task CompleteBackgroundSyncCoreAsync(
@@ -1513,11 +1557,21 @@ public sealed class ProfileSyncService
                 item.ObjectId,
                 orderId.ToString("D"),
                 StringComparison.OrdinalIgnoreCase));
-        if (local == null)
+        if (local != null)
         {
-            return null;
+            return ReadOrderCompanyProfileId(local);
         }
-        return ReadOrderCompanyProfileId(local);
+
+        if (_archiveSummaries != null)
+        {
+            var connection = await _localState.LoadConnectionSettingsAsync();
+            return _archiveSummaries
+                .GetAll(connection.ConnectionScopeId)
+                .FirstOrDefault(record => record.OrderId == orderId)
+                ?.CompanyProfileId;
+        }
+
+        return null;
     }
 
     private static Guid ReadOrderCompanyProfileId(ProfileSyncObjectEnvelope envelope)
