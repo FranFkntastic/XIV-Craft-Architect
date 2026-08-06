@@ -10,13 +10,13 @@ const PERSONAL_DB_VERSION = 1;
 const MARKET_DB_NAME = 'FFXIVCraftArchitect.Market';
 const MARKET_DB_VERSION = 1;
 const COMPANY_DB_NAME = 'FFXIVCraftArchitect.Company';
-const COMPANY_DB_VERSION = 2;
+const COMPANY_DB_VERSION = 3;
 const ENGINE_DB_NAME = 'FFXIVCraftArchitect.Engine';
 const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 26;
+const MODULE_REVISION = 27;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -432,7 +432,7 @@ function createLegacyTradeStores(database) {
         store.createIndex('commissionedAtUtc', 'commissionedAtUtc', { unique: false });
     }
     if (!database.objectStoreNames.contains(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES)) {
-        database.createObjectStore(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES, { keyPath: 'orderId' });
+        database.createObjectStore(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES, { keyPath: 'id' });
     }
     if (!database.objectStoreNames.contains(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS)) {
         const store = database.createObjectStore(STORE_TRADE_ORDER_CRAFT_SNAPSHOTS, { keyPath: 'id' });
@@ -449,9 +449,29 @@ function createLegacyTradeStores(database) {
     }
 }
 
-function createCompanySchema(database) {
+function createCompanySchema(database, transaction, oldVersion) {
     createMetadataStore(database);
     createLegacyTradeStores(database);
+    if (oldVersion === 2) {
+        const source = transaction.objectStore(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES);
+        const request = source.getAll();
+        request.onsuccess = () => {
+            const records = request.result || [];
+            database.deleteObjectStore(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES);
+            const destination = database.createObjectStore(
+                STORE_TRADE_ORDER_ARCHIVE_SUMMARIES,
+                { keyPath: 'id' });
+            for (const record of records) {
+                if (record.connectionScopeId && record.orderId) {
+                    destination.put({
+                        ...record,
+                        id: `${record.connectionScopeId}\u001f${String(record.orderId).toLowerCase()}`
+                    });
+                }
+            }
+        };
+        request.onerror = () => transaction.abort();
+    }
 }
 
 async function loadLegacySnapshot() {

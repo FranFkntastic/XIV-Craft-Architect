@@ -13,15 +13,18 @@ public sealed class TradeOperationsPersistenceService
     private readonly IndexedDbService _indexedDb;
     private readonly TradeCompanyProfilePackageService _profilePackageService;
     private readonly TradeOrderArchiveSummaryStore? _archiveSummaries;
+    private readonly ProfileSyncLocalStateService? _profileSyncLocalState;
 
     public TradeOperationsPersistenceService(
         IndexedDbService indexedDb,
         TradeCompanyProfilePackageService profilePackageService,
-        TradeOrderArchiveSummaryStore? archiveSummaries = null)
+        TradeOrderArchiveSummaryStore? archiveSummaries = null,
+        ProfileSyncLocalStateService? profileSyncLocalState = null)
     {
         _indexedDb = indexedDb;
         _profilePackageService = profilePackageService;
         _archiveSummaries = archiveSummaries;
+        _profileSyncLocalState = profileSyncLocalState;
     }
 
     public async Task<TradeCompanyProfile> GetOrCreateActiveCompanyProfileAsync()
@@ -189,10 +192,18 @@ public sealed class TradeOperationsPersistenceService
 
     public async Task<bool> DeleteOrderAsync(Guid orderId)
     {
+        var connectionScopeId = _archiveSummaries != null && _profileSyncLocalState != null
+            ? (await _profileSyncLocalState.LoadConnectionSettingsAsync()).ConnectionScopeId
+            : null;
+        return await DeleteOrderAsync(orderId, connectionScopeId);
+    }
+
+    public async Task<bool> DeleteOrderAsync(Guid orderId, string? summaryConnectionScopeId)
+    {
         var deleted = await _indexedDb.DeleteTradeOrderAsync(orderId);
-        if (deleted && _archiveSummaries != null)
+        if (deleted && _archiveSummaries != null && summaryConnectionScopeId != null)
         {
-            await _archiveSummaries.RemoveAsync(orderId);
+            await _archiveSummaries.RemoveAsync(summaryConnectionScopeId, orderId);
         }
         return deleted;
     }

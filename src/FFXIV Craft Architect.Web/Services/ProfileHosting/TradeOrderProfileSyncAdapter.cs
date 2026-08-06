@@ -100,7 +100,9 @@ public sealed class TradeOrderProfileSyncAdapter :
             async candidate =>
             {
                 var persisted = candidate.Deleted
-                    ? await _tradeOperations.DeleteOrderAsync(candidate.OrderId)
+                    ? await _tradeOperations.DeleteOrderAsync(
+                        candidate.OrderId,
+                        connection.ConnectionScopeId)
                     : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
                 if (!persisted)
                 {
@@ -129,9 +131,9 @@ public sealed class TradeOrderProfileSyncAdapter :
         if (_archiveSummaries != null && connection.ConnectionScopeId != null)
         {
             await _archiveSummaries.RemoveIfSupersededAsync(
+                connection.ConnectionScopeId,
                 order.Id,
-                envelope.Revision,
-                connection.ConnectionScopeId);
+                envelope.Revision);
         }
     }
 
@@ -162,7 +164,9 @@ public sealed class TradeOrderProfileSyncAdapter :
             {
                 ct.ThrowIfCancellationRequested();
                 var persisted = candidate.Deleted
-                    ? await _tradeOperations.DeleteOrderAsync(candidate.OrderId)
+                    ? await _tradeOperations.DeleteOrderAsync(
+                        candidate.OrderId,
+                        connection.ConnectionScopeId)
                     : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
                 if (!persisted)
                 {
@@ -190,7 +194,7 @@ public sealed class TradeOrderProfileSyncAdapter :
         }
         if (_archiveSummaries != null)
         {
-            await _archiveSummaries.RemoveAsync(orderId);
+            await _archiveSummaries.RemoveAsync(connection.ConnectionScopeId!, orderId);
         }
     }
 
@@ -216,14 +220,15 @@ public sealed class TradeOrderProfileSyncAdapter :
             throw new InvalidOperationException($"Hosted Trade order id '{objectId}' is not a valid GUID.");
         }
 
-        if (!await _tradeOperations.DeleteOrderAsync(orderId))
+        var connection = await _localState.LoadConnectionSettingsAsync();
+        if (!await _tradeOperations.DeleteOrderAsync(orderId, connection.ConnectionScopeId))
         {
             throw new InvalidOperationException(
                 $"Browser storage could not delete hosted Trade order '{objectId}'.");
         }
-        if (_archiveSummaries != null)
+        if (_archiveSummaries != null && connection.ConnectionScopeId != null)
         {
-            await _archiveSummaries.RemoveAsync(orderId);
+            await _archiveSummaries.RemoveAsync(connection.ConnectionScopeId, orderId);
         }
     }
 

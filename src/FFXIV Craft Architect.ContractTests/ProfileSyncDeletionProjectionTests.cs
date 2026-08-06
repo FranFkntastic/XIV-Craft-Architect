@@ -109,6 +109,7 @@ public sealed class ProfileSyncDeletionProjectionTests
     public async Task LocalOrderDeletionDropsStoredArchiveSummary()
     {
         var profileId = NewId();
+        var otherProfileId = NewId();
         var orderId = Guid.NewGuid();
         var runtime = new StorageRuntime(ConnectionSettings(profileId));
         var indexedDb = new IndexedDbService(runtime);
@@ -120,13 +121,22 @@ public sealed class ProfileSyncDeletionProjectionTests
             Title = "Deleted archive",
             Status = TradeOrderStatus.Canceled
         }, 3, ConnectionScope(profileId));
+        await summaries.UpsertAsync(new TradeOrderArchiveSummary
+        {
+            OrderId = orderId,
+            CompanyProfileId = Guid.NewGuid(),
+            Title = "Other profile archive",
+            Status = TradeOrderStatus.Completed
+        }, 4, ConnectionScope(otherProfileId));
         var persistence = new TradeOperationsPersistenceService(
             indexedDb,
             new TradeCompanyProfilePackageService(),
-            summaries);
+            summaries,
+            CreateLocalState(indexedDb));
 
         Assert.True(await persistence.DeleteOrderAsync(orderId));
         Assert.Empty(summaries.GetAll(ConnectionScope(profileId)));
+        Assert.Single(summaries.GetAll(ConnectionScope(otherProfileId)));
     }
 
     [Fact]
@@ -695,7 +705,7 @@ public sealed class ProfileSyncDeletionProjectionTests
     private sealed class StorageRuntime(Dictionary<string, string> settings) : IJSRuntime
     {
         private readonly HashSet<Guid> _companyIds = [];
-        private readonly Dictionary<Guid, TradeOrderArchiveSummaryRecord> _archiveSummaries = [];
+        private readonly Dictionary<string, TradeOrderArchiveSummaryRecord> _archiveSummaries = [];
         public int SaveTradeOrderCount { get; private set; }
         public TradeOrder? DurableOrder { get; private set; }
         public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
@@ -721,13 +731,13 @@ public sealed class ProfileSyncDeletionProjectionTests
             if (identifier == "IndexedDB.saveTradeOrderArchiveSummary")
             {
                 var record = (TradeOrderArchiveSummaryRecord)args![0]!;
-                _archiveSummaries[record.OrderId] = record;
+                _archiveSummaries[record.Id] = record;
                 return ValueTask.FromResult((TValue)(object)true);
             }
 
             if (identifier == "IndexedDB.deleteTradeOrderArchiveSummary")
             {
-                _archiveSummaries.Remove((Guid)args![0]!);
+                _archiveSummaries.Remove((string)args![0]!);
                 return ValueTask.FromResult((TValue)(object)true);
             }
 

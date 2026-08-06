@@ -158,6 +158,13 @@ public partial class TradeOrders
                 throw new InvalidOperationException(
                     "Connect to the hosted profile before opening this archived order.");
             }
+            if (!string.Equals(
+                    connection.ConnectionScopeId,
+                    row.SummaryRecord.ConnectionScopeId,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
 
             var envelope = await ProfileHostClient.GetObjectAsync(
                 connection.HostUrl!,
@@ -165,9 +172,14 @@ public partial class TradeOrders
                 ProfileSyncCollections.TradeOrders,
                 row.OrderId.ToString("D"),
                 CancellationToken.None);
+            var currentConnection = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+            if (!HasSameArchiveFetchAuthority(connection, currentConnection))
+            {
+                return;
+            }
             if (envelope == null)
             {
-                await ArchiveSummaries.RemoveAsync(row.OrderId);
+                await ArchiveSummaries.RemoveAsync(connection.ConnectionScopeId!, row.OrderId);
                 Snackbar.Add(
                     "This archived order is no longer available on the profile host.",
                     Severity.Info);
@@ -213,6 +225,18 @@ public partial class TradeOrders
             _fetchingArchiveOrderIds.Remove(row.OrderId);
         }
     }
+
+    private static bool HasSameArchiveFetchAuthority(
+        HostedProfileConnectionSettings captured,
+        HostedProfileConnectionSettings current) =>
+        string.Equals(
+            captured.ConnectionScopeId,
+            current.ConnectionScopeId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            captured.ProfileScopeId,
+            current.ProfileScopeId,
+            StringComparison.OrdinalIgnoreCase);
 
     private static bool CanOpenCraftPlan(TradeOrder order)
     {

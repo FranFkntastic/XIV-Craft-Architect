@@ -254,12 +254,12 @@ public sealed class IndexedDbService
             "IndexedDB.loadTradeOrderArchiveSummaries",
             "load archived Trade order summaries");
 
-    public Task<bool> DeleteTradeOrderArchiveSummaryAsync(Guid orderId) =>
+    public Task<bool> DeleteTradeOrderArchiveSummaryAsync(string storageId) =>
         InvokeOrDefaultAsync(
             "IndexedDB.deleteTradeOrderArchiveSummary",
             false,
-            $"delete archived Trade order summary {orderId}",
-            orderId);
+            $"delete archived Trade order summary {storageId}",
+            storageId);
 
     public Task<List<JsonElement>> LoadAllTradeOrderCraftSnapshotsAsync() =>
         InvokeRequiredAsync<List<JsonElement>>(
