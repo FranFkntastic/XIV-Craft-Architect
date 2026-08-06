@@ -22,6 +22,7 @@ public sealed record ProfileSyncStatus(
     public ProfileSyncFailure Failure { get; init; }
     public int AppliedObjectCount { get; init; }
     public long? TargetRevision { get; init; }
+    public bool OrderScopeReady { get; init; }
 
     public static ProfileSyncStatus LocalOnly() => new(false, false, 0, 0, 0, null, "Local only");
 }
@@ -77,7 +78,7 @@ public sealed record ProfileSyncPublicationResult(
 
 public sealed class ProfileSyncService
 {
-    private const int ChangePageSize = 1;
+    private const int ChangePageSize = 50;
     private const int RecoveryPageSize = 50;
     private const string CanonicalProfileHostUrl = "https://xivcraftarchitect.com/api/";
     private const string LegacyDevelopmentProfileHostUrl = "https://dev.xivcraftarchitect.com/api/";
@@ -90,6 +91,7 @@ public sealed class ProfileSyncService
     private readonly List<ProfileSyncPendingSave> _pendingSaves = [];
     private readonly List<ProfileSyncConflict> _conflicts = [];
     private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private int _backgroundPumpActive;
     private int _suppressionDepth;
     private string? _pendingSavesConnectionScopeId;
 
@@ -404,6 +406,7 @@ public sealed class ProfileSyncService
                 Failure = ProfileSyncFailure.None,
                 AppliedObjectCount = 0,
                 TargetRevision = targetRevision,
+                OrderScopeReady = false,
                 Message = "Reading saved profile state"
             });
             var persistedRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
@@ -429,199 +432,28 @@ public sealed class ProfileSyncService
                 lastRevision,
                 DateTime.UtcNow,
                 settings.ConnectionScopeId!);
-            var syncAuthority = _hostedOrders.CaptureAuthorityScope();
-            var serverRevision = lastRevision;
-            var hasMore = true;
+            var baseRevision = lastRevision;
             SetStatus(CurrentStatus with
             {
                 LastSyncRevision = lastRevision,
                 Stage = ProfileSyncStage.DownloadingChanges,
                 Message = "Checking hosted revisions"
             });
+            var serverRevision = baseRevision;
+            var hasMore = true;
             while (hasMore)
             {
-                var changes = await _client.GetChangesAsync(
-                    settings.HostUrl!,
-                    settings.AccessKey!,
+                var page = await ReplayChangesPageAsync(
+                    settings,
+                    profileId,
+                    ProfileSyncCollections.OrderAuthorityScope,
                     serverRevision,
-                    ChangePageSize,
+                    targetRevision,
+                    appliedObjectCount,
                     ct);
-                using (SuppressNotifications())
-                {
-                    foreach (var item in changes.Objects)
-                    {
-                        SetStatus(CurrentStatus with
-                        {
-                            Stage = ProfileSyncStage.ApplyingChanges,
-                            AppliedObjectCount = appliedObjectCount,
-                            TargetRevision = targetRevision,
-                            Message = "Applying hosted changes"
-                        });
-                        if (IsPending(item.Collection, item.ObjectId))
-                        {
-                            continue;
-                        }
-
-                        var adapter = GetAdapter(item.Collection);
-                        var orderDeletionPersisted = false;
-                        var orderDeletionDeferred = false;
-                        if (item.Deleted)
-                        {
-                            orderDeletionDeferred =
-                                string.Equals(
-                                    item.Collection,
-                                    ProfileSyncCollections.TradeOrders,
-                                    StringComparison.OrdinalIgnoreCase) &&
-                                (await _localState.LoadPendingOrderCleanupAsync(profileId))
-                                .Contains(item.ObjectId, StringComparer.OrdinalIgnoreCase);
-                            var shouldDeleteLocalObject = !orderDeletionDeferred;
-                            Guid? deletedOrderId = null;
-                            Guid? deletedOrderCompanyProfileId = null;
-                            if (!orderDeletionDeferred &&
-                                string.Equals(
-                                    item.Collection,
-                                    ProfileSyncCollections.TradeOrders,
-                                    StringComparison.OrdinalIgnoreCase) &&
-                                Guid.TryParse(item.ObjectId, out var parsedDeletedOrderId))
-                            {
-                                deletedOrderId = parsedDeletedOrderId;
-                                deletedOrderCompanyProfileId =
-                                    await ResolveDeletedOrderCompanyProfileIdAsync(
-                                        adapter,
-                                        parsedDeletedOrderId,
-                                        ct);
-                                shouldDeleteLocalObject =
-                                    deletedOrderCompanyProfileId.HasValue;
-                            }
-                            if (deletedOrderCompanyProfileId.HasValue)
-                            {
-                                if (adapter is IHostedOrderProfileSyncAdapter hostedOrderAdapter)
-                                {
-                                    await hostedOrderAdapter.ApplyRemoteDeletionAsync(
-                                        deletedOrderId!.Value,
-                                        deletedOrderCompanyProfileId.Value,
-                                        item.Revision,
-                                        ct);
-                                    shouldDeleteLocalObject = false;
-                                    orderDeletionPersisted = true;
-                                }
-                                else
-                                {
-                                    var adoption = _hostedOrders.TryAdoptCommittedTombstone(
-                                        syncAuthority,
-                                        deletedOrderId!.Value,
-                                        deletedOrderCompanyProfileId.Value,
-                                        item.Revision);
-                                    if (adoption is not (
-                                        HostedOrderCommittedProjectionResult.Adopted or
-                                        HostedOrderCommittedProjectionResult.AlreadyCurrent))
-                                    {
-                                        throw new InvalidOperationException(
-                                            $"Hosted order deletion could not be applied because its authority is {adoption}.");
-                                    }
-                                }
-                            }
-                            if (shouldDeleteLocalObject &&
-                                adapter is PlansProfileSyncAdapter plansAdapter &&
-                                await plansAdapter.IsDeleteProtectedAsync(item.ObjectId))
-                            {
-                                await _localState.SaveObjectRevisionAsync(
-                                    profileId,
-                                    ProfileSyncCollections.Plans,
-                                    item.ObjectId,
-                                    item.Revision);
-                                await AddPendingSaveAsync(
-                                    profileId,
-                                    ProfileSyncCollections.Plans,
-                                    item.ObjectId);
-                                shouldDeleteLocalObject = false;
-                            }
-                            if (shouldDeleteLocalObject)
-                            {
-                                await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
-                            }
-                        }
-                        else
-                        {
-                            await _localState.SaveHostedObjectProvenanceAsync(
-                                profileId,
-                                item.Collection,
-                                item.ObjectId);
-                            try
-                            {
-                                await adapter.ApplyRemoteObjectAsync(item, ct);
-                            }
-                            catch (ProfileSyncObjectReconciliationException reconciliation) when (
-                                string.Equals(reconciliation.Collection, item.Collection, StringComparison.OrdinalIgnoreCase) &&
-                                string.Equals(reconciliation.ObjectId, item.ObjectId, StringComparison.Ordinal))
-                            {
-                                if (reconciliation.Reconciliation ==
-                                    ProfileSyncObjectReconciliation.PromoteLocalAuthority)
-                                {
-                                    await AddPendingSaveAsync(
-                                        profileId,
-                                        item.Collection,
-                                        item.ObjectId);
-                                }
-                                else
-                                {
-                                    await RecordRemoteObjectConflictAsync(
-                                        profileId,
-                                        item,
-                                        ct);
-                                    continue;
-                                }
-                            }
-                            catch (MissingTradeCompanyProfileException exception)
-                            {
-                                await RestoreMissingCompanyProfileAsync(
-                                    settings,
-                                    profileId,
-                                    exception.CompanyProfileId,
-                                    ct);
-                                await adapter.ApplyRemoteObjectAsync(item, ct);
-                            }
-                        }
-
-                        if (!orderDeletionDeferred &&
-                            ((item.Deleted && !orderDeletionPersisted) ||
-                            !string.Equals(
-                                item.Collection,
-                                ProfileSyncCollections.TradeOrders,
-                                StringComparison.OrdinalIgnoreCase)))
-                        {
-                            await _localState.SaveObjectRevisionAsync(
-                                profileId,
-                                item.Collection,
-                                item.ObjectId,
-                                item.Revision);
-                        }
-                        appliedObjectCount++;
-                        SetStatus(CurrentStatus with
-                        {
-                            LastSyncRevision = item.Revision,
-                            Stage = ProfileSyncStage.ApplyingChanges,
-                            AppliedObjectCount = appliedObjectCount,
-                            TargetRevision = targetRevision,
-                            Message = $"Applied {appliedObjectCount:N0} hosted change{(appliedObjectCount == 1 ? string.Empty : "s")}"
-                        });
-                    }
-                }
-
-                if (changes.HasMore && changes.ServerRevision <= serverRevision)
-                {
-                    throw new InvalidOperationException(
-                        "The profile host returned a non-advancing changes page.");
-                }
-
-                serverRevision = changes.ServerRevision;
-                lastRevision = serverRevision;
-                hasMore = changes.HasMore;
-                if (ShouldAdvancePersistedRevision(persistedRevision, serverRevision))
-                {
-                    await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
-                    persistedRevision = serverRevision;
-                }
+                appliedObjectCount = page.AppliedCount;
+                serverRevision = page.ServerRevision;
+                hasMore = page.HasMore;
                 if (hasMore)
                 {
                     SetStatus(CurrentStatus with
@@ -635,6 +467,7 @@ public sealed class ProfileSyncService
                 }
             }
 
+            lastRevision = serverRevision;
             SetStatus(CurrentStatus with
             {
                 LastSyncRevision = serverRevision,
@@ -643,14 +476,11 @@ public sealed class ProfileSyncService
                 TargetRevision = Math.Max(targetRevision ?? 0, serverRevision),
                 Message = "Publishing local changes"
             });
-            await BackfillRetainedOrderGeneratedPlansAsync(
-                settings,
-                profileId,
-                ct);
             var hostReachable = await RetryPendingSavesAsync(
                 settings,
                 profileId,
-                ct);
+                ct,
+                ProfileSyncCollections.OrderAuthorityScope);
             if (hostReachable && !_hostedOrders.RestoreState.HasTrustedProjection)
             {
                 await HydrateTrustedOrderProjectionsAsync(profileId, ct);
@@ -662,22 +492,29 @@ public sealed class ProfileSyncService
                 _pendingSaves.Count,
                 _conflicts.Count,
                 DateTime.UtcNow,
-                _conflicts.Count > 0
-                    ? "Conflicts need review"
-                    : _pendingSaves.Count > 0
-                        ? "Local changes pending"
-                        : "Synced") with
+                hostReachable
+                    ? "Orders restored"
+                    : "Order restoration needs attention") with
             {
                 ProfileId = profileId,
                 Stage = hostReachable
-                    ? ProfileSyncStage.Ready
+                    ? ProfileSyncStage.ApplyingChanges
                     : ProfileSyncStage.Failed,
                 Failure = hostReachable
                     ? ProfileSyncFailure.None
                     : ProfileSyncFailure.Offline,
                 AppliedObjectCount = appliedObjectCount,
-                TargetRevision = Math.Max(targetRevision ?? 0, serverRevision)
+                TargetRevision = Math.Max(targetRevision ?? 0, serverRevision),
+                OrderScopeReady = hostReachable
             });
+            if (hostReachable)
+            {
+                StartBackgroundReplayPump(
+                    settings.Snapshot(),
+                    profileId,
+                    baseRevision,
+                    targetRevision);
+            }
         }
         catch (Exception ex)
         {
@@ -695,9 +532,329 @@ public sealed class ProfileSyncService
                 Stage = ProfileSyncStage.Failed,
                 Failure = failure,
                 AppliedObjectCount = appliedObjectCount,
-                TargetRevision = targetRevision
+                TargetRevision = targetRevision,
+                OrderScopeReady = CurrentStatus.OrderScopeReady &&
+                                  failure is not (
+                                      ProfileSyncFailure.Authentication or
+                                      ProfileSyncFailure.Incompatible or
+                                      ProfileSyncFailure.Unverifiable)
             });
         }
+    }
+
+    private sealed record ReplayPageResult(
+        long ServerRevision,
+        bool HasMore,
+        int AppliedCount);
+
+    private async Task<ReplayPageResult> ReplayChangesPageAsync(
+        HostedProfileConnectionSettings settings,
+        string profileId,
+        IReadOnlyList<string>? collections,
+        long sinceRevision,
+        long? targetRevision,
+        int appliedObjectCount,
+        CancellationToken ct)
+    {
+        var changes = await _client.GetChangesAsync(
+            settings.HostUrl!,
+            settings.AccessKey!,
+            sinceRevision,
+            ChangePageSize,
+            ct,
+            collections);
+        using (SuppressNotifications())
+        {
+            foreach (var item in changes.Objects)
+            {
+                SetStatus(CurrentStatus with
+                {
+                    Stage = ProfileSyncStage.ApplyingChanges,
+                    AppliedObjectCount = appliedObjectCount,
+                    TargetRevision = targetRevision,
+                    Message = "Applying hosted changes"
+                });
+                if (IsPending(item.Collection, item.ObjectId))
+                {
+                    continue;
+                }
+
+                var adapter = GetAdapter(item.Collection);
+                var orderDeletionPersisted = false;
+                var orderDeletionDeferred = false;
+                if (item.Deleted)
+                {
+                    orderDeletionDeferred =
+                        string.Equals(
+                            item.Collection,
+                            ProfileSyncCollections.TradeOrders,
+                            StringComparison.OrdinalIgnoreCase) &&
+                        (await _localState.LoadPendingOrderCleanupAsync(profileId))
+                        .Contains(item.ObjectId, StringComparer.OrdinalIgnoreCase);
+                    var shouldDeleteLocalObject = !orderDeletionDeferred;
+                    Guid? deletedOrderId = null;
+                    Guid? deletedOrderCompanyProfileId = null;
+                    if (!orderDeletionDeferred &&
+                        string.Equals(
+                            item.Collection,
+                            ProfileSyncCollections.TradeOrders,
+                            StringComparison.OrdinalIgnoreCase) &&
+                        Guid.TryParse(item.ObjectId, out var parsedDeletedOrderId))
+                    {
+                        deletedOrderId = parsedDeletedOrderId;
+                        deletedOrderCompanyProfileId =
+                            await ResolveDeletedOrderCompanyProfileIdAsync(
+                                adapter,
+                                parsedDeletedOrderId,
+                                ct);
+                        shouldDeleteLocalObject =
+                            deletedOrderCompanyProfileId.HasValue;
+                    }
+                    if (deletedOrderCompanyProfileId.HasValue)
+                    {
+                        if (adapter is IHostedOrderProfileSyncAdapter hostedOrderAdapter)
+                        {
+                            await hostedOrderAdapter.ApplyRemoteDeletionAsync(
+                                deletedOrderId!.Value,
+                                deletedOrderCompanyProfileId.Value,
+                                item.Revision,
+                                ct);
+                            shouldDeleteLocalObject = false;
+                            orderDeletionPersisted = true;
+                        }
+                        else
+                        {
+                            var adoption = _hostedOrders.TryAdoptCommittedTombstone(
+                                _hostedOrders.CaptureAuthorityScope(),
+                                deletedOrderId!.Value,
+                                deletedOrderCompanyProfileId.Value,
+                                item.Revision);
+                            if (adoption is not (
+                                HostedOrderCommittedProjectionResult.Adopted or
+                                HostedOrderCommittedProjectionResult.AlreadyCurrent))
+                            {
+                                throw new InvalidOperationException(
+                                    $"Hosted order deletion could not be applied because its authority is {adoption}.");
+                            }
+                        }
+                    }
+                    if (shouldDeleteLocalObject &&
+                        adapter is PlansProfileSyncAdapter plansAdapter &&
+                        await plansAdapter.IsDeleteProtectedAsync(item.ObjectId))
+                    {
+                        await _localState.SaveObjectRevisionAsync(
+                            profileId,
+                            ProfileSyncCollections.Plans,
+                            item.ObjectId,
+                            item.Revision);
+                        await AddPendingSaveAsync(
+                            profileId,
+                            ProfileSyncCollections.Plans,
+                            item.ObjectId);
+                        shouldDeleteLocalObject = false;
+                    }
+                    if (shouldDeleteLocalObject)
+                    {
+                        await adapter.DeleteLocalObjectAsync(item.ObjectId, ct);
+                    }
+                }
+                else
+                {
+                    await _localState.SaveHostedObjectProvenanceAsync(
+                        profileId,
+                        item.Collection,
+                        item.ObjectId);
+                    try
+                    {
+                        await adapter.ApplyRemoteObjectAsync(item, ct);
+                    }
+                    catch (ProfileSyncObjectReconciliationException reconciliation) when (
+                        string.Equals(reconciliation.Collection, item.Collection, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(reconciliation.ObjectId, item.ObjectId, StringComparison.Ordinal))
+                    {
+                        if (reconciliation.Reconciliation ==
+                            ProfileSyncObjectReconciliation.PromoteLocalAuthority)
+                        {
+                            await AddPendingSaveAsync(
+                                profileId,
+                                item.Collection,
+                                item.ObjectId);
+                        }
+                        else
+                        {
+                            await RecordRemoteObjectConflictAsync(
+                                profileId,
+                                item,
+                                ct);
+                            continue;
+                        }
+                    }
+                    catch (MissingTradeCompanyProfileException exception)
+                    {
+                        await RestoreMissingCompanyProfileAsync(
+                            settings,
+                            profileId,
+                            exception.CompanyProfileId,
+                            ct);
+                        await adapter.ApplyRemoteObjectAsync(item, ct);
+                    }
+                }
+
+                if (!orderDeletionDeferred &&
+                    ((item.Deleted && !orderDeletionPersisted) ||
+                    !string.Equals(
+                        item.Collection,
+                        ProfileSyncCollections.TradeOrders,
+                        StringComparison.OrdinalIgnoreCase)))
+                {
+                    await _localState.SaveObjectRevisionAsync(
+                        profileId,
+                        item.Collection,
+                        item.ObjectId,
+                        item.Revision);
+                }
+                appliedObjectCount++;
+                SetStatus(CurrentStatus with
+                {
+                    LastSyncRevision = item.Revision,
+                    Stage = ProfileSyncStage.ApplyingChanges,
+                    AppliedObjectCount = appliedObjectCount,
+                    TargetRevision = targetRevision,
+                    Message = $"Applied {appliedObjectCount:N0} hosted change{(appliedObjectCount == 1 ? string.Empty : "s")}"
+                });
+            }
+        }
+
+        if (changes.HasMore && changes.ServerRevision <= sinceRevision)
+        {
+            throw new InvalidOperationException(
+                "The profile host returned a non-advancing changes page.");
+        }
+
+        return new ReplayPageResult(
+            changes.ServerRevision,
+            changes.HasMore,
+            appliedObjectCount);
+    }
+
+    private void StartBackgroundReplayPump(
+        HostedProfileConnectionSettings settings,
+        string profileId,
+        long baseRevision,
+        long? targetRevision)
+    {
+        if (Interlocked.CompareExchange(ref _backgroundPumpActive, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var cursor = baseRevision;
+                var hasMore = true;
+                while (hasMore)
+                {
+                    var page = await RunSerializedAsync(
+                        () => ReplayChangesPageAsync(
+                            settings,
+                            profileId,
+                            ProfileSyncCollections.BackgroundScope,
+                            cursor,
+                            targetRevision,
+                            CurrentStatus.AppliedObjectCount,
+                            CancellationToken.None),
+                        CancellationToken.None);
+                    cursor = page.ServerRevision;
+                    hasMore = page.HasMore;
+                }
+
+                await RunSerializedAsync(
+                    () => CompleteBackgroundSyncCoreAsync(
+                        settings,
+                        profileId,
+                        cursor,
+                        targetRevision),
+                    CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                var failure = ClassifyFailure(exception);
+                SetStatus(CurrentStatus with
+                {
+                    Stage = ProfileSyncStage.Failed,
+                    Failure = failure,
+                    Message = exception.Message,
+                    OrderScopeReady = CurrentStatus.OrderScopeReady &&
+                                      failure is not (
+                                          ProfileSyncFailure.Authentication or
+                                          ProfileSyncFailure.Incompatible or
+                                          ProfileSyncFailure.Unverifiable)
+                });
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _backgroundPumpActive, 0);
+            }
+        });
+    }
+
+    private async Task CompleteBackgroundSyncCoreAsync(
+        HostedProfileConnectionSettings settings,
+        string profileId,
+        long serverRevision,
+        long? targetRevision)
+    {
+        var current = await _localState.LoadConnectionSettingsAsync();
+        if (!IsSameConnectionAuthority(current, settings) ||
+            !string.Equals(
+                current.ProfileScopeId,
+                profileId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        SetStatus(CurrentStatus with
+        {
+            Stage = ProfileSyncStage.PublishingLocalChanges,
+            TargetRevision = Math.Max(targetRevision ?? 0, serverRevision),
+            Message = "Publishing local changes"
+        });
+        await BackfillRetainedOrderGeneratedPlansAsync(
+            settings,
+            profileId,
+            CancellationToken.None);
+        var hostReachable = await RetryPendingSavesAsync(
+            settings,
+            profileId,
+            CancellationToken.None);
+        await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
+        SetStatus(new ProfileSyncStatus(
+            true,
+            hostReachable,
+            serverRevision,
+            _pendingSaves.Count,
+            _conflicts.Count,
+            DateTime.UtcNow,
+            _conflicts.Count > 0
+                ? "Conflicts need review"
+                : _pendingSaves.Count > 0
+                    ? "Local changes pending"
+                    : "Synced") with
+        {
+            ProfileId = profileId,
+            Stage = hostReachable
+                ? ProfileSyncStage.Ready
+                : ProfileSyncStage.Failed,
+            Failure = hostReachable
+                ? ProfileSyncFailure.None
+                : ProfileSyncFailure.Offline,
+            AppliedObjectCount = CurrentStatus.AppliedObjectCount,
+            TargetRevision = Math.Max(targetRevision ?? 0, serverRevision),
+            OrderScopeReady = hostReachable || CurrentStatus.OrderScopeReady
+        });
     }
 
     private async Task BackfillRetainedOrderGeneratedPlansAsync(
@@ -886,11 +1043,6 @@ public sealed class ProfileSyncService
         replayAfterRevision.HasValue
             ? Math.Min(persistedRevision, Math.Max(0, replayAfterRevision.Value))
             : persistedRevision;
-
-    private static bool ShouldAdvancePersistedRevision(
-        long persistedRevision,
-        long candidateRevision) =>
-        candidateRevision > persistedRevision;
 
     private async Task<int> HydrateTrustedOrderProjectionsAsync(
         string profileId,
@@ -1780,7 +1932,8 @@ public sealed class ProfileSyncService
     private async Task<bool> RetryPendingSavesAsync(
         HostedProfileConnectionSettings settings,
         string profileId,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyCollection<string>? collections = null)
     {
         var hostReachable = true;
         foreach (var pending in _pendingSaves
@@ -1788,6 +1941,12 @@ public sealed class ProfileSyncService
                      .ThenBy(item => item.ObjectId, StringComparer.Ordinal)
                      .ToArray())
         {
+            if (collections != null &&
+                !collections.Contains(pending.Collection, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             if (!await TryPushPendingSaveAsync(
                     settings,
                     profileId,

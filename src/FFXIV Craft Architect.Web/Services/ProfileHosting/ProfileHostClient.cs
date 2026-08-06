@@ -213,12 +213,19 @@ public sealed class ProfileHostClient
         string accessKey,
         long sinceRevision,
         int limit,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyCollection<string>? collections = null)
     {
+        var path = $"/profile-host/changes?sinceRevision={sinceRevision}&limit={limit}";
+        if (collections is { Count: > 0 })
+        {
+            path += $"&collections={Uri.EscapeDataString(string.Join(",", collections))}";
+        }
+
         using var request = CreateRequest(
             HttpMethod.Get,
             hostUrl,
-            $"/profile-host/changes?sinceRevision={sinceRevision}&limit={limit}",
+            path,
             accessKey);
         using var response = await _httpClient.SendAsync(request, ct);
         if (response.StatusCode == HttpStatusCode.Unauthorized)
@@ -250,6 +257,40 @@ public sealed class ProfileHostClient
             ?? throw new ProfileHostConnectionException(
                 ProfileHostConnectionFailure.IncompatibleHost,
                 "The profile host returned an invalid changes response.");
+    }
+
+    public async Task<ProfileSyncObjectEnvelope?> GetObjectAsync(
+        string hostUrl,
+        string accessKey,
+        string collection,
+        string objectId,
+        CancellationToken ct)
+    {
+        using var request = CreateRequest(
+            HttpMethod.Get,
+            hostUrl,
+            $"/profile-host/objects/{collection}/{Uri.EscapeDataString(objectId)}",
+            accessKey);
+        using var response = await _httpClient.SendAsync(request, ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.AccessKeyRejected,
+                "The profile access key was rejected or revoked.");
+        }
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.HostUnavailable,
+                $"The profile host returned HTTP {(int)response.StatusCode} while loading a hosted object.");
+        }
+
+        return await response.Content.ReadFromJsonAsync<ProfileSyncObjectEnvelope>(
+            cancellationToken: ct);
     }
 
     public async Task<ProfileSyncPutResponse> PutObjectAsync(
