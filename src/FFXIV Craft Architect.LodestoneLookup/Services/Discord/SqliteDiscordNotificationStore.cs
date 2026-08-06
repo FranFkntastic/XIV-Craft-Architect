@@ -112,6 +112,7 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                     interaction_id TEXT PRIMARY KEY,
                     company_id TEXT NOT NULL,
                     commission_id TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
                     claim_event_id TEXT NOT NULL,
                     commission_revision INTEGER NOT NULL,
                     discord_user_id TEXT NOT NULL,
@@ -119,6 +120,29 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                     committed_at_utc TEXT NOT NULL,
                     UNIQUE(company_id, commission_id, discord_user_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS discord_pending_claim_contacts (
+                    interaction_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    commission_id TEXT NOT NULL,
+                    public_brief_id TEXT NOT NULL,
+                    claim_capability_id TEXT NOT NULL UNIQUE,
+                    claim_capability_revision INTEGER NOT NULL,
+                    discord_user_id TEXT NOT NULL,
+                    display_name_snapshot TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    expires_at_utc TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_discord_pending_claim_contacts_match
+                    ON discord_pending_claim_contacts(
+                        company_id,
+                        commission_id,
+                        public_brief_id,
+                        claim_capability_id,
+                        claim_capability_revision,
+                        expires_at_utc
+                    );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
             _schemaReady = true;
@@ -509,6 +533,7 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
     {
         if (contact.EventKind != CompanyCommissionActivityKind.ClaimAccepted ||
             contact.ClaimEventId == Guid.Empty ||
+            contact.ClaimId == Guid.Empty ||
             contact.CommissionId == Guid.Empty ||
             contact.CommissionRevision <= 0 ||
             !DiscordSnowflake.IsValid(contact.InteractionId) ||
@@ -526,6 +551,7 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                 interaction_id,
                 company_id,
                 commission_id,
+                claim_id,
                 claim_event_id,
                 commission_revision,
                 discord_user_id,
@@ -536,19 +562,29 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                 $interactionId,
                 $companyId,
                 $commissionId,
+                $claimId,
                 $claimEventId,
                 $commissionRevision,
                 $discordUserId,
                 $displayNameSnapshot,
                 $committedAt
             )
-            ON CONFLICT(interaction_id) DO NOTHING;
+            ON CONFLICT(company_id, commission_id, discord_user_id) DO UPDATE SET
+                interaction_id = excluded.interaction_id,
+                claim_id = excluded.claim_id,
+                claim_event_id = excluded.claim_event_id,
+                commission_revision = excluded.commission_revision,
+                display_name_snapshot = excluded.display_name_snapshot,
+                committed_at_utc = excluded.committed_at_utc;
             """;
         command.Parameters.AddWithValue("$interactionId", contact.InteractionId);
         command.Parameters.AddWithValue("$companyId", contact.CompanyId.ToString());
         command.Parameters.AddWithValue(
             "$commissionId",
             contact.CommissionId.ToString("D"));
+        command.Parameters.AddWithValue(
+            "$claimId",
+            contact.ClaimId.ToString("D"));
         command.Parameters.AddWithValue(
             "$claimEventId",
             contact.ClaimEventId.ToString("D"));
@@ -567,13 +603,163 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task<bool> RecordPendingClaimContactAsync(
+        PendingDiscordClaimContactExpectation expectation,
+        CancellationToken cancellationToken = default)
+    {
+        if (expectation.CommissionId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(expectation.PublicBriefId) ||
+            expectation.PublicBriefId.Length > 128 ||
+            expectation.ClaimCapabilityId == Guid.Empty ||
+            expectation.ClaimCapabilityRevision <= 0 ||
+            !DiscordSnowflake.IsValid(expectation.InteractionId) ||
+            !DiscordSnowflake.IsValid(expectation.Contact.DiscordUserId) ||
+            expectation.ExpiresAt <= expectation.CreatedAt)
+        {
+            return false;
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT OR IGNORE INTO discord_pending_claim_contacts (
+                interaction_id,
+                company_id,
+                commission_id,
+                public_brief_id,
+                claim_capability_id,
+                claim_capability_revision,
+                discord_user_id,
+                display_name_snapshot,
+                created_at_utc,
+                expires_at_utc
+            )
+            VALUES (
+                $interactionId,
+                $companyId,
+                $commissionId,
+                $publicBriefId,
+                $claimCapabilityId,
+                $claimCapabilityRevision,
+                $discordUserId,
+                $displayNameSnapshot,
+                $createdAt,
+                $expiresAt
+            );
+            """;
+        AddPendingClaimContactParameters(command, expectation);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) == 1)
+        {
+            return true;
+        }
+
+        var existing = await LoadPendingClaimContactByInteractionAsync(
+            connection,
+            expectation.InteractionId,
+            cancellationToken);
+        return existing == expectation;
+    }
+
+    public async Task<PendingDiscordClaimContactExpectation?>
+        LoadPendingClaimContactAsync(
+            CompanyId companyId,
+            Guid commissionId,
+            string publicBriefId,
+            Guid claimCapabilityId,
+            long claimCapabilityRevision,
+            DateTimeOffset now,
+            CancellationToken cancellationToken = default)
+    {
+        if (commissionId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(publicBriefId) ||
+            claimCapabilityId == Guid.Empty ||
+            claimCapabilityRevision <= 0)
+        {
+            return null;
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await DeleteExpiredPendingClaimContactsAsync(connection, now, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                company_id,
+                commission_id,
+                public_brief_id,
+                claim_capability_id,
+                claim_capability_revision,
+                interaction_id,
+                discord_user_id,
+                display_name_snapshot,
+                created_at_utc,
+                expires_at_utc
+            FROM discord_pending_claim_contacts
+            WHERE company_id = $companyId
+              AND commission_id = $commissionId
+              AND public_brief_id = $publicBriefId
+              AND claim_capability_id = $claimCapabilityId
+              AND claim_capability_revision = $claimCapabilityRevision
+              AND expires_at_utc > $now;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+        command.Parameters.AddWithValue("$publicBriefId", publicBriefId);
+        command.Parameters.AddWithValue("$claimCapabilityId", claimCapabilityId.ToString("D"));
+        command.Parameters.AddWithValue("$claimCapabilityRevision", claimCapabilityRevision);
+        command.Parameters.AddWithValue("$now", now.ToString("O"));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? ReadPendingClaimContact(reader)
+            : null;
+    }
+
+    public async Task<bool> ConsumePendingClaimContactAsync(
+        PendingDiscordClaimContactExpectation expectation,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM discord_pending_claim_contacts
+            WHERE interaction_id = $interactionId
+              AND company_id = $companyId
+              AND commission_id = $commissionId
+              AND public_brief_id = $publicBriefId
+              AND claim_capability_id = $claimCapabilityId
+              AND claim_capability_revision = $claimCapabilityRevision
+              AND discord_user_id = $discordUserId;
+            """;
+        command.Parameters.AddWithValue("$interactionId", expectation.InteractionId);
+        command.Parameters.AddWithValue("$companyId", expectation.CompanyId.ToString());
+        command.Parameters.AddWithValue(
+            "$commissionId",
+            expectation.CommissionId.ToString("D"));
+        command.Parameters.AddWithValue("$publicBriefId", expectation.PublicBriefId);
+        command.Parameters.AddWithValue(
+            "$claimCapabilityId",
+            expectation.ClaimCapabilityId.ToString("D"));
+        command.Parameters.AddWithValue(
+            "$claimCapabilityRevision",
+            expectation.ClaimCapabilityRevision);
+        command.Parameters.AddWithValue(
+            "$discordUserId",
+            expectation.Contact.DiscordUserId);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
     public async Task<bool> HasCommittedClaimContactAsync(
         CompanyId companyId,
         Guid commissionId,
+        Guid claimId,
         string discordUserId,
         CancellationToken cancellationToken = default)
     {
-        if (commissionId == Guid.Empty || !DiscordSnowflake.IsValid(discordUserId))
+        if (commissionId == Guid.Empty ||
+            claimId == Guid.Empty ||
+            !DiscordSnowflake.IsValid(discordUserId))
         {
             return false;
         }
@@ -585,10 +771,12 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
             FROM discord_claim_contacts
             WHERE company_id = $companyId
               AND commission_id = $commissionId
+              AND claim_id = $claimId
               AND discord_user_id = $discordUserId;
             """;
         command.Parameters.AddWithValue("$companyId", companyId.ToString());
         command.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+        command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
         command.Parameters.AddWithValue("$discordUserId", discordUserId);
         return Convert.ToInt64(
             await command.ExecuteScalarAsync(cancellationToken)) == 1;
@@ -1126,6 +1314,89 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
         command.Parameters.AddWithValue(
             "$fallbackSourceId",
             source.WorkItemId.ToString("D"));
+        command.Parameters.AddWithValue("$now", now.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static void AddPendingClaimContactParameters(
+        SqliteCommand command,
+        PendingDiscordClaimContactExpectation expectation)
+    {
+        command.Parameters.AddWithValue("$interactionId", expectation.InteractionId);
+        command.Parameters.AddWithValue("$companyId", expectation.CompanyId.ToString());
+        command.Parameters.AddWithValue(
+            "$commissionId",
+            expectation.CommissionId.ToString("D"));
+        command.Parameters.AddWithValue("$publicBriefId", expectation.PublicBriefId);
+        command.Parameters.AddWithValue(
+            "$claimCapabilityId",
+            expectation.ClaimCapabilityId.ToString("D"));
+        command.Parameters.AddWithValue(
+            "$claimCapabilityRevision",
+            expectation.ClaimCapabilityRevision);
+        command.Parameters.AddWithValue(
+            "$discordUserId",
+            expectation.Contact.DiscordUserId);
+        command.Parameters.AddWithValue(
+            "$displayNameSnapshot",
+            DiscordProjectionSanitizer.Text(
+                expectation.Contact.DisplayNameSnapshot,
+                120));
+        command.Parameters.AddWithValue("$createdAt", expectation.CreatedAt.ToString("O"));
+        command.Parameters.AddWithValue("$expiresAt", expectation.ExpiresAt.ToString("O"));
+    }
+
+    private static async Task<PendingDiscordClaimContactExpectation?>
+        LoadPendingClaimContactByInteractionAsync(
+            SqliteConnection connection,
+            string interactionId,
+            CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                company_id,
+                commission_id,
+                public_brief_id,
+                claim_capability_id,
+                claim_capability_revision,
+                interaction_id,
+                discord_user_id,
+                display_name_snapshot,
+                created_at_utc,
+                expires_at_utc
+            FROM discord_pending_claim_contacts
+            WHERE interaction_id = $interactionId;
+            """;
+        command.Parameters.AddWithValue("$interactionId", interactionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? ReadPendingClaimContact(reader)
+            : null;
+    }
+
+    private static PendingDiscordClaimContactExpectation ReadPendingClaimContact(
+        SqliteDataReader reader) =>
+        new(
+            CompanyId.Parse(reader.GetString(0)),
+            Guid.Parse(reader.GetString(1)),
+            reader.GetString(2),
+            Guid.Parse(reader.GetString(3)),
+            reader.GetInt64(4),
+            reader.GetString(5),
+            new DiscordOriginContact(reader.GetString(6), reader.GetString(7)),
+            DateTimeOffset.Parse(reader.GetString(8)),
+            DateTimeOffset.Parse(reader.GetString(9)));
+
+    private static async Task DeleteExpiredPendingClaimContactsAsync(
+        SqliteConnection connection,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "DELETE FROM discord_pending_claim_contacts WHERE expires_at_utc <= $now;";
         command.Parameters.AddWithValue("$now", now.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

@@ -57,6 +57,7 @@ public static class DiscordCommissionEndpoints
                 DiscordCommissionOptions options,
                 DiscordRequestVerifier verifier,
                 SqliteCommissionBriefStore store,
+                DiscordCommissionInteractionService interactions,
                 CancellationToken ct) =>
             {
                 if (!options.CanVerifyInteractions)
@@ -107,8 +108,16 @@ public static class DiscordCommissionEndpoints
                                 store,
                                 ct)
                             : InteractionError("Commission publishing has not been connected to a channel yet."),
-                        MessageComponentInteraction => InteractionError(
-                            "Discord interest controls are retired. Open the current commission brief to claim its one available slot."),
+                        MessageComponentInteraction => options.IsConfigured
+                            ? Results.Json(new
+                            {
+                                type = ChannelMessageResponse,
+                                data = await interactions.HandleAsync(
+                                    payload.RootElement,
+                                    ct)
+                            })
+                            : InteractionError(
+                                "Commission publishing has not been connected to a channel yet."),
                         _ => InteractionError("This interaction is not supported by the prototype.")
                     };
                 }

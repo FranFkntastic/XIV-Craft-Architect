@@ -185,9 +185,13 @@ builder.Services.AddScoped<DiscordCompanyOrderAdapter>();
 builder.Services.AddScoped<DiscordPublicationService>();
 builder.Services.AddScoped<IDiscordPublicationRefresher>(
     services => services.GetRequiredService<DiscordPublicationService>());
+builder.Services.AddScoped<IDiscordInteractionClaimLinkIssuer>(
+    services => services.GetRequiredService<DiscordPublicationService>());
+builder.Services.AddScoped<DiscordCommissionInteractionService>();
 builder.Services.AddScoped<CompanyCommissionDiscordDeliveryService>();
 builder.Services.AddScoped<ICompanyCommissionDiscordDelivery>(
     services => services.GetRequiredService<CompanyCommissionDiscordDeliveryService>());
+builder.Services.AddScoped<DiscordClaimContactCommitter>();
 builder.Services.AddHttpClient<IDiscordApiClient, DiscordApiClient>((services, client) =>
 {
     var options = services.GetRequiredService<DiscordCommissionOptions>();

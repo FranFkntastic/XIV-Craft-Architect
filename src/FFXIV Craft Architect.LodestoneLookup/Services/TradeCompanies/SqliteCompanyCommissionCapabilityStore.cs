@@ -20,7 +20,8 @@ public sealed record CompanyCommissionCapabilityResolution(
     string PublicBriefId,
     CompanyCommissionCapabilityKind Kind,
     Guid? GrantId,
-    long CapabilityRevision);
+    long CapabilityRevision,
+    Guid CapabilityId = default);
 
 public sealed record IssuedCompanyCommissionCapability(
     CompanyCommissionCapabilityResolution Resolution,
@@ -55,6 +56,7 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
             throw new ArgumentException("A valid commission capability identity is required.");
         }
 
+        var capabilityId = Guid.NewGuid();
         var plaintext = CreateToken();
         var tokenHash = HashToken(plaintext);
         await using var connection = await OpenAsync(cancellationToken);
@@ -153,7 +155,7 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                     revoked_at_utc = NULL,
                     consumed_by_command_id = NULL;
                 """;
-            insert.Parameters.AddWithValue("$capabilityId", Guid.NewGuid().ToString("D"));
+            insert.Parameters.AddWithValue("$capabilityId", capabilityId.ToString("D"));
             insert.Parameters.AddWithValue("$companyId", companyId.ToString());
             insert.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
             insert.Parameters.AddWithValue("$publicBriefId", publicBriefId);
@@ -173,7 +175,8 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                 publicBriefId,
                 kind,
                 grantId,
-                capabilityRevision),
+                capabilityRevision,
+                capabilityId),
             plaintext);
     }
 
@@ -316,7 +319,8 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
         await EnsureSchemaAsync(connection, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT company_id,
+            SELECT capability_id,
+                   company_id,
                    commission_id,
                    grant_id,
                    capability_revision,
@@ -338,27 +342,30 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
         CompanyCommissionCapabilityResolution? resolved = null;
         while (await reader.ReadAsync(cancellationToken))
         {
-            if (!TokenMatches(plaintextToken, reader.GetString(4)))
+            if (!TokenMatches(plaintextToken, reader.GetString(5)))
             {
                 continue;
             }
             if (resolved != null ||
-                !CompanyId.TryParse(reader.GetString(0), out var companyId) ||
-                !Guid.TryParse(reader.GetString(1), out var commissionId) ||
+                !Guid.TryParse(reader.GetString(0), out var capabilityId) ||
+                !CompanyId.TryParse(reader.GetString(1), out var companyId) ||
+                !Guid.TryParse(reader.GetString(2), out var commissionId) ||
+                capabilityId == Guid.Empty ||
                 commissionId == Guid.Empty)
             {
                 throw new InvalidOperationException(
                     "Commission capability ownership is duplicated or invalid.");
             }
 
-            var rawGrantId = reader.GetString(2);
+            var rawGrantId = reader.GetString(3);
             resolved = new CompanyCommissionCapabilityResolution(
                 companyId,
                 commissionId,
                 publicBriefId,
                 kind,
                 Guid.TryParse(rawGrantId, out var parsedGrantId) ? parsedGrantId : null,
-                reader.GetInt64(3));
+                reader.GetInt64(4),
+                capabilityId);
         }
 
         return resolved;

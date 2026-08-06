@@ -129,12 +129,24 @@ public sealed record DiscordOriginContact(
 public sealed record CommittedDiscordClaimContact(
     CompanyId CompanyId,
     Guid CommissionId,
+    Guid ClaimId,
     Guid ClaimEventId,
     long CommissionRevision,
     CompanyCommissionActivityKind EventKind,
     DateTime CommittedAtUtc,
     string InteractionId,
     DiscordOriginContact Contact);
+
+public sealed record PendingDiscordClaimContactExpectation(
+    CompanyId CompanyId,
+    Guid CommissionId,
+    string PublicBriefId,
+    Guid ClaimCapabilityId,
+    long ClaimCapabilityRevision,
+    string InteractionId,
+    DiscordOriginContact Contact,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset ExpiresAt);
 
 public enum DiscordNotificationDiagnosticState
 {

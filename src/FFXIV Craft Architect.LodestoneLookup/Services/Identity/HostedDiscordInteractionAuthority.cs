@@ -94,6 +94,7 @@ internal sealed class HostedDiscordInteractionAuthority(
              await discordContacts.HasCommittedClaimContactAsync(
                  target.CompanyId,
                  target.CommissionId,
+                 claim!.ClaimId,
                  target.DiscordUserId,
                  cancellationToken));
         if (ownerAccess == null && !contactMatches)
