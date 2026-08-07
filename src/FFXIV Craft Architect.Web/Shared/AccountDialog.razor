@@ -256,7 +256,10 @@
     {
         get
         {
-            var current = _keys.SingleOrDefault(key => key.IsCurrent);
+            var current = _keys
+                .Where(key => key.IsCurrent)
+                .OrderBy(key => key.CreatedAtUtc)
+                .FirstOrDefault();
             return current == null
                 ? "Current session key"
                 : $"Session key issued {FormatDate(current.CreatedAtUtc)} · revoke to sign out here";
