@@ -138,26 +138,6 @@ public partial class TradeOrders
     private bool SelectedOrderUsesCompanyPaymentPolicy =>
         _selectedOrder?.PaymentPolicyOverride == null;
 
-    private TradePaymentContractMode SelectedOrderPaymentContract
-    {
-        get
-        {
-            if (IsEditingCommissionTermsRevision &&
-                _commissionTermsRevisionBrief?.Payment is { } revisionPayment)
-            {
-                return ResolveCanonicalPaymentContract(revisionPayment.ContractLabel);
-            }
-
-            if (_selectedOrder?.CompanyCommission?.CurrentTerms.Payment is { } canonicalPayment)
-            {
-                return ResolveCanonicalPaymentContract(canonicalPayment.ContractLabel);
-            }
-
-            return GetSelectedOrderEffectivePaymentPolicy()?.ActiveContract ??
-                TradePaymentContractMode.LegacyCommission;
-        }
-    }
-
     private CompanyCommissionPaymentSchedule SelectedOrderPaymentSchedule =>
         _selectedOrderPaymentSchedule;
 
@@ -174,24 +154,18 @@ public partial class TradeOrders
         if (IsEditingCommissionTermsRevision &&
             _commissionTermsRevisionBrief?.Payment is { } revisionPayment)
         {
-            return $"Revision basis: {revisionPayment.ContractLabel}";
+            return "Revision payment terms";
         }
 
         if (_selectedOrder.CompanyCommission?.CurrentTerms.Payment is { } canonicalPayment)
         {
-            var state = CanEditCanonicalDraft ? "Draft basis" : "Accepted basis";
-            return $"{state}: {canonicalPayment.ContractLabel}";
+            return CanEditCanonicalDraft ? "Draft payment terms" : "Accepted payment terms";
         }
 
-        var policy = GetSelectedOrderEffectivePaymentPolicy() ?? TradePaymentPolicy.LegacyDefault;
+        var policy = GetSelectedOrderEffectivePaymentPolicy() ?? TradePaymentPolicy.Default;
         var source = SelectedOrderUsesCompanyPaymentPolicy ? "Company default" : "Order override";
-        return $"{source}: {FormatPaymentContract(policy.ActiveContract)}";
+        return $"{source}: labor, material-value bonus, and reimbursement";
     }
-
-    private static TradePaymentContractMode ResolveCanonicalPaymentContract(string contractLabel) =>
-        contractLabel.Contains("labor", StringComparison.OrdinalIgnoreCase)
-            ? TradePaymentContractMode.LaborStandard
-            : TradePaymentContractMode.LegacyCommission;
 
     private async Task SetSelectedOrderUseCompanyPolicyAsync(bool useCompanyPolicy)
     {
@@ -205,23 +179,6 @@ public partial class TradeOrders
             : TradeOrderWorkflow.WithPaymentPolicyOverride(
                 _selectedOrder,
                 TradeOrderWorkflow.ResolvePaymentPolicy(_selectedOrder, _companyProfile?.PaymentPolicy));
-
-        await SaveSelectedPaymentPolicyOrderAsync(
-            orderToSave,
-            recalculateCanonicalPayment: true);
-    }
-
-    private async Task SetSelectedOrderPaymentContractAsync(TradePaymentContractMode contract)
-    {
-        if (_selectedOrder == null)
-        {
-            return;
-        }
-
-        var current = TradeOrderWorkflow.ResolvePaymentPolicy(_selectedOrder, _companyProfile?.PaymentPolicy);
-        var orderToSave = TradeOrderWorkflow.WithPaymentPolicyOverride(
-            _selectedOrder,
-            current with { ActiveContract = contract });
 
         await SaveSelectedPaymentPolicyOrderAsync(
             orderToSave,

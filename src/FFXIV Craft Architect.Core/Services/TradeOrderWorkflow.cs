@@ -90,7 +90,7 @@ public static class TradeOrderWorkflow
     {
         ArgumentNullException.ThrowIfNull(order);
 
-        var policy = order.PaymentPolicyOverride ?? companyPolicy ?? TradePaymentPolicy.LegacyDefault;
+        var policy = order.PaymentPolicyOverride ?? companyPolicy ?? TradePaymentPolicy.Default;
         return TradePaymentPolicyNormalizer.Normalize(policy);
     }
 

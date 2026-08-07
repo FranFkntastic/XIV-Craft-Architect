@@ -988,7 +988,7 @@
                                         {
                                             <div class="trade-orders-payment-breakdown-row">
                                                 <span>On-hand material value</span>
-                                                <span>Bonus basis only; not reimbursed</span>
+                                                <span>Included in material-value bonus; not reimbursed</span>
                                                 <strong>@FormatGil(paymentSummary.OnHandMaterialValueTotal)</strong>
                                             </div>
                                         }
@@ -997,11 +997,11 @@
                                             <span>Estimate only</span>
                                             <strong>@FormatGilAllowZero(paymentSummary.ProvidedMaterialTotal)</strong>
                                         </div>
-                                        @if (paymentSummary.Active.Contract == TradePaymentContractMode.LegacyCommission)
+                                        @if (paymentSummary.Active.CommissionAmount > 0)
                                         {
                                             <div class="trade-orders-payment-breakdown-row">
-                                                <span>Legacy material commission</span>
-                                                <span>@paymentSummary.CommissionPercent.ToString("N0")% of procurement</span>
+                                                <span>Material value bonus</span>
+                                                <span>@paymentSummary.Active.CommissionPercent.ToString("N0")% of estimated material value</span>
                                                 <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
                                             </div>
                                         }
@@ -1017,30 +1017,6 @@
                                             <span>Total payment</span>
                                             <span>@FormatPaymentContract(paymentSummary.Active.Contract)</span>
                                             <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
-                                        </div>
-                                    </div>
-                                    <div class="trade-orders-payment-table">
-                                        <div class="trade-orders-payment-table-title">
-                                            <span>Policy Comparison</span>
-                                            <span>Same current route</span>
-                                        </div>
-                                        <div class="trade-orders-policy-comparison-header">
-                                            <span>Contract</span>
-                                            <span>Includes</span>
-                                            <span>Payment</span>
-                                            <span>Delta</span>
-                                        </div>
-                                        <div class="trade-orders-policy-comparison-row">
-                                            <span>Legacy commission</span>
-                                            <span>Materials + @paymentSummary.Legacy.CommissionPercent.ToString("N0")% legacy commission</span>
-                                            <strong>@FormatPaymentBreakdown(paymentSummary.Legacy)</strong>
-                                            <span>Baseline</span>
-                                        </div>
-                                        <div class="trade-orders-policy-comparison-row">
-                                            <span>Labor standard</span>
-                                            <span>Materials + synth labor</span>
-                                            <strong>@FormatPaymentBreakdown(paymentSummary.LaborStandard)</strong>
-                                            <span>@FormatPaymentDifference(paymentSummary.LaborStandard, paymentSummary.Legacy)</span>
                                         </div>
                                     </div>
                                     <div class="trade-orders-payment-heading">
@@ -1553,12 +1529,9 @@
                                         <strong>@FormatGil(displayedPlanPayment)</strong>
                                         <small>@GetSelectedOrderPaymentPolicyLabel()</small>
                                     </div>
-                                    <CompactSelectField Id="selected-order-payment-contract"
-                                                        Label="Payment basis"
-                                                        Value="@SelectedOrderPaymentContract.ToString()"
-                                                        ValueChanged="SetSelectedOrderPaymentContractValueAsync"
-                                                        Options="PaymentContractOptions"
-                                                        Disabled="@(!planPaymentIsEditable || IsPlanMutationTransactionRunning)" />
+                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                        Payment uses crafter reimbursement, the company material-value bonus, and labor pay per synth from Company options.
+                                    </MudText>
                                     <CompactSelectField Id="selected-order-payment-schedule"
                                                         Label="Payment timing"
                                                         Value="@SelectedOrderPaymentSchedule.ToString()"

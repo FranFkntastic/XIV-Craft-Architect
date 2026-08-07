@@ -465,9 +465,7 @@ public static class TradeCompanyCommissionMigrationService
             Materials = materials,
             Payment = new CompanyCommissionPaymentTerms(
                 payment?.Schedule ?? order.PaymentSchedule,
-                payment?.ContractLabel ?? (authoringPayment?.Contract == TradePaymentContractMode.LaborStandard
-                    ? "Labor standard"
-                    : "Legacy commission"),
+                payment?.ContractLabel ?? "Labor + material-value bonus",
                 payment?.MaterialReimbursement ?? authoringPayment?.MaterialReimbursementTotal ?? 0,
                 payment?.MaterialBonus ?? authoringPayment?.CommissionAmount ?? 0,
                 payment?.CraftLabor ?? authoringPayment?.CraftLaborTotal ?? 0,

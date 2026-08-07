@@ -34,17 +34,14 @@ public static class TradeOrderPaymentCopyFormatter
         var summary = context.Payment;
         var active = summary.Active;
         var builder = CreateHeader("Payment receipt", context);
-        builder.AppendLine($"Active basis: {FormatPaymentContract(active.Contract)}");
+        builder.AppendLine($"Payment formula: {FormatPaymentContract(active.Contract)}");
         builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(active.MaterialReimbursementTotal)}");
-        if (active.Contract == TradePaymentContractMode.LaborStandard)
+        if (active.CommissionAmount > 0)
         {
-            builder.AppendLine($"Craft labor: {active.CraftSynthCount:N0} synths x {active.GilPerSynth:N2} gil = {FormatGil(active.CraftLaborTotal)}");
+            builder.AppendLine($"Material value bonus ({active.CommissionPercent:N0}%): {FormatGil(active.CommissionAmount)}");
         }
-        else
-        {
-            builder.AppendLine($"Legacy material commission ({active.CommissionPercent:N0}%): {FormatGil(active.CommissionAmount)}");
-        }
+        builder.AppendLine($"Craft labor: {active.CraftSynthCount:N0} synths x {active.GilPerSynth:N2} gil = {FormatGil(active.CraftLaborTotal)}");
 
         AppendActiveWarnings(builder, summary);
         return builder.ToString();
@@ -60,21 +57,19 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine();
         AppendMaterialSection(builder, "Provided by commissioner", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided));
         builder.AppendLine();
-        builder.AppendLine($"Active basis: {FormatPaymentContract(summary.Active.Contract)}");
+        builder.AppendLine($"Payment formula: {FormatPaymentContract(summary.Active.Contract)}");
         builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(summary.MaterialReimbursementTotal)}");
+        if (summary.Active.CommissionAmount > 0)
+        {
+            builder.AppendLine($"Material value bonus ({summary.Active.CommissionPercent:N0}%): {FormatGil(summary.Active.CommissionAmount)}");
+        }
         if (summary.OnHandMaterialValueTotal > 0)
         {
-            builder.AppendLine($"On-hand material value (bonus basis only): {FormatGil(summary.OnHandMaterialValueTotal)}");
+            builder.AppendLine($"On-hand material value (included in bonus): {FormatGil(summary.OnHandMaterialValueTotal)}");
         }
         builder.AppendLine($"Provided material value: {FormatGil(summary.ProvidedMaterialTotal)}");
-        builder.AppendLine($"Legacy comparison: {FormatPaymentBreakdown(summary.Legacy)}");
-        builder.AppendLine($"Labor-standard comparison: {FormatPaymentBreakdown(summary.LaborStandard)}");
-        if (summary.LaborStandard.IsAvailable)
-        {
-            builder.AppendLine($"Craft labor: {summary.LaborStandard.CraftSynthCount:N0} synths x {summary.LaborStandard.GilPerSynth:N2} gil = {FormatGil(summary.LaborStandard.CraftLaborTotal)}");
-            builder.AppendLine($"Difference vs legacy: {FormatPaymentDifference(summary.LaborStandard, summary.Legacy)}");
-        }
+        builder.AppendLine($"Craft labor: {summary.Active.CraftSynthCount:N0} synths x {summary.Active.GilPerSynth:N2} gil = {FormatGil(summary.Active.CraftLaborTotal)}");
 
         builder.AppendLine($"Total estimated procurement: {FormatGil(summary.EstimatedProcurementTotal)}");
         AppendAllWarnings(builder, summary);
@@ -91,31 +86,9 @@ public static class TradeOrderPaymentCopyFormatter
         return "Needs reprice";
     }
 
-    public static string FormatPaymentDifference(
-        TradePaymentContractBreakdown laborStandard,
-        TradePaymentContractBreakdown legacy)
-    {
-        if (!laborStandard.IsAvailable)
-        {
-            return "Needs reprice";
-        }
-
-        var value = laborStandard.Total - legacy.Total;
-        if (value == 0)
-        {
-            return "0 gil";
-        }
-
-        return value > 0
-            ? $"+{value:N0} gil"
-            : $"{value:N0} gil";
-    }
-
     public static string FormatPaymentContract(TradePaymentContractMode mode)
     {
-        return mode == TradePaymentContractMode.LaborStandard
-            ? "labor standard"
-            : "legacy";
+        return "reimbursement + material-value bonus + synth labor";
     }
 
     private static StringBuilder CreateHeader(string title, TradeOrderPaymentCopyContext context)

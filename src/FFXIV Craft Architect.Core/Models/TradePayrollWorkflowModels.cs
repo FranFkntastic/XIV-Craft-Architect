@@ -12,8 +12,8 @@ public sealed class TradePayrollWorkflowDraft
     public string SourcePlanName { get; set; } = "Active craft plan";
     public Guid? AssignedCrafterId { get; set; }
     public string? AssignedCrafterDisplayName { get; set; }
-    public decimal CommissionPercent { get; set; } = CommissionPayoutPolicy.Default.CommissionPercent;
-    public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LegacyCommission;
+    public decimal CommissionPercent { get; set; } = TradePaymentPolicy.DefaultMaterialValueBonusPercent;
+    public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LaborStandard;
     public decimal LaborGilPerSynth { get; set; } = TradePaymentPolicy.DefaultLaborGilPerSynth;
     public IReadOnlyList<TradePayrollResponsibilityLine> Responsibilities { get; set; } = Array.Empty<TradePayrollResponsibilityLine>();
     public string? RemoteId { get; set; }
@@ -93,8 +93,8 @@ public sealed record TradeCommissionPaymentSummary(
         var policy = effectivePolicy != null
             ? TradePaymentPolicyNormalizer.Normalize(effectivePolicy)
             : TradePaymentPolicyNormalizer.Normalize(new TradePaymentPolicy(
-                draft?.ActivePaymentContract ?? TradePaymentContractMode.LegacyCommission,
-                draft?.CommissionPercent ?? CommissionPayoutPolicy.Default.CommissionPercent,
+                draft?.ActivePaymentContract ?? TradePaymentContractMode.LaborStandard,
+                draft?.CommissionPercent ?? TradePaymentPolicy.DefaultMaterialValueBonusPercent,
                 draft?.LaborGilPerSynth > 0
                     ? draft.LaborGilPerSynth
                     : TradePaymentPolicy.DefaultLaborGilPerSynth));

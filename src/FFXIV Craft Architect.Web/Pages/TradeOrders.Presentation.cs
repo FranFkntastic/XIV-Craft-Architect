@@ -67,13 +67,6 @@ public partial class TradeOrders
         return TradeOrderPaymentCopyFormatter.FormatPaymentBreakdown(breakdown);
     }
 
-    private static string FormatPaymentDifference(
-        TradePaymentContractBreakdown laborStandard,
-        TradePaymentContractBreakdown legacy)
-    {
-        return TradeOrderPaymentCopyFormatter.FormatPaymentDifference(laborStandard, legacy);
-    }
-
     private static string FormatCraftLaborBasis(TradePaymentContractBreakdown breakdown)
     {
         return TradeOrderPaymentDisplayFormatter.FormatCraftLaborBasis(breakdown);

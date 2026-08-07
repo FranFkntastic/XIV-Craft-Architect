@@ -957,7 +957,8 @@ public partial class TradeOrders
                     material.TotalCost))
                 .ToArray(),
             Payment = new CommissionBriefPayment(
-                terms.Payment.ContractLabel,
+                CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(
+                    terms.Payment.ContractLabel),
                 terms.Payment.MaterialReimbursement,
                 terms.Payment.MaterialAdjustment,
                 terms.Payment.CraftLabor,
@@ -1045,9 +1046,7 @@ public partial class TradeOrders
         };
 
     private static string FormatCommissionPaymentContract(TradePaymentContractMode contract) =>
-        contract == TradePaymentContractMode.LaborStandard
-            ? "Labor standard"
-            : "Legacy commission";
+        "Labor + material-value bonus";
 
     private static string FormatCommissionLocation(TradeOrderSourceSnapshot source)
     {

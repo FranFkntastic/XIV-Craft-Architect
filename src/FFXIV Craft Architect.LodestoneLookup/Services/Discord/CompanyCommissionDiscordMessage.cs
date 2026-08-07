@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
@@ -308,7 +309,7 @@ public static class CompanyCommissionDiscordMessage
                 ? $"\nLabor: {FormatGil(payment.CraftLabor)}"
                 : string.Empty;
 
-        return $"**{FormatGil(payment.Total)} total**\n{timing} | {payment.ContractLabel}" +
+        return $"**{FormatGil(payment.Total)} total**\n{timing} | {CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(payment.ContractLabel)}" +
             $"\nMaterials: {FormatGil(payment.MaterialReimbursement)}{labor}";
     }
 
