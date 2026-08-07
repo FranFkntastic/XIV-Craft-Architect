@@ -30,10 +30,16 @@ public sealed record DiscordIdentityLinkResult(
 
 public sealed record DiscordIdentityAuditEvent(
     Guid EventId,
-    Guid ProfileId,
+    Guid? ProfileId,
     string EventKind,
     string? DiscordUserId,
     DateTimeOffset CreatedAt);
+
+public enum DiscordOAuthPurpose
+{
+    Link,
+    SignIn
+}
 
 public enum DiscordOAuthStateStatus
 {
@@ -46,13 +52,16 @@ public enum DiscordOAuthStateStatus
 public sealed record DiscordOAuthStateConsumption(
     DiscordOAuthStateStatus Status,
     Guid? ProfileId = null,
-    string? PkceVerifier = null);
+    string? PkceVerifier = null,
+    DiscordOAuthPurpose? Purpose = null);
 
 public sealed record DiscordOAuthIdentity(
     string DiscordUserId,
     string DisplayName);
 
 public sealed record DiscordLinkStartResponse(string AuthorizationUrl);
+
+public sealed record DiscordSignInStatus(bool Enabled);
 
 public sealed record DiscordParticipantExchangeRequest(
     string BootstrapToken,

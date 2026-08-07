@@ -1,14 +1,97 @@
 @implements IAsyncDisposable
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.HostedOrderSyncCoordinator Coordinator
+@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileHostClient ProfileHostClient
+@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncLocalStateService LocalState
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
 
 @code {
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            await Coordinator.StartAsync();
+            try
+            {
+                await ConsumeDiscordSignInAsync();
+            }
+            finally
+            {
+                await Coordinator.StartAsync();
+            }
         }
     }
+
+    private async Task ConsumeDiscordSignInAsync()
+    {
+        SignInFragment? fragment;
+        try
+        {
+            fragment = await JSRuntime.InvokeAsync<SignInFragment?>(
+                "CraftArchitectDiscordIdentity.readSignInFragment");
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        if (fragment == null)
+        {
+            return;
+        }
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync(
+                "CraftArchitectDiscordIdentity.clearSignInFragment");
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
+            if (fragment.Kind == "signin" &&
+                fragment.Value is { Length: <= 256 } accessKey &&
+                accessKey.StartsWith("cap_", StringComparison.Ordinal))
+            {
+                var profile = await ProfileHostClient.GetProfileAsync(
+                    ProfileHostClient.DefaultHostUrl,
+                    accessKey,
+                    CancellationToken.None);
+                await LocalState.SaveConnectionSettingsAsync(new()
+                {
+                    HostUrl = ProfileHostClient.DefaultHostUrl,
+                    AccessKey = accessKey,
+                    RememberAccessKey = true,
+                    ConnectedProfileId = profile.ProfileId,
+                    ConnectedProfileName = profile.DisplayName
+                });
+            }
+            else if (fragment.Kind == "error")
+            {
+                Snackbar.Add(SignInErrorMessage(fragment.Value), Severity.Error);
+            }
+            else
+            {
+                Snackbar.Add("Discord sign-in could not be completed. Try again.", Severity.Error);
+            }
+        }
+        catch (Exception)
+        {
+            Snackbar.Add("Discord sign-in could not be completed. Try again.", Severity.Error);
+        }
+    }
+
+    private static string SignInErrorMessage(string? code) => code switch
+    {
+        "expired-state" => "Discord sign-in expired. Try again.",
+        "replayed-state" => "Discord sign-in was already completed. Start again if needed.",
+        "inactive-profile" => "This Craft Architect account is unavailable.",
+        "link-conflict" => "That Discord account is already linked elsewhere.",
+        _ => "Discord sign-in could not be completed. Try again."
+    };
+
+    private sealed record SignInFragment(string Kind, string? Value);
 
     public ValueTask DisposeAsync() => Coordinator.DisposeAsync();
 }

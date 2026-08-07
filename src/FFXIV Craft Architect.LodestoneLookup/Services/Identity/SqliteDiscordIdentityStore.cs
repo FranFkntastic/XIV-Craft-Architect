@@ -40,7 +40,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                 UPDATE discord_oauth_states
                 SET consumed_at_utc = COALESCE(consumed_at_utc, $createdAt),
                     pkce_verifier = ''
-                WHERE profile_id = $profileId AND consumed_at_utc IS NULL;
+                WHERE purpose = 'link' AND profile_id = $profileId AND consumed_at_utc IS NULL;
                 """;
             expire.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
             expire.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
@@ -53,12 +53,13 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             insert.CommandText = """
                 INSERT INTO discord_oauth_states (
                     state_hash,
+                    purpose,
                     profile_id,
                     pkce_verifier,
                     created_at_utc,
                     expires_at_utc,
                     consumed_at_utc)
-                VALUES ($stateHash, $profileId, $pkceVerifier, $createdAt, $expiresAt, NULL);
+                VALUES ($stateHash, 'link', $profileId, $pkceVerifier, $createdAt, $expiresAt, NULL);
                 """;
             insert.Parameters.AddWithValue("$stateHash", HashSecret(plaintextState));
             insert.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
@@ -73,6 +74,48 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             transaction,
             profileId,
             "oauth_started",
+            discordUserId: null,
+            createdAt,
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task CreateSignInOAuthStateAsync(
+        string plaintextState,
+        string pkceVerifier,
+        DateTimeOffset createdAt,
+        DateTimeOffset expiresAt,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsSecret(plaintextState, 32, 256) ||
+            !IsSecret(pkceVerifier, 43, 128) ||
+            expiresAt <= createdAt)
+        {
+            throw new ArgumentException("A valid OAuth state transaction is required.");
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        await using var insert = connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+            INSERT INTO discord_oauth_states (
+                state_hash, purpose, profile_id, pkce_verifier,
+                created_at_utc, expires_at_utc, consumed_at_utc)
+            VALUES ($stateHash, 'signin', NULL, $pkceVerifier, $createdAt, $expiresAt, NULL);
+            """;
+        insert.Parameters.AddWithValue("$stateHash", HashSecret(plaintextState));
+        insert.Parameters.AddWithValue("$pkceVerifier", pkceVerifier);
+        insert.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
+        insert.Parameters.AddWithValue("$expiresAt", expiresAt.ToString("O"));
+        await insert.ExecuteNonQueryAsync(cancellationToken);
+        await InsertAuditAsync(
+            connection,
+            transaction,
+            profileId: null,
+            "signin_oauth_started",
             discordUserId: null,
             createdAt,
             cancellationToken);
@@ -96,7 +139,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
         await using var select = connection.CreateCommand();
         select.Transaction = transaction;
         select.CommandText = """
-            SELECT profile_id, pkce_verifier, expires_at_utc, consumed_at_utc
+            SELECT profile_id, pkce_verifier, expires_at_utc, consumed_at_utc, purpose
             FROM discord_oauth_states
             WHERE state_hash = $stateHash;
             """;
@@ -108,10 +151,11 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             return new DiscordOAuthStateConsumption(DiscordOAuthStateStatus.Unknown);
         }
 
-        var profileId = Guid.Parse(reader.GetString(0));
+        var profileId = reader.IsDBNull(0) ? (Guid?)null : Guid.Parse(reader.GetString(0));
         var verifier = reader.GetString(1);
         var expiresAt = DateTimeOffset.Parse(reader.GetString(2));
         var alreadyConsumed = !reader.IsDBNull(3);
+        var purpose = ParsePurpose(reader.GetString(4));
         await reader.DisposeAsync();
         if (alreadyConsumed)
         {
@@ -126,7 +170,8 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             await transaction.CommitAsync(cancellationToken);
             return new DiscordOAuthStateConsumption(
                 DiscordOAuthStateStatus.Replayed,
-                profileId);
+                profileId,
+                Purpose: purpose);
         }
 
         await using (var consume = connection.CreateCommand())
@@ -145,7 +190,8 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                 await transaction.RollbackAsync(cancellationToken);
                 return new DiscordOAuthStateConsumption(
                     DiscordOAuthStateStatus.Replayed,
-                    profileId);
+                    profileId,
+                    Purpose: purpose);
             }
         }
 
@@ -162,7 +208,37 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
         return new DiscordOAuthStateConsumption(
             expired ? DiscordOAuthStateStatus.Expired : DiscordOAuthStateStatus.Consumed,
             profileId,
-            expired ? null : verifier);
+            expired ? null : verifier,
+            purpose);
+    }
+
+    public async Task RecordSignInAuditAsync(
+        Guid? profileId,
+        string eventKind,
+        string discordUserId,
+        DateTimeOffset createdAt,
+        CancellationToken cancellationToken = default)
+    {
+        if (profileId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(eventKind) ||
+            !DiscordIdentityValue.IsSnowflake(discordUserId))
+        {
+            throw new ArgumentException("A valid Discord sign-in audit event is required.");
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        await InsertAuditAsync(
+            connection,
+            transaction,
+            profileId,
+            eventKind,
+            discordUserId,
+            createdAt,
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<DiscordIdentityLinkResult> LinkAsync(
@@ -405,7 +481,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
         {
             events.Add(new DiscordIdentityAuditEvent(
                 Guid.Parse(reader.GetString(0)),
-                Guid.Parse(reader.GetString(1)),
+                reader.IsDBNull(1) ? null : Guid.Parse(reader.GetString(1)),
                 reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 DateTimeOffset.Parse(reader.GetString(4))));
@@ -683,6 +759,69 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                 return;
             }
 
+            await using (var version = connection.CreateCommand())
+            {
+                version.CommandText = "PRAGMA user_version;";
+                var schemaVersion = Convert.ToInt32(
+                    await version.ExecuteScalarAsync(cancellationToken));
+                if (schemaVersion < 2)
+                {
+                    var hasV1Tables = false;
+                    await using (var probe = connection.CreateCommand())
+                    {
+                        probe.CommandText = """
+                            SELECT COUNT(*) FROM sqlite_master
+                            WHERE type = 'table' AND name IN (
+                                'discord_oauth_states', 'discord_identity_audit');
+                            """;
+                        hasV1Tables = Convert.ToInt32(
+                            await probe.ExecuteScalarAsync(cancellationToken)) == 2;
+                    }
+
+                    if (hasV1Tables)
+                    {
+                        await using var recreate = connection.CreateCommand();
+                        recreate.CommandText = """
+                            BEGIN IMMEDIATE;
+                            CREATE TABLE IF NOT EXISTS discord_oauth_states_v2 (
+                                state_hash TEXT PRIMARY KEY,
+                                purpose TEXT NOT NULL CHECK (purpose IN ('link', 'signin')),
+                                profile_id TEXT NULL,
+                                pkce_verifier TEXT NOT NULL,
+                                created_at_utc TEXT NOT NULL,
+                                expires_at_utc TEXT NOT NULL,
+                                consumed_at_utc TEXT NULL
+                            );
+                            INSERT INTO discord_oauth_states_v2
+                                SELECT state_hash, 'link', profile_id, pkce_verifier,
+                                       created_at_utc, expires_at_utc, consumed_at_utc
+                                FROM discord_oauth_states;
+                            DROP TABLE discord_oauth_states;
+                            ALTER TABLE discord_oauth_states_v2 RENAME TO discord_oauth_states;
+
+                            CREATE TABLE IF NOT EXISTS discord_identity_audit_v2 (
+                                event_id TEXT PRIMARY KEY,
+                                profile_id TEXT NULL,
+                                event_kind TEXT NOT NULL,
+                                discord_user_id TEXT NULL,
+                                created_at_utc TEXT NOT NULL
+                            );
+                            INSERT INTO discord_identity_audit_v2
+                                SELECT event_id, profile_id, event_kind, discord_user_id, created_at_utc
+                                FROM discord_identity_audit;
+                            DROP TABLE discord_identity_audit;
+                            ALTER TABLE discord_identity_audit_v2 RENAME TO discord_identity_audit;
+                            COMMIT;
+                            """;
+                        await recreate.ExecuteNonQueryAsync(cancellationToken);
+                    }
+
+                    await using var mark = connection.CreateCommand();
+                    mark.CommandText = "PRAGMA user_version = 2;";
+                    await mark.ExecuteNonQueryAsync(cancellationToken);
+                }
+            }
+
             await using var command = connection.CreateCommand();
             command.CommandText = """
                 CREATE TABLE IF NOT EXISTS discord_identity_links (
@@ -701,7 +840,8 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
 
                 CREATE TABLE IF NOT EXISTS discord_oauth_states (
                     state_hash TEXT PRIMARY KEY,
-                    profile_id TEXT NOT NULL,
+                    purpose TEXT NOT NULL CHECK (purpose IN ('link', 'signin')),
+                    profile_id TEXT NULL,
                     pkce_verifier TEXT NOT NULL,
                     created_at_utc TEXT NOT NULL,
                     expires_at_utc TEXT NOT NULL,
@@ -712,7 +852,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
 
                 CREATE TABLE IF NOT EXISTS discord_identity_audit (
                     event_id TEXT PRIMARY KEY,
-                    profile_id TEXT NOT NULL,
+                    profile_id TEXT NULL,
                     event_kind TEXT NOT NULL,
                     discord_user_id TEXT NULL,
                     created_at_utc TEXT NOT NULL
@@ -781,7 +921,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
     private static async Task InsertAuditAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
-        Guid profileId,
+        Guid? profileId,
         string eventKind,
         string? discordUserId,
         DateTimeOffset createdAt,
@@ -795,7 +935,9 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             VALUES ($eventId, $profileId, $eventKind, $discordUserId, $createdAt);
             """;
         command.Parameters.AddWithValue("$eventId", Guid.NewGuid().ToString("D"));
-        command.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
+        command.Parameters.AddWithValue(
+            "$profileId",
+            profileId is { } value ? value.ToString("D") : DBNull.Value);
         command.Parameters.AddWithValue("$eventKind", eventKind);
         command.Parameters.AddWithValue(
             "$discordUserId",
@@ -821,4 +963,11 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
         value.Length <= maximum &&
         value.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+
+    private static DiscordOAuthPurpose ParsePurpose(string value) => value switch
+    {
+        "link" => DiscordOAuthPurpose.Link,
+        "signin" => DiscordOAuthPurpose.SignIn,
+        _ => throw new InvalidOperationException("The OAuth state purpose is invalid.")
+    };
 }

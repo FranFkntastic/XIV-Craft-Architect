@@ -23,6 +23,7 @@
 @inject IMarketCacheService MarketCache
 @inject GitHubIssueReportService GitHubIssueReportService
 @inject IJSRuntime JSRuntime
+@inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
@@ -463,6 +464,16 @@
                                       Class="mt-4" />
 
                         <div class="d-flex flex-wrap gap-2 mt-3">
+                            @if (_discordSignInEnabled)
+                            {
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.Login"
+                                           OnClick="SignInWithDiscordAsync"
+                                           Disabled="@(_profileHostIsBusy || _discordIdentityBusy)">
+                                    Sign in with Discord
+                                </MudButton>
+                            }
                             <MudButton Variant="Variant.Filled"
                                        Color="Color.Primary"
                                        StartIcon="@Icons.Material.Filled.CloudSync"
@@ -1194,6 +1205,7 @@
     private ProfileSyncBootstrapPreview? _profileHostBootstrapPreview;
     private HostedProfileConnectionSettings? _profileHostPendingSettings;
     private DiscordIdentityWebStatus? _discordIdentityStatus;
+    private bool _discordSignInEnabled;
     private bool _discordIdentityBusy;
     private string? _discordIdentityMessage;
     private Color _discordIdentityMessageColor = Color.Secondary;
@@ -1597,6 +1609,41 @@
         if (ProfileSync.CurrentStatus.IsConnected)
         {
             await RefreshDiscordIdentityAsync();
+        }
+        else
+        {
+            await RefreshDiscordSignInStatusAsync();
+        }
+    }
+
+    private async Task RefreshDiscordSignInStatusAsync()
+    {
+        try
+        {
+            _discordSignInEnabled = (await DiscordIdentityClient.GetSignInStatusAsync(
+                ProfileHostClient.DefaultHostUrl,
+                CancellationToken.None)).Enabled;
+        }
+        catch (Exception)
+        {
+            _discordSignInEnabled = false;
+        }
+    }
+
+    private async Task SignInWithDiscordAsync()
+    {
+        _discordIdentityBusy = true;
+        try
+        {
+            var authorizationUri = await DiscordIdentityClient.StartSignInAsync(
+                ProfileHostClient.DefaultHostUrl,
+                CancellationToken.None);
+            NavigationManager.NavigateTo(authorizationUri.AbsoluteUri, forceLoad: true);
+        }
+        catch (Exception)
+        {
+            Snackbar.Add("Discord sign-in could not be started.", Severity.Error);
+            _discordIdentityBusy = false;
         }
     }
 
