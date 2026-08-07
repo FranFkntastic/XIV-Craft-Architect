@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
@@ -50,6 +51,92 @@ public sealed class MembershipContractTests
         Assert.Equal(MembershipRole.Owner, founder.Role);
         Assert.Equal(MembershipState.Active, founder.State);
         Assert.Single(events);
+    }
+
+    [Fact]
+    public async Task CompanyPutRefusesMismatchedIdentityAndCompetingFounder()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var victim = await fixture.CreateAccountAsync("Victim owner");
+        var attacker = await fixture.CreateAccountAsync("Attacker");
+        var company = CreateCompany();
+        var companyId = new CompanyId(company.Id);
+        using var victimClient = fixture.CreateClient(victim.Key);
+        using var attackerClient = fixture.CreateClient(attacker.Key);
+        await PutCompanyAsync(victimClient, company);
+
+        await PutCompanyAsync(attackerClient, company, objectId: Guid.NewGuid());
+        var mismatched = await fixture.Memberships.LoadAsync(companyId, attacker.ProfileId);
+        await PutCompanyAsync(attackerClient, company);
+        var competing = await fixture.Memberships.LoadAsync(companyId, attacker.ProfileId);
+        var owner = await fixture.Memberships.LoadAsync(companyId, victim.ProfileId);
+
+        Assert.Null(mismatched);
+        Assert.Null(competing);
+        Assert.Equal(MembershipRole.Owner, owner!.Role);
+        Assert.Equal(MembershipState.Active, owner.State);
+    }
+
+    [Fact]
+    public async Task ReconciliationRefusesAmbiguousCompanyHolders()
+    {
+        await using var fixture = await MembershipFixture.CreateWithAmbiguousCompanyAsync();
+        var companyId = new CompanyId(fixture.ExistingCompanyId!.Value);
+
+        await fixture.Reconciler.RunReconciliationAsync(CancellationToken.None);
+        var first = await fixture.Memberships.LoadAsync(
+            companyId,
+            fixture.ExistingProfileId!.Value);
+        var second = await fixture.Memberships.LoadAsync(
+            companyId,
+            fixture.SecondExistingProfileId!.Value);
+
+        Assert.Null(first);
+        Assert.Null(second);
+    }
+
+    [Theory]
+    [InlineData(MembershipState.Pending)]
+    [InlineData(MembershipState.Denied)]
+    [InlineData(MembershipState.Revoked)]
+    public async Task FounderBindingNeverOverwritesExistingMembership(MembershipState state)
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var account = await fixture.CreateAccountAsync("Existing member");
+        var companyId = new CompanyId(Guid.NewGuid());
+        await fixture.Memberships.RequestAsync(companyId, account.ProfileId, "Keep this evidence");
+        if (state == MembershipState.Denied)
+        {
+            await fixture.Memberships.DenyAsync(
+                companyId,
+                account.ProfileId,
+                Guid.NewGuid());
+        }
+        else if (state == MembershipState.Revoked)
+        {
+            await fixture.Memberships.ApproveAsync(
+                companyId,
+                account.ProfileId,
+                Guid.NewGuid());
+            await fixture.Memberships.RevokeAsync(
+                companyId,
+                account.ProfileId,
+                Guid.NewGuid());
+        }
+        var before = await fixture.Memberships.LoadAsync(companyId, account.ProfileId);
+        var eventCount = (await fixture.Memberships.LoadEventsAsync(
+            companyId,
+            account.ProfileId)).Count;
+
+        var result = await fixture.Memberships.EnsureFounderAsync(companyId, account.ProfileId);
+        var after = await fixture.Memberships.LoadAsync(companyId, account.ProfileId);
+        var events = await fixture.Memberships.LoadEventsAsync(companyId, account.ProfileId);
+
+        Assert.Equal(FounderBindingStatus.ExistingMembership, result.Status);
+        Assert.Equal(before, after);
+        Assert.Equal(state, after!.State);
+        Assert.Equal("Keep this evidence", after.RequestNote);
+        Assert.Equal(eventCount, events.Count);
     }
 
     [Fact]
@@ -139,6 +226,85 @@ public sealed class MembershipContractTests
             events.Select(item => item.ToState));
         Assert.Equal(crafter.ProfileId, events[0].ActorProfileId);
         Assert.Equal(owner.ProfileId, events[^1].ActorProfileId);
+        Assert.Equal(
+            new[]
+            {
+                "First request",
+                "First request",
+                "Second request",
+                "Second request",
+                "Second request"
+            },
+            events.Select(item => item.RequestNote));
+        Assert.All(events, item => Assert.Equal(MembershipRole.Crafter, item.Role));
+        Assert.All(events, item => Assert.NotNull(item.RequestedAtUtc));
+        Assert.Null(events[0].DecidedAtUtc);
+        Assert.Null(events[0].DecidedByProfileId);
+        Assert.Equal(owner.ProfileId, events[1].DecidedByProfileId);
+        Assert.Null(events[2].DecidedAtUtc);
+        Assert.Null(events[2].DecidedByProfileId);
+        Assert.Equal(owner.ProfileId, events[3].DecidedByProfileId);
+        Assert.Equal(owner.ProfileId, events[4].DecidedByProfileId);
+    }
+
+    [Fact]
+    public async Task RetriedMembershipTransitionsReplayWithoutDuplicateEvents()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var approvedCrafter = await fixture.CreateAccountAsync("Approved crafter");
+        var deniedCrafter = await fixture.CreateAccountAsync("Denied crafter");
+        var company = CreateCompany();
+        var companyId = new CompanyId(company.Id);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var approvedClient = fixture.CreateClient(approvedCrafter.Key);
+        using var deniedClient = fixture.CreateClient(deniedCrafter.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(approvedClient, company.Id, "Approve me");
+        await RequestAsync(deniedClient, company.Id, "Deny me");
+
+        await AssertSuccessfulReplayAsync(
+            ownerClient,
+            company.Id,
+            approvedCrafter.ProfileId,
+            "approve");
+        await AssertSuccessfulReplayAsync(
+            ownerClient,
+            company.Id,
+            approvedCrafter.ProfileId,
+            "revoke");
+        await AssertSuccessfulReplayAsync(
+            ownerClient,
+            company.Id,
+            deniedCrafter.ProfileId,
+            "deny");
+        var approvedEvents = await fixture.Memberships.LoadEventsAsync(
+            companyId,
+            approvedCrafter.ProfileId);
+        var deniedEvents = await fixture.Memberships.LoadEventsAsync(
+            companyId,
+            deniedCrafter.ProfileId);
+
+        Assert.Equal(3, approvedEvents.Count);
+        Assert.Equal(2, deniedEvents.Count);
+    }
+
+    [Fact]
+    public async Task PeriodicReconciliationRepairsMissedFounderBinding()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync(
+            founderReconciliationIntervalSeconds: 1);
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany();
+        var companyId = new CompanyId(company.Id);
+        using var client = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(client, company);
+        await fixture.DeleteMembershipsAsync(company.Id);
+
+        var repaired = await fixture.WaitForMembershipAsync(companyId, owner.ProfileId);
+
+        Assert.Equal(MembershipRole.Owner, repaired.Role);
+        Assert.Equal(MembershipState.Active, repaired.State);
     }
 
     [Fact]
@@ -189,11 +355,12 @@ public sealed class MembershipContractTests
     private static async Task PutCompanyAsync(
         HttpClient client,
         TradeCompanyProfile company,
-        long expectedRevision = 0)
+        long expectedRevision = 0,
+        Guid? objectId = null)
     {
         company.UpdatedAtUtc = DateTime.UtcNow;
         using var response = await client.PutAsJsonAsync(
-            $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{company.Id:D}",
+            $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{objectId ?? company.Id:D}",
             new ProfileSyncPutRequest
             {
                 PayloadJson = JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
@@ -214,6 +381,22 @@ public sealed class MembershipContractTests
         return (await response.Content.ReadFromJsonAsync<MembershipResponse>())!;
     }
 
+    private static async Task AssertSuccessfulReplayAsync(
+        HttpClient client,
+        Guid companyId,
+        Guid accountProfileId,
+        string action)
+    {
+        var route = $"/trade/v1/companies/{companyId:D}/memberships/{accountProfileId:D}/{action}";
+        using var first = await client.PostAsync(route, null);
+        using var replay = await client.PostAsync(route, null);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(
+            await first.Content.ReadAsStringAsync(),
+            await replay.Content.ReadAsStringAsync());
+    }
+
     private sealed class MembershipFixture : IAsyncDisposable
     {
         private readonly string root;
@@ -223,25 +406,36 @@ public sealed class MembershipContractTests
             string root,
             WebApplicationFactory<Program> application,
             Guid? existingProfileId = null,
-            Guid? existingCompanyId = null)
+            Guid? existingCompanyId = null,
+            Guid? secondExistingProfileId = null)
         {
             this.root = root;
             this.application = application;
             ExistingProfileId = existingProfileId;
             ExistingCompanyId = existingCompanyId;
+            SecondExistingProfileId = secondExistingProfileId;
             Profiles = application.Services.GetRequiredService<SqliteProfileHostStore>();
             Memberships = application.Services.GetRequiredService<SqliteMembershipStore>();
+            Reconciler = application.Services
+                .GetServices<IHostedService>()
+                .OfType<FounderMembershipReconciler>()
+                .Single();
         }
 
         public SqliteProfileHostStore Profiles { get; }
         public SqliteMembershipStore Memberships { get; }
+        public FounderMembershipReconciler Reconciler { get; }
         public Guid? ExistingProfileId { get; }
         public Guid? ExistingCompanyId { get; }
+        public Guid? SecondExistingProfileId { get; }
 
-        public static Task<MembershipFixture> CreateAsync()
+        public static Task<MembershipFixture> CreateAsync(
+            int founderReconciliationIntervalSeconds = 300)
         {
             var root = CreateRoot();
-            return Task.FromResult(new MembershipFixture(root, CreateApplication(root)));
+            return Task.FromResult(new MembershipFixture(
+                root,
+                CreateApplication(root, founderReconciliationIntervalSeconds)));
         }
 
         public static async Task<MembershipFixture> CreateWithExistingCompanyAsync()
@@ -269,6 +463,37 @@ public sealed class MembershipContractTests
                 company.Id);
         }
 
+        public static async Task<MembershipFixture> CreateWithAmbiguousCompanyAsync()
+        {
+            var root = CreateRoot();
+            var store = new SqliteProfileHostStore(new ProfileHostOptions
+            {
+                Enabled = true,
+                DatabasePath = Path.Combine(root, "profiles.db")
+            });
+            var first = await store.CreateProfileAsync("First holder", CancellationToken.None);
+            var second = await store.CreateProfileAsync("Second holder", CancellationToken.None);
+            var company = CreateCompany();
+            foreach (var profileId in new[] { first.ProfileId, second.ProfileId })
+            {
+                var put = await store.PutObjectAsync(
+                    profileId,
+                    ProfileSyncCollections.TradeCompanyProfiles,
+                    company.Id.ToString("D"),
+                    JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
+                    0,
+                    CancellationToken.None);
+                Assert.True(put.Success);
+            }
+
+            return new MembershipFixture(
+                root,
+                CreateApplication(root),
+                Guid.Parse(first.ProfileId),
+                company.Id,
+                Guid.Parse(second.ProfileId));
+        }
+
         public HttpClient CreateClient(string key)
         {
             var client = application.CreateClient();
@@ -292,7 +517,7 @@ public sealed class MembershipContractTests
             CompanyId companyId,
             Guid profileId)
         {
-            for (var attempt = 0; attempt < 50; attempt++)
+            for (var attempt = 0; attempt < 150; attempt++)
             {
                 var membership = await Memberships.LoadAsync(companyId, profileId);
                 if (membership != null)
@@ -341,7 +566,9 @@ public sealed class MembershipContractTests
             return root;
         }
 
-        private static WebApplicationFactory<Program> CreateApplication(string root) =>
+        private static WebApplicationFactory<Program> CreateApplication(
+            string root,
+            int founderReconciliationIntervalSeconds = 300) =>
             new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
                 builder.ConfigureAppConfiguration((_, configuration) =>
                     configuration.AddInMemoryCollection(new Dictionary<string, string?>
@@ -349,7 +576,9 @@ public sealed class MembershipContractTests
                         ["ProfileHost:Enabled"] = "true",
                         ["ProfileHost:DatabasePath"] = Path.Combine(root, "profiles.db"),
                         ["ProfileHost:ArchiveBackupDirectory"] = Path.Combine(root, "archive"),
-                        ["TradeMemberships:DatabasePath"] = Path.Combine(root, "memberships.db")
+                        ["TradeMemberships:DatabasePath"] = Path.Combine(root, "memberships.db"),
+                        ["TradeMemberships:FounderReconciliationIntervalSeconds"] =
+                            founderReconciliationIntervalSeconds.ToString()
                     })));
     }
 

@@ -46,15 +46,32 @@ public sealed record MembershipEvent(
     MembershipState? FromState,
     MembershipState ToState,
     Guid ActorProfileId,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    MembershipRole? Role,
+    DateTimeOffset? RequestedAtUtc,
+    DateTimeOffset? DecidedAtUtc,
+    Guid? DecidedByProfileId,
+    string? RequestNote);
 
 public sealed record MembershipMutationResult(
     MembershipMutationStatus Status,
     CompanyMembership? Membership = null);
 
+public enum FounderBindingStatus
+{
+    Bound,
+    ExistingMembership,
+    ConflictingOwner
+}
+
+public sealed record FounderBindingResult(
+    FounderBindingStatus Status,
+    CompanyMembership? Membership = null,
+    Guid? ConflictingOwnerProfileId = null);
+
 public interface ITradeCompanyFounderBinder
 {
-    Task BindFounderAsync(
+    Task<FounderBindingResult> BindFounderAsync(
         CompanyId companyId,
         Guid accountProfileId,
         CancellationToken cancellationToken = default);
@@ -62,19 +79,20 @@ public interface ITradeCompanyFounderBinder
 
 public sealed class SqliteMembershipStore(
     TradeMembershipOptions options,
-    TimeProvider timeProvider) : ITradeCompanyFounderBinder
+    TimeProvider timeProvider,
+    ILogger<SqliteMembershipStore> logger) : ITradeCompanyFounderBinder
 {
     public const int MaximumRequestNoteLength = 500;
     private readonly SemaphoreSlim schemaGate = new(1, 1);
     private bool schemaReady;
 
-    public async Task BindFounderAsync(
+    public async Task<FounderBindingResult> BindFounderAsync(
         CompanyId companyId,
         Guid accountProfileId,
         CancellationToken cancellationToken = default) =>
-        _ = await EnsureFounderAsync(companyId, accountProfileId, cancellationToken);
+        await EnsureFounderAsync(companyId, accountProfileId, cancellationToken);
 
-    public async Task<CompanyMembership> EnsureFounderAsync(
+    public async Task<FounderBindingResult> EnsureFounderAsync(
         CompanyId companyId,
         Guid accountProfileId,
         CancellationToken cancellationToken = default)
@@ -91,13 +109,25 @@ public sealed class SqliteMembershipStore(
             companyId,
             accountProfileId,
             cancellationToken);
-        if (existing is { Role: MembershipRole.Owner, State: MembershipState.Active })
+        if (existing != null)
         {
             await transaction.CommitAsync(cancellationToken);
-            return existing;
+            return new FounderBindingResult(
+                FounderBindingStatus.ExistingMembership,
+                existing);
         }
 
         var now = timeProvider.GetUtcNow();
+        var founder = new CompanyMembership(
+            companyId,
+            accountProfileId,
+            MembershipRole.Owner,
+            MembershipState.Active,
+            now,
+            now,
+            accountProfileId,
+            null);
+        int inserted;
         await using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
@@ -105,35 +135,67 @@ public sealed class SqliteMembershipStore(
                 INSERT INTO company_memberships (
                     company_id, account_profile_id, role, state, requested_at_utc,
                     decided_at_utc, decided_by_profile_id, request_note)
-                VALUES (
+                SELECT
                     $companyId, $accountProfileId, 'owner', 'active', $requestedAtUtc,
-                    $decidedAtUtc, $decidedByProfileId, NULL)
-                ON CONFLICT(company_id, account_profile_id) DO UPDATE SET
-                    role = 'owner',
-                    state = 'active',
-                    decided_at_utc = excluded.decided_at_utc,
-                    decided_by_profile_id = excluded.decided_by_profile_id,
-                    request_note = NULL;
+                    $decidedAtUtc, $decidedByProfileId, NULL
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM company_memberships
+                    WHERE company_id = $companyId
+                      AND role = 'owner'
+                      AND state = 'active'
+                      AND account_profile_id <> $accountProfileId)
+                ON CONFLICT(company_id, account_profile_id) DO NOTHING;
                 """;
             command.Parameters.AddWithValue("$companyId", companyId.ToString());
             command.Parameters.AddWithValue("$accountProfileId", accountProfileId.ToString("D"));
             command.Parameters.AddWithValue("$requestedAtUtc", now.ToString("O"));
             command.Parameters.AddWithValue("$decidedAtUtc", now.ToString("O"));
             command.Parameters.AddWithValue("$decidedByProfileId", accountProfileId.ToString("D"));
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            inserted = await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        if (inserted == 0)
+        {
+            var concurrentlyExisting = await LoadAsync(
+                connection,
+                transaction,
+                companyId,
+                accountProfileId,
+                cancellationToken);
+            if (concurrentlyExisting != null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return new FounderBindingResult(
+                    FounderBindingStatus.ExistingMembership,
+                    concurrentlyExisting);
+            }
+
+            var conflictingOwner = await LoadActiveOwnerProfileIdAsync(
+                connection,
+                transaction,
+                companyId,
+                accountProfileId,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            logger.LogError(
+                "Founder membership refused for company {CompanyId}, profile {ProfileId}: active owner profile {ConflictingProfileId} already exists.",
+                companyId,
+                accountProfileId,
+                conflictingOwner);
+            return new FounderBindingResult(
+                FounderBindingStatus.ConflictingOwner,
+                ConflictingOwnerProfileId: conflictingOwner);
         }
         await InsertEventAsync(
             connection,
             transaction,
-            companyId,
-            accountProfileId,
             existing?.State,
-            MembershipState.Active,
+            founder,
             accountProfileId,
             now,
             cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return (await LoadAsync(companyId, accountProfileId, cancellationToken))!;
+        return new FounderBindingResult(FounderBindingStatus.Bound, founder);
     }
 
     public async Task<MembershipMutationResult> RequestAsync(
@@ -162,6 +224,15 @@ public sealed class SqliteMembershipStore(
         }
 
         var now = timeProvider.GetUtcNow();
+        var pending = new CompanyMembership(
+            companyId,
+            accountProfileId,
+            MembershipRole.Crafter,
+            MembershipState.Pending,
+            now,
+            null,
+            null,
+            requestNote);
         await using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
@@ -188,17 +259,15 @@ public sealed class SqliteMembershipStore(
         await InsertEventAsync(
             connection,
             transaction,
-            companyId,
-            accountProfileId,
             existing?.State,
-            MembershipState.Pending,
+            pending,
             accountProfileId,
             now,
             cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new MembershipMutationResult(
             MembershipMutationStatus.Applied,
-            await LoadAsync(companyId, accountProfileId, cancellationToken));
+            pending);
     }
 
     public Task<MembershipMutationResult> ApproveAsync(
@@ -290,10 +359,11 @@ public sealed class SqliteMembershipStore(
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT event_id, company_id, account_profile_id, from_state, to_state,
-                   actor_profile_id, created_at_utc
+                   actor_profile_id, created_at_utc, role, requested_at_utc,
+                   decided_at_utc, decided_by_profile_id, request_note
             FROM membership_events
             WHERE company_id = $companyId AND account_profile_id = $accountProfileId
-            ORDER BY created_at_utc, event_id;
+            ORDER BY rowid;
             """;
         AddMembershipIdentity(command, companyId, accountProfileId);
         var events = new List<MembershipEvent>();
@@ -307,7 +377,16 @@ public sealed class SqliteMembershipStore(
                 reader.IsDBNull(3) ? null : ParseState(reader.GetString(3)),
                 ParseState(reader.GetString(4)),
                 Guid.Parse(reader.GetString(5)),
-                DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture)));
+                DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
+                reader.IsDBNull(7) ? null : ParseRole(reader.GetString(7)),
+                reader.IsDBNull(8)
+                    ? null
+                    : DateTimeOffset.Parse(reader.GetString(8), CultureInfo.InvariantCulture),
+                reader.IsDBNull(9)
+                    ? null
+                    : DateTimeOffset.Parse(reader.GetString(9), CultureInfo.InvariantCulture),
+                reader.IsDBNull(10) ? null : Guid.Parse(reader.GetString(10)),
+                reader.IsDBNull(11) ? null : reader.GetString(11)));
         }
         return events;
     }
@@ -342,6 +421,11 @@ public sealed class SqliteMembershipStore(
             await transaction.RollbackAsync(cancellationToken);
             return new MembershipMutationResult(MembershipMutationStatus.NotFound);
         }
+        if (current.State == targetState)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return new MembershipMutationResult(MembershipMutationStatus.Replayed, current);
+        }
         if (current.State != expectedState)
         {
             await transaction.RollbackAsync(cancellationToken);
@@ -356,6 +440,12 @@ public sealed class SqliteMembershipStore(
         }
 
         var now = timeProvider.GetUtcNow();
+        var transitioned = current with
+        {
+            State = targetState,
+            DecidedAtUtc = now,
+            DecidedByProfileId = actorProfileId
+        };
         await using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
@@ -382,17 +472,15 @@ public sealed class SqliteMembershipStore(
         await InsertEventAsync(
             connection,
             transaction,
-            companyId,
-            accountProfileId,
             current.State,
-            targetState,
+            transitioned,
             actorProfileId,
             now,
             cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new MembershipMutationResult(
             MembershipMutationStatus.Applied,
-            await LoadAsync(companyId, accountProfileId, cancellationToken));
+            transitioned);
     }
 
     private async Task<IReadOnlyList<CompanyMembership>> LoadManyAsync(
@@ -457,13 +545,36 @@ public sealed class SqliteMembershipStore(
         return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
     }
 
-    private static async Task InsertEventAsync(
+    private static async Task<Guid?> LoadActiveOwnerProfileIdAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         CompanyId companyId,
-        Guid accountProfileId,
+        Guid excludedProfileId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT account_profile_id
+            FROM company_memberships
+            WHERE company_id = $companyId
+              AND role = 'owner'
+              AND state = 'active'
+              AND account_profile_id <> $excludedProfileId
+            ORDER BY account_profile_id
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$excludedProfileId", excludedProfileId.ToString("D"));
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        return value is string profileId ? Guid.Parse(profileId) : null;
+    }
+
+    private static async Task InsertEventAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
         MembershipState? fromState,
-        MembershipState toState,
+        CompanyMembership snapshot,
         Guid actorProfileId,
         DateTimeOffset createdAtUtc,
         CancellationToken cancellationToken)
@@ -473,19 +584,36 @@ public sealed class SqliteMembershipStore(
         command.CommandText = """
             INSERT INTO membership_events (
                 event_id, company_id, account_profile_id, from_state, to_state,
-                actor_profile_id, created_at_utc)
+                actor_profile_id, created_at_utc, role, requested_at_utc,
+                decided_at_utc, decided_by_profile_id, request_note)
             VALUES (
                 $eventId, $companyId, $accountProfileId, $fromState, $toState,
-                $actorProfileId, $createdAtUtc);
+                $actorProfileId, $createdAtUtc, $role, $requestedAtUtc,
+                $decidedAtUtc, $decidedByProfileId, $requestNote);
             """;
         command.Parameters.AddWithValue("$eventId", Guid.NewGuid().ToString("D"));
-        AddMembershipIdentity(command, companyId, accountProfileId);
+        AddMembershipIdentity(command, snapshot.CompanyId, snapshot.AccountProfileId);
         command.Parameters.AddWithValue(
             "$fromState",
             fromState.HasValue ? ToStorage(fromState.Value) : DBNull.Value);
-        command.Parameters.AddWithValue("$toState", ToStorage(toState));
+        command.Parameters.AddWithValue("$toState", ToStorage(snapshot.State));
         command.Parameters.AddWithValue("$actorProfileId", actorProfileId.ToString("D"));
         command.Parameters.AddWithValue("$createdAtUtc", createdAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$role", ToStorage(snapshot.Role));
+        command.Parameters.AddWithValue("$requestedAtUtc", snapshot.RequestedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue(
+            "$decidedAtUtc",
+            snapshot.DecidedAtUtc.HasValue
+                ? snapshot.DecidedAtUtc.Value.ToString("O")
+                : DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$decidedByProfileId",
+            snapshot.DecidedByProfileId.HasValue
+                ? snapshot.DecidedByProfileId.Value.ToString("D")
+                : DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$requestNote",
+            (object?)snapshot.RequestNote ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -528,7 +656,12 @@ public sealed class SqliteMembershipStore(
                     from_state TEXT NULL CHECK(from_state IS NULL OR from_state IN ('pending', 'active', 'denied', 'revoked')),
                     to_state TEXT NOT NULL CHECK(to_state IN ('pending', 'active', 'denied', 'revoked')),
                     actor_profile_id TEXT NOT NULL,
-                    created_at_utc TEXT NOT NULL
+                    created_at_utc TEXT NOT NULL,
+                    role TEXT NULL,
+                    requested_at_utc TEXT NULL,
+                    decided_at_utc TEXT NULL,
+                    decided_by_profile_id TEXT NULL,
+                    request_note TEXT NULL
                 );
 
                 CREATE INDEX IF NOT EXISTS ix_company_memberships_account_state
@@ -537,12 +670,56 @@ public sealed class SqliteMembershipStore(
                     ON membership_events(company_id, account_profile_id, created_at_utc);
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
+            await AddEventColumnIfMissingAsync(connection, "role", "TEXT NULL", cancellationToken);
+            await AddEventColumnIfMissingAsync(
+                connection,
+                "requested_at_utc",
+                "TEXT NULL",
+                cancellationToken);
+            await AddEventColumnIfMissingAsync(
+                connection,
+                "decided_at_utc",
+                "TEXT NULL",
+                cancellationToken);
+            await AddEventColumnIfMissingAsync(
+                connection,
+                "decided_by_profile_id",
+                "TEXT NULL",
+                cancellationToken);
+            await AddEventColumnIfMissingAsync(
+                connection,
+                "request_note",
+                "TEXT NULL",
+                cancellationToken);
             schemaReady = true;
         }
         finally
         {
             schemaGate.Release();
         }
+    }
+
+    private static async Task AddEventColumnIfMissingAsync(
+        SqliteConnection connection,
+        string columnName,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        await using var inspect = connection.CreateCommand();
+        inspect.CommandText = "PRAGMA table_info(membership_events);";
+        await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        await reader.DisposeAsync();
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE membership_events ADD COLUMN {columnName} {definition};";
+        await alter.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
@@ -629,6 +806,14 @@ public sealed class SqliteMembershipStore(
         "denied" => MembershipState.Denied,
         "revoked" => MembershipState.Revoked,
         _ => throw new InvalidDataException("Stored membership state is invalid.")
+    };
+
+    private static string ToStorage(MembershipRole role) => role switch
+    {
+        MembershipRole.Owner => "owner",
+        MembershipRole.Operator => "operator",
+        MembershipRole.Crafter => "crafter",
+        _ => throw new ArgumentOutOfRangeException(nameof(role))
     };
 
     private static string ToStorage(MembershipState state) => state switch

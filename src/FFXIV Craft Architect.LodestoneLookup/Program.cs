@@ -78,7 +78,13 @@ builder.Services.AddSingleton(services => new TradeMembershipOptions
         ?? Path.Combine(
             Path.GetDirectoryName(Path.GetFullPath(
                 services.GetRequiredService<ProfileHostOptions>().DatabasePath))!,
-            "trade-memberships.db")
+            "trade-memberships.db"),
+    FounderReconciliationInterval = TimeSpan.FromSeconds(Math.Clamp(
+        builder.Configuration.GetValue(
+            "TradeMemberships:FounderReconciliationIntervalSeconds",
+            300),
+        1,
+        3600))
 });
 builder.Services.AddSingleton<SqliteMembershipStore>();
 builder.Services.AddSingleton<ITradeCompanyFounderBinder>(services =>

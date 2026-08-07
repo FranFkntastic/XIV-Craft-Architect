@@ -168,7 +168,8 @@ public static class MembershipEndpoints
                     cancellationToken);
                 return result.Status switch
                 {
-                    MembershipMutationStatus.Applied => Results.Ok(ToResponse(result.Membership!)),
+                    MembershipMutationStatus.Applied or MembershipMutationStatus.Replayed =>
+                        Results.Ok(ToResponse(result.Membership!)),
                     MembershipMutationStatus.NotFound => Results.NotFound(),
                     MembershipMutationStatus.LastOwner => Results.Conflict(
                         new MembershipErrorResponse(
