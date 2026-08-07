@@ -9,6 +9,7 @@ public interface IDiscordOAuthClient
     Task<DiscordOAuthIdentity?> ResolveIdentityAsync(
         string code,
         string pkceVerifier,
+        string callbackUri,
         CancellationToken cancellationToken = default);
 }
 
@@ -22,9 +23,12 @@ public sealed class DiscordOAuthClient(
     public async Task<DiscordOAuthIdentity?> ResolveIdentityAsync(
         string code,
         string pkceVerifier,
+        string callbackUri,
         CancellationToken cancellationToken = default)
     {
-        if (!IsBounded(code, 1, 512) || !IsBounded(pkceVerifier, 43, 128))
+        if (!IsBounded(code, 1, 512) ||
+            !IsBounded(pkceVerifier, 43, 128) ||
+            !Uri.TryCreate(callbackUri, UriKind.Absolute, out _))
         {
             return null;
         }
@@ -39,7 +43,7 @@ public sealed class DiscordOAuthClient(
                 ["client_secret"] = options.ClientSecret,
                 ["grant_type"] = "authorization_code",
                 ["code"] = code,
-                ["redirect_uri"] = options.CallbackUri,
+                ["redirect_uri"] = callbackUri,
                 ["code_verifier"] = pkceVerifier
             })
         };

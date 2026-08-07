@@ -806,6 +806,7 @@ public sealed class DiscordIdentityContractTests
         public Task<DiscordOAuthIdentity?> ResolveIdentityAsync(
             string code,
             string pkceVerifier,
+            string callbackUri,
             CancellationToken cancellationToken = default)
         {
             LastVerifier = pkceVerifier;
