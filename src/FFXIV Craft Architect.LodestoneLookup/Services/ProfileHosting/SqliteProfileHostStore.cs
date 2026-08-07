@@ -2,6 +2,7 @@ using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.Data.Sqlite;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
@@ -18,13 +19,16 @@ public sealed class SqliteProfileHostStore
 
     private readonly ProfileHostOptions _options;
     private readonly ProfileHostChangeSignal? _changeSignal;
+    private readonly ITradeCompanyFounderBinder? _founderBinder;
 
     public SqliteProfileHostStore(
         ProfileHostOptions options,
-        ProfileHostChangeSignal? changeSignal = null)
+        ProfileHostChangeSignal? changeSignal = null,
+        ITradeCompanyFounderBinder? founderBinder = null)
     {
         _options = options;
         _changeSignal = changeSignal;
+        _founderBinder = founderBinder;
     }
 
     public async Task<ProfileHostProfileResponse> CreateProfileAsync(string displayName, CancellationToken ct)
@@ -1164,6 +1168,19 @@ public sealed class SqliteProfileHostStore
         }
         await transaction.CommitAsync(ct);
         _changeSignal?.Publish(profileId, revision);
+        if (_founderBinder != null &&
+            string.Equals(
+                collection,
+                ProfileSyncCollections.TradeCompanyProfiles,
+                StringComparison.Ordinal) &&
+            FounderMembershipBinding.TryRead(
+                profileId,
+                payloadJson,
+                out var companyId,
+                out var accountProfileId))
+        {
+            await _founderBinder.BindFounderAsync(companyId, accountProfileId, ct);
+        }
 
         return new ProfileSyncPutResponse
         {

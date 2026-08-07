@@ -72,6 +72,17 @@ builder.Services.AddSingleton<ProfileAccessKeyHasher>();
 builder.Services.AddSingleton<ProfilePairingCodeService>();
 builder.Services.AddSingleton<ProfileAuthenticationGate>();
 builder.Services.AddSingleton<ProfileHostChangeSignal>();
+builder.Services.AddSingleton(services => new TradeMembershipOptions
+{
+    DatabasePath = builder.Configuration["TradeMemberships:DatabasePath"]
+        ?? Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(
+                services.GetRequiredService<ProfileHostOptions>().DatabasePath))!,
+            "trade-memberships.db")
+});
+builder.Services.AddSingleton<SqliteMembershipStore>();
+builder.Services.AddSingleton<ITradeCompanyFounderBinder>(services =>
+    services.GetRequiredService<SqliteMembershipStore>());
 builder.Services.AddSingleton<SqliteProfileHostStore>();
 builder.Services.AddSingleton<ProfileArchiveBackupStore>();
 builder.Services.AddHostedService<ProfileHostRetentionService>();
@@ -168,6 +179,8 @@ builder.Services.AddSingleton(_ =>
 });
 builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
 builder.Services.AddSingleton<TradeCompanyAuthorization>();
+builder.Services.AddSingleton<MembershipAccessResolver>();
+builder.Services.AddHostedService<FounderMembershipReconciler>();
 builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();
 builder.Services.AddSingleton<HostedCompanyCommissionService>();
 builder.Services.AddSingleton<
@@ -331,6 +344,7 @@ app.MapCraftAppraisalEndpoints();
 app.MapCommissionBriefEndpoints();
 app.MapCompanyCommissionBriefEndpoints();
 app.MapCompanyCommissionEndpoints();
+app.MapMembershipEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
 app.MapDiscordNotificationEndpoints();
