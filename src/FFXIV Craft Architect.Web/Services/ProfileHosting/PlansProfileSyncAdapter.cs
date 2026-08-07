@@ -2,7 +2,9 @@ using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
-public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
+public sealed class PlansProfileSyncAdapter :
+    IProfileSyncCollectionAdapter,
+    IProfileSyncSingleObjectAdapter
 {
     private readonly IndexedDbService _indexedDb;
     private readonly WebPlanPersistenceService _planPersistence;
@@ -71,6 +73,15 @@ public sealed class PlansProfileSyncAdapter : IProfileSyncCollectionAdapter
         }
 
         return objects;
+    }
+
+    public async Task<ProfileSyncObjectEnvelope?> LoadLocalObjectAsync(
+        string objectId,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var plan = await _indexedDb.LoadPlanAsync(objectId);
+        return plan == null ? null : ToSyncObject(plan, DateTime.UtcNow);
     }
 
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
