@@ -174,17 +174,6 @@ public static class DiscordCommissionMessage
                     custom_id = $"claim-discord:{actionToken}"
                 });
             }
-
-            if (state is DiscordPublicationState.Open or DiscordPublicationState.Assigned)
-            {
-                buttons.Add(new
-                {
-                    type = 2,
-                    style = 2,
-                    label = "Open my workspace",
-                    custom_id = $"open-workspace:{actionToken}"
-                });
-            }
         }
         return
         [
