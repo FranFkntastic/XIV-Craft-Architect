@@ -69,7 +69,7 @@ public static class ProfileHostEndpoints
 
                 return Results.Ok(await store.LoadActiveAccessKeysAsync(
                     authenticated.Profile.ProfileId,
-                    authenticated.KeyId,
+                    authenticated.KeyIds,
                     cancellationToken));
             });
 
@@ -99,10 +99,13 @@ public static class ProfileHostEndpoints
                     return Results.Unauthorized();
                 }
 
-                await store.RevokeAccessKeyAsync(
-                    authenticated.Profile.ProfileId,
-                    authenticated.KeyId,
-                    cancellationToken);
+                foreach (var keyId in authenticated.KeyIds)
+                {
+                    await store.RevokeAccessKeyAsync(
+                        authenticated.Profile.ProfileId,
+                        keyId,
+                        cancellationToken);
+                }
                 return Results.NoContent();
             });
 
@@ -132,7 +135,7 @@ public static class ProfileHostEndpoints
                 {
                     return Results.Unauthorized();
                 }
-                if (string.Equals(keyId, authenticated.KeyId, StringComparison.Ordinal))
+                if (authenticated.KeyIds.Contains(keyId, StringComparer.Ordinal))
                 {
                     return Results.BadRequest(new
                     {

@@ -700,7 +700,7 @@ public sealed class SqliteProfileHostStore
 
     public async Task<IReadOnlyList<ProfileHostAccessKeyMetadata>> LoadActiveAccessKeysAsync(
         string profileId,
-        string currentKeyId,
+        IReadOnlyCollection<string> currentKeyIds,
         CancellationToken ct)
     {
         await EnsureSchemaAsync(ct);
@@ -731,7 +731,7 @@ public sealed class SqliteProfileHostStore
                         reader.GetString(2),
                         CultureInfo.InvariantCulture,
                         DateTimeStyles.RoundtripKind),
-                IsCurrent = string.Equals(reader.GetString(0), currentKeyId, StringComparison.Ordinal)
+                IsCurrent = currentKeyIds.Contains(reader.GetString(0), StringComparer.Ordinal)
             });
         }
 
@@ -797,31 +797,35 @@ public sealed class SqliteProfileHostStore
             """;
 
         await using var reader = await command.ExecuteReaderAsync(ct);
+        var matches = new List<(string ProfileId, string DisplayName, string KeyId)>();
         while (await reader.ReadAsync(ct))
         {
-            var profileId = reader.GetString(0);
-            var displayName = reader.GetString(1);
-            var keyId = reader.GetString(2);
-            var storedHash = reader.GetString(3);
-            if (!hasher.Verify(plaintextKey, storedHash))
+            if (hasher.Verify(plaintextKey, reader.GetString(3)))
             {
-                continue;
+                matches.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
             }
+        }
+        await reader.DisposeAsync();
 
-            await reader.DisposeAsync();
-            await TouchAccessKeyAsync(connection, keyId, ct);
-            var revision = await GetServerRevisionAsync(connection, profileId, ct);
-            return new AuthenticatedProfileAccessKey(
-                new ProfileHostProfileResponse
-                {
-                    ProfileId = profileId,
-                    DisplayName = displayName,
-                    ServerRevision = revision
-                },
-                keyId);
+        if (matches.Count == 0 || matches.Any(match => match.ProfileId != matches[0].ProfileId))
+        {
+            return null;
         }
 
-        return null;
+        foreach (var match in matches)
+        {
+            await TouchAccessKeyAsync(connection, match.KeyId, ct);
+        }
+        var profileId = matches[0].ProfileId;
+        var revision = await GetServerRevisionAsync(connection, profileId, ct);
+        return new AuthenticatedProfileAccessKey(
+            new ProfileHostProfileResponse
+            {
+                ProfileId = profileId,
+                DisplayName = matches[0].DisplayName,
+                ServerRevision = revision
+            },
+            matches.Select(match => match.KeyId).ToArray());
     }
 
     public async Task<ProfileSyncChangesResponse> LoadChangesAsync(
@@ -1833,4 +1837,4 @@ public sealed record ProfileAccessKeyImportResult(
 
 public sealed record AuthenticatedProfileAccessKey(
     ProfileHostProfileResponse Profile,
-    string KeyId);
+    IReadOnlyList<string> KeyIds);
