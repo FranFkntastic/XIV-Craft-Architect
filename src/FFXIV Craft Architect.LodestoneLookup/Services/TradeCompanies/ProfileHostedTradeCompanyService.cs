@@ -6,7 +6,8 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 public sealed class ProfileHostedTradeCompanyService(
     SqliteProfileHostStore profiles,
-    ProfileAccessKeyHasher accessKeyHasher)
+    ProfileAccessKeyHasher accessKeyHasher,
+    SqliteMembershipStore? memberships = null)
 {
     private const string CompanyCollectionPrefix = "tradeCompany.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -58,6 +59,63 @@ public sealed class ProfileHostedTradeCompanyService(
             companyId,
             hostProfileId,
             TradeCompanyRole.Owner,
+            hostProfileId);
+    }
+
+    public async Task<TradeCompanyAccessContext?> ResolveMembershipAccessAsync(
+        Guid accountProfileId,
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        if (accountProfileId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var hosted = await profiles.FindObjectAsync(
+            ProfileSyncCollections.TradeCompanyProfiles,
+            companyId.ToString(),
+            cancellationToken);
+        if (hosted is not { Object.Deleted: false } ||
+            !Guid.TryParse(hosted.ProfileId, out var hostProfileId) ||
+            hostProfileId == Guid.Empty ||
+            await LoadCompanyProfileAsync(
+                hosted.ProfileId,
+                companyId,
+                cancellationToken) == null)
+        {
+            return null;
+        }
+
+        if (accountProfileId == hostProfileId)
+        {
+            return new TradeCompanyAccessContext(
+                companyId,
+                accountProfileId,
+                TradeCompanyRole.Owner,
+                hostProfileId);
+        }
+
+        var membership = memberships == null
+            ? null
+            : await memberships.LoadAsync(
+                companyId,
+                accountProfileId,
+                cancellationToken);
+        if (membership is not { State: MembershipState.Active })
+        {
+            return null;
+        }
+
+        return new TradeCompanyAccessContext(
+            companyId,
+            accountProfileId,
+            membership.Role switch
+            {
+                MembershipRole.Owner => TradeCompanyRole.Owner,
+                MembershipRole.Operator => TradeCompanyRole.Operator,
+                _ => TradeCompanyRole.ReadOnly
+            },
             hostProfileId);
     }
 
