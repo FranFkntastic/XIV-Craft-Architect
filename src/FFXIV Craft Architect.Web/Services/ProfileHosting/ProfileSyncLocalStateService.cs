@@ -14,6 +14,7 @@ public sealed class ProfileSyncLocalStateService
     private const string HostedObjectSuffix = "hostedObject.";
     private const string PendingSavesSuffix = "pendingSaves";
     private const string PendingOrderCleanupSuffix = "pendingOrderCleanup";
+    private const string OrderTombstonesSuffix = "orderTombstones";
     private const string LinkedPlanSealMigrationSuffix = "migration.linkedPlanSeal.v2";
     private static readonly IReadOnlySet<string> PortableSettingKeys = new HashSet<string>(
         [
@@ -272,6 +273,55 @@ public sealed class ProfileSyncLocalStateService
         {
             throw new InvalidOperationException(
                 "Browser storage could not persist pending hosted-order cleanup.");
+        }
+    }
+
+    public async Task<IReadOnlyDictionary<string, long>> LoadOrderTombstonesAsync(
+        string profileId)
+    {
+        return await _indexedDb.LoadRequiredSettingAsync(
+                   await BuildProfileStateKeyAsync(profileId, OrderTombstonesSuffix),
+                   new Dictionary<string, long>())
+               ?? new Dictionary<string, long>();
+    }
+
+    public async Task SaveOrderTombstoneAsync(
+        string profileId,
+        string orderObjectId,
+        long revision)
+    {
+        var tombstones = new Dictionary<string, long>(
+            await LoadOrderTombstonesAsync(profileId),
+            StringComparer.OrdinalIgnoreCase);
+        if (tombstones.TryGetValue(orderObjectId, out var existing) && existing >= revision)
+        {
+            return;
+        }
+
+        tombstones[orderObjectId] = revision;
+        var key = await BuildProfileStateKeyAsync(profileId, OrderTombstonesSuffix);
+        if (!await _indexedDb.SaveSettingAsync(key, tombstones))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not persist the hosted-order tombstone for '{orderObjectId}'.");
+        }
+    }
+
+    public async Task ClearOrderTombstoneAsync(string profileId, string orderObjectId)
+    {
+        var tombstones = new Dictionary<string, long>(
+            await LoadOrderTombstonesAsync(profileId),
+            StringComparer.OrdinalIgnoreCase);
+        if (!tombstones.Remove(orderObjectId))
+        {
+            return;
+        }
+
+        var key = await BuildProfileStateKeyAsync(profileId, OrderTombstonesSuffix);
+        if (!await _indexedDb.SaveSettingAsync(key, tombstones))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not clear the hosted-order tombstone for '{orderObjectId}'.");
         }
     }
 

@@ -45,6 +45,22 @@ public sealed class TradeOrderProfileSyncAdapter :
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        var tombstoneConnection = await _localState.LoadConnectionSettingsAsync();
+        if (tombstoneConnection.ProfileScopeId is { } tombstoneScope)
+        {
+            var tombstoneRevision = (await _localState.LoadOrderTombstonesAsync(tombstoneScope))
+                .GetValueOrDefault(envelope.ObjectId);
+            if (tombstoneRevision > 0)
+            {
+                if (envelope.Revision <= tombstoneRevision)
+                {
+                    return;
+                }
+
+                await _localState.ClearOrderTombstoneAsync(tombstoneScope, envelope.ObjectId);
+            }
+        }
+
         if (envelope.IsSummary)
         {
             var archiveSummaries = _archiveSummaries
@@ -192,9 +208,50 @@ public sealed class TradeOrderProfileSyncAdapter :
             throw new InvalidOperationException(
                 $"Hosted Trade order '{orderId:D}' deletion could not be applied because its authority is {adoption}.");
         }
+        if (connection.ProfileScopeId is { } tombstoneScope)
+        {
+            await _localState.SaveOrderTombstoneAsync(
+                tombstoneScope,
+                orderId.ToString("D"),
+                revision);
+        }
         if (_archiveSummaries != null)
         {
             await _archiveSummaries.RemoveAsync(connection.ConnectionScopeId!, orderId);
+        }
+    }
+
+    public async Task ReapResurrectedOrdersAsync(
+        string profileId,
+        CancellationToken cancellationToken = default)
+    {
+        var tombstones = await _localState.LoadOrderTombstonesAsync(profileId);
+        if (tombstones.Count == 0)
+        {
+            return;
+        }
+
+        var profiles = await _tradeOperations.LoadCompanyProfilesAsync();
+        foreach (var profile in profiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var order in await _tradeOperations.LoadOrdersAsync(profile.Id))
+            {
+                var objectId = order.Id.ToString("D");
+                if (!tombstones.TryGetValue(objectId, out var tombstoneRevision))
+                {
+                    continue;
+                }
+
+                var localRevision = await _localState.LoadObjectRevisionAsync(
+                    profileId,
+                    ProfileSyncCollections.TradeOrders,
+                    objectId);
+                if (localRevision <= tombstoneRevision)
+                {
+                    await _tradeOperations.DeleteOrderAsync(order.Id);
+                }
+            }
         }
     }
 
