@@ -2,6 +2,7 @@ using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.Data.Sqlite;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
@@ -18,13 +19,19 @@ public sealed class SqliteProfileHostStore
 
     private readonly ProfileHostOptions _options;
     private readonly ProfileHostChangeSignal? _changeSignal;
+    private readonly ITradeCompanyFounderBinder? _founderBinder;
+    private readonly ILogger<SqliteProfileHostStore>? _logger;
 
     public SqliteProfileHostStore(
         ProfileHostOptions options,
-        ProfileHostChangeSignal? changeSignal = null)
+        ProfileHostChangeSignal? changeSignal = null,
+        ITradeCompanyFounderBinder? founderBinder = null,
+        ILogger<SqliteProfileHostStore>? logger = null)
     {
         _options = options;
         _changeSignal = changeSignal;
+        _founderBinder = founderBinder;
+        _logger = logger;
     }
 
     public async Task<ProfileHostProfileResponse> CreateProfileAsync(string displayName, CancellationToken ct)
@@ -1164,6 +1171,40 @@ public sealed class SqliteProfileHostStore
         }
         await transaction.CommitAsync(ct);
         _changeSignal?.Publish(profileId, revision);
+        if (_founderBinder != null &&
+            string.Equals(
+                collection,
+                ProfileSyncCollections.TradeCompanyProfiles,
+                StringComparison.Ordinal))
+        {
+            if (!FounderMembershipBinding.TryRead(
+                    profileId,
+                    objectId,
+                    payloadJson,
+                    out var companyId,
+                    out var accountProfileId))
+            {
+                _logger?.LogError(
+                    "Founder membership binding skipped hosted company {CompanyId} on profile {ProfileId}: object and payload identities do not match.",
+                    objectId,
+                    profileId);
+            }
+            else
+            {
+                try
+                {
+                    await _founderBinder.BindFounderAsync(companyId, accountProfileId, ct);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    _logger?.LogError(
+                        exception,
+                        "Founder membership binding failed after hosted company {CompanyId} committed for profile {ProfileId}; periodic reconciliation will retry.",
+                        companyId,
+                        profileId);
+                }
+            }
+        }
 
         return new ProfileSyncPutResponse
         {
