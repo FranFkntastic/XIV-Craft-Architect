@@ -68,10 +68,8 @@ public sealed class DiscordIdentityLinkService(
             throw new UnauthorizedAccessException("The hosted profile identity is invalid.");
         }
 
-        var state = CreateSecret(32);
-        var verifier = CreateSecret(48);
-        var challenge = DiscordIdentityValue.Base64Url(
-            SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
+        var state = DiscordOAuthAuthorization.CreateSecret(32);
+        var verifier = DiscordOAuthAuthorization.CreateSecret(48);
         var now = timeProvider.GetUtcNow();
         await links.CreateOAuthStateAsync(
             profileId,
@@ -80,17 +78,11 @@ public sealed class DiscordIdentityLinkService(
             now,
             now + options.StateLifetime,
             cancellationToken);
-        var query = QueryString.Create(new KeyValuePair<string, string?>[]
-        {
-            new("client_id", options.ClientId),
-            new("response_type", "code"),
-            new("redirect_uri", options.CallbackUri),
-            new("scope", "identify"),
-            new("state", state),
-            new("code_challenge", challenge),
-            new("code_challenge_method", "S256")
-        });
-        return new DiscordLinkStartResponse(options.AuthorizationEndpoint + query);
+        return DiscordOAuthAuthorization.CreateResponse(
+            options,
+            options.CallbackUri,
+            state,
+            verifier);
     }
 
     public async Task<DiscordLinkCompletion> CompleteAsync(
@@ -109,6 +101,7 @@ public sealed class DiscordIdentityLinkService(
             timeProvider.GetUtcNow(),
             cancellationToken);
         if (consumed.Status != DiscordOAuthStateStatus.Consumed ||
+            consumed.Purpose != DiscordOAuthPurpose.Link ||
             consumed.ProfileId is not { } profileId ||
             string.IsNullOrWhiteSpace(consumed.PkceVerifier))
         {
@@ -135,6 +128,7 @@ public sealed class DiscordIdentityLinkService(
         var identity = await discord.ResolveIdentityAsync(
             code,
             consumed.PkceVerifier,
+            options.CallbackUri,
             cancellationToken);
         if (identity == null)
         {
@@ -212,6 +206,31 @@ public sealed class DiscordIdentityLinkService(
         }
     }
 
-    private static string CreateSecret(int byteCount) =>
+}
+
+internal static class DiscordOAuthAuthorization
+{
+    public static DiscordLinkStartResponse CreateResponse(
+        DiscordIdentityOptions options,
+        string callbackUri,
+        string state,
+        string verifier)
+    {
+        var challenge = DiscordIdentityValue.Base64Url(
+            SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
+        var query = QueryString.Create(new KeyValuePair<string, string?>[]
+        {
+            new("client_id", options.ClientId),
+            new("response_type", "code"),
+            new("redirect_uri", callbackUri),
+            new("scope", "identify"),
+            new("state", state),
+            new("code_challenge", challenge),
+            new("code_challenge_method", "S256")
+        });
+        return new DiscordLinkStartResponse(options.AuthorizationEndpoint + query);
+    }
+
+    public static string CreateSecret(int byteCount) =>
         DiscordIdentityValue.Base64Url(RandomNumberGenerator.GetBytes(byteCount));
 }

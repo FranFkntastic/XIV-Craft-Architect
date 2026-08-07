@@ -143,7 +143,85 @@ public static class DiscordIdentityEndpoints
                     ? Results.Unauthorized()
                     : Results.Ok(result);
             });
+
+        var signIn = routes.MapGroup("/identity/v1/signin/discord");
+        signIn.MapGet(
+            "/status",
+            (DiscordIdentityOptions options) =>
+                Results.Ok(new DiscordSignInStatus(options.Enabled)));
+        signIn.MapPost(
+            "/start",
+            async (
+                DiscordIdentitySignInService service,
+                CancellationToken cancellationToken) =>
+            {
+                try
+                {
+                    return Results.Ok(await service.StartAsync(cancellationToken));
+                }
+                catch (InvalidOperationException)
+                {
+                    return Results.Problem(
+                        statusCode: StatusCodes.Status503ServiceUnavailable,
+                        title: "Discord sign-in is unavailable.");
+                }
+            });
+        signIn.MapGet(
+            "/callback",
+            async (
+                string? code,
+                string? state,
+                DiscordIdentitySignInService service,
+                DiscordIdentityOptions options,
+                CancellationToken cancellationToken) =>
+            {
+                DiscordSignInCompletion completion;
+                try
+                {
+                    completion = await service.CompleteAsync(
+                        code,
+                        state,
+                        cancellationToken);
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    completion = new DiscordSignInCompletion(
+                        DiscordSignInCompletionStatus.ProviderRejected);
+                }
+
+                var location = completion.Status is
+                    DiscordSignInCompletionStatus.SessionIssued or
+                    DiscordSignInCompletionStatus.Provisioned
+                        ? FragmentRedirect(
+                            options.ApplicationBaseUri,
+                            "signin",
+                            completion.PlaintextAccessKey!)
+                        : FragmentRedirect(
+                            options.ApplicationBaseUri,
+                            "signin-error",
+                            SignInErrorCode(completion.Status));
+                return Results.Redirect(location);
+            });
         return group;
+    }
+
+    private static string SignInErrorCode(DiscordSignInCompletionStatus status) => status switch
+    {
+        DiscordSignInCompletionStatus.ExpiredState => "expired-state",
+        DiscordSignInCompletionStatus.ReplayedState => "replayed-state",
+        DiscordSignInCompletionStatus.IdentityInactive => "inactive-profile",
+        DiscordSignInCompletionStatus.ProviderRejected => "provider-rejected",
+        DiscordSignInCompletionStatus.Conflict => "link-conflict",
+        _ => "invalid-state"
+    };
+
+    private static string FragmentRedirect(string applicationBaseUri, string name, string value)
+    {
+        var builder = new UriBuilder(applicationBaseUri)
+        {
+            Fragment = $"{name}={Uri.EscapeDataString(value)}"
+        };
+        return builder.Uri.AbsoluteUri;
     }
 
     private static IResult HtmlResult(string title, string message, int statusCode)
