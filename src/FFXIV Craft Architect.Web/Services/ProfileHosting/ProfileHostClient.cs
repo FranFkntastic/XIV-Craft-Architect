@@ -161,6 +161,50 @@ public sealed class ProfileHostClient
         }
     }
 
+    public async Task<IReadOnlyList<ProfileHostAccessKeyMetadata>> GetAccessKeysAsync(
+        string hostUrl,
+        string accessKey,
+        CancellationToken ct)
+    {
+        using var request = CreateRequest(HttpMethod.Get, hostUrl, "/profile-host/keys", accessKey);
+        using var response = await _httpClient.SendAsync(request, ct);
+        EnsureKeyManagementResponse(response, "load active browser sessions");
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<ProfileHostAccessKeyMetadata>>(
+                cancellationToken: ct)
+            ?? throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.IncompatibleHost,
+                "The profile host returned an invalid access-key list.");
+    }
+
+    public async Task RevokeCurrentAccessKeyAsync(
+        string hostUrl,
+        string accessKey,
+        CancellationToken ct)
+    {
+        using var request = CreateRequest(
+            HttpMethod.Delete,
+            hostUrl,
+            "/profile-host/keys/current",
+            accessKey);
+        using var response = await _httpClient.SendAsync(request, ct);
+        EnsureKeyManagementResponse(response, "sign out this browser");
+    }
+
+    public async Task RevokeAccessKeyAsync(
+        string hostUrl,
+        string accessKey,
+        string keyId,
+        CancellationToken ct)
+    {
+        using var request = CreateRequest(
+            HttpMethod.Delete,
+            hostUrl,
+            $"/profile-host/keys/{Uri.EscapeDataString(keyId)}",
+            accessKey);
+        using var response = await _httpClient.SendAsync(request, ct);
+        EnsureKeyManagementResponse(response, "revoke that browser session");
+    }
+
     public async Task<ProfileHostPairingRedeemResponse> RedeemPairingCodeAsync(
         string hostUrl,
         string pairingCode,
@@ -392,6 +436,24 @@ public sealed class ProfileHostClient
             ProfileHostConnectionFailure.InvalidAddress,
             "Enter a complete HTTP or HTTPS profile host address.",
             innerException);
+
+    private static void EnsureKeyManagementResponse(HttpResponseMessage response, string operation)
+    {
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.AccessKeyRejected,
+                "This browser session is no longer authorized.");
+        }
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.ProfileHostingDisabled,
+                $"The profile host could not {operation}.");
+        }
+
+        response.EnsureSuccessStatusCode();
+    }
 
     private static async Task<ProfileSyncPutResponse> ReadProfileSyncPutResponseAsync(
         HttpResponseMessage response,

@@ -698,6 +698,67 @@ public sealed class SqliteProfileHostStore
         await command.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task<IReadOnlyList<ProfileHostAccessKeyMetadata>> LoadActiveAccessKeysAsync(
+        string profileId,
+        string currentKeyId,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select id, created_at_utc, last_used_at_utc
+            from profile_access_keys
+            where profile_id = $profileId and revoked_at_utc is null
+            order by created_at_utc, id;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+
+        var keys = new List<ProfileHostAccessKeyMetadata>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            keys.Add(new ProfileHostAccessKeyMetadata
+            {
+                Id = reader.GetString(0),
+                CreatedAtUtc = DateTime.Parse(
+                    reader.GetString(1),
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind),
+                LastUsedAtUtc = reader.IsDBNull(2)
+                    ? null
+                    : DateTime.Parse(
+                        reader.GetString(2),
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind),
+                IsCurrent = string.Equals(reader.GetString(0), currentKeyId, StringComparison.Ordinal)
+            });
+        }
+
+        return keys;
+    }
+
+    public async Task<bool> RevokeAccessKeyAsync(
+        string profileId,
+        string keyId,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            update profile_access_keys
+            set revoked_at_utc = $revokedAtUtc
+            where id = $keyId
+              and profile_id = $profileId
+              and revoked_at_utc is null;
+            """;
+        command.Parameters.AddWithValue("$keyId", keyId);
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$revokedAtUtc", DateTime.UtcNow.ToString("O"));
+        return await command.ExecuteNonQueryAsync(ct) == 1;
+    }
+
     public async Task DisableProfileAsync(string profileId, CancellationToken ct)
     {
         await EnsureSchemaAsync(ct);
@@ -715,6 +776,12 @@ public sealed class SqliteProfileHostStore
     }
 
     public async Task<ProfileHostProfileResponse?> AuthenticateAsync(
+        string plaintextKey,
+        ProfileAccessKeyHasher hasher,
+        CancellationToken ct) =>
+        (await AuthenticateAccessKeyAsync(plaintextKey, hasher, ct))?.Profile;
+
+    public async Task<AuthenticatedProfileAccessKey?> AuthenticateAccessKeyAsync(
         string plaintextKey,
         ProfileAccessKeyHasher hasher,
         CancellationToken ct)
@@ -744,12 +811,14 @@ public sealed class SqliteProfileHostStore
             await reader.DisposeAsync();
             await TouchAccessKeyAsync(connection, keyId, ct);
             var revision = await GetServerRevisionAsync(connection, profileId, ct);
-            return new ProfileHostProfileResponse
-            {
-                ProfileId = profileId,
-                DisplayName = displayName,
-                ServerRevision = revision
-            };
+            return new AuthenticatedProfileAccessKey(
+                new ProfileHostProfileResponse
+                {
+                    ProfileId = profileId,
+                    DisplayName = displayName,
+                    ServerRevision = revision
+                },
+                keyId);
         }
 
         return null;
@@ -1761,3 +1830,7 @@ public sealed record ProfileAccessKeyImportResult(
     int SourceActiveKeyCount,
     IReadOnlyList<string> InsertedKeyIds,
     IReadOnlyList<string> AlreadyPresentKeyIds);
+
+public sealed record AuthenticatedProfileAccessKey(
+    ProfileHostProfileResponse Profile,
+    string KeyId);

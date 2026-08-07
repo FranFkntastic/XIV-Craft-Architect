@@ -430,11 +430,9 @@
                 <MudPaper Variant="Variant.Outlined" Class="pa-4">
                     <div class="d-flex align-center justify-space-between gap-3">
                         <div>
-                            <MudText Typo="Typo.caption" Color="Color.Secondary">Browser profile</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Browser sync</MudText>
                             <MudText Typo="Typo.h6">
-                                @(ProfileSync.CurrentStatus.IsConnected
-                                    ? GetProfileHostConnectionLabel()
-                                    : "Craft Architect browser profile")
+                                @(ProfileSync.CurrentStatus.IsConnected ? "Hosted storage" : "Local storage")
                             </MudText>
                             <MudText Typo="Typo.caption" Color="Color.Secondary">
                                 @(ProfileSync.CurrentStatus.IsConnected
@@ -452,176 +450,19 @@
 
                     @if (!ProfileSync.CurrentStatus.IsConnected)
                     {
-                        <MudTextField @bind-Value="_profileHostAccessKey"
-                                      id="profile-host-access-key"
-                                      Label="Access key"
-                                      HelperText="Paste an access key, or pair this browser from one that is already connected."
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Immediate="true"
-                                      InputType="InputType.Password"
-                                      Disabled="_profileHostIsBusy"
-                                      Class="mt-4" />
-
-                        <div class="d-flex flex-wrap gap-2 mt-3">
-                            @if (_discordSignInEnabled)
-                            {
-                                <MudButton Variant="Variant.Filled"
-                                           Color="Color.Primary"
-                                           StartIcon="@Icons.Material.Filled.Login"
-                                           OnClick="SignInWithDiscordAsync"
-                                           Disabled="@(_profileHostIsBusy || _discordIdentityBusy)">
-                                    Sign in with Discord
-                                </MudButton>
-                            }
-                            <MudButton Variant="Variant.Filled"
-                                       Color="Color.Primary"
-                                       StartIcon="@Icons.Material.Filled.CloudSync"
-                                       OnClick="ConnectProfileHostAsync"
-                                       Disabled="_profileHostIsBusy">
-                                Connect
-                            </MudButton>
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       StartIcon="@Icons.Material.Filled.Devices"
-                                       OnClick="ToggleProfileHostPairingMode"
-                                       Disabled="_profileHostIsBusy">
-                                Pair This Browser
-                            </MudButton>
-                        </div>
-
-                        @if (_profileHostPairingMode)
-                        {
-                            <MudPaper Variant="Variant.Outlined" Class="pa-3 mt-3">
-                                <MudText Typo="Typo.subtitle2">Pair from a connected browser</MudText>
-                                <MudTextField @bind-Value="_profileHostPairingCode"
-                                              id="profile-host-pairing-code"
-                                              Label="One-time pairing code"
-                                              Variant="Variant.Outlined"
-                                              Margin="Margin.Dense"
-                                              Immediate="true"
-                                              Disabled="_profileHostIsBusy"
-                                              Class="mt-2" />
-                                <MudButton Variant="Variant.Filled"
-                                           Color="Color.Primary"
-                                           StartIcon="@Icons.Material.Filled.Link"
-                                           OnClick="RedeemProfileHostPairingCodeAsync"
-                                           Disabled="_profileHostIsBusy"
-                                           Class="mt-2">
-                                    Connect With Code
-                                </MudButton>
-                            </MudPaper>
-                        }
-
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-4">
+                            This browser is using local storage. Account credentials are managed in the dedicated account dialog.
+                        </MudText>
                         <MudButton Variant="Variant.Text"
                                    Color="Color.Secondary"
-                                   Size="Size.Small"
-                                   StartIcon="@Icons.Material.Filled.SettingsEthernet"
-                                   OnClick="ToggleCustomProfileHost"
-                                   Disabled="_profileHostIsBusy"
-                                   Class="mt-3">
-                            @(_profileHostUseCustomHost ? "Use Release Host" : "Advanced: Use Custom Host")
+                                   StartIcon="@Icons.Material.Filled.AccountCircle"
+                                   OnClick="OpenAccountDialogAsync"
+                                   Class="mt-2">
+                            Account connection…
                         </MudButton>
-
-                        @if (_profileHostUseCustomHost)
-                        {
-                            <MudTextField @bind-Value="_profileHostUrl"
-                                          id="profile-host-url"
-                                          Label="Profile host API URL"
-                                          HelperText="Use the full API base address supplied by the host."
-                                          Placeholder="https://craft.example.com/api/"
-                                          Variant="Variant.Outlined"
-                                          Margin="Margin.Dense"
-                                          Immediate="true"
-                                          Disabled="_profileHostIsBusy"
-                                          Class="mt-2" />
-                        }
                     }
                     else
                     {
-                        @if (_companyProfile != null)
-                        {
-                            <MudDivider Class="my-4" />
-                            <div class="d-flex align-center justify-space-between gap-3">
-                                <div>
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                        Active Trade company | @FormatCompanyReference(_companyProfile.Id)
-                                    </MudText>
-                                    <MudText Typo="Typo.subtitle2">@_companyName</MudText>
-                                    <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                        Company settings, crafters, orders, and payroll history are included in this browser profile.
-                                    </MudText>
-                                </div>
-                                <MudButton Variant="Variant.Text"
-                                           Color="Color.Secondary"
-                                           Size="Size.Small"
-                                           StartIcon="@Icons.Material.Filled.Business"
-                                           OnClick="@(() => SelectTab(OptionsPanel.Company))">
-                                    Manage company
-                                </MudButton>
-                            </div>
-                        }
-
-                        <MudDivider Class="my-4" />
-                        <div class="d-flex align-center justify-space-between gap-3">
-                            <div>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">Discord account</MudText>
-                                <MudText Typo="Typo.subtitle2">
-                                    @(_discordIdentityStatus?.Linked == true
-                                        ? _discordIdentityStatus.DisplayName
-                                        : "No Discord account linked")
-                                </MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                    @(_discordIdentityStatus?.Linked == true
-                                        ? "Verified interactions can resolve this stable account, then re-check current Trade authority."
-                                        : "Link explicitly to use role-aware Craft Architect actions from Discord.")
-                                </MudText>
-                            </div>
-                            @if (_discordIdentityStatus != null)
-                            {
-                                <div class="d-flex flex-wrap gap-1">
-                                    @if (_discordIdentityStatus.Enabled && _discordIdentityStatus.Linked)
-                                    {
-                                        <MudButton Variant="Variant.Text"
-                                                   Color="Color.Error"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.LinkOff"
-                                                   Disabled="_discordIdentityBusy"
-                                                   OnClick="UnlinkDiscordAsync">
-                                            Unlink
-                                        </MudButton>
-                                    }
-                                    else if (_discordIdentityStatus.Enabled)
-                                    {
-                                        <MudButton Variant="Variant.Filled"
-                                                   Color="Color.Primary"
-                                                   Size="Size.Small"
-                                                   StartIcon="@Icons.Material.Filled.Link"
-                                                   Disabled="_discordIdentityBusy"
-                                                   OnClick="LinkDiscordAsync">
-                                            Link Discord
-                                        </MudButton>
-                                    }
-                                    <MudIconButton Icon="@Icons.Material.Filled.Refresh"
-                                                   Color="Color.Secondary"
-                                                   Size="Size.Small"
-                                                   Disabled="_discordIdentityBusy"
-                                                   OnClick="RefreshDiscordIdentityAsync"
-                                                   aria-label="Refresh Discord link status" />
-                                </div>
-                            }
-                        </div>
-                        @if (_discordIdentityBusy)
-                        {
-                            <MudProgressLinear Indeterminate="true" Class="mt-2" />
-                        }
-                        @if (!string.IsNullOrWhiteSpace(_discordIdentityMessage))
-                        {
-                            <MudText Typo="Typo.caption" Color="@_discordIdentityMessageColor" Class="mt-2 d-block">
-                                @_discordIdentityMessage
-                            </MudText>
-                        }
-
                         <div class="d-flex flex-wrap gap-2 mt-4">
                             <MudButton Variant="Variant.Outlined"
                                        Color="Color.Secondary"
@@ -629,70 +470,6 @@
                                        OnClick="SyncProfileHostNowAsync"
                                        Disabled="_profileHostIsBusy">
                                 Sync Now
-                            </MudButton>
-                            <MudButton Variant="Variant.Outlined"
-                                       Color="Color.Secondary"
-                                       StartIcon="@Icons.Material.Filled.Devices"
-                                       OnClick="CreateProfileHostPairingCodeAsync"
-                                       Disabled="_profileHostIsBusy">
-                                Connect Another Browser
-                            </MudButton>
-                            <MudButton Variant="Variant.Text"
-                                       Color="Color.Error"
-                                       StartIcon="@Icons.Material.Filled.LinkOff"
-                                       OnClick="DisconnectProfileHostAsync"
-                                       Disabled="_profileHostIsBusy">
-                                Disconnect
-                            </MudButton>
-                        </div>
-
-                        @if (!string.IsNullOrWhiteSpace(_profileHostGeneratedPairingCode))
-                        {
-                            <MudPaper Variant="Variant.Outlined" Class="pa-3 mt-3">
-                                <MudText Typo="Typo.subtitle2">One-time pairing code</MudText>
-                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                    Use this on the other browser before @_profileHostPairingExpiresAtUtc?.ToLocalTime().ToString("t").
-                                </MudText>
-                                <div class="d-flex align-center gap-2 mt-2">
-                                    <MudTextField Value="@_profileHostGeneratedPairingCode"
-                                                  ReadOnly="true"
-                                                  Variant="Variant.Outlined"
-                                                  Margin="Margin.Dense"
-                                                  Class="flex-grow-1" />
-                                    <MudButton Variant="Variant.Outlined"
-                                               StartIcon="@Icons.Material.Filled.ContentCopy"
-                                               OnClick="CopyProfileHostPairingCodeAsync">
-                                        Copy
-                                    </MudButton>
-                                </div>
-                            </MudPaper>
-                        }
-                    }
-
-                    @if (_profileHostBootstrapPreview != null && _profileHostPendingSettings != null)
-                    {
-                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-4">
-                            Both this browser and the hosted profile contain data. Choose which side initializes this connection.
-                        </MudAlert>
-                        <MudRadioGroup T="FirstConnectMode" @bind-Value="_profileHostFirstConnectMode" Class="my-2">
-                            <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.UploadLocal" Color="Color.Primary">
-                                Keep this browser (@_profileHostBootstrapPreview.LocalObjectCount.ToString("N0") objects)
-                            </MudRadio>
-                            <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.DownloadRemote" Color="Color.Primary">
-                                Use hosted profile (@_profileHostBootstrapPreview.RemoteObjectCount.ToString("N0") objects)
-                            </MudRadio>
-                        </MudRadioGroup>
-                        <div class="d-flex gap-2">
-                            <MudButton Variant="Variant.Filled"
-                                       Color="Color.Primary"
-                                       OnClick="CompleteProfileHostConnectionAsync"
-                                       Disabled="_profileHostIsBusy">
-                                Continue
-                            </MudButton>
-                            <MudButton Variant="Variant.Text"
-                                       OnClick="CancelPendingProfileHostConnection"
-                                       Disabled="_profileHostIsBusy">
-                                Cancel
                             </MudButton>
                         </div>
                     }
@@ -1206,9 +983,9 @@
     private HostedProfileConnectionSettings? _profileHostPendingSettings;
     private DiscordIdentityWebStatus? _discordIdentityStatus;
     private bool _discordSignInEnabled;
-    private bool _discordIdentityBusy;
+    private bool _discordIdentityBusy { get; set; }
     private string? _discordIdentityMessage;
-    private Color _discordIdentityMessageColor = Color.Secondary;
+    private Color _discordIdentityMessageColor { get; set; } = Color.Secondary;
     private bool _diagnosticsBusy;
     private bool _diagnosticSnapshotReady;
     private bool _prepareDiagnosticAttachment;
@@ -1606,14 +1383,6 @@
             _profileHostUrl,
             ProfileHostClient.DefaultHostUrl);
         await ProfileSync.InitializeAsync();
-        if (ProfileSync.CurrentStatus.IsConnected)
-        {
-            await RefreshDiscordIdentityAsync();
-        }
-        else
-        {
-            await RefreshDiscordSignInStatusAsync();
-        }
     }
 
     private async Task RefreshDiscordSignInStatusAsync()
@@ -2029,6 +1798,14 @@
         {
             _profileHostIsBusy = false;
         }
+    }
+
+    private async Task OpenAccountDialogAsync()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = await DialogService.ShowAsync<AccountDialog>("Account", options);
+        await dialog.Result;
+        await LoadProfileHostSettingsAsync();
     }
 
     private async Task DisconnectProfileHostAsync()
