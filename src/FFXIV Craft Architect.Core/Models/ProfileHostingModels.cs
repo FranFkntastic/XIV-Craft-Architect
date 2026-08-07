@@ -210,6 +210,14 @@ public sealed class ProfileHostProfileResponse
     public long ServerRevision { get; set; }
 }
 
+public sealed class ProfileHostAccessKeyMetadata
+{
+    public string Id { get; set; } = string.Empty;
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime? LastUsedAtUtc { get; set; }
+    public bool IsCurrent { get; set; }
+}
+
 public sealed class ProfileHostBootstrapPayload
 {
     public IReadOnlyList<ProfileSyncObjectEnvelope> Objects { get; set; } = Array.Empty<ProfileSyncObjectEnvelope>();

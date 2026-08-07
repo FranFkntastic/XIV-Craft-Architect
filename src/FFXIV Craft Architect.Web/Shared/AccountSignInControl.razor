@@ -5,24 +5,34 @@
 @inject ProfileSyncService ProfileSync
 @inject NavigationManager NavigationManager
 @inject IDialogService DialogService
+@implements IDisposable
 
 @if (_signInEnabled && !_connected)
 {
     <MudButton Variant="Variant.Text"
-               StartIcon="@Icons.Material.Filled.Login"
                OnClick="SignInAsync"
                Disabled="_busy"
                Style="color: #d4a73a; text-transform: none; font-size: 14px;">
-        Sign in
+        <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Small" Style="color: #7289da; margin-right: 8px;" />
+        Sign in with Discord
     </MudButton>
 }
-else if (_connected && !string.IsNullOrWhiteSpace(_displayName))
+else if (_connected)
 {
     <MudButton Variant="Variant.Text"
                StartIcon="@Icons.Material.Filled.AccountCircle"
-               OnClick="OpenHostingAsync"
+               OnClick="OpenAccountAsync"
                Style="color: #cccccc; text-transform: none; font-size: 14px;">
-        @_displayName
+        @(string.IsNullOrWhiteSpace(_displayName) ? "Account" : _displayName)
+    </MudButton>
+}
+else
+{
+    <MudButton Variant="Variant.Text"
+               StartIcon="@Icons.Material.Filled.AccountCircle"
+               OnClick="OpenAccountAsync"
+               Style="color: #cccccc; text-transform: none; font-size: 14px;">
+        Connect account
     </MudButton>
 }
 
@@ -79,10 +89,10 @@ else if (_connected && !string.IsNullOrWhiteSpace(_displayName))
         }
     }
 
-    private async Task OpenHostingAsync()
+    private async Task OpenAccountAsync()
     {
         var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        await DialogService.ShowAsync<OptionsDialog>("Options", options);
+        await DialogService.ShowAsync<AccountDialog>("Account", options);
     }
 
     public void Dispose()
