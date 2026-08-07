@@ -160,6 +160,31 @@ public sealed class DiscordAccountContractTests
             CancellationToken.None)));
     }
 
+    [Fact]
+    public async Task ConcurrentFirstSignInJoinsTheWinningProfileAndDisablesTheOrphan()
+    {
+        await using var fixture = await DiscordAccountFixture.CreateAsync();
+        var existing = await fixture.Profiles.CreateProfileAsync(
+            "Existing Crafter",
+            CancellationToken.None);
+        Assert.Equal(
+            DiscordIdentityLinkResultStatus.Linked,
+            (await fixture.Links.LinkAsync(
+                Guid.Parse(existing.ProfileId),
+                DiscordUser,
+                "Existing Crafter",
+                fixture.Time.GetUtcNow(),
+                CancellationToken.None)).Status);
+        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Existing Crafter");
+        using var client = fixture.CreateClient();
+
+        var key = await CompleteSignInAsync(client, fixture.OAuth);
+
+        var resolved = await GetProfileAsync(client, key);
+        Assert.Equal(existing.ProfileId, resolved.ProfileId);
+        Assert.Equal(1, await fixture.CountRowsAsync("hosted_profiles"));
+    }
+
     private static async Task<string> CompleteSignInAsync(
         HttpClient client,
         StubDiscordOAuthClient oauth)

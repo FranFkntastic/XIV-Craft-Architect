@@ -41,6 +41,15 @@
 
         try
         {
+            await JSRuntime.InvokeVoidAsync(
+                "CraftArchitectDiscordIdentity.clearSignInFragment");
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
             if (fragment.Kind == "signin" &&
                 fragment.Value is { Length: <= 256 } accessKey &&
                 accessKey.StartsWith("cap_", StringComparison.Ordinal))
@@ -70,17 +79,6 @@
         catch (Exception)
         {
             Snackbar.Add("Discord sign-in could not be completed. Try again.", Severity.Error);
-        }
-        finally
-        {
-            try
-            {
-                await JSRuntime.InvokeVoidAsync(
-                    "CraftArchitectDiscordIdentity.clearSignInFragment");
-            }
-            catch (Exception)
-            {
-            }
         }
     }
 

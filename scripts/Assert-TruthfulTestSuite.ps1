@@ -9,9 +9,9 @@ $testProjects = @(
     Join-Path $root 'src/FFXIV Craft Architect.ContractTests'
 )
 $maximumFiles = 37
-$maximumMethods = 227
-$maximumCases = 322
-$maximumLines = 13443
+$maximumMethods = 228
+$maximumCases = 323
+$maximumLines = 13468
 $maximumFileLines = 1050
 
 if (Test-Path -LiteralPath $legacyProject) {

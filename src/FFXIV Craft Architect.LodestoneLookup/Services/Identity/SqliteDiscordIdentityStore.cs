@@ -766,13 +766,59 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                     await version.ExecuteScalarAsync(cancellationToken));
                 if (schemaVersion < 2)
                 {
-                    await using var recreate = connection.CreateCommand();
-                    recreate.CommandText = """
-                        DROP TABLE IF EXISTS discord_oauth_states;
-                        DROP TABLE IF EXISTS discord_identity_audit;
-                        PRAGMA user_version = 2;
-                        """;
-                    await recreate.ExecuteNonQueryAsync(cancellationToken);
+                    var hasV1Tables = false;
+                    await using (var probe = connection.CreateCommand())
+                    {
+                        probe.CommandText = """
+                            SELECT COUNT(*) FROM sqlite_master
+                            WHERE type = 'table' AND name IN (
+                                'discord_oauth_states', 'discord_identity_audit');
+                            """;
+                        hasV1Tables = Convert.ToInt32(
+                            await probe.ExecuteScalarAsync(cancellationToken)) == 2;
+                    }
+
+                    if (hasV1Tables)
+                    {
+                        await using var recreate = connection.CreateCommand();
+                        recreate.CommandText = """
+                            BEGIN IMMEDIATE;
+                            CREATE TABLE IF NOT EXISTS discord_oauth_states_v2 (
+                                state_hash TEXT PRIMARY KEY,
+                                purpose TEXT NOT NULL CHECK (purpose IN ('link', 'signin')),
+                                profile_id TEXT NULL,
+                                pkce_verifier TEXT NOT NULL,
+                                created_at_utc TEXT NOT NULL,
+                                expires_at_utc TEXT NOT NULL,
+                                consumed_at_utc TEXT NULL
+                            );
+                            INSERT INTO discord_oauth_states_v2
+                                SELECT state_hash, 'link', profile_id, pkce_verifier,
+                                       created_at_utc, expires_at_utc, consumed_at_utc
+                                FROM discord_oauth_states;
+                            DROP TABLE discord_oauth_states;
+                            ALTER TABLE discord_oauth_states_v2 RENAME TO discord_oauth_states;
+
+                            CREATE TABLE IF NOT EXISTS discord_identity_audit_v2 (
+                                event_id TEXT PRIMARY KEY,
+                                profile_id TEXT NULL,
+                                event_kind TEXT NOT NULL,
+                                discord_user_id TEXT NULL,
+                                created_at_utc TEXT NOT NULL
+                            );
+                            INSERT INTO discord_identity_audit_v2
+                                SELECT event_id, profile_id, event_kind, discord_user_id, created_at_utc
+                                FROM discord_identity_audit;
+                            DROP TABLE discord_identity_audit;
+                            ALTER TABLE discord_identity_audit_v2 RENAME TO discord_identity_audit;
+                            COMMIT;
+                            """;
+                        await recreate.ExecuteNonQueryAsync(cancellationToken);
+                    }
+
+                    await using var mark = connection.CreateCommand();
+                    mark.CommandText = "PRAGMA user_version = 2;";
+                    await mark.ExecuteNonQueryAsync(cancellationToken);
                 }
             }
 

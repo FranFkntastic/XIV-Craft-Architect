@@ -136,6 +136,31 @@ public sealed class DiscordIdentitySignInService(
             cancellationToken);
         if (linked.Status != DiscordIdentityLinkResultStatus.Linked)
         {
+            await profiles.DisableProfileAsync(profile.ProfileId, cancellationToken);
+            var winner = await links.LoadByDiscordUserAsync(
+                identity.DiscordUserId,
+                cancellationToken);
+            if (winner != null &&
+                await profiles.LoadProfileAsync(
+                    winner.ProfileId.ToString("D"),
+                    cancellationToken) != null)
+            {
+                var winnerKey = accessKeyHasher.CreateAccessKey();
+                await profiles.AddAccessKeyAsync(
+                    winner.ProfileId.ToString("D"),
+                    winnerKey.StoredHash,
+                    cancellationToken);
+                await links.RecordSignInAuditAsync(
+                    profileId: null,
+                    "signin_session_issued",
+                    identity.DiscordUserId,
+                    now,
+                    cancellationToken);
+                return new DiscordSignInCompletion(
+                    DiscordSignInCompletionStatus.SessionIssued,
+                    winnerKey.PlaintextKey);
+            }
+
             return new DiscordSignInCompletion(DiscordSignInCompletionStatus.Conflict);
         }
 
