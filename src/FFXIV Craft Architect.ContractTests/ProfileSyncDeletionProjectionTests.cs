@@ -42,8 +42,11 @@ public sealed class ProfileSyncDeletionProjectionTests
         await persistence.ApplyCanonicalOrderAsync(order);
         Assert.Single(await persistence.LoadOrdersAsync(companyProfileId));
 
+        runtime.ResetReadCounts();
         await adapter.ReapResurrectedOrdersAsync(profileId, CancellationToken.None);
         Assert.Empty(await persistence.LoadOrdersAsync(companyProfileId));
+        Assert.Equal(1, runtime.LoadTradeOrderCount);
+        Assert.Equal(0, runtime.LoadTradeCompanyProfilesCount);
 
         await adapter.ApplyRemoteObjectAsync(Envelope(order, 5), CancellationToken.None);
         Assert.Empty(await persistence.LoadOrdersAsync(companyProfileId));
@@ -52,6 +55,38 @@ public sealed class ProfileSyncDeletionProjectionTests
         var revived = Assert.Single(await persistence.LoadOrdersAsync(companyProfileId));
         Assert.Equal(order.Id, revived.Id);
         Assert.Empty(await localState.LoadOrderTombstonesAsync(profileId));
+    }
+
+    [Fact]
+    public async Task ObjectRevisionBatchReadsKnownValuesWithOneSettingsSnapshot()
+    {
+        var profileId = NewId();
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var localState = CreateLocalState(new IndexedDbService(runtime));
+        var first = Guid.NewGuid().ToString("D");
+        var second = Guid.NewGuid().ToString("D");
+
+        await localState.SaveObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            first,
+            4);
+        await localState.SaveObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            second,
+            7);
+
+        runtime.ResetReadCounts();
+        var revisions = await localState.LoadObjectRevisionsAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            [first, second]);
+
+        Assert.Equal(4, revisions[first]);
+        Assert.Equal(7, revisions[second]);
+        Assert.Equal(1, runtime.LoadAllSettingsCount);
+        Assert.Equal(0, runtime.LoadSettingCount);
     }
 
     [Fact]
@@ -190,6 +225,20 @@ public sealed class ProfileSyncDeletionProjectionTests
             var projection = f.Store.Get(f.LocalOrder.Id); Check(() => Assert.Equal(f.CommittedOrder.Title, projection?.Order?.Title), () => Assert.Equal(f.CommittedRevision, projection?.ObjectRevision), () => Assert.Equal(f.RetainedOrder.Title, f.Store.Get(f.RetainedOrder.Id)?.Order?.Title), () => Assert.True(f.Store.RestoreState.IsAuthoritative), () => Assert.Equal(f.CommittedOrder.Title, f.Runtime.DurableOrder?.Title), () => Assert.Equal(0, f.Service.CurrentStatus.LastSyncRevision), () => Assert.Empty(f.Service.PendingSaves), () => Assert.Empty(f.Service.Conflicts));
             Assert.Equal(f.CommittedRevision, await f.LocalState.LoadObjectRevisionAsync(f.ProfileId, ProfileSyncCollections.TradeOrders, Key(f.LocalOrder))); Assert.Equal(0, await f.LocalState.LoadLastSyncRevisionAsync(f.ProfileId));
         }
+    }
+
+    [Fact]
+    public async Task ImmediateOrderSaveUsesOneTargetedLocalLookup()
+    {
+        var fixture = CreatePutAdoptionFixture(conflictFirst: false);
+        fixture.Runtime.ResetReadCounts();
+
+        await fixture.Service.QueueLocalSaveAsync(
+            ProfileSyncCollections.TradeOrders,
+            Key(fixture.LocalOrder));
+
+        Assert.Equal(1, fixture.Runtime.LoadTradeOrderCount);
+        Assert.Equal(0, fixture.Runtime.LoadTradeOrdersCount);
     }
     [Fact]
     public async Task ConfirmedDeletionColdStartsScopedTombstoneAndDeletesLocalOrder()
@@ -818,12 +867,25 @@ public sealed class ProfileSyncDeletionProjectionTests
         private readonly HashSet<Guid> _companyIds = [];
         private readonly Dictionary<string, TradeOrderArchiveSummaryRecord> _archiveSummaries = [];
         public int SaveTradeOrderCount { get; private set; }
+        public int LoadAllSettingsCount { get; private set; }
+        public int LoadSettingCount { get; private set; }
+        public int LoadTradeCompanyProfilesCount { get; private set; }
+        public int LoadTradeOrdersCount { get; private set; }
+        public int LoadTradeOrderCount { get; private set; }
         public TradeOrder? DurableOrder { get; private set; }
         public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
         public Func<Guid, Task>? BeforeDeleteTradeOrderAsync { get; set; }
         public void SaveRawSetting(string key, string value) => settings[key] = value;
         public void AddCompany(Guid companyId) => _companyIds.Add(companyId);
         public void SeedOrder(TradeOrder order) => DurableOrder = order;
+        public void ResetReadCounts()
+        {
+            LoadAllSettingsCount = 0;
+            LoadSettingCount = 0;
+            LoadTradeCompanyProfilesCount = 0;
+            LoadTradeOrdersCount = 0;
+            LoadTradeOrderCount = 0;
+        }
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
             InvokeAsync<TValue>(identifier, CancellationToken.None, args);
         public ValueTask<TValue> InvokeAsync<TValue>(
@@ -854,11 +916,11 @@ public sealed class ProfileSyncDeletionProjectionTests
 
             object? result = identifier switch
             {
-                "IndexedDB.loadAllSettings" => new Dictionary<string, string>(settings, StringComparer.Ordinal),
-                "IndexedDB.loadSetting" => settings.GetValueOrDefault((string)args![0]!),
-                "IndexedDB.loadTradeCompanyProfiles" => _companyIds.Select(companyId =>
-                    new TradeCompanyProfile { Id = companyId, Name = "Test company" }).ToList(),
-                "IndexedDB.loadTradeOrders" => DurableOrder?.CompanyProfileId == (Guid)args![0]! ? new List<TradeOrder> { DurableOrder } : new List<TradeOrder>(),
+                "IndexedDB.loadAllSettings" => LoadAllSettings(),
+                "IndexedDB.loadSetting" => LoadSetting((string)args![0]!),
+                "IndexedDB.loadTradeCompanyProfiles" => LoadTradeCompanyProfiles(),
+                "IndexedDB.loadTradeOrders" => LoadTradeOrders((Guid)args![0]!),
+                "IndexedDB.loadTradeOrder" => LoadTradeOrder((Guid)args![0]!),
                 "IndexedDB.loadTradeOrderArchiveSummaries" => _archiveSummaries.Values.ToList(),
                 "IndexedDB.saveSettingsBatch" => SaveBatch((Dictionary<string, string>)args![0]!),
                 "IndexedDB.saveSetting" => SaveSetting((string)args![0]!, (string)args[1]!),
@@ -874,6 +936,34 @@ public sealed class ProfileSyncDeletionProjectionTests
             }
 
             return true;
+        }
+        private Dictionary<string, string> LoadAllSettings()
+        {
+            LoadAllSettingsCount++;
+            return new Dictionary<string, string>(settings, StringComparer.Ordinal);
+        }
+        private string? LoadSetting(string key)
+        {
+            LoadSettingCount++;
+            return settings.GetValueOrDefault(key);
+        }
+        private List<TradeCompanyProfile> LoadTradeCompanyProfiles()
+        {
+            LoadTradeCompanyProfilesCount++;
+            return _companyIds.Select(companyId =>
+                new TradeCompanyProfile { Id = companyId, Name = "Test company" }).ToList();
+        }
+        private TradeOrder? LoadTradeOrder(Guid orderId)
+        {
+            LoadTradeOrderCount++;
+            return DurableOrder?.Id == orderId ? DurableOrder : null;
+        }
+        private List<TradeOrder> LoadTradeOrders(Guid companyProfileId)
+        {
+            LoadTradeOrdersCount++;
+            return DurableOrder?.CompanyProfileId == companyProfileId
+                ? [DurableOrder]
+                : [];
         }
         private bool SaveSetting(string key, string value)
         {

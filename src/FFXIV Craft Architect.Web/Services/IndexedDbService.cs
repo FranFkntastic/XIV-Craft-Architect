@@ -234,6 +234,12 @@ public sealed class IndexedDbService
             "load Trade orders",
             companyProfileId);
 
+    public Task<TradeOrder?> LoadTradeOrderAsync(Guid orderId) =>
+        InvokeRequiredAsync<TradeOrder?>(
+            "IndexedDB.loadTradeOrder",
+            "load Trade order",
+            orderId);
+
     public Task<bool> DeleteTradeOrderAsync(Guid orderId) =>
         InvokeOrDefaultAsync(
             "IndexedDB.deleteTradeOrder",
