@@ -115,7 +115,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             connection,
             transaction,
             profileId: null,
-            "signin_started",
+            "signin_oauth_started",
             discordUserId: null,
             createdAt,
             cancellationToken);

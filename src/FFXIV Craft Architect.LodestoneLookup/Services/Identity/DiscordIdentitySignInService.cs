@@ -90,6 +90,12 @@ public sealed class DiscordIdentitySignInService(
         }
 
         var now = timeProvider.GetUtcNow();
+        await links.RecordSignInAuditAsync(
+            profileId: null,
+            "signin_started",
+            identity.DiscordUserId,
+            now,
+            cancellationToken);
         var link = await links.LoadByDiscordUserAsync(
             identity.DiscordUserId,
             cancellationToken);
