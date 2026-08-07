@@ -14,6 +14,47 @@ public sealed class ProfileSyncDeletionProjectionTests
 {
     private const string Host = "https://profiles.example/api/";
     [Fact]
+    public async Task TombstoneMarkerReapsZombieRewriteAndBlocksStaleReplay()
+    {
+        var profileId = NewId();
+        var companyProfileId = Guid.NewGuid();
+        var order = CreateOrder(Guid.NewGuid(), companyProfileId, "Doomed draft");
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(companyProfileId);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = CreateLocalState(indexedDb);
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(profileId, false, 0, DateTime.UtcNow, ConnectionScope(profileId));
+        var persistence = new TradeOperationsPersistenceService(
+            indexedDb,
+            new TradeCompanyProfilePackageService(),
+            new TradeOrderArchiveSummaryStore(indexedDb));
+        var adapter = new TradeOrderProfileSyncAdapter(
+            persistence,
+            store,
+            localState,
+            new TradeOrderArchiveSummaryStore(indexedDb));
+
+        await adapter.ApplyRemoteObjectAsync(Envelope(order, 4), CancellationToken.None);
+        await adapter.ApplyRemoteDeletionAsync(order.Id, companyProfileId, 6, CancellationToken.None);
+        Assert.Empty(await persistence.LoadOrdersAsync(companyProfileId));
+
+        await persistence.ApplyCanonicalOrderAsync(order);
+        Assert.Single(await persistence.LoadOrdersAsync(companyProfileId));
+
+        await adapter.ReapResurrectedOrdersAsync(profileId, CancellationToken.None);
+        Assert.Empty(await persistence.LoadOrdersAsync(companyProfileId));
+
+        await adapter.ApplyRemoteObjectAsync(Envelope(order, 5), CancellationToken.None);
+        Assert.Empty(await persistence.LoadOrdersAsync(companyProfileId));
+
+        await adapter.ApplyRemoteObjectAsync(Envelope(order, 8), CancellationToken.None);
+        var revived = Assert.Single(await persistence.LoadOrdersAsync(companyProfileId));
+        Assert.Equal(order.Id, revived.Id);
+        Assert.Empty(await localState.LoadOrderTombstonesAsync(profileId));
+    }
+
+    [Fact]
     public async Task ArchivedOrderSummaryPersistsRevisionWithoutPublishingFullOrder()
     {
         var profileId = NewId();

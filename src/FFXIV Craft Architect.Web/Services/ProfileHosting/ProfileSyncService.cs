@@ -874,6 +874,13 @@ public sealed class ProfileSyncService
             settings,
             profileId,
             CancellationToken.None);
+        if (_adapters.TryGetValue(
+                ProfileSyncCollections.TradeOrders,
+                out var orderAdapter) &&
+            orderAdapter is TradeOrderProfileSyncAdapter hostedOrderAdapter)
+        {
+            await hostedOrderAdapter.ReapResurrectedOrdersAsync(profileId);
+        }
         await _localState.SaveLastSyncRevisionAsync(profileId, serverRevision);
         SetStatus(new ProfileSyncStatus(
             true,
