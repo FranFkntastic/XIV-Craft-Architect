@@ -176,6 +176,9 @@ public sealed class TradeOperationsPersistenceService
         return await _indexedDb.LoadTradeOrdersAsync(companyProfileId);
     }
 
+    public Task<TradeOrder?> LoadOrderAsync(Guid orderId) =>
+        _indexedDb.LoadTradeOrderAsync(orderId);
+
     public async Task<bool> SaveOrderAsync(TradeOrder order)
     {
         if (order.CompanyCommission != null)

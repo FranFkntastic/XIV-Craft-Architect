@@ -110,12 +110,13 @@ public partial class TradeOrders
             return;
         }
 
+        var revisions = await ProfileSyncLocalState.LoadObjectRevisionsAsync(
+            connection.ProfileScopeId,
+            ProfileSyncCollections.TradeOrders,
+            _orders.Select(order => order.Id.ToString("D")));
         foreach (var order in _orders)
         {
-            var revision = await ProfileSyncLocalState.LoadObjectRevisionAsync(
-                connection.ProfileScopeId,
-                ProfileSyncCollections.TradeOrders,
-                order.Id.ToString("D"));
+            var revision = revisions.GetValueOrDefault(order.Id.ToString("D"));
             if (revision > 0)
             {
                 _orderHostedRevisions[order.Id] = revision;

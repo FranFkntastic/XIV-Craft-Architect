@@ -1259,6 +1259,10 @@ async function loadTradeOrders(companyProfileId) {
         .sort((a, b) => String(b.commissionedAtUtc || '').localeCompare(String(a.commissionedAtUtc || '')));
 }
 
+async function loadTradeOrder(orderId) {
+    return await loadStoreRecord(STORE_TRADE_ORDERS, orderId);
+}
+
 async function deleteTradeOrder(orderId) {
     return await deleteStoreRecord(STORE_TRADE_ORDERS, orderId);
 }
@@ -2103,6 +2107,7 @@ window.IndexedDB = {
     saveTradeOrder,
     saveTradeOrdersBatch,
     loadTradeOrders,
+    loadTradeOrder,
     deleteTradeOrder,
     saveTradeOrderArchiveSummary,
     loadTradeOrderArchiveSummaries,

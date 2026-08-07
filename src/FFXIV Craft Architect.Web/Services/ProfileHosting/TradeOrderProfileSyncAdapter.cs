@@ -5,6 +5,7 @@ namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 public sealed class TradeOrderProfileSyncAdapter :
     IProfileSyncCollectionAdapter,
+    IProfileSyncSingleObjectAdapter,
     IHostedOrderProfileSyncAdapter
 {
     private static readonly JsonSerializerOptions JsonOptions =
@@ -40,6 +41,20 @@ public sealed class TradeOrderProfileSyncAdapter :
 
         var now = DateTime.UtcNow;
         return orders.Select(order => ToEnvelope(order, now)).ToArray();
+    }
+
+    public async Task<ProfileSyncObjectEnvelope?> LoadLocalObjectAsync(
+        string objectId,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!Guid.TryParse(objectId, out var orderId))
+        {
+            return null;
+        }
+
+        var order = await _tradeOperations.LoadOrderAsync(orderId);
+        return order == null ? null : ToEnvelope(order, DateTime.UtcNow);
     }
 
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
@@ -231,26 +246,28 @@ public sealed class TradeOrderProfileSyncAdapter :
             return;
         }
 
-        var profiles = await _tradeOperations.LoadCompanyProfilesAsync();
-        foreach (var profile in profiles)
+        foreach (var tombstone in tombstones)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            foreach (var order in await _tradeOperations.LoadOrdersAsync(profile.Id))
+            if (!Guid.TryParse(tombstone.Key, out var orderId))
             {
-                var objectId = order.Id.ToString("D");
-                if (!tombstones.TryGetValue(objectId, out var tombstoneRevision))
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                var localRevision = await _localState.LoadObjectRevisionAsync(
-                    profileId,
-                    ProfileSyncCollections.TradeOrders,
-                    objectId);
-                if (localRevision <= tombstoneRevision)
-                {
-                    await _tradeOperations.DeleteOrderAsync(order.Id);
-                }
+            var order = await _tradeOperations.LoadOrderAsync(orderId);
+            if (order == null)
+            {
+                continue;
+            }
+
+            var objectId = orderId.ToString("D");
+            var localRevision = await _localState.LoadObjectRevisionAsync(
+                profileId,
+                ProfileSyncCollections.TradeOrders,
+                objectId);
+            if (localRevision <= tombstone.Value)
+            {
+                await _tradeOperations.DeleteOrderAsync(order.Id);
             }
         }
     }
