@@ -1,0 +1,92 @@
+@using FFXIV_Craft_Architect.Web.Services.ProfileHosting
+@inject DiscordIdentityClient DiscordIdentityClient
+@inject ProfileHostClient ProfileHostClient
+@inject ProfileSyncLocalStateService LocalState
+@inject ProfileSyncService ProfileSync
+@inject NavigationManager NavigationManager
+@inject IDialogService DialogService
+
+@if (_signInEnabled && !_connected)
+{
+    <MudButton Variant="Variant.Text"
+               StartIcon="@Icons.Material.Filled.Login"
+               OnClick="SignInAsync"
+               Disabled="_busy"
+               Style="color: #d4a73a; text-transform: none; font-size: 14px;">
+        Sign in
+    </MudButton>
+}
+else if (_connected && !string.IsNullOrWhiteSpace(_displayName))
+{
+    <MudButton Variant="Variant.Text"
+               StartIcon="@Icons.Material.Filled.AccountCircle"
+               OnClick="OpenHostingAsync"
+               Style="color: #cccccc; text-transform: none; font-size: 14px;">
+        @_displayName
+    </MudButton>
+}
+
+@code {
+    private bool _signInEnabled;
+    private bool _connected;
+    private bool _busy;
+    private string? _displayName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        ProfileSync.ConnectionChanged += OnConnectionChanged;
+    }
+
+    private async void OnConnectionChanged()
+    {
+        await InvokeAsync(RefreshAsync);
+    }
+
+    private async Task RefreshAsync()
+    {
+        try
+        {
+            var settings = await LocalState.LoadConnectionSettingsAsync();
+            _connected = settings.IsConfigured;
+            _displayName = settings.ConnectedProfileName;
+            _signInEnabled = !_connected &&
+                (await DiscordIdentityClient.GetSignInStatusAsync(
+                    ProfileHostClient.DefaultHostUrl,
+                    CancellationToken.None)).Enabled;
+        }
+        catch (Exception)
+        {
+            _signInEnabled = false;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SignInAsync()
+    {
+        _busy = true;
+        try
+        {
+            var authorizationUri = await DiscordIdentityClient.StartSignInAsync(
+                ProfileHostClient.DefaultHostUrl,
+                CancellationToken.None);
+            NavigationManager.NavigateTo(authorizationUri.AbsoluteUri, forceLoad: true);
+        }
+        catch (Exception)
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task OpenHostingAsync()
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+        await DialogService.ShowAsync<OptionsDialog>("Options", options);
+    }
+
+    public void Dispose()
+    {
+        ProfileSync.ConnectionChanged -= OnConnectionChanged;
+    }
+}
