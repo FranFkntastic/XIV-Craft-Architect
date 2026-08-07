@@ -928,7 +928,7 @@ public sealed class DiscordCommissionMessageLifecycleTests
         Assert.Contains("View commission", buttons);
         Assert.Equal(expectsClaimButton, buttons.Contains("Claim commission"));
         Assert.Equal(expectsClaimButton, buttons.Contains("Claim with Discord"));
-        Assert.Contains("Open my workspace", buttons);
+        Assert.DoesNotContain("Open my workspace", buttons);
         var customIds = payload.RootElement
             .GetProperty("components")[0]
             .GetProperty("components")
@@ -936,7 +936,7 @@ public sealed class DiscordCommissionMessageLifecycleTests
             .Where(button => button.TryGetProperty("custom_id", out _))
             .Select(button => button.GetProperty("custom_id").GetString())
             .ToArray();
-        Assert.Contains(customIds, value =>
+        Assert.DoesNotContain(customIds, value =>
             value!.StartsWith("open-workspace:ca:v1:", StringComparison.Ordinal));
         Assert.Equal(
             expectsClaimButton,

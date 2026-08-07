@@ -44,14 +44,6 @@ public static class CompanyCommissionDiscordMessage
                     $"claim-discord:{actionToken}",
                     style: 1));
             }
-
-            if (state is DiscordPublicationState.Open or DiscordPublicationState.Assigned)
-            {
-                buttons.Add(ActionButton(
-                    "Open my workspace",
-                    $"open-workspace:{actionToken}",
-                    style: 2));
-            }
         }
 
         return new
