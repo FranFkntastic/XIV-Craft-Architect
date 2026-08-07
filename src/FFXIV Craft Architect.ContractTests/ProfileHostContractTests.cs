@@ -362,6 +362,110 @@ public sealed class ProfileHostContractTests
     }
 
     [Fact]
+    public async Task AccessKeyList_ReturnsOnlyActiveMetadataAndMarksPresentedKey()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var otherKey = new ProfileAccessKeyHasher().CreateAccessKey();
+        await fixture.Store.AddAccessKeyAsync(
+            fixture.ProfileId,
+            otherKey.StoredHash,
+            CancellationToken.None);
+        using var client = fixture.CreateClient();
+
+        using var response = await client.GetAsync("/profile-host/keys");
+        var json = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(json);
+
+        response.EnsureSuccessStatusCode();
+        var keys = document.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(2, keys.Length);
+        Assert.Single(keys, key => key.GetProperty("isCurrent").GetBoolean());
+        Assert.All(keys, key => Assert.Equal(
+            ["id", "createdAtUtc", "lastUsedAtUtc", "isCurrent"],
+            key.EnumerateObject().Select(property => property.Name).ToArray()));
+        Assert.DoesNotContain("hash", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(fixture.AccessKey, json, StringComparison.Ordinal);
+        Assert.DoesNotContain(otherKey.PlaintextKey, json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RevokeCurrentKey_SignsOutPresentedBrowser()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+        var keys = await client.GetFromJsonAsync<IReadOnlyList<ProfileHostAccessKeyMetadata>>("/profile-host/keys");
+        var currentKeyId = Assert.Single(keys!).Id;
+
+        using var wrongRoute = await client.DeleteAsync($"/profile-host/keys/{currentKeyId}");
+        using var revoked = await client.DeleteAsync("/profile-host/keys/current");
+        using var afterRevocation = await client.GetAsync("/profile-host/profile");
+
+        Assert.Equal(HttpStatusCode.BadRequest, wrongRoute.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, afterRevocation.StatusCode);
+    }
+
+    [Fact]
+    public async Task RevokeOtherKey_LeavesPresentedKeyAuthorized()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var otherKey = new ProfileAccessKeyHasher().CreateAccessKey();
+        await fixture.Store.AddAccessKeyAsync(
+            fixture.ProfileId,
+            otherKey.StoredHash,
+            CancellationToken.None);
+        using var currentClient = fixture.CreateClient();
+        var keys = await currentClient.GetFromJsonAsync<IReadOnlyList<ProfileHostAccessKeyMetadata>>(
+            "/profile-host/keys");
+        var otherKeyId = Assert.Single(keys!, key => !key.IsCurrent).Id;
+
+        using var revoked = await currentClient.DeleteAsync($"/profile-host/keys/{otherKeyId}");
+        using var currentStillAuthorized = await currentClient.GetAsync("/profile-host/profile");
+        using var otherClient = fixture.CreateClient(accessKey: otherKey.PlaintextKey);
+        using var otherRejected = await otherClient.GetAsync("/profile-host/profile");
+
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, currentStillAuthorized.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, otherRejected.StatusCode);
+    }
+
+    [Fact]
+    public async Task KeyManagement_RefusesCrossProfileAndDisabledHost()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var secondaryProfile = await fixture.Store.CreateProfileAsync("Other Account", CancellationToken.None);
+        var secondaryKey = new ProfileAccessKeyHasher().CreateAccessKey();
+        await fixture.Store.AddAccessKeyAsync(
+            secondaryProfile.ProfileId,
+            secondaryKey.StoredHash,
+            CancellationToken.None);
+        using var secondaryClient = fixture.CreateClient(accessKey: secondaryKey.PlaintextKey);
+        var secondaryKeys = await secondaryClient.GetFromJsonAsync<IReadOnlyList<ProfileHostAccessKeyMetadata>>(
+            "/profile-host/keys");
+        var secondaryKeyId = Assert.Single(secondaryKeys!).Id;
+        using var primaryClient = fixture.CreateClient();
+
+        using var crossProfile = await primaryClient.DeleteAsync($"/profile-host/keys/{secondaryKeyId}");
+        using var secondaryStillAuthorized = await secondaryClient.GetAsync("/profile-host/profile");
+        using var disabledApplication = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ProfileHost:Enabled"] = "false"
+                })));
+        using var disabledClient = disabledApplication.CreateClient();
+        using var disabledList = await disabledClient.GetAsync("/profile-host/keys");
+        using var disabledCurrent = await disabledClient.DeleteAsync("/profile-host/keys/current");
+        using var disabledOther = await disabledClient.DeleteAsync($"/profile-host/keys/{Guid.NewGuid():D}");
+
+        Assert.Equal(HttpStatusCode.NotFound, crossProfile.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, secondaryStillAuthorized.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, disabledList.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, disabledCurrent.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, disabledOther.StatusCode);
+    }
+
+    [Fact]
     public async Task UnauthorizedMutationAndBootstrap_AreDeniedWithoutStoreMutation()
     {
         await using var fixture = await ProfileFixture.CreateAsync();

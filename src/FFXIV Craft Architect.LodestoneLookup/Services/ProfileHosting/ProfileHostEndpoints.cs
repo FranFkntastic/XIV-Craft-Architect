@@ -41,6 +41,117 @@ public static class ProfileHostEndpoints
                 return profile == null ? Results.Unauthorized() : Results.Ok(profile);
             });
 
+        group.MapGet(
+            "/keys",
+            async (
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var authenticated = await AuthenticateAccessKeyAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (authenticated == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                return Results.Ok(await store.LoadActiveAccessKeysAsync(
+                    authenticated.Profile.ProfileId,
+                    authenticated.KeyIds,
+                    cancellationToken));
+            });
+
+        group.MapDelete(
+            "/keys/current",
+            async (
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var authenticated = await AuthenticateAccessKeyAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (authenticated == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                foreach (var keyId in authenticated.KeyIds)
+                {
+                    await store.RevokeAccessKeyAsync(
+                        authenticated.Profile.ProfileId,
+                        keyId,
+                        cancellationToken);
+                }
+                return Results.NoContent();
+            });
+
+        group.MapDelete(
+            "/keys/{keyId}",
+            async (
+                string keyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var authenticated = await AuthenticateAccessKeyAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (authenticated == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (authenticated.KeyIds.Contains(keyId, StringComparer.Ordinal))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "current_key_requires_sign_out",
+                        message = "Use the current-key endpoint to sign out this browser."
+                    });
+                }
+
+                return await store.RevokeAccessKeyAsync(
+                    authenticated.Profile.ProfileId,
+                    keyId,
+                    cancellationToken)
+                    ? Results.NoContent()
+                    : Results.NotFound();
+            });
+
         group.MapPost(
             "/pairing/create",
             async (
@@ -617,6 +728,25 @@ public static class ProfileHostEndpoints
         return await authentication.ExecuteAsync(
             accessKey,
             ct => store.AuthenticateAsync(accessKey, hasher, ct),
+            cancellationToken);
+    }
+
+    private static async Task<AuthenticatedProfileAccessKey?> AuthenticateAccessKeyAsync(
+        HttpRequest request,
+        ProfileAuthenticationGate authentication,
+        SqliteProfileHostStore store,
+        ProfileAccessKeyHasher hasher,
+        CancellationToken cancellationToken)
+    {
+        var accessKey = ReadAccessKey(request);
+        if (string.IsNullOrWhiteSpace(accessKey))
+        {
+            return null;
+        }
+
+        return await authentication.ExecuteAsync(
+            accessKey,
+            ct => store.AuthenticateAccessKeyAsync(accessKey, hasher, ct),
             cancellationToken);
     }
 

@@ -1,0 +1,68 @@
+.account-heading {
+    margin-bottom: 18px;
+}
+
+.account-section-label {
+    margin-top: 16px;
+    color: #9aa1a7;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.account-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 58px;
+    padding: 10px 0;
+    border-top: 1px solid #3a3f44;
+}
+
+.account-row-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.account-row-stack {
+    display: block;
+}
+
+.account-row-summary,
+.account-key-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.account-key-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 10px;
+    border: 1px solid #3a3f44;
+    border-radius: 5px;
+    background: #202428;
+}
+
+.account-key-row + .account-key-row {
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.account-advanced {
+    margin-top: 16px;
+    border-top: 1px solid #3a3f44;
+}
+
+::deep .account-advanced .mud-expand-panel {
+    background: transparent;
+}
+
+@media (max-width: 560px) {
+    .account-row {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+}

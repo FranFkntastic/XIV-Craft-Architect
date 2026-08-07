@@ -1,0 +1,707 @@
+@using FFXIV_Craft_Architect.Web.Services.ProfileHosting
+@inject ProfileHostClient ProfileHostClient
+@inject DiscordIdentityClient DiscordIdentityClient
+@inject ProfileSyncLocalStateService LocalState
+@inject ProfileSyncService ProfileSync
+@inject IJSRuntime JSRuntime
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<MudDialog Class="account-dialog">
+    <DialogContent>
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" Class="my-4" />
+        }
+        else
+        {
+            <div class="account-heading">
+                <MudText Typo="Typo.h6">@(_settings.IsConfigured ? AccountDisplayName : "Connect account")</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @if (_settings.IsConfigured)
+                    {
+                        <span>Account @ShortProfileId · Signed in with @SignInMethod</span>
+                    }
+                    else
+                    {
+                        <span>Connect this browser with an access key or one-time pairing code.</span>
+                    }
+                </MudText>
+            </div>
+
+            @if (_settings.IsConfigured)
+            {
+                <div class="account-section-label">Discord identity</div>
+                <div class="account-row">
+                    <div class="account-row-main">
+                        <MudText Typo="Typo.subtitle2">
+                            @(_discordStatus?.Linked == true
+                                ? _discordStatus.DisplayName
+                                : "No Discord account linked")
+                        </MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            @(_discordStatus?.Linked == true
+                                ? $"Linked {FormatDate(_discordStatus.LinkedAt)} · used for sign-in and commission notifications"
+                                : "Link Discord for provider sign-in and commission notifications.")
+                        </MudText>
+                    </div>
+                    @if (_discordStatus?.Enabled == true && _discordStatus.Linked)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success">linked</MudChip>
+                        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="RefreshDiscordAsync" Disabled="_discordBusy">Refresh</MudButton>
+                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="UnlinkDiscordAsync" Disabled="_discordBusy">Unlink</MudButton>
+                    }
+                    else if (_discordStatus?.Enabled == true)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="LinkDiscordAsync" Disabled="_discordBusy">
+                            Link Discord
+                        </MudButton>
+                    }
+                    else
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="RefreshDiscordAsync" Disabled="_discordBusy" aria-label="Refresh Discord status" />
+                    }
+                </div>
+                @if (_discordBusy)
+                {
+                    <MudProgressLinear Indeterminate="true" Class="mt-1" />
+                }
+
+                <div class="account-section-label">This browser</div>
+                <div class="account-row">
+                    <div class="account-row-main">
+                        <MudText Typo="Typo.subtitle2">This device</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">@CurrentSessionSummary</MudText>
+                    </div>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small" OnClick="SignOutAsync" Disabled="_accountBusy">
+                        Sign out
+                    </MudButton>
+                </div>
+
+                <div class="account-section-label">Other ways in</div>
+                <div class="account-row account-row-stack">
+                    <div class="account-row-summary">
+                        <div class="account-row-main">
+                            <MudText Typo="Typo.subtitle2">@OtherKeySummary</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">Paired access keys remain active until revoked.</MudText>
+                        </div>
+                        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="ToggleKeyManagement" Disabled="_accountBusy">
+                            @(_managingKeys ? "Done" : "Manage…")
+                        </MudButton>
+                    </div>
+                    @if (_managingKeys)
+                    {
+                        <div class="account-key-list">
+                            @foreach (var key in OtherKeys)
+                            {
+                                <div class="account-key-row">
+                                    <div>
+                                        <MudText Typo="Typo.body2">Browser key @ShortKeyId(key.Id)</MudText>
+                                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                            Created @FormatDate(key.CreatedAtUtc) · last used @FormatDate(key.LastUsedAtUtc)
+                                        </MudText>
+                                    </div>
+                                    <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="() => RevokeKeyAsync(key.Id)" Disabled="_accountBusy">
+                                        Revoke
+                                    </MudButton>
+                                </div>
+                            }
+                            @if (OtherKeys.Count == 0)
+                            {
+                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                    @(_keysLoaded ? "No other active browser keys." : "Active browser keys could not be loaded.")
+                                </MudText>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+
+            <MudExpansionPanels Class="account-advanced" Elevation="0">
+                <MudExpansionPanel Text="Advanced: access key, pairing, custom host" Expanded="@(!_settings.IsConfigured)">
+                    <MudTextField @bind-Value="_accessKey"
+                                  Label="Access key"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  InputType="InputType.Password"
+                                  Immediate="true"
+                                  Disabled="_accountBusy" />
+                    <MudTextField @bind-Value="_pairingCode"
+                                  Label="One-time pairing code"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  Disabled="_accountBusy"
+                                  Class="mt-2" />
+                    @if (_useCustomHost)
+                    {
+                        <MudTextField @bind-Value="_hostUrl"
+                                      Label="Profile host API URL"
+                                      Placeholder="https://craft.example.com/api/"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true"
+                                      Disabled="_accountBusy"
+                                      Class="mt-2" />
+                    }
+                    <div class="d-flex flex-wrap gap-2 mt-3">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="ConnectWithKeyAsync" Disabled="_accountBusy">
+                            Connect with key
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="RedeemPairingCodeAsync" Disabled="_accountBusy">
+                            Pair this browser
+                        </MudButton>
+                        @if (_settings.IsConfigured)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="CreatePairingCodeAsync" Disabled="_accountBusy">
+                                Connect another browser
+                            </MudButton>
+                        }
+                        <MudButton Variant="Variant.Text" Color="Color.Secondary" OnClick="ToggleCustomHost" Disabled="_accountBusy">
+                            @(_useCustomHost ? "Use release host" : "Use custom host")
+                        </MudButton>
+                    </div>
+
+                    @if (_bootstrapPreview != null && _pendingSettings != null)
+                    {
+                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                            Both this browser and hosted profile contain data. Choose which side initializes this connection.
+                        </MudAlert>
+                        <MudRadioGroup T="FirstConnectMode" @bind-Value="_firstConnectMode" Class="my-2">
+                            <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.UploadLocal" Color="Color.Primary">
+                                Keep this browser (@_bootstrapPreview.LocalObjectCount.ToString("N0") objects)
+                            </MudRadio>
+                            <MudRadio T="FirstConnectMode" Value="@FirstConnectMode.DownloadRemote" Color="Color.Primary">
+                                Use hosted profile (@_bootstrapPreview.RemoteObjectCount.ToString("N0") objects)
+                            </MudRadio>
+                        </MudRadioGroup>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="CompleteConnectionAsync" Disabled="_accountBusy">Continue</MudButton>
+                        <MudButton Variant="Variant.Text" OnClick="CancelPendingConnection" Disabled="_accountBusy">Cancel</MudButton>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(_generatedPairingCode))
+                    {
+                        <MudPaper Variant="Variant.Outlined" Class="pa-3 mt-3">
+                            <MudText Typo="Typo.subtitle2">One-time pairing code</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                Use on another browser before @_pairingExpiresAtUtc?.ToLocalTime().ToString("t").
+                            </MudText>
+                            <div class="d-flex align-center gap-2 mt-2">
+                                <MudTextField Value="@_generatedPairingCode" ReadOnly="true" Variant="Variant.Outlined" Margin="Margin.Dense" Class="flex-grow-1" />
+                                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="CopyPairingCodeAsync">Copy</MudButton>
+                            </div>
+                        </MudPaper>
+                    }
+                </MudExpansionPanel>
+            </MudExpansionPanels>
+
+            @if (_accountBusy)
+            {
+                <MudProgressLinear Indeterminate="true" Class="mt-3" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 d-block">@_busyMessage</MudText>
+            }
+            @if (!string.IsNullOrWhiteSpace(_statusMessage))
+            {
+                <MudText Typo="Typo.caption" Color="@_statusColor" Class="mt-2 d-block">@_statusMessage</MudText>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
+
+    private HostedProfileConnectionSettings _settings = new();
+    private DiscordIdentityWebStatus? _discordStatus;
+    private bool _discordStatusLoaded;
+    private IReadOnlyList<ProfileHostAccessKeyMetadata> _keys = [];
+    private bool _keysLoaded;
+    private bool _loading = true;
+    private bool _discordBusy;
+    private bool _accountBusy;
+    private bool _managingKeys;
+    private string _busyMessage = "Working...";
+    private string? _statusMessage;
+    private Color _statusColor = Color.Secondary;
+    private string _hostUrl = string.Empty;
+    private string _accessKey = string.Empty;
+    private string _pairingCode = string.Empty;
+    private bool _useCustomHost;
+    private string? _generatedPairingCode;
+    private DateTime? _pairingExpiresAtUtc;
+    private ProfileSyncBootstrapPreview? _bootstrapPreview;
+    private HostedProfileConnectionSettings? _pendingSettings;
+    private FirstConnectMode _firstConnectMode = FirstConnectMode.DownloadRemote;
+
+    private string AccountDisplayName => string.IsNullOrWhiteSpace(_settings.ConnectedProfileName)
+        ? "Account"
+        : _settings.ConnectedProfileName;
+    private string ShortProfileId => ShortId(_settings.ProfileScopeId);
+    private string SignInMethod => !_discordStatusLoaded
+        ? "an account session"
+        : _discordStatus?.Linked == true ? "Discord" : "an access key";
+    private IReadOnlyList<ProfileHostAccessKeyMetadata> OtherKeys => _keys.Where(key => !key.IsCurrent).ToArray();
+    private string OtherKeySummary => !_keysLoaded
+        ? "Browser access unavailable"
+        : OtherKeys.Count switch
+        {
+            0 => "No other browsers have access",
+            1 => "1 other browser has access",
+            _ => $"{OtherKeys.Count:N0} other browsers have access"
+        };
+    private string CurrentSessionSummary
+    {
+        get
+        {
+            var current = _keys.SingleOrDefault(key => key.IsCurrent);
+            return current == null
+                ? "Current session key"
+                : $"Session key issued {FormatDate(current.CreatedAtUtc)} · revoke to sign out here";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _settings = await LocalState.LoadConnectionSettingsAsync();
+        _hostUrl = string.IsNullOrWhiteSpace(_settings.HostUrl)
+            ? ProfileHostClient.DefaultHostUrl
+            : _settings.HostUrl;
+        _accessKey = _settings.AccessKey ?? string.Empty;
+        _useCustomHost = !AddressesMatch(_hostUrl, ProfileHostClient.DefaultHostUrl);
+        if (_settings.IsConfigured)
+        {
+            await Task.WhenAll(RefreshDiscordAsync(), RefreshKeysAsync());
+        }
+        _loading = false;
+    }
+
+    private async Task RefreshKeysAsync()
+    {
+        if (!_settings.IsConfigured)
+        {
+            _keys = [];
+            _keysLoaded = false;
+            return;
+        }
+
+        try
+        {
+            _keys = await ProfileHostClient.GetAccessKeysAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+            _keysLoaded = true;
+        }
+        catch (Exception ex)
+        {
+            _keysLoaded = false;
+            SetStatus(ex.Message, Color.Warning);
+        }
+    }
+
+    private async Task RefreshDiscordAsync()
+    {
+        if (!_settings.IsConfigured)
+        {
+            return;
+        }
+
+        _discordBusy = true;
+        try
+        {
+            _discordStatus = await DiscordIdentityClient.GetStatusAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+            _discordStatusLoaded = true;
+        }
+        catch
+        {
+            _discordStatus = new DiscordIdentityWebStatus(false, false, null, null);
+            _discordStatusLoaded = false;
+        }
+        finally
+        {
+            _discordBusy = false;
+        }
+    }
+
+    private async Task LinkDiscordAsync()
+    {
+        _discordBusy = true;
+        try
+        {
+            var opened = await JSRuntime.InvokeAsync<bool>("CraftArchitectDiscordIdentity.begin");
+            if (!opened)
+            {
+                throw new InvalidOperationException("The Discord authorization window was blocked.");
+            }
+            var uri = await DiscordIdentityClient.StartLinkAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+            if (!await JSRuntime.InvokeAsync<bool>("CraftArchitectDiscordIdentity.navigate", uri.AbsoluteUri))
+            {
+                throw new InvalidOperationException("The Discord authorization window was closed.");
+            }
+
+            for (var attempt = 0; attempt < 120; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1));
+                try
+                {
+                    _discordStatus = await DiscordIdentityClient.GetStatusAsync(
+                        _settings.HostUrl!,
+                        _settings.AccessKey!,
+                        CancellationToken.None);
+                    if (_discordStatus.Linked)
+                    {
+                        _discordStatusLoaded = true;
+                        SetStatus($"{_discordStatus.DisplayName} linked.", Color.Success);
+                        return;
+                    }
+                }
+                catch when (attempt < 119)
+                {
+                }
+                await InvokeAsync(StateHasChanged);
+            }
+            SetStatus("Discord authorization is still pending.", Color.Warning);
+        }
+        catch
+        {
+            await JSRuntime.InvokeVoidAsync("CraftArchitectDiscordIdentity.close");
+            SetStatus("Discord linking could not be started.", Color.Error);
+        }
+        finally
+        {
+            _discordBusy = false;
+        }
+    }
+
+    private async Task UnlinkDiscordAsync()
+    {
+        var confirmed = await DialogService.ShowMessageBox(
+            "Unlink Discord Account",
+            "Discord sign-in and commission notifications will stop for this account. Access keys remain active.",
+            yesText: "Unlink",
+            cancelText: "Keep linked");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        _discordBusy = true;
+        try
+        {
+            await DiscordIdentityClient.UnlinkAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+            _discordStatus = new DiscordIdentityWebStatus(true, false, null, null);
+            _discordStatusLoaded = true;
+            SetStatus("Discord account unlinked.", Color.Success);
+        }
+        catch
+        {
+            SetStatus("Discord account could not be unlinked.", Color.Error);
+        }
+        finally
+        {
+            _discordBusy = false;
+        }
+    }
+
+    private async Task SignOutAsync()
+    {
+        _accountBusy = true;
+        _busyMessage = "Signing out this browser...";
+        try
+        {
+            await ProfileHostClient.RevokeCurrentAccessKeyAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+            await ProfileSync.DisconnectAsync();
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, Color.Error);
+        }
+        finally
+        {
+            _accountBusy = false;
+        }
+    }
+
+    private async Task RevokeKeyAsync(string keyId)
+    {
+        _accountBusy = true;
+        _busyMessage = "Revoking browser access...";
+        try
+        {
+            await ProfileHostClient.RevokeAccessKeyAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                keyId,
+                CancellationToken.None);
+            await RefreshKeysAsync();
+            SetStatus("Browser access revoked.", Color.Success);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, Color.Error);
+        }
+        finally
+        {
+            _accountBusy = false;
+        }
+    }
+
+    private async Task ConnectWithKeyAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_accessKey))
+        {
+            SetStatus("Enter an access key.", Color.Error);
+            return;
+        }
+
+        _accountBusy = true;
+        _busyMessage = "Authorizing this browser...";
+        ClearPendingConnection();
+        try
+        {
+            var settings = new HostedProfileConnectionSettings
+            {
+                HostUrl = SelectedHostUrl(),
+                AccessKey = _accessKey.Trim(),
+                RememberAccessKey = true
+            };
+            var health = await ProfileHostClient.GetHealthAsync(settings.HostUrl, CancellationToken.None);
+            if (!health.ProfileHostEnabled)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.ProfileHostingDisabled,
+                    "Profile hosting is not enabled on that server.");
+            }
+            if (health.ProtocolVersion != 1)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.IncompatibleHost,
+                    "This server is not a compatible Craft Architect profile host.");
+            }
+            var profile = await ProfileHostClient.GetProfileAsync(settings.HostUrl, settings.AccessKey, CancellationToken.None);
+            await PrepareConnectionAsync(settings, profile);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, Color.Error);
+        }
+        finally
+        {
+            _accountBusy = false;
+        }
+    }
+
+    private async Task RedeemPairingCodeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_pairingCode))
+        {
+            SetStatus("Enter a one-time pairing code.", Color.Error);
+            return;
+        }
+
+        _accountBusy = true;
+        _busyMessage = "Pairing this browser...";
+        ClearPendingConnection();
+        try
+        {
+            var hostUrl = SelectedHostUrl();
+            var health = await ProfileHostClient.GetHealthAsync(hostUrl, CancellationToken.None);
+            if (!health.ProfileHostEnabled || health.ProtocolVersion != 1)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.IncompatibleHost,
+                    "This server is not a compatible Craft Architect profile host.");
+            }
+            var redeemed = await ProfileHostClient.RedeemPairingCodeAsync(
+                hostUrl,
+                _pairingCode.Trim(),
+                CancellationToken.None);
+            _pairingCode = string.Empty;
+            _accessKey = redeemed.AccessKey;
+            await PrepareConnectionAsync(
+                new HostedProfileConnectionSettings
+                {
+                    HostUrl = hostUrl,
+                    AccessKey = redeemed.AccessKey,
+                    RememberAccessKey = true,
+                    ConnectedProfileId = redeemed.Profile.ProfileId,
+                    ConnectedProfileName = redeemed.Profile.DisplayName
+                },
+                redeemed.Profile);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, Color.Error);
+        }
+        finally
+        {
+            _accountBusy = false;
+        }
+    }
+
+    private async Task PrepareConnectionAsync(
+        HostedProfileConnectionSettings settings,
+        ProfileHostProfileResponse profile)
+    {
+        settings.ConnectedProfileId = profile.ProfileId;
+        settings.ConnectedProfileName = profile.DisplayName;
+        _busyMessage = "Comparing browser and hosted data...";
+        var preview = await ProfileSync.PreviewFirstConnectAsync(settings);
+        if (preview.LocalObjectCount > 0 && preview.RemoteObjectCount > 0 && !preview.ContentsMatch)
+        {
+            _bootstrapPreview = preview;
+            _pendingSettings = settings.Snapshot();
+            _firstConnectMode = FirstConnectMode.DownloadRemote;
+            return;
+        }
+
+        await ConnectVerifiedAsync(
+            settings,
+            preview.RemoteObjectCount == 0 && preview.LocalObjectCount > 0
+                ? FirstConnectMode.UploadLocal
+                : FirstConnectMode.DownloadRemote);
+    }
+
+    private async Task CompleteConnectionAsync()
+    {
+        if (_pendingSettings == null)
+        {
+            return;
+        }
+        _accountBusy = true;
+        _busyMessage = "Connecting and reconciling data...";
+        try
+        {
+            await ConnectVerifiedAsync(_pendingSettings, _firstConnectMode);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, Color.Error);
+        }
+        finally
+        {
+            _accountBusy = false;
+        }
+    }
+
+    private async Task ConnectVerifiedAsync(HostedProfileConnectionSettings settings, FirstConnectMode mode)
+    {
+        await ProfileSync.ConnectAsync(settings, mode);
+        ClearPendingConnection();
+        SetStatus($"Connected to {settings.ConnectedProfileName ?? "hosted profile"}.", Color.Success);
+        await LoadAsync();
+    }
+
+    private async Task CreatePairingCodeAsync()
+    {
+        _accountBusy = true;
+        _busyMessage = "Creating a one-time pairing code...";
+        try
+        {
+            var pairing = await ProfileHostClient.CreatePairingCodeAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+            _generatedPairingCode = pairing.PairingCode;
+            _pairingExpiresAtUtc = pairing.ExpiresAtUtc;
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, Color.Error);
+        }
+        finally
+        {
+            _accountBusy = false;
+        }
+    }
+
+    private async Task CopyPairingCodeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_generatedPairingCode))
+        {
+            return;
+        }
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", _generatedPairingCode);
+            Snackbar.Add("Pairing code copied.", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("The pairing code could not be copied.", Severity.Error);
+        }
+    }
+
+    private void ToggleKeyManagement() => _managingKeys = !_managingKeys;
+    private void ToggleCustomHost()
+    {
+        _useCustomHost = !_useCustomHost;
+        if (!_useCustomHost)
+        {
+            _hostUrl = ProfileHostClient.DefaultHostUrl;
+        }
+    }
+    private void CancelPendingConnection()
+    {
+        ClearPendingConnection();
+        SetStatus("Connection canceled. Browser data was not changed.", Color.Info);
+    }
+    private void ClearPendingConnection()
+    {
+        _bootstrapPreview = null;
+        _pendingSettings = null;
+    }
+    private string SelectedHostUrl() => ProfileHostClient.NormalizeHostUrl(
+        _useCustomHost ? _hostUrl : ProfileHostClient.DefaultHostUrl);
+    private static bool AddressesMatch(string first, string second)
+    {
+        try
+        {
+            return string.Equals(
+                ProfileHostClient.NormalizeHostUrl(first),
+                ProfileHostClient.NormalizeHostUrl(second),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+    private static string ShortId(string? value) => string.IsNullOrWhiteSpace(value)
+        ? "unknown"
+        : value.Replace("-", string.Empty, StringComparison.Ordinal) is { Length: > 8 } compact
+            ? $"{compact[..4]}…{compact[^4..]}"
+            : value;
+    private static string ShortKeyId(string value) => value.Length > 8 ? $"{value[..4]}…{value[^4..]}" : value;
+    private static string FormatDate(DateTimeOffset? value) => value?.ToLocalTime().ToString("yyyy-MM-dd") ?? "never";
+    private static string FormatDate(DateTime? value) => value?.ToLocalTime().ToString("yyyy-MM-dd") ?? "never";
+    private void SetStatus(string message, Color color)
+    {
+        _statusMessage = message;
+        _statusColor = color;
+    }
+    private void Close() => MudDialog.Close();
+}
