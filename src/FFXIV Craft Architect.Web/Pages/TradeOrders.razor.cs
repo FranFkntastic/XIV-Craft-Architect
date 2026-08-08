@@ -602,7 +602,6 @@ public partial class TradeOrders
         _showNewOrderPanel = true;
         _activeOpsTab = 0;
         AppState.SelectTradeOrder(null);
-        ClearSelectedOrderNavigation();
         if (string.IsNullOrWhiteSpace(_newRequestedOrderTitle))
         {
             RefreshRequestedOrderSuggestedTitle(force: true);
@@ -612,6 +611,7 @@ public partial class TradeOrders
     private void CloseNewOrderWorkspace()
     {
         _showNewOrderPanel = false;
+        ClearSelectedOrderNavigation();
     }
 
     private void ResetNewOrderDraft()
