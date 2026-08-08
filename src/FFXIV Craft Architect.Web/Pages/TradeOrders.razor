@@ -1885,6 +1885,13 @@
                                                 This order changed in another client while local edits were pending.
                                                 Review before any publication or claim action.
                                             </span>
+                                            <MudButton Variant="Variant.Filled"
+                                                       Color="Color.Warning"
+                                                       Size="Size.Small"
+                                                       Disabled="@(SelectedOrderConflict.CanKeepLocal == false)"
+                                                       OnClick="KeepLocalOrderVersionAsync">
+                                                Keep My Changes
+                                            </MudButton>
                                             <MudButton Variant="Variant.Outlined"
                                                        Color="Color.Warning"
                                                        Size="Size.Small"
@@ -1892,6 +1899,12 @@
                                                 Use Hosted Version
                                             </MudButton>
                                         </div>
+                                    </MudAlert>
+                                }
+                                else if (IsSelectedOrderPending)
+                                {
+                                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                                        Saved on this device; hosted sync is still pending.
                                     </MudAlert>
                                 }
                                 @if (HasCanonicalCommission && SelectedCommissionOwner == null)
