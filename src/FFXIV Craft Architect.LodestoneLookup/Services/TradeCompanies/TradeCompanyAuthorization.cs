@@ -29,6 +29,7 @@ public sealed class TradeCompanyAuthorization(
 
         var access = await authentication.ExecuteAsync(
             key,
+            ct => companies.TryAuthenticateCachedAsync(key, companyId, ct),
             ct => companies.AuthenticateAsync(key, companyId, ct),
             cancellationToken);
         return access is

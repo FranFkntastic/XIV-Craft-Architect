@@ -38,6 +38,40 @@ public sealed class ProfileAuthenticationGate
         }
     }
 
+    public async Task<T?> ExecuteAsync<T>(
+        string plaintextKey,
+        Func<CancellationToken, Task<T?>> tryAuthenticateCached,
+        Func<CancellationToken, Task<T?>> authenticate,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(tryAuthenticateCached);
+        ArgumentNullException.ThrowIfNull(authenticate);
+        if (!IsBoundedAccessKey(plaintextKey))
+        {
+            return null;
+        }
+
+        var cached = await tryAuthenticateCached(cancellationToken);
+        if (cached != null)
+        {
+            return cached;
+        }
+
+        await WaitForWindowPermitAsync(cancellationToken);
+        await _concurrency.WaitAsync(cancellationToken);
+
+        try
+        {
+            return await tryAuthenticateCached(cancellationToken) ??
+                   await authenticate(cancellationToken);
+        }
+        finally
+        {
+            _concurrency.Release();
+        }
+    }
+
     private async Task WaitForWindowPermitAsync(CancellationToken cancellationToken)
     {
         while (true)
