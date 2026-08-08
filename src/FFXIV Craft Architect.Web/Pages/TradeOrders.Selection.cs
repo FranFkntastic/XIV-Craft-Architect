@@ -390,7 +390,69 @@ public partial class TradeOrders
         PrepareCompanyCommissionEditor(order);
         AppState.SelectTradeOrder(order.Id);
         PersistSelectedOrderInNavigation(order.Id);
+        ScheduleSelectedCommissionOwnerRefresh(order);
         ScheduleSelectedOrderPlanRestoration();
+    }
+
+    private void ScheduleSelectedCommissionOwnerRefresh(TradeOrder order)
+    {
+        if (_selectedCommissionOwnerRefreshOrderId == order.Id &&
+            _selectedCommissionOwnerRefreshCancellation is { IsCancellationRequested: false })
+        {
+            return;
+        }
+
+        InvalidateSelectedCommissionOwnerRefresh();
+        var snapshot = HostedOrders.Get(order.Id);
+        if (order.CompanyCommission == null ||
+            snapshot == null ||
+            !HostedOrderSyncCoordinator.NeedsOwnerAdoption(snapshot))
+        {
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _selectedCommissionOwnerRefreshCancellation = cancellation;
+        _selectedCommissionOwnerRefreshOrderId = order.Id;
+        _ = RefreshSelectedCommissionOwnerAsync(order, cancellation);
+    }
+
+    private async Task RefreshSelectedCommissionOwnerAsync(
+        TradeOrder order,
+        CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await HostedOrderSync.RefreshOwnerProjectionAsync(
+                order.Id,
+                cancellation.Token);
+            if (!_isDisposed &&
+                !cancellation.IsCancellationRequested &&
+                _selectedOrder?.Id == order.Id)
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(_selectedCommissionOwnerRefreshCancellation, cancellation))
+            {
+                _selectedCommissionOwnerRefreshCancellation = null;
+                _selectedCommissionOwnerRefreshOrderId = null;
+            }
+            cancellation.Dispose();
+        }
+    }
+
+    private void InvalidateSelectedCommissionOwnerRefresh()
+    {
+        var cancellation = _selectedCommissionOwnerRefreshCancellation;
+        _selectedCommissionOwnerRefreshCancellation = null;
+        _selectedCommissionOwnerRefreshOrderId = null;
+        cancellation?.Cancel();
     }
 
     private bool IsSelectedOrderArchived => _selectedOrder != null && TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status);

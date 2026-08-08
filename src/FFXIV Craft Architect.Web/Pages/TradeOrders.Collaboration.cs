@@ -223,7 +223,6 @@ public partial class TradeOrders
             }
         }
 
-        _ = RefreshCollaborationAsync(order);
     }
 
     private async Task RefreshCollaborationAsync(TradeOrder order)

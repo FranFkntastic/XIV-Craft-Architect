@@ -281,6 +281,7 @@ public partial class TradeOrders
 
     private void ClearUnavailableSelectedOrder(string message)
     {
+        InvalidateSelectedCommissionOwnerRefresh();
         _selectedOrder = null;
         _manualNote = string.Empty;
         _showCommissionTermsRevision = false;

@@ -60,6 +60,8 @@ public partial class TradeOrders
     private string? _selectedOrderPlanRestoreError;
     private long _selectedOrderPlanRestoreGeneration;
     private CancellationTokenSource? _selectedOrderPlanRestoreCancellation;
+    private CancellationTokenSource? _selectedCommissionOwnerRefreshCancellation;
+    private Guid? _selectedCommissionOwnerRefreshOrderId;
     private int _activeOpsTab;
     private int _opsPaneWidth = DefaultOpsPaneWidth;
     private bool _isPlanPaneExpanded;
@@ -366,6 +368,7 @@ public partial class TradeOrders
     {
         _isDisposed = true;
         InvalidateSelectedOrderPlanRestoration();
+        InvalidateSelectedCommissionOwnerRefresh();
         HostedOrders.Changed -= OnHostedOrderProjectionChanged;
         HostedOrders.Reset -= OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged -= OnHostedOrderRestoreStateChanged;
@@ -580,6 +583,7 @@ public partial class TradeOrders
 
     private void StartNewOrderWorkspace()
     {
+        InvalidateSelectedCommissionOwnerRefresh();
         _pendingImport = null;
         _selectedOrder = null;
         _showNewOrderPanel = true;
