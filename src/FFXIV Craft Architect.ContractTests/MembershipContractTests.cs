@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -38,6 +39,24 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
+    public async Task NewCompanyRequiresClaimedAccount()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateKeyOnlyAsync("Key-only creator");
+        using var client = fixture.CreateClient(owner.Key);
+        using var response = await client.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{Guid.NewGuid():D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = JsonSerializer.Serialize(CreateCompany(), ProfileSyncJson.CreateOptions()),
+                ExpectedRevision = 0
+            });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("company_account_required", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task StartupReconciliationBindsExistingFounderIdempotently()
     {
         await using var fixture = await MembershipFixture.CreateWithExistingCompanyAsync();
@@ -65,9 +84,9 @@ public sealed class MembershipContractTests
         using var attackerClient = fixture.CreateClient(attacker.Key);
         await PutCompanyAsync(victimClient, company);
 
-        await PutCompanyAsync(attackerClient, company, objectId: Guid.NewGuid());
+        await PutCompanyExpectingConflictAsync(attackerClient, company, objectId: Guid.NewGuid());
         var mismatched = await fixture.Memberships.LoadAsync(companyId, attacker.ProfileId);
-        await PutCompanyAsync(attackerClient, company);
+        await PutCompanyExpectingConflictAsync(attackerClient, company);
         var competing = await fixture.Memberships.LoadAsync(companyId, attacker.ProfileId);
         var owner = await fixture.Memberships.LoadAsync(companyId, victim.ProfileId);
 
@@ -331,11 +350,12 @@ public sealed class MembershipContractTests
     [Fact]
     public async Task KeyOnlyHoldingProfileRetainsOwnerAccessWithoutMembershipRows()
     {
-        await using var fixture = await MembershipFixture.CreateAsync();
-        var owner = await fixture.CreateAccountAsync("Key-only owner");
+        await using var fixture = await MembershipFixture.CreateWithExistingKeyOnlyCompanyAsync();
+        var owner = fixture.ExistingKeyOnlyOwner!;
         var company = CreateCompany();
+        company.Id = fixture.ExistingCompanyId!.Value;
         using var client = fixture.CreateClient(owner.Key);
-        await PutCompanyAsync(client, company);
+        await PutCompanyAsync(client, company, expectedRevision: 1);
         await fixture.DeleteMembershipsAsync(company.Id);
 
         using var response = await client.GetAsync(
@@ -367,6 +387,22 @@ public sealed class MembershipContractTests
                 ExpectedRevision = expectedRevision
             });
         response.EnsureSuccessStatusCode();
+    }
+
+    private static async Task PutCompanyExpectingConflictAsync(
+        HttpClient client,
+        TradeCompanyProfile company,
+        Guid? objectId = null)
+    {
+        company.UpdatedAtUtc = DateTime.UtcNow;
+        using var response = await client.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{objectId ?? company.Id:D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
+                ExpectedRevision = 0
+            });
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
 
     private static async Task<MembershipResponse> RequestAsync(
@@ -407,14 +443,17 @@ public sealed class MembershipContractTests
             WebApplicationFactory<Program> application,
             Guid? existingProfileId = null,
             Guid? existingCompanyId = null,
-            Guid? secondExistingProfileId = null)
+            Guid? secondExistingProfileId = null,
+            AccountFixture? existingKeyOnlyOwner = null)
         {
             this.root = root;
             this.application = application;
             ExistingProfileId = existingProfileId;
             ExistingCompanyId = existingCompanyId;
             SecondExistingProfileId = secondExistingProfileId;
+            ExistingKeyOnlyOwner = existingKeyOnlyOwner;
             Profiles = application.Services.GetRequiredService<SqliteProfileHostStore>();
+            Identities = application.Services.GetRequiredService<SqliteDiscordIdentityStore>();
             Memberships = application.Services.GetRequiredService<SqliteMembershipStore>();
             Reconciler = application.Services
                 .GetServices<IHostedService>()
@@ -423,11 +462,13 @@ public sealed class MembershipContractTests
         }
 
         public SqliteProfileHostStore Profiles { get; }
+        public SqliteDiscordIdentityStore Identities { get; }
         public SqliteMembershipStore Memberships { get; }
         public FounderMembershipReconciler Reconciler { get; }
         public Guid? ExistingProfileId { get; }
         public Guid? ExistingCompanyId { get; }
         public Guid? SecondExistingProfileId { get; }
+        public AccountFixture? ExistingKeyOnlyOwner { get; }
 
         public static Task<MembershipFixture> CreateAsync(
             int founderReconciliationIntervalSeconds = 300)
@@ -461,6 +502,35 @@ public sealed class MembershipContractTests
                 CreateApplication(root),
                 Guid.Parse(profile.ProfileId),
                 company.Id);
+        }
+
+        public static async Task<MembershipFixture> CreateWithExistingKeyOnlyCompanyAsync()
+        {
+            var root = CreateRoot();
+            var store = new SqliteProfileHostStore(new ProfileHostOptions
+            {
+                Enabled = true,
+                DatabasePath = Path.Combine(root, "profiles.db")
+            });
+            var hasher = new ProfileAccessKeyHasher();
+            var key = hasher.CreateAccessKey();
+            var profile = await store.CreateProfileAsync("Key-only owner", CancellationToken.None);
+            await store.AddAccessKeyAsync(profile.ProfileId, key.StoredHash, CancellationToken.None);
+            var company = CreateCompany();
+            var put = await store.PutObjectAsync(
+                profile.ProfileId,
+                ProfileSyncCollections.TradeCompanyProfiles,
+                company.Id.ToString("D"),
+                JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
+                0,
+                CancellationToken.None);
+            Assert.True(put.Success);
+            return new MembershipFixture(
+                root,
+                CreateApplication(root),
+                Guid.Parse(profile.ProfileId),
+                company.Id,
+                existingKeyOnlyOwner: new AccountFixture(Guid.Parse(profile.ProfileId), key.PlaintextKey));
         }
 
         public static async Task<MembershipFixture> CreateWithAmbiguousCompanyAsync()
@@ -502,6 +572,18 @@ public sealed class MembershipContractTests
         }
 
         public async Task<AccountFixture> CreateAccountAsync(string displayName)
+        {
+            var account = await CreateKeyOnlyAsync(displayName);
+            var linked = await Identities.LinkAsync(
+                account.ProfileId,
+                $"{100000000000000000L + Math.Abs((long)account.ProfileId.GetHashCode()):D18}",
+                displayName,
+                DateTimeOffset.UtcNow);
+            Assert.Equal(DiscordIdentityLinkResultStatus.Linked, linked.Status);
+            return account;
+        }
+
+        public async Task<AccountFixture> CreateKeyOnlyAsync(string displayName)
         {
             var hasher = new ProfileAccessKeyHasher();
             var key = hasher.CreateAccessKey();
