@@ -9,6 +9,21 @@ public sealed class TradeOrderPlanRestorePolicyTests
     private static readonly Guid OrderB = Guid.Parse("22222222-2222-2222-2222-222222222222");
 
     [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    public void WorkerChangesDoNotRescheduleTheirOwnRestore(
+        bool disposed,
+        bool restoreInProgress,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            TradeOrderPlanRestorePolicy.ShouldScheduleForWorkerChange(
+                disposed,
+                restoreInProgress));
+
+    [Theory]
     [InlineData(CurrentRequestScenario.Current, true)]
     [InlineData(CurrentRequestScenario.SelectionChanged, false)]
     [InlineData(CurrentRequestScenario.PlanChanged, false)]

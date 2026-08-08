@@ -194,12 +194,22 @@ public partial class TradeOrders
 
     private void OnWorkerProjectionChangedForPlanRestoration()
     {
-        if (_isDisposed)
+        if (!TradeOrderPlanRestorePolicy.ShouldScheduleForWorkerChange(
+                _isDisposed,
+                _isLoadingSelectedOrderSupplyPlan))
         {
             return;
         }
 
-        _ = InvokeAsync(ScheduleSelectedOrderPlanRestoration);
+        _ = InvokeAsync(() =>
+        {
+            if (TradeOrderPlanRestorePolicy.ShouldScheduleForWorkerChange(
+                    _isDisposed,
+                    _isLoadingSelectedOrderSupplyPlan))
+            {
+                ScheduleSelectedOrderPlanRestoration();
+            }
+        });
     }
 
     private void ScheduleSelectedOrderPlanRestoration()
