@@ -502,6 +502,12 @@ public partial class TradeOrders
             return;
         }
 
+        if (_showNewOrderPanel)
+        {
+            _pendingNavigationOrderId = null;
+            return;
+        }
+
         var orderId = _pendingNavigationOrderId.Value;
         _pendingNavigationOrderId = null;
         SelectOrderAfterReload(orderId, "Linked Trade order could not be loaded.");
