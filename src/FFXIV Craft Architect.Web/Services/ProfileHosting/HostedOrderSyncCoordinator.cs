@@ -19,6 +19,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
     private const string ModulePath = "./profile-sync-session.js?v=2";
     private static readonly TimeSpan RecoveryInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan OwnerAuthorizationRetryInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan OwnerAdoptionPacingInterval = TimeSpan.FromMilliseconds(175);
     private readonly IJSRuntime _jsRuntime;
     private readonly ProfileSyncService _profileSync;
     private readonly ProfileSyncLocalStateService _localState;
@@ -378,8 +379,12 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
 
         var connectionScopeId = connection.ConnectionScopeId!;
         var now = DateTime.UtcNow;
-        foreach (var candidate in _hostedOrders.GetAll().Where(NeedsOwnerAdoption))
+        var candidates = _hostedOrders.GetAll()
+            .Where(NeedsOwnerAdoption)
+            .ToArray();
+        for (var index = 0; index < candidates.Length; index++)
         {
+            var candidate = candidates[index];
             cancellationToken.ThrowIfCancellationRequested();
             var commission = candidate.Order!.CompanyCommission!;
             var companyId = commission.CompanyId.Value;
@@ -465,6 +470,15 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                     exception,
                     "Authenticated owner projection for hosted order {OrderId} could not be adopted; preserving the last truthful local projection.",
                     candidate.OrderId);
+            }
+            finally
+            {
+                if (index < candidates.Length - 1)
+                {
+                    await Task.Delay(
+                        OwnerAdoptionPacingInterval,
+                        cancellationToken);
+                }
             }
         }
     }
