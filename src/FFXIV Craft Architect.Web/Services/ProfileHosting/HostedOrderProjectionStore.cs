@@ -36,6 +36,7 @@ public sealed class HostedOrderProjectionStore
     private HostedOrderRestoreState _restoreState = HostedOrderRestoreState.Inactive(DateTime.UtcNow);
 
     public event Action<HostedOrderProjectionSnapshot>? Changed;
+    public event Action<IReadOnlyList<HostedOrderProjectionSnapshot>>? BatchChanged;
     public event Action? Reset;
     public event Action<HostedOrderRestoreState>? RestoreStateChanged;
 
@@ -249,6 +250,54 @@ public sealed class HostedOrderProjectionStore
             accepted = TryAcceptUnderLock(candidate);
         }
         return NotifyIfAccepted(candidate, accepted);
+    }
+
+    public int PublishRemoteOrders(
+        IReadOnlyList<(TradeOrder Order, long ObjectRevision)> projections)
+    {
+        ArgumentNullException.ThrowIfNull(projections);
+        if (projections.Count == 0)
+        {
+            return 0;
+        }
+
+        var accepted = new List<HostedOrderProjectionSnapshot>(projections.Count);
+        var restored = 0;
+        lock (_gate)
+        {
+            foreach (var (order, objectRevision) in projections)
+            {
+                ArgumentNullException.ThrowIfNull(order);
+                ArgumentOutOfRangeException.ThrowIfNegativeOrZero(objectRevision);
+                var current = _orders.GetValueOrDefault(order.Id);
+                var candidate = new HostedOrderProjectionSnapshot(
+                    order.Id,
+                    order.CompanyProfileId,
+                    objectRevision,
+                    current?.CompanyRevision,
+                    order,
+                    current?.ObjectRevision == objectRevision
+                        ? current.OwnerProjection
+                        : null,
+                    Deleted: false);
+                if (TryAcceptUnderLock(candidate))
+                {
+                    accepted.Add(candidate);
+                }
+
+                if (_orders.GetValueOrDefault(order.Id)?.ObjectRevision == objectRevision)
+                {
+                    restored++;
+                }
+            }
+        }
+
+        if (accepted.Count > 0)
+        {
+            BatchChanged?.Invoke(accepted);
+            RestoreStateChanged?.Invoke(RestoreState);
+        }
+        return restored;
     }
 
     public HostedOrderCommittedProjectionResult TryAdoptCommittedOrder(
