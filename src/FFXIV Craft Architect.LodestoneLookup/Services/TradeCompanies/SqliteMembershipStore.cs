@@ -342,6 +342,14 @@ public sealed class SqliteMembershipStore(
             companyId.ToString(),
             cancellationToken);
 
+    public async Task<IReadOnlyList<CompanyMembership>> LoadForCompanyAsync(
+        CompanyId companyId,
+        CancellationToken cancellationToken = default) =>
+        await LoadManyAsync(
+            "company_id = $identity",
+            companyId.ToString(),
+            cancellationToken);
+
     public async Task<IReadOnlyList<CompanyMembership>> LoadCurrentForAccountAsync(
         Guid accountProfileId,
         CancellationToken cancellationToken = default)

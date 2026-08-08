@@ -53,6 +53,13 @@ public sealed class CompanyHubContractTests
         Assert.DoesNotContain("roster", json, StringComparison.Ordinal);
         Assert.DoesNotContain("output", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("payment", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("termsVersion", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("deliveryInstructions", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("publicBriefId", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("projectionRevision", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("completedQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("readyQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("acceptedQuantity", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -105,7 +112,15 @@ public sealed class CompanyHubContractTests
         using var ownerJson = JsonDocument.Parse(await ownerResponse.Content.ReadAsStringAsync());
 
         Assert.Equal("hub", memberJson.RootElement.GetProperty("kind").GetString());
-        Assert.Single(memberJson.RootElement.GetProperty("openCommissions").EnumerateArray());
+        var commission = Assert.Single(memberJson.RootElement.GetProperty("openCommissions").EnumerateArray());
+        Assert.Equal(1, commission.GetProperty("termsVersion").GetInt32());
+        Assert.Equal("Deliver to the workshop.", commission.GetProperty("deliveryInstructions").GetString());
+        Assert.Equal("brief", commission.GetProperty("publicBriefId").GetString());
+        Assert.Equal(7, commission.GetProperty("projectionRevision").GetInt64());
+        var output = Assert.Single(commission.GetProperty("outputs").EnumerateArray());
+        Assert.Equal(80, output.GetProperty("completedQuantity").GetInt32());
+        Assert.Equal(60, output.GetProperty("readyQuantity").GetInt32());
+        Assert.Equal(40, output.GetProperty("acceptedQuantity").GetInt32());
         Assert.Equal("hub", ownerJson.RootElement.GetProperty("kind").GetString());
         Assert.Equal(1, ownerJson.RootElement.GetProperty("pendingMembershipRequestCount").GetInt32());
     }
@@ -243,6 +258,13 @@ public sealed class CompanyHubContractTests
         Assert.DoesNotContain("roster", json, StringComparison.Ordinal);
         Assert.DoesNotContain("output", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("payment", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("termsVersion", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("deliveryInstructions", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("publicBriefId", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("projectionRevision", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("completedQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("readyQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("acceptedQuantity", json, StringComparison.Ordinal);
     }
 
     private static TradeCompanyProfile CreateCompany(string name = "Sapphire Avenue", bool showCount = false)
@@ -261,13 +283,15 @@ public sealed class CompanyHubContractTests
     {
         var now = DateTime.UtcNow;
         var orderId = Guid.NewGuid();
+        var outputLineId = Guid.NewGuid();
         var terms = new CompanyCommissionTermsVersion
         {
             Version = 1,
             CreatedAtUtc = now,
             CreatedBy = new("owner", CompanyCommissionActorKind.Commissioner),
-            Outputs = [new(Guid.NewGuid(), 100, "Rarefied Sykon Bavarois", 120, false)],
+            Outputs = [new(outputLineId, 100, "Rarefied Sykon Bavarois", 120, false)],
             Payment = new(CompanyCommissionPaymentSchedule.OnDelivery, "Delivery", 0, 0, 180000, 180000),
+            DeliveryInstructions = "Deliver to the workshop.",
             PricingEvidence = new("test", "test", "test", now)
         };
         return new TradeOrder
@@ -292,8 +316,28 @@ public sealed class CompanyHubContractTests
                     new(CompanyCommissionClearanceState.NotRequired),
                     new(CompanyCommissionClearanceState.NotRequired),
                     new(CompanyCommissionClearanceState.NotRequired, [])),
+                OutputProgress = [new(
+                    outputLineId,
+                    100,
+                    120,
+                    80,
+                    60,
+                    40,
+                    now,
+                    new("crafter", CompanyCommissionActorKind.Crafter))],
                 DeliveryReadiness = new(false),
-                SettlementState = CompanyCommissionSettlementState.NotDue
+                SettlementState = CompanyCommissionSettlementState.NotDue,
+                Activity = [new CompanyCommissionActivityEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    CommissionId = orderId,
+                    CommissionRevision = 7,
+                    Actor = new("crafter", CompanyCommissionActorKind.Crafter),
+                    SourceSurface = CompanyCommissionSourceSurface.TradeArchitect,
+                    CreatedAtUtc = now,
+                    Kind = CompanyCommissionActivityKind.ProgressReported,
+                    TermsVersion = 1
+                }]
             }
         };
     }

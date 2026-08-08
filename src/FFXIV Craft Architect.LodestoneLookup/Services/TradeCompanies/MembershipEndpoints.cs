@@ -19,6 +19,14 @@ public sealed record MembershipResponse(
 public sealed record MembershipErrorResponse(string Error, string Message);
 public sealed record MembershipNotificationPreferenceBody(bool OptedOut);
 public sealed record MembershipNotificationPreferenceResponse(string CompanyId, bool OptedOut);
+public sealed record CompanyMemberResponse(
+    Guid AccountProfileId,
+    string DisplayName,
+    string Role,
+    string State,
+    DateTimeOffset RequestedAtUtc,
+    DateTimeOffset? DecidedAtUtc,
+    bool DiscordLinked);
 
 public static class MembershipEndpoints
 {
@@ -107,6 +115,57 @@ public static class MembershipEndpoints
                     authorization.CompanyId,
                     cancellationToken);
                 return Results.Ok(pending.Select(ToResponse).ToArray());
+            });
+
+        companies.MapGet(
+            "/{companyId}/memberships",
+            async (
+                string companyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                SqliteProfileHostStore profiles,
+                SqliteDiscordIdentityStore identities,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeCompanyAdministratorAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+
+                var current = await memberships.LoadForCompanyAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                var response = new List<CompanyMemberResponse>(current.Count);
+                foreach (var membership in current)
+                {
+                    var profile = await profiles.LoadProfileAsync(
+                        membership.AccountProfileId.ToString("D"),
+                        cancellationToken);
+                    if (profile != null)
+                    {
+                        response.Add(new CompanyMemberResponse(
+                            membership.AccountProfileId,
+                            profile.DisplayName,
+                            membership.Role.ToString().ToLowerInvariant(),
+                            membership.State.ToString().ToLowerInvariant(),
+                            membership.RequestedAtUtc,
+                            membership.DecidedAtUtc,
+                            await identities.LoadByProfileAsync(
+                                membership.AccountProfileId,
+                                cancellationToken) != null));
+                    }
+                }
+                return Results.Ok(response);
             });
 
         MapTransition(companies, "approve", static (store, companyId, accountId, actorId, ct) =>
