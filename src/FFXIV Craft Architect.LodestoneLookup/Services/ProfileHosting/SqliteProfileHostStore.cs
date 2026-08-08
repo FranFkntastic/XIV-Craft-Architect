@@ -3,6 +3,7 @@ using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.Data.Sqlite;
 
@@ -33,6 +34,7 @@ public sealed class SqliteProfileHostStore
     private readonly ProfileHostOptions _options;
     private readonly ProfileHostChangeSignal? _changeSignal;
     private readonly ITradeCompanyFounderBinder? _founderBinder;
+    private readonly SqliteDiscordIdentityStore? _identityStore;
     private readonly ILogger<SqliteProfileHostStore>? _logger;
     private readonly SemaphoreSlim _schemaGate = new(1, 1);
     private readonly ConcurrentDictionary<string, CachedAccessKeyAuthentication> _accessKeyCache = new();
@@ -42,12 +44,14 @@ public sealed class SqliteProfileHostStore
         ProfileHostOptions options,
         ProfileHostChangeSignal? changeSignal = null,
         ITradeCompanyFounderBinder? founderBinder = null,
-        ILogger<SqliteProfileHostStore>? logger = null)
+        ILogger<SqliteProfileHostStore>? logger = null,
+        SqliteDiscordIdentityStore? identityStore = null)
     {
         _options = options;
         _changeSignal = changeSignal;
         _founderBinder = founderBinder;
         _logger = logger;
+        _identityStore = identityStore;
     }
 
     public async Task<ProfileHostProfileResponse> CreateProfileAsync(string displayName, CancellationToken ct)
@@ -1335,6 +1339,30 @@ public sealed class SqliteProfileHostStore
             objectId,
             ct,
             transaction);
+        var isCompany = string.Equals(
+            collection,
+            ProfileSyncCollections.TradeCompanyProfiles,
+            StringComparison.Ordinal);
+        var introducesCompany = isCompany && existing == null;
+
+        if (introducesCompany &&
+            _identityStore != null &&
+            await _identityStore.LoadByProfileAsync(Guid.Parse(profileId), ct) == null)
+        {
+            await transaction.RollbackAsync(ct);
+            _logger?.LogError(
+                "Hosted company creation refused for unclaimed profile {ProfileId}: company {CompanyId} requires an account.",
+                profileId,
+                objectId);
+            return new ProfileSyncPutResponse
+            {
+                Success = false,
+                Conflict = true,
+                ServerRevision = currentServerRevision,
+                ErrorCode = "company_account_required",
+                ErrorMessage = "Creating a hosted company requires a claimed account."
+            };
+        }
 
         if (existing is { Deleted: false } &&
             IsIdenticalLinkedPlanSnapshot(collection, objectId, existing.PayloadJson, payloadJson))
@@ -1464,13 +1492,7 @@ public sealed class SqliteProfileHostStore
                 ErrorMessage = "Remote object changed before the hosted write completed."
             };
         }
-        await transaction.CommitAsync(ct);
-        _changeSignal?.Publish(profileId, revision);
-        if (_founderBinder != null &&
-            string.Equals(
-                collection,
-                ProfileSyncCollections.TradeCompanyProfiles,
-                StringComparison.Ordinal))
+        if (_founderBinder != null && isCompany)
         {
             if (!FounderMembershipBinding.TryRead(
                     profileId,
@@ -1479,6 +1501,23 @@ public sealed class SqliteProfileHostStore
                     out var companyId,
                     out var accountProfileId))
             {
+                if (introducesCompany)
+                {
+                    await transaction.RollbackAsync(ct);
+                    _logger?.LogError(
+                        "Founder membership binding refused hosted company {CompanyId} on profile {ProfileId}: object and payload identities do not match.",
+                        objectId,
+                        profileId);
+                    return new ProfileSyncPutResponse
+                    {
+                        Success = false,
+                        Conflict = true,
+                        ServerRevision = currentServerRevision,
+                        ErrorCode = "founder_identity_mismatch",
+                        ErrorMessage = "The hosted company founder identity is invalid."
+                    };
+                }
+
                 _logger?.LogError(
                     "Founder membership binding skipped hosted company {CompanyId} on profile {ProfileId}: object and payload identities do not match.",
                     objectId,
@@ -1488,18 +1527,51 @@ public sealed class SqliteProfileHostStore
             {
                 try
                 {
-                    await _founderBinder.BindFounderAsync(companyId, accountProfileId, ct);
+                    var binding = await _founderBinder.BindFounderAsync(companyId, accountProfileId, ct);
+                    if (introducesCompany && binding.Status == FounderBindingStatus.ConflictingOwner)
+                    {
+                        await transaction.RollbackAsync(ct);
+                        return new ProfileSyncPutResponse
+                        {
+                            Success = false,
+                            Conflict = true,
+                            ServerRevision = currentServerRevision,
+                            ErrorCode = "founder_owner_conflict",
+                            ErrorMessage = "The hosted company already has a different founder."
+                        };
+                    }
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
+                    if (introducesCompany)
+                    {
+                        await transaction.RollbackAsync(ct);
+                        _logger?.LogError(
+                            exception,
+                            "Founder membership binding refused new hosted company {CompanyId} on profile {ProfileId}.",
+                            companyId,
+                            profileId);
+                        return new ProfileSyncPutResponse
+                        {
+                            Success = false,
+                            Conflict = true,
+                            ServerRevision = currentServerRevision,
+                            ErrorCode = "founder_binding_failed",
+                            ErrorMessage = "Founder membership could not be created."
+                        };
+                    }
+
                     _logger?.LogError(
                         exception,
-                        "Founder membership binding failed after hosted company {CompanyId} committed for profile {ProfileId}; periodic reconciliation will retry.",
+                        "Founder membership binding failed for existing hosted company {CompanyId} on profile {ProfileId}; periodic reconciliation will retry.",
                         companyId,
                         profileId);
                 }
             }
         }
+
+        await transaction.CommitAsync(ct);
+        _changeSignal?.Publish(profileId, revision);
 
         return new ProfileSyncPutResponse
         {
