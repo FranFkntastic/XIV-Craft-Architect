@@ -14,7 +14,7 @@
              TransformOrigin="Origin.BottomCenter"
              Class="trade-company-switcher">
         <ActivatorContent>
-            <MudButton Variant="Variant.Text" Href="@CompanyHubUrl(_activeCompany)"
+            <MudButton Variant="Variant.Text"
                        Size="Size.Small"
                        StartIcon="@Icons.Material.Filled.Business"
                        EndIcon="@Icons.Material.Filled.KeyboardArrowDown"
@@ -25,6 +25,9 @@
             </MudButton>
         </ActivatorContent>
         <ChildContent>
+            <MudMenuItem Href="@CompanyHubUrl(_activeCompany)" Icon="@Icons.Material.Filled.Home">
+                Company hub
+            </MudMenuItem>
             <div class="trade-company-switcher-heading">Active Trade company</div>
             @foreach (var company in _companies)
             {

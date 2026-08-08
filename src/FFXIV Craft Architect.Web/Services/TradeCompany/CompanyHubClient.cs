@@ -31,7 +31,7 @@ public sealed class CompanyHubClient(
         using var response = await SendAsync(
             HttpMethod.Post,
             $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-requests",
-            new { Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim() },
+            new { RequestNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim() },
             cancellationToken);
         response.EnsureSuccessStatusCode();
     }

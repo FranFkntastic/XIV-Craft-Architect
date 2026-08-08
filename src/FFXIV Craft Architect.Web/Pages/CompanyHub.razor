@@ -129,7 +129,8 @@ else
     {
         _loading = true;
         var settings = await LocalState.LoadConnectionSettingsAsync();
-        _signedIn = settings.IsConfigured;
+        _signedIn = settings.IsConfigured &&
+            (await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!)).Linked;
         _hub = await HubClient.LoadAsync(Slug);
         if (_hub != null)
         {
@@ -142,7 +143,13 @@ else
     private void Discard() { _draft = ThemeDraft.From(_hub!.Theme, _hub.OpenCommissionCount != null); _editing = false; }
     private async Task PublishAsync()
     {
-        var profile = (await TradeOperations.LoadCompanyProfilesAsync()).Single(company => company.Id == Guid.Parse(_hub!.CompanyId));
+        var profile = (await TradeOperations.LoadCompanyProfilesAsync())
+            .FirstOrDefault(company => company.Id == Guid.Parse(_hub!.CompanyId));
+        if (profile == null)
+        {
+            Snackbar.Add("This company is not available in this browser, so its theme could not be published.", Severity.Error);
+            return;
+        }
         profile.Landing = new CompanyLandingTheme
         {
             Accent = Enum.Parse<CompanyLandingAccent>(_draft.Accent.Replace("-", string.Empty), true),
