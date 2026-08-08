@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
@@ -12,8 +13,12 @@ public sealed class ProfileAccessKeyHasher
     {
         var keyBytes = RandomNumberGenerator.GetBytes(32);
         var plaintext = "cap_" + Convert.ToBase64String(keyBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        return new CreatedProfileAccessKey(plaintext, Hash(plaintext));
+        return new CreatedProfileAccessKey(plaintext, Hash(plaintext), Fingerprint(plaintext));
     }
+
+    public string Fingerprint(string plaintextKey) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(plaintextKey)))
+            .ToLowerInvariant();
 
     public string Hash(string plaintextKey)
     {
@@ -83,4 +88,7 @@ public sealed class ProfileAccessKeyHasher
     private readonly record struct ParsedStoredHash(byte[] Salt, byte[] Expected);
 }
 
-public sealed record CreatedProfileAccessKey(string PlaintextKey, string StoredHash);
+public sealed record CreatedProfileAccessKey(
+    string PlaintextKey,
+    string StoredHash,
+    string Fingerprint);

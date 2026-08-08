@@ -16,11 +16,18 @@ public sealed class SqliteProfileHostStore
         string StoredHash,
         string CreatedAtUtc,
         string? RevokedAtUtc);
+    private sealed record AccessKeyAuthenticationCandidate(
+        string ProfileId,
+        string DisplayName,
+        string KeyId,
+        string StoredHash);
 
     private readonly ProfileHostOptions _options;
     private readonly ProfileHostChangeSignal? _changeSignal;
     private readonly ITradeCompanyFounderBinder? _founderBinder;
     private readonly ILogger<SqliteProfileHostStore>? _logger;
+    private readonly SemaphoreSlim _schemaGate = new(1, 1);
+    private volatile bool _schemaReady;
 
     public SqliteProfileHostStore(
         ProfileHostOptions options,
@@ -168,12 +175,18 @@ public sealed class SqliteProfileHostStore
                 insertKey.Transaction = (SqliteTransaction)transaction;
                 insertKey.CommandText =
                     """
-                    INSERT INTO profile_access_keys (id, profile_id, key_hash, created_at_utc)
-                    VALUES ($id, $profileId, $keyHash, $createdAtUtc);
+                    INSERT INTO profile_access_keys (
+                        id,
+                        profile_id,
+                        key_hash,
+                        key_fingerprint,
+                        created_at_utc)
+                    VALUES ($id, $profileId, $keyHash, $keyFingerprint, $createdAtUtc);
                     """;
                 insertKey.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
                 insertKey.Parameters.AddWithValue("$profileId", profileId);
                 insertKey.Parameters.AddWithValue("$keyHash", hasher.Hash(plaintextKey));
+                insertKey.Parameters.AddWithValue("$keyFingerprint", hasher.Fingerprint(plaintextKey));
                 insertKey.Parameters.AddWithValue("$createdAtUtc", reconciliationTimestamp);
                 await insertKey.ExecuteNonQueryAsync(ct);
             }
@@ -210,12 +223,18 @@ public sealed class SqliteProfileHostStore
             insertKey.Transaction = (SqliteTransaction)transaction;
             insertKey.CommandText =
                 """
-                INSERT INTO profile_access_keys (id, profile_id, key_hash, created_at_utc)
-                VALUES ($id, $profileId, $keyHash, $createdAtUtc);
+                INSERT INTO profile_access_keys (
+                    id,
+                    profile_id,
+                    key_hash,
+                    key_fingerprint,
+                    created_at_utc)
+                VALUES ($id, $profileId, $keyHash, $keyFingerprint, $createdAtUtc);
                 """;
             insertKey.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
             insertKey.Parameters.AddWithValue("$profileId", profileId);
             insertKey.Parameters.AddWithValue("$keyHash", hasher.Hash(plaintextKey));
+            insertKey.Parameters.AddWithValue("$keyFingerprint", hasher.Fingerprint(plaintextKey));
             insertKey.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
             await insertKey.ExecuteNonQueryAsync(ct);
         }
@@ -244,18 +263,46 @@ public sealed class SqliteProfileHostStore
 
     public async Task AddAccessKeyAsync(string profileId, string storedHash, CancellationToken ct)
     {
+        await AddAccessKeyAsync(profileId, storedHash, fingerprint: null, ct);
+    }
+
+    public async Task AddAccessKeyAsync(
+        string profileId,
+        CreatedProfileAccessKey accessKey,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(accessKey);
+        await AddAccessKeyAsync(
+            profileId,
+            accessKey.StoredHash,
+            accessKey.Fingerprint,
+            ct);
+    }
+
+    private async Task AddAccessKeyAsync(
+        string profileId,
+        string storedHash,
+        string? fingerprint,
+        CancellationToken ct)
+    {
         await EnsureSchemaAsync(ct);
         var now = DateTime.UtcNow;
 
         await using var connection = await OpenAsync(ct);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            insert into profile_access_keys (id, profile_id, key_hash, created_at_utc)
-            values ($id, $profileId, $keyHash, $createdAtUtc);
+            insert into profile_access_keys (
+                id,
+                profile_id,
+                key_hash,
+                key_fingerprint,
+                created_at_utc)
+            values ($id, $profileId, $keyHash, $keyFingerprint, $createdAtUtc);
             """;
         command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
         command.Parameters.AddWithValue("$profileId", profileId);
         command.Parameters.AddWithValue("$keyHash", storedHash);
+        command.Parameters.AddWithValue("$keyFingerprint", (object?)fingerprint ?? DBNull.Value);
         command.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
         await command.ExecuteNonQueryAsync(ct);
     }
@@ -582,6 +629,7 @@ public sealed class SqliteProfileHostStore
     public async Task<ProfileHostProfileResponse?> RedeemPairingCodeAsync(
         string tokenHash,
         string accessKeyHash,
+        string accessKeyFingerprint,
         DateTime nowUtc,
         CancellationToken ct)
     {
@@ -642,12 +690,18 @@ public sealed class SqliteProfileHostStore
         {
             insertKey.Transaction = transaction;
             insertKey.CommandText = """
-                insert into profile_access_keys (id, profile_id, key_hash, created_at_utc)
-                values ($id, $profileId, $keyHash, $createdAtUtc);
+                insert into profile_access_keys (
+                    id,
+                    profile_id,
+                    key_hash,
+                    key_fingerprint,
+                    created_at_utc)
+                values ($id, $profileId, $keyHash, $keyFingerprint, $createdAtUtc);
                 """;
             insertKey.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
             insertKey.Parameters.AddWithValue("$profileId", profileId);
             insertKey.Parameters.AddWithValue("$keyHash", accessKeyHash);
+            insertKey.Parameters.AddWithValue("$keyFingerprint", accessKeyFingerprint);
             insertKey.Parameters.AddWithValue("$createdAtUtc", nowUtc.ToString("O"));
             await insertKey.ExecuteNonQueryAsync(ct);
         }
@@ -795,24 +849,40 @@ public sealed class SqliteProfileHostStore
     {
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            select p.id, p.display_name, k.id, k.key_hash
-            from profile_access_keys k
-            inner join hosted_profiles p on p.id = k.profile_id
-            where k.revoked_at_utc is null and p.disabled_at_utc is null;
-            """;
-
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        var matches = new List<(string ProfileId, string DisplayName, string KeyId)>();
-        while (await reader.ReadAsync(ct))
+        var fingerprint = hasher.Fingerprint(plaintextKey);
+        var candidates = await LoadAuthenticationCandidatesAsync(
+            connection,
+            fingerprint,
+            ct);
+        var usedLegacyFallback = candidates.Count == 0;
+        if (usedLegacyFallback)
         {
-            if (hasher.Verify(plaintextKey, reader.GetString(3)))
-            {
-                matches.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
-            }
+            candidates = await LoadAuthenticationCandidatesAsync(
+                connection,
+                fingerprint: null,
+                ct);
         }
-        await reader.DisposeAsync();
+
+        var matchingCandidates = candidates
+            .Where(candidate => hasher.Verify(plaintextKey, candidate.StoredHash))
+            .ToList();
+        if (!usedLegacyFallback && matchingCandidates.Count > 0)
+        {
+            var importedAliases = await LoadAuthenticationCandidatesByStoredHashAsync(
+                connection,
+                matchingCandidates.Select(candidate => candidate.StoredHash).Distinct().ToArray(),
+                ct);
+            matchingCandidates.AddRange(importedAliases.Where(alias =>
+                matchingCandidates.All(candidate => candidate.KeyId != alias.KeyId) &&
+                hasher.Verify(plaintextKey, alias.StoredHash)));
+        }
+
+        var matches = matchingCandidates
+            .Select(candidate => (
+                candidate.ProfileId,
+                candidate.DisplayName,
+                candidate.KeyId))
+            .ToList();
 
         if (matches.Count == 0 || matches.Any(match => match.ProfileId != matches[0].ProfileId))
         {
@@ -821,6 +891,11 @@ public sealed class SqliteProfileHostStore
 
         foreach (var match in matches)
         {
+            await SaveAccessKeyFingerprintAsync(
+                connection,
+                match.KeyId,
+                fingerprint,
+                ct);
             await TouchAccessKeyAsync(connection, match.KeyId, ct);
         }
         var profileId = matches[0].ProfileId;
@@ -833,6 +908,105 @@ public sealed class SqliteProfileHostStore
                 ServerRevision = revision
             },
             matches.Select(match => match.KeyId).ToArray());
+    }
+
+    private static async Task<List<AccessKeyAuthenticationCandidate>> LoadAuthenticationCandidatesAsync(
+        SqliteConnection connection,
+        string? fingerprint,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = fingerprint == null
+            ? """
+                select p.id, p.display_name, k.id, k.key_hash
+                from profile_access_keys k
+                inner join hosted_profiles p on p.id = k.profile_id
+                where k.key_fingerprint is null
+                  and k.revoked_at_utc is null
+                  and p.disabled_at_utc is null;
+                """
+            : """
+                select p.id, p.display_name, k.id, k.key_hash
+                from profile_access_keys k
+                inner join hosted_profiles p on p.id = k.profile_id
+                where k.key_fingerprint = $fingerprint
+                  and k.revoked_at_utc is null
+                  and p.disabled_at_utc is null;
+                """;
+        if (fingerprint != null)
+        {
+            command.Parameters.AddWithValue("$fingerprint", fingerprint);
+        }
+
+        var candidates = new List<AccessKeyAuthenticationCandidate>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            candidates.Add(new AccessKeyAuthenticationCandidate(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3)));
+        }
+
+        return candidates;
+    }
+
+    private static async Task SaveAccessKeyFingerprintAsync(
+        SqliteConnection connection,
+        string keyId,
+        string fingerprint,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            update profile_access_keys
+            set key_fingerprint = $fingerprint
+            where id = $id and key_fingerprint is null;
+            """;
+        command.Parameters.AddWithValue("$id", keyId);
+        command.Parameters.AddWithValue("$fingerprint", fingerprint);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    private static async Task<List<AccessKeyAuthenticationCandidate>> LoadAuthenticationCandidatesByStoredHashAsync(
+        SqliteConnection connection,
+        IReadOnlyList<string> storedHashes,
+        CancellationToken ct)
+    {
+        if (storedHashes.Count == 0)
+        {
+            return [];
+        }
+
+        await using var command = connection.CreateCommand();
+        var parameters = new string[storedHashes.Count];
+        for (var index = 0; index < storedHashes.Count; index++)
+        {
+            parameters[index] = $"$hash{index}";
+            command.Parameters.AddWithValue(parameters[index], storedHashes[index]);
+        }
+
+        command.CommandText = $"""
+            select p.id, p.display_name, k.id, k.key_hash
+            from profile_access_keys k
+            inner join hosted_profiles p on p.id = k.profile_id
+            where k.key_hash in ({string.Join(", ", parameters)})
+              and k.revoked_at_utc is null
+              and p.disabled_at_utc is null;
+            """;
+        var candidates = new List<AccessKeyAuthenticationCandidate>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            candidates.Add(new AccessKeyAuthenticationCandidate(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3)));
+        }
+
+        return candidates;
     }
 
     public async Task<ProfileSyncChangesResponse> LoadChangesAsync(
@@ -1768,70 +1942,133 @@ public sealed class SqliteProfileHostStore
 
     private async Task EnsureSchemaAsync(CancellationToken ct)
     {
-        var directory = Path.GetDirectoryName(_options.DatabasePath);
-        if (!string.IsNullOrWhiteSpace(directory))
+        if (_schemaReady)
         {
-            Directory.CreateDirectory(directory);
+            return;
         }
 
-        await using var connection = await OpenAsync(ct);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            create table if not exists hosted_profiles (
-                id text primary key,
-                display_name text not null,
-                created_at_utc text not null,
-                updated_at_utc text not null,
-                disabled_at_utc text null
-            );
+        await _schemaGate.WaitAsync(ct);
+        try
+        {
+            if (_schemaReady)
+            {
+                return;
+            }
 
-            create table if not exists profile_access_keys (
-                id text primary key,
-                profile_id text not null,
-                key_hash text not null,
-                created_at_utc text not null,
-                last_used_at_utc text null,
-                revoked_at_utc text null,
-                foreign key(profile_id) references hosted_profiles(id)
-            );
+            var directory = Path.GetDirectoryName(_options.DatabasePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
 
-            create table if not exists profile_pairing_codes (
-                token_hash text primary key,
-                profile_id text not null,
-                created_at_utc text not null,
-                expires_at_utc text not null,
-                redeemed_at_utc text null,
-                foreign key(profile_id) references hosted_profiles(id)
-            );
+            await using var connection = await OpenAsync(ct);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                create table if not exists hosted_profiles (
+                    id text primary key,
+                    display_name text not null,
+                    created_at_utc text not null,
+                    updated_at_utc text not null,
+                    disabled_at_utc text null
+                );
 
-            create table if not exists sync_objects (
-                profile_id text not null,
-                collection text not null,
-                object_id text not null,
-                payload_json text not null,
-                revision integer not null,
-                updated_at_utc text not null,
-                deleted integer not null,
-                deleted_at_utc text null,
-                primary key(profile_id, collection, object_id),
-                foreign key(profile_id) references hosted_profiles(id)
-            );
+                create table if not exists profile_access_keys (
+                    id text primary key,
+                    profile_id text not null,
+                    key_hash text not null,
+                    key_fingerprint text null,
+                    created_at_utc text not null,
+                    last_used_at_utc text null,
+                    revoked_at_utc text null,
+                    foreign key(profile_id) references hosted_profiles(id)
+                );
 
-            create table if not exists profile_revisions (
-                profile_id text primary key,
-                revision integer not null,
-                foreign key(profile_id) references hosted_profiles(id)
-            );
+                create table if not exists profile_pairing_codes (
+                    token_hash text primary key,
+                    profile_id text not null,
+                    created_at_utc text not null,
+                    expires_at_utc text not null,
+                    redeemed_at_utc text null,
+                    foreign key(profile_id) references hosted_profiles(id)
+                );
 
-            insert into profile_revisions (profile_id, revision)
-            select p.id, coalesce(max(o.revision), 0)
-            from hosted_profiles p
-            left join sync_objects o on o.profile_id = p.id
-            group by p.id
-            on conflict(profile_id) do update set
-                revision = max(profile_revisions.revision, excluded.revision);
+                create table if not exists sync_objects (
+                    profile_id text not null,
+                    collection text not null,
+                    object_id text not null,
+                    payload_json text not null,
+                    revision integer not null,
+                    updated_at_utc text not null,
+                    deleted integer not null,
+                    deleted_at_utc text null,
+                    primary key(profile_id, collection, object_id),
+                    foreign key(profile_id) references hosted_profiles(id)
+                );
+
+                create table if not exists profile_revisions (
+                    profile_id text primary key,
+                    revision integer not null,
+                    foreign key(profile_id) references hosted_profiles(id)
+                );
+
+                insert into profile_revisions (profile_id, revision)
+                select p.id, coalesce(max(o.revision), 0)
+                from hosted_profiles p
+                left join sync_objects o on o.profile_id = p.id
+                group by p.id
+                on conflict(profile_id) do update set
+                    revision = max(profile_revisions.revision, excluded.revision);
+                """;
+            await command.ExecuteNonQueryAsync(ct);
+            await EnsureAccessKeyFingerprintSchemaAsync(connection, ct);
+            _schemaReady = true;
+        }
+        finally
+        {
+            _schemaGate.Release();
+        }
+    }
+
+    private static async Task EnsureAccessKeyFingerprintSchemaAsync(
+        SqliteConnection connection,
+        CancellationToken ct)
+    {
+        var hasFingerprint = false;
+        await using (var columns = connection.CreateCommand())
+        {
+            columns.CommandText = "pragma table_info(profile_access_keys);";
+            await using var reader = await columns.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                if (string.Equals(
+                        reader.GetString(1),
+                        "key_fingerprint",
+                        StringComparison.Ordinal))
+                {
+                    hasFingerprint = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasFingerprint)
+        {
+            await using var addColumn = connection.CreateCommand();
+            addColumn.CommandText =
+                "alter table profile_access_keys add column key_fingerprint text null;";
+            await addColumn.ExecuteNonQueryAsync(ct);
+        }
+
+        await using var createIndex = connection.CreateCommand();
+        createIndex.CommandText = """
+            create index if not exists ix_profile_access_keys_fingerprint
+            on profile_access_keys(key_fingerprint)
+            where key_fingerprint is not null;
+
+            create index if not exists ix_profile_access_keys_hash
+            on profile_access_keys(key_hash);
             """;
-        await command.ExecuteNonQueryAsync(ct);
+        await createIndex.ExecuteNonQueryAsync(ct);
     }
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken ct)
