@@ -25,6 +25,8 @@ public sealed record CompanyHubTeaserResponse(
     int? OpenCommissionCount);
 
 public sealed record CompanyHubOutputResponse(
+    Guid LineId,
+    int ItemId,
     string Name,
     int Quantity,
     int CompletedQuantity,
@@ -406,6 +408,8 @@ public sealed class CompanyHubService(
             {
                 progressByLine.TryGetValue(output.LineId, out var progress);
                 return new CompanyHubOutputResponse(
+                    output.LineId,
+                    output.ItemId,
                     ClampText(output.Name, 240, "Unknown item"),
                     Math.Max(0, output.RequiredQuantity),
                     Math.Max(0, progress?.CompletedQuantity ?? 0),

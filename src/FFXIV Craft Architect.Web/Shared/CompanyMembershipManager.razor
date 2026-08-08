@@ -1,0 +1,65 @@
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+@inject CompanyHubClient HubClient
+@inject ISnackbar Snackbar
+
+<MudPaper Class="pa-3 mb-3">
+    <MudText Typo="Typo.h6">Membership requests</MudText>
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else
+    {
+        <MudTable Items="Pending" Dense="true" Hover="true">
+            <HeaderContent><MudTh>Requester</MudTh><MudTh>Note</MudTh><MudTh>Requested</MudTh><MudTh></MudTh></HeaderContent>
+            <RowTemplate>
+                <MudTd><strong>@context.Member.DisplayName</strong></MudTd><MudTd>@(context.Request.RequestNote ?? "No note")</MudTd><MudTd>@context.Request.RequestedAtUtc.ToLocalTime().ToString("g")</MudTd>
+                <MudTd><MudButton Size="Size.Small" Color="Color.Primary" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "approve"))">Approve</MudButton><MudButton Size="Size.Small" Color="Color.Error" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "deny"))">Deny</MudButton></MudTd>
+            </RowTemplate>
+            <NoRecordsContent><MudText Typo="Typo.body2">No pending requests.</MudText></NoRecordsContent>
+        </MudTable>
+    }
+</MudPaper>
+
+<MudPaper Class="pa-3 mb-3">
+    <MudText Typo="Typo.h6">Company members</MudText>
+    <MudTable Items="ActiveMembers" Dense="true" Hover="true">
+        <HeaderContent><MudTh>Member</MudTh><MudTh>Role</MudTh><MudTh>Standing</MudTh><MudTh>Routing</MudTh><MudTh></MudTh></HeaderContent>
+        <RowTemplate>
+            <MudTd><strong>@context.DisplayName</strong></MudTd><MudTd>@context.Role</MudTd><MudTd>@context.State</MudTd><MudTd>@(context.DiscordLinked ? "Linked Discord" : "Discord not linked")</MudTd>
+            <MudTd>@if (CanRevoke(context)) { <MudButton Size="Size.Small" Color="Color.Error" OnClick="() => _revokeMember = context">Revoke</MudButton> }</MudTd>
+        </RowTemplate>
+    </MudTable>
+    @if (_revokeMember != null)
+    {
+        <div class="d-flex align-center gap-2 mt-2"><MudTextField @bind-Value="_revokeReason" Label="Reason" Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" /><MudButton OnClick="CancelRevoke">Cancel</MudButton><MudButton Color="Color.Error" Disabled="@string.IsNullOrWhiteSpace(_revokeReason)" OnClick="RevokeAsync">Revoke @_revokeMember.DisplayName</MudButton></div>
+    }
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public string CompanyId { get; set; } = string.Empty;
+    private bool _loading = true;
+    private string _viewerRole = string.Empty;
+    private IReadOnlyList<CompanyMembership> _requests = [];
+    private IReadOnlyList<CompanyMember> _members = [];
+    private CompanyMember? _revokeMember;
+    private string? _revokeReason;
+    private IEnumerable<PendingMember> Pending => _requests.Join(_members, request => request.AccountProfileId, member => member.AccountProfileId, (request, member) => new PendingMember(request, member));
+    private IEnumerable<CompanyMember> ActiveMembers => _members.Where(member => member.State == "active");
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        var hub = await HubClient.LoadAsync(CompanyId);
+        _viewerRole = hub?.Standing.Role ?? string.Empty;
+        _requests = await HubClient.LoadPendingMembershipsAsync(CompanyId);
+        _members = await HubClient.LoadCompanyMembersAsync(CompanyId);
+        _loading = false;
+    }
+    private bool CanRevoke(CompanyMember member) => member.Role != "owner" || _viewerRole == "owner";
+    private async Task TransitionAsync(Guid accountId, string action) { await HubClient.TransitionMembershipAsync(CompanyId, accountId, action); await LoadAsync(); Snackbar.Add($"Membership {action}d.", Severity.Success); }
+    private void CancelRevoke() { _revokeMember = null; _revokeReason = null; }
+    private async Task RevokeAsync() { await HubClient.TransitionMembershipAsync(CompanyId, _revokeMember!.AccountProfileId, "revoke"); CancelRevoke(); await LoadAsync(); Snackbar.Add("Membership revoked.", Severity.Success); }
+    private sealed record PendingMember(CompanyMembership Request, CompanyMember Member);
+}
