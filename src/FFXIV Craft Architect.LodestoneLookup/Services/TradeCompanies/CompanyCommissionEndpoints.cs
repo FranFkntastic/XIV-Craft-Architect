@@ -638,6 +638,18 @@ public static class CompanyCommissionEndpoints
             return MissingCanonicalCommission();
         }
 
+        var activeClaim = commission.ActiveClaim;
+        var participantIsLive =
+            activeClaim?.CrafterId == account.ProfileId &&
+            commission.ParticipantGrant is { RevokedAtUtc: null } participant &&
+            participant.ClaimId == activeClaim.ClaimId &&
+            snapshot.Order.Status != TradeOrderStatus.Canceled &&
+            commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published;
+        if (!participantIsLive)
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+
         var recordedReplay = commission.ProcessedCommands.Any(
             item => item.CommandId == envelope.CommandId);
         if (!recordedReplay &&
@@ -650,12 +662,6 @@ public static class CompanyCommissionEndpoints
                 message =
                     "The canonical commission changed before the public command was applied."
             });
-        }
-        var activeCrafter = commission.ActiveClaim?.CrafterId == account.ProfileId;
-        var companyOperator = membership.Role is MembershipRole.Owner or MembershipRole.Operator;
-        if (!activeCrafter && !companyOperator)
-        {
-            return Results.StatusCode(StatusCodes.Status403Forbidden);
         }
 
         ICompanyCommissionParticipantCommand command;

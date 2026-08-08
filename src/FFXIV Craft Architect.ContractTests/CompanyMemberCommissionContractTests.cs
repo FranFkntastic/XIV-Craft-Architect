@@ -39,19 +39,37 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
-    public async Task SecondMemberClaimReportsTakenSlot()
+    public async Task ConcurrentMemberClaimsCommitExactlyOneClaimant()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
         var first = await fixture.AddActiveMemberAsync("First crafter");
         var second = await fixture.AddActiveMemberAsync("Second crafter");
-        using var accepted = await fixture.ClaimAsync(first);
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstClaim = ClaimAfterBarrierAsync(first);
+        var secondClaim = ClaimAfterBarrierAsync(second);
+        barrier.SetResult();
 
-        using var response = await fixture.ClaimAsync(second);
-        var error = await response.Content.ReadFromJsonAsync<MembershipErrorResponse>();
+        using var firstResponse = await firstClaim;
+        using var secondResponse = await secondClaim;
+        var responses = new[] { firstResponse, secondResponse };
+        var accepted = Assert.Single(
+            responses,
+            item => item.StatusCode == HttpStatusCode.OK);
+        var refused = Assert.Single(
+            responses,
+            item => item.StatusCode == HttpStatusCode.Conflict);
+        var error = await refused.Content.ReadFromJsonAsync<MembershipErrorResponse>();
+        var persistedCrafterId = await fixture.LoadActiveCrafterIdAsync();
 
-        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.NotNull(accepted);
         Assert.Equal("claim_slot_taken", error!.Error);
+        Assert.Contains(persistedCrafterId, new[] { first.ProfileId, second.ProfileId });
+
+        async Task<HttpResponseMessage> ClaimAfterBarrierAsync(Account account)
+        {
+            await barrier.Task;
+            return await fixture.ClaimAsync(account);
+        }
     }
 
     [Theory]
@@ -98,6 +116,43 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task OtherMemberAndCompanyOwnerCannotUseClaimantsParticipantAuthority()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.AddActiveMemberAsync("Claimant");
+        var other = await fixture.AddActiveMemberAsync("Other member");
+        using var claimed = await fixture.ClaimAsync(claimant);
+        var projection = (await claimed.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>())!;
+
+        using var otherResponse = await fixture.ReportProgressAsync(
+            other,
+            projection.Public.ProjectionRevision);
+        using var ownerResponse = await fixture.ReportProgressAsync(
+            fixture.Owner,
+            projection.Public.ProjectionRevision);
+
+        Assert.Equal(HttpStatusCode.Forbidden, otherResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, ownerResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task ClaimantCannotUseMembershipAuthorityAfterCommissionCancellation()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var member = await fixture.AddActiveMemberAsync("Crafter");
+        using var claimed = await fixture.ClaimAsync(member);
+        var projection = (await claimed.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>())!;
+        using var cancelled = await fixture.CancelCommissionAsync();
+        cancelled.EnsureSuccessStatusCode();
+
+        using var response = await fixture.ReportProgressAsync(
+            member,
+            projection.Public.ProjectionRevision + 1);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task ParticipantCapabilityFlowStillReportsProgress()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -115,6 +170,45 @@ public sealed class CompanyMemberCommissionContractTests
         var projection = await response.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>();
 
         Assert.Equal(1, projection!.Public.OutputProgress.Single().CompletedQuantity);
+    }
+
+    [Fact]
+    public async Task RevokedParticipantCapabilityRetainsUnauthorizedContract()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var member = await fixture.AddActiveMemberAsync("Crafter");
+        using var claimed = await fixture.ClaimAsync(member);
+        var projection = (await claimed.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>())!;
+        var capability = await fixture.IssueParticipantCapabilityAsync();
+        await fixture.RevokeParticipantCapabilitiesAsync();
+
+        using var response = await fixture.ReportProgressWithCapabilityAsync(
+            capability,
+            projection.Public.ProjectionRevision);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task StaleParticipantCapabilityCommandRetainsProjectionConflictContract()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var member = await fixture.AddActiveMemberAsync("Crafter");
+        using var claimed = await fixture.ClaimAsync(member);
+        var projection = (await claimed.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>())!;
+        var capability = await fixture.IssueParticipantCapabilityAsync();
+
+        using var response = await fixture.ReportProgressWithCapabilityAsync(
+            capability,
+            projection.Public.ProjectionRevision - 1);
+        using var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("projection_conflict", error.RootElement.GetProperty("error").GetString());
+        Assert.Equal(
+            "The canonical commission changed before the public command was applied.",
+            error.RootElement.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -161,6 +255,7 @@ public sealed class CompanyMemberCommissionContractTests
             Identities = application.Services.GetRequiredService<SqliteDiscordIdentityStore>();
             Memberships = application.Services.GetRequiredService<SqliteMembershipStore>();
             Companies = application.Services.GetRequiredService<ProfileHostedTradeCompanyService>();
+            Commissions = application.Services.GetRequiredService<HostedCompanyCommissionService>();
             Capabilities = application.Services.GetRequiredService<SqliteCompanyCommissionCapabilityStore>();
             Notifications = application.Services.GetRequiredService<SqliteDiscordNotificationStore>();
         }
@@ -169,6 +264,7 @@ public sealed class CompanyMemberCommissionContractTests
         public SqliteDiscordIdentityStore Identities { get; }
         public SqliteMembershipStore Memberships { get; }
         public ProfileHostedTradeCompanyService Companies { get; }
+        public HostedCompanyCommissionService Commissions { get; }
         public SqliteCompanyCommissionCapabilityStore Capabilities { get; }
         public SqliteDiscordNotificationStore Notifications { get; }
         public Account Owner { get; private set; } = null!;
@@ -285,6 +381,51 @@ public sealed class CompanyMemberCommissionContractTests
 
         public async Task<Guid> LoadActiveClaimIdAsync()
         {
+            var order = await LoadCanonicalOrderAsync();
+            return order.CompanyCommission!.ActiveClaim!.ClaimId;
+        }
+
+        public async Task<Guid> LoadActiveCrafterIdAsync()
+        {
+            var order = await LoadCanonicalOrderAsync();
+            return order.CompanyCommission!.ActiveClaim!.CrafterId!.Value;
+        }
+
+        public async Task<HttpResponseMessage> CancelCommissionAsync()
+        {
+            var access = await Companies.ResolveMembershipAccessAsync(
+                Owner.ProfileId,
+                new CompanyId(Company.Id),
+                CancellationToken.None);
+            var snapshot = await Commissions.LoadOwnerAsync(
+                access!,
+                Order.Id,
+                CancellationToken.None);
+            var command = new CancelCompanyCommissionCommand(
+                new CompanyCommissionCommandContext(
+                    new CompanyId(Company.Id),
+                    Order.Id,
+                    snapshot!.Envelope.RecordRevision,
+                    snapshot.CompanyRevision,
+                    Guid.NewGuid(),
+                    CompanyCommissionProtocol.Version1),
+                "Cancelled by contract fixture");
+            var client = CreateClient(Owner.Key);
+            return await client.PostAsJsonAsync(
+                $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/commands/cancel",
+                command);
+        }
+
+        public Task RevokeParticipantCapabilitiesAsync() =>
+            Capabilities.RevokeAllAsync(
+                new CompanyId(Company.Id),
+                Order.Id,
+                CompanyCommissionCapabilityKind.Participant,
+                DateTime.UtcNow,
+                CancellationToken.None);
+
+        private async Task<TradeOrder> LoadCanonicalOrderAsync()
+        {
             var access = await Companies.ResolveMembershipAccessAsync(
                 Owner.ProfileId,
                 new CompanyId(Company.Id),
@@ -294,8 +435,7 @@ public sealed class CompanyMemberCommissionContractTests
                 TradeCompanyRecordKinds.Order,
                 Order.Id.ToString("D"),
                 CancellationToken.None);
-            return JsonSerializer.Deserialize<TradeOrder>(record!.PayloadJson, JsonOptions)!
-                .CompanyCommission!.ActiveClaim!.ClaimId;
+            return JsonSerializer.Deserialize<TradeOrder>(record!.PayloadJson, JsonOptions)!;
         }
 
         public async ValueTask DisposeAsync()
