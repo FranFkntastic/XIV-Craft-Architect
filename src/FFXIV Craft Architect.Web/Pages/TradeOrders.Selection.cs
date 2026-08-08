@@ -439,14 +439,25 @@ public partial class TradeOrders
         }
         finally
         {
+            var refreshCompleted = false;
             if (ReferenceEquals(_selectedCommissionOwnerRefreshCancellation, cancellation))
             {
                 _selectedCommissionOwnerRefreshCancellation = null;
                 _selectedCommissionOwnerRefreshOrderId = null;
+                refreshCompleted = true;
             }
             cancellation.Dispose();
+            if (refreshCompleted && !_isDisposed)
+            {
+                await InvokeAsync(StateHasChanged);
+            }
         }
     }
+
+    private bool IsSelectedCommissionOwnerRefreshPending =>
+        _selectedOrder != null &&
+        _selectedCommissionOwnerRefreshOrderId == _selectedOrder.Id &&
+        _selectedCommissionOwnerRefreshCancellation is { IsCancellationRequested: false };
 
     private void InvalidateSelectedCommissionOwnerRefresh()
     {

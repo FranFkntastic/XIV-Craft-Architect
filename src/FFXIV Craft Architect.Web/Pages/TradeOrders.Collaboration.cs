@@ -228,6 +228,15 @@ public partial class TradeOrders
         }
     }
 
+    private void ActivateSharingTab()
+    {
+        _activeOpsTab = SharingTabIndex;
+        if (_selectedOrder != null)
+        {
+            ScheduleSelectedCommissionOwnerRefresh(_selectedOrder);
+        }
+    }
+
     private async Task PublishSelectedCommissionAsync()
     {
         if (_selectedOrder == null || _companyProfile == null || !CanPublishCommission)
@@ -348,7 +357,7 @@ public partial class TradeOrders
             AppState.NotifyTradeOperationsDataChanged();
             await LoadAsync();
             SelectOrderAfterReload(orderId, "The brief was published, but the order could not be reloaded.");
-            _activeOpsTab = SharingTabIndex;
+            ActivateSharingTab();
             await CopyTextToClipboardAsync(
                 link.Url,
                 "Commission published and link copied");
@@ -368,7 +377,7 @@ public partial class TradeOrders
                 SelectOrderAfterReload(
                     publicationOrderId,
                     "The publication may be attached remotely, but the order could not be reloaded.");
-                _activeOpsTab = SharingTabIndex;
+                ActivateSharingTab();
             }
 
             Snackbar.Add(
@@ -478,7 +487,7 @@ public partial class TradeOrders
                 SelectOrderAfterReload(
                     orderId,
                     "The commission terms were committed, but the order could not be reloaded.");
-                _activeOpsTab = SharingTabIndex;
+                ActivateSharingTab();
             }
             Snackbar.Add(
                 result.Publication?.Message ??
@@ -493,7 +502,7 @@ public partial class TradeOrders
 
         await LoadAsync();
         SelectOrderAfterReload(orderId, "The publication was accepted, but the order could not be reloaded.");
-        _activeOpsTab = SharingTabIndex;
+        ActivateSharingTab();
         Snackbar.Add(
             result.Publication?.State == TradeCommissionDeliveryState.Published
                 ? "Commission published to Discord"
@@ -637,7 +646,7 @@ public partial class TradeOrders
             SelectOrderAfterReload(
                 orderId.Value,
                 "The hosted version was applied, but the order could not be reloaded.");
-            _activeOpsTab = SharingTabIndex;
+            ActivateSharingTab();
         }
 
         AppState.NotifyTradeOperationsDataChanged();
@@ -671,7 +680,7 @@ public partial class TradeOrders
             SelectOrderAfterReload(
                 orderId.Value,
                 "Your changes were published, but the order could not be reloaded.");
-            _activeOpsTab = SharingTabIndex;
+            ActivateSharingTab();
         }
 
         AppState.NotifyTradeOperationsDataChanged();
@@ -754,7 +763,7 @@ public partial class TradeOrders
 
             await LoadAsync();
             SelectOrderAfterReload(orderId, "The link was revoked, but the order could not be reloaded.");
-            _activeOpsTab = SharingTabIndex;
+            ActivateSharingTab();
             Snackbar.Add("Commission link revoked", Severity.Success);
         }
         catch (Exception)
