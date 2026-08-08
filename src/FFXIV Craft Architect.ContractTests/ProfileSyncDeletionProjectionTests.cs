@@ -452,6 +452,45 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Null(collaboration.GetPublication(fixture.Order.Id));
     }
     [Fact]
+    public async Task PortablePublicationDoesNotImmediatelyReloadDiscordState()
+    {
+        var fixture = new ProjectionFixture("Portable publication refresh cache");
+        await fixture.PrepareCollaborationAsync();
+        var committed = fixture.PublishedOrder("Published portable commission");
+        var requestCount = 0;
+        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(_ =>
+        {
+            requestCount++;
+            var publication = committed.CommissionPublication!;
+            return Ok(new CommissionBriefCreateResponse
+            {
+                PublicId = publication.PublicId,
+                PublicUrl = publication.PublicUrl!,
+                EditorToken = string.Empty,
+                Version = publication.Version,
+                PublishedAtUtc = publication.PublishedAtUtc,
+                OrderRecord = new(
+                    new(committed.CompanyProfileId),
+                    TradeCompanyRecordKinds.Order,
+                    Key(committed),
+                    JsonSerializer.Serialize(
+                        committed,
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                    new(5),
+                    DateTime.UtcNow)
+            });
+        }));
+
+        await collaboration.PublishPortableLinkAsync(
+            fixture.Order,
+            new CommissionBriefDocument());
+        await collaboration.RefreshAsync(
+            fixture.Order.CompanyProfileId,
+            fixture.Order.Id);
+
+        Assert.Equal(1, requestCount);
+    }
+    [Fact]
     public async Task DelayedCollaborationResponseCannotPersistOverNewerProjection()
     {
         var fixture = new ProjectionFixture("Revision four");

@@ -1912,13 +1912,22 @@
                                 }
                                 @if (HasCanonicalCommission && SelectedCommissionOwner == null)
                                 {
-                                    <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
-                                        <MudText Typo="Typo.subtitle2">Company commission operations are unavailable.</MudText>
-                                        <MudText Typo="Typo.body2">
-                                            @(SelectedCommissionOperationsError ??
-                                              "The authenticated owner projection could not be loaded.")
-                                        </MudText>
-                                    </MudAlert>
+                                    @if (IsSelectedCommissionOwnerRefreshPending)
+                                    {
+                                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                                            Loading commission operations...
+                                        </MudAlert>
+                                    }
+                                    else
+                                    {
+                                        <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
+                                            <MudText Typo="Typo.subtitle2">Company commission operations are unavailable.</MudText>
+                                            <MudText Typo="Typo.body2">
+                                                @(SelectedCommissionOperationsError ??
+                                                  "The authenticated owner projection could not be loaded.")
+                                            </MudText>
+                                        </MudAlert>
+                                    }
                                 }
                                  @if (SelectedCommissionOwner is { } sharingOwner &&
                                       sharingOwner.Order.CompanyCommission is { } sharingCommission)

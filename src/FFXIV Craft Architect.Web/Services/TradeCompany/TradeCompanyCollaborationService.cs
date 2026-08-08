@@ -383,6 +383,9 @@ public sealed class TradeCompanyCollaborationService(
             hostedOrder,
             published.OrderRecord.RecordRevision.Value,
             "The company brief was attached by Profile Hosting, but browser storage could not apply the authoritative order.");
+        AdoptDictionaryAuthority(authority);
+        _publications.Remove(order.Id);
+        _publicationRefreshedAtUtc[order.Id] = DateTime.UtcNow;
         return published.Link;
     }
 
