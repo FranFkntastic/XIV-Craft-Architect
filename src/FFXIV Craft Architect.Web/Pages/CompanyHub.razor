@@ -1,0 +1,169 @@
+@page "/companies/{Slug}"
+@using System.Text.RegularExpressions
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Web.Services.ProfileHosting
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+@inject CompanyHubClient HubClient
+@inject ProfileSyncLocalStateService LocalState
+@inject TradeOperationsPersistenceService TradeOperations
+@inject DiscordIdentityClient DiscordIdentityClient
+@inject ProfileHostClient ProfileHostClient
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else if (_hub == null)
+{
+    <MudAlert Severity="Severity.Warning">Company not found.</MudAlert>
+}
+else
+{
+    <main class="company-hub banner-@_draft.BannerStyle" style="--hub-accent: @AccentColor(_draft.Accent)">
+        <div class="hub-banner"></div>
+        <header class="hub-heading">
+            <div class="emblem" aria-hidden="true">@EmblemGlyph(_draft.Emblem)</div>
+            <div class="heading-copy">
+                <h1>@_hub.DisplayName</h1>
+                @if (_editing)
+                {
+                    <input class="inline-title" maxlength="120" @bind="_draft.Tagline" placeholder="Company tagline" />
+                }
+                else if (!string.IsNullOrWhiteSpace(_draft.Tagline))
+                {
+                    <div class="tagline">@_draft.Tagline</div>
+                }
+            </div>
+            <span class="standing">@StandingLabel</span>
+            @if (CanCustomize && !_editing)
+            {
+                <button class="button" @onclick="BeginCustomize">Customize</button>
+            }
+        </header>
+
+        @if (_editing)
+        {
+            <section class="customize card">
+                <div><span class="label">Accent</span><div class="tokens">@foreach (var token in Accents) { <button class="@TokenClass(_draft.Accent, token)" @onclick="() => _draft.Accent = token">@token</button> }</div></div>
+                <div><span class="label">Banner</span><div class="tokens">@foreach (var token in Banners) { <button class="@TokenClass(_draft.BannerStyle, token)" @onclick="() => _draft.BannerStyle = token">@token</button> }</div></div>
+                <div><span class="label">Emblem</span><div class="tokens">@foreach (var token in Emblems) { <button class="@TokenClass(_draft.Emblem, token)" @onclick="() => _draft.Emblem = token">@EmblemGlyph(token) @token</button> }</div></div>
+                <label class="count-toggle"><input type="checkbox" @bind="_draft.ShowOpenCommissionCount" /> Show open-commission count on teaser</label>
+                <div class="edit-actions"><button class="button" @onclick="Discard">Discard</button><button class="button primary" @onclick="PublishAsync">Publish</button></div>
+            </section>
+        }
+
+        @if (_editing)
+        {
+            <textarea class="about-edit card" maxlength="2000" @bind="_draft.About" placeholder="About this company (bold, italic, and HTTPS links supported)"></textarea>
+        }
+        else if (!string.IsNullOrWhiteSpace(_draft.About))
+        {
+            <section class="about card"><span class="label">About @_hub.DisplayName</span><p>@((MarkupString)RenderMarkdown(_draft.About))</p></section>
+        }
+
+        @if (_hub.Kind == "hub")
+        {
+            @if (CanCustomize && _hub.PendingMembershipRequestCount > 0)
+            {
+                <a class="request-notice" href="/trade/crafters?company=@_hub.CompanyId">@_hub.PendingMembershipRequestCount membership requests need review</a>
+            }
+            <section class="card board">
+                <div class="section-heading"><h2>Open commissions</h2><span>@(_hub.OpenCommissions?.Count ?? 0) available</span></div>
+                <div class="commission-table">
+                    @foreach (var commission in _hub.OpenCommissions ?? [])
+                    {
+                        <article class="commission-row"><div><strong>@commission.Title</strong><small>Ref @commission.Reference</small></div><div>@foreach (var output in commission.Outputs) { <span>@output.Name ×@output.Quantity</span> }</div><div>@Payment(commission.Payment)</div><span class="state">@commission.State</span></article>
+                    }
+                </div>
+            </section>
+            <div class="lower-grid">
+                <section class="card"><h2>My assignments</h2>@foreach (var assignment in _hub.Assignments ?? []) { <div class="feed"><strong>@assignment.Title</strong><span>@assignment.Outputs.FirstOrDefault()?.Name · @assignment.State</span></div> }</section>
+                <section class="card"><h2>Members</h2>@foreach (var member in _hub.Roster ?? []) { <div class="feed"><strong>@member.DisplayName</strong><span>@member.Role</span></div> }</section>
+                <section class="card"><h2>Recent activity</h2>@foreach (var activity in _hub.RecentActivity ?? []) { <div class="feed"><strong>@activity.Reference · @activity.Kind</strong><span>@activity.OccurredAtUtc.ToLocalTime().ToString("g")</span></div> }</section>
+            </div>
+        }
+        else
+        {
+            <div class="teaser-grid">
+                @if (_hub.OpenCommissionCount is int count || (_editing && _draft.ShowOpenCommissionCount))
+                {
+                    <section class="card count"><strong>@(_hub.OpenCommissionCount ?? 0) open commissions</strong><span>Terms available to members.</span></section>
+                }
+                <aside class="card join">
+                    @if (!_signedIn)
+                    {
+                        <h2>Join @_hub.DisplayName</h2><button class="button primary" @onclick="SignInAsync">Sign in with Discord to request membership</button>
+                    }
+                    else if (_hub.Standing.State == "pending")
+                    {
+                        <strong>Membership request sent</strong><span>Pending approval · no action needed.</span>
+                    }
+                    else
+                    {
+                        <h2>Request membership</h2><textarea @bind="_membershipNote" placeholder="Optional note to company operators"></textarea><button class="button primary" disabled="@_requesting" @onclick="RequestMembershipAsync">Send request</button>
+                    }
+                </aside>
+            </div>
+        }
+    </main>
+}
+
+@code {
+    [Parameter] public string Slug { get; set; } = string.Empty;
+    private CompanyHubProjection? _hub;
+    private ThemeDraft _draft = new();
+    private bool _loading = true;
+    private bool _signedIn;
+    private bool _editing;
+    private bool _requesting;
+    private string? _membershipNote;
+    private static readonly string[] Accents = ["deep-blue", "crimson", "gold", "emerald", "violet", "amber", "teal", "rose", "slate", "ivory"];
+    private static readonly string[] Banners = ["none", "gradient", "pattern"];
+    private static readonly string[] Emblems = ["star", "prism", "crest", "workshop", "moon", "compass"];
+    private bool CanCustomize => _hub?.Standing.Role is "owner" or "operator";
+    private string StandingLabel => _hub!.Standing.State == "active" ? _hub.Standing.Role ?? "member" : _hub.Standing.State;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        var settings = await LocalState.LoadConnectionSettingsAsync();
+        _signedIn = settings.IsConfigured;
+        _hub = await HubClient.LoadAsync(Slug);
+        if (_hub != null)
+        {
+            _draft = ThemeDraft.From(_hub.Theme, _hub.OpenCommissionCount != null);
+        }
+        _loading = false;
+    }
+
+    private void BeginCustomize() => _editing = true;
+    private void Discard() { _draft = ThemeDraft.From(_hub!.Theme, _hub.OpenCommissionCount != null); _editing = false; }
+    private async Task PublishAsync()
+    {
+        var profile = (await TradeOperations.LoadCompanyProfilesAsync()).Single(company => company.Id == Guid.Parse(_hub!.CompanyId));
+        profile.Landing = new CompanyLandingTheme
+        {
+            Accent = Enum.Parse<CompanyLandingAccent>(_draft.Accent.Replace("-", string.Empty), true),
+            BannerStyle = Enum.Parse<CompanyLandingBannerStyle>(_draft.BannerStyle, true),
+            Emblem = Enum.Parse<CompanyLandingEmblem>(_draft.Emblem, true),
+            Tagline = string.IsNullOrWhiteSpace(_draft.Tagline) ? null : _draft.Tagline.Trim(),
+            About = string.IsNullOrWhiteSpace(_draft.About) ? null : _draft.About.Trim(),
+            ShowOpenCommissionCount = _draft.ShowOpenCommissionCount
+        };
+        profile.UpdatedAtUtc = DateTime.UtcNow;
+        profile.SyncState = TradeSyncState.PendingSync;
+        if (!await TradeOperations.SaveCompanyProfileAsync(profile)) throw new InvalidOperationException("Company theme could not be saved.");
+        _editing = false;
+        Snackbar.Add("Company hub published.", Severity.Success);
+    }
+    private async Task SignInAsync() { var uri = await DiscordIdentityClient.StartSignInAsync(ProfileHostClient.DefaultHostUrl); Navigation.NavigateTo(uri.AbsoluteUri, true); }
+    private async Task RequestMembershipAsync() { _requesting = true; try { await HubClient.RequestMembershipAsync(_hub!.CompanyId, _membershipNote); _hub = await HubClient.LoadAsync(_hub.Slug); Snackbar.Add("Membership request sent.", Severity.Success); } finally { _requesting = false; } }
+    private static string TokenClass(string selected, string token) => selected == token ? "selected" : string.Empty;
+    private static string Payment(CompanyHubPayment payment) => $"{payment.Schedule} · {payment.Total:N0} gil";
+    private static string AccentColor(string token) => token switch { "crimson" => "#b34a58", "gold" => "#b88a35", "emerald" => "#3f9673", "violet" => "#8065b3", "amber" => "#c27d32", "teal" => "#398f92", "rose" => "#b75f82", "slate" => "#718096", "ivory" => "#d8cfb6", _ => "#4c78b5" };
+    private static string EmblemGlyph(string token) => token switch { "prism" => "◆", "crest" => "◈", "workshop" => "⚒", "moon" => "☾", "compass" => "✥", _ => "✦" };
+    private static string RenderMarkdown(string source) => Regex.Replace(source, @"\[(?<text>[^\]]+)\]\((?<url>https://[^\s)]+)\)|\*\*(?<bold>[^*]+)\*\*|\*(?<italic>[^*]+)\*", match => match.Groups["url"].Success ? $"<a href=\"{match.Groups["url"].Value}\" target=\"_blank\" rel=\"noopener\">{match.Groups["text"].Value}</a>" : match.Groups["bold"].Success ? $"<strong>{match.Groups["bold"].Value}</strong>" : $"<em>{match.Groups["italic"].Value}</em>");
+    private sealed class ThemeDraft { public string Accent { get; set; } = "deep-blue"; public string BannerStyle { get; set; } = "gradient"; public string Emblem { get; set; } = "star"; public string? Tagline { get; set; } public string? About { get; set; } public bool ShowOpenCommissionCount { get; set; } public static ThemeDraft From(CompanyHubTheme theme, bool showCount) => new() { Accent = theme.Accent, BannerStyle = theme.BannerStyle, Emblem = theme.Emblem, Tagline = theme.Tagline, About = theme.About, ShowOpenCommissionCount = showCount }; }
+}

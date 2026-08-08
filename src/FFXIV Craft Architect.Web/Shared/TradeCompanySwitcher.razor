@@ -14,7 +14,7 @@
              TransformOrigin="Origin.BottomCenter"
              Class="trade-company-switcher">
         <ActivatorContent>
-            <MudButton Variant="Variant.Text"
+            <MudButton Variant="Variant.Text" Href="@CompanyHubUrl(_activeCompany)"
                        Size="Size.Small"
                        StartIcon="@Icons.Material.Filled.Business"
                        EndIcon="@Icons.Material.Filled.KeyboardArrowDown"
@@ -116,6 +116,32 @@
 
     private static string FormatCompanyId(Guid companyId) =>
         companyId.ToString("N")[..6].ToUpperInvariant();
+
+    private static string CompanyHubUrl(TradeCompanyProfile company) =>
+        $"/companies/{Slugify(company.Name)}";
+
+    private static string Slugify(string value)
+    {
+        var slug = new System.Text.StringBuilder(value.Length);
+        var hyphenPending = false;
+        foreach (var character in value)
+        {
+            if (char.IsAsciiLetterOrDigit(character))
+            {
+                if (hyphenPending && slug.Length > 0)
+                {
+                    slug.Append('-');
+                }
+                slug.Append(char.ToLowerInvariant(character));
+                hyphenPending = false;
+            }
+            else
+            {
+                hyphenPending = slug.Length > 0;
+            }
+        }
+        return slug.Length == 0 ? "company" : slug.ToString();
+    }
 
     public void Dispose()
     {
