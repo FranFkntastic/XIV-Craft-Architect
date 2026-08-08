@@ -1100,14 +1100,16 @@ public sealed class ProfileSyncService
             return 0;
         }
 
+        var envelopes = await adapter.LoadLocalObjectsAsync(cancellationToken);
+        var revisions = await _localState.LoadObjectRevisionsAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            envelopes.Select(envelope => envelope.ObjectId));
         var restored = 0;
-        foreach (var envelope in await adapter.LoadLocalObjectsAsync(cancellationToken))
+        foreach (var envelope in envelopes)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var revision = await _localState.LoadObjectRevisionAsync(
-                profileId,
-                ProfileSyncCollections.TradeOrders,
-                envelope.ObjectId);
+            var revision = revisions.GetValueOrDefault(envelope.ObjectId);
             if (revision <= 0)
             {
                 continue;
