@@ -90,6 +90,31 @@ public sealed class ProfileSyncDeletionProjectionTests
     }
 
     [Fact]
+    public async Task TradeOrderHydrationReadsTheOrderStoreOnce()
+    {
+        var profileId = NewId();
+        var companyProfileId = Guid.NewGuid();
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        runtime.AddCompany(companyProfileId);
+        runtime.AddCompany(Guid.NewGuid());
+        runtime.SeedOrder(CreateOrder(Guid.NewGuid(), companyProfileId, "Cached order"));
+        var indexedDb = new IndexedDbService(runtime);
+        var adapter = new TradeOrderProfileSyncAdapter(
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            new HostedOrderProjectionStore(),
+            CreateLocalState(indexedDb));
+
+        var objects = await adapter.LoadLocalObjectsAsync(CancellationToken.None);
+
+        Assert.Single(objects);
+        Assert.Equal(1, runtime.LoadAllTradeOrdersCount);
+        Assert.Equal(0, runtime.LoadTradeOrdersCount);
+        Assert.Equal(0, runtime.LoadTradeCompanyProfilesCount);
+    }
+
+    [Fact]
     public async Task ArchivedOrderSummaryPersistsRevisionWithoutPublishingFullOrder()
     {
         var profileId = NewId();
@@ -928,6 +953,7 @@ public sealed class ProfileSyncDeletionProjectionTests
         public int LoadSettingCount { get; private set; }
         public int LoadTradeCompanyProfilesCount { get; private set; }
         public int LoadTradeOrdersCount { get; private set; }
+        public int LoadAllTradeOrdersCount { get; private set; }
         public int LoadTradeOrderCount { get; private set; }
         public TradeOrder? DurableOrder { get; private set; }
         public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
@@ -941,6 +967,7 @@ public sealed class ProfileSyncDeletionProjectionTests
             LoadSettingCount = 0;
             LoadTradeCompanyProfilesCount = 0;
             LoadTradeOrdersCount = 0;
+            LoadAllTradeOrdersCount = 0;
             LoadTradeOrderCount = 0;
         }
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
@@ -977,6 +1004,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                 "IndexedDB.loadSetting" => LoadSetting((string)args![0]!),
                 "IndexedDB.loadTradeCompanyProfiles" => LoadTradeCompanyProfiles(),
                 "IndexedDB.loadTradeOrders" => LoadTradeOrders((Guid)args![0]!),
+                "IndexedDB.loadAllTradeOrders" => LoadAllTradeOrders(),
                 "IndexedDB.loadTradeOrder" => LoadTradeOrder((Guid)args![0]!),
                 "IndexedDB.loadTradeOrderArchiveSummaries" => _archiveSummaries.Values.ToList(),
                 "IndexedDB.saveSettingsBatch" => SaveBatch((Dictionary<string, string>)args![0]!),
@@ -1021,6 +1049,12 @@ public sealed class ProfileSyncDeletionProjectionTests
             return DurableOrder?.CompanyProfileId == companyProfileId
                 ? [DurableOrder]
                 : [];
+        }
+
+        private List<TradeOrder> LoadAllTradeOrders()
+        {
+            LoadAllTradeOrdersCount++;
+            return DurableOrder == null ? [] : [DurableOrder];
         }
         private bool SaveSetting(string key, string value)
         {
