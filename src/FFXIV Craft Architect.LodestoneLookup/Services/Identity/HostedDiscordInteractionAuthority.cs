@@ -15,6 +15,7 @@ internal interface IDiscordCanonicalInteractionAuthority
 internal sealed class HostedDiscordInteractionAuthority(
     SqliteProfileHostStore profiles,
     ProfileHostedTradeCompanyService companies,
+    SqliteMembershipStore memberships,
     HostedCompanyCommissionService commissions,
     SqliteDiscordNotificationStore discordContacts) :
     IDiscordCanonicalInteractionAuthority
@@ -36,6 +37,10 @@ internal sealed class HostedDiscordInteractionAuthority(
         var ownerAccess = await companies.ResolveProfileAccessAsync(
             link.ProfileId,
             target.CompanyId,
+            cancellationToken);
+        var membership = await memberships.LoadAsync(
+            target.CompanyId,
+            link.ProfileId,
             cancellationToken);
         var canonicalAccess = ownerAccess;
         if (canonicalAccess == null)
@@ -86,18 +91,21 @@ internal sealed class HostedDiscordInteractionAuthority(
         var activeGrant = participant is { RevokedAtUtc: null } &&
             claim != null &&
             participant.ClaimId == claim.ClaimId;
+        var isCompanyOperator = ownerAccess != null ||
+            membership is
+            {
+                State: MembershipState.Active,
+                Role: MembershipRole.Owner or MembershipRole.Operator
+            };
         var contactMatches = activeGrant &&
-            (string.Equals(
-                 commission.ProvisionalCrafter?.DiscordUserId,
-                 target.DiscordUserId,
-                 StringComparison.Ordinal) ||
-             await discordContacts.HasCommittedClaimContactAsync(
-                 target.CompanyId,
-                 target.CommissionId,
-                 claim!.ClaimId,
-                 target.DiscordUserId,
-                 cancellationToken));
-        if (ownerAccess == null && !contactMatches)
+            membership is { State: MembershipState.Active } &&
+            await discordContacts.HasCommittedClaimContactAsync(
+                  target.CompanyId,
+                  target.CommissionId,
+                  claim!.ClaimId,
+                  target.DiscordUserId,
+                  cancellationToken);
+        if (!isCompanyOperator && !contactMatches)
         {
             return null;
         }
@@ -111,7 +119,7 @@ internal sealed class HostedDiscordInteractionAuthority(
             participant?.GrantId ?? Guid.Empty,
             participant?.CapabilityRevision ?? 0,
             publicUrl,
-            IsCompanyOperator: ownerAccess != null,
+            IsCompanyOperator: isCompanyOperator,
             IsActiveParticipant: contactMatches);
     }
 }
