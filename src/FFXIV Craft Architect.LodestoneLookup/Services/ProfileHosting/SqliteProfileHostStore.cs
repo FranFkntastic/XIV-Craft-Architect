@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Data;
 using System.Globalization;
 using System.Text.Json;
@@ -21,12 +22,20 @@ public sealed class SqliteProfileHostStore
         string DisplayName,
         string KeyId,
         string StoredHash);
+    private sealed record CachedAccessKeyAuthentication(
+        string[] StoredHashes,
+        DateTimeOffset ExpiresAt);
+
+    private const int MaximumCachedAccessKeys = 256;
+    private static readonly TimeSpan AccessKeyCacheLifetime = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan AccessKeyUsageTouchInterval = TimeSpan.FromMinutes(5);
 
     private readonly ProfileHostOptions _options;
     private readonly ProfileHostChangeSignal? _changeSignal;
     private readonly ITradeCompanyFounderBinder? _founderBinder;
     private readonly ILogger<SqliteProfileHostStore>? _logger;
     private readonly SemaphoreSlim _schemaGate = new(1, 1);
+    private readonly ConcurrentDictionary<string, CachedAccessKeyAuthentication> _accessKeyCache = new();
     private volatile bool _schemaReady;
 
     public SqliteProfileHostStore(
@@ -850,6 +859,15 @@ public sealed class SqliteProfileHostStore
         await EnsureSchemaAsync(ct);
         await using var connection = await OpenAsync(ct);
         var fingerprint = hasher.Fingerprint(plaintextKey);
+        var cached = await TryAuthenticateCachedAccessKeyAsync(
+            connection,
+            fingerprint,
+            ct);
+        if (cached != null)
+        {
+            return cached;
+        }
+
         var candidates = await LoadAuthenticationCandidatesAsync(
             connection,
             fingerprint,
@@ -900,7 +918,7 @@ public sealed class SqliteProfileHostStore
         }
         var profileId = matches[0].ProfileId;
         var revision = await GetServerRevisionAsync(connection, profileId, ct);
-        return new AuthenticatedProfileAccessKey(
+        var authenticated = new AuthenticatedProfileAccessKey(
             new ProfileHostProfileResponse
             {
                 ProfileId = profileId,
@@ -908,6 +926,82 @@ public sealed class SqliteProfileHostStore
                 ServerRevision = revision
             },
             matches.Select(match => match.KeyId).ToArray());
+        CacheSuccessfulAccessKey(
+            fingerprint,
+            matchingCandidates.Select(candidate => candidate.StoredHash));
+        return authenticated;
+    }
+
+    private async Task<AuthenticatedProfileAccessKey?> TryAuthenticateCachedAccessKeyAsync(
+        SqliteConnection connection,
+        string fingerprint,
+        CancellationToken ct)
+    {
+        if (!_accessKeyCache.TryGetValue(fingerprint, out var cached) ||
+            cached.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            _accessKeyCache.TryRemove(fingerprint, out _);
+            return null;
+        }
+
+        var candidates = await LoadAuthenticationCandidatesByStoredHashAsync(
+            connection,
+            cached.StoredHashes,
+            ct);
+        if (candidates.Count == 0 ||
+            candidates.Any(candidate => candidate.ProfileId != candidates[0].ProfileId))
+        {
+            _accessKeyCache.TryRemove(fingerprint, out _);
+            return null;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            await SaveAccessKeyFingerprintAsync(
+                connection,
+                candidate.KeyId,
+                fingerprint,
+                ct);
+            await TouchAccessKeyAsync(connection, candidate.KeyId, ct);
+        }
+
+        var profileId = candidates[0].ProfileId;
+        var revision = await GetServerRevisionAsync(connection, profileId, ct);
+        return new AuthenticatedProfileAccessKey(
+            new ProfileHostProfileResponse
+            {
+                ProfileId = profileId,
+                DisplayName = candidates[0].DisplayName,
+                ServerRevision = revision
+            },
+            candidates.Select(candidate => candidate.KeyId).ToArray());
+    }
+
+    private void CacheSuccessfulAccessKey(
+        string fingerprint,
+        IEnumerable<string> storedHashes)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_accessKeyCache.Count >= MaximumCachedAccessKeys)
+        {
+            foreach (var expired in _accessKeyCache.Where(entry => entry.Value.ExpiresAt <= now))
+            {
+                _accessKeyCache.TryRemove(expired.Key, out _);
+            }
+
+            if (_accessKeyCache.Count >= MaximumCachedAccessKeys)
+            {
+                var oldest = _accessKeyCache.MinBy(entry => entry.Value.ExpiresAt);
+                if (!string.IsNullOrEmpty(oldest.Key))
+                {
+                    _accessKeyCache.TryRemove(oldest.Key, out _);
+                }
+            }
+        }
+
+        _accessKeyCache[fingerprint] = new CachedAccessKeyAuthentication(
+            storedHashes.Distinct(StringComparer.Ordinal).ToArray(),
+            now.Add(AccessKeyCacheLifetime));
     }
 
     private static async Task<List<AccessKeyAuthenticationCandidate>> LoadAuthenticationCandidatesAsync(
@@ -1886,14 +1980,19 @@ public sealed class SqliteProfileHostStore
 
     private static async Task TouchAccessKeyAsync(SqliteConnection connection, string keyId, CancellationToken ct)
     {
+        var now = DateTime.UtcNow;
         await using var command = connection.CreateCommand();
         command.CommandText = """
             update profile_access_keys
             set last_used_at_utc = $lastUsedAtUtc
-            where id = $id;
+            where id = $id
+              and (last_used_at_utc is null or last_used_at_utc < $touchBeforeUtc);
             """;
         command.Parameters.AddWithValue("$id", keyId);
-        command.Parameters.AddWithValue("$lastUsedAtUtc", DateTime.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$lastUsedAtUtc", now.ToString("O"));
+        command.Parameters.AddWithValue(
+            "$touchBeforeUtc",
+            now.Subtract(AccessKeyUsageTouchInterval).ToString("O"));
         await command.ExecuteNonQueryAsync(ct);
     }
 

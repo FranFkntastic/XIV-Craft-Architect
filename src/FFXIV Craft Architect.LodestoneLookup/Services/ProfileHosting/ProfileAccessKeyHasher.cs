@@ -3,7 +3,7 @@ using System.Text;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
-public sealed class ProfileAccessKeyHasher
+public class ProfileAccessKeyHasher
 {
     private const int SaltBytes = 16;
     private const int KeyBytes = 32;
@@ -27,7 +27,7 @@ public sealed class ProfileAccessKeyHasher
         return $"pbkdf2-sha256:{Iterations}:{Convert.ToBase64String(salt)}:{Convert.ToBase64String(hash)}";
     }
 
-    public bool Verify(string plaintextKey, string storedHash)
+    public virtual bool Verify(string plaintextKey, string storedHash)
     {
         if (string.IsNullOrEmpty(plaintextKey) ||
             !TryParseStoredHash(storedHash, out var parsedHash))
