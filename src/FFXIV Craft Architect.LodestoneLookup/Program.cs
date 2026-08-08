@@ -100,7 +100,6 @@ var discordIdentityOptions = new DiscordIdentityOptions
     ClientId = builder.Configuration["DiscordIdentity:ClientId"] ?? string.Empty,
     ClientSecret = builder.Configuration["DiscordIdentity:ClientSecret"] ?? string.Empty,
     BootstrapSecret = builder.Configuration["DiscordIdentity:BootstrapSecret"] ?? string.Empty,
-    CallbackUri = builder.Configuration["DiscordIdentity:CallbackUri"] ?? string.Empty,
     SignInCallbackUri = builder.Configuration["DiscordIdentity:SignInCallbackUri"] ?? string.Empty,
     ApplicationBaseUri = builder.Configuration["DiscordIdentity:ApplicationBaseUri"]
         ?? "https://dev.xivcraftarchitect.com/",
@@ -127,7 +126,6 @@ discordIdentityOptions.Validate();
 builder.Services.AddSingleton(discordIdentityOptions);
 builder.Services.AddSingleton<SqliteDiscordIdentityStore>();
 builder.Services.AddSingleton<DiscordIdentityAuthorization>();
-builder.Services.AddSingleton<DiscordIdentityLinkService>();
 builder.Services.AddSingleton<DiscordIdentitySignInService>();
 builder.Services.AddSingleton<IDiscordCanonicalInteractionAuthority, HostedDiscordInteractionAuthority>();
 builder.Services.AddSingleton<DiscordInteractionAccessResolver>();

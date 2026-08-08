@@ -389,7 +389,7 @@ jobs:
                 printf 'DiscordIdentity__ClientId=%s\n' "$DISCORD_OAUTH_CLIENT_ID"
                 printf 'DiscordIdentity__ClientSecret=%s\n' "$DISCORD_OAUTH_CLIENT_SECRET"
                 printf 'DiscordIdentity__BootstrapSecret=%s\n' "$DISCORD_OAUTH_BOOTSTRAP_SECRET"
-                printf 'DiscordIdentity__CallbackUri=https://xivcraftarchitect.com/api/identity/v1/discord/callback\n'
+                printf 'DiscordIdentity__SignInCallbackUri=https://xivcraftarchitect.com/api/identity/v1/signin/discord/callback\n'
                 printf 'DiscordIdentity__ApplicationBaseUri=https://xivcraftarchitect.com/\n'
                 printf 'DiscordIdentity__DatabasePath=%s/data/discord-identity.db\n' '${{ steps.target.outputs.root }}'
               else
@@ -1150,12 +1150,6 @@ jobs:
             if (health?.status !== "ready") process.exit(1);
             if (health?.profileHostEnabled !== enabled) process.exit(1);
           '
-          test "$(
-            curl --silent --show-error \
-              --output /dev/null \
-              --write-out '%{http_code}' \
-              "https://$DEPLOY_DOMAIN/api/trade/v1/companies/00000000-0000-0000-0000-000000000001/discord/claims"
-          )" = "404"
           test "$(
             curl --silent --show-error \
               --output /dev/null \

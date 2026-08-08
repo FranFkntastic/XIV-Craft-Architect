@@ -32,28 +32,6 @@ public sealed class DiscordIdentityClient(HttpClient httpClient)
                 "The Discord identity service returned an empty status.");
     }
 
-    public async Task<Uri> StartLinkAsync(
-        string hostUrl,
-        string accessKey,
-        CancellationToken cancellationToken = default)
-    {
-        using var request = CreateRequest(
-            HttpMethod.Post,
-            hostUrl,
-            "identity/v1/discord/link",
-            accessKey);
-        using var response = await httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        var result = await response.Content.ReadFromJsonAsync<DiscordLinkStartDto>(
-            cancellationToken: cancellationToken);
-        return result != null &&
-            Uri.TryCreate(result.AuthorizationUrl, UriKind.Absolute, out var uri) &&
-            uri.Scheme == Uri.UriSchemeHttps
-                ? uri
-                : throw new InvalidOperationException(
-                    "The Discord identity service returned an invalid authorization address.");
-    }
-
     public async Task<DiscordSignInWebStatus> GetSignInStatusAsync(
         string hostUrl,
         CancellationToken cancellationToken = default)
@@ -88,20 +66,6 @@ public sealed class DiscordIdentityClient(HttpClient httpClient)
                 ? uri
                 : throw new InvalidOperationException(
                     "The Discord sign-in service returned an invalid authorization address.");
-    }
-
-    public async Task UnlinkAsync(
-        string hostUrl,
-        string accessKey,
-        CancellationToken cancellationToken = default)
-    {
-        using var request = CreateRequest(
-            HttpMethod.Delete,
-            hostUrl,
-            "identity/v1/discord/link",
-            accessKey);
-        using var response = await httpClient.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
     }
 
     private static HttpRequestMessage CreateRequest(

@@ -13,73 +13,6 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
     private readonly SemaphoreSlim _schemaGate = new(1, 1);
     private bool _schemaReady;
 
-    public async Task CreateOAuthStateAsync(
-        Guid profileId,
-        string plaintextState,
-        string pkceVerifier,
-        DateTimeOffset createdAt,
-        DateTimeOffset expiresAt,
-        CancellationToken cancellationToken = default)
-    {
-        if (profileId == Guid.Empty ||
-            !IsSecret(plaintextState, 32, 256) ||
-            !IsSecret(pkceVerifier, 43, 128) ||
-            expiresAt <= createdAt)
-        {
-            throw new ArgumentException("A valid OAuth state transaction is required.");
-        }
-
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
-            IsolationLevel.Serializable,
-            cancellationToken);
-        await using (var expire = connection.CreateCommand())
-        {
-            expire.Transaction = transaction;
-            expire.CommandText = """
-                UPDATE discord_oauth_states
-                SET consumed_at_utc = COALESCE(consumed_at_utc, $createdAt),
-                    pkce_verifier = ''
-                WHERE purpose = 'link' AND profile_id = $profileId AND consumed_at_utc IS NULL;
-                """;
-            expire.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
-            expire.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
-            await expire.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await using (var insert = connection.CreateCommand())
-        {
-            insert.Transaction = transaction;
-            insert.CommandText = """
-                INSERT INTO discord_oauth_states (
-                    state_hash,
-                    purpose,
-                    profile_id,
-                    pkce_verifier,
-                    created_at_utc,
-                    expires_at_utc,
-                    consumed_at_utc)
-                VALUES ($stateHash, 'link', $profileId, $pkceVerifier, $createdAt, $expiresAt, NULL);
-                """;
-            insert.Parameters.AddWithValue("$stateHash", HashSecret(plaintextState));
-            insert.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
-            insert.Parameters.AddWithValue("$pkceVerifier", pkceVerifier);
-            insert.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
-            insert.Parameters.AddWithValue("$expiresAt", expiresAt.ToString("O"));
-            await insert.ExecuteNonQueryAsync(cancellationToken);
-        }
-
-        await InsertAuditAsync(
-            connection,
-            transaction,
-            profileId,
-            "oauth_started",
-            discordUserId: null,
-            createdAt,
-            cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-    }
-
     public async Task CreateSignInOAuthStateAsync(
         string plaintextState,
         string pkceVerifier,
@@ -413,81 +346,6 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             "discord_user_id",
             discordUserId,
             cancellationToken);
-    }
-
-    public async Task<bool> UnlinkAsync(
-        Guid profileId,
-        DateTimeOffset revokedAt,
-        CancellationToken cancellationToken = default)
-    {
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
-            IsolationLevel.Serializable,
-            cancellationToken);
-        var link = await LoadLinkAsync(
-            connection,
-            transaction,
-            "profile_id",
-            profileId.ToString("D"),
-            cancellationToken);
-        if (link == null)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return false;
-        }
-
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            UPDATE discord_identity_links
-            SET revoked_at_utc = $revokedAt, updated_at_utc = $revokedAt
-            WHERE link_id = $linkId AND revoked_at_utc IS NULL;
-            """;
-        command.Parameters.AddWithValue("$revokedAt", revokedAt.ToString("O"));
-        command.Parameters.AddWithValue("$linkId", link.LinkId.ToString("D"));
-        var changed = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
-        if (changed)
-        {
-            await InsertAuditAsync(
-                connection,
-                transaction,
-                profileId,
-                "unlinked",
-                link.DiscordUserId,
-                revokedAt,
-                cancellationToken);
-        }
-
-        await transaction.CommitAsync(cancellationToken);
-        return changed;
-    }
-
-    public async Task<IReadOnlyList<DiscordIdentityAuditEvent>> LoadAuditAsync(
-        Guid profileId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT event_id, profile_id, event_kind, discord_user_id, created_at_utc
-            FROM discord_identity_audit
-            WHERE profile_id = $profileId
-            ORDER BY created_at_utc, event_id;
-            """;
-        command.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
-        var events = new List<DiscordIdentityAuditEvent>();
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            events.Add(new DiscordIdentityAuditEvent(
-                Guid.Parse(reader.GetString(0)),
-                reader.IsDBNull(1) ? null : Guid.Parse(reader.GetString(1)),
-                reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                DateTimeOffset.Parse(reader.GetString(4))));
-        }
-
-        return events;
     }
 
     internal async Task IssueBootstrapAsync(
@@ -966,7 +824,6 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
 
     private static DiscordOAuthPurpose ParsePurpose(string value) => value switch
     {
-        "link" => DiscordOAuthPurpose.Link,
         "signin" => DiscordOAuthPurpose.SignIn,
         _ => throw new InvalidOperationException("The OAuth state purpose is invalid.")
     };

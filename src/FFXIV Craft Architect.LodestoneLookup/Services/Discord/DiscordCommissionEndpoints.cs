@@ -3,28 +3,6 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
-public sealed record DiscordVolunteerInteraction(
-    string InteractionId,
-    string ApplicationId,
-    string GuildId,
-    string ChannelId,
-    string MessageId,
-    string ActionToken,
-    string DiscordUserId,
-    string DiscordUserDisplayName);
-
-public enum DiscordVolunteerInteractionStatus
-{
-    Recorded,
-    Replayed,
-    NoLongerOpen,
-    Rejected
-}
-
-public sealed record DiscordVolunteerInteractionResult(
-    DiscordVolunteerInteractionStatus Status,
-    string Message);
-
 public static class DiscordCommissionEndpoints
 {
     private const int MaximumRequestBodyBytes = 128 * 1024;
