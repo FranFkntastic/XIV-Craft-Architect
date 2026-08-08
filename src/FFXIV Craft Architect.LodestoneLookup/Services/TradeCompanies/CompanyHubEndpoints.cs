@@ -24,7 +24,12 @@ public sealed record CompanyHubTeaserResponse(
     CompanyHubStandingResponse Standing,
     int? OpenCommissionCount);
 
-public sealed record CompanyHubOutputResponse(string Name, int Quantity);
+public sealed record CompanyHubOutputResponse(
+    string Name,
+    int Quantity,
+    int CompletedQuantity,
+    int ReadyQuantity,
+    int AcceptedQuantity);
 
 public sealed record CompanyHubPaymentResponse(string Schedule, string Label, decimal Total);
 
@@ -32,6 +37,10 @@ public sealed record CompanyHubCommissionResponse(
     string CommissionId,
     string Title,
     string Reference,
+    int TermsVersion,
+    string DeliveryInstructions,
+    string? PublicBriefId,
+    long ProjectionRevision,
     IReadOnlyList<CompanyHubOutputResponse> Outputs,
     CompanyHubPaymentResponse Payment,
     string State);
@@ -382,13 +391,27 @@ public sealed class CompanyHubService(
     {
         var commission = order.CompanyCommission!;
         var terms = commission.CurrentTerms;
+        var progressByLine = commission.OutputProgress.ToDictionary(progress => progress.LineId);
         return new CompanyHubCommissionResponse(
             order.Id.ToString("D"),
             ClampText(order.Title, 240, "Untitled commission"),
             ClampText(commission.Reference, 120, string.Empty),
-            terms.Outputs.Select(output => new CompanyHubOutputResponse(
-                ClampText(output.Name, 240, "Unknown item"),
-                Math.Max(0, output.RequiredQuantity))).ToArray(),
+            commission.CurrentTermsVersion,
+            terms.DeliveryInstructions,
+            commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published
+                ? commission.PublicMetadata.PublicBriefId
+                : null,
+            commission.Activity.LastOrDefault()?.CommissionRevision ?? 0,
+            terms.Outputs.Select(output =>
+            {
+                progressByLine.TryGetValue(output.LineId, out var progress);
+                return new CompanyHubOutputResponse(
+                    ClampText(output.Name, 240, "Unknown item"),
+                    Math.Max(0, output.RequiredQuantity),
+                    Math.Max(0, progress?.CompletedQuantity ?? 0),
+                    Math.Max(0, progress?.ReadyQuantity ?? 0),
+                    Math.Max(0, progress?.AcceptedQuantity ?? 0));
+            }).ToArray(),
             new CompanyHubPaymentResponse(
                 terms.Payment.Schedule.ToString().ToLowerInvariant(),
                 ClampText(terms.Payment.ContractLabel, 240, "Commission"),

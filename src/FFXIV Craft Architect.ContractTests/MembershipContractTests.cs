@@ -228,6 +228,68 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
+    public async Task CompanyMemberListIsAvailableOnlyToAdministratorsAndExcludesDiscordIds()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var operatorAccount = await fixture.CreateAccountAsync("Operator");
+        var crafter = await fixture.CreateAccountAsync("Crafter");
+        var outsider = await fixture.CreateAccountAsync("Outsider");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var operatorClient = fixture.CreateClient(operatorAccount.Key);
+        using var crafterClient = fixture.CreateClient(crafter.Key);
+        using var outsiderClient = fixture.CreateClient(outsider.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(operatorClient, company.Id, "Operate");
+        await RequestAsync(crafterClient, company.Id, "Craft");
+        foreach (var profileId in new[] { operatorAccount.ProfileId, crafter.ProfileId })
+        {
+            using var approved = await ownerClient.PostAsync(
+                $"/trade/v1/companies/{company.Id:D}/memberships/{profileId:D}/approve",
+                null);
+            approved.EnsureSuccessStatusCode();
+        }
+        await fixture.SetRoleAsync(company.Id, operatorAccount.ProfileId, MembershipRole.Operator);
+
+        var route = $"/trade/v1/companies/{company.Id:D}/memberships";
+        using var ownerResponse = await ownerClient.GetAsync(route);
+        using var operatorResponse = await operatorClient.GetAsync(route);
+        using var crafterResponse = await crafterClient.GetAsync(route);
+        using var outsiderResponse = await outsiderClient.GetAsync(route);
+        var ownerJson = await ownerResponse.Content.ReadAsStringAsync();
+        var members = JsonSerializer.Deserialize<CompanyMemberResponse[]>(
+            ownerJson,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var operatorMembers = await operatorResponse.Content.ReadFromJsonAsync<CompanyMemberResponse[]>();
+        var discordUserIds = await Task.WhenAll(
+            new[] { owner.ProfileId, operatorAccount.ProfileId, crafter.ProfileId }
+                .Select(async profileId =>
+                    (await fixture.Identities.LoadByProfileAsync(profileId))!.DiscordUserId));
+
+        Assert.Equal(HttpStatusCode.OK, ownerResponse.StatusCode);
+        Assert.Equal(3, members!.Length);
+        Assert.Equal(3, operatorMembers!.Length);
+        Assert.Contains(members, member =>
+            member.AccountProfileId == owner.ProfileId &&
+            member.DisplayName == "Owner" &&
+            member.Role == "owner" &&
+            member.State == "active" &&
+            member.RequestedAtUtc != default &&
+            member.DecidedAtUtc != null &&
+            member.DiscordLinked);
+        Assert.Contains(members, member =>
+            member.AccountProfileId == operatorAccount.ProfileId &&
+            member.Role == "operator" &&
+            member.DecidedAtUtc != null);
+        Assert.All(discordUserIds, discordUserId =>
+            Assert.DoesNotContain(discordUserId, ownerJson, StringComparison.Ordinal));
+        Assert.DoesNotContain("discordUserId", ownerJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.Forbidden, crafterResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, outsiderResponse.StatusCode);
+    }
+
+    [Fact]
     public async Task DenyRerequestApproveAndRevokePersistEveryAuditTransition()
     {
         await using var fixture = await MembershipFixture.CreateAsync();
@@ -659,6 +721,23 @@ public sealed class MembershipContractTests
                 await memberships.ExecuteNonQueryAsync();
             }
             await transaction.CommitAsync();
+        }
+
+        public async Task SetRoleAsync(Guid companyId, Guid profileId, MembershipRole role)
+        {
+            await using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(root, "memberships.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE company_memberships
+                SET role = $role
+                WHERE company_id = $companyId AND account_profile_id = $profileId;
+                """;
+            command.Parameters.AddWithValue("$role", role.ToString().ToLowerInvariant());
+            command.Parameters.AddWithValue("$companyId", companyId.ToString("D"));
+            command.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
         }
 
         public async ValueTask DisposeAsync()
