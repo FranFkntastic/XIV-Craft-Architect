@@ -31,13 +31,8 @@ public sealed class TradeOrderProfileSyncAdapter :
 
     public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct)
     {
-        var profiles = await _tradeOperations.LoadCompanyProfilesAsync();
-        var orders = new List<TradeOrder>();
-        foreach (var profile in profiles.OrderBy(profile => profile.Id))
-        {
-            ct.ThrowIfCancellationRequested();
-            orders.AddRange(await _tradeOperations.LoadOrdersAsync(profile.Id));
-        }
+        var orders = await _tradeOperations.LoadAllOrdersAsync();
+        ct.ThrowIfCancellationRequested();
 
         var now = DateTime.UtcNow;
         return orders.Select(order => ToEnvelope(order, now)).ToArray();
