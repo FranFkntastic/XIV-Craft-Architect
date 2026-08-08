@@ -403,10 +403,10 @@ public partial class TradeOrders
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+            SelectPendingNavigationOrder();
             await RefreshArchiveSummariesAsync();
             await LoadOrderHostedRevisionsAsync();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
-            SelectPendingNavigationOrder();
             if (!hadPendingNavigation &&
                 selectedCanonicalOrderId.HasValue)
             {
