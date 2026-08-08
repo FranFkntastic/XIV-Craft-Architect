@@ -74,10 +74,26 @@ else
                 <div class="commission-table">
                     @foreach (var commission in _hub.OpenCommissions ?? [])
                     {
-                        <article class="commission-row"><div><strong>@commission.Title</strong><small>Ref @commission.Reference</small></div><div>@foreach (var output in commission.Outputs) { <span>@output.Name ×@output.Quantity</span> }</div><div>@Payment(commission.Payment)</div><span class="state">@commission.State</span></article>
+                        <button class="commission-row" @onclick="() => _selectedCommission = commission"><div><strong>@commission.Title</strong><small>Ref @commission.Reference</small></div><div>@foreach (var output in commission.Outputs) { <span>@output.Name ×@output.Quantity</span> }</div><div>@Payment(commission.Payment)</div><span class="state">@commission.State</span></button>
                     }
                 </div>
             </section>
+            @if (_selectedCommission != null)
+            {
+                <section class="card commission-detail">
+                    <div class="section-heading"><div><small>@_selectedCommission.Reference</small><h2>@_selectedCommission.Title</h2></div><span>Current terms</span></div>
+                    <div>@foreach (var output in _selectedCommission.Outputs) { <div><strong>@output.Name</strong> ×@output.Quantity</div> }</div>
+                    <div><strong>@_selectedCommission.Payment.Total.ToString("N0") gil</strong> · @_selectedCommission.Payment.Schedule · @_selectedCommission.Payment.Label</div>
+                    @if (_confirmingClaim)
+                    {
+                        <div class="edit-actions"><button class="button" @onclick="() => _confirmingClaim = false">Cancel</button><button class="button primary" disabled="@_claiming" @onclick="ClaimAsync">Confirm claim</button></div>
+                    }
+                    else
+                    {
+                        <div class="edit-actions"><button class="button" @onclick="() => _selectedCommission = null">Back to board</button><button class="button primary" @onclick="() => _confirmingClaim = true">Claim commission</button></div>
+                    }
+                </section>
+            }
             <div class="lower-grid">
                 <section class="card"><h2>My assignments</h2>@foreach (var assignment in _hub.Assignments ?? []) { <div class="feed"><strong>@assignment.Title</strong><span>@assignment.Outputs.FirstOrDefault()?.Name · @assignment.State</span></div> }</section>
                 <section class="card"><h2>Members</h2>@foreach (var member in _hub.Roster ?? []) { <div class="feed"><strong>@member.DisplayName</strong><span>@member.Role</span></div> }</section>
@@ -118,6 +134,9 @@ else
     private bool _signedIn;
     private bool _editing;
     private bool _requesting;
+    private bool _claiming;
+    private bool _confirmingClaim;
+    private CompanyHubCommission? _selectedCommission;
     private string? _membershipNote;
     private static readonly string[] Accents = ["deep-blue", "crimson", "gold", "emerald", "violet", "amber", "teal", "rose", "slate", "ivory"];
     private static readonly string[] Banners = ["none", "gradient", "pattern"];
@@ -165,8 +184,9 @@ else
         _editing = false;
         Snackbar.Add("Company hub published.", Severity.Success);
     }
-    private async Task SignInAsync() { var uri = await DiscordIdentityClient.StartSignInAsync(ProfileHostClient.DefaultHostUrl); Navigation.NavigateTo(uri.AbsoluteUri, true); }
+    private async Task SignInAsync() { var uri = await DiscordIdentityClient.StartSignInAsync(ProfileHostClient.DefaultHostUrl, $"/companies/{Uri.EscapeDataString(Slug)}"); Navigation.NavigateTo(uri.AbsoluteUri, true); }
     private async Task RequestMembershipAsync() { _requesting = true; try { await HubClient.RequestMembershipAsync(_hub!.CompanyId, _membershipNote); _hub = await HubClient.LoadAsync(_hub.Slug); Snackbar.Add("Membership request sent.", Severity.Success); } finally { _requesting = false; } }
+    private async Task ClaimAsync() { _claiming = true; try { await HubClient.ClaimAsync(_hub!.CompanyId, _selectedCommission!.CommissionId); _hub = await HubClient.LoadAsync(_hub.Slug); _selectedCommission = null; _confirmingClaim = false; Snackbar.Add("Commission claimed.", Severity.Success); } finally { _claiming = false; } }
     private static string TokenClass(string selected, string token) => selected == token ? "selected" : string.Empty;
     private static string Payment(CompanyHubPayment payment) => $"{payment.Schedule} · {payment.Total:N0} gil";
     private static string AccentColor(string token) => token switch { "crimson" => "#b34a58", "gold" => "#b88a35", "emerald" => "#3f9673", "violet" => "#8065b3", "amber" => "#c27d32", "teal" => "#398f92", "rose" => "#b75f82", "slate" => "#718096", "ivory" => "#d8cfb6", _ => "#4c78b5" };

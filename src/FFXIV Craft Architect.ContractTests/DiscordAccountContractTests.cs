@@ -48,6 +48,41 @@ public sealed class DiscordAccountContractTests
         Assert.DoesNotContain("cap_", body, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("https://evil.test/companies/example")]
+    [InlineData("//evil.test/companies/example")]
+    public async Task SignInStartRejectsAbsoluteReturnPaths(string returnPath)
+    {
+        await using var fixture = await DiscordAccountFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+
+        using var response = await client.PostAsync(
+            $"/identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}",
+            null);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SignInReturnsToStoredApplicationPath()
+    {
+        await using var fixture = await DiscordAccountFixture.CreateAsync();
+        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Discord Crafter");
+        using var client = fixture.CreateClient();
+        var returnPath = "/companies/sapphire-avenue";
+        var start = await (await client.PostAsync(
+                $"/identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}",
+                null))
+            .Content.ReadFromJsonAsync<DiscordLinkStartResponse>();
+        var state = QueryHelpers.ParseQuery(new Uri(start!.AuthorizationUrl).Query)["state"];
+
+        using var callback = await client.GetAsync(
+            $"/identity/v1/signin/discord/callback?code=code&state={Uri.EscapeDataString(state!)}");
+
+        Assert.Equal(returnPath, callback.Headers.Location!.AbsolutePath);
+        Assert.StartsWith("#signin=", callback.Headers.Location.Fragment, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task SignInProvisionsThenReusesHostedProfileAndIssuesOrdinaryKeys()
     {

@@ -67,12 +67,17 @@ public static class DiscordIdentityEndpoints
         signIn.MapPost(
             "/start",
             async (
+                string? returnPath,
                 DiscordIdentitySignInService service,
                 CancellationToken cancellationToken) =>
             {
                 try
                 {
-                    return Results.Ok(await service.StartAsync(cancellationToken));
+                    return Results.Ok(await service.StartAsync(returnPath, cancellationToken));
+                }
+                catch (ArgumentException exception)
+                {
+                    return Results.BadRequest(new { error = "invalid_return_path", message = exception.Message });
                 }
                 catch (InvalidOperationException)
                 {
@@ -108,7 +113,7 @@ public static class DiscordIdentityEndpoints
                     DiscordSignInCompletionStatus.SessionIssued or
                     DiscordSignInCompletionStatus.Provisioned
                         ? FragmentRedirect(
-                            options.ApplicationBaseUri,
+                            ApplicationReturnUri(options.ApplicationBaseUri, completion.ReturnPath),
                             "signin",
                             completion.PlaintextAccessKey!)
                         : FragmentRedirect(
@@ -138,6 +143,11 @@ public static class DiscordIdentityEndpoints
         };
         return builder.Uri.AbsoluteUri;
     }
+
+    private static string ApplicationReturnUri(string applicationBaseUri, string? returnPath) =>
+        returnPath == null
+            ? applicationBaseUri
+            : new Uri(new Uri(applicationBaseUri), returnPath).AbsoluteUri;
 
     private static IResult RetiredLinkEndpoint() => Results.Json(
         new

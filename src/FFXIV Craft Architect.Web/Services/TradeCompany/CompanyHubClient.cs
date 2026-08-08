@@ -36,6 +36,36 @@ public sealed class CompanyHubClient(
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task ClaimAsync(string companyId, string commissionId, CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/commissions/{Uri.EscapeDataString(commissionId)}/claim",
+            null,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<IReadOnlyList<CompanyMembership>> LoadMembershipsAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(HttpMethod.Get, "trade/v1/memberships", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<IReadOnlyList<CompanyMembership>>(JsonOptions, cancellationToken) ?? [];
+    }
+
+    public async Task<bool> LoadNotificationOptOutAsync(string companyId, CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(HttpMethod.Get, $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-notifications", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<CompanyMembershipNotifications>(JsonOptions, cancellationToken))!.OptedOut;
+    }
+
+    public async Task SetNotificationOptOutAsync(string companyId, bool optedOut, CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(HttpMethod.Put, $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-notifications", new { OptedOut = optedOut }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, CancellationToken cancellationToken)
     {
         var connection = await localState.LoadConnectionSettingsAsync();
@@ -82,3 +112,5 @@ public sealed record CompanyHubPayment(string Schedule, string Label, decimal To
 public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string State);
 public sealed record CompanyHubRosterMember(string DisplayName, string Role);
 public sealed record CompanyHubActivity(string CommissionId, string Reference, string Kind, DateTime OccurredAtUtc);
+public sealed record CompanyMembership(string CompanyId, Guid AccountProfileId, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, Guid? DecidedByProfileId, string? RequestNote);
+public sealed record CompanyMembershipNotifications(string CompanyId, bool OptedOut);

@@ -18,6 +18,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
         string pkceVerifier,
         DateTimeOffset createdAt,
         DateTimeOffset expiresAt,
+        string? returnPath,
         CancellationToken cancellationToken = default)
     {
         if (!IsSecret(plaintextState, 32, 256) ||
@@ -36,13 +37,14 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
         insert.CommandText = """
             INSERT INTO discord_oauth_states (
                 state_hash, purpose, profile_id, pkce_verifier,
-                created_at_utc, expires_at_utc, consumed_at_utc)
-            VALUES ($stateHash, 'signin', NULL, $pkceVerifier, $createdAt, $expiresAt, NULL);
+                created_at_utc, expires_at_utc, consumed_at_utc, return_path)
+            VALUES ($stateHash, 'signin', NULL, $pkceVerifier, $createdAt, $expiresAt, NULL, $returnPath);
             """;
         insert.Parameters.AddWithValue("$stateHash", HashSecret(plaintextState));
         insert.Parameters.AddWithValue("$pkceVerifier", pkceVerifier);
         insert.Parameters.AddWithValue("$createdAt", createdAt.ToString("O"));
         insert.Parameters.AddWithValue("$expiresAt", expiresAt.ToString("O"));
+        insert.Parameters.AddWithValue("$returnPath", (object?)returnPath ?? DBNull.Value);
         await insert.ExecuteNonQueryAsync(cancellationToken);
         await InsertAuditAsync(
             connection,
@@ -72,7 +74,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
         await using var select = connection.CreateCommand();
         select.Transaction = transaction;
         select.CommandText = """
-            SELECT profile_id, pkce_verifier, expires_at_utc, consumed_at_utc, purpose
+            SELECT profile_id, pkce_verifier, expires_at_utc, consumed_at_utc, purpose, return_path
             FROM discord_oauth_states
             WHERE state_hash = $stateHash;
             """;
@@ -89,6 +91,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
         var expiresAt = DateTimeOffset.Parse(reader.GetString(2));
         var alreadyConsumed = !reader.IsDBNull(3);
         var purpose = ParsePurpose(reader.GetString(4));
+        var returnPath = reader.IsDBNull(5) ? null : reader.GetString(5);
         await reader.DisposeAsync();
         if (alreadyConsumed)
         {
@@ -142,7 +145,8 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             expired ? DiscordOAuthStateStatus.Expired : DiscordOAuthStateStatus.Consumed,
             profileId,
             expired ? null : verifier,
-            purpose);
+            purpose,
+            returnPath);
     }
 
     public async Task RecordSignInAuditAsync(
@@ -735,6 +739,15 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                 );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
+
+            await using var returnPathMigration = connection.CreateCommand();
+            returnPathMigration.CommandText = "PRAGMA user_version;";
+            var currentVersion = Convert.ToInt32(await returnPathMigration.ExecuteScalarAsync(cancellationToken));
+            if (currentVersion < 3)
+            {
+                returnPathMigration.CommandText = "ALTER TABLE discord_oauth_states ADD COLUMN return_path TEXT NULL; PRAGMA user_version = 3;";
+                await returnPathMigration.ExecuteNonQueryAsync(cancellationToken);
+            }
             _schemaReady = true;
         }
         finally
