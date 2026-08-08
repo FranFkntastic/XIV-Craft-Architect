@@ -84,6 +84,22 @@ public sealed class DiscordAccountContractTests
     }
 
     [Fact]
+    public async Task SignInCallbackRejectsTamperedStoredReturnPath()
+    {
+        await using var fixture = await DiscordAccountFixture.CreateAsync();
+        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Discord Crafter");
+        using var client = fixture.CreateClient();
+        var state = await StartSignInAsync(client, fixture.OAuth);
+        await fixture.TamperReturnPathAsync("//evil.test/stolen");
+
+        using var callback = await client.GetAsync(
+            $"/identity/v1/signin/discord/callback?code=code&state={Uri.EscapeDataString(state)}");
+
+        Assert.Equal("/", callback.Headers.Location!.AbsolutePath);
+        Assert.Equal("app.test", callback.Headers.Location.Host);
+    }
+
+    [Fact]
     public async Task SignInProvisionsThenReusesHostedProfileAndIssuesOrdinaryKeys()
     {
         await using var fixture = await DiscordAccountFixture.CreateAsync();
@@ -331,6 +347,16 @@ public sealed class DiscordAccountContractTests
             await using var command = connection.CreateCommand();
             command.CommandText = $"SELECT COUNT(*) FROM {table};";
             return Convert.ToInt32(await command.ExecuteScalarAsync());
+        }
+
+        public async Task TamperReturnPathAsync(string returnPath)
+        {
+            await using var connection = new SqliteConnection($"Data Source={Path.Combine(root, "identity.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE discord_oauth_states SET return_path = $returnPath WHERE consumed_at_utc IS NULL;";
+            command.Parameters.AddWithValue("$returnPath", returnPath);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
         }
 
         public async ValueTask DisposeAsync()

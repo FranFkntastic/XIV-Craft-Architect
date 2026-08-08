@@ -60,6 +60,6 @@
     private bool CanRevoke(CompanyMember member) => member.Role != "owner" || _viewerRole == "owner";
     private async Task TransitionAsync(Guid accountId, string action) { await HubClient.TransitionMembershipAsync(CompanyId, accountId, action); await LoadAsync(); Snackbar.Add($"Membership {action}d.", Severity.Success); }
     private void CancelRevoke() { _revokeMember = null; _revokeReason = null; }
-    private async Task RevokeAsync() { await HubClient.TransitionMembershipAsync(CompanyId, _revokeMember!.AccountProfileId, "revoke"); CancelRevoke(); await LoadAsync(); Snackbar.Add("Membership revoked.", Severity.Success); }
+    private async Task RevokeAsync() { await HubClient.TransitionMembershipAsync(CompanyId, _revokeMember!.AccountProfileId, "revoke", _revokeReason!.Trim()); CancelRevoke(); await LoadAsync(); Snackbar.Add("Membership revoked.", Severity.Success); }
     private sealed record PendingMember(CompanyMembership Request, CompanyMember Member);
 }

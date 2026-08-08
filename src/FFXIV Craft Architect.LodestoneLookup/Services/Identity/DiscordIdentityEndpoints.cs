@@ -145,7 +145,7 @@ public static class DiscordIdentityEndpoints
     }
 
     private static string ApplicationReturnUri(string applicationBaseUri, string? returnPath) =>
-        returnPath == null
+        returnPath == null || !DiscordIdentitySignInService.IsValidReturnPath(returnPath)
             ? applicationBaseUri
             : new Uri(new Uri(applicationBaseUri), returnPath).AbsoluteUri;
 

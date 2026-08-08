@@ -87,9 +87,9 @@ public sealed class CompanyHubClient(
     public async Task<IReadOnlyList<CompanyMembership>> LoadPendingMembershipsAsync(string companyId, CancellationToken cancellationToken = default) =>
         await GetListAsync<CompanyMembership>($"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-requests", cancellationToken);
 
-    public async Task TransitionMembershipAsync(string companyId, Guid accountProfileId, string action, CancellationToken cancellationToken = default)
+    public async Task TransitionMembershipAsync(string companyId, Guid accountProfileId, string action, string? reason = null, CancellationToken cancellationToken = default)
     {
-        using var response = await SendAsync(HttpMethod.Post, $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/memberships/{accountProfileId:D}/{action}", null, cancellationToken);
+        using var response = await SendAsync(HttpMethod.Post, $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/memberships/{accountProfileId:D}/{action}", reason == null ? null : new { Reason = reason }, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 
@@ -156,7 +156,7 @@ public sealed record CompanyHubTheme(string Accent, string BannerStyle, string E
 public sealed record CompanyHubStanding(string State, string? Role);
 public sealed record CompanyHubOutput(Guid LineId, int ItemId, string Name, int Quantity, int CompletedQuantity, int ReadyQuantity, int AcceptedQuantity);
 public sealed record CompanyHubPayment(string Schedule, string Label, decimal Total);
-public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string State);
+public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State);
 public sealed record CompanyHubRosterMember(string DisplayName, string Role);
 public sealed record CompanyHubActivity(string CommissionId, string Reference, string Kind, DateTime OccurredAtUtc);
 public sealed record CompanyMembership(string CompanyId, Guid AccountProfileId, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, Guid? DecidedByProfileId, string? RequestNote);

@@ -32,11 +32,7 @@ public sealed class DiscordIdentitySignInService(
         CancellationToken cancellationToken = default)
     {
         RequireEnabled();
-        if (returnPath != null &&
-            (!returnPath.StartsWith("/", StringComparison.Ordinal) ||
-             returnPath.StartsWith("//", StringComparison.Ordinal) ||
-             returnPath.Contains('\\') ||
-             !Uri.IsWellFormedUriString(returnPath, UriKind.Relative)))
+        if (returnPath != null && !IsValidReturnPath(returnPath))
         {
             throw new ArgumentException("Return path must be an application-relative path.", nameof(returnPath));
         }
@@ -56,6 +52,12 @@ public sealed class DiscordIdentitySignInService(
             state,
             verifier);
     }
+
+    internal static bool IsValidReturnPath(string returnPath) =>
+        returnPath.StartsWith("/", StringComparison.Ordinal) &&
+        !returnPath.StartsWith("//", StringComparison.Ordinal) &&
+        !returnPath.Contains('\\') &&
+        Uri.IsWellFormedUriString(returnPath, UriKind.Relative);
 
     public async Task<DiscordSignInCompletion> CompleteAsync(
         string? code,

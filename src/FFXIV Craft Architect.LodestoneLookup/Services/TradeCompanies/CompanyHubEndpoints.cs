@@ -45,6 +45,7 @@ public sealed record CompanyHubCommissionResponse(
     long ProjectionRevision,
     IReadOnlyList<CompanyHubOutputResponse> Outputs,
     CompanyHubPaymentResponse Payment,
+    string SettlementState,
     string State);
 
 public sealed record CompanyHubRosterMemberResponse(string DisplayName, string Role);
@@ -420,6 +421,7 @@ public sealed class CompanyHubService(
                 terms.Payment.Schedule.ToString().ToLowerInvariant(),
                 ClampText(terms.Payment.ContractLabel, 240, "Commission"),
                 terms.Payment.Total),
+            commission.SettlementState.ToString().ToLowerInvariant(),
             order.Status.ToString().ToLowerInvariant());
     }
 
