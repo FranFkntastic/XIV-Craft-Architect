@@ -187,6 +187,30 @@ public partial class TradeOrders
         {
             return;
         }
+        ApplyHostedOrderProjectionState(snapshot);
+        StateHasChanged();
+    }
+
+    private void ApplyHostedOrderProjections(
+        IReadOnlyList<HostedOrderProjectionSnapshot> snapshots)
+    {
+        foreach (var snapshot in snapshots)
+        {
+            if (_companyProfile != null &&
+                snapshot.CompanyProfileId.HasValue &&
+                snapshot.CompanyProfileId != _companyProfile.Id)
+            {
+                continue;
+            }
+
+            ApplyHostedOrderProjectionState(snapshot);
+        }
+
+        StateHasChanged();
+    }
+
+    private void ApplyHostedOrderProjectionState(HostedOrderProjectionSnapshot snapshot)
+    {
         _orderHostedRevisions[snapshot.OrderId] = snapshot.ObjectRevision;
 
         if (_selectedOrder?.Id == snapshot.OrderId)
@@ -216,7 +240,6 @@ public partial class TradeOrders
             }
         }
 
-        StateHasChanged();
     }
 
     private async Task ApplyHostedOrderProjectionReset()

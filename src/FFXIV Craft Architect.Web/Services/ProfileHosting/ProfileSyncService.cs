@@ -1105,7 +1105,7 @@ public sealed class ProfileSyncService
             profileId,
             ProfileSyncCollections.TradeOrders,
             envelopes.Select(envelope => envelope.ObjectId));
-        var restored = 0;
+        var projections = new List<(TradeOrder Order, long ObjectRevision)>(envelopes.Count);
         foreach (var envelope in envelopes)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1118,14 +1118,10 @@ public sealed class ProfileSyncService
             var order = JsonSerializer.Deserialize<TradeOrder>(envelope.PayloadJson, JsonOptions)
                 ?? throw new InvalidOperationException(
                     $"Saved Trade order '{envelope.ObjectId}' could not be restored safely.");
-            if (_hostedOrders.TryPublishRemoteOrder(order, revision) ||
-                _hostedOrders.Get(order.Id)?.ObjectRevision == revision)
-            {
-                restored++;
-            }
+            projections.Add((order, revision));
         }
 
-        return restored;
+        return _hostedOrders.PublishRemoteOrders(projections);
     }
 
     private static ProfileSyncFailure ClassifyFailure(Exception exception) =>

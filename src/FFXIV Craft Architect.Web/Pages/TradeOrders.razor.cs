@@ -296,6 +296,7 @@ public partial class TradeOrders
     protected override async Task OnInitializedAsync()
     {
         HostedOrders.Changed += OnHostedOrderProjectionChanged;
+        HostedOrders.BatchChanged += OnHostedOrderProjectionsChanged;
         HostedOrders.Reset += OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged += OnHostedOrderRestoreStateChanged;
         ArchiveSummaries.Changed += OnArchiveSummariesChanged;
@@ -370,6 +371,7 @@ public partial class TradeOrders
         InvalidateSelectedOrderPlanRestoration();
         InvalidateSelectedCommissionOwnerRefresh();
         HostedOrders.Changed -= OnHostedOrderProjectionChanged;
+        HostedOrders.BatchChanged -= OnHostedOrderProjectionsChanged;
         HostedOrders.Reset -= OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged -= OnHostedOrderRestoreStateChanged;
         ArchiveSummaries.Changed -= OnArchiveSummariesChanged;
@@ -445,6 +447,17 @@ public partial class TradeOrders
         }
 
         _ = InvokeAsync(() => ApplyHostedOrderProjection(snapshot));
+    }
+
+    private void OnHostedOrderProjectionsChanged(
+        IReadOnlyList<HostedOrderProjectionSnapshot> snapshots)
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() => ApplyHostedOrderProjections(snapshots));
     }
 
     private void OnHostedOrderProjectionsReset() =>
