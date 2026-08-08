@@ -12,12 +12,15 @@ public sealed class TradeCompanyCollaborationService(
     ProfileSyncService profileSync,
     HostedOrderProjectionStore hostedOrders)
 {
+    private static readonly TimeSpan PublicationRefreshLifetime = TimeSpan.FromSeconds(30);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private sealed record OrderCommandAuthority(
         HostedOrderAuthorityScope Projection,
         HostedProfileConnectionSettings Connection);
     private readonly Dictionary<Guid, IReadOnlyList<TradeCommissionInterest>> _interests = [];
     private readonly Dictionary<Guid, TradeCommissionPublicationProjection> _publications = [];
+    private readonly Dictionary<Guid, DateTime> _publicationRefreshedAtUtc = [];
+    private readonly Dictionary<Guid, Task> _publicationRefreshes = [];
     private string? _dictionaryProfileId;
     private string? _dictionaryConnectionScopeId;
 
@@ -119,10 +122,32 @@ public sealed class TradeCompanyCollaborationService(
             new CompanyRecordRevision(revision));
     }
 
-    public async Task RefreshAsync(
+    public Task RefreshAsync(
         Guid companyProfileId,
         Guid orderId,
         CancellationToken cancellationToken = default)
+    {
+        if (IsDictionaryAuthorityCurrent() &&
+            _publicationRefreshedAtUtc.TryGetValue(orderId, out var refreshedAtUtc) &&
+            DateTime.UtcNow - refreshedAtUtc < PublicationRefreshLifetime)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (_publicationRefreshes.TryGetValue(orderId, out var pending))
+        {
+            return pending.WaitAsync(cancellationToken);
+        }
+
+        var refresh = RefreshCoreAsync(companyProfileId, orderId, cancellationToken);
+        _publicationRefreshes[orderId] = refresh;
+        return ObserveRefreshAsync(orderId, refresh);
+    }
+
+    private async Task RefreshCoreAsync(
+        Guid companyProfileId,
+        Guid orderId,
+        CancellationToken cancellationToken)
     {
         var authority = await CaptureOrderAuthorityAsync();
         var interests = await client.LoadPendingInterestsAsync(
@@ -156,6 +181,22 @@ public sealed class TradeCompanyCollaborationService(
         else
         {
             _publications[orderId] = publication;
+        }
+        _publicationRefreshedAtUtc[orderId] = DateTime.UtcNow;
+    }
+
+    private async Task ObserveRefreshAsync(Guid orderId, Task refresh)
+    {
+        try
+        {
+            await refresh;
+        }
+        finally
+        {
+            if (_publicationRefreshes.GetValueOrDefault(orderId) == refresh)
+            {
+                _publicationRefreshes.Remove(orderId);
+            }
         }
     }
 
@@ -196,6 +237,7 @@ public sealed class TradeCompanyCollaborationService(
                 publication);
             AdoptDictionaryAuthority(authority);
             _publications[order.Id] = publication;
+            _publicationRefreshedAtUtc[order.Id] = DateTime.UtcNow;
             return new TradeCommissionWorkflowResult(
                 publication.State is
                     TradeCommissionDeliveryState.Pending or
@@ -239,6 +281,7 @@ public sealed class TradeCompanyCollaborationService(
                 publication);
             AdoptDictionaryAuthority(authority);
             _publications[order.Id] = publication;
+            _publicationRefreshedAtUtc[order.Id] = DateTime.UtcNow;
             return new TradeCommissionWorkflowResult(
                 publication.State == TradeCommissionDeliveryState.Pending,
                 TradeCompanyMutationDisposition.Synced,
@@ -280,6 +323,7 @@ public sealed class TradeCompanyCollaborationService(
                 publication);
             AdoptDictionaryAuthority(authority);
             _publications[order.Id] = publication;
+            _publicationRefreshedAtUtc[order.Id] = DateTime.UtcNow;
             return new TradeCommissionWorkflowResult(
                 Success: true,
                 TradeCompanyMutationDisposition.Synced,
@@ -398,6 +442,7 @@ public sealed class TradeCompanyCollaborationService(
         }
         AdoptDictionaryAuthority(authority);
         _publications.Remove(ownership.OrderId);
+        _publicationRefreshedAtUtc[ownership.OrderId] = DateTime.UtcNow;
     }
 
     private async Task<TradeCommissionWorkflowResult> ResolveInterestAsync(
@@ -642,6 +687,7 @@ public sealed class TradeCompanyCollaborationService(
         {
             _interests.Clear();
             _publications.Clear();
+            _publicationRefreshedAtUtc.Clear();
         }
         _dictionaryProfileId = authority.Projection.ProfileId;
         _dictionaryConnectionScopeId = authority.Projection.ConnectionScopeId;
@@ -651,6 +697,7 @@ public sealed class TradeCompanyCollaborationService(
     {
         _interests.Clear();
         _publications.Clear();
+        _publicationRefreshedAtUtc.Clear();
         _dictionaryProfileId = null;
         _dictionaryConnectionScopeId = null;
     }
