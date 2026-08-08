@@ -173,6 +173,12 @@ public partial class TradeOrders
             InvalidateSelectedOrderPlanRestoration();
         }
         _activeOpsTab = tabIndex;
+        if (tabIndex == SharingTabIndex && _selectedOrder != null)
+        {
+            ScheduleSelectedCommissionOwnerRefresh(_selectedOrder);
+            _ = RefreshCollaborationAsync(_selectedOrder);
+            return;
+        }
         if (tabIndex != ProcurementTabIndex || _selectedOrder == null)
         {
             return;
