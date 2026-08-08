@@ -110,6 +110,19 @@ public sealed class ProfileHostContractTests
         await entered.WaitAsync(testCancellationToken);
         await entered.WaitAsync(testCancellationToken);
 
+        var uncachedAuthenticationCalls = 0;
+        var cachedResult = await concurrencyGate.ExecuteAsync(
+            "cap_valid-contract-key",
+            _ => Task.FromResult<string?>("cached"),
+            _ =>
+            {
+                Interlocked.Increment(ref uncachedAuthenticationCalls);
+                return Task.FromResult<string?>("unexpected");
+            },
+            testCancellationToken);
+        Assert.Equal("cached", cachedResult);
+        Assert.Equal(0, uncachedAuthenticationCalls);
+
         var third = concurrencyGate.ExecuteAsync(
             "cap_valid-contract-key",
             AuthenticateAsync,
