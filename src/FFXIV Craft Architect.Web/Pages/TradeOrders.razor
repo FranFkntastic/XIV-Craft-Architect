@@ -2122,53 +2122,6 @@
                                          </section>
                                      }
                                  }
-                                @if (SelectedCommissionOwner == null && SelectedPendingInterests.Count > 0)
-                                {
-                                    <section class="trade-orders-interest-list">
-                                        <div class="trade-orders-section-heading">
-                                            <div>
-                                                <MudText Typo="Typo.subtitle2">Crafter interest</MudText>
-                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                    Confirm assignment here; Discord never assigns the order by itself.
-                                                </MudText>
-                                            </div>
-                                            <span class="trade-orders-publication-chip is-attention">
-                                                @SelectedPendingInterests.Count pending
-                                            </span>
-                                        </div>
-                                        @foreach (var claim in SelectedPendingInterests)
-                                        {
-                                            <div class="trade-orders-interest-row">
-                                                <div class="trade-orders-interest-identity">
-                                                    <strong>@claim.DisplayName</strong>
-                                                    <span>@claim.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
-                                                </div>
-                                                <CompactSelectField Id="@($"interest-crafter-{claim.ClaimId}")"
-                                                                    Label="Assign to crafter"
-                                                                    Value="@GetInterestCrafterValue(claim)"
-                                                                    ValueChanged="value => SetInterestCrafterValue(claim, value)"
-                                                                    Options="GetCrafterOptions()"
-                                                                    Disabled="@(_activeInterestClaimId is not null)" />
-                                                <div class="trade-orders-interest-actions">
-                                                    <MudButton Variant="Variant.Filled"
-                                                               Color="Color.Primary"
-                                                               Size="Size.Small"
-                                                               Disabled="@(_activeInterestClaimId is not null || string.IsNullOrWhiteSpace(GetInterestCrafterValue(claim)))"
-                                                               OnClick="() => AcceptInterestAsync(claim)">
-                                                        @(_activeInterestClaimId == claim.ClaimId ? "Assigning..." : "Assign")
-                                                    </MudButton>
-                                                    <MudButton Variant="Variant.Outlined"
-                                                               Color="Color.Secondary"
-                                                               Size="Size.Small"
-                                                               Disabled="@(_activeInterestClaimId is not null)"
-                                                               OnClick="() => DeclineInterestAsync(claim)">
-                                                        Decline
-                                                    </MudButton>
-                                                </div>
-                                            </div>
-                                        }
-                                    </section>
-                                }
                                 @if (SelectedCommissionOwner == null &&
                                      SelectedCompanyPublication is { } companyPublication)
                                 {

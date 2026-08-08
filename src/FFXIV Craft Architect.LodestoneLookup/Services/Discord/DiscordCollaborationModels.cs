@@ -89,45 +89,6 @@ public sealed record DiscordPublicationReconcileResult(
     public bool Success => Status == DiscordPublicationReconcileStatus.Queued;
 }
 
-public enum DiscordInterestClaimState
-{
-    Pending = 0,
-    AssignmentPending = 1,
-    Accepted = 2,
-    Declined = 3
-}
-
-public sealed record DiscordInterestClaim(
-    Guid ClaimId,
-    Guid PublicationId,
-    CompanyId CompanyId,
-    Guid OrderId,
-    string DiscordUserId,
-    string DiscordDisplayName,
-    DiscordInterestClaimState State,
-    Guid? ResolvedCrafterId,
-    CompanyRecordRevision? AcceptedOrderRevision,
-    string? ResolutionIdempotencyKey,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset? ResolvedAt);
-
-public enum DiscordClaimTransitionStatus
-{
-    Applied,
-    Replayed,
-    Conflict,
-    Missing
-}
-
-public sealed record DiscordClaimTransitionResult(
-    DiscordClaimTransitionStatus Status,
-    DiscordInterestClaim? Claim,
-    string? Error = null)
-{
-    public bool Success =>
-        Status is DiscordClaimTransitionStatus.Applied or DiscordClaimTransitionStatus.Replayed;
-}
-
 public enum DiscordOutboxState
 {
     Pending = 0,

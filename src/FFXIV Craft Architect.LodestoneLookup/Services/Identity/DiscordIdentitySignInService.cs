@@ -41,7 +41,7 @@ public sealed class DiscordIdentitySignInService(
             cancellationToken);
         return DiscordOAuthAuthorization.CreateResponse(
             options,
-            options.EffectiveSignInCallbackUri,
+            options.SignInCallbackUri,
             state,
             verifier);
     }
@@ -82,7 +82,7 @@ public sealed class DiscordIdentitySignInService(
         var identity = await discord.ResolveIdentityAsync(
             code,
             consumed.PkceVerifier,
-            options.EffectiveSignInCallbackUri,
+            options.SignInCallbackUri,
             cancellationToken);
         if (identity == null)
         {
