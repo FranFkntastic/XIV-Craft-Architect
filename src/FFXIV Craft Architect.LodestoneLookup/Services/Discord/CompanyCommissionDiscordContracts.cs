@@ -46,7 +46,8 @@ public enum DiscordDirectMessageFallback
 public enum DiscordNotificationDestinationKind
 {
     CommissionerDirectMessage,
-    UpdateChannel
+    UpdateChannel,
+    MemberDirectMessage
 }
 
 public sealed record CommittedCompanyCommissionNotification(
@@ -176,6 +177,12 @@ public interface ICompanyCommissionDiscordDelivery
 
     Task<DiscordNotificationEnqueueResult> NotifyAsync(
         CommittedCompanyCommissionNotification notification,
+        CancellationToken cancellationToken = default);
+
+    Task<DiscordNotificationEnqueueResult> NotifyMembersAsync(
+        CommittedCompanyCommissionNotification notification,
+        TradeCompanyCommission commission,
+        Uri publicUrl,
         CancellationToken cancellationToken = default);
 
     Task CaptureDiscordClaimContactAsync(
