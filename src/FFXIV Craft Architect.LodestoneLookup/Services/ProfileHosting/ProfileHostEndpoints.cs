@@ -231,6 +231,7 @@ public static class ProfileHostEndpoints
                         return await store.RedeemPairingCodeAsync(
                             pairingCodes.Hash(plaintext),
                             accessKey.StoredHash,
+                            accessKey.Fingerprint,
                             DateTime.UtcNow,
                             ct);
                     },
