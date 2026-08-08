@@ -349,6 +349,37 @@ public sealed class ProfileHostContractTests
             await LoadOnlyAccessKeyFingerprintAsync(fixture.DatabasePath));
     }
 
+    [Fact]
+    public async Task SuccessfulAccessKeyAuthentication_IsCachedButStillHonorsRevocation()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var hasher = new RepeatedVerificationRejectingHasher();
+
+        var first = await fixture.Store.AuthenticateAccessKeyAsync(
+            fixture.AccessKey,
+            hasher,
+            CancellationToken.None);
+        var verificationCount = hasher.VerificationCount;
+        hasher.RejectFurtherVerification = true;
+        var cached = await fixture.Store.AuthenticateAccessKeyAsync(
+            fixture.AccessKey,
+            hasher,
+            CancellationToken.None);
+        await fixture.Store.RevokeAccessKeysAsync(
+            fixture.ProfileId,
+            CancellationToken.None);
+        var revoked = await fixture.Store.AuthenticateAccessKeyAsync(
+            fixture.AccessKey,
+            hasher,
+            CancellationToken.None);
+
+        Assert.Equal(fixture.ProfileId, first?.Profile.ProfileId);
+        Assert.Equal(fixture.ProfileId, cached?.Profile.ProfileId);
+        Assert.True(verificationCount > 0);
+        Assert.Equal(verificationCount, hasher.VerificationCount);
+        Assert.Null(revoked);
+    }
+
     private static async Task<string?> LoadOnlyAccessKeyFingerprintAsync(string databasePath)
     {
         await using var connection = new SqliteConnection($"Data Source={databasePath}");
@@ -357,6 +388,23 @@ public sealed class ProfileHostContractTests
         command.CommandText = "select key_fingerprint from profile_access_keys;";
         var value = await command.ExecuteScalarAsync();
         return value == null || value == DBNull.Value ? null : (string)value;
+    }
+
+    private sealed class RepeatedVerificationRejectingHasher : ProfileAccessKeyHasher
+    {
+        public int VerificationCount { get; private set; }
+        public bool RejectFurtherVerification { get; set; }
+
+        public override bool Verify(string plaintextKey, string storedHash)
+        {
+            if (RejectFurtherVerification)
+            {
+                throw new InvalidOperationException("The cached access key was rehashed.");
+            }
+
+            VerificationCount++;
+            return base.Verify(plaintextKey, storedHash);
+        }
     }
 
     [Fact]
