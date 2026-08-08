@@ -24,6 +24,26 @@ public sealed class ProfileHostedTradeCompanyService(
             plaintextKey,
             accessKeyHasher,
             cancellationToken);
+        return await ResolveAuthenticatedHostAsync(host, companyId, cancellationToken);
+    }
+
+    public async Task<TradeCompanyAccessContext?> TryAuthenticateCachedAsync(
+        string plaintextKey,
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        var host = await profiles.TryAuthenticateCachedAsync(
+            plaintextKey,
+            accessKeyHasher,
+            cancellationToken);
+        return await ResolveAuthenticatedHostAsync(host, companyId, cancellationToken);
+    }
+
+    private async Task<TradeCompanyAccessContext?> ResolveAuthenticatedHostAsync(
+        ProfileHostProfileResponse? host,
+        CompanyId companyId,
+        CancellationToken cancellationToken)
+    {
         if (host == null ||
             !Guid.TryParse(host.ProfileId, out var hostProfileId) ||
             await LoadCompanyProfileAsync(host.ProfileId, companyId, cancellationToken) == null)

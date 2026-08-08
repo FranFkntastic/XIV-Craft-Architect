@@ -851,6 +851,33 @@ public sealed class SqliteProfileHostStore
         CancellationToken ct) =>
         (await AuthenticateAccessKeyAsync(plaintextKey, hasher, ct))?.Profile;
 
+    public async Task<ProfileHostProfileResponse?> TryAuthenticateCachedAsync(
+        string plaintextKey,
+        ProfileAccessKeyHasher hasher,
+        CancellationToken ct) =>
+        (await TryAuthenticateCachedAccessKeyAsync(plaintextKey, hasher, ct))?.Profile;
+
+    public async Task<AuthenticatedProfileAccessKey?> TryAuthenticateCachedAccessKeyAsync(
+        string plaintextKey,
+        ProfileAccessKeyHasher hasher,
+        CancellationToken ct)
+    {
+        var fingerprint = hasher.Fingerprint(plaintextKey);
+        if (!_accessKeyCache.TryGetValue(fingerprint, out var cached) ||
+            cached.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            _accessKeyCache.TryRemove(fingerprint, out _);
+            return null;
+        }
+
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        return await TryAuthenticateCachedAccessKeyAsync(
+            connection,
+            fingerprint,
+            ct);
+    }
+
     public async Task<AuthenticatedProfileAccessKey?> AuthenticateAccessKeyAsync(
         string plaintextKey,
         ProfileAccessKeyHasher hasher,

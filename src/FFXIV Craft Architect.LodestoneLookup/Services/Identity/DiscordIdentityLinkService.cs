@@ -43,6 +43,10 @@ public sealed class DiscordIdentityAuthorization(
             ? null
             : await authenticationGate.ExecuteAsync(
                 key,
+                ct => profiles.TryAuthenticateCachedAsync(
+                    key,
+                    accessKeyHasher,
+                    ct),
                 ct => profiles.AuthenticateAsync(
                     key,
                     accessKeyHasher,
