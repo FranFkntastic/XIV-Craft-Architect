@@ -184,6 +184,7 @@ builder.Services.AddSingleton(_ =>
 builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
 builder.Services.AddSingleton<TradeCompanyAuthorization>();
 builder.Services.AddSingleton<MembershipAccessResolver>();
+builder.Services.AddSingleton<CompanyHubService>();
 builder.Services.AddHostedService<FounderMembershipReconciler>();
 builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();
 builder.Services.AddSingleton<HostedCompanyCommissionService>();
@@ -349,6 +350,7 @@ app.MapCommissionBriefEndpoints();
 app.MapCompanyCommissionBriefEndpoints();
 app.MapCompanyCommissionEndpoints();
 app.MapMembershipEndpoints();
+app.MapCompanyHubEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
 app.MapDiscordNotificationEndpoints();

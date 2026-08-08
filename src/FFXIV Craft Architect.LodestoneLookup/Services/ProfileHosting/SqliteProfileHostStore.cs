@@ -1780,6 +1780,61 @@ public sealed class SqliteProfileHostStore
         CancellationToken ct)
         => await LoadObjectsAsync(collection, includeDeleted: false, ct);
 
+    public async Task<IReadOnlyList<HostedProfileObject>> LoadProfileObjectsAsync(
+        string profileId,
+        string collection,
+        CancellationToken ct)
+    {
+        ValidateCollection(collection);
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select o.profile_id,
+                   o.object_id,
+                   o.payload_json,
+                   o.revision,
+                   o.updated_at_utc,
+                   o.deleted,
+                   o.deleted_at_utc
+            from sync_objects o
+            inner join hosted_profiles p on p.id = o.profile_id
+            where p.disabled_at_utc is null
+              and o.profile_id = $profileId
+              and o.collection = $collection
+              and o.deleted = 0
+            order by o.object_id;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$collection", collection);
+        var found = new List<HostedProfileObject>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            found.Add(new HostedProfileObject(
+                reader.GetString(0),
+                new ProfileSyncObjectEnvelope
+                {
+                    Collection = collection,
+                    ObjectId = reader.GetString(1),
+                    PayloadJson = NormalizePortablePayload(
+                        collection,
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        deleted: false),
+                    Revision = reader.GetInt64(3),
+                    UpdatedAtUtc = DateTime.Parse(
+                        reader.GetString(4),
+                        null,
+                        DateTimeStyles.RoundtripKind),
+                    Deleted = false,
+                    DeletedAtUtc = null
+                }));
+        }
+
+        return found;
+    }
+
     public async Task<IReadOnlyList<HostedProfileObject>> LoadObjectsAsync(
         string collection,
         bool includeDeleted,
