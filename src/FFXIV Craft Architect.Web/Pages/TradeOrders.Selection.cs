@@ -390,7 +390,6 @@ public partial class TradeOrders
         PrepareCompanyCommissionEditor(order);
         AppState.SelectTradeOrder(order.Id);
         PersistSelectedOrderInNavigation(order.Id);
-        ScheduleSelectedCommissionOwnerRefresh(order);
         ScheduleSelectedOrderPlanRestoration();
     }
 
@@ -423,6 +422,8 @@ public partial class TradeOrders
     {
         try
         {
+            // Let the requesting surface render before authenticated owner work begins.
+            await Task.Delay(150, cancellation.Token);
             await HostedOrderSync.RefreshOwnerProjectionAsync(
                 order.Id,
                 cancellation.Token);
