@@ -1,4 +1,5 @@
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -32,6 +33,7 @@ public static class MembershipEndpoints
                 HttpRequest request,
                 ProfileHostOptions options,
                 MembershipAccessResolver accessResolver,
+                SqliteDiscordIdentityStore identities,
                 ProfileHostedTradeCompanyService companyService,
                 SqliteMembershipStore memberships,
                 CancellationToken cancellationToken) =>
@@ -44,6 +46,14 @@ public static class MembershipEndpoints
                 if (account == null)
                 {
                     return Results.Unauthorized();
+                }
+                if (await identities.LoadByProfileAsync(account.ProfileId, cancellationToken) == null)
+                {
+                    return Results.Json(
+                        new MembershipErrorResponse(
+                            "account_sign_in_required",
+                            "Sign in with Discord before requesting membership."),
+                        statusCode: StatusCodes.Status403Forbidden);
                 }
                 if (!CompanyId.TryParse(companyId, out var parsedCompanyId) ||
                     await companyService.LoadPublicCompanyProfileAsync(

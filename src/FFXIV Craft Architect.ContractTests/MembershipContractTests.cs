@@ -159,6 +159,33 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
+    public async Task KeyOnlyAccountMustSignInWithDiscordBeforeRequestingMembership()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var keyOnly = await fixture.CreateKeyOnlyAsync("Key-only account");
+        var claimed = await fixture.CreateAccountAsync("Claimed account");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var keyOnlyClient = fixture.CreateClient(keyOnly.Key);
+        using var claimedClient = fixture.CreateClient(claimed.Key);
+        await PutCompanyAsync(ownerClient, company);
+
+        using var refused = await keyOnlyClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-requests",
+            new MembershipRequestBody(null));
+        using var accepted = await claimedClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-requests",
+            new MembershipRequestBody(null));
+        var error = await refused.Content.ReadFromJsonAsync<MembershipErrorResponse>();
+
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal("account_sign_in_required", error!.Error);
+        Assert.Equal("Sign in with Discord before requesting membership.", error.Message);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+    }
+
+    [Fact]
     public async Task RequestApprovalGrantsOwnMembershipAndRefusesNonAdministrators()
     {
         await using var fixture = await MembershipFixture.CreateAsync();
