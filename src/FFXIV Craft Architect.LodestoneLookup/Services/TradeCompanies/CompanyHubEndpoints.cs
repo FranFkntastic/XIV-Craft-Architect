@@ -85,7 +85,9 @@ public static class CompanyHubEndpoints
 
 public sealed class CompanyHubService(
     SqliteProfileHostStore profiles,
-    SqliteMembershipStore memberships)
+    SqliteMembershipStore memberships,
+    ProfileHostChangeSignal changes,
+    TimeProvider timeProvider)
 {
     private const int MaximumDisplayNameLength = 120;
     private const int MaximumTaglineLength = 120;
@@ -97,6 +99,8 @@ public sealed class CompanyHubService(
     private static readonly Regex MarkdownToken = new(
         @"\[(?<linkText>[^\]\r\n]{1,240})\]\((?<linkUrl>[^\s)]{1,2048})\)|\*\*(?<bold>[^*\r\n]{1,500})\*\*|\*(?<italic>[^*\r\n]{1,500})\*",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private readonly SemaphoreSlim directoryGate = new(1, 1);
+    private CompanyDirectoryCache? directory;
 
     public async Task<object?> LoadAsync(
         string slugOrGuid,
@@ -220,6 +224,51 @@ public sealed class CompanyHubService(
     private async Task<IReadOnlyList<HostedCompany>> LoadCompaniesAsync(
         CancellationToken cancellationToken)
     {
+        var current = Volatile.Read(ref directory);
+        if (current is { } cached && DirectoryIsCurrent(cached))
+        {
+            return cached.Companies;
+        }
+
+        await directoryGate.WaitAsync(cancellationToken);
+        try
+        {
+            current = Volatile.Read(ref directory);
+            if (current is { } refreshed && DirectoryIsCurrent(refreshed))
+            {
+                return refreshed.Companies;
+            }
+
+            IReadOnlyList<HostedCompany> companies;
+            ProfileHostChangeObservation observation;
+            do
+            {
+                observation = changes.ObserveAll();
+                companies = await BuildCompanyDirectoryAsync(cancellationToken);
+            }
+            while (changes.ObserveAll().Generation != observation.Generation);
+            Volatile.Write(
+                ref directory,
+                new CompanyDirectoryCache(
+                    companies,
+                    observation.Generation,
+                    timeProvider.GetUtcNow().AddMinutes(1)));
+            return companies;
+        }
+        finally
+        {
+            directoryGate.Release();
+        }
+    }
+
+    private bool DirectoryIsCurrent(CompanyDirectoryCache? current) =>
+        current != null &&
+        current.ExpiresAtUtc > timeProvider.GetUtcNow() &&
+        changes.ObserveAll().Generation == current.Generation;
+
+    private async Task<IReadOnlyList<HostedCompany>> BuildCompanyDirectoryAsync(
+        CancellationToken cancellationToken)
+    {
         var hosted = await profiles.LoadObjectsAsync(
             ProfileSyncCollections.TradeCompanyProfiles,
             cancellationToken);
@@ -239,9 +288,12 @@ public sealed class CompanyHubService(
         HostedCompany company,
         CancellationToken cancellationToken)
     {
-        var hosted = await profiles.LoadObjectsAsync(ProfileSyncCollections.TradeOrders, cancellationToken);
+        var hosted = await profiles.LoadProfileObjectsAsync(
+            company.HostProfileId.ToString("D"),
+            ProfileSyncCollections.TradeOrders,
+            cancellationToken);
         var orders = new List<TradeOrder>();
-        foreach (var item in hosted.Where(item => item.ProfileId == company.HostProfileId.ToString("D")))
+        foreach (var item in hosted)
         {
             try
             {
@@ -476,4 +528,9 @@ public sealed class CompanyHubService(
             .Replace(")", "\\)", StringComparison.Ordinal);
 
     private sealed record HostedCompany(TradeCompanyProfile Profile, Guid HostProfileId, int Ordinal);
+
+    private sealed record CompanyDirectoryCache(
+        IReadOnlyList<HostedCompany> Companies,
+        long Generation,
+        DateTimeOffset ExpiresAtUtc);
 }

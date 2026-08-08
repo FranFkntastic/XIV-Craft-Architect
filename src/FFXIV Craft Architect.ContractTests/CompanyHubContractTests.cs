@@ -190,6 +190,61 @@ public sealed class CompanyHubContractTests
         Assert.Equal("sapphire-avenue-2", guidJson.RootElement.GetProperty("slug").GetString());
     }
 
+    [Fact]
+    public async Task CachedDirectoryInvalidatesAfterCompanyRenameWithoutExpandingTeaser()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany(showCount: true);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, CreateOrder(company.Id));
+
+        using var initial = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        company.Name = "Moonlit Provisioners";
+        await PutCompanyAsync(ownerClient, company, expectedRevision: 1);
+        using var oldSlug = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        using var renamed = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/moonlit-provisioners/hub");
+        var json = await renamed.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, initial.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, oldSlug.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, renamed.StatusCode);
+        Assert.Contains("\"kind\":\"teaser\"", json);
+        Assert.DoesNotContain("openCommissions", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("assignments", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("roster", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CachedTeaserMaintainsWhitelist()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany(showCount: true);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, CreateOrder(company.Id));
+
+        using var first = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        using var second = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        var json = await second.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Contains("\"kind\":\"teaser\"", json);
+        Assert.DoesNotContain("openCommissions", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("assignments", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("roster", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("output", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("payment", json, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static TradeCompanyProfile CreateCompany(string name = "Sapphire Avenue", bool showCount = false)
     {
         var company = TradeCompanyProfile.CreateLocal(name, DateTime.UtcNow);
@@ -243,14 +298,17 @@ public sealed class CompanyHubContractTests
         };
     }
 
-    private static async Task PutCompanyAsync(HttpClient client, TradeCompanyProfile company)
+    private static async Task PutCompanyAsync(
+        HttpClient client,
+        TradeCompanyProfile company,
+        long expectedRevision = 0)
     {
         using var response = await client.PutAsJsonAsync(
             $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{company.Id:D}",
             new ProfileSyncPutRequest
             {
                 PayloadJson = JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
-                ExpectedRevision = 0
+                ExpectedRevision = expectedRevision
             });
         response.EnsureSuccessStatusCode();
     }
