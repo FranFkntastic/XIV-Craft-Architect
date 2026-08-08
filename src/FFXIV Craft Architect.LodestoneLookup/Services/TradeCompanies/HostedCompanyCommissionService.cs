@@ -42,13 +42,22 @@ public sealed class HostedCompanyCommissionService(
         CancellationToken cancellationToken = default)
     {
         RequireCompanyOperator(access);
+        return await LoadMemberAsync(access, commissionId, cancellationToken);
+    }
+
+    public async Task<HostedCompanyCommissionSnapshot?> LoadMemberAsync(
+        TradeCompanyAccessContext access,
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
         if (commissionId == Guid.Empty)
         {
             return null;
         }
 
+        var canonicalAccess = ToCanonicalAccess(access);
         var record = await companies.LoadRecordAsync(
-            access,
+            canonicalAccess,
             TradeCompanyRecordKinds.Order,
             commissionId.ToString("D"),
             cancellationToken);
@@ -58,11 +67,11 @@ public sealed class HostedCompanyCommissionService(
         }
 
         var order = DeserializeCanonicalOrder(record, access.CompanyId, commissionId);
-        var profile = await companies.LoadCompanyProfileAsync(access, cancellationToken)
+        var profile = await companies.LoadCompanyProfileAsync(canonicalAccess, cancellationToken)
             ?? throw new InvalidOperationException(
                 "The canonical Trade company profile is unavailable.");
         var companyRevision = await companies.LoadCompanyRevisionAsync(
-            access,
+            canonicalAccess,
             cancellationToken);
         return new HostedCompanyCommissionSnapshot(
             record,
@@ -290,6 +299,47 @@ public sealed class HostedCompanyCommissionService(
             cancellationToken);
     }
 
+    public Task<CompanyCommissionMutationResult> ExecuteMemberAsync(
+        TradeCompanyAccessContext access,
+        Guid accountProfileId,
+        ICompanyCommissionParticipantCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        if (accountProfileId == Guid.Empty || access.GrantId != accountProfileId)
+        {
+            return Task.FromResult(Unauthorized());
+        }
+
+        var actor = new CompanyCommissionActor(
+            $"account-profile:{accountProfileId:D}",
+            CompanyCommissionActorKind.Crafter);
+        return ExecuteAuthenticatedAsync(
+            access,
+            command,
+            actor,
+            CompanyCommissionSourceSurface.TradeArchitect,
+            order => CompanyCommissionCommandWorkflow.Apply(
+                order,
+                command,
+                actor,
+                timeProvider.GetUtcNow().UtcDateTime),
+            cancellationToken,
+            requireCompanyOperator: false);
+    }
+
+    public async Task<CompanyCommissionParticipantBrief?> LoadMemberParticipantAsync(
+        TradeCompanyAccessContext access,
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = await LoadMemberAsync(access, commissionId, cancellationToken);
+        return snapshot == null
+            ? null
+            : CompanyCommissionProjectionService.CreateParticipantBrief(
+                snapshot.Order,
+                snapshot.CompanyDisplayName);
+    }
+
     public async Task<CompanyCommissionMutationResult> ExecuteCapabilityAsync(
         CompanyCommissionCapabilityResolution capability,
         ICompanyCommissionParticipantCommand command,
@@ -362,11 +412,16 @@ public sealed class HostedCompanyCommissionService(
         CompanyCommissionActor actor,
         CompanyCommissionSourceSurface sourceSurface,
         Func<TradeOrder, CompanyCommissionDomainTransition> transition,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireCompanyOperator = true)
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(transition);
-        RequireCompanyOperator(access);
+        if (requireCompanyOperator)
+        {
+            RequireCompanyOperator(access);
+        }
+        var canonicalAccess = requireCompanyOperator ? access : ToCanonicalAccess(access);
         var context = command.Context;
         var fingerprint = CreateFingerprint(command);
         var validationError = ValidateCommandContext(access, context);
@@ -375,7 +430,12 @@ public sealed class HostedCompanyCommissionService(
             return Rejected("invalid_command", validationError);
         }
 
-        var snapshot = await LoadOwnerAsync(
+        var snapshot = requireCompanyOperator
+            ? await LoadOwnerAsync(
+                access,
+                context.CommissionId,
+                cancellationToken)
+            : await LoadMemberAsync(
             access,
             context.CommissionId,
             cancellationToken);
@@ -391,7 +451,7 @@ public sealed class HostedCompanyCommissionService(
         if (replay != null)
         {
             await NotifyPostCommitAsync(
-                access,
+                canonicalAccess,
                 snapshot,
                 replay.Activity!,
                 cancellationToken);
@@ -469,7 +529,7 @@ public sealed class HostedCompanyCommissionService(
         }
 
         var mutation = await companies.PutRecordAsync(
-            access,
+            canonicalAccess,
             TradeCompanyRecordKinds.Order,
             updated.Id.ToString("D"),
             JsonSerializer.Serialize(updated, JsonOptions),
@@ -495,21 +555,20 @@ public sealed class HostedCompanyCommissionService(
                 activity,
                 ObjectRevision: committed.Envelope.RecordRevision,
                 CompanyRevision: committed.CompanyRevision);
-            await NotifyPostCommitAsync(access, committed, activity, cancellationToken);
+            await NotifyPostCommitAsync(canonicalAccess, committed, activity, cancellationToken);
             return result;
         }
 
-        var current = await LoadOwnerAsync(
-            access,
-            context.CommissionId,
-            cancellationToken);
+        var current = requireCompanyOperator
+            ? await LoadOwnerAsync(access, context.CommissionId, cancellationToken)
+            : await LoadMemberAsync(access, context.CommissionId, cancellationToken);
         var replayAfterConflict = current == null
             ? null
             : ResolveReplay(current, context, fingerprint);
         if (replayAfterConflict != null)
         {
             await NotifyPostCommitAsync(
-                access,
+                canonicalAccess,
                 current!,
                 replayAfterConflict.Activity!,
                 cancellationToken);
@@ -577,6 +636,22 @@ public sealed class HostedCompanyCommissionService(
                 recovery.RecoveryRevision == capability.CapabilityRevision,
             _ => false
         };
+
+    private static TradeCompanyAccessContext ToCanonicalAccess(
+        TradeCompanyAccessContext access)
+    {
+        if (access.HostProfileId is not { } hostProfileId || hostProfileId == Guid.Empty)
+        {
+            throw new UnauthorizedAccessException(
+                "The hosted company profile is unavailable.");
+        }
+
+        return new TradeCompanyAccessContext(
+            access.CompanyId,
+            hostProfileId,
+            TradeCompanyRole.Owner,
+            hostProfileId);
+    }
 
     private static TradeOrder DeserializeCanonicalOrder(
         TradeCompanyRecordEnvelope record,

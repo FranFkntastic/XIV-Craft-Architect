@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
@@ -44,6 +45,116 @@ public static class CompanyCommissionEndpoints
     {
         var company = app.MapGroup(
             "/trade/v1/companies/{companyId}/commissions");
+
+        company.MapPost(
+            "/{commissionId:guid}/claim",
+            async (
+                string companyId,
+                Guid commissionId,
+                HttpRequest request,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                HostedCompanyCommissionService commissions,
+                DiscordClaimContactCommitter claimContacts,
+                SqliteDiscordIdentityStore identities,
+                CancellationToken cancellationToken) =>
+            {
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (!CompanyId.TryParse(companyId, out var parsedCompanyId) ||
+                    await companyService.LoadPublicCompanyProfileAsync(
+                        parsedCompanyId,
+                        cancellationToken) == null)
+                {
+                    return Results.NotFound();
+                }
+
+                var membership = await memberships.LoadForAccountAsync(
+                    parsedCompanyId,
+                    account.ProfileId,
+                    cancellationToken);
+                if (membership is not { State: MembershipState.Active })
+                {
+                    return MembershipForbidden(membership);
+                }
+
+                var access = await accessResolver.ResolveCompanyAccessAsync(
+                    account,
+                    parsedCompanyId,
+                    cancellationToken);
+                if (access == null)
+                {
+                    return Results.NotFound();
+                }
+                var snapshot = await commissions.LoadMemberAsync(
+                    access,
+                    commissionId,
+                    cancellationToken);
+                if (snapshot?.Order.CompanyCommission is not { } commission)
+                {
+                    return MissingCanonicalCommission();
+                }
+                if (commission.ActiveClaim != null)
+                {
+                    return ClaimSlotTaken();
+                }
+                if (snapshot.Order.Status != TradeOrderStatus.ReadyToAssign ||
+                    commission.PublicMetadata.ViewState !=
+                        CompanyCommissionPublicViewState.Published ||
+                    commission.PublicMetadata.IsTestFixture)
+                {
+                    return Results.Conflict(new MembershipErrorResponse(
+                        "commission_not_open",
+                        "Only an open, published commission can be claimed."));
+                }
+
+                var command = new ClaimCompanyCommissionCommand(
+                    new CompanyCommissionCommandContext(
+                        parsedCompanyId,
+                        commissionId,
+                        snapshot.Envelope.RecordRevision,
+                        snapshot.CompanyRevision,
+                        Guid.NewGuid(),
+                        CompanyCommissionProtocol.Version1),
+                    commission.CurrentTermsVersion,
+                    null,
+                    account.ProfileId);
+                var mutation = await commissions.ExecuteMemberAsync(
+                    access,
+                    account.ProfileId,
+                    command,
+                    cancellationToken);
+                if (!mutation.Success)
+                {
+                    if (mutation.Status == CompanyCommissionMutationStatus.Conflict &&
+                        (await commissions.LoadMemberAsync(
+                            access,
+                            commissionId,
+                            cancellationToken))?.Order.CompanyCommission?.ActiveClaim != null)
+                    {
+                        return ClaimSlotTaken();
+                    }
+                    return ToCommandError(mutation);
+                }
+
+                using var committedWork = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await claimContacts.CaptureMemberAsync(
+                    account.ProfileId,
+                    identities,
+                    mutation,
+                    committedWork.Token);
+                var projection = await commissions.LoadMemberParticipantAsync(
+                    access,
+                    commissionId,
+                    committedWork.Token);
+                return projection == null
+                    ? CanonicalCommissionConflict()
+                    : Results.Ok(projection);
+            });
 
         company.MapGet(
             "/{commissionId:guid}/owner",
@@ -300,10 +411,14 @@ public static class CompanyCommissionEndpoints
                 string publicId,
                 string route,
                 PublicCompanyCommissionCommandEnvelope envelope,
+                 HttpRequest request,
                  SqliteCompanyCommissionCapabilityStore capabilities,
                  DiscordClaimContactCommitter claimContacts,
                  HostedCompanyCommissionService commissions,
-                TimeProvider timeProvider,
+                 MembershipAccessResolver accessResolver,
+                 ProfileHostedTradeCompanyService companyService,
+                 SqliteMembershipStore memberships,
+                 TimeProvider timeProvider,
                 CancellationToken cancellationToken) =>
             {
                 if (!string.Equals(
@@ -334,7 +449,17 @@ public static class CompanyCommissionEndpoints
                 if (!SqliteCompanyCommissionCapabilityStore.IsValidCapability(
                         plaintextCapability))
                 {
-                    return Results.Unauthorized();
+                    return await ExecuteMembershipParticipantAsync(
+                        publicId,
+                        route,
+                        envelope,
+                        request,
+                        capabilityKind.Value,
+                        accessResolver,
+                        companyService,
+                        memberships,
+                        commissions,
+                        cancellationToken);
                 }
 
                 var capability = await capabilities.ResolveForCommandAsync(
@@ -451,6 +576,139 @@ public static class CompanyCommissionEndpoints
                     ? CanonicalCommissionConflict()
                     : Results.Ok(participantProjection);
             });
+    }
+
+    private static async Task<IResult> ExecuteMembershipParticipantAsync(
+        string publicId,
+        string route,
+        PublicCompanyCommissionCommandEnvelope envelope,
+        HttpRequest request,
+        CompanyCommissionCapabilityKind capabilityKind,
+        MembershipAccessResolver accessResolver,
+        ProfileHostedTradeCompanyService companyService,
+        SqliteMembershipStore memberships,
+        HostedCompanyCommissionService commissions,
+        CancellationToken cancellationToken)
+    {
+        if (capabilityKind != CompanyCommissionCapabilityKind.Participant)
+        {
+            return Results.Unauthorized();
+        }
+
+        var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+        if (account == null)
+        {
+            return Results.Unauthorized();
+        }
+        var ownership = await companyService.ResolvePublicationOwnershipAsync(
+            publicId,
+            cancellationToken);
+        if (ownership == null)
+        {
+            return Results.NotFound();
+        }
+        var membership = await memberships.LoadForAccountAsync(
+            ownership.CompanyId,
+            account.ProfileId,
+            cancellationToken);
+        if (membership is not { State: MembershipState.Active })
+        {
+            return MembershipForbidden(membership);
+        }
+        var access = await accessResolver.ResolveCompanyAccessAsync(
+            account,
+            ownership.CompanyId,
+            cancellationToken);
+        if (access == null)
+        {
+            return Results.NotFound();
+        }
+        var snapshot = await commissions.LoadMemberAsync(
+            access,
+            ownership.OrderId,
+            cancellationToken);
+        var commission = snapshot?.Order.CompanyCommission;
+        if (snapshot == null ||
+            commission == null ||
+            !string.Equals(
+                commission.PublicMetadata.PublicBriefId,
+                publicId,
+                StringComparison.Ordinal))
+        {
+            return MissingCanonicalCommission();
+        }
+
+        var activeClaim = commission.ActiveClaim;
+        var participantIsLive =
+            activeClaim?.CrafterId == account.ProfileId &&
+            commission.ParticipantGrant is { RevokedAtUtc: null } participant &&
+            participant.ClaimId == activeClaim.ClaimId &&
+            snapshot.Order.Status != TradeOrderStatus.Canceled &&
+            commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published;
+        if (!participantIsLive)
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+
+        var recordedReplay = commission.ProcessedCommands.Any(
+            item => item.CommandId == envelope.CommandId);
+        if (!recordedReplay &&
+            (commission.Activity.LastOrDefault()?.CommissionRevision ?? 0) !=
+                envelope.ExpectedProjectionRevision)
+        {
+            return Results.Conflict(new
+            {
+                error = "projection_conflict",
+                message =
+                    "The canonical commission changed before the public command was applied."
+            });
+        }
+
+        ICompanyCommissionParticipantCommand command;
+        try
+        {
+            (command, _) = DeserializeParticipantCommand(
+                route,
+                envelope.Command,
+                new CompanyCommissionCommandContext(
+                    ownership.CompanyId,
+                    ownership.OrderId,
+                    snapshot.Envelope.RecordRevision,
+                    snapshot.CompanyRevision,
+                    envelope.CommandId,
+                    envelope.ProtocolVersion));
+        }
+        catch (JsonException exception)
+        {
+            return InvalidCommand(exception.Message);
+        }
+
+        var mutation = await commissions.ExecuteMemberAsync(
+            access,
+            account.ProfileId,
+            command,
+            cancellationToken);
+        if (!mutation.Success)
+        {
+            return ToCommandError(mutation);
+        }
+        if (command is ReleaseCompanyCommissionClaimCommand)
+        {
+            var publicProjection = await commissions.LoadPublicAsync(
+                publicId,
+                cancellationToken);
+            return publicProjection == null
+                ? CanonicalCommissionConflict()
+                : Results.Ok(publicProjection);
+        }
+
+        var participantProjection = await commissions.LoadMemberParticipantAsync(
+            access,
+            ownership.OrderId,
+            cancellationToken);
+        return participantProjection == null
+            ? CanonicalCommissionConflict()
+            : Results.Ok(participantProjection);
     }
 
     private static ICompanyCommissionCompanyCommand DeserializeOwnerCommand(
@@ -831,6 +1089,20 @@ public static class CompanyCommissionEndpoints
             error = "invalid_command",
             message
         });
+
+    private static IResult MembershipForbidden(CompanyMembership? membership) =>
+        Results.Json(
+            new MembershipErrorResponse(
+                membership == null ? "active_membership_required" : "membership_inactive",
+                membership == null
+                    ? "An active company membership is required."
+                    : "The company membership is not active."),
+            statusCode: StatusCodes.Status403Forbidden);
+
+    private static IResult ClaimSlotTaken() =>
+        Results.Conflict(new MembershipErrorResponse(
+            "claim_slot_taken",
+            "The commission already has an active crafter."));
 
     private static IResult CanonicalCommissionConflict() =>
         Results.Conflict(new
