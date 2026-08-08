@@ -80,6 +80,7 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                     activity.EventId,
                     result.Error ?? "invalid notification projection");
             }
+            await delivery.NotifyMembersAsync(notification, commission, publicUri, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

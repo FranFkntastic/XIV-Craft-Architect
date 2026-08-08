@@ -16,6 +16,8 @@ public sealed record MembershipResponse(
     string? RequestNote);
 
 public sealed record MembershipErrorResponse(string Error, string Message);
+public sealed record MembershipNotificationPreferenceBody(bool OptedOut);
+public sealed record MembershipNotificationPreferenceResponse(string CompanyId, bool OptedOut);
 
 public static class MembershipEndpoints
 {
@@ -128,6 +130,72 @@ public static class MembershipEndpoints
                     cancellationToken);
                 return Results.Ok(current.Select(ToResponse).ToArray());
             });
+
+        companies.MapGet(
+            "/{companyId}/membership-notifications",
+            async (
+                string companyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null || !CompanyId.TryParse(companyId, out var parsed))
+                {
+                    return account == null ? Results.Unauthorized() : Results.NotFound();
+                }
+                var membership = await memberships.LoadForAccountAsync(
+                    parsed,
+                    account.ProfileId,
+                    cancellationToken);
+                return membership == null
+                    ? Results.NotFound()
+                    : Results.Ok(new MembershipNotificationPreferenceResponse(
+                        parsed.ToString(),
+                        membership.NotificationsOptedOut));
+            });
+
+        companies.MapPut(
+            "/{companyId}/membership-notifications",
+            async (
+                string companyId,
+                MembershipNotificationPreferenceBody body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (!CompanyId.TryParse(companyId, out var parsed))
+                {
+                    return Results.NotFound();
+                }
+                var membership = await memberships.SetNotificationsOptedOutAsync(
+                    parsed,
+                    account.ProfileId,
+                    body.OptedOut,
+                    cancellationToken);
+                return membership == null
+                    ? Results.NotFound()
+                    : Results.Ok(new MembershipNotificationPreferenceResponse(
+                        parsed.ToString(),
+                        membership.NotificationsOptedOut));
+            });
     }
 
     private static void MapTransition(
@@ -226,7 +294,7 @@ public static class MembershipEndpoints
             membership.RequestedAtUtc,
             membership.DecidedAtUtc,
             membership.DecidedByProfileId,
-            membership.RequestNote);
+             membership.RequestNote);
 
     private sealed record CompanyAuthorizationResult(
         CompanyId CompanyId,

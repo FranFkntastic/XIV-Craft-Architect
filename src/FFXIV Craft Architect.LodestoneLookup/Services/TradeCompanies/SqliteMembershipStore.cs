@@ -37,7 +37,8 @@ public sealed record CompanyMembership(
     DateTimeOffset RequestedAtUtc,
     DateTimeOffset? DecidedAtUtc,
     Guid? DecidedByProfileId,
-    string? RequestNote);
+    string? RequestNote,
+    bool NotificationsOptedOut = false);
 
 public sealed record MembershipEvent(
     Guid EventId,
@@ -348,6 +349,39 @@ public sealed class SqliteMembershipStore(
             cancellationToken);
     }
 
+    public async Task<CompanyMembership?> LoadForAccountAsync(
+        CompanyId companyId,
+        Guid accountProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        return await LoadAsync(connection, null, companyId, accountProfileId, cancellationToken);
+    }
+
+    public async Task<CompanyMembership?> SetNotificationsOptedOutAsync(
+        CompanyId companyId,
+        Guid accountProfileId,
+        bool optedOut,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE company_memberships
+            SET notifications_opted_out = $optedOut
+            WHERE company_id = $companyId AND account_profile_id = $accountProfileId;
+            """;
+        AddMembershipIdentity(command, companyId, accountProfileId);
+        command.Parameters.AddWithValue("$optedOut", optedOut ? 1 : 0);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            return null;
+        }
+        return await LoadAsync(connection, null, companyId, accountProfileId, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<MembershipEvent>> LoadEventsAsync(
         CompanyId companyId,
         Guid accountProfileId,
@@ -492,8 +526,9 @@ public sealed class SqliteMembershipStore(
         await EnsureSchemaAsync(connection, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
-            SELECT company_id, account_profile_id, role, state, requested_at_utc,
-                   decided_at_utc, decided_by_profile_id, request_note
+             SELECT company_id, account_profile_id, role, state, requested_at_utc,
+                    decided_at_utc, decided_by_profile_id, request_note,
+                    notifications_opted_out
             FROM company_memberships
             WHERE {predicate}
             ORDER BY requested_at_utc, company_id, account_profile_id;
@@ -519,7 +554,8 @@ public sealed class SqliteMembershipStore(
         command.Transaction = transaction;
         command.CommandText = """
             SELECT company_id, account_profile_id, role, state, requested_at_utc,
-                   decided_at_utc, decided_by_profile_id, request_note
+                   decided_at_utc, decided_by_profile_id, request_note,
+                   notifications_opted_out
             FROM company_memberships
             WHERE company_id = $companyId AND account_profile_id = $accountProfileId;
             """;
@@ -645,6 +681,7 @@ public sealed class SqliteMembershipStore(
                     decided_at_utc TEXT NULL,
                     decided_by_profile_id TEXT NULL,
                     request_note TEXT NULL CHECK(request_note IS NULL OR length(request_note) <= 500),
+                    notifications_opted_out INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(company_id, account_profile_id),
                     CHECK(role <> 'owner' OR state IN ('active', 'revoked'))
                 );
@@ -670,6 +707,11 @@ public sealed class SqliteMembershipStore(
                     ON membership_events(company_id, account_profile_id, created_at_utc);
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
+            await AddMembershipColumnIfMissingAsync(
+                connection,
+                "notifications_opted_out",
+                "INTEGER NOT NULL DEFAULT 0",
+                cancellationToken);
             await AddEventColumnIfMissingAsync(connection, "role", "TEXT NULL", cancellationToken);
             await AddEventColumnIfMissingAsync(
                 connection,
@@ -696,6 +738,34 @@ public sealed class SqliteMembershipStore(
         finally
         {
             schemaGate.Release();
+        }
+    }
+
+    private static async Task AddMembershipColumnIfMissingAsync(
+        SqliteConnection connection,
+        string column,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        await using var check = connection.CreateCommand();
+        check.CommandText = "PRAGMA table_info(company_memberships);";
+        var found = false;
+        await using (var reader = await check.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found)
+        {
+            await using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE company_memberships ADD COLUMN {column} {definition};";
+            await alter.ExecuteNonQueryAsync(cancellationToken);
         }
     }
 
@@ -753,7 +823,8 @@ public sealed class SqliteMembershipStore(
                 ? null
                 : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
             reader.IsDBNull(6) ? null : Guid.Parse(reader.GetString(6)),
-            reader.IsDBNull(7) ? null : reader.GetString(7));
+             reader.IsDBNull(7) ? null : reader.GetString(7),
+             !reader.IsDBNull(8) && reader.GetInt32(8) != 0);
 
     private static void AddMembershipIdentity(
         SqliteCommand command,
