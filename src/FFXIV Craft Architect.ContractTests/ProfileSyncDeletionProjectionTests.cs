@@ -433,6 +433,24 @@ public sealed class ProfileSyncDeletionProjectionTests
         static void AssertCapturedRequest(HttpRequestMessage request) { Assert.Equal(new Uri(Host).Host, request.RequestUri!.Host); Assert.Equal("access-key", request.Headers.GetValues("X-Profile-Key").Single()); }
     }
     [Fact]
+    public async Task CollaborationRefreshReusesRecentPublicationResult()
+    {
+        var fixture = new ProjectionFixture("Collaboration refresh cache");
+        await fixture.PrepareCollaborationAsync();
+        var requestCount = 0;
+        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(_ =>
+        {
+            requestCount++;
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }));
+
+        await collaboration.RefreshAsync(fixture.Order.CompanyProfileId, fixture.Order.Id);
+        await collaboration.RefreshAsync(fixture.Order.CompanyProfileId, fixture.Order.Id);
+
+        Assert.Equal(1, requestCount);
+        Assert.Null(collaboration.GetPublication(fixture.Order.Id));
+    }
+    [Fact]
     public async Task DelayedCollaborationResponseCannotPersistOverNewerProjection()
     {
         var fixture = new ProjectionFixture("Revision four");

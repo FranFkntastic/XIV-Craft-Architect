@@ -176,7 +176,11 @@ public partial class TradeOrders
         if (tabIndex == SharingTabIndex && _selectedOrder != null)
         {
             ScheduleSelectedCommissionOwnerRefresh(_selectedOrder);
-            _ = RefreshCollaborationAsync(_selectedOrder);
+            if (_selectedOrder.CompanyCommission != null ||
+                _selectedOrder.CommissionPublication != null)
+            {
+                _ = RefreshCollaborationAsync(_selectedOrder);
+            }
             return;
         }
         if (tabIndex != ProcurementTabIndex || _selectedOrder == null)
