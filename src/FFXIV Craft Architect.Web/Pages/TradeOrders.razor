@@ -291,6 +291,7 @@
                                               Label="Notes"
                                               Variant="Variant.Outlined"
                                               Margin="Margin.Dense"
+                                              Immediate="true"
                                               Lines="1" />
                             </div>
                             <section class="trade-orders-work-section">
@@ -1245,13 +1246,14 @@
                                                          @bind-Value="DetailCrafterValue"
                                                          Options="GetCrafterOptions()"
                                                          Disabled="@IsSelectedOrderArchived" />
-                                     <MudTextField @bind-Value="_detailNotes"
-                                                   id="selected-order-notes"
-                                                   Label="Notes"
-                                                   Variant="Variant.Outlined"
-                                                   Margin="Margin.Dense"
-                                                   Lines="1"
-                                                   Disabled="@IsSelectedOrderArchived" />
+                                    <MudTextField @bind-Value="_detailNotes"
+                                                  id="selected-order-notes"
+                                                  Label="Notes"
+                                                  Variant="Variant.Outlined"
+                                                  Margin="Margin.Dense"
+                                                  Immediate="true"
+                                                  Lines="1"
+                                                  Disabled="@IsSelectedOrderArchived" />
                                  </div>
                              }
                             <section class="trade-orders-work-section">
