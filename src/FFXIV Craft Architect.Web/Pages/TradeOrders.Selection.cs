@@ -548,9 +548,14 @@ public partial class TradeOrders
 
     private bool SelectOrderAfterReload(Guid orderId, string missingMessage)
     {
-        var reloadedOrder = VisibleOrders.FirstOrDefault(order => order.Id == orderId) ??
-            DeviceOnlyOrders.FirstOrDefault(order =>
-                order.Id == orderId && order.CompanyCommission == null);
+        var localOrder = _orders.FirstOrDefault(order => order.Id == orderId);
+        var preferLocal = localOrder?.CompanyCommission == null &&
+            (FindOrderConflict(orderId) != null || IsOrderPending(orderId));
+        var reloadedOrder = preferLocal
+            ? localOrder
+            : VisibleOrders.FirstOrDefault(order => order.Id == orderId) ??
+              DeviceOnlyOrders.FirstOrDefault(order =>
+                  order.Id == orderId && order.CompanyCommission == null);
         if (reloadedOrder == null)
         {
             _selectedOrder = null;
@@ -565,6 +570,10 @@ public partial class TradeOrders
         }
 
         SelectOrder(reloadedOrder);
+        if (preferLocal)
+        {
+            _selectedLocalHostedCollision = HostedOrders.Get(orderId);
+        }
         ExpandGroupForOrder(reloadedOrder);
         return true;
     }
