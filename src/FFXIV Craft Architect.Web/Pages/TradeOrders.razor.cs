@@ -597,6 +597,8 @@ public partial class TradeOrders
     private void StartNewOrderWorkspace()
     {
         InvalidateSelectedCommissionOwnerRefresh();
+        InvalidateSelectedOrderPlanRestoration();
+        ClearLiveProcurementSnapshot();
         _pendingImport = null;
         _selectedOrder = null;
         _showNewOrderPanel = true;
