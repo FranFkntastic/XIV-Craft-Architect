@@ -91,17 +91,32 @@ public partial class TradeOrders
             : TradeCollaboration.GetPendingInterests(_selectedOrder.Id);
 
     private ProfileSyncConflict? SelectedOrderConflict =>
-        _selectedOrder == null
-            ? null
-            : ProfileSync.Conflicts.FirstOrDefault(conflict =>
+        _selectedOrder == null ? null : FindOrderConflict(_selectedOrder.Id);
+
+    private ProfileSyncConflict? FindOrderConflict(Guid orderId) =>
+        ProfileSync.Conflicts.FirstOrDefault(conflict =>
                 string.Equals(
                     conflict.Collection,
                     ProfileSyncCollections.TradeOrders,
                     StringComparison.Ordinal) &&
                 string.Equals(
                     conflict.ObjectId,
-                    _selectedOrder.Id.ToString("D"),
+                    orderId.ToString("D"),
                     StringComparison.OrdinalIgnoreCase));
+
+    private bool IsOrderPending(Guid orderId) =>
+        ProfileSync.PendingSaves.Any(pending =>
+            string.Equals(
+                pending.Collection,
+                ProfileSyncCollections.TradeOrders,
+                StringComparison.Ordinal) &&
+            string.Equals(
+                pending.ObjectId,
+                orderId.ToString("D"),
+                StringComparison.OrdinalIgnoreCase));
+
+    private bool IsSelectedOrderPending =>
+        _selectedOrder != null && IsOrderPending(_selectedOrder.Id);
 
     private bool HasActiveCompanyPublication =>
         SelectedCompanyPublication?.State is
@@ -741,6 +756,40 @@ public partial class TradeOrders
 
         AppState.NotifyTradeOperationsDataChanged();
         Snackbar.Add("Hosted order version applied", Severity.Success);
+    }
+
+    private async Task KeepLocalOrderVersionAsync()
+    {
+        var conflict = SelectedOrderConflict;
+        if (conflict == null || !conflict.CanKeepLocal)
+        {
+            return;
+        }
+
+        var orderId = _selectedOrder?.Id;
+        try
+        {
+            await ProfileSync.KeepLocalConflictAsync(conflict);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(
+                $"Your changes could not be published: {exception.Message}",
+                Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+        if (orderId.HasValue)
+        {
+            SelectOrderAfterReload(
+                orderId.Value,
+                "Your changes were published, but the order could not be reloaded.");
+            _activeOpsTab = SharingTabIndex;
+        }
+
+        AppState.NotifyTradeOperationsDataChanged();
+        Snackbar.Add("Your changes were published", Severity.Success);
     }
 
     private static string GetCompanyPublicationClass(
