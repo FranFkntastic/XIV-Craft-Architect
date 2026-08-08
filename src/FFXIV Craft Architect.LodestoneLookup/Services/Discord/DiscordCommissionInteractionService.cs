@@ -233,6 +233,44 @@ internal sealed class DiscordClaimContactCommitter(
     ICompanyCommissionDiscordDelivery discordDelivery,
     TimeProvider timeProvider)
 {
+    public async Task<bool> CaptureMemberAsync(
+        Guid profileId,
+        SqliteDiscordIdentityStore identities,
+        CompanyCommissionMutationResult mutation,
+        CancellationToken cancellationToken = default)
+    {
+        var identity = await identities.LoadByProfileAsync(profileId, cancellationToken);
+        var activity = mutation.Activity;
+        var commission = mutation.Order?.CompanyCommission;
+        var committedClaim = commission?.ActiveClaim;
+        if (!mutation.Success ||
+            identity == null ||
+            activity is not { Kind: CompanyCommissionActivityKind.ClaimAccepted } ||
+            activity.EventId == Guid.Empty ||
+            activity.CommissionRevision <= 0 ||
+            committedClaim == null ||
+            committedClaim.ClaimId == Guid.Empty)
+        {
+            return false;
+        }
+
+        await discordDelivery.CaptureDiscordClaimContactAsync(
+            new CommittedDiscordClaimContact(
+                commission!.CompanyId,
+                commission.CommissionId,
+                committedClaim.ClaimId,
+                activity.EventId,
+                activity.CommissionRevision,
+                activity.Kind,
+                activity.CreatedAtUtc,
+                identity.DiscordUserId,
+                new DiscordOriginContact(
+                    identity.DiscordUserId,
+                    identity.DisplayNameSnapshot)),
+            cancellationToken);
+        return true;
+    }
+
     public async Task<bool> CaptureAsync(
         CompanyCommissionCapabilityResolution claimCapability,
         CompanyCommissionMutationResult mutation,
