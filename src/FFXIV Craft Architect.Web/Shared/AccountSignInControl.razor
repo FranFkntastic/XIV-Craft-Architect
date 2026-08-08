@@ -22,6 +22,7 @@ else if (_connected)
     <MudButton Variant="Variant.Text"
                StartIcon="@Icons.Material.Filled.AccountCircle"
                OnClick="OpenAccountAsync"
+               Disabled="_accountDialogOpen"
                Style="color: #cccccc; text-transform: none; font-size: 14px;">
         @(string.IsNullOrWhiteSpace(_displayName) ? "Account" : _displayName)
     </MudButton>
@@ -31,6 +32,7 @@ else
     <MudButton Variant="Variant.Text"
                StartIcon="@Icons.Material.Filled.AccountCircle"
                OnClick="OpenAccountAsync"
+               Disabled="_accountDialogOpen"
                Style="color: #cccccc; text-transform: none; font-size: 14px;">
         Connect account
     </MudButton>
@@ -40,6 +42,7 @@ else
     private bool _signInEnabled;
     private bool _connected;
     private bool _busy;
+    private bool _accountDialogOpen;
     private string? _displayName;
 
     protected override async Task OnInitializedAsync()
@@ -91,8 +94,22 @@ else
 
     private async Task OpenAccountAsync()
     {
-        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        await DialogService.ShowAsync<AccountDialog>("Account", options);
+        if (_accountDialogOpen)
+        {
+            return;
+        }
+
+        _accountDialogOpen = true;
+        try
+        {
+            var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
+            var dialog = await DialogService.ShowAsync<AccountDialog>("Account", options);
+            await dialog.Result;
+        }
+        finally
+        {
+            _accountDialogOpen = false;
+        }
     }
 
     public void Dispose()
