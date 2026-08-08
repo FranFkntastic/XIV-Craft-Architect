@@ -374,7 +374,7 @@ static async Task RunProfileHostProvisioningCommandAsync(
                 var displayName = command.DisplayName ?? throw new InvalidOperationException("Display name is required.");
                 var profile = await store.CreateProfileAsync(displayName, cancellationToken);
                 var key = hasher.CreateAccessKey();
-                await store.AddAccessKeyAsync(profile.ProfileId, key.StoredHash, cancellationToken);
+                await store.AddAccessKeyAsync(profile.ProfileId, key, cancellationToken);
                 WriteJson(new
                 {
                     profile.ProfileId,
@@ -460,7 +460,7 @@ static async Task RunProfileHostProvisioningCommandAsync(
 
                 await store.RevokeAccessKeysAsync(profileId, cancellationToken);
                 var key = hasher.CreateAccessKey();
-                await store.AddAccessKeyAsync(profileId, key.StoredHash, cancellationToken);
+                await store.AddAccessKeyAsync(profileId, key, cancellationToken);
                 WriteJson(new
                 {
                     profile.ProfileId,

@@ -325,6 +325,41 @@ public sealed class ProfileHostContractTests
     }
 
     [Fact]
+    public async Task LegacyAccessKey_AuthenticationBackfillsIndexedFingerprint()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+
+        Assert.Null(await LoadOnlyAccessKeyFingerprintAsync(fixture.DatabasePath));
+
+        using var firstResponse = await client.GetAsync("/profile-host/profile");
+        await fixture.Store.AddAccessKeyAsync(
+            fixture.ProfileId,
+            fixture.StoredAccessKeyHash,
+            CancellationToken.None);
+        using var secondResponse = await client.GetAsync("/profile-host/keys");
+        var keys = await secondResponse.Content.ReadFromJsonAsync<ProfileHostAccessKeyMetadata[]>();
+
+        firstResponse.EnsureSuccessStatusCode();
+        secondResponse.EnsureSuccessStatusCode();
+        Assert.Equal(2, keys!.Length);
+        Assert.All(keys, key => Assert.True(key.IsCurrent));
+        Assert.Equal(
+            new ProfileAccessKeyHasher().Fingerprint(fixture.AccessKey),
+            await LoadOnlyAccessKeyFingerprintAsync(fixture.DatabasePath));
+    }
+
+    private static async Task<string?> LoadOnlyAccessKeyFingerprintAsync(string databasePath)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select key_fingerprint from profile_access_keys;";
+        var value = await command.ExecuteScalarAsync();
+        return value == null || value == DBNull.Value ? null : (string)value;
+    }
+
+    [Fact]
     public async Task AccessKey_CannotSelectOrReadAnotherProfile()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
@@ -834,6 +869,7 @@ public sealed class ProfileHostContractTests
             string databasePath,
             string profileId,
             string accessKey,
+            string storedAccessKeyHash,
             SqliteProfileHostStore store,
             ProfileHostOptions options,
             string backupRoot,
@@ -842,6 +878,7 @@ public sealed class ProfileHostContractTests
             this.databasePath = databasePath;
             ProfileId = profileId;
             AccessKey = accessKey;
+            StoredAccessKeyHash = storedAccessKeyHash;
             Store = store;
             Options = options;
             BackupRoot = backupRoot;
@@ -850,6 +887,8 @@ public sealed class ProfileHostContractTests
 
         public string ProfileId { get; }
         public string AccessKey { get; }
+        public string StoredAccessKeyHash { get; }
+        public string DatabasePath => databasePath;
         public SqliteProfileHostStore Store { get; }
         public ProfileHostOptions Options { get; }
         public string BackupRoot { get; }
@@ -886,6 +925,7 @@ public sealed class ProfileHostContractTests
                 databasePath,
                 profile.ProfileId,
                 accessKey.PlaintextKey,
+                accessKey.StoredHash,
                 store,
                 options,
                 backupRoot,
