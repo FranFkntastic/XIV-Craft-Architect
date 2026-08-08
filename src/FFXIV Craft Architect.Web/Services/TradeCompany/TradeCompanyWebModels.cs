@@ -26,25 +26,6 @@ public enum TradeCommissionDeliveryState
     Suppressed
 }
 
-public enum TradeCommissionInterestState
-{
-    Pending,
-    Accepted,
-    Declined,
-    Withdrawn,
-    Superseded
-}
-
-public sealed record TradeCommissionInterest(
-    string ClaimId,
-    Guid OrderId,
-    string DiscordUserId,
-    string DisplayName,
-    TradeCommissionInterestState State,
-    Guid? MatchedCrafterId,
-    DateTime CreatedAtUtc,
-    string? Message = null);
-
 public sealed record TradeCommissionPublicationProjection(
     Guid OrderId,
     TradeCommissionDestination Destination,
@@ -54,17 +35,10 @@ public sealed record TradeCommissionPublicationProjection(
     DateTime UpdatedAtUtc,
     string? Message = null);
 
-public sealed record TradeCommissionInterestResolutionReceipt(
-    TradeCommissionInterest Claim,
-    TradeOrder? UpdatedOrder,
-    long? UpdatedOrderRevision = null,
-    string? Message = null);
-
 public sealed record TradeCommissionWorkflowResult(
     bool Success,
     TradeCompanyMutationDisposition Disposition,
     TradeCommissionPublicationProjection? Publication = null,
-    TradeCommissionInterestResolutionReceipt? Resolution = null,
     string? Message = null);
 
 public enum TradeDiscordNotificationDestinationMode

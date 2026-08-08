@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
@@ -22,7 +20,7 @@ public sealed class DiscordIdentityContractTests
     private const string OtherParticipantCredential =
         "participant_credential_contract_bbbbbbbbbbbbbbbb";
     [Fact]
-    public async Task OAuthLinksAndDiscordActionsRecheckCanonicalTradeAuthority()
+    public async Task DiscordActionsRecheckCanonicalTradeAuthority()
     {
         var root = Path.Combine(
             Path.GetTempPath(),
@@ -555,63 +553,17 @@ public sealed class DiscordIdentityContractTests
             "cap_discord-other-contract-key",
             hasher,
             CancellationToken.None)).Profile;
-        var oauth = new StubDiscordOAuthClient();
-        var linking = new DiscordIdentityLinkService(
-            options,
-            linkStore,
-            profiles,
-            oauth,
-            now);
-        var start = await linking.StartAsync(owner);
-        var authorize = new Uri(start.AuthorizationUrl);
-        var query = QueryHelpers.ParseQuery(authorize.Query);
-        Assert.Equal(options.AuthorizationEndpoint, authorize.GetLeftPart(UriPartial.Path));
-        Assert.Equal(options.ClientId, query["client_id"]);
-        Assert.Equal("code", query["response_type"]);
-        Assert.Equal(options.CallbackUri, query["redirect_uri"]);
-        Assert.Equal("identify", query["scope"]);
-        Assert.Equal("S256", query["code_challenge_method"]);
-        Assert.False(string.IsNullOrWhiteSpace(query["state"]));
-        Assert.False(string.IsNullOrWhiteSpace(query["code_challenge"]));
-
-        oauth.Identity = new DiscordOAuthIdentity(DiscordUser, "owner-context-only");
-        var linked = await linking.CompleteAsync("oauth-code", query["state"]);
-        Assert.Equal(DiscordLinkCompletionStatus.Linked, linked.Status);
         Assert.Equal(
-            query["code_challenge"],
-            Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(oauth.LastVerifier!))));
-        Assert.Equal(
-            DiscordLinkCompletionStatus.ReplayedState,
-            (await linking.CompleteAsync("oauth-code", query["state"])).Status);
-        var conflictingDiscord = await linking.StartAsync(other);
-        oauth.Identity = new DiscordOAuthIdentity(DiscordUser, "conflicting-display");
-        Assert.Equal(
-            DiscordLinkCompletionStatus.Conflict,
-            (await linking.CompleteAsync(
-                "oauth-code",
-                StateFrom(conflictingDiscord))).Status);
-        var conflictingProfile = await linking.StartAsync(owner);
-        oauth.Identity = new DiscordOAuthIdentity(OtherDiscordUser, "other-display");
-        Assert.Equal(
-            DiscordLinkCompletionStatus.Conflict,
-            (await linking.CompleteAsync(
-                "oauth-code",
-                StateFrom(conflictingProfile))).Status);
+            DiscordIdentityLinkResultStatus.Linked,
+            (await linkStore.LinkAsync(
+                ownerId,
+                DiscordUser,
+                "owner-context-only",
+                now.GetUtcNow(),
+                CancellationToken.None)).Status);
         Assert.Equal(
             DiscordUser,
             (await linkStore.LoadByProfileAsync(ownerId))!.DiscordUserId);
-
-        var stale = await linking.StartAsync(other);
-        now.Advance(options.StateLifetime + TimeSpan.FromSeconds(1));
-        Assert.Equal(
-            DiscordLinkCompletionStatus.ExpiredState,
-            (await linking.CompleteAsync("oauth-code", StateFrom(stale))).Status);
-        var auditKinds = (await linkStore.LoadAuditAsync(ownerId))
-            .Select(item => item.EventKind)
-            .ToArray();
-        Assert.Contains("linked", auditKinds);
-        Assert.Contains("profile_link_conflict", auditKinds);
-        Assert.Contains("oauth_consumed", auditKinds);
         var companyId = new CompanyId(Guid.NewGuid());
         var commissionId = Guid.NewGuid();
         var grantId = Guid.NewGuid();
@@ -706,13 +658,6 @@ public sealed class DiscordIdentityContractTests
             CompanyCommissionCapabilityKind.Participant,
             OtherParticipantCredential));
 
-        Assert.True(await linking.UnlinkAsync(owner));
-        Assert.Equal(
-            DiscordInteractionAccessStatus.Forbidden,
-            (await resolver.ResolveAsync(target)).Status);
-        Assert.Contains(
-            await linkStore.LoadAuditAsync(ownerId),
-            item => item.EventKind == "unlinked");
     }
 
     private static JsonElement ComponentInteraction(
@@ -853,8 +798,6 @@ public sealed class DiscordIdentityContractTests
                     "Siren",
                     "Discord",
                     "participant",
-                    DiscordUser,
-                    "Discord Participant",
                     null,
                     null,
                     createdAtUtc),
@@ -887,41 +830,16 @@ public sealed class DiscordIdentityContractTests
         ClientId = "123456789012345678",
         ClientSecret = "client_secret_contract_aaaaaaaaaaaaaaaa",
         BootstrapSecret = "bootstrap_secret_contract_bbbbbbbbbbbbbbbb",
-        CallbackUri = "https://identity.test/api/identity/v1/discord/callback",
+        SignInCallbackUri = "https://identity.test/api/identity/v1/signin/discord/callback",
         ApplicationBaseUri = "https://app.test/",
         DatabasePath = Path.Combine(root, "discord-identity.db")
     };
-
-    private static string StateFrom(DiscordLinkStartResponse response) =>
-        QueryHelpers.ParseQuery(new Uri(response.AuthorizationUrl).Query)["state"]!;
 
     private static string BootstrapFrom(DiscordInteractionAccessResolution resolution) =>
         Assert.Single(
             resolution.Actions,
             item => item.Kind == DiscordInteractionActionKind.OpenParticipantCommission)
         .Uri.Fragment["#bootstrap=".Length..];
-
-    private static string Base64Url(byte[] value) =>
-        Convert.ToBase64String(value)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-
-    private sealed class StubDiscordOAuthClient : IDiscordOAuthClient
-    {
-        public DiscordOAuthIdentity? Identity { get; set; }
-        public string? LastVerifier { get; private set; }
-
-        public Task<DiscordOAuthIdentity?> ResolveIdentityAsync(
-            string code,
-            string pkceVerifier,
-            string callbackUri,
-            CancellationToken cancellationToken = default)
-        {
-            LastVerifier = pkceVerifier;
-            return Task.FromResult(Identity);
-        }
-    }
 
     private sealed class StubCanonicalAuthority : IDiscordCanonicalInteractionAuthority
     {

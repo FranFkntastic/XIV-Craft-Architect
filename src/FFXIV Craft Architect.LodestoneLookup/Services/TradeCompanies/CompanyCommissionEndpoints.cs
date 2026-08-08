@@ -740,8 +740,6 @@ public static class CompanyCommissionEndpoints
             HomeWorld = supplied.HomeWorld.Trim(),
             ContactMethod = supplied.ContactMethod.Trim(),
             ContactValue = supplied.ContactValue.Trim(),
-            DiscordUserId = null,
-            DiscordDisplayNameSnapshot = null,
             LodestoneCharacterId = supplied.LodestoneCharacterId!.Trim(),
             LodestoneProfileUrl = supplied.LodestoneProfileUrl!.Trim(),
             SubmittedAtUtc = supplied.SubmittedAtUtc.ToUniversalTime()

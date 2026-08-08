@@ -410,9 +410,9 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Contains("authority", portableFailure.Message, StringComparison.OrdinalIgnoreCase);
 
         var refreshFixture = await Ready();
-        var refresh = refreshFixture.CreateUnusedCollaboration(new StubHandler(request => request.RequestUri!.AbsolutePath.EndsWith("/claims") ? RefreshedClaims(request, refreshFixture) : Publication(request, refreshFixture, () => { })));
+        var refresh = refreshFixture.CreateUnusedCollaboration(new StubHandler(request => Publication(request, refreshFixture, () => ChangeProfile(refreshFixture))));
         var refreshFailure = await Assert.ThrowsAsync<InvalidOperationException>(() => refresh.RefreshAsync(refreshFixture.Order.CompanyProfileId, refreshFixture.Order.Id));
-        Check(() => Assert.Contains("authority", refreshFailure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Empty(refresh.GetPendingInterests(refreshFixture.Order.Id)), () => Assert.Null(refresh.GetPublication(refreshFixture.Order.Id)));
+        Check(() => Assert.Contains("authority", refreshFailure.Message, StringComparison.OrdinalIgnoreCase), () => Assert.Null(refresh.GetPublication(refreshFixture.Order.Id)));
 
         var ensureFixture = await Ready();
         var captured = (await ensureFixture.LocalState.LoadConnectionSettingsAsync()).Snapshot();
@@ -429,7 +429,6 @@ public sealed class ProfileSyncDeletionProjectionTests
         static async Task<ProjectionFixture> Ready() { var candidate = new ProjectionFixture("Collaboration authority"); await candidate.PrepareCollaborationAsync(); return candidate; }
         static void ChangeProfile(ProjectionFixture candidate) { var profileId = NewId(); candidate.Store.BeginProfileRestore(profileId, false, 0, DateTime.UtcNow, ConnectionScope(profileId)); }
         static HttpResponseMessage Publication(HttpRequestMessage request, ProjectionFixture candidate, Action change) { AssertCapturedRequest(request); change(); return Ok(new { OrderId = candidate.Order.Id, PublicId = "public-id", Version = 1, PublishedAtUtc = DateTime.UtcNow, State = "Pending", DestinationLabel = "Test", Message = (string?)null }); }
-        static HttpResponseMessage RefreshedClaims(HttpRequestMessage request, ProjectionFixture candidate) { AssertCapturedRequest(request); ChangeProfile(candidate); return Ok(Array.Empty<object>()); }
         static HttpResponseMessage Revoked(HttpRequestMessage request, ProjectionFixture candidate, Action change) { AssertCapturedRequest(request); change(); return new(HttpStatusCode.NoContent); }
         static void AssertCapturedRequest(HttpRequestMessage request) { Assert.Equal(new Uri(Host).Host, request.RequestUri!.Host); Assert.Equal("access-key", request.Headers.GetValues("X-Profile-Key").Single()); }
     }

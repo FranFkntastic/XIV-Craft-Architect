@@ -17,7 +17,6 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class DiscordAccountContractTests
 {
     private const string DiscordUser = "111111111111111111";
-    private const string OtherDiscordUser = "222222222222222222";
 
     [Fact]
     public async Task SignInStartUsesDedicatedCallbackPkceAndNoKeyMaterial()
@@ -73,6 +72,14 @@ public sealed class DiscordAccountContractTests
         Assert.NotEqual(firstKey, secondKey);
         Assert.Equal(1, await fixture.CountRowsAsync("hosted_profiles"));
         Assert.Equal(2, await fixture.CountRowsAsync("profile_access_keys"));
+
+        using var statusRequest = new HttpRequestMessage(HttpMethod.Get, "/identity/v1/discord/");
+        statusRequest.Headers.Add("X-Profile-Key", firstKey);
+        using var statusResponse = await client.SendAsync(statusRequest);
+        statusResponse.EnsureSuccessStatusCode();
+        var identityStatus = await statusResponse.Content.ReadFromJsonAsync<DiscordAccountIdentityStatus>();
+        Assert.True(identityStatus!.Linked);
+        Assert.Equal("Discord Crafter " + new string('x', 80), identityStatus.DisplayName);
     }
 
     [Fact]
@@ -104,60 +111,20 @@ public sealed class DiscordAccountContractTests
     }
 
     [Fact]
-    public async Task AccessKeyClaimPreservesSyncRowsAndRejectsSecondDiscordIdentity()
+    public async Task RetiredLinkEndpointsReturnGoneWithActionableError()
     {
         await using var fixture = await DiscordAccountFixture.CreateAsync();
-        var hasher = new ProfileAccessKeyHasher();
-        var key = hasher.CreateAccessKey();
-        var profile = await fixture.Profiles.CreateProfileAsync("Claimed Crafter", CancellationToken.None);
-        await fixture.Profiles.AddAccessKeyAsync(
-            profile.ProfileId,
-            key.StoredHash,
-            CancellationToken.None);
-        const string collection = "settings";
-        const string objectId = "market.region";
-        Assert.True((await fixture.Profiles.PutObjectAsync(
-            profile.ProfileId,
-            collection,
-            objectId,
-            "{\"name\":\"Continuity\",\"items\":[1,2,3]}",
-            0,
-            CancellationToken.None)).Success);
-        var beforeObject = JsonSerializer.Serialize(await fixture.Profiles.LoadObjectAsync(
-            profile.ProfileId,
-            collection,
-            objectId,
-            CancellationToken.None));
-        var beforeChanges = JsonSerializer.Serialize(await fixture.Profiles.LoadChangesAsync(
-            profile.ProfileId,
-            0,
-            CancellationToken.None));
-
         using var client = fixture.CreateClient();
-        client.DefaultRequestHeaders.Add("X-Profile-Key", key.PlaintextKey);
-        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Claim owner");
-        var linkState = await StartLinkAsync(client, fixture.OAuth);
-        using var linked = await client.GetAsync(
-            $"/identity/v1/discord/callback?code=code&state={Uri.EscapeDataString(linkState)}");
-        Assert.Equal(HttpStatusCode.OK, linked.StatusCode);
+        using var post = await client.PostAsync("/identity/v1/discord/link", null);
+        using var delete = await client.DeleteAsync("/identity/v1/discord/link");
+        using var callback = await client.GetAsync("/identity/v1/discord/callback");
 
-        fixture.OAuth.Identity = new DiscordOAuthIdentity(OtherDiscordUser, "Other claimant");
-        var conflictState = await StartLinkAsync(client, fixture.OAuth);
-        using var conflict = await client.GetAsync(
-            $"/identity/v1/discord/callback?code=code&state={Uri.EscapeDataString(conflictState)}");
-        Assert.Equal(HttpStatusCode.BadRequest, conflict.StatusCode);
-        Assert.Equal(
-            DiscordUser,
-            (await fixture.Links.LoadByProfileAsync(Guid.Parse(profile.ProfileId)))!.DiscordUserId);
-        Assert.Equal(beforeObject, JsonSerializer.Serialize(await fixture.Profiles.LoadObjectAsync(
-            profile.ProfileId,
-            collection,
-            objectId,
-            CancellationToken.None)));
-        Assert.Equal(beforeChanges, JsonSerializer.Serialize(await fixture.Profiles.LoadChangesAsync(
-            profile.ProfileId,
-            0,
-            CancellationToken.None)));
+        foreach (var response in new[] { post, delete, callback })
+        {
+            Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("link_endpoints_retired", body.RootElement.GetProperty("error").GetString());
+        }
     }
 
     [Fact]
@@ -205,17 +172,6 @@ public sealed class DiscordAccountContractTests
         StubDiscordOAuthClient oauth)
     {
         var start = await (await client.PostAsync("/identity/v1/signin/discord/start", null))
-            .Content.ReadFromJsonAsync<DiscordLinkStartResponse>();
-        var query = QueryHelpers.ParseQuery(new Uri(start!.AuthorizationUrl).Query);
-        oauth.LastChallenge = query["code_challenge"];
-        return query["state"]!;
-    }
-
-    private static async Task<string> StartLinkAsync(
-        HttpClient client,
-        StubDiscordOAuthClient oauth)
-    {
-        var start = await (await client.PostAsync("/identity/v1/discord/link", null))
             .Content.ReadFromJsonAsync<DiscordLinkStartResponse>();
         var query = QueryHelpers.ParseQuery(new Uri(start!.AuthorizationUrl).Query);
         oauth.LastChallenge = query["code_challenge"];
@@ -292,7 +248,6 @@ public sealed class DiscordAccountContractTests
                         ["DiscordIdentity:ClientId"] = "123456789012345678",
                         ["DiscordIdentity:ClientSecret"] = "client_secret_contract_aaaaaaaaaaaaaaaa",
                         ["DiscordIdentity:BootstrapSecret"] = "bootstrap_secret_contract_bbbbbbbbbbbbbbbb",
-                        ["DiscordIdentity:CallbackUri"] = "https://localhost/identity/v1/discord/callback",
                         ["DiscordIdentity:SignInCallbackUri"] = "https://localhost/identity/v1/signin/discord/callback",
                         ["DiscordIdentity:ApplicationBaseUri"] = "https://app.test/",
                         ["DiscordIdentity:DatabasePath"] = Path.Combine(root, "identity.db"),
@@ -316,7 +271,6 @@ public sealed class DiscordAccountContractTests
                         ClientId = "123456789012345678",
                         ClientSecret = "client_secret_contract_aaaaaaaaaaaaaaaa",
                         BootstrapSecret = "bootstrap_secret_contract_bbbbbbbbbbbbbbbb",
-                        CallbackUri = "https://localhost/identity/v1/discord/callback",
                         SignInCallbackUri = "https://localhost/identity/v1/signin/discord/callback",
                         ApplicationBaseUri = "https://app.test/",
                         DatabasePath = Path.Combine(root, "identity.db"),

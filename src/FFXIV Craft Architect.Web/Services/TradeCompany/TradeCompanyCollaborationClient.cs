@@ -14,30 +14,6 @@ public sealed class TradeCompanyCollaborationClient(
     private const string AccessKeyHeader = "X-Profile-Key";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task<IReadOnlyList<TradeCommissionInterest>> LoadPendingInterestsAsync(
-        Guid companyProfileId,
-        Guid orderId,
-        CancellationToken cancellationToken = default,
-        HostedProfileConnectionSettings? capturedConnection = null)
-    {
-        using var response = await SendAsync(
-            HttpMethod.Get,
-            $"trade/v1/companies/{companyProfileId:D}/discord/claims?orderId={orderId:D}",
-            content: null,
-            cancellationToken,
-            capturedConnection);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            return [];
-        }
-
-        response.EnsureSuccessStatusCode();
-        var claims = await response.Content.ReadFromJsonAsync<DiscordInterestClaimDto[]>(
-            JsonOptions,
-            cancellationToken) ?? [];
-        return claims.Select(ToInterest).ToArray();
-    }
-
     public async Task<TradeCommissionPublicationProjection?> LoadPublicationAsync(
         Guid companyProfileId,
         Guid orderId,
@@ -307,42 +283,6 @@ public sealed class TradeCompanyCollaborationClient(
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
-    public async Task<TradeCommissionInterestResolutionReceipt> AcceptAsync(
-        Guid companyProfileId,
-        string claimId,
-        Guid crafterId,
-        string idempotencyKey,
-        CancellationToken cancellationToken = default,
-        HostedProfileConnectionSettings? capturedConnection = null)
-    {
-        var parsedClaimId = ParseClaimId(claimId);
-        using var response = await SendAsync(
-            HttpMethod.Post,
-            $"trade/v1/companies/{companyProfileId:D}/discord/claims/{parsedClaimId:D}/accept",
-            new DiscordAcceptInterestBody(crafterId, idempotencyKey),
-            cancellationToken,
-            capturedConnection);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await ReadReceiptAsync(response, accepted: true, cancellationToken);
-    }
-
-    public async Task<TradeCommissionInterestResolutionReceipt> DeclineAsync(
-        Guid companyProfileId,
-        string claimId,
-        CancellationToken cancellationToken = default,
-        HostedProfileConnectionSettings? capturedConnection = null)
-    {
-        var parsedClaimId = ParseClaimId(claimId);
-        using var response = await SendAsync(
-            HttpMethod.Post,
-            $"trade/v1/companies/{companyProfileId:D}/discord/claims/{parsedClaimId:D}/decline",
-            new DiscordDeclineInterestBody($"discord-decline:{parsedClaimId:D}"),
-            cancellationToken,
-            capturedConnection);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await ReadReceiptAsync(response, accepted: false, cancellationToken);
-    }
-
     public async Task RevokeAsync(
         Guid companyProfileId,
         string publicId,
@@ -413,61 +353,6 @@ public sealed class TradeCompanyCollaborationClient(
             $"Discord collaboration failed with HTTP {(int)response.StatusCode}.");
     }
 
-    private static async Task<TradeCommissionInterestResolutionReceipt> ReadReceiptAsync(
-        HttpResponseMessage response,
-        bool accepted,
-        CancellationToken cancellationToken)
-    {
-        var result = await response.Content.ReadFromJsonAsync<DiscordClaimResultDto>(
-            JsonOptions,
-            cancellationToken)
-            ?? throw new InvalidOperationException(
-                "The Discord claim endpoint returned an empty response.");
-        var claim = result.Claim
-            ?? throw new InvalidOperationException(
-                result.Error ?? "The Discord claim response did not include a claim.");
-        TradeOrder? order = null;
-        if (!string.IsNullOrWhiteSpace(result.OrderMutation?.Record?.PayloadJson))
-        {
-            order = JsonSerializer.Deserialize<TradeOrder>(
-                result.OrderMutation.Record.PayloadJson,
-                JsonOptions);
-        }
-
-        return new TradeCommissionInterestResolutionReceipt(
-            ToInterest(claim) with
-            {
-                State = accepted
-                    ? TradeCommissionInterestState.Accepted
-                    : TradeCommissionInterestState.Declined
-            },
-            order,
-            result.OrderMutation?.Record?.RecordRevision.Value,
-            result.Error);
-    }
-
-    private static Guid ParseClaimId(string claimId) =>
-        Guid.TryParse(claimId, out var parsed) && parsed != Guid.Empty
-            ? parsed
-            : throw new InvalidOperationException("The Discord claim ID is invalid.");
-
-    private static TradeCommissionInterest ToInterest(DiscordInterestClaimDto claim) =>
-        new(
-            claim.ClaimId.ToString("D"),
-            claim.OrderId,
-            claim.DiscordUserId,
-            claim.DiscordDisplayName,
-            claim.State switch
-            {
-                DiscordInterestStateDto.Accepted => TradeCommissionInterestState.Accepted,
-                DiscordInterestStateDto.Declined => TradeCommissionInterestState.Declined,
-                DiscordInterestStateDto.Withdrawn => TradeCommissionInterestState.Withdrawn,
-                DiscordInterestStateDto.Superseded => TradeCommissionInterestState.Superseded,
-                _ => TradeCommissionInterestState.Pending
-            },
-            claim.ResolvedCrafterId,
-            claim.CreatedAt.UtcDateTime);
-
     private static TradeCommissionPublicationProjection ToPublication(
         DiscordPublicationDto publication) =>
         new(
@@ -502,8 +387,6 @@ public sealed class TradeCompanyCollaborationClient(
         CommissionBriefDocument Brief,
         string IdempotencyKey);
 
-    private sealed record DiscordAcceptInterestBody(Guid CrafterId, string IdempotencyKey);
-    private sealed record DiscordDeclineInterestBody(string IdempotencyKey);
     private sealed record DiscordPublicationDto(
         Guid OrderId,
         string PublicId,
@@ -512,36 +395,6 @@ public sealed class TradeCompanyCollaborationClient(
         string State,
         string DestinationLabel,
         string? Message);
-
-    private enum DiscordInterestStateDto
-    {
-        Pending,
-        AssignmentPending,
-        Accepted,
-        Declined,
-        Withdrawn,
-        Superseded
-    }
-
-    private sealed record DiscordInterestClaimDto(
-        Guid ClaimId,
-        Guid PublicationId,
-        CompanyId CompanyId,
-        Guid OrderId,
-        string DiscordUserId,
-        string DiscordDisplayName,
-        DiscordInterestStateDto State,
-        Guid? ResolvedCrafterId,
-        CompanyRecordRevision? AcceptedOrderRevision,
-        string? ResolutionIdempotencyKey,
-        DateTimeOffset CreatedAt,
-        DateTimeOffset? ResolvedAt);
-
-    private sealed record DiscordClaimResultDto(
-        int Status,
-        DiscordInterestClaimDto? Claim,
-        TradeCompanyMutationResult? OrderMutation,
-        string? Error);
 
     private sealed record DiscordProblemDto(string? Error, string? Message);
     private sealed record DiscordNotificationRouteDto(
