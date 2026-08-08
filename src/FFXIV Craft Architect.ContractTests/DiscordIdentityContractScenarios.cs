@@ -16,6 +16,7 @@ public sealed class DiscordIdentityContractTests
 {
     private const string DiscordUser = "111111111111111111";
     private const string OtherDiscordUser = "222222222222222222";
+    private const string OwnerDiscordUser = "333333333333333333";
     private const string ParticipantCredential =
         "participant_credential_contract_aaaaaaaaaaaaaaaa";
     private const string OtherParticipantCredential =
@@ -91,6 +92,17 @@ public sealed class DiscordIdentityContractTests
                 DatabasePath = Path.Combine(root, "profiles.db")
             });
             var hasher = new ProfileAccessKeyHasher();
+            var memberships = new SqliteMembershipStore(
+                new TradeMembershipOptions
+                {
+                    DatabasePath = Path.Combine(root, "memberships.db")
+                },
+                now,
+                NullLogger<SqliteMembershipStore>.Instance);
+            var companies = new ProfileHostedTradeCompanyService(
+                profiles,
+                hasher,
+                memberships);
             var participantProfileId = Guid.NewGuid();
             await profiles.EnsureProfileAsync(
                 participantProfileId.ToString("D"),
@@ -128,6 +140,8 @@ public sealed class DiscordIdentityContractTests
                 collaboration,
                 identities,
                 profiles,
+                companies,
+                memberships,
                 notifications,
                 claimIssuer,
                 resolver,
@@ -194,12 +208,55 @@ public sealed class DiscordIdentityContractTests
                     DiscordUser,
                     "Discord Participant",
                     now.GetUtcNow())).Status);
-            var linked = await interactions.HandleAsync(
+            var nonMember = await interactions.HandleAsync(
                 ComponentInteraction(
                     interactionId,
                     DiscordUser,
                     $"claim-discord:{actionToken}"));
-            using (var response = JsonDocument.Parse(JsonSerializer.Serialize(linked)))
+            using (var response = JsonDocument.Parse(JsonSerializer.Serialize(nonMember)))
+            {
+                Assert.Contains(
+                    "not available to your company membership",
+                    response.RootElement.GetProperty("content").GetString());
+            }
+            Assert.Null(await notifications.LoadPendingClaimContactAsync(
+                companyId,
+                commissionId,
+                publicId,
+                claimCapabilityId,
+                5,
+                now.GetUtcNow()));
+
+            Assert.Equal(
+                MembershipMutationStatus.Applied,
+                (await memberships.RequestAsync(
+                    companyId,
+                    participantProfileId,
+                    "Discord claim access")).Status);
+            var pending = await interactions.HandleAsync(
+                ComponentInteraction(
+                    interactionId,
+                    DiscordUser,
+                    $"claim-discord:{actionToken}"));
+            using (var response = JsonDocument.Parse(JsonSerializer.Serialize(pending)))
+            {
+                Assert.Contains(
+                    "not available to your company membership",
+                    response.RootElement.GetProperty("content").GetString());
+            }
+            Assert.Equal(
+                MembershipMutationStatus.Applied,
+                (await memberships.ApproveAsync(
+                    companyId,
+                    participantProfileId,
+                    Guid.NewGuid())).Status);
+
+            var activeMember = await interactions.HandleAsync(
+                ComponentInteraction(
+                    interactionId,
+                    DiscordUser,
+                    $"claim-discord:{actionToken}"));
+            using (var response = JsonDocument.Parse(JsonSerializer.Serialize(activeMember)))
             {
                 Assert.Equal(64, response.RootElement.GetProperty("flags").GetInt32());
                 var claimUrl = response.RootElement
@@ -318,7 +375,6 @@ public sealed class DiscordIdentityContractTests
                 "cap_discord-company-owner-contract-key",
                 hasher,
                 CancellationToken.None);
-            var companies = new ProfileHostedTradeCompanyService(profiles, hasher);
             var ownerAccess = new TradeCompanyAccessContext(
                 companyId,
                 ownerProfileId,
@@ -372,6 +428,7 @@ public sealed class DiscordIdentityContractTests
             var authority = new HostedDiscordInteractionAuthority(
                 profiles,
                 companies,
+                memberships,
                 commissions,
                 notifications);
             var linkedIdentity = await identities.LoadByDiscordUserAsync(DiscordUser);
@@ -401,6 +458,8 @@ public sealed class DiscordIdentityContractTests
                 collaboration,
                 identities,
                 profiles,
+                companies,
+                memberships,
                 notifications,
                 claimIssuer,
                 canonicalResolver,
@@ -423,6 +482,45 @@ public sealed class DiscordIdentityContractTests
                     .GetProperty("url")
                     .GetString()!).Fragment,
                 StringComparison.Ordinal);
+
+            Assert.Equal(
+                MembershipMutationStatus.Applied,
+                (await memberships.RevokeAsync(
+                    companyId,
+                    participantProfileId,
+                    Guid.NewGuid())).Status);
+            var revoked = await participantInteractions.HandleAsync(
+                ComponentInteraction(
+                    "999999999999999999",
+                    DiscordUser,
+                    $"open-workspace:{actionToken}"));
+            using (var revokedPayload = JsonDocument.Parse(JsonSerializer.Serialize(revoked)))
+            {
+                Assert.Contains(
+                    "not available for this account",
+                    revokedPayload.RootElement.GetProperty("content").GetString());
+            }
+
+            Assert.Equal(
+                DiscordIdentityLinkResultStatus.Linked,
+                (await identities.LinkAsync(
+                    ownerProfileId,
+                    OwnerDiscordUser,
+                    "Company owner",
+                    now.GetUtcNow())).Status);
+            var ownerWorkspace = await participantInteractions.HandleAsync(
+                ComponentInteraction(
+                    "101010101010101010",
+                    OwnerDiscordUser,
+                    $"open-workspace:{actionToken}"));
+            using var ownerPayload = JsonDocument.Parse(JsonSerializer.Serialize(ownerWorkspace));
+            Assert.Equal(
+                ownerUri.AbsoluteUri,
+                ownerPayload.RootElement
+                    .GetProperty("components")[0]
+                    .GetProperty("components")[0]
+                    .GetProperty("url")
+                    .GetString());
         }
         finally
         {
@@ -749,6 +847,17 @@ public sealed class DiscordIdentityContractTests
                     createdAtUtc,
                     crafterId,
                     null),
+                ProvisionalCrafter = new CompanyCommissionProvisionalCrafter(
+                    Guid.NewGuid(),
+                    "Provisional crafter",
+                    "Siren",
+                    "Discord",
+                    "participant",
+                    DiscordUser,
+                    "Discord Participant",
+                    null,
+                    null,
+                    createdAtUtc),
                 ParticipantGrant = new CompanyCommissionParticipantGrant(
                     Guid.NewGuid(),
                     claimId,
