@@ -376,9 +376,8 @@ function validateBuildManifest(manifest) {
       JSON.stringify(requiredOutcomes(manifest.target.slot))) {
     throw new Error('Build manifest required outcomes are incomplete or reordered.');
   }
-  if (manifest?.acceptance?.dotnet?.specTestCases !== 72 ||
-      manifest?.acceptance?.dotnet?.contractTestCases !== 269) {
-    throw new Error('Build manifest .NET test inventory is incomplete.');
+  if (manifest?.acceptance?.dotnet?.testInventory !== 'runtime-trx') {
+    throw new Error('Build manifest .NET test inventory proof is invalid.');
   }
   if (JSON.stringify(manifest?.acceptance?.worker) !== JSON.stringify(expectedTarget.worker)) {
     throw new Error('Worker acceptance boundary is not explicit.');
@@ -581,7 +580,7 @@ export async function createArtifact(options, behavior = {}) {
       harnessTreeSha256: harnessTreeSha,
       fixtureTreeSha256: fixtureTreeSha,
       requiredOutcomes: requiredOutcomes(slot),
-      dotnet: { specTestCases: 72, contractTestCases: 269 },
+      dotnet: { testInventory: 'runtime-trx' },
       worker: target.worker
     }
   };

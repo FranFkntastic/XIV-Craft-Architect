@@ -111,7 +111,7 @@ public sealed class DiscordIdentitySignInService(
             var key = accessKeyHasher.CreateAccessKey();
             await profiles.AddAccessKeyAsync(
                 link.ProfileId.ToString("D"),
-                key.StoredHash,
+                key,
                 cancellationToken);
             await links.RecordSignInAuditAsync(
                 profileId: null,
@@ -148,7 +148,7 @@ public sealed class DiscordIdentitySignInService(
                 var winnerKey = accessKeyHasher.CreateAccessKey();
                 await profiles.AddAccessKeyAsync(
                     winner.ProfileId.ToString("D"),
-                    winnerKey.StoredHash,
+                    winnerKey,
                     cancellationToken);
                 await links.RecordSignInAuditAsync(
                     profileId: null,
@@ -173,7 +173,7 @@ public sealed class DiscordIdentitySignInService(
         var accessKey = accessKeyHasher.CreateAccessKey();
         await profiles.AddAccessKeyAsync(
             profile.ProfileId,
-            accessKey.StoredHash,
+            accessKey,
             cancellationToken);
         await links.RecordSignInAuditAsync(
             profileId: null,

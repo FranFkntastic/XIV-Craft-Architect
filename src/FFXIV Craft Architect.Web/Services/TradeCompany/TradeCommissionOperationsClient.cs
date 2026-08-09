@@ -58,6 +58,10 @@ public sealed class TradeCommissionOperationsClient(
                 problem?.ErrorMessage ??
                 $"Company commission operations failed with HTTP {(int)response.StatusCode}.");
         }
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            throw new TradeCompanyAuthorizationException(companyId);
+        }
         await EnsureSuccessAsync(response, cancellationToken);
         return await response.Content.ReadFromJsonAsync<CompanyCommissionOwnerProjection>(
             JsonOptions,
@@ -249,6 +253,17 @@ internal sealed class CompanyCommissionRevisionConflictException : InvalidOperat
             "The hosted commission or company changed before the command was applied.")
     {
     }
+}
+
+internal sealed class TradeCompanyAuthorizationException : InvalidOperationException
+{
+    public TradeCompanyAuthorizationException(Guid companyId)
+        : base($"The connected hosted profile is not authorized for Trade company '{companyId:D}'.")
+    {
+        CompanyId = companyId;
+    }
+
+    public Guid CompanyId { get; }
 }
 
 public sealed record TradeCommissionRecoveryResetResponse(

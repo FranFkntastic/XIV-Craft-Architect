@@ -311,11 +311,7 @@ public sealed class ProfileSyncService
         }
 
         var adapter = GetAdapter(collection);
-        var localObject = (await adapter.LoadLocalObjectsAsync(ct))
-            .FirstOrDefault(item => string.Equals(
-                item.ObjectId,
-                objectId,
-                StringComparison.Ordinal));
+        var localObject = await LoadLocalObjectAsync(adapter, objectId, ct);
         if (localObject == null)
         {
             return 0;
@@ -1104,14 +1100,16 @@ public sealed class ProfileSyncService
             return 0;
         }
 
-        var restored = 0;
-        foreach (var envelope in await adapter.LoadLocalObjectsAsync(cancellationToken))
+        var envelopes = await adapter.LoadLocalObjectsAsync(cancellationToken);
+        var revisions = await _localState.LoadObjectRevisionsAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            envelopes.Select(envelope => envelope.ObjectId));
+        var projections = new List<(TradeOrder Order, long ObjectRevision)>(envelopes.Count);
+        foreach (var envelope in envelopes)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var revision = await _localState.LoadObjectRevisionAsync(
-                profileId,
-                ProfileSyncCollections.TradeOrders,
-                envelope.ObjectId);
+            var revision = revisions.GetValueOrDefault(envelope.ObjectId);
             if (revision <= 0)
             {
                 continue;
@@ -1120,14 +1118,10 @@ public sealed class ProfileSyncService
             var order = JsonSerializer.Deserialize<TradeOrder>(envelope.PayloadJson, JsonOptions)
                 ?? throw new InvalidOperationException(
                     $"Saved Trade order '{envelope.ObjectId}' could not be restored safely.");
-            if (_hostedOrders.TryPublishRemoteOrder(order, revision) ||
-                _hostedOrders.Get(order.Id)?.ObjectRevision == revision)
-            {
-                restored++;
-            }
+            projections.Add((order, revision));
         }
 
-        return restored;
+        return _hostedOrders.PublishRemoteOrders(projections);
     }
 
     private static ProfileSyncFailure ClassifyFailure(Exception exception) =>
@@ -1625,7 +1619,7 @@ public sealed class ProfileSyncService
         }
 
         var adapter = GetAdapter(collection);
-        var localObject = (await adapter.LoadLocalObjectsAsync(ct)).FirstOrDefault(item => item.ObjectId == objectId);
+        var localObject = await LoadLocalObjectAsync(adapter, objectId, ct);
         if (localObject == null)
         {
             return;
@@ -1640,7 +1634,8 @@ public sealed class ProfileSyncService
             settings,
             profileId,
             new ProfileSyncPendingSave(collection, objectId),
-            ct);
+            ct,
+            localObject);
 
         var lastRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
         SetStatus(new ProfileSyncStatus(
@@ -2025,14 +2020,14 @@ public sealed class ProfileSyncService
         HostedProfileConnectionSettings settings,
         string profileId,
         ProfileSyncPendingSave pending,
-        CancellationToken ct)
+        CancellationToken ct,
+        ProfileSyncObjectEnvelope? knownLocalObject = null)
     {
         var adapter = GetAdapter(pending.Collection);
-        var localObject = (await adapter.LoadLocalObjectsAsync(ct))
-            .FirstOrDefault(item => string.Equals(
-                item.ObjectId,
-                pending.ObjectId,
-                StringComparison.Ordinal));
+        var localObject = knownLocalObject ?? await LoadLocalObjectAsync(
+            adapter,
+            pending.ObjectId,
+            ct);
         if (localObject == null)
         {
             return false;
@@ -2448,6 +2443,23 @@ public sealed class ProfileSyncService
         }
 
         throw new InvalidOperationException($"No hosted profile sync adapter is registered for collection '{collection}'.");
+    }
+
+    private static async Task<ProfileSyncObjectEnvelope?> LoadLocalObjectAsync(
+        IProfileSyncCollectionAdapter adapter,
+        string objectId,
+        CancellationToken ct)
+    {
+        if (adapter is IProfileSyncSingleObjectAdapter singleObjectAdapter)
+        {
+            return await singleObjectAdapter.LoadLocalObjectAsync(objectId, ct);
+        }
+
+        return (await adapter.LoadLocalObjectsAsync(ct))
+            .FirstOrDefault(item => string.Equals(
+                item.ObjectId,
+                objectId,
+                StringComparison.Ordinal));
     }
 
     private async Task RunSerializedAsync(

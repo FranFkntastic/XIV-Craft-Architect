@@ -91,17 +91,32 @@ public partial class TradeOrders
             : TradeCollaboration.GetPendingInterests(_selectedOrder.Id);
 
     private ProfileSyncConflict? SelectedOrderConflict =>
-        _selectedOrder == null
-            ? null
-            : ProfileSync.Conflicts.FirstOrDefault(conflict =>
+        _selectedOrder == null ? null : FindOrderConflict(_selectedOrder.Id);
+
+    private ProfileSyncConflict? FindOrderConflict(Guid orderId) =>
+        ProfileSync.Conflicts.FirstOrDefault(conflict =>
                 string.Equals(
                     conflict.Collection,
                     ProfileSyncCollections.TradeOrders,
                     StringComparison.Ordinal) &&
                 string.Equals(
                     conflict.ObjectId,
-                    _selectedOrder.Id.ToString("D"),
+                    orderId.ToString("D"),
                     StringComparison.OrdinalIgnoreCase));
+
+    private bool IsOrderPending(Guid orderId) =>
+        ProfileSync.PendingSaves.Any(pending =>
+            string.Equals(
+                pending.Collection,
+                ProfileSyncCollections.TradeOrders,
+                StringComparison.Ordinal) &&
+            string.Equals(
+                pending.ObjectId,
+                orderId.ToString("D"),
+                StringComparison.OrdinalIgnoreCase));
+
+    private bool IsSelectedOrderPending =>
+        _selectedOrder != null && IsOrderPending(_selectedOrder.Id);
 
     private bool HasActiveCompanyPublication =>
         SelectedCompanyPublication?.State is
@@ -208,7 +223,6 @@ public partial class TradeOrders
             }
         }
 
-        _ = RefreshCollaborationAsync(order);
     }
 
     private async Task RefreshCollaborationAsync(TradeOrder order)
@@ -235,6 +249,15 @@ public partial class TradeOrders
                 Snackbar.Add(
                     $"Collaboration refresh failed: {exception.Message}",
                     Severity.Warning));
+        }
+    }
+
+    private void ActivateSharingTab()
+    {
+        _activeOpsTab = SharingTabIndex;
+        if (_selectedOrder != null)
+        {
+            ScheduleSelectedCommissionOwnerRefresh(_selectedOrder);
         }
     }
 
@@ -358,7 +381,7 @@ public partial class TradeOrders
             AppState.NotifyTradeOperationsDataChanged();
             await LoadAsync();
             SelectOrderAfterReload(orderId, "The brief was published, but the order could not be reloaded.");
-            _activeOpsTab = SharingTabIndex;
+            ActivateSharingTab();
             await CopyTextToClipboardAsync(
                 link.Url,
                 "Commission published and link copied");
@@ -378,7 +401,7 @@ public partial class TradeOrders
                 SelectOrderAfterReload(
                     publicationOrderId,
                     "The publication may be attached remotely, but the order could not be reloaded.");
-                _activeOpsTab = SharingTabIndex;
+                ActivateSharingTab();
             }
 
             Snackbar.Add(
@@ -488,7 +511,7 @@ public partial class TradeOrders
                 SelectOrderAfterReload(
                     orderId,
                     "The commission terms were committed, but the order could not be reloaded.");
-                _activeOpsTab = SharingTabIndex;
+                ActivateSharingTab();
             }
             Snackbar.Add(
                 result.Publication?.Message ??
@@ -503,7 +526,7 @@ public partial class TradeOrders
 
         await LoadAsync();
         SelectOrderAfterReload(orderId, "The publication was accepted, but the order could not be reloaded.");
-        _activeOpsTab = SharingTabIndex;
+        ActivateSharingTab();
         Snackbar.Add(
             result.Publication?.State == TradeCommissionDeliveryState.Published
                 ? "Commission published to Discord"
@@ -736,11 +759,45 @@ public partial class TradeOrders
             SelectOrderAfterReload(
                 orderId.Value,
                 "The hosted version was applied, but the order could not be reloaded.");
-            _activeOpsTab = SharingTabIndex;
+            ActivateSharingTab();
         }
 
         AppState.NotifyTradeOperationsDataChanged();
         Snackbar.Add("Hosted order version applied", Severity.Success);
+    }
+
+    private async Task KeepLocalOrderVersionAsync()
+    {
+        var conflict = SelectedOrderConflict;
+        if (conflict == null || !conflict.CanKeepLocal)
+        {
+            return;
+        }
+
+        var orderId = _selectedOrder?.Id;
+        try
+        {
+            await ProfileSync.KeepLocalConflictAsync(conflict);
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add(
+                $"Your changes could not be published: {exception.Message}",
+                Severity.Error);
+            return;
+        }
+
+        await LoadAsync();
+        if (orderId.HasValue)
+        {
+            SelectOrderAfterReload(
+                orderId.Value,
+                "Your changes were published, but the order could not be reloaded.");
+            ActivateSharingTab();
+        }
+
+        AppState.NotifyTradeOperationsDataChanged();
+        Snackbar.Add("Your changes were published", Severity.Success);
     }
 
     private static string GetCompanyPublicationClass(
@@ -819,7 +876,7 @@ public partial class TradeOrders
 
             await LoadAsync();
             SelectOrderAfterReload(orderId, "The link was revoked, but the order could not be reloaded.");
-            _activeOpsTab = SharingTabIndex;
+            ActivateSharingTab();
             Snackbar.Add("Commission link revoked", Severity.Success);
         }
         catch (Exception)

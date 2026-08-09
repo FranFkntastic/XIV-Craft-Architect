@@ -18,6 +18,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
 {
     private const string ModulePath = "./profile-sync-session.js?v=2";
     private static readonly TimeSpan RecoveryInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan OwnerAuthorizationRetryInterval = TimeSpan.FromMinutes(5);
     private readonly IJSRuntime _jsRuntime;
     private readonly ProfileSyncService _profileSync;
     private readonly ProfileSyncLocalStateService _localState;
@@ -28,7 +29,10 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
     private readonly ILogger<HostedOrderSyncCoordinator> _logger;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly SemaphoreSlim _sync = new(1, 1);
+    private readonly SemaphoreSlim _ownerAdoption = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly Dictionary<(string ConnectionScopeId, Guid CompanyId), DateTime>
+        _ownerAuthorizationRetryAfter = [];
     private IJSObjectReference? _module;
     private IJSObjectReference? _controller;
     private DotNetObjectReference<HostedOrderSyncCoordinator>? _callback;
@@ -246,7 +250,6 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                         DateTime.UtcNow));
                     return;
                 }
-                await AdoptCanonicalOwnerProjectionsAsync(profileId, cancellationToken);
                 _callback ??= DotNetObjectReference.Create(this);
                 _module ??= await _jsRuntime.InvokeAsync<IJSObjectReference>(
                     "import",
@@ -342,7 +345,6 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 await _profileSync.SyncNowAsync(cancellationToken);
             }
             var after = Math.Max(0, _profileSync.CurrentStatus.LastSyncRevision);
-            await AdoptCanonicalOwnerProjectionsAsync(profileId, cancellationToken);
             _appState.NotifyTradeOperationsDataChanged();
 
             UpdateDiagnostics(Diagnostics with
@@ -361,28 +363,51 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task AdoptCanonicalOwnerProjectionsAsync(
-        string profileId,
-        CancellationToken cancellationToken)
+    public async Task RefreshOwnerProjectionAsync(
+        Guid orderId,
+        CancellationToken cancellationToken = default)
     {
-        foreach (var candidate in _hostedOrders.GetAll().Where(NeedsOwnerAdoption))
+        await _ownerAdoption.WaitAsync(cancellationToken);
+        try
         {
+            var connection = await _localState.LoadConnectionSettingsAsync();
+            var profileId = connection.ProfileScopeId;
+            if (profileId == null)
+            {
+                return;
+            }
+            var authority = _hostedOrders.CaptureAuthorityScope();
+            if (!IsCurrentAuthority(authority, connection, profileId))
+            {
+                throw new InvalidOperationException(
+                    "The hosted order authority changed before owner adoption began.");
+            }
+
+            var connectionScopeId = connection.ConnectionScopeId!;
+            var now = DateTime.UtcNow;
+            var candidate = _hostedOrders.Get(orderId);
+            if (candidate == null || !NeedsOwnerAdoption(candidate))
+            {
+                return;
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             var commission = candidate.Order!.CompanyCommission!;
+            var companyId = commission.CompanyId.Value;
+            var retryKey = (connectionScopeId, companyId);
+            if (_ownerAuthorizationRetryAfter.TryGetValue(retryKey, out var retryAfter) &&
+                ShouldDeferOwnerAuthorizationRetry(retryAfter, now))
+            {
+                return;
+            }
             try
             {
-                var connection = await _localState.LoadConnectionSettingsAsync();
-                var authority = _hostedOrders.CaptureAuthorityScope();
-                if (!IsCurrentAuthority(authority, connection, profileId))
-                {
-                    throw new InvalidOperationException(
-                        "The hosted order authority changed before owner adoption began.");
-                }
                 var projection = await _commissionClient.LoadOwnerProjectionAsync(
                     connection,
-                    commission.CompanyId.Value,
+                    companyId,
                     commission.CommissionId,
                     cancellationToken);
+                _ownerAuthorizationRetryAfter.Remove(retryKey);
 
                 // The order can advance while the authenticated projection is in flight.
                 // Re-read it before making any durable local change.
@@ -394,7 +419,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 var current = _hostedOrders.Get(candidate.OrderId);
                 if (current == null || !NeedsOwnerAdoption(current))
                 {
-                    continue;
+                    return;
                 }
 
                 ValidateOwnerProjection(current, projection);
@@ -436,6 +461,15 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
             {
                 throw;
             }
+            catch (TradeCompanyAuthorizationException exception)
+            {
+                _ownerAuthorizationRetryAfter[retryKey] =
+                    DateTime.UtcNow.Add(OwnerAuthorizationRetryInterval);
+                _logger.LogWarning(
+                    exception,
+                    "Owner projection authorization failed for Trade company {CompanyId}; further adoption attempts are paused for this connection.",
+                    companyId);
+            }
             catch (Exception exception)
             {
                 _logger.LogWarning(
@@ -443,6 +477,10 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                     "Authenticated owner projection for hosted order {OrderId} could not be adopted; preserving the last truthful local projection.",
                     candidate.OrderId);
             }
+        }
+        finally
+        {
+            _ownerAdoption.Release();
         }
     }
 
@@ -490,6 +528,11 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         (snapshot.OwnerProjection == null ||
          snapshot.OwnerProjection.ObjectRevision.Value < snapshot.ObjectRevision);
 
+    internal static bool ShouldDeferOwnerAuthorizationRetry(
+        DateTime retryAfterUtc,
+        DateTime nowUtc) =>
+        retryAfterUtc > nowUtc;
+
     internal static void ValidateOwnerProjection(
         HostedOrderProjectionSnapshot expected,
         CompanyCommissionOwnerProjection projection)
@@ -524,6 +567,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
         _activeProfileId = null;
         _activeHostUrl = null;
         _activeAccessKey = null;
+        _ownerAuthorizationRetryAfter.Clear();
         if (_controller != null)
         {
             try

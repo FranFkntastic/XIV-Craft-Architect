@@ -34,6 +34,11 @@ public readonly record struct TradeOrderPlanRestoreRequest(
 
 public static class TradeOrderPlanRestorePolicy
 {
+    public static bool ShouldScheduleForWorkerChange(
+        bool disposed,
+        bool restoreInProgress) =>
+        !disposed && !restoreInProgress;
+
     public const int MaximumExactPlanReadAttempts = 3;
 
     public static bool IsCurrent(
