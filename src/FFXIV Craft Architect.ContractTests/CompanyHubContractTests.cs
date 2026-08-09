@@ -60,6 +60,7 @@ public sealed class CompanyHubContractTests
         Assert.DoesNotContain("completedQuantity", json, StringComparison.Ordinal);
         Assert.DoesNotContain("readyQuantity", json, StringComparison.Ordinal);
         Assert.DoesNotContain("acceptedQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("settlementState", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -117,6 +118,7 @@ public sealed class CompanyHubContractTests
         Assert.Equal("Deliver to the workshop.", commission.GetProperty("deliveryInstructions").GetString());
         Assert.Equal("brief", commission.GetProperty("publicBriefId").GetString());
         Assert.Equal(7, commission.GetProperty("projectionRevision").GetInt64());
+        Assert.Equal("notdue", commission.GetProperty("settlementState").GetString());
         var output = Assert.Single(commission.GetProperty("outputs").EnumerateArray());
         Assert.Equal(80, output.GetProperty("completedQuantity").GetInt32());
         Assert.Equal(60, output.GetProperty("readyQuantity").GetInt32());

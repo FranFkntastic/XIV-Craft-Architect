@@ -45,7 +45,8 @@ public sealed record DiscordOAuthStateConsumption(
     DiscordOAuthStateStatus Status,
     Guid? ProfileId = null,
     string? PkceVerifier = null,
-    DiscordOAuthPurpose? Purpose = null);
+    DiscordOAuthPurpose? Purpose = null,
+    string? ReturnPath = null);
 
 public sealed record DiscordOAuthIdentity(
     string DiscordUserId,

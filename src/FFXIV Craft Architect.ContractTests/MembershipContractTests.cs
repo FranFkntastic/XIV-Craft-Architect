@@ -310,9 +310,9 @@ public sealed class MembershipContractTests
         using var approved = await ownerClient.PostAsync(
             $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/approve",
             null);
-        using var revoked = await ownerClient.PostAsync(
+        using var revoked = await ownerClient.PostAsJsonAsync(
             $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/revoke",
-            null);
+            new MembershipTransitionBody("  Repeated missed handoffs  "));
         var events = await fixture.Memberships.LoadEventsAsync(companyId, crafter.ProfileId);
         var current = await fixture.Memberships.LoadAsync(companyId, crafter.ProfileId);
 
@@ -353,6 +353,43 @@ public sealed class MembershipContractTests
         Assert.Null(events[2].DecidedByProfileId);
         Assert.Equal(owner.ProfileId, events[3].DecidedByProfileId);
         Assert.Equal(owner.ProfileId, events[4].DecidedByProfileId);
+        Assert.Equal("Repeated missed handoffs", events[4].Reason);
+    }
+
+    [Fact]
+    public async Task OnlyOwnersCanRevokeAnotherOwner()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var secondOwner = await fixture.CreateAccountAsync("Second owner");
+        var operatorAccount = await fixture.CreateAccountAsync("Operator");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var secondOwnerClient = fixture.CreateClient(secondOwner.Key);
+        using var operatorClient = fixture.CreateClient(operatorAccount.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(secondOwnerClient, company.Id, string.Empty);
+        await RequestAsync(operatorClient, company.Id, string.Empty);
+        foreach (var profileId in new[] { secondOwner.ProfileId, operatorAccount.ProfileId })
+        {
+            (await ownerClient.PostAsync($"/trade/v1/companies/{company.Id:D}/memberships/{profileId:D}/approve", null)).EnsureSuccessStatusCode();
+        }
+        await fixture.SetRoleAsync(company.Id, secondOwner.ProfileId, MembershipRole.Owner);
+        await fixture.SetRoleAsync(company.Id, operatorAccount.ProfileId, MembershipRole.Operator);
+
+        using var refused = await operatorClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{secondOwner.ProfileId:D}/revoke",
+            null);
+        using var allowed = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{secondOwner.ProfileId:D}/revoke",
+            null);
+        using var lastOwner = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{owner.ProfileId:D}/revoke",
+            null);
+
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, lastOwner.StatusCode);
     }
 
     [Fact]

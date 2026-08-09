@@ -25,6 +25,8 @@ public sealed record CompanyHubTeaserResponse(
     int? OpenCommissionCount);
 
 public sealed record CompanyHubOutputResponse(
+    Guid LineId,
+    int ItemId,
     string Name,
     int Quantity,
     int CompletedQuantity,
@@ -43,6 +45,7 @@ public sealed record CompanyHubCommissionResponse(
     long ProjectionRevision,
     IReadOnlyList<CompanyHubOutputResponse> Outputs,
     CompanyHubPaymentResponse Payment,
+    string SettlementState,
     string State);
 
 public sealed record CompanyHubRosterMemberResponse(string DisplayName, string Role);
@@ -406,6 +409,8 @@ public sealed class CompanyHubService(
             {
                 progressByLine.TryGetValue(output.LineId, out var progress);
                 return new CompanyHubOutputResponse(
+                    output.LineId,
+                    output.ItemId,
                     ClampText(output.Name, 240, "Unknown item"),
                     Math.Max(0, output.RequiredQuantity),
                     Math.Max(0, progress?.CompletedQuantity ?? 0),
@@ -416,6 +421,7 @@ public sealed class CompanyHubService(
                 terms.Payment.Schedule.ToString().ToLowerInvariant(),
                 ClampText(terms.Payment.ContractLabel, 240, "Commission"),
                 terms.Payment.Total),
+            commission.SettlementState.ToString().ToLowerInvariant(),
             order.Status.ToString().ToLowerInvariant());
     }
 

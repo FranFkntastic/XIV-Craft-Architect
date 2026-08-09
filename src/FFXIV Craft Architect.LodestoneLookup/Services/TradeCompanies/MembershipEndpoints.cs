@@ -5,6 +5,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 public sealed record MembershipRequestBody(string? RequestNote);
+public sealed record MembershipTransitionBody(string? Reason);
 
 public sealed record MembershipResponse(
     string CompanyId,
@@ -168,12 +169,12 @@ public static class MembershipEndpoints
                 return Results.Ok(response);
             });
 
-        MapTransition(companies, "approve", static (store, companyId, accountId, actorId, ct) =>
+        MapTransition(companies, "approve", static (store, companyId, accountId, actorId, _, ct) =>
             store.ApproveAsync(companyId, accountId, actorId, ct));
-        MapTransition(companies, "deny", static (store, companyId, accountId, actorId, ct) =>
+        MapTransition(companies, "deny", static (store, companyId, accountId, actorId, _, ct) =>
             store.DenyAsync(companyId, accountId, actorId, ct));
-        MapTransition(companies, "revoke", static (store, companyId, accountId, actorId, ct) =>
-            store.RevokeAsync(companyId, accountId, actorId, ct));
+        MapTransition(companies, "revoke", static (store, companyId, accountId, actorId, reason, ct) =>
+            store.RevokeAsync(companyId, accountId, actorId, reason, ct));
 
         app.MapGet(
             "/trade/v1/memberships",
@@ -270,7 +271,7 @@ public static class MembershipEndpoints
     private static void MapTransition(
         RouteGroupBuilder companies,
         string action,
-        Func<SqliteMembershipStore, CompanyId, Guid, Guid, CancellationToken,
+        Func<SqliteMembershipStore, CompanyId, Guid, Guid, string?, CancellationToken,
             Task<MembershipMutationResult>> transition)
     {
         companies.MapPost(
@@ -297,12 +298,39 @@ public static class MembershipEndpoints
                     return authorization.Error;
                 }
 
-                var result = await transition(
-                    memberships,
+                var target = await memberships.LoadAsync(
                     authorization.CompanyId,
                     accountProfileId,
-                    authorization.Account!.ProfileId,
                     cancellationToken);
+                if (action == "revoke" &&
+                    target?.Role == MembershipRole.Owner &&
+                    authorization.Role != TradeCompanyRole.Owner)
+                {
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+
+                string? reason = null;
+                if (action == "revoke" && request.ContentLength > 0)
+                {
+                    var body = await request.ReadFromJsonAsync<MembershipTransitionBody>(cancellationToken);
+                    reason = body?.Reason;
+                }
+
+                MembershipMutationResult result;
+                try
+                {
+                    result = await transition(
+                        memberships,
+                        authorization.CompanyId,
+                        accountProfileId,
+                        authorization.Account!.ProfileId,
+                        reason,
+                        cancellationToken);
+                }
+                catch (ArgumentException exception)
+                {
+                    return Results.BadRequest(new MembershipErrorResponse("invalid_membership_transition", exception.Message));
+                }
                 return result.Status switch
                 {
                     MembershipMutationStatus.Applied or MembershipMutationStatus.Replayed =>
@@ -329,17 +357,17 @@ public static class MembershipEndpoints
     {
         if (!options.Enabled)
         {
-            return new(default, null, Results.NotFound());
+            return new(default, null, null, Results.NotFound());
         }
         var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
         if (account == null)
         {
-            return new(default, null, Results.Unauthorized());
+            return new(default, null, null, Results.Unauthorized());
         }
         if (!CompanyId.TryParse(rawCompanyId, out var companyId) ||
             await companyService.LoadPublicCompanyProfileAsync(companyId, cancellationToken) == null)
         {
-            return new(default, account, Results.NotFound());
+            return new(default, account, null, Results.NotFound());
         }
 
         var access = await accessResolver.ResolveCompanyAccessAsync(
@@ -347,10 +375,11 @@ public static class MembershipEndpoints
             companyId,
             cancellationToken);
         return access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator }
-            ? new CompanyAuthorizationResult(companyId, account, null)
+            ? new CompanyAuthorizationResult(companyId, account, access.Role, null)
             : new CompanyAuthorizationResult(
                 companyId,
                 account,
+                null,
                 Results.StatusCode(StatusCodes.Status403Forbidden));
     }
 
@@ -368,5 +397,6 @@ public static class MembershipEndpoints
     private sealed record CompanyAuthorizationResult(
         CompanyId CompanyId,
         MembershipAccount? Account,
+        TradeCompanyRole? Role,
         IResult? Error);
 }
