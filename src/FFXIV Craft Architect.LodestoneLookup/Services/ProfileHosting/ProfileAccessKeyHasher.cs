@@ -1,9 +1,8 @@
 using System.Security.Cryptography;
-using System.Text;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
-public class ProfileAccessKeyHasher
+public sealed class ProfileAccessKeyHasher
 {
     private const int SaltBytes = 16;
     private const int KeyBytes = 32;
@@ -13,12 +12,8 @@ public class ProfileAccessKeyHasher
     {
         var keyBytes = RandomNumberGenerator.GetBytes(32);
         var plaintext = "cap_" + Convert.ToBase64String(keyBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        return new CreatedProfileAccessKey(plaintext, Hash(plaintext), Fingerprint(plaintext));
+        return new CreatedProfileAccessKey(plaintext, Hash(plaintext));
     }
-
-    public string Fingerprint(string plaintextKey) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(plaintextKey)))
-            .ToLowerInvariant();
 
     public string Hash(string plaintextKey)
     {
@@ -27,7 +22,7 @@ public class ProfileAccessKeyHasher
         return $"pbkdf2-sha256:{Iterations}:{Convert.ToBase64String(salt)}:{Convert.ToBase64String(hash)}";
     }
 
-    public virtual bool Verify(string plaintextKey, string storedHash)
+    public bool Verify(string plaintextKey, string storedHash)
     {
         if (string.IsNullOrEmpty(plaintextKey) ||
             !TryParseStoredHash(storedHash, out var parsedHash))
@@ -88,7 +83,4 @@ public class ProfileAccessKeyHasher
     private readonly record struct ParsedStoredHash(byte[] Salt, byte[] Expected);
 }
 
-public sealed record CreatedProfileAccessKey(
-    string PlaintextKey,
-    string StoredHash,
-    string Fingerprint);
+public sealed record CreatedProfileAccessKey(string PlaintextKey, string StoredHash);

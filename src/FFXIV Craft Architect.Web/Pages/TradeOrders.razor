@@ -14,11 +14,9 @@
 @inject TradePayrollPersistenceService TradePayrollPersistence
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncService ProfileSync
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.HostedOrderProjectionStore HostedOrders
-@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.HostedOrderSyncCoordinator HostedOrderSync
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.TradeOrderArchiveSummaryStore ArchiveSummaries
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncLocalStateService ProfileSyncLocalState
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileHostClient ProfileHostClient
-@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.DiscordIdentityClient DiscordIdentityClient
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.TradeOrderProfileSyncAdapter TradeOrderSyncAdapter
 @inject WebSettingsService WebSettings
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeCompanyCollaborationService TradeCollaboration
@@ -293,7 +291,6 @@
                                               Label="Notes"
                                               Variant="Variant.Outlined"
                                               Margin="Margin.Dense"
-                                              Immediate="true"
                                               Lines="1" />
                             </div>
                             <section class="trade-orders-work-section">
@@ -1248,14 +1245,13 @@
                                                          @bind-Value="DetailCrafterValue"
                                                          Options="GetCrafterOptions()"
                                                          Disabled="@IsSelectedOrderArchived" />
-                                    <MudTextField @bind-Value="_detailNotes"
-                                                  id="selected-order-notes"
-                                                  Label="Notes"
-                                                  Variant="Variant.Outlined"
-                                                  Margin="Margin.Dense"
-                                                  Immediate="true"
-                                                  Lines="1"
-                                                  Disabled="@IsSelectedOrderArchived" />
+                                     <MudTextField @bind-Value="_detailNotes"
+                                                   id="selected-order-notes"
+                                                   Label="Notes"
+                                                   Variant="Variant.Outlined"
+                                                   Margin="Margin.Dense"
+                                                   Lines="1"
+                                                   Disabled="@IsSelectedOrderArchived" />
                                  </div>
                              }
                             <section class="trade-orders-work-section">
@@ -1889,13 +1885,6 @@
                                                 This order changed in another client while local edits were pending.
                                                 Review before any publication or claim action.
                                             </span>
-                                            <MudButton Variant="Variant.Filled"
-                                                       Color="Color.Warning"
-                                                       Size="Size.Small"
-                                                       Disabled="@(SelectedOrderConflict.CanKeepLocal == false)"
-                                                       OnClick="KeepLocalOrderVersionAsync">
-                                                Keep My Changes
-                                            </MudButton>
                                             <MudButton Variant="Variant.Outlined"
                                                        Color="Color.Warning"
                                                        Size="Size.Small"
@@ -1905,30 +1894,15 @@
                                         </div>
                                     </MudAlert>
                                 }
-                                else if (IsSelectedOrderPending)
-                                {
-                                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
-                                        Saved on this device; hosted sync is still pending.
-                                    </MudAlert>
-                                }
                                 @if (HasCanonicalCommission && SelectedCommissionOwner == null)
                                 {
-                                    @if (IsSelectedCommissionOwnerRefreshPending)
-                                    {
-                                        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
-                                            Loading commission operations...
-                                        </MudAlert>
-                                    }
-                                    else
-                                    {
-                                        <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
-                                            <MudText Typo="Typo.subtitle2">Company commission operations are unavailable.</MudText>
-                                            <MudText Typo="Typo.body2">
-                                                @(SelectedCommissionOperationsError ??
-                                                  "The authenticated owner projection could not be loaded.")
-                                            </MudText>
-                                        </MudAlert>
-                                    }
+                                    <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3">
+                                        <MudText Typo="Typo.subtitle2">Company commission operations are unavailable.</MudText>
+                                        <MudText Typo="Typo.body2">
+                                            @(SelectedCommissionOperationsError ??
+                                              "The authenticated owner projection could not be loaded.")
+                                        </MudText>
+                                    </MudAlert>
                                 }
                                  @if (SelectedCommissionOwner is { } sharingOwner &&
                                       sharingOwner.Order.CompanyCommission is { } sharingCommission)
@@ -2132,6 +2106,53 @@
                                          </section>
                                      }
                                  }
+                                @if (SelectedCommissionOwner == null && SelectedPendingInterests.Count > 0)
+                                {
+                                    <section class="trade-orders-interest-list">
+                                        <div class="trade-orders-section-heading">
+                                            <div>
+                                                <MudText Typo="Typo.subtitle2">Crafter interest</MudText>
+                                                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                    Confirm assignment here; Discord never assigns the order by itself.
+                                                </MudText>
+                                            </div>
+                                            <span class="trade-orders-publication-chip is-attention">
+                                                @SelectedPendingInterests.Count pending
+                                            </span>
+                                        </div>
+                                        @foreach (var claim in SelectedPendingInterests)
+                                        {
+                                            <div class="trade-orders-interest-row">
+                                                <div class="trade-orders-interest-identity">
+                                                    <strong>@claim.DisplayName</strong>
+                                                    <span>@claim.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                                                </div>
+                                                <CompactSelectField Id="@($"interest-crafter-{claim.ClaimId}")"
+                                                                    Label="Assign to crafter"
+                                                                    Value="@GetInterestCrafterValue(claim)"
+                                                                    ValueChanged="value => SetInterestCrafterValue(claim, value)"
+                                                                    Options="GetCrafterOptions()"
+                                                                    Disabled="@(_activeInterestClaimId is not null)" />
+                                                <div class="trade-orders-interest-actions">
+                                                    <MudButton Variant="Variant.Filled"
+                                                               Color="Color.Primary"
+                                                               Size="Size.Small"
+                                                               Disabled="@(_activeInterestClaimId is not null || string.IsNullOrWhiteSpace(GetInterestCrafterValue(claim)))"
+                                                               OnClick="() => AcceptInterestAsync(claim)">
+                                                        @(_activeInterestClaimId == claim.ClaimId ? "Assigning..." : "Assign")
+                                                    </MudButton>
+                                                    <MudButton Variant="Variant.Outlined"
+                                                               Color="Color.Secondary"
+                                                               Size="Size.Small"
+                                                               Disabled="@(_activeInterestClaimId is not null)"
+                                                               OnClick="() => DeclineInterestAsync(claim)">
+                                                        Decline
+                                                    </MudButton>
+                                                </div>
+                                            </div>
+                                        }
+                                    </section>
+                                }
                                 @if (SelectedCommissionOwner == null &&
                                      SelectedCompanyPublication is { } companyPublication)
                                 {

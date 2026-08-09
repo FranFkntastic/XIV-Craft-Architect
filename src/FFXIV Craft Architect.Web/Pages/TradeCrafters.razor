@@ -1,6 +1,5 @@
 @page "/trade/crafters"
 @using FFXIV_Craft_Architect.Web.Shared.TablePrimitives
-@using FFXIV_Craft_Architect.Web.Shared
 @inject AppState AppState
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncService ProfileSync
@@ -11,10 +10,6 @@
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-crafters-page">
-    @if (!string.IsNullOrWhiteSpace(Company))
-    {
-        <CompanyMembershipManager CompanyId="@Company" />
-    }
     @if (!string.IsNullOrWhiteSpace(_loadError))
     {
         <MudAlert Severity="Severity.Error" Class="ma-4">
@@ -331,7 +326,6 @@
 </MudContainer>
 
 @code {
-    [SupplyParameterFromQuery(Name = "company")] private string? Company { get; set; }
     private TradeCompanyProfile? _companyProfile;
     private List<TradeCrafterProfile> _crafters = [];
     private List<TradeOrder> _orders = [];

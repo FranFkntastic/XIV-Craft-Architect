@@ -1,6 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
-
 namespace FFXIV_Craft_Architect.Core.Models;
 
 public enum TradeSyncState
@@ -37,7 +34,6 @@ public sealed class TradeCompanyProfile
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
-    public CompanyLandingTheme? Landing { get; set; }
     public string? CommissionContact { get; set; }
     public TradeCompanyDiscordInstallationBinding? DiscordInstallation { get; set; }
     public string? RemoteId { get; set; }
@@ -59,76 +55,6 @@ public sealed class TradeCompanyProfile
             PaymentPolicy = TradePaymentPolicy.LegacyDefault
         };
     }
-}
-
-public enum CompanyLandingAccent
-{
-    DeepBlue,
-    Crimson,
-    Gold,
-    Emerald,
-    Violet,
-    Amber,
-    Teal,
-    Rose,
-    Slate,
-    Ivory
-}
-
-public enum CompanyLandingBannerStyle
-{
-    None,
-    Gradient,
-    Pattern
-}
-
-public enum CompanyLandingEmblem
-{
-    Star,
-    Prism,
-    Crest,
-    Workshop,
-    Moon,
-    Compass
-}
-
-public sealed record CompanyLandingTheme
-{
-    [JsonConverter(typeof(CompanyLandingAccentJsonConverter))]
-    public CompanyLandingAccent Accent { get; init; } = CompanyLandingAccent.DeepBlue;
-    [JsonConverter(typeof(CompanyLandingBannerStyleJsonConverter))]
-    public CompanyLandingBannerStyle BannerStyle { get; init; } = CompanyLandingBannerStyle.Gradient;
-    [JsonConverter(typeof(CompanyLandingEmblemJsonConverter))]
-    public CompanyLandingEmblem Emblem { get; init; } = CompanyLandingEmblem.Star;
-    public string? Tagline { get; init; }
-    public string? About { get; init; }
-    public bool ShowOpenCommissionCount { get; init; }
-}
-
-public sealed class CompanyLandingAccentJsonConverter : CompanyLandingEnumJsonConverter<CompanyLandingAccent>;
-public sealed class CompanyLandingBannerStyleJsonConverter : CompanyLandingEnumJsonConverter<CompanyLandingBannerStyle>;
-public sealed class CompanyLandingEmblemJsonConverter : CompanyLandingEnumJsonConverter<CompanyLandingEmblem>;
-
-public abstract class CompanyLandingEnumJsonConverter<T> : JsonConverter<T> where T : struct, Enum
-{
-    public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-    {
-        if (reader.TokenType == JsonTokenType.String &&
-            Enum.TryParse<T>(reader.GetString(), ignoreCase: true, out var parsed))
-        {
-            return parsed;
-        }
-        if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var numeric))
-        {
-            return (T)Enum.ToObject(typeof(T), numeric);
-        }
-
-        reader.Skip();
-        return default;
-    }
-
-    public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options) =>
-        writer.WriteStringValue(value.ToString());
 }
 
 public sealed class TradeCompanyProfilePackage

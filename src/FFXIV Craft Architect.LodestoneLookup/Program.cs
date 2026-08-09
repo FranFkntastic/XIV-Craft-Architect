@@ -100,6 +100,7 @@ var discordIdentityOptions = new DiscordIdentityOptions
     ClientId = builder.Configuration["DiscordIdentity:ClientId"] ?? string.Empty,
     ClientSecret = builder.Configuration["DiscordIdentity:ClientSecret"] ?? string.Empty,
     BootstrapSecret = builder.Configuration["DiscordIdentity:BootstrapSecret"] ?? string.Empty,
+    CallbackUri = builder.Configuration["DiscordIdentity:CallbackUri"] ?? string.Empty,
     SignInCallbackUri = builder.Configuration["DiscordIdentity:SignInCallbackUri"] ?? string.Empty,
     ApplicationBaseUri = builder.Configuration["DiscordIdentity:ApplicationBaseUri"]
         ?? "https://dev.xivcraftarchitect.com/",
@@ -126,6 +127,7 @@ discordIdentityOptions.Validate();
 builder.Services.AddSingleton(discordIdentityOptions);
 builder.Services.AddSingleton<SqliteDiscordIdentityStore>();
 builder.Services.AddSingleton<DiscordIdentityAuthorization>();
+builder.Services.AddSingleton<DiscordIdentityLinkService>();
 builder.Services.AddSingleton<DiscordIdentitySignInService>();
 builder.Services.AddSingleton<IDiscordCanonicalInteractionAuthority, HostedDiscordInteractionAuthority>();
 builder.Services.AddSingleton<DiscordInteractionAccessResolver>();
@@ -184,7 +186,6 @@ builder.Services.AddSingleton(_ =>
 builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
 builder.Services.AddSingleton<TradeCompanyAuthorization>();
 builder.Services.AddSingleton<MembershipAccessResolver>();
-builder.Services.AddSingleton<CompanyHubService>();
 builder.Services.AddHostedService<FounderMembershipReconciler>();
 builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();
 builder.Services.AddSingleton<HostedCompanyCommissionService>();
@@ -350,7 +351,6 @@ app.MapCommissionBriefEndpoints();
 app.MapCompanyCommissionBriefEndpoints();
 app.MapCompanyCommissionEndpoints();
 app.MapMembershipEndpoints();
-app.MapCompanyHubEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
 app.MapDiscordNotificationEndpoints();
@@ -374,7 +374,7 @@ static async Task RunProfileHostProvisioningCommandAsync(
                 var displayName = command.DisplayName ?? throw new InvalidOperationException("Display name is required.");
                 var profile = await store.CreateProfileAsync(displayName, cancellationToken);
                 var key = hasher.CreateAccessKey();
-                await store.AddAccessKeyAsync(profile.ProfileId, key, cancellationToken);
+                await store.AddAccessKeyAsync(profile.ProfileId, key.StoredHash, cancellationToken);
                 WriteJson(new
                 {
                     profile.ProfileId,
@@ -460,7 +460,7 @@ static async Task RunProfileHostProvisioningCommandAsync(
 
                 await store.RevokeAccessKeysAsync(profileId, cancellationToken);
                 var key = hasher.CreateAccessKey();
-                await store.AddAccessKeyAsync(profileId, key, cancellationToken);
+                await store.AddAccessKeyAsync(profileId, key.StoredHash, cancellationToken);
                 WriteJson(new
                 {
                     profile.ProfileId,

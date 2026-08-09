@@ -65,7 +65,8 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
             activity.Kind,
             activity.CreatedAtUtc,
             BuildSummary(activity),
-            activity.Actor.DisplayName,
+            activity.Actor.DisplayName ??
+                FormatCrafterDisplayName(commission.ProvisionalCrafter),
             activityUrl);
         try
         {
@@ -79,7 +80,6 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                     activity.EventId,
                     result.Error ?? "invalid notification projection");
             }
-            await delivery.NotifyMembersAsync(notification, commission, publicUri, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -95,6 +95,12 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                 activity.EventId);
         }
     }
+
+    private static string? FormatCrafterDisplayName(
+        CompanyCommissionProvisionalCrafter? crafter) =>
+        crafter == null
+            ? null
+            : $"{crafter.CharacterName} @ {crafter.HomeWorld}";
 
     private static string BuildSummary(CompanyCommissionActivityEvent activity) =>
         activity.Kind switch

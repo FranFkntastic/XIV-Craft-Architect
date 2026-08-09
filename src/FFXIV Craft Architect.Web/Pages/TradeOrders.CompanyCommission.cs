@@ -860,6 +860,13 @@ public partial class TradeOrders
         crafter.DisplayName = provisional.CharacterName.Trim();
         crafter.WorldName = provisional.HomeWorld.Trim();
         crafter.ContactHandle = provisional.ContactValue.Trim();
+        if (string.Equals(
+                provisional.ContactMethod,
+                "Discord",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            crafter.DiscordHandle = provisional.ContactValue.Trim();
+        }
         crafter.LodestoneCharacterId = provisional.LodestoneCharacterId?.Trim();
         crafter.LodestoneProfileUrl = provisional.LodestoneProfileUrl?.Trim();
         crafter.LodestoneLastSyncedAtUtc = DateTime.UtcNow;

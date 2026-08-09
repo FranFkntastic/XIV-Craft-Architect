@@ -159,35 +159,6 @@ public sealed class ProfileSyncLocalStateService
             0L);
     }
 
-    public async Task<IReadOnlyDictionary<string, long>> LoadObjectRevisionsAsync(
-        string profileId,
-        string collection,
-        IEnumerable<string> objectIds)
-    {
-        var ids = objectIds
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (ids.Length == 0)
-        {
-            return new Dictionary<string, long>(StringComparer.Ordinal);
-        }
-
-        var authorityScope = await RequireAuthorityScopeAsync();
-        var settings = await _indexedDb.LoadAllSettingsRequiredAsync();
-        var revisions = new Dictionary<string, long>(ids.Length, StringComparer.Ordinal);
-        foreach (var objectId in ids)
-        {
-            var key = BuildProfileStateKey(
-                authorityScope,
-                profileId,
-                $"{ObjectRevisionSuffix}{collection}.{Uri.EscapeDataString(objectId)}");
-            revisions[objectId] = ReadSetting(settings, key, 0L);
-        }
-
-        return revisions;
-    }
-
     public async Task<bool> HasKnownHostedObjectAsync(
         string collection,
         string objectId)

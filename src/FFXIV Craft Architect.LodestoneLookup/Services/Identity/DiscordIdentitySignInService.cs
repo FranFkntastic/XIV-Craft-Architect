@@ -16,8 +16,7 @@ public enum DiscordSignInCompletionStatus
 
 public sealed record DiscordSignInCompletion(
     DiscordSignInCompletionStatus Status,
-    string? PlaintextAccessKey = null,
-    string? ReturnPath = null);
+    string? PlaintextAccessKey = null);
 
 public sealed class DiscordIdentitySignInService(
     DiscordIdentityOptions options,
@@ -28,14 +27,9 @@ public sealed class DiscordIdentitySignInService(
     TimeProvider timeProvider)
 {
     public async Task<DiscordLinkStartResponse> StartAsync(
-        string? returnPath = null,
         CancellationToken cancellationToken = default)
     {
         RequireEnabled();
-        if (returnPath != null && !IsValidReturnPath(returnPath))
-        {
-            throw new ArgumentException("Return path must be an application-relative path.", nameof(returnPath));
-        }
         var state = DiscordOAuthAuthorization.CreateSecret(32);
         var verifier = DiscordOAuthAuthorization.CreateSecret(48);
         var now = timeProvider.GetUtcNow();
@@ -44,20 +38,13 @@ public sealed class DiscordIdentitySignInService(
             verifier,
             now,
             now + options.StateLifetime,
-            returnPath,
             cancellationToken);
         return DiscordOAuthAuthorization.CreateResponse(
             options,
-            options.SignInCallbackUri,
+            options.EffectiveSignInCallbackUri,
             state,
             verifier);
     }
-
-    internal static bool IsValidReturnPath(string returnPath) =>
-        returnPath.StartsWith("/", StringComparison.Ordinal) &&
-        !returnPath.StartsWith("//", StringComparison.Ordinal) &&
-        !returnPath.Contains('\\') &&
-        Uri.IsWellFormedUriString(returnPath, UriKind.Relative);
 
     public async Task<DiscordSignInCompletion> CompleteAsync(
         string? code,
@@ -95,7 +82,7 @@ public sealed class DiscordIdentitySignInService(
         var identity = await discord.ResolveIdentityAsync(
             code,
             consumed.PkceVerifier,
-            options.SignInCallbackUri,
+            options.EffectiveSignInCallbackUri,
             cancellationToken);
         if (identity == null)
         {
@@ -124,7 +111,7 @@ public sealed class DiscordIdentitySignInService(
             var key = accessKeyHasher.CreateAccessKey();
             await profiles.AddAccessKeyAsync(
                 link.ProfileId.ToString("D"),
-                key,
+                key.StoredHash,
                 cancellationToken);
             await links.RecordSignInAuditAsync(
                 profileId: null,
@@ -134,8 +121,7 @@ public sealed class DiscordIdentitySignInService(
                 cancellationToken);
             return new DiscordSignInCompletion(
                 DiscordSignInCompletionStatus.SessionIssued,
-                key.PlaintextKey,
-                consumed.ReturnPath);
+                key.PlaintextKey);
         }
 
         var profile = await profiles.CreateProfileAsync(
@@ -162,7 +148,7 @@ public sealed class DiscordIdentitySignInService(
                 var winnerKey = accessKeyHasher.CreateAccessKey();
                 await profiles.AddAccessKeyAsync(
                     winner.ProfileId.ToString("D"),
-                    winnerKey,
+                    winnerKey.StoredHash,
                     cancellationToken);
                 await links.RecordSignInAuditAsync(
                     profileId: null,
@@ -172,8 +158,7 @@ public sealed class DiscordIdentitySignInService(
                     cancellationToken);
                 return new DiscordSignInCompletion(
                     DiscordSignInCompletionStatus.SessionIssued,
-                    winnerKey.PlaintextKey,
-                    consumed.ReturnPath);
+                    winnerKey.PlaintextKey);
             }
 
             return new DiscordSignInCompletion(DiscordSignInCompletionStatus.Conflict);
@@ -188,7 +173,7 @@ public sealed class DiscordIdentitySignInService(
         var accessKey = accessKeyHasher.CreateAccessKey();
         await profiles.AddAccessKeyAsync(
             profile.ProfileId,
-            accessKey,
+            accessKey.StoredHash,
             cancellationToken);
         await links.RecordSignInAuditAsync(
             profileId: null,
@@ -198,8 +183,7 @@ public sealed class DiscordIdentitySignInService(
             cancellationToken);
         return new DiscordSignInCompletion(
             DiscordSignInCompletionStatus.Provisioned,
-            accessKey.PlaintextKey,
-            consumed.ReturnPath);
+            accessKey.PlaintextKey);
     }
 
     private static string NormalizeProfileName(string value)

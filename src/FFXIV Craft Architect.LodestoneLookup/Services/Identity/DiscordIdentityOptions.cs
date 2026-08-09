@@ -6,6 +6,7 @@ public sealed class DiscordIdentityOptions
     public string ClientId { get; init; } = string.Empty;
     public string ClientSecret { get; init; } = string.Empty;
     public string BootstrapSecret { get; init; } = string.Empty;
+    public string CallbackUri { get; init; } = string.Empty;
     public string SignInCallbackUri { get; init; } = string.Empty;
     public string ApplicationBaseUri { get; init; } = string.Empty;
     public string DatabasePath { get; init; } = string.Empty;
@@ -17,6 +18,13 @@ public sealed class DiscordIdentityOptions
         "https://discord.com/api/v10/users/@me";
     public TimeSpan StateLifetime { get; init; } = TimeSpan.FromMinutes(5);
     public TimeSpan ParticipantBootstrapLifetime { get; init; } = TimeSpan.FromMinutes(5);
+
+    public string EffectiveSignInCallbackUri => string.IsNullOrWhiteSpace(SignInCallbackUri)
+        ? CallbackUri.Replace(
+            "/identity/v1/discord/callback",
+            "/identity/v1/signin/discord/callback",
+            StringComparison.Ordinal)
+        : SignInCallbackUri;
 
     public void Validate()
     {
@@ -36,12 +44,24 @@ public sealed class DiscordIdentityOptions
                 "Discord identity linking requires a stable application ID, separate server secrets, a database path, and bounded lifetimes.");
         }
 
-        RequireSecureAbsoluteUri(SignInCallbackUri, nameof(SignInCallbackUri));
+        RequireSecureAbsoluteUri(CallbackUri, nameof(CallbackUri));
+        RequireSecureAbsoluteUri(EffectiveSignInCallbackUri, nameof(SignInCallbackUri));
         RequireSecureAbsoluteUri(ApplicationBaseUri, nameof(ApplicationBaseUri));
         RequireSecureAbsoluteUri(AuthorizationEndpoint, nameof(AuthorizationEndpoint));
         RequireSecureAbsoluteUri(TokenEndpoint, nameof(TokenEndpoint));
         RequireSecureAbsoluteUri(UserEndpoint, nameof(UserEndpoint));
-        var signInCallback = new Uri(SignInCallbackUri);
+        var callback = new Uri(CallbackUri);
+        if (!callback.AbsolutePath.EndsWith(
+                "/identity/v1/discord/callback",
+                StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(callback.Query) ||
+            !string.IsNullOrEmpty(callback.Fragment))
+        {
+            throw new InvalidOperationException(
+                "Discord identity CallbackUri must exactly target the fixed identity callback endpoint without query or fragment data.");
+        }
+
+        var signInCallback = new Uri(EffectiveSignInCallbackUri);
         if (!signInCallback.AbsolutePath.EndsWith(
                 "/identity/v1/signin/discord/callback",
                 StringComparison.Ordinal) ||

@@ -168,14 +168,6 @@ jobs:
           TARGET_PROFILE_HOST_ENABLED: ${{ vars.CRAFT_ARCHITECT_PROFILE_HOST_ENABLED }}
           PROFILE_HOST_CANONICALIZED: ${{ steps.canonical-authority.outputs.profile_host_canonicalized }}
           DEPLOY_TARGET: ${{ steps.target.outputs.target }}
-          STAGING_DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_STAGING_BOT_TOKEN }}
-          STAGING_DISCORD_APPLICATION_ID: ${{ vars.CA_DISCORD_STAGING_APPLICATION_ID }}
-          STAGING_DISCORD_PUBLIC_KEY: ${{ secrets.CA_DISCORD_STAGING_PUBLIC_KEY }}
-          STAGING_DISCORD_GUILD_ID: ${{ secrets.CA_DISCORD_STAGING_ALLOWED_GUILD_ID }}
-          STAGING_DISCORD_CHANNEL_PARENT_ID: ${{ vars.CA_DISCORD_STAGING_CHANNEL_PARENT_ID }}
-          STAGING_DISCORD_OAUTH_CLIENT_ID: ${{ vars.CA_DISCORD_STAGING_OAUTH_CLIENT_ID }}
-          STAGING_DISCORD_OAUTH_CLIENT_SECRET: ${{ secrets.CA_DISCORD_STAGING_OAUTH_CLIENT_SECRET }}
-          STAGING_DISCORD_OAUTH_BOOTSTRAP_SECRET: ${{ secrets.CA_DISCORD_STAGING_OAUTH_BOOTSTRAP_SECRET }}
         run: |
           set -euo pipefail
           case "$TARGET_DISCORD_ENABLED" in
@@ -193,26 +185,8 @@ jobs:
               ;;
           esac
           runtime_profile_host_enabled="$TARGET_PROFILE_HOST_ENABLED"
-          runtime_discord_enabled="$TARGET_DISCORD_ENABLED"
-          if [[ "$DEPLOY_TARGET" == "staging" && "$runtime_discord_enabled" == "true" ]]; then
-            missing_staging_configuration="false"
-            for value in \
-              "$STAGING_DISCORD_BOT_TOKEN" \
-              "$STAGING_DISCORD_APPLICATION_ID" \
-              "$STAGING_DISCORD_PUBLIC_KEY" \
-              "$STAGING_DISCORD_GUILD_ID" \
-              "$STAGING_DISCORD_CHANNEL_PARENT_ID" \
-              "$STAGING_DISCORD_OAUTH_CLIENT_ID" \
-              "$STAGING_DISCORD_OAUTH_CLIENT_SECRET" \
-              "$STAGING_DISCORD_OAUTH_BOOTSTRAP_SECRET"; do
-              if [[ -z "$value" ]]; then
-                missing_staging_configuration="true"
-              fi
-            done
-            if [[ "$missing_staging_configuration" == "true" ]]; then
-              runtime_discord_enabled="false"
-              echo "::notice::Staging Discord and identity are disabled because staging-specific Discord/OAuth configuration is incomplete."
-            fi
+          if [[ "$DEPLOY_TARGET" == "staging" && "$PROFILE_HOST_CANONICALIZED" == "true" ]]; then
+            runtime_profile_host_enabled="false"
           fi
           if [[ "$DEPLOY_TARGET" == "canonical" &&
                 "$PROFILE_HOST_CANONICALIZED" == "true" &&
@@ -221,7 +195,7 @@ jobs:
             exit 1
           fi
           {
-            echo "discord_enabled=$runtime_discord_enabled"
+            echo "discord_enabled=$TARGET_DISCORD_ENABLED"
             echo "profile_host_enabled=$runtime_profile_host_enabled"
           } >> "$GITHUB_OUTPUT"
 
@@ -254,14 +228,11 @@ jobs:
         if: steps.features.outputs.discord_enabled == 'true' && steps.target.outputs.target == 'staging'
         shell: bash
         env:
-          TARGET_DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_STAGING_BOT_TOKEN }}
-          TARGET_DISCORD_APPLICATION_ID: ${{ vars.CA_DISCORD_STAGING_APPLICATION_ID }}
-          TARGET_DISCORD_PUBLIC_KEY: ${{ secrets.CA_DISCORD_STAGING_PUBLIC_KEY }}
-          TARGET_DISCORD_GUILD_ID: ${{ secrets.CA_DISCORD_STAGING_ALLOWED_GUILD_ID }}
-          TARGET_DISCORD_CHANNEL_PARENT_ID: ${{ vars.CA_DISCORD_STAGING_CHANNEL_PARENT_ID }}
-          TARGET_DISCORD_OAUTH_CLIENT_ID: ${{ vars.CA_DISCORD_STAGING_OAUTH_CLIENT_ID }}
-          TARGET_DISCORD_OAUTH_CLIENT_SECRET: ${{ secrets.CA_DISCORD_STAGING_OAUTH_CLIENT_SECRET }}
-          TARGET_DISCORD_OAUTH_BOOTSTRAP_SECRET: ${{ secrets.CA_DISCORD_STAGING_OAUTH_BOOTSTRAP_SECRET }}
+          TARGET_DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_STAGING_BOT_TOKEN || secrets.CA_DISCORD_BOT_TOKEN }}
+          TARGET_DISCORD_APPLICATION_ID: ${{ vars.CA_DISCORD_STAGING_APPLICATION_ID || vars.CA_DISCORD_APPLICATION_ID }}
+          TARGET_DISCORD_PUBLIC_KEY: ${{ secrets.CA_DISCORD_STAGING_PUBLIC_KEY || secrets.CA_DISCORD_PUBLIC_KEY }}
+          TARGET_DISCORD_GUILD_ID: ${{ secrets.CA_DISCORD_STAGING_ALLOWED_GUILD_ID || secrets.CA_DISCORD_ALLOWED_GUILD_ID }}
+          TARGET_DISCORD_CHANNEL_PARENT_ID: ${{ vars.CA_DISCORD_STAGING_CHANNEL_PARENT_ID || vars.CA_DISCORD_CHANNEL_PARENT_ID }}
         run: |
           set -euo pipefail
           {
@@ -270,9 +241,6 @@ jobs:
             printf 'DISCORD_PUBLIC_KEY=%s\n' "$TARGET_DISCORD_PUBLIC_KEY"
             printf 'DISCORD_GUILD_ID=%s\n' "$TARGET_DISCORD_GUILD_ID"
             printf 'DISCORD_CHANNEL_PARENT_ID=%s\n' "$TARGET_DISCORD_CHANNEL_PARENT_ID"
-            printf 'DISCORD_OAUTH_CLIENT_ID=%s\n' "$TARGET_DISCORD_OAUTH_CLIENT_ID"
-            printf 'DISCORD_OAUTH_CLIENT_SECRET=%s\n' "$TARGET_DISCORD_OAUTH_CLIENT_SECRET"
-            printf 'DISCORD_OAUTH_BOOTSTRAP_SECRET=%s\n' "$TARGET_DISCORD_OAUTH_BOOTSTRAP_SECRET"
           } >> "$GITHUB_ENV"
 
       - name: Fail closed on missing target configuration
@@ -416,13 +384,17 @@ jobs:
               printf 'Discord__AllowedChannelId=%s\n' "$TARGET_DISCORD_CHANNEL_ID"
               printf 'Discord__CommissionBaseUrl=https://%s/commission.html?id=\n' '${{ steps.target.outputs.domain }}'
               printf 'CommissionBriefs__PublicPageUrl=https://%s/commission.html\n' '${{ steps.target.outputs.domain }}'
-              printf 'DiscordIdentity__Enabled=true\n'
-              printf 'DiscordIdentity__ClientId=%s\n' "$DISCORD_OAUTH_CLIENT_ID"
-              printf 'DiscordIdentity__ClientSecret=%s\n' "$DISCORD_OAUTH_CLIENT_SECRET"
-              printf 'DiscordIdentity__BootstrapSecret=%s\n' "$DISCORD_OAUTH_BOOTSTRAP_SECRET"
-              printf 'DiscordIdentity__SignInCallbackUri=https://%s/api/identity/v1/signin/discord/callback\n' '${{ steps.target.outputs.domain }}'
-              printf 'DiscordIdentity__ApplicationBaseUri=https://%s/\n' '${{ steps.target.outputs.domain }}'
-              printf 'DiscordIdentity__DatabasePath=%s/data/discord-identity.db\n' '${{ steps.target.outputs.root }}'
+              if [[ "${{ steps.target.outputs.target }}" == "canonical" ]]; then
+                printf 'DiscordIdentity__Enabled=true\n'
+                printf 'DiscordIdentity__ClientId=%s\n' "$DISCORD_OAUTH_CLIENT_ID"
+                printf 'DiscordIdentity__ClientSecret=%s\n' "$DISCORD_OAUTH_CLIENT_SECRET"
+                printf 'DiscordIdentity__BootstrapSecret=%s\n' "$DISCORD_OAUTH_BOOTSTRAP_SECRET"
+                printf 'DiscordIdentity__CallbackUri=https://xivcraftarchitect.com/api/identity/v1/discord/callback\n'
+                printf 'DiscordIdentity__ApplicationBaseUri=https://xivcraftarchitect.com/\n'
+                printf 'DiscordIdentity__DatabasePath=%s/data/discord-identity.db\n' '${{ steps.target.outputs.root }}'
+              else
+                printf 'DiscordIdentity__Enabled=false\n'
+              fi
               printf 'CraftAppraisal__Enabled=true\n'
               printf 'CraftAppraisal__CacheDirectory=%s/data/craft-appraisal-cache\n' '${{ steps.target.outputs.root }}'
               printf 'CraftAppraisal__PlanDirectory=%s/data/craft-appraisal-plans\n' '${{ steps.target.outputs.root }}'
@@ -502,6 +474,9 @@ jobs:
           fi
           test "$profile_host_canonicalized" = "$observed_canonicalized"
           runtime_profile_host_enabled="$profile_host_enabled"
+          if [[ "$target" == "staging" && "$profile_host_canonicalized" == "true" ]]; then
+            runtime_profile_host_enabled="false"
+          fi
           if [[ "$target" == "canonical" &&
                 "$profile_host_canonicalized" == "true" &&
                 "$runtime_profile_host_enabled" != "true" ]]; then
@@ -535,10 +510,10 @@ jobs:
               rollback_failed="true"
             fi
             if [[ "$cutover_canonical_exposed" == "true" ]]; then
-              echo "Cutover failed after canonical exposure; preserving isolated canonical and staging writes." >&2
+              echo "Cutover failed after canonical exposure; preserving canonical writes and fencing staging." >&2
               staging_fail_forward_candidate="$(mktemp)"
               {
-                printf 'ProfileHost__Enabled=true\n'
+                printf 'ProfileHost__Enabled=false\n'
                 printf 'ProfileHost__DatabasePath=%s\n' \
                   /srv/craftarchitect/services/lodestone-staging/data/profile-host.db
               } > "$staging_fail_forward_candidate"
@@ -574,13 +549,13 @@ jobs:
               if ! sudo systemctl start craftarchitect-lodestone; then
                 rollback_failed="true"
               fi
-              if ! sudo systemctl start craftarchitect-lodestone-staging; then
+              if ! sudo systemctl stop craftarchitect-lodestone-staging; then
                 rollback_failed="true"
               fi
               if ! systemctl is-active craftarchitect-lodestone; then
                 rollback_failed="true"
               fi
-              if ! systemctl is-active craftarchitect-lodestone-staging; then
+              if systemctl is-active craftarchitect-lodestone-staging; then
                 rollback_failed="true"
               fi
               for canonical_health in \
@@ -606,10 +581,10 @@ jobs:
                 fi
               done
               if [[ "$rollback_failed" == "true" ]]; then
-                echo "Post-exposure fail-forward is incomplete; isolated authorities and marker require operator inspection." >&2
+                echo "Post-exposure fail-forward is incomplete; staging fencing and the authority marker were attempted and require operator inspection." >&2
                 return 1
               fi
-              echo "Post-exposure fail-forward completed; isolated canonical and staging authorities are retained." >&2
+              echo "Post-exposure fail-forward completed; canonical authority is retained and staging is fenced." >&2
               return 0
             fi
 
@@ -700,7 +675,7 @@ jobs:
               fi
             done
             if [[ "$rollback_failed" == "true" ]]; then
-              echo "Cutover rollback was incomplete; recording marker without disabling isolated staging authority." >&2
+              echo "Cutover rollback was incomplete; fencing staging to prevent split authority." >&2
               rollback_marker_candidate="$(mktemp)"
               printf '%s rollback-incomplete\n' "$release" > "$rollback_marker_candidate"
               sudo install -o "$USER" -g "$USER" -m 644 \
@@ -709,7 +684,7 @@ jobs:
               rm -f "$rollback_marker_candidate"
               staging_fail_closed_candidate="$(mktemp)"
               {
-                printf 'ProfileHost__Enabled=true\n'
+                printf 'ProfileHost__Enabled=false\n'
                 printf 'ProfileHost__DatabasePath=%s\n' \
                   /srv/craftarchitect/services/lodestone-staging/data/profile-host.db
               } > "$staging_fail_closed_candidate"
@@ -718,7 +693,7 @@ jobs:
                 "$staging_fail_closed_candidate" \
                 /srv/craftarchitect/services/lodestone-staging/env/profile-host.env
               rm -f "$staging_fail_closed_candidate"
-              sudo systemctl start craftarchitect-lodestone-staging
+              sudo systemctl stop craftarchitect-lodestone-staging
               return 1
             fi
             return 0
@@ -920,7 +895,7 @@ jobs:
 
             staging_profile_candidate="$(mktemp)"
             {
-              printf 'ProfileHost__Enabled=true\n'
+              printf 'ProfileHost__Enabled=false\n'
               printf 'ProfileHost__DatabasePath=%s\n' "$staging_db"
             } > "$staging_profile_candidate"
             chmod 600 "$staging_profile_candidate"
@@ -974,7 +949,7 @@ jobs:
                 sleep 1
               done
             done
-            for direct in '5128:true' '5129:true'; do
+            for direct in '5128:true' '5129:false'; do
               direct_port="${direct%%:*}"
               expected_enabled="${direct##*:}"
               curl --fail --silent --show-error \
@@ -1013,18 +988,16 @@ jobs:
               fi
               sleep 1
             done
-            if [[ "$target" == "staging" ]]; then
+            if [[ "$target" == "staging" && "$profile_host_canonicalized" == "true" ]]; then
               curl --fail --silent --show-error \
                 "http://127.0.0.1:$port/profile-host/health" \
-                | EXPECTED_ENABLED="$runtime_profile_host_enabled" python3 -c '
-           import json
-           import os
-           import sys
-           health = json.load(sys.stdin)
-           expected = os.environ["EXPECTED_ENABLED"] == "true"
-           if health.get("status") != "ready" or health.get("profileHostEnabled") is not expected:
-               raise SystemExit("Staging Profile Host runtime does not match configured behavior.")
-           '
+                | python3 -c '
+          import json
+          import sys
+          health = json.load(sys.stdin)
+          if health.get("status") != "ready" or health.get("profileHostEnabled") is not False:
+              raise SystemExit("Staging Profile Host remained enabled after canonicalization.")
+          '
             fi
             if ! sudo cmp --silent "$caddyfile" "$caddy_candidate"; then
               sudo cp --preserve=mode,ownership,timestamps \
@@ -1177,6 +1150,12 @@ jobs:
             if (health?.status !== "ready") process.exit(1);
             if (health?.profileHostEnabled !== enabled) process.exit(1);
           '
+          test "$(
+            curl --silent --show-error \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              "https://$DEPLOY_DOMAIN/api/trade/v1/companies/00000000-0000-0000-0000-000000000001/discord/claims"
+          )" = "404"
           test "$(
             curl --silent --show-error \
               --output /dev/null \

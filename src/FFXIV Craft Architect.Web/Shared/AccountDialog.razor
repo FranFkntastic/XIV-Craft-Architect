@@ -5,6 +5,7 @@
 @inject ProfileSyncService ProfileSync
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 
 <MudDialog Class="account-dialog">
     <DialogContent>
@@ -36,22 +37,35 @@
                         <MudText Typo="Typo.subtitle2">
                             @(_discordStatus?.Linked == true
                                 ? _discordStatus.DisplayName
-                                : _discordStatusLoaded
-                                    ? "No Discord sign-in identity"
-                                    : "Discord identity unavailable")
+                                : "No Discord account linked")
                         </MudText>
                         <MudText Typo="Typo.caption" Color="Color.Secondary">
                             @(_discordStatus?.Linked == true
-                                ? $"Linked {FormatDate(_discordStatus.LinkedAt)} · used for Discord sign-in and commission notifications"
-                                : "Discord identities are created through Discord sign-in.")
+                                ? $"Linked {FormatDate(_discordStatus.LinkedAt)} · used for sign-in and commission notifications"
+                                : "Link Discord for provider sign-in and commission notifications.")
                         </MudText>
                     </div>
                     @if (_discordStatus?.Enabled == true && _discordStatus.Linked)
                     {
                         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success">linked</MudChip>
+                        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="RefreshDiscordAsync" Disabled="_discordBusy">Refresh</MudButton>
+                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small" OnClick="UnlinkDiscordAsync" Disabled="_discordBusy">Unlink</MudButton>
                     }
-                }
+                    else if (_discordStatus?.Enabled == true)
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="LinkDiscordAsync" Disabled="_discordBusy">
+                            Link Discord
+                        </MudButton>
+                    }
+                    else
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" OnClick="RefreshDiscordAsync" Disabled="_discordBusy" aria-label="Refresh Discord status" />
+                    }
                 </div>
+                @if (_discordBusy)
+                {
+                    <MudProgressLinear Indeterminate="true" Class="mt-1" />
+                }
 
                 <div class="account-section-label">This browser</div>
                 <div class="account-row">
@@ -206,6 +220,7 @@
     private IReadOnlyList<ProfileHostAccessKeyMetadata> _keys = [];
     private bool _keysLoaded;
     private bool _loading = true;
+    private bool _discordBusy;
     private bool _accountBusy;
     private bool _managingKeys;
     private string _busyMessage = "Working...";
@@ -303,6 +318,7 @@
             return;
         }
 
+        _discordBusy = true;
         try
         {
             _discordStatus = await DiscordIdentityClient.GetStatusAsync(
@@ -315,6 +331,96 @@
         {
             _discordStatus = new DiscordIdentityWebStatus(false, false, null, null);
             _discordStatusLoaded = false;
+        }
+        finally
+        {
+            _discordBusy = false;
+        }
+    }
+
+    private async Task LinkDiscordAsync()
+    {
+        _discordBusy = true;
+        try
+        {
+            var opened = await JSRuntime.InvokeAsync<bool>("CraftArchitectDiscordIdentity.begin");
+            if (!opened)
+            {
+                throw new InvalidOperationException("The Discord authorization window was blocked.");
+            }
+            var uri = await DiscordIdentityClient.StartLinkAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+            if (!await JSRuntime.InvokeAsync<bool>("CraftArchitectDiscordIdentity.navigate", uri.AbsoluteUri))
+            {
+                throw new InvalidOperationException("The Discord authorization window was closed.");
+            }
+
+            for (var attempt = 0; attempt < 120; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1));
+                try
+                {
+                    _discordStatus = await DiscordIdentityClient.GetStatusAsync(
+                        _settings.HostUrl!,
+                        _settings.AccessKey!,
+                        CancellationToken.None);
+                    if (_discordStatus.Linked)
+                    {
+                        _discordStatusLoaded = true;
+                        SetStatus($"{_discordStatus.DisplayName} linked.", Color.Success);
+                        return;
+                    }
+                }
+                catch when (attempt < 119)
+                {
+                }
+                await InvokeAsync(StateHasChanged);
+            }
+            SetStatus("Discord authorization is still pending.", Color.Warning);
+        }
+        catch
+        {
+            await JSRuntime.InvokeVoidAsync("CraftArchitectDiscordIdentity.close");
+            SetStatus("Discord linking could not be started.", Color.Error);
+        }
+        finally
+        {
+            _discordBusy = false;
+        }
+    }
+
+    private async Task UnlinkDiscordAsync()
+    {
+        var confirmed = await DialogService.ShowMessageBox(
+            "Unlink Discord Account",
+            "Discord sign-in and commission notifications will stop for this account. Access keys remain active.",
+            yesText: "Unlink",
+            cancelText: "Keep linked");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        _discordBusy = true;
+        try
+        {
+            await DiscordIdentityClient.UnlinkAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+            _discordStatus = new DiscordIdentityWebStatus(true, false, null, null);
+            _discordStatusLoaded = true;
+            SetStatus("Discord account unlinked.", Color.Success);
+        }
+        catch
+        {
+            SetStatus("Discord account could not be unlinked.", Color.Error);
+        }
+        finally
+        {
+            _discordBusy = false;
         }
     }
 

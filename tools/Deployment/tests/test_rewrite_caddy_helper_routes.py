@@ -87,17 +87,23 @@ class RewriteCaddyHelperRoutesTests(unittest.TestCase):
         )
         self.assertIn("root * /srv/craftarchitect/web", rewritten)
 
-    def test_canonical_cutover_keeps_each_domain_on_its_own_helper(self) -> None:
+    def test_canonical_cutover_installs_production_and_dev_authority_atomically(self) -> None:
         rewritten = rewrite_caddy_routes(fixture(), "canonical", canonicalized=True)
 
         self.assertEqual(
             {prefix: CANONICAL_PORT for prefix in MANAGED_PREFIXES},
             route_ports(rewritten, PRODUCTION_HOST),
         )
-        self.assertEqual(
-            {prefix: STAGING_PORT for prefix in MANAGED_PREFIXES},
-            route_ports(rewritten, DEVELOPMENT_HOST),
+        expected_dev = {prefix: STAGING_PORT for prefix in MANAGED_PREFIXES}
+        expected_dev.update(
+            {
+                "/api/profile-host": CANONICAL_PORT,
+                "/api/trade": CANONICAL_PORT,
+                "/api/xivdata/commission-briefs": CANONICAL_PORT,
+                "/api/identity": CANONICAL_PORT,
+            }
         )
+        self.assertEqual(expected_dev, route_ports(rewritten, DEVELOPMENT_HOST))
         dev = site_text(rewritten, DEVELOPMENT_HOST)
         self.assertLess(
             dev.index("handle /api/xivdata/commission-briefs*"),
@@ -118,17 +124,15 @@ class RewriteCaddyHelperRoutesTests(unittest.TestCase):
             route_ports(rewritten, PRODUCTION_HOST),
         )
 
-    def test_staging_after_cutover_preserves_production_and_dev_isolation(self) -> None:
+    def test_staging_after_cutover_preserves_production_and_dev_split(self) -> None:
         original = fixture()
         production_before = site_text(original, PRODUCTION_HOST)
 
         rewritten = rewrite_caddy_routes(original, "staging", canonicalized=True)
 
         self.assertEqual(production_before, site_text(rewritten, PRODUCTION_HOST))
-        self.assertEqual(
-            {prefix: STAGING_PORT for prefix in MANAGED_PREFIXES},
-            route_ports(rewritten, DEVELOPMENT_HOST),
-        )
+        self.assertEqual(CANONICAL_PORT, route_ports(rewritten, DEVELOPMENT_HOST)["/api/trade"])
+        self.assertEqual(STAGING_PORT, route_ports(rewritten, DEVELOPMENT_HOST)["/api/discord"])
 
     def test_rewrite_is_idempotent(self) -> None:
         first = rewrite_caddy_routes(fixture(), "canonical", canonicalized=True)
@@ -152,7 +156,7 @@ class RewriteCaddyHelperRoutesTests(unittest.TestCase):
                 with self.assertRaises(RouteRewriteError):
                     rewrite_caddy_routes(value, "staging", canonicalized=True)
 
-    def test_workflow_keeps_staging_profile_host_enabled_after_cutover(self) -> None:
+    def test_workflow_owns_cutover_and_retires_staging_credentials(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[3]
             / ".github"
@@ -163,10 +167,7 @@ class RewriteCaddyHelperRoutesTests(unittest.TestCase):
         self.assertIn("reconsolidate_profile_host:", workflow)
         self.assertIn("import-active-credentials", workflow)
         self.assertIn("profile-host-canonicalized-v1", workflow)
-        self.assertNotIn(
-            'target" == "staging" && "$profile_host_canonicalized" == "true"',
-            workflow,
-        )
+        self.assertIn('runtime_profile_host_enabled="false"', workflow)
         self.assertIn('cutover_complete="true"', workflow)
         self.assertLess(
             workflow.index("import-active-credentials"),
