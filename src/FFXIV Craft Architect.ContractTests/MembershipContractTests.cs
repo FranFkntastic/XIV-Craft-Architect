@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
-using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -39,24 +38,6 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
-    public async Task NewCompanyRequiresClaimedAccount()
-    {
-        await using var fixture = await MembershipFixture.CreateAsync();
-        var owner = await fixture.CreateKeyOnlyAsync("Key-only creator");
-        using var client = fixture.CreateClient(owner.Key);
-        using var response = await client.PutAsJsonAsync(
-            $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{Guid.NewGuid():D}",
-            new ProfileSyncPutRequest
-            {
-                PayloadJson = JsonSerializer.Serialize(CreateCompany(), ProfileSyncJson.CreateOptions()),
-                ExpectedRevision = 0
-            });
-
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        Assert.Contains("company_account_required", await response.Content.ReadAsStringAsync());
-    }
-
-    [Fact]
     public async Task StartupReconciliationBindsExistingFounderIdempotently()
     {
         await using var fixture = await MembershipFixture.CreateWithExistingCompanyAsync();
@@ -84,9 +65,9 @@ public sealed class MembershipContractTests
         using var attackerClient = fixture.CreateClient(attacker.Key);
         await PutCompanyAsync(victimClient, company);
 
-        await PutCompanyExpectingConflictAsync(attackerClient, company, objectId: Guid.NewGuid());
+        await PutCompanyAsync(attackerClient, company, objectId: Guid.NewGuid());
         var mismatched = await fixture.Memberships.LoadAsync(companyId, attacker.ProfileId);
-        await PutCompanyExpectingConflictAsync(attackerClient, company);
+        await PutCompanyAsync(attackerClient, company);
         var competing = await fixture.Memberships.LoadAsync(companyId, attacker.ProfileId);
         var owner = await fixture.Memberships.LoadAsync(companyId, victim.ProfileId);
 
@@ -159,33 +140,6 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
-    public async Task KeyOnlyAccountMustSignInWithDiscordBeforeRequestingMembership()
-    {
-        await using var fixture = await MembershipFixture.CreateAsync();
-        var owner = await fixture.CreateAccountAsync("Owner");
-        var keyOnly = await fixture.CreateKeyOnlyAsync("Key-only account");
-        var claimed = await fixture.CreateAccountAsync("Claimed account");
-        var company = CreateCompany();
-        using var ownerClient = fixture.CreateClient(owner.Key);
-        using var keyOnlyClient = fixture.CreateClient(keyOnly.Key);
-        using var claimedClient = fixture.CreateClient(claimed.Key);
-        await PutCompanyAsync(ownerClient, company);
-
-        using var refused = await keyOnlyClient.PostAsJsonAsync(
-            $"/trade/v1/companies/{company.Id:D}/membership-requests",
-            new MembershipRequestBody(null));
-        using var accepted = await claimedClient.PostAsJsonAsync(
-            $"/trade/v1/companies/{company.Id:D}/membership-requests",
-            new MembershipRequestBody(null));
-        var error = await refused.Content.ReadFromJsonAsync<MembershipErrorResponse>();
-
-        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
-        Assert.Equal("account_sign_in_required", error!.Error);
-        Assert.Equal("Sign in with Discord before requesting membership.", error.Message);
-        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
-    }
-
-    [Fact]
     public async Task RequestApprovalGrantsOwnMembershipAndRefusesNonAdministrators()
     {
         await using var fixture = await MembershipFixture.CreateAsync();
@@ -228,68 +182,6 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
-    public async Task CompanyMemberListIsAvailableOnlyToAdministratorsAndExcludesDiscordIds()
-    {
-        await using var fixture = await MembershipFixture.CreateAsync();
-        var owner = await fixture.CreateAccountAsync("Owner");
-        var operatorAccount = await fixture.CreateAccountAsync("Operator");
-        var crafter = await fixture.CreateAccountAsync("Crafter");
-        var outsider = await fixture.CreateAccountAsync("Outsider");
-        var company = CreateCompany();
-        using var ownerClient = fixture.CreateClient(owner.Key);
-        using var operatorClient = fixture.CreateClient(operatorAccount.Key);
-        using var crafterClient = fixture.CreateClient(crafter.Key);
-        using var outsiderClient = fixture.CreateClient(outsider.Key);
-        await PutCompanyAsync(ownerClient, company);
-        await RequestAsync(operatorClient, company.Id, "Operate");
-        await RequestAsync(crafterClient, company.Id, "Craft");
-        foreach (var profileId in new[] { operatorAccount.ProfileId, crafter.ProfileId })
-        {
-            using var approved = await ownerClient.PostAsync(
-                $"/trade/v1/companies/{company.Id:D}/memberships/{profileId:D}/approve",
-                null);
-            approved.EnsureSuccessStatusCode();
-        }
-        await fixture.SetRoleAsync(company.Id, operatorAccount.ProfileId, MembershipRole.Operator);
-
-        var route = $"/trade/v1/companies/{company.Id:D}/memberships";
-        using var ownerResponse = await ownerClient.GetAsync(route);
-        using var operatorResponse = await operatorClient.GetAsync(route);
-        using var crafterResponse = await crafterClient.GetAsync(route);
-        using var outsiderResponse = await outsiderClient.GetAsync(route);
-        var ownerJson = await ownerResponse.Content.ReadAsStringAsync();
-        var members = JsonSerializer.Deserialize<CompanyMemberResponse[]>(
-            ownerJson,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web));
-        var operatorMembers = await operatorResponse.Content.ReadFromJsonAsync<CompanyMemberResponse[]>();
-        var discordUserIds = await Task.WhenAll(
-            new[] { owner.ProfileId, operatorAccount.ProfileId, crafter.ProfileId }
-                .Select(async profileId =>
-                    (await fixture.Identities.LoadByProfileAsync(profileId))!.DiscordUserId));
-
-        Assert.Equal(HttpStatusCode.OK, ownerResponse.StatusCode);
-        Assert.Equal(3, members!.Length);
-        Assert.Equal(3, operatorMembers!.Length);
-        Assert.Contains(members, member =>
-            member.AccountProfileId == owner.ProfileId &&
-            member.DisplayName == "Owner" &&
-            member.Role == "owner" &&
-            member.State == "active" &&
-            member.RequestedAtUtc != default &&
-            member.DecidedAtUtc != null &&
-            member.DiscordLinked);
-        Assert.Contains(members, member =>
-            member.AccountProfileId == operatorAccount.ProfileId &&
-            member.Role == "operator" &&
-            member.DecidedAtUtc != null);
-        Assert.All(discordUserIds, discordUserId =>
-            Assert.DoesNotContain(discordUserId, ownerJson, StringComparison.Ordinal));
-        Assert.DoesNotContain("discordUserId", ownerJson, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(HttpStatusCode.Forbidden, crafterResponse.StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, outsiderResponse.StatusCode);
-    }
-
-    [Fact]
     public async Task DenyRerequestApproveAndRevokePersistEveryAuditTransition()
     {
         await using var fixture = await MembershipFixture.CreateAsync();
@@ -310,9 +202,9 @@ public sealed class MembershipContractTests
         using var approved = await ownerClient.PostAsync(
             $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/approve",
             null);
-        using var revoked = await ownerClient.PostAsJsonAsync(
+        using var revoked = await ownerClient.PostAsync(
             $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/revoke",
-            new MembershipTransitionBody("  Repeated missed handoffs  "));
+            null);
         var events = await fixture.Memberships.LoadEventsAsync(companyId, crafter.ProfileId);
         var current = await fixture.Memberships.LoadAsync(companyId, crafter.ProfileId);
 
@@ -353,43 +245,6 @@ public sealed class MembershipContractTests
         Assert.Null(events[2].DecidedByProfileId);
         Assert.Equal(owner.ProfileId, events[3].DecidedByProfileId);
         Assert.Equal(owner.ProfileId, events[4].DecidedByProfileId);
-        Assert.Equal("Repeated missed handoffs", events[4].Reason);
-    }
-
-    [Fact]
-    public async Task OnlyOwnersCanRevokeAnotherOwner()
-    {
-        await using var fixture = await MembershipFixture.CreateAsync();
-        var owner = await fixture.CreateAccountAsync("Owner");
-        var secondOwner = await fixture.CreateAccountAsync("Second owner");
-        var operatorAccount = await fixture.CreateAccountAsync("Operator");
-        var company = CreateCompany();
-        using var ownerClient = fixture.CreateClient(owner.Key);
-        using var secondOwnerClient = fixture.CreateClient(secondOwner.Key);
-        using var operatorClient = fixture.CreateClient(operatorAccount.Key);
-        await PutCompanyAsync(ownerClient, company);
-        await RequestAsync(secondOwnerClient, company.Id, string.Empty);
-        await RequestAsync(operatorClient, company.Id, string.Empty);
-        foreach (var profileId in new[] { secondOwner.ProfileId, operatorAccount.ProfileId })
-        {
-            (await ownerClient.PostAsync($"/trade/v1/companies/{company.Id:D}/memberships/{profileId:D}/approve", null)).EnsureSuccessStatusCode();
-        }
-        await fixture.SetRoleAsync(company.Id, secondOwner.ProfileId, MembershipRole.Owner);
-        await fixture.SetRoleAsync(company.Id, operatorAccount.ProfileId, MembershipRole.Operator);
-
-        using var refused = await operatorClient.PostAsync(
-            $"/trade/v1/companies/{company.Id:D}/memberships/{secondOwner.ProfileId:D}/revoke",
-            null);
-        using var allowed = await ownerClient.PostAsync(
-            $"/trade/v1/companies/{company.Id:D}/memberships/{secondOwner.ProfileId:D}/revoke",
-            null);
-        using var lastOwner = await ownerClient.PostAsync(
-            $"/trade/v1/companies/{company.Id:D}/memberships/{owner.ProfileId:D}/revoke",
-            null);
-
-        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, lastOwner.StatusCode);
     }
 
     [Fact]
@@ -476,12 +331,11 @@ public sealed class MembershipContractTests
     [Fact]
     public async Task KeyOnlyHoldingProfileRetainsOwnerAccessWithoutMembershipRows()
     {
-        await using var fixture = await MembershipFixture.CreateWithExistingKeyOnlyCompanyAsync();
-        var owner = fixture.ExistingKeyOnlyOwner!;
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Key-only owner");
         var company = CreateCompany();
-        company.Id = fixture.ExistingCompanyId!.Value;
         using var client = fixture.CreateClient(owner.Key);
-        await PutCompanyAsync(client, company, expectedRevision: 1);
+        await PutCompanyAsync(client, company);
         await fixture.DeleteMembershipsAsync(company.Id);
 
         using var response = await client.GetAsync(
@@ -513,22 +367,6 @@ public sealed class MembershipContractTests
                 ExpectedRevision = expectedRevision
             });
         response.EnsureSuccessStatusCode();
-    }
-
-    private static async Task PutCompanyExpectingConflictAsync(
-        HttpClient client,
-        TradeCompanyProfile company,
-        Guid? objectId = null)
-    {
-        company.UpdatedAtUtc = DateTime.UtcNow;
-        using var response = await client.PutAsJsonAsync(
-            $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{objectId ?? company.Id:D}",
-            new ProfileSyncPutRequest
-            {
-                PayloadJson = JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
-                ExpectedRevision = 0
-            });
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
 
     private static async Task<MembershipResponse> RequestAsync(
@@ -569,17 +407,14 @@ public sealed class MembershipContractTests
             WebApplicationFactory<Program> application,
             Guid? existingProfileId = null,
             Guid? existingCompanyId = null,
-            Guid? secondExistingProfileId = null,
-            AccountFixture? existingKeyOnlyOwner = null)
+            Guid? secondExistingProfileId = null)
         {
             this.root = root;
             this.application = application;
             ExistingProfileId = existingProfileId;
             ExistingCompanyId = existingCompanyId;
             SecondExistingProfileId = secondExistingProfileId;
-            ExistingKeyOnlyOwner = existingKeyOnlyOwner;
             Profiles = application.Services.GetRequiredService<SqliteProfileHostStore>();
-            Identities = application.Services.GetRequiredService<SqliteDiscordIdentityStore>();
             Memberships = application.Services.GetRequiredService<SqliteMembershipStore>();
             Reconciler = application.Services
                 .GetServices<IHostedService>()
@@ -588,13 +423,11 @@ public sealed class MembershipContractTests
         }
 
         public SqliteProfileHostStore Profiles { get; }
-        public SqliteDiscordIdentityStore Identities { get; }
         public SqliteMembershipStore Memberships { get; }
         public FounderMembershipReconciler Reconciler { get; }
         public Guid? ExistingProfileId { get; }
         public Guid? ExistingCompanyId { get; }
         public Guid? SecondExistingProfileId { get; }
-        public AccountFixture? ExistingKeyOnlyOwner { get; }
 
         public static Task<MembershipFixture> CreateAsync(
             int founderReconciliationIntervalSeconds = 300)
@@ -628,35 +461,6 @@ public sealed class MembershipContractTests
                 CreateApplication(root),
                 Guid.Parse(profile.ProfileId),
                 company.Id);
-        }
-
-        public static async Task<MembershipFixture> CreateWithExistingKeyOnlyCompanyAsync()
-        {
-            var root = CreateRoot();
-            var store = new SqliteProfileHostStore(new ProfileHostOptions
-            {
-                Enabled = true,
-                DatabasePath = Path.Combine(root, "profiles.db")
-            });
-            var hasher = new ProfileAccessKeyHasher();
-            var key = hasher.CreateAccessKey();
-            var profile = await store.CreateProfileAsync("Key-only owner", CancellationToken.None);
-            await store.AddAccessKeyAsync(profile.ProfileId, key.StoredHash, CancellationToken.None);
-            var company = CreateCompany();
-            var put = await store.PutObjectAsync(
-                profile.ProfileId,
-                ProfileSyncCollections.TradeCompanyProfiles,
-                company.Id.ToString("D"),
-                JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
-                0,
-                CancellationToken.None);
-            Assert.True(put.Success);
-            return new MembershipFixture(
-                root,
-                CreateApplication(root),
-                Guid.Parse(profile.ProfileId),
-                company.Id,
-                existingKeyOnlyOwner: new AccountFixture(Guid.Parse(profile.ProfileId), key.PlaintextKey));
         }
 
         public static async Task<MembershipFixture> CreateWithAmbiguousCompanyAsync()
@@ -698,18 +502,6 @@ public sealed class MembershipContractTests
         }
 
         public async Task<AccountFixture> CreateAccountAsync(string displayName)
-        {
-            var account = await CreateKeyOnlyAsync(displayName);
-            var linked = await Identities.LinkAsync(
-                account.ProfileId,
-                $"{100000000000000000L + Math.Abs((long)account.ProfileId.GetHashCode()):D18}",
-                displayName,
-                DateTimeOffset.UtcNow);
-            Assert.Equal(DiscordIdentityLinkResultStatus.Linked, linked.Status);
-            return account;
-        }
-
-        public async Task<AccountFixture> CreateKeyOnlyAsync(string displayName)
         {
             var hasher = new ProfileAccessKeyHasher();
             var key = hasher.CreateAccessKey();
@@ -758,23 +550,6 @@ public sealed class MembershipContractTests
                 await memberships.ExecuteNonQueryAsync();
             }
             await transaction.CommitAsync();
-        }
-
-        public async Task SetRoleAsync(Guid companyId, Guid profileId, MembershipRole role)
-        {
-            await using var connection = new SqliteConnection(
-                $"Data Source={Path.Combine(root, "memberships.db")}");
-            await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = """
-                UPDATE company_memberships
-                SET role = $role
-                WHERE company_id = $companyId AND account_profile_id = $profileId;
-                """;
-            command.Parameters.AddWithValue("$role", role.ToString().ToLowerInvariant());
-            command.Parameters.AddWithValue("$companyId", companyId.ToString("D"));
-            command.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
-            Assert.Equal(1, await command.ExecuteNonQueryAsync());
         }
 
         public async ValueTask DisposeAsync()

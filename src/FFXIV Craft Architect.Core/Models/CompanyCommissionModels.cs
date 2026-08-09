@@ -177,6 +177,8 @@ public sealed record CompanyCommissionProvisionalCrafter(
     string HomeWorld,
     string ContactMethod,
     string ContactValue,
+    string? DiscordUserId,
+    string? DiscordDisplayNameSnapshot,
     string? LodestoneCharacterId,
     string? LodestoneProfileUrl,
     DateTime SubmittedAtUtc);

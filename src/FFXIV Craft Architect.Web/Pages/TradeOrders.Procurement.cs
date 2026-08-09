@@ -173,16 +173,6 @@ public partial class TradeOrders
             InvalidateSelectedOrderPlanRestoration();
         }
         _activeOpsTab = tabIndex;
-        if (tabIndex == SharingTabIndex && _selectedOrder != null)
-        {
-            ScheduleSelectedCommissionOwnerRefresh(_selectedOrder);
-            if (_selectedOrder.CompanyCommission != null ||
-                _selectedOrder.CommissionPublication != null)
-            {
-                _ = RefreshCollaborationAsync(_selectedOrder);
-            }
-            return;
-        }
         if (tabIndex != ProcurementTabIndex || _selectedOrder == null)
         {
             return;
@@ -204,22 +194,12 @@ public partial class TradeOrders
 
     private void OnWorkerProjectionChangedForPlanRestoration()
     {
-        if (!TradeOrderPlanRestorePolicy.ShouldScheduleForWorkerChange(
-                _isDisposed,
-                _isLoadingSelectedOrderSupplyPlan))
+        if (_isDisposed)
         {
             return;
         }
 
-        _ = InvokeAsync(() =>
-        {
-            if (TradeOrderPlanRestorePolicy.ShouldScheduleForWorkerChange(
-                    _isDisposed,
-                    _isLoadingSelectedOrderSupplyPlan))
-            {
-                ScheduleSelectedOrderPlanRestoration();
-            }
-        });
+        _ = InvokeAsync(ScheduleSelectedOrderPlanRestoration);
     }
 
     private void ScheduleSelectedOrderPlanRestoration()

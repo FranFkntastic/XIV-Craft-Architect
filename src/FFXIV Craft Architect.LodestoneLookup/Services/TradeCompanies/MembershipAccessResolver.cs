@@ -33,7 +33,6 @@ public sealed class MembershipAccessResolver(
 
         var profile = await authentication.ExecuteAsync(
             key,
-            ct => profiles.TryAuthenticateCachedAsync(key, accessKeyHasher, ct),
             ct => profiles.AuthenticateAsync(key, accessKeyHasher, ct),
             cancellationToken);
         return profile != null &&

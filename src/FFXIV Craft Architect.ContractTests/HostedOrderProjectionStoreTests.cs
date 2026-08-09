@@ -33,7 +33,6 @@ public sealed class HostedOrderProjectionStoreTests
     [InlineData(ProjectionStoreScenario.CenterOperationAuthoritySwitch)]
     [InlineData(ProjectionStoreScenario.CenterOperationCommittedFailure)]
     [InlineData(ProjectionStoreScenario.StaleMissingOwner)]
-    [InlineData(ProjectionStoreScenario.BatchHydration)]
     public async Task ProjectionStorePreservesCanonicalIdentityAndRestoreTruth(ProjectionStoreScenario scenario)
     {
         await (scenario switch
@@ -55,7 +54,6 @@ public sealed class HostedOrderProjectionStoreTests
             ProjectionStoreScenario.CenterOperationAuthoritySwitch => CenterOperationRejectsHostAndProfileReplacement(),
             ProjectionStoreScenario.CenterOperationCommittedFailure => CenterOperationRetainsCommittedProjectionOnAdoptionFailure(),
             ProjectionStoreScenario.StaleMissingOwner => StaleMissingOwnerCannotClearReplacementProjection(),
-            ProjectionStoreScenario.BatchHydration => Run(BatchHydrationPublishesOneNotification),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null)
         });
     }
@@ -264,27 +262,6 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.True(current.Deleted);
         Assert.Equal(3, current.ObjectRevision);
         Assert.Equal([2L, 3L], revisions);
-    }
-
-    private static void BatchHydrationPublishesOneNotification()
-    {
-        var store = new HostedOrderProjectionStore();
-        var companyProfileId = Guid.NewGuid();
-        var first = CreateOrder(Guid.NewGuid(), companyProfileId, "First cached order");
-        var second = CreateOrder(Guid.NewGuid(), companyProfileId, "Second cached order");
-        var singleNotifications = 0;
-        var batchNotifications = new List<IReadOnlyList<HostedOrderProjectionSnapshot>>();
-        store.Changed += _ => singleNotifications++;
-        store.BatchChanged += snapshots => batchNotifications.Add(snapshots);
-
-        var restored = store.PublishRemoteOrders([(first, 2), (second, 3)]);
-
-        Assert.Equal(2, restored);
-        Assert.Equal(0, singleNotifications);
-        Assert.Single(batchNotifications);
-        Assert.Equal(2, batchNotifications[0].Count);
-        Assert.Same(first, store.Get(first.Id)?.Order);
-        Assert.Same(second, store.Get(second.Id)?.Order);
     }
 
     private static void SameOrderCannotMoveBetweenCompanyProfiles()
@@ -617,6 +594,6 @@ public sealed class HostedOrderProjectionStoreTests
         CanonicalRevisionAndTombstone, CompanyProfileIsImmutable, ProfileResetClearsRevisionHistory, OwnerUpgradeAtSameRevision, SameProfileReconnect,
         ScopeChange, RestoreRevisionCannotRollBack, CompanySnapshotComposition, SameProfileConnectionReplacement, ConnectionScopePathCase,
         SameRevisionOwnerPersistence, LiveTombstonePersistence, OwnerTombstonePersistence, CenterOperationWinner, CenterOperationAuthoritySwitch,
-        CenterOperationCommittedFailure, StaleMissingOwner, BatchHydration
+        CenterOperationCommittedFailure, StaleMissingOwner
     }
 }

@@ -8,6 +8,11 @@ $testProjects = @(
     Join-Path $root 'src/FFXIV Craft Architect.SpecTests'
     Join-Path $root 'src/FFXIV Craft Architect.ContractTests'
 )
+$maximumFiles = 38
+$maximumMethods = 244
+$maximumCases = 341
+$maximumLines = 14199
+$maximumFileLines = 1050
 
 if (Test-Path -LiteralPath $legacyProject) {
     throw 'Legacy FFXIV Craft Architect.Tests project still exists.'
@@ -38,6 +43,10 @@ foreach ($file in $sourceFiles) {
     $factCount += $fileFactCount
     $theoryCount += $fileTheoryCount
     $caseCount += $fileFactCount + $fileInlineDataCount
+
+    if ($fileLineCount -gt $maximumFileLines) {
+        $violations += "$($file.FullName): file line ceiling exceeded: $fileLineCount > $maximumFileLines"
+    }
 
     if ($text -match '(?i)\bSkip\s*=') {
         $violations += "$($file.FullName): skipped test"
@@ -71,6 +80,19 @@ $methodCount = $factCount + $theoryCount
 if ($methodCount -eq 0) {
     $violations += 'No test methods were discovered.'
 }
+if ($sourceFiles.Count -gt $maximumFiles) {
+    $violations += "Test file ceiling exceeded: $($sourceFiles.Count) > $maximumFiles."
+}
+if ($methodCount -gt $maximumMethods) {
+    $violations += "Test method ceiling exceeded: $methodCount > $maximumMethods."
+}
+if ($caseCount -gt $maximumCases) {
+    $violations += "Test case ceiling exceeded: $caseCount > $maximumCases."
+}
+if ($lineCount -gt $maximumLines) {
+    $violations += "Test source ceiling exceeded: $lineCount > $maximumLines."
+}
+
 $specProject = Get-Content -LiteralPath (Join-Path $testProjects[0] 'FFXIV Craft Architect.SpecTests.csproj') -Raw
 foreach ($forbiddenReference in @('FFXIV Craft Architect.Web', 'FFXIV Craft Architect.LodestoneLookup', 'MarketAnalysisProbe', 'Moq', 'bunit')) {
     if ($specProject -match [regex]::Escape($forbiddenReference)) {
@@ -84,4 +106,3 @@ if ($violations.Count -gt 0) {
 }
 
 Write-Output "Truthful suite structure valid: $($sourceFiles.Count) files, $methodCount methods, $caseCount explicit cases, $lineCount source lines."
-Write-Output 'Suite size is reported for review, not enforced as a capacity ceiling.'

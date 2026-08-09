@@ -10,11 +10,6 @@ public interface IProfileSyncCollectionAdapter
     Task DeleteLocalObjectAsync(string objectId, CancellationToken ct);
 }
 
-public interface IProfileSyncSingleObjectAdapter
-{
-    Task<ProfileSyncObjectEnvelope?> LoadLocalObjectAsync(string objectId, CancellationToken ct);
-}
-
 public interface IHostedOrderProfileSyncAdapter
 {
     Task ApplyRemoteDeletionAsync(

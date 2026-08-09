@@ -527,119 +527,6 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
             workItemIds);
     }
 
-    internal async Task<IReadOnlyList<string>> LoadCommittedClaimContactDiscordUserIdsAsync(
-        CompanyId companyId,
-        Guid commissionId,
-        CancellationToken cancellationToken = default)
-    {
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT DISTINCT discord_user_id
-            FROM discord_claim_contacts
-            WHERE company_id = $companyId AND commission_id = $commissionId;
-            """;
-        command.Parameters.AddWithValue("$companyId", companyId.ToString());
-        command.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
-        var result = new List<string>();
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            result.Add(reader.GetString(0));
-        }
-        return result;
-    }
-
-    internal async Task<DiscordNotificationEnqueueResult> EnqueueMemberAsync(
-        CompanyId companyId,
-        Guid commissionId,
-        Guid eventId,
-        long desiredProjectionRevision,
-        DiscordNotificationAttentionClass attentionClass,
-        long expectedRouteRevision,
-        string payloadJson,
-        IReadOnlyCollection<string> discordUserIds,
-        DateTimeOffset now,
-        CancellationToken cancellationToken = default)
-    {
-        if (discordUserIds.Count == 0 || string.IsNullOrWhiteSpace(payloadJson))
-        {
-            return new(DiscordNotificationEnqueueStatus.Suppressed, attentionClass, []);
-        }
-        await using var connection = await OpenAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(
-            IsolationLevel.Serializable, cancellationToken);
-        var route = await LoadRouteAsync(
-            connection, companyId, cancellationToken, (SqliteTransaction)transaction);
-        if (route == null || route.Revision != expectedRouteRevision)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return new(DiscordNotificationEnqueueStatus.Unconfigured, attentionClass, []);
-        }
-        var ids = new List<Guid>();
-        var inserted = false;
-        foreach (var discordUserId in discordUserIds.Distinct(StringComparer.Ordinal))
-        {
-            if (!DiscordSnowflake.IsValid(discordUserId))
-            {
-                continue;
-            }
-            var workItemId = Guid.NewGuid();
-            await using var command = connection.CreateCommand();
-            command.Transaction = (SqliteTransaction)transaction;
-            command.CommandText = """
-                INSERT OR IGNORE INTO discord_notification_outbox (
-                    work_item_id, company_id, commission_id, event_id,
-                    desired_projection_revision, attention_class, route_revision,
-                    destination_kind, destination_key, commissioner_user_id,
-                    allowed_mention_user_id, channel_id, payload_json,
-                    fallback_payload_json, fallback_allowed_mention_user_id,
-                    fallback_channel_id, state, attempt_count, next_attempt_at_utc,
-                    created_at_utc, updated_at_utc)
-                VALUES ($workItemId, $companyId, $commissionId, $eventId,
-                    $desiredProjectionRevision, $attentionClass, $routeRevision,
-                    $destinationKind, $destinationKey, $commissionerUserId,
-                    NULL, NULL, $payloadJson, NULL, NULL, NULL, $state, 0,
-                    $now, $now, $now);
-                """;
-            command.Parameters.AddWithValue("$workItemId", workItemId.ToString("D"));
-            command.Parameters.AddWithValue("$companyId", companyId.ToString());
-            command.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
-            command.Parameters.AddWithValue("$eventId", eventId.ToString("D"));
-            command.Parameters.AddWithValue("$desiredProjectionRevision", desiredProjectionRevision);
-            command.Parameters.AddWithValue("$attentionClass", (int)attentionClass);
-            command.Parameters.AddWithValue("$routeRevision", route.Revision);
-            command.Parameters.AddWithValue("$destinationKind", (int)DiscordNotificationDestinationKind.MemberDirectMessage);
-            command.Parameters.AddWithValue("$destinationKey", discordUserId);
-            command.Parameters.AddWithValue("$commissionerUserId", discordUserId);
-            command.Parameters.AddWithValue("$payloadJson", payloadJson);
-            command.Parameters.AddWithValue("$state", (int)DiscordOutboxState.Pending);
-            command.Parameters.AddWithValue("$now", now.ToString("O"));
-            if (await command.ExecuteNonQueryAsync(cancellationToken) == 1)
-            {
-                inserted = true;
-                ids.Add(workItemId);
-            }
-            else
-            {
-                var existing = await LoadExistingWorkItemIdAsync(
-                    connection, (SqliteTransaction)transaction, eventId,
-                    desiredProjectionRevision,
-                    DiscordNotificationDestinationKind.MemberDirectMessage,
-                    discordUserId, cancellationToken);
-                if (existing.HasValue)
-                {
-                    ids.Add(existing.Value);
-                }
-            }
-        }
-        await transaction.CommitAsync(cancellationToken);
-        return new(
-            inserted ? DiscordNotificationEnqueueStatus.Queued : DiscordNotificationEnqueueStatus.Replayed,
-            attentionClass,
-            ids);
-    }
-
     public async Task CaptureCommittedClaimContactAsync(
         CommittedDiscordClaimContact contact,
         CancellationToken cancellationToken = default)
@@ -1024,11 +911,10 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
         var route = await LoadRouteAsync(workItem.CompanyId, cancellationToken);
         if (route == null ||
             route.Revision != workItem.RouteRevision ||
-             (workItem.DestinationKind != DiscordNotificationDestinationKind.MemberDirectMessage &&
-                 !string.Equals(
-                     route.CommissionerDiscordUserId,
-                     workItem.CommissionerDiscordUserId,
-                     StringComparison.Ordinal)) ||
+            !string.Equals(
+                route.CommissionerDiscordUserId,
+                workItem.CommissionerDiscordUserId,
+                StringComparison.Ordinal) ||
             CompanyCommissionNotificationPolicy.ResolveBehavior(
                 route,
                 workItem.AttentionClass) == DiscordNotificationMentionBehavior.Off)
@@ -1050,9 +936,8 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                     route.DirectMessageFallback == DiscordDirectMessageFallback.UpdateChannel) &&
                 string.Equals(
                     route.UpdateChannelId,
-                 workItem.ChannelId,
-                     StringComparison.Ordinal),
-            DiscordNotificationDestinationKind.MemberDirectMessage => true,
+                    workItem.ChannelId,
+                    StringComparison.Ordinal),
             _ => false
         };
     }

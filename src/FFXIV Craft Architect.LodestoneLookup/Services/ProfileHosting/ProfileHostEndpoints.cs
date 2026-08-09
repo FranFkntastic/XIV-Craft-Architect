@@ -231,7 +231,6 @@ public static class ProfileHostEndpoints
                         return await store.RedeemPairingCodeAsync(
                             pairingCodes.Hash(plaintext),
                             accessKey.StoredHash,
-                            accessKey.Fingerprint,
                             DateTime.UtcNow,
                             ct);
                     },
@@ -728,7 +727,6 @@ public static class ProfileHostEndpoints
 
         return await authentication.ExecuteAsync(
             accessKey,
-            ct => store.TryAuthenticateCachedAsync(accessKey, hasher, ct),
             ct => store.AuthenticateAsync(accessKey, hasher, ct),
             cancellationToken);
     }
@@ -748,7 +746,6 @@ public static class ProfileHostEndpoints
 
         return await authentication.ExecuteAsync(
             accessKey,
-            ct => store.TryAuthenticateCachedAccessKeyAsync(accessKey, hasher, ct),
             ct => store.AuthenticateAccessKeyAsync(accessKey, hasher, ct),
             cancellationToken);
     }

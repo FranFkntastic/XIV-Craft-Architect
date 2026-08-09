@@ -10,7 +10,7 @@ public sealed record DiscordIdentityLink(
     DateTimeOffset LinkedAt,
     DateTimeOffset UpdatedAt);
 
-public sealed record DiscordAccountIdentityStatus(
+public sealed record DiscordIdentityLinkStatus(
     bool Enabled,
     bool Linked,
     string? DisplayName,
@@ -28,8 +28,16 @@ public sealed record DiscordIdentityLinkResult(
     DiscordIdentityLinkResultStatus Status,
     DiscordIdentityLink? Link = null);
 
+public sealed record DiscordIdentityAuditEvent(
+    Guid EventId,
+    Guid? ProfileId,
+    string EventKind,
+    string? DiscordUserId,
+    DateTimeOffset CreatedAt);
+
 public enum DiscordOAuthPurpose
 {
+    Link,
     SignIn
 }
 
@@ -45,8 +53,7 @@ public sealed record DiscordOAuthStateConsumption(
     DiscordOAuthStateStatus Status,
     Guid? ProfileId = null,
     string? PkceVerifier = null,
-    DiscordOAuthPurpose? Purpose = null,
-    string? ReturnPath = null);
+    DiscordOAuthPurpose? Purpose = null);
 
 public sealed record DiscordOAuthIdentity(
     string DiscordUserId,

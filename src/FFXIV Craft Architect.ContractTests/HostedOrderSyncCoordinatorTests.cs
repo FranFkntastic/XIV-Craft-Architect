@@ -18,7 +18,6 @@ public sealed class HostedOrderSyncCoordinatorTests
         {
             case OwnerProjectionScenario.AdoptionRequired:
                 MissingOrStaleOwnerProjectionRequiresAdoption();
-                OwnerAuthorizationFailuresUseABoundedRetryDelay();
                 TabReplayUsesOwnCursorAndOrderScopeReadinessIsTruthful();
                 break;
             case OwnerProjectionScenario.AdoptionForbidden:
@@ -33,15 +32,6 @@ public sealed class HostedOrderSyncCoordinatorTests
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
         }
-    }
-
-    private static void OwnerAuthorizationFailuresUseABoundedRetryDelay()
-    {
-        var now = new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc);
-
-        Assert.True(ShouldDeferOwnerAuthorizationRetry(now.AddMinutes(5), now));
-        Assert.False(ShouldDeferOwnerAuthorizationRetry(now, now));
-        Assert.False(ShouldDeferOwnerAuthorizationRetry(now.AddTicks(-1), now));
     }
 
     private static void MissingOrStaleOwnerProjectionRequiresAdoption()
@@ -194,14 +184,6 @@ public sealed class HostedOrderSyncCoordinatorTests
 
     private static bool NeedsOwnerAdoption(HostedOrderProjectionSnapshot snapshot) =>
         (bool)InvokePolicy(nameof(NeedsOwnerAdoption), snapshot)!;
-
-    private static bool ShouldDeferOwnerAuthorizationRetry(
-        DateTime retryAfterUtc,
-        DateTime nowUtc) =>
-        (bool)InvokePolicy(
-            nameof(ShouldDeferOwnerAuthorizationRetry),
-            retryAfterUtc,
-            nowUtc)!;
 
     private static void ValidateOwnerProjection(
         HostedOrderProjectionSnapshot expected,

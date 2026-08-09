@@ -227,43 +227,10 @@ public partial class TradeOrders
             return;
         }
 
-        var reloadedOrder = await TradeOperationsPersistence.LoadOrderAsync(orderId);
-        if (reloadedOrder == null)
+        await LoadAsync();
+        if (string.IsNullOrWhiteSpace(_loadError))
         {
-            Snackbar.Add(
-                "Trade order was saved, but it could not be loaded.",
-                Severity.Error);
-            return;
-        }
-
-        var localIndex = _orders.FindIndex(order => order.Id == orderId);
-        if (localIndex >= 0)
-        {
-            _orders[localIndex] = reloadedOrder;
-        }
-        else
-        {
-            _orders.Add(reloadedOrder);
-        }
-
-        var conflict = FindOrderConflict(orderId);
-        var pending = IsOrderPending(orderId);
-        var hosted = HostedOrders.Get(orderId);
-        SelectOrder(conflict != null || pending
-            ? reloadedOrder
-            : hosted?.OwnerProjection?.Order ?? hosted?.Order ?? reloadedOrder);
-        if (conflict != null)
-        {
-            _selectedLocalHostedCollision = hosted;
-            Snackbar.Add(
-                "The hosted order changed. Your edit is preserved here; choose which version to keep.",
-                Severity.Warning);
-        }
-        else if (pending)
-        {
-            Snackbar.Add(
-                "Saved on this device; hosted sync is still pending.",
-                Severity.Info);
+            SelectOrderAfterReload(orderId, "Trade order was saved, but it could not be loaded.");
         }
     }
 

@@ -6,7 +6,6 @@ public sealed class ProfileHostChangeSignal
 {
     private readonly ConcurrentDictionary<string, ProfileState> _profiles =
         new(StringComparer.Ordinal);
-    private readonly ProfileState allProfiles = new();
 
     public ProfileHostChangeObservation Observe(string profileId)
     {
@@ -18,17 +17,6 @@ public sealed class ProfileHostChangeSignal
                 state.Generation,
                 state.LastPublishedRevision,
                 state.Changed.Task);
-        }
-    }
-
-    public ProfileHostChangeObservation ObserveAll()
-    {
-        lock (allProfiles.Gate)
-        {
-            return new ProfileHostChangeObservation(
-                allProfiles.Generation,
-                allProfiles.LastPublishedRevision,
-                allProfiles.Changed.Task);
         }
     }
 
@@ -51,19 +39,7 @@ public sealed class ProfileHostChangeSignal
             state.Changed = NewSignal();
         }
 
-        TaskCompletionSource allChanged;
-        lock (allProfiles.Gate)
-        {
-            allProfiles.Generation++;
-            allProfiles.LastPublishedRevision = Math.Max(
-                allProfiles.LastPublishedRevision,
-                serverRevision);
-            allChanged = allProfiles.Changed;
-            allProfiles.Changed = NewSignal();
-        }
-
         changed.TrySetResult();
-        allChanged.TrySetResult();
     }
 
     private static TaskCompletionSource NewSignal() =>

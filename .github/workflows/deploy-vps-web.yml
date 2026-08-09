@@ -79,7 +79,7 @@ jobs:
           {
             echo "slot=$slot"
             echo "domain=$domain"
-            echo "profile_host_domain=$domain"
+            echo "profile_host_domain=xivcraftarchitect.com"
             echo "checkout_ref=$checkout_ref"
             echo "source_ref=$source_ref"
           } >> "$GITHUB_OUTPUT"
@@ -325,7 +325,7 @@ jobs:
         shell: bash
         env:
           DEPLOY_DOMAIN: ${{ needs.package.outputs.domain }}
-          PROFILE_HOST_DOMAIN: ${{ needs.package.outputs.domain }}
+          PROFILE_HOST_DOMAIN: xivcraftarchitect.com
           CONFIGURATION_SHA256: ${{ needs.package.outputs.configuration_sha256 }}
           DEPLOY_SOURCE_SHA: ${{ needs.package.outputs.source_sha }}
           DEPLOY_RELEASE: ${{ needs.package.outputs.release }}

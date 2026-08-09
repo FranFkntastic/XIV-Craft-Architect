@@ -12,16 +12,22 @@ public sealed class TradeCompanyCollaborationService(
     ProfileSyncService profileSync,
     HostedOrderProjectionStore hostedOrders)
 {
-    private static readonly TimeSpan PublicationRefreshLifetime = TimeSpan.FromSeconds(30);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private sealed record OrderCommandAuthority(
         HostedOrderAuthorityScope Projection,
         HostedProfileConnectionSettings Connection);
+    private readonly Dictionary<Guid, IReadOnlyList<TradeCommissionInterest>> _interests = [];
     private readonly Dictionary<Guid, TradeCommissionPublicationProjection> _publications = [];
-    private readonly Dictionary<Guid, DateTime> _publicationRefreshedAtUtc = [];
-    private readonly Dictionary<Guid, Task> _publicationRefreshes = [];
     private string? _dictionaryProfileId;
     private string? _dictionaryConnectionScopeId;
+
+    public IReadOnlyList<TradeCommissionInterest> GetPendingInterests(Guid orderId) =>
+        IsDictionaryAuthorityCurrent()
+            ? _interests.GetValueOrDefault(orderId, [])
+            .Where(claim => claim.State == TradeCommissionInterestState.Pending)
+            .OrderBy(claim => claim.CreatedAtUtc)
+            .ToArray()
+            : [];
 
     public TradeCommissionPublicationProjection? GetPublication(Guid orderId) =>
         IsDictionaryAuthorityCurrent()
@@ -113,40 +119,24 @@ public sealed class TradeCompanyCollaborationService(
             new CompanyRecordRevision(revision));
     }
 
-    public Task RefreshAsync(
+    public async Task RefreshAsync(
         Guid companyProfileId,
         Guid orderId,
         CancellationToken cancellationToken = default)
     {
-        if (IsDictionaryAuthorityCurrent() &&
-            _publicationRefreshedAtUtc.TryGetValue(orderId, out var refreshedAtUtc) &&
-            DateTime.UtcNow - refreshedAtUtc < PublicationRefreshLifetime)
-        {
-            return Task.CompletedTask;
-        }
-
-        if (_publicationRefreshes.TryGetValue(orderId, out var pending))
-        {
-            return pending.WaitAsync(cancellationToken);
-        }
-
-        var refresh = RefreshCoreAsync(companyProfileId, orderId, cancellationToken);
-        _publicationRefreshes[orderId] = refresh;
-        return ObserveRefreshAsync(orderId, refresh);
-    }
-
-    private async Task RefreshCoreAsync(
-        Guid companyProfileId,
-        Guid orderId,
-        CancellationToken cancellationToken)
-    {
         var authority = await CaptureOrderAuthorityAsync();
+        var interests = await client.LoadPendingInterestsAsync(
+            companyProfileId,
+            orderId,
+            cancellationToken,
+            authority.Connection);
         var publication = await client.LoadPublicationAsync(
             companyProfileId,
             orderId,
             cancellationToken,
             authority.Connection);
-        if (publication is not null && publication.OrderId != orderId)
+        if (interests.Any(claim => claim.OrderId != orderId) ||
+            publication is not null && publication.OrderId != orderId)
         {
             throw new InvalidOperationException(
                 "The collaboration refresh returned data for a different order.");
@@ -158,6 +148,7 @@ public sealed class TradeCompanyCollaborationService(
                 "The hosted order authority changed while collaboration details were refreshing.");
         }
         AdoptDictionaryAuthority(authority);
+        _interests[orderId] = interests;
         if (publication == null)
         {
             _publications.Remove(orderId);
@@ -165,22 +156,6 @@ public sealed class TradeCompanyCollaborationService(
         else
         {
             _publications[orderId] = publication;
-        }
-        _publicationRefreshedAtUtc[orderId] = DateTime.UtcNow;
-    }
-
-    private async Task ObserveRefreshAsync(Guid orderId, Task refresh)
-    {
-        try
-        {
-            await refresh;
-        }
-        finally
-        {
-            if (_publicationRefreshes.GetValueOrDefault(orderId) == refresh)
-            {
-                _publicationRefreshes.Remove(orderId);
-            }
         }
     }
 
@@ -221,7 +196,6 @@ public sealed class TradeCompanyCollaborationService(
                 publication);
             AdoptDictionaryAuthority(authority);
             _publications[order.Id] = publication;
-            _publicationRefreshedAtUtc[order.Id] = DateTime.UtcNow;
             return new TradeCommissionWorkflowResult(
                 publication.State is
                     TradeCommissionDeliveryState.Pending or
@@ -265,7 +239,6 @@ public sealed class TradeCompanyCollaborationService(
                 publication);
             AdoptDictionaryAuthority(authority);
             _publications[order.Id] = publication;
-            _publicationRefreshedAtUtc[order.Id] = DateTime.UtcNow;
             return new TradeCommissionWorkflowResult(
                 publication.State == TradeCommissionDeliveryState.Pending,
                 TradeCompanyMutationDisposition.Synced,
@@ -307,7 +280,6 @@ public sealed class TradeCompanyCollaborationService(
                 publication);
             AdoptDictionaryAuthority(authority);
             _publications[order.Id] = publication;
-            _publicationRefreshedAtUtc[order.Id] = DateTime.UtcNow;
             return new TradeCommissionWorkflowResult(
                 Success: true,
                 TradeCompanyMutationDisposition.Synced,
@@ -367,9 +339,6 @@ public sealed class TradeCompanyCollaborationService(
             hostedOrder,
             published.OrderRecord.RecordRevision.Value,
             "The company brief was attached by Profile Hosting, but browser storage could not apply the authoritative order.");
-        AdoptDictionaryAuthority(authority);
-        _publications.Remove(order.Id);
-        _publicationRefreshedAtUtc[order.Id] = DateTime.UtcNow;
         return published.Link;
     }
 
@@ -397,6 +366,19 @@ public sealed class TradeCompanyCollaborationService(
         }
     }
 
+    public Task<TradeCommissionWorkflowResult> AcceptInterestAsync(
+        TradeOrder order,
+        TradeCommissionInterest claim,
+        Guid crafterId,
+        CancellationToken cancellationToken = default) =>
+        ResolveInterestAsync(true, order, claim, crafterId, cancellationToken);
+
+    public Task<TradeCommissionWorkflowResult> DeclineInterestAsync(
+        TradeOrder order,
+        TradeCommissionInterest claim,
+        CancellationToken cancellationToken = default) =>
+        ResolveInterestAsync(false, order, claim, null, cancellationToken);
+
     public async Task RevokePublicationAsync(
         TradeCompanyPublicationOwnership ownership,
         string publicId,
@@ -416,7 +398,73 @@ public sealed class TradeCompanyCollaborationService(
         }
         AdoptDictionaryAuthority(authority);
         _publications.Remove(ownership.OrderId);
-        _publicationRefreshedAtUtc[ownership.OrderId] = DateTime.UtcNow;
+    }
+
+    private async Task<TradeCommissionWorkflowResult> ResolveInterestAsync(
+        bool accept,
+        TradeOrder order,
+        TradeCommissionInterest claim,
+        Guid? crafterId,
+        CancellationToken cancellationToken)
+    {
+        if (!CanPerformExternalAction(order, out var reason))
+        {
+            return Rejected(reason);
+        }
+
+        try
+        {
+            var authority = await CaptureOrderAuthorityAsync();
+            var receipt = accept
+                ? await client.AcceptAsync(
+                    order.CompanyProfileId,
+                    claim.ClaimId,
+                    crafterId ?? throw new InvalidOperationException(
+                        "Choose a hosted company crafter before accepting interest."),
+                    $"discord-claim:{claim.ClaimId}:{crafterId:D}",
+                    cancellationToken,
+                    authority.Connection)
+                : await client.DeclineAsync(
+                    order.CompanyProfileId,
+                    claim.ClaimId,
+                    cancellationToken,
+                    authority.Connection);
+
+            if (receipt.UpdatedOrder != null)
+            {
+                if (receipt.UpdatedOrderRevision is not > 0)
+                {
+                    return Rejected(
+                        "The hosted assignment response omitted its authoritative order revision.");
+                }
+
+                await AdoptCommittedOrderAsync(
+                    authority,
+                    receipt.UpdatedOrder,
+                    receipt.UpdatedOrderRevision.Value,
+                    "The hosted assignment was accepted, but the order could not be saved locally.");
+            }
+
+            if (!await IsCurrentAuthorityAsync(authority))
+            {
+                InvalidateDictionaryAuthority();
+                return Rejected(
+                    "The hosted order authority changed while the interest response was in progress.");
+            }
+            AdoptDictionaryAuthority(authority);
+            _interests[order.Id] = GetPendingInterests(order.Id)
+                .Where(candidate => candidate.ClaimId != claim.ClaimId)
+                .ToArray();
+            return new TradeCommissionWorkflowResult(
+                !accept || receipt.UpdatedOrder != null,
+                TradeCompanyMutationDisposition.Synced,
+                Resolution: receipt,
+                Message: receipt.Message);
+        }
+        catch (Exception exception)
+        {
+            return Rejected(exception.Message);
+        }
     }
 
     private async Task<OrderCommandAuthority> CaptureOrderAuthorityAsync()
@@ -592,8 +640,8 @@ public sealed class TradeCompanyCollaborationService(
                 authority.Projection.ConnectionScopeId,
                 StringComparison.Ordinal))
         {
+            _interests.Clear();
             _publications.Clear();
-            _publicationRefreshedAtUtc.Clear();
         }
         _dictionaryProfileId = authority.Projection.ProfileId;
         _dictionaryConnectionScopeId = authority.Projection.ConnectionScopeId;
@@ -601,8 +649,8 @@ public sealed class TradeCompanyCollaborationService(
 
     private void InvalidateDictionaryAuthority()
     {
+        _interests.Clear();
         _publications.Clear();
-        _publicationRefreshedAtUtc.Clear();
         _dictionaryProfileId = null;
         _dictionaryConnectionScopeId = null;
     }
