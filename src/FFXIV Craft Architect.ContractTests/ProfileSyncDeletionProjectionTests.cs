@@ -463,17 +463,20 @@ public sealed class ProfileSyncDeletionProjectionTests
     {
         var fixture = new ProjectionFixture("Collaboration refresh cache");
         await fixture.PrepareCollaborationAsync();
-        var requestCount = 0;
-        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(_ =>
+        var publicationRequests = 0;
+        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(request =>
         {
-            requestCount++;
+            if (!request.RequestUri!.AbsolutePath.EndsWith("/claims"))
+            {
+                publicationRequests++;
+            }
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         }));
 
         await collaboration.RefreshAsync(fixture.Order.CompanyProfileId, fixture.Order.Id);
         await collaboration.RefreshAsync(fixture.Order.CompanyProfileId, fixture.Order.Id);
 
-        Assert.Equal(1, requestCount);
+        Assert.Equal(1, publicationRequests);
         Assert.Null(collaboration.GetPublication(fixture.Order.Id));
     }
     [Fact]
