@@ -1,11 +1,89 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Reflection;
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
+using FFXIV_Craft_Architect.Web.Services.TradeCompany;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class HostedOrderSyncCoordinatorTests
 {
+    private const string Host = "https://profiles.example/api/";
+
+    [Fact]
+    public async Task SyncQueuesOneListOwnerAdoptionPassWithoutSelectionDemand()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateCommissionOrder();
+        var runtime = new OwnerAdoptionRuntime(profileId);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            hasTrustedProjection: true,
+            lastAppliedRevision: 0,
+            DateTime.UtcNow,
+            $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(order, 1));
+        var profileSync = new ProfileSyncService(
+            new ProfileHostClient(
+                new HttpClient(new EmptyChangesHandler()),
+                new ProfileHostClientOptions(Host)),
+            localState,
+            new WebSettingsService(indexedDb),
+            store,
+            []);
+        var ownerHandler = new BlockingOwnerHandler(Projection(order, 1, 1));
+        var appState = new AppState();
+        var dataChangeCount = 0;
+        appState.OnStateChanged += change =>
+        {
+            if (change.HasScope(AppStateChangeScope.TradeOperationsData))
+            {
+                Interlocked.Increment(ref dataChangeCount);
+            }
+        };
+        await using var coordinator = new HostedOrderSyncCoordinator(
+            runtime,
+            profileSync,
+            localState,
+            store,
+            new TradeCommissionOperationsClient(
+                new HttpClient(ownerHandler) { BaseAddress = new Uri(Host) },
+                localState),
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            appState,
+            NullLogger<HostedOrderSyncCoordinator>.Instance);
+        SetField(coordinator, "_activeProfileId", profileId);
+        SetField(coordinator, "_session", new CancellationTokenSource());
+
+        await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
+        await ownerHandler.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
+        Assert.Equal(1, ownerHandler.RequestCount);
+
+        ownerHandler.Release.TrySetResult();
+        await GetField<Task>(coordinator, "_ownerAdoptionPass")
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, ownerHandler.RequestCount);
+        Assert.Equal(3, dataChangeCount);
+        Assert.Equal(1, store.GetOwnerProjection(order.Id)!.ObjectRevision.Value);
+        Assert.Equal(order.Id, runtime.DurableOrder?.Id);
+    }
+
     [Theory]
     [InlineData(OwnerProjectionScenario.AdoptionRequired)]
     [InlineData(OwnerProjectionScenario.AdoptionForbidden)]
@@ -248,6 +326,29 @@ public sealed class HostedOrderSyncCoordinatorTests
         }
     }
 
+    private static void SetField<T>(
+        HostedOrderSyncCoordinator coordinator,
+        string name,
+        T value)
+    {
+        var field = typeof(HostedOrderSyncCoordinator).GetField(
+            name,
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(HostedOrderSyncCoordinator).FullName, name);
+        field.SetValue(coordinator, value);
+    }
+
+    private static T GetField<T>(
+        HostedOrderSyncCoordinator coordinator,
+        string name)
+    {
+        var field = typeof(HostedOrderSyncCoordinator).GetField(
+            name,
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(HostedOrderSyncCoordinator).FullName, name);
+        return (T)field.GetValue(coordinator)!;
+    }
+
     private static HostedOrderProjectionSnapshot Snapshot(
         TradeOrder order,
         long objectRevision,
@@ -293,6 +394,23 @@ public sealed class HostedOrderSyncCoordinatorTests
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
                 CurrentTermsVersion = 1,
+                TermsVersions =
+                [
+                    new CompanyCommissionTermsVersion
+                    {
+                        Version = 1,
+                        CreatedAtUtc = now,
+                        CreatedBy = new("commissioner", CompanyCommissionActorKind.Commissioner),
+                        Payment = new(
+                            CompanyCommissionPaymentSchedule.OnDelivery,
+                            "Test",
+                            0,
+                            0,
+                            0,
+                            0),
+                        PricingEvidence = new("test", "test", "test", now)
+                    }
+                ],
                 PublicMetadata = new CompanyCommissionPublicMetadata
                 {
                     PublicBriefId = "test-001",
@@ -318,4 +436,106 @@ public sealed class HostedOrderSyncCoordinatorTests
         ValidProjection,
         InvalidProjection
     }
+
+    private sealed class EmptyChangesHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Assert.EndsWith("/profile-host/changes", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new ProfileSyncChangesResponse
+                {
+                    ServerRevision = 1
+                })
+            });
+        }
+    }
+
+    private sealed class BlockingOwnerHandler(
+        CompanyCommissionOwnerProjection projection) : HttpMessageHandler
+    {
+        private int _requestCount;
+
+        public int RequestCount => Volatile.Read(ref _requestCount);
+        public TaskCompletionSource Entered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Assert.EndsWith("/owner", request.RequestUri!.AbsolutePath);
+            Interlocked.Increment(ref _requestCount);
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(projection)
+            };
+        }
+    }
+
+    private sealed class OwnerAdoptionRuntime(string profileId) : IJSRuntime
+    {
+        private readonly Dictionary<string, string> _settings = new(StringComparer.Ordinal)
+        {
+            [ProfileSyncSettingsKeys.HostUrl] = JsonSerializer.Serialize(Host),
+            [ProfileSyncSettingsKeys.AccessKey] = JsonSerializer.Serialize("access-key"),
+            [ProfileSyncSettingsKeys.RememberAccessKey] = JsonSerializer.Serialize(true),
+            [ProfileSyncSettingsKeys.ConnectedProfileId] = JsonSerializer.Serialize(profileId)
+        };
+
+        public TradeOrder? DurableOrder { get; private set; }
+
+        public ValueTask<TValue> InvokeAsync<TValue>(
+            string identifier,
+            object?[]? args) =>
+            InvokeAsync<TValue>(identifier, CancellationToken.None, args);
+
+        public ValueTask<TValue> InvokeAsync<TValue>(
+            string identifier,
+            CancellationToken cancellationToken,
+            object?[]? args)
+        {
+            object? result = identifier switch
+            {
+                "IndexedDB.loadAllSettings" => new Dictionary<string, string>(_settings),
+                "IndexedDB.loadSetting" => _settings.GetValueOrDefault((string)args![0]!),
+                "IndexedDB.saveSettingsBatch" => SaveBatch((Dictionary<string, string>)args![0]!),
+                "IndexedDB.saveSetting" => SaveSetting((string)args![0]!, (string)args[1]!),
+                "IndexedDB.loadAllTradeOrders" => new List<TradeOrder>(),
+                "IndexedDB.saveTradeOrder" => SaveOrder((TradeOrder)args![0]!),
+                "IndexedDB.deleteTradeOrder" => true,
+                _ => throw new NotSupportedException(identifier)
+            };
+            return ValueTask.FromResult((TValue)result!);
+        }
+
+        private bool SaveBatch(Dictionary<string, string> values)
+        {
+            foreach (var (key, value) in values)
+            {
+                _settings[key] = value;
+            }
+            return true;
+        }
+
+        private bool SaveSetting(string key, string value)
+        {
+            _settings[key] = value;
+            return true;
+        }
+
+        private bool SaveOrder(TradeOrder order)
+        {
+            DurableOrder = order;
+            return true;
+        }
+    }
+
 }
