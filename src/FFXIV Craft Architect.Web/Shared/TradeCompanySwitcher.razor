@@ -25,6 +25,9 @@
             </MudButton>
         </ActivatorContent>
         <ChildContent>
+            <MudMenuItem Href="@CompanyHubUrl(_activeCompany)" Icon="@Icons.Material.Filled.Home">
+                Company hub
+            </MudMenuItem>
             <div class="trade-company-switcher-heading">Active Trade company</div>
             @foreach (var company in _companies)
             {
@@ -116,6 +119,32 @@
 
     private static string FormatCompanyId(Guid companyId) =>
         companyId.ToString("N")[..6].ToUpperInvariant();
+
+    private static string CompanyHubUrl(TradeCompanyProfile company) =>
+        $"/companies/{Slugify(company.Name)}";
+
+    private static string Slugify(string value)
+    {
+        var slug = new System.Text.StringBuilder(value.Length);
+        var hyphenPending = false;
+        foreach (var character in value)
+        {
+            if (char.IsAsciiLetterOrDigit(character))
+            {
+                if (hyphenPending && slug.Length > 0)
+                {
+                    slug.Append('-');
+                }
+                slug.Append(char.ToLowerInvariant(character));
+                hyphenPending = false;
+            }
+            else
+            {
+                hyphenPending = slug.Length > 0;
+            }
+        }
+        return slug.Length == 0 ? "company" : slug.ToString();
+    }
 
     public void Dispose()
     {

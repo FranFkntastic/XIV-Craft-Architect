@@ -11,6 +11,8 @@ internal sealed class DiscordCommissionInteractionService(
     SqliteDiscordCollaborationStore collaboration,
     SqliteDiscordIdentityStore identities,
     SqliteProfileHostStore profiles,
+    ProfileHostedTradeCompanyService companies,
+    SqliteMembershipStore memberships,
     SqliteDiscordNotificationStore notifications,
     IDiscordInteractionClaimLinkIssuer claimLinks,
     IDiscordInteractionAccessResolver accessResolver,
@@ -91,6 +93,20 @@ internal sealed class DiscordCommissionInteractionService(
         {
             return Refusal(
                 "Link Discord in Craft Architect Options before claiming with Discord.");
+        }
+        var holdingProfile = await companies.ResolveProfileAccessAsync(
+            link.ProfileId,
+            publication.CompanyId,
+            cancellationToken);
+        var membership = holdingProfile == null
+            ? await memberships.LoadAsync(
+                publication.CompanyId,
+                link.ProfileId,
+                cancellationToken)
+            : null;
+        if (holdingProfile == null && membership is not { State: MembershipState.Active })
+        {
+            return Refusal("This commission is not available to your company membership.");
         }
 
         var issued = await claimLinks.IssueInteractionClaimLinkAsync(
@@ -217,6 +233,44 @@ internal sealed class DiscordClaimContactCommitter(
     ICompanyCommissionDiscordDelivery discordDelivery,
     TimeProvider timeProvider)
 {
+    public async Task<bool> CaptureMemberAsync(
+        Guid profileId,
+        SqliteDiscordIdentityStore identities,
+        CompanyCommissionMutationResult mutation,
+        CancellationToken cancellationToken = default)
+    {
+        var identity = await identities.LoadByProfileAsync(profileId, cancellationToken);
+        var activity = mutation.Activity;
+        var commission = mutation.Order?.CompanyCommission;
+        var committedClaim = commission?.ActiveClaim;
+        if (!mutation.Success ||
+            identity == null ||
+            activity is not { Kind: CompanyCommissionActivityKind.ClaimAccepted } ||
+            activity.EventId == Guid.Empty ||
+            activity.CommissionRevision <= 0 ||
+            committedClaim == null ||
+            committedClaim.ClaimId == Guid.Empty)
+        {
+            return false;
+        }
+
+        await discordDelivery.CaptureDiscordClaimContactAsync(
+            new CommittedDiscordClaimContact(
+                commission!.CompanyId,
+                commission.CommissionId,
+                committedClaim.ClaimId,
+                activity.EventId,
+                activity.CommissionRevision,
+                activity.Kind,
+                activity.CreatedAtUtc,
+                identity.DiscordUserId,
+                new DiscordOriginContact(
+                    identity.DiscordUserId,
+                    identity.DisplayNameSnapshot)),
+            cancellationToken);
+        return true;
+    }
+
     public async Task<bool> CaptureAsync(
         CompanyCommissionCapabilityResolution claimCapability,
         CompanyCommissionMutationResult mutation,

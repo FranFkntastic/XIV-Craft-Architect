@@ -1,0 +1,307 @@
+using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace FFXIV_Craft_Architect.ContractTests;
+
+public sealed class MemberNotificationContractTests
+{
+    private static readonly CompanyId CompanyId = new(
+        Guid.Parse("11111111-1111-1111-1111-111111111111"));
+    private static readonly Guid CommissionId = Guid.Parse(
+        "22222222-2222-2222-2222-222222222222");
+    private static readonly Guid CrafterId = Guid.Parse(
+        "33333333-3333-3333-3333-333333333333");
+    private const string CommissionerDiscordId = "100000000000000001";
+    private const string CrafterDiscordId = "100000000000000002";
+
+    [Theory]
+    [InlineData(CompanyCommissionActivityKind.ClaimAccepted)]
+    [InlineData(CompanyCommissionActivityKind.TermsAmended)]
+    [InlineData(CompanyCommissionActivityKind.ProgressReported)]
+    [InlineData(CompanyCommissionActivityKind.DeliveryAccepted)]
+    [InlineData(CompanyCommissionActivityKind.CommissionCanceled)]
+    public async Task CommissionActivityEnqueuesMemberDmAndPreservesCommissionerRoute(
+        CompanyCommissionActivityKind eventKind)
+    {
+        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
+
+        var result = await fixture.Delivery.NotifyMembersAsync(
+            fixture.Notification(eventKind),
+            fixture.Commission,
+            fixture.PublicUrl);
+        Assert.True(result.Success);
+
+        var commissionerResult = await fixture.Delivery.NotifyAsync(fixture.Notification(eventKind));
+        Assert.True(commissionerResult.Success, commissionerResult.Error);
+        Assert.True(
+            commissionerResult.WorkItemIds.Count > 0,
+            $"{commissionerResult.Status}: {commissionerResult.Error}");
+        var items = await fixture.LoadOutboxAsync();
+        Assert.True(items.Count >= 2, string.Join(" | ", items));
+
+        var member = Assert.Single(items, item => item.DestinationKind == 2);
+        Assert.Equal(CrafterDiscordId, member.DestinationKey);
+        Assert.Contains(
+            items,
+            item => item.DestinationKind == 0 &&
+                item.DestinationKey == $"dm:{CommissionerDiscordId}");
+        Assert.DoesNotContain("capability", member.PayloadJson, StringComparison.OrdinalIgnoreCase);
+        using var payload = JsonDocument.Parse(member.PayloadJson);
+        Assert.Equal(fixture.PublicUrl.AbsoluteUri, payload.RootElement
+            .GetProperty("embeds")[0]
+            .GetProperty("url")
+            .GetString());
+    }
+
+    [Fact]
+    public async Task OptedOutMemberReceivesNoMemberDm()
+    {
+        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
+        var membership = await fixture.Memberships.SetNotificationsOptedOutAsync(
+            CompanyId,
+            CrafterId,
+            optedOut: true);
+
+        Assert.True(membership!.NotificationsOptedOut);
+        var result = await fixture.Delivery.NotifyMembersAsync(
+            fixture.Notification(CompanyCommissionActivityKind.ProgressReported),
+            fixture.Commission,
+            fixture.PublicUrl);
+
+        Assert.Equal(DiscordNotificationEnqueueStatus.Suppressed, result.Status);
+        Assert.DoesNotContain(
+            await fixture.LoadOutboxAsync(),
+            item => item.DestinationKind == 2);
+    }
+
+    [Fact]
+    public async Task ActiveParticipantWithoutLinkedDiscordReceivesNoMemberDm()
+    {
+        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: false);
+
+        var result = await fixture.Delivery.NotifyMembersAsync(
+            fixture.Notification(CompanyCommissionActivityKind.ClaimAccepted),
+            fixture.Commission,
+            fixture.PublicUrl);
+
+        Assert.Equal(DiscordNotificationEnqueueStatus.Suppressed, result.Status);
+        Assert.Empty(await fixture.LoadOutboxAsync());
+    }
+
+    private sealed class NotificationFixture : IAsyncDisposable
+    {
+        private readonly string databasePath;
+        private readonly SqliteDiscordNotificationStore notifications;
+
+        private NotificationFixture(
+            string databasePath,
+            DiscordCommissionOptions options,
+            SqliteDiscordNotificationStore notifications,
+            SqliteMembershipStore memberships,
+            SqliteDiscordIdentityStore identities,
+            CompanyCommissionDiscordDeliveryService delivery,
+            TradeCompanyCommission commission)
+        {
+            this.databasePath = databasePath;
+            this.notifications = notifications;
+            Memberships = memberships;
+            Commission = commission;
+            Delivery = delivery;
+        }
+
+        public CompanyCommissionDiscordDeliveryService Delivery { get; }
+        public SqliteMembershipStore Memberships { get; }
+        public TradeCompanyCommission Commission { get; }
+        public Uri PublicUrl { get; } = new("https://example.test/commission/brief");
+
+        public static async Task<NotificationFixture> CreateAsync(bool linkDiscord)
+        {
+            var path = Path.Combine(
+                Path.GetTempPath(),
+                $"craft-architect-member-notifications-{Guid.NewGuid():N}.db");
+            var options = new DiscordCommissionOptions
+            {
+                Enabled = true,
+                CompanyId = CompanyId.Value.ToString("D"),
+                ApplicationId = CommissionerDiscordId,
+                PublicKey = new string('a', 64),
+                BotToken = "test-token",
+                AllowedGuildId = "100000000000000003",
+                AllowedChannelId = "100000000000000004",
+                CommissionBaseUrl = "https://example.test/commission/",
+                DatabasePath = path
+            };
+            var notifications = new SqliteDiscordNotificationStore(options);
+            await notifications.InitializeAsync();
+            var route = await notifications.PutRouteAsync(
+                CompanyId,
+                new DiscordNotificationRouteUpdate(
+                    CommissionerDiscordId,
+                    DiscordNotificationDestinationMode.CommissionerDirectMessage,
+                    null,
+                    DiscordDirectMessageFallback.None,
+                    DiscordNotificationMentionBehavior.NoPing,
+                    DiscordNotificationMentionBehavior.NoPing,
+                    DiscordNotificationMentionBehavior.NoPing,
+                    0,
+                    "member-notification-contract"),
+                DateTimeOffset.UtcNow);
+            Assert.True(route.Success, route.Error);
+
+            var memberships = new SqliteMembershipStore(
+                new TradeMembershipOptions { DatabasePath = path },
+                TimeProvider.System,
+                NullLogger<SqliteMembershipStore>.Instance);
+            await memberships.RequestAsync(CompanyId, CrafterId, null);
+            var approval = await memberships.ApproveAsync(CompanyId, CrafterId, Guid.NewGuid());
+            Assert.Equal(MembershipMutationStatus.Applied, approval.Status);
+
+            var identities = new SqliteDiscordIdentityStore(new DiscordIdentityOptions
+            {
+                DatabasePath = path
+            });
+            if (linkDiscord)
+            {
+                var linked = await identities.LinkAsync(
+                    CrafterId,
+                    CrafterDiscordId,
+                    "Contract Crafter",
+                    DateTimeOffset.UtcNow);
+                Assert.Equal(DiscordIdentityLinkResultStatus.Linked, linked.Status);
+            }
+
+            var commission = CreateCommission();
+            return new NotificationFixture(
+                path,
+                options,
+                notifications,
+                memberships,
+                identities,
+                new CompanyCommissionDiscordDeliveryService(
+                    new SqliteDiscordCollaborationStore(options),
+                    notifications,
+                    memberships,
+                    identities,
+                    options,
+                    TimeProvider.System),
+                commission);
+        }
+
+        public CommittedCompanyCommissionNotification Notification(
+            CompanyCommissionActivityKind eventKind)
+        {
+            var eventId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+            return new(
+                CompanyId,
+                CommissionBrief(),
+                eventId,
+                1,
+                eventKind,
+                DateTime.UtcNow,
+                "Commission activity changed.",
+                "Contract Crafter",
+                new Uri($"https://example.test/commission/brief#activity={eventId:D}"));
+        }
+
+        public async Task<IReadOnlyList<OutboxItem>> LoadOutboxAsync()
+        {
+            await using var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT destination_kind, destination_key, payload_json
+                FROM discord_notification_outbox
+                ORDER BY destination_kind;
+                """;
+            var items = new List<OutboxItem>();
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                items.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2)));
+            }
+            return items;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            try
+            {
+                File.Delete(databasePath);
+                File.Delete(databasePath + "-shm");
+                File.Delete(databasePath + "-wal");
+            }
+            catch (IOException)
+            {
+            }
+            return ValueTask.CompletedTask;
+        }
+
+        private CompanyCommissionPublicBrief CommissionBrief() => new()
+        {
+            PublicBriefId = "brief",
+            CommissionId = CommissionId,
+            Title = "Contract commission",
+            CompanyDisplayName = "Contract company",
+            Reference = "MEMBER-1",
+            ViewState = CompanyCommissionPublicViewState.Published,
+            Terms = new()
+            {
+                Version = 1,
+                Outputs = [],
+                Payment = new(
+                    CompanyCommissionPaymentSchedule.Advance,
+                    "Contract payment",
+                    0,
+                    0,
+                    1_000,
+                    1_000),
+                PricingEvidence = new("Contract evidence", "Aether", "Siren", DateTime.UtcNow)
+            },
+            Status = TradeOrderStatus.Assigned,
+            Gates = new(
+                CompanyCommissionClearanceState.Satisfied,
+                CompanyCommissionClearanceState.Pending,
+                CompanyCommissionClearanceState.NotRequired),
+            ClearedToWork = false,
+            IsClaimed = true,
+            DeliveryReadiness = new(false, null, null),
+            SettlementState = CompanyCommissionSettlementState.NotDue,
+            Closed = false,
+            ProjectionRevision = 1
+        };
+
+        private static TradeCompanyCommission CreateCommission() => new()
+        {
+            CommissionId = CommissionId,
+            CompanyId = CompanyId,
+            CommissionerActorId = "commissioner",
+            Reference = "MEMBER-1",
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+            CurrentTermsVersion = 1,
+            TermsVersions = [],
+            PublicMetadata = new()
+            {
+                PublicBriefId = "brief",
+                ViewState = CompanyCommissionPublicViewState.Published,
+                PublicUrl = "https://example.test/commission/brief"
+            },
+            ActiveClaimCapabilityRevision = 1,
+            ActiveClaim = new(Guid.NewGuid(), 1, DateTime.UtcNow, CrafterId, null),
+            Gates = new(
+                new(CompanyCommissionClearanceState.Satisfied),
+                new(CompanyCommissionClearanceState.Pending),
+                new(CompanyCommissionClearanceState.NotRequired, [], null)),
+            DeliveryReadiness = new(false, null, null),
+            SettlementState = CompanyCommissionSettlementState.NotDue
+        };
+
+        public sealed record OutboxItem(int DestinationKind, string DestinationKey, string PayloadJson);
+    }
+}

@@ -110,12 +110,13 @@ public partial class TradeOrders
             return;
         }
 
+        var revisions = await ProfileSyncLocalState.LoadObjectRevisionsAsync(
+            connection.ProfileScopeId,
+            ProfileSyncCollections.TradeOrders,
+            _orders.Select(order => order.Id.ToString("D")));
         foreach (var order in _orders)
         {
-            var revision = await ProfileSyncLocalState.LoadObjectRevisionAsync(
-                connection.ProfileScopeId,
-                ProfileSyncCollections.TradeOrders,
-                order.Id.ToString("D"));
+            var revision = revisions.GetValueOrDefault(order.Id.ToString("D"));
             if (revision > 0)
             {
                 _orderHostedRevisions[order.Id] = revision;
@@ -186,6 +187,30 @@ public partial class TradeOrders
         {
             return;
         }
+        ApplyHostedOrderProjectionState(snapshot);
+        StateHasChanged();
+    }
+
+    private void ApplyHostedOrderProjections(
+        IReadOnlyList<HostedOrderProjectionSnapshot> snapshots)
+    {
+        foreach (var snapshot in snapshots)
+        {
+            if (_companyProfile != null &&
+                snapshot.CompanyProfileId.HasValue &&
+                snapshot.CompanyProfileId != _companyProfile.Id)
+            {
+                continue;
+            }
+
+            ApplyHostedOrderProjectionState(snapshot);
+        }
+
+        StateHasChanged();
+    }
+
+    private void ApplyHostedOrderProjectionState(HostedOrderProjectionSnapshot snapshot)
+    {
         _orderHostedRevisions[snapshot.OrderId] = snapshot.ObjectRevision;
 
         if (_selectedOrder?.Id == snapshot.OrderId)
@@ -215,7 +240,6 @@ public partial class TradeOrders
             }
         }
 
-        StateHasChanged();
     }
 
     private async Task ApplyHostedOrderProjectionReset()
@@ -280,6 +304,7 @@ public partial class TradeOrders
 
     private void ClearUnavailableSelectedOrder(string message)
     {
+        InvalidateSelectedCommissionOwnerRefresh();
         _selectedOrder = null;
         _manualNote = string.Empty;
         _showCommissionTermsRevision = false;

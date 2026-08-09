@@ -110,6 +110,19 @@ public sealed class ProfileHostContractTests
         await entered.WaitAsync(testCancellationToken);
         await entered.WaitAsync(testCancellationToken);
 
+        var uncachedAuthenticationCalls = 0;
+        var cachedResult = await concurrencyGate.ExecuteAsync(
+            "cap_valid-contract-key",
+            _ => Task.FromResult<string?>("cached"),
+            _ =>
+            {
+                Interlocked.Increment(ref uncachedAuthenticationCalls);
+                return Task.FromResult<string?>("unexpected");
+            },
+            testCancellationToken);
+        Assert.Equal("cached", cachedResult);
+        Assert.Equal(0, uncachedAuthenticationCalls);
+
         var third = concurrencyGate.ExecuteAsync(
             "cap_valid-contract-key",
             AuthenticateAsync,
@@ -322,6 +335,89 @@ public sealed class ProfileHostContractTests
         Assert.Equal(HttpStatusCode.Unauthorized, revokedResponse.StatusCode);
         Assert.Equal(HttpStatusCode.OK, enabledResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, disabledResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task LegacyAccessKey_AuthenticationBackfillsIndexedFingerprint()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+
+        Assert.Null(await LoadOnlyAccessKeyFingerprintAsync(fixture.DatabasePath));
+
+        using var firstResponse = await client.GetAsync("/profile-host/profile");
+        await fixture.Store.AddAccessKeyAsync(
+            fixture.ProfileId,
+            fixture.StoredAccessKeyHash,
+            CancellationToken.None);
+        using var secondResponse = await client.GetAsync("/profile-host/keys");
+        var keys = await secondResponse.Content.ReadFromJsonAsync<ProfileHostAccessKeyMetadata[]>();
+
+        firstResponse.EnsureSuccessStatusCode();
+        secondResponse.EnsureSuccessStatusCode();
+        Assert.Equal(2, keys!.Length);
+        Assert.All(keys, key => Assert.True(key.IsCurrent));
+        Assert.Equal(
+            new ProfileAccessKeyHasher().Fingerprint(fixture.AccessKey),
+            await LoadOnlyAccessKeyFingerprintAsync(fixture.DatabasePath));
+    }
+
+    [Fact]
+    public async Task SuccessfulAccessKeyAuthentication_IsCachedButStillHonorsRevocation()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var hasher = new RepeatedVerificationRejectingHasher();
+
+        var first = await fixture.Store.AuthenticateAccessKeyAsync(
+            fixture.AccessKey,
+            hasher,
+            CancellationToken.None);
+        var verificationCount = hasher.VerificationCount;
+        hasher.RejectFurtherVerification = true;
+        var cached = await fixture.Store.AuthenticateAccessKeyAsync(
+            fixture.AccessKey,
+            hasher,
+            CancellationToken.None);
+        await fixture.Store.RevokeAccessKeysAsync(
+            fixture.ProfileId,
+            CancellationToken.None);
+        var revoked = await fixture.Store.AuthenticateAccessKeyAsync(
+            fixture.AccessKey,
+            hasher,
+            CancellationToken.None);
+
+        Assert.Equal(fixture.ProfileId, first?.Profile.ProfileId);
+        Assert.Equal(fixture.ProfileId, cached?.Profile.ProfileId);
+        Assert.True(verificationCount > 0);
+        Assert.Equal(verificationCount, hasher.VerificationCount);
+        Assert.Null(revoked);
+    }
+
+    private static async Task<string?> LoadOnlyAccessKeyFingerprintAsync(string databasePath)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select key_fingerprint from profile_access_keys;";
+        var value = await command.ExecuteScalarAsync();
+        return value == null || value == DBNull.Value ? null : (string)value;
+    }
+
+    private sealed class RepeatedVerificationRejectingHasher : ProfileAccessKeyHasher
+    {
+        public int VerificationCount { get; private set; }
+        public bool RejectFurtherVerification { get; set; }
+
+        public override bool Verify(string plaintextKey, string storedHash)
+        {
+            if (RejectFurtherVerification)
+            {
+                throw new InvalidOperationException("The cached access key was rehashed.");
+            }
+
+            VerificationCount++;
+            return base.Verify(plaintextKey, storedHash);
+        }
     }
 
     [Fact]
@@ -834,6 +930,7 @@ public sealed class ProfileHostContractTests
             string databasePath,
             string profileId,
             string accessKey,
+            string storedAccessKeyHash,
             SqliteProfileHostStore store,
             ProfileHostOptions options,
             string backupRoot,
@@ -842,6 +939,7 @@ public sealed class ProfileHostContractTests
             this.databasePath = databasePath;
             ProfileId = profileId;
             AccessKey = accessKey;
+            StoredAccessKeyHash = storedAccessKeyHash;
             Store = store;
             Options = options;
             BackupRoot = backupRoot;
@@ -850,6 +948,8 @@ public sealed class ProfileHostContractTests
 
         public string ProfileId { get; }
         public string AccessKey { get; }
+        public string StoredAccessKeyHash { get; }
+        public string DatabasePath => databasePath;
         public SqliteProfileHostStore Store { get; }
         public ProfileHostOptions Options { get; }
         public string BackupRoot { get; }
@@ -886,6 +986,7 @@ public sealed class ProfileHostContractTests
                 databasePath,
                 profile.ProfileId,
                 accessKey.PlaintextKey,
+                accessKey.StoredHash,
                 store,
                 options,
                 backupRoot,

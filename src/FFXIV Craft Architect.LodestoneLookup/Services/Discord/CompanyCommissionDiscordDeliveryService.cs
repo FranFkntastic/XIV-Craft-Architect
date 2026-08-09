@@ -1,14 +1,27 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
 public sealed class CompanyCommissionDiscordDeliveryService(
     SqliteDiscordCollaborationStore collaboration,
     SqliteDiscordNotificationStore notifications,
+    SqliteMembershipStore? memberships,
+    SqliteDiscordIdentityStore? identities,
     DiscordCommissionOptions options,
     TimeProvider timeProvider) : ICompanyCommissionDiscordDelivery
 {
+    public CompanyCommissionDiscordDeliveryService(
+        SqliteDiscordCollaborationStore collaboration,
+        SqliteDiscordNotificationStore notifications,
+        DiscordCommissionOptions options,
+        TimeProvider timeProvider)
+        : this(collaboration, notifications, null, null, options, timeProvider)
+    {
+    }
+
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
 
@@ -180,6 +193,77 @@ public sealed class CompanyCommissionDiscordDeliveryService(
             route.Revision,
             JsonSerializer.Serialize(directMessagePayload, JsonOptions),
             JsonSerializer.Serialize(updateChannelPayload, JsonOptions),
+            timeProvider.GetUtcNow(),
+            cancellationToken);
+    }
+
+    public async Task<DiscordNotificationEnqueueResult> NotifyMembersAsync(
+        CommittedCompanyCommissionNotification notification,
+        TradeCompanyCommission commission,
+        Uri publicUrl,
+        CancellationToken cancellationToken = default)
+    {
+        if (memberships == null || identities == null)
+        {
+            return new(DiscordNotificationEnqueueStatus.Suppressed,
+                CompanyCommissionNotificationPolicy.Classify(notification.EventKind), []);
+        }
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var contacts = await notifications.LoadCommittedClaimContactDiscordUserIdsAsync(
+            notification.CompanyId,
+            notification.Commission.CommissionId,
+            cancellationToken);
+        foreach (var contact in contacts)
+        {
+            var identity = await identities.LoadByDiscordUserAsync(contact, cancellationToken);
+            var membership = identity == null
+                ? null
+                : await memberships.LoadForAccountAsync(
+                    notification.CompanyId,
+                    identity.ProfileId,
+                    cancellationToken);
+            if (membership is not { NotificationsOptedOut: true })
+            {
+                ids.Add(contact);
+            }
+        }
+        if (commission.ActiveClaim?.CrafterId is { } crafterId)
+        {
+            var membership = await memberships.LoadForAccountAsync(
+                notification.CompanyId,
+                crafterId,
+                cancellationToken);
+            if (membership is { State: MembershipState.Active, NotificationsOptedOut: false })
+            {
+                var identity = await identities.LoadByProfileAsync(crafterId, cancellationToken);
+                if (identity != null)
+                {
+                    ids.Add(identity.DiscordUserId);
+                }
+            }
+        }
+        var route = await notifications.LoadRouteAsync(notification.CompanyId, cancellationToken);
+        if (route == null || ids.Count == 0)
+        {
+            return new(DiscordNotificationEnqueueStatus.Suppressed,
+                CompanyCommissionNotificationPolicy.Classify(notification.EventKind), []);
+        }
+        var attentionClass = CompanyCommissionNotificationPolicy.Classify(notification.EventKind);
+        var payload = CompanyCommissionDiscordMessage.CreateNotification(
+            notification with { ActivityUrl = new UriBuilder(publicUrl) { Fragment = string.Empty }.Uri },
+            attentionClass,
+            DiscordNotificationMentionBehavior.NoPing,
+            DiscordNotificationDestinationKind.MemberDirectMessage,
+            string.Empty);
+        return await notifications.EnqueueMemberAsync(
+            notification.CompanyId,
+            notification.Commission.CommissionId,
+            notification.EventId,
+            notification.CommissionRevision,
+            attentionClass,
+            route.Revision,
+            JsonSerializer.Serialize(payload, JsonOptions),
+            ids,
             timeProvider.GetUtcNow(),
             cancellationToken);
     }

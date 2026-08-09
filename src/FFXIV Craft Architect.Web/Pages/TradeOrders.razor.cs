@@ -60,6 +60,8 @@ public partial class TradeOrders
     private string? _selectedOrderPlanRestoreError;
     private long _selectedOrderPlanRestoreGeneration;
     private CancellationTokenSource? _selectedOrderPlanRestoreCancellation;
+    private CancellationTokenSource? _selectedCommissionOwnerRefreshCancellation;
+    private Guid? _selectedCommissionOwnerRefreshOrderId;
     private int _activeOpsTab;
     private int _opsPaneWidth = DefaultOpsPaneWidth;
     private bool _isPlanPaneExpanded;
@@ -294,6 +296,7 @@ public partial class TradeOrders
     protected override async Task OnInitializedAsync()
     {
         HostedOrders.Changed += OnHostedOrderProjectionChanged;
+        HostedOrders.BatchChanged += OnHostedOrderProjectionsChanged;
         HostedOrders.Reset += OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged += OnHostedOrderRestoreStateChanged;
         ArchiveSummaries.Changed += OnArchiveSummariesChanged;
@@ -366,7 +369,9 @@ public partial class TradeOrders
     {
         _isDisposed = true;
         InvalidateSelectedOrderPlanRestoration();
+        InvalidateSelectedCommissionOwnerRefresh();
         HostedOrders.Changed -= OnHostedOrderProjectionChanged;
+        HostedOrders.BatchChanged -= OnHostedOrderProjectionsChanged;
         HostedOrders.Reset -= OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged -= OnHostedOrderRestoreStateChanged;
         ArchiveSummaries.Changed -= OnArchiveSummariesChanged;
@@ -395,13 +400,25 @@ public partial class TradeOrders
         try
         {
             _loadError = null;
+            if ((await TradeOperationsPersistence.LoadCompanyProfilesAsync()).Count == 0)
+            {
+                var settings = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+                var signedIn = settings.IsConfigured &&
+                    (await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!)).Linked;
+                if (!signedIn)
+                {
+                    var authorization = await DiscordIdentityClient.StartSignInAsync(ProfileHostClient.DefaultHostUrl, "/trade/orders");
+                    NavigationManager.NavigateTo(authorization.AbsoluteUri, true);
+                    return;
+                }
+            }
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+            SelectPendingNavigationOrder();
             await RefreshArchiveSummariesAsync();
             await LoadOrderHostedRevisionsAsync();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
-            SelectPendingNavigationOrder();
             if (!hadPendingNavigation &&
                 selectedCanonicalOrderId.HasValue)
             {
@@ -442,6 +459,17 @@ public partial class TradeOrders
         }
 
         _ = InvokeAsync(() => ApplyHostedOrderProjection(snapshot));
+    }
+
+    private void OnHostedOrderProjectionsChanged(
+        IReadOnlyList<HostedOrderProjectionSnapshot> snapshots)
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() => ApplyHostedOrderProjections(snapshots));
     }
 
     private void OnHostedOrderProjectionsReset() =>
@@ -580,12 +608,14 @@ public partial class TradeOrders
 
     private void StartNewOrderWorkspace()
     {
+        InvalidateSelectedCommissionOwnerRefresh();
+        InvalidateSelectedOrderPlanRestoration();
+        ClearLiveProcurementSnapshot();
         _pendingImport = null;
         _selectedOrder = null;
         _showNewOrderPanel = true;
         _activeOpsTab = 0;
         AppState.SelectTradeOrder(null);
-        ClearSelectedOrderNavigation();
         if (string.IsNullOrWhiteSpace(_newRequestedOrderTitle))
         {
             RefreshRequestedOrderSuggestedTitle(force: true);
@@ -595,6 +625,7 @@ public partial class TradeOrders
     private void CloseNewOrderWorkspace()
     {
         _showNewOrderPanel = false;
+        ClearSelectedOrderNavigation();
     }
 
     private void ResetNewOrderDraft()

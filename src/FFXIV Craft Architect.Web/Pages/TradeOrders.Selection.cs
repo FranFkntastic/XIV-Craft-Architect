@@ -393,6 +393,80 @@ public partial class TradeOrders
         ScheduleSelectedOrderPlanRestoration();
     }
 
+    private void ScheduleSelectedCommissionOwnerRefresh(TradeOrder order)
+    {
+        if (_selectedCommissionOwnerRefreshOrderId == order.Id &&
+            _selectedCommissionOwnerRefreshCancellation is { IsCancellationRequested: false })
+        {
+            return;
+        }
+
+        InvalidateSelectedCommissionOwnerRefresh();
+        var snapshot = HostedOrders.Get(order.Id);
+        if (order.CompanyCommission == null ||
+            snapshot == null ||
+            !HostedOrderSyncCoordinator.NeedsOwnerAdoption(snapshot))
+        {
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _selectedCommissionOwnerRefreshCancellation = cancellation;
+        _selectedCommissionOwnerRefreshOrderId = order.Id;
+        _ = RefreshSelectedCommissionOwnerAsync(order, cancellation);
+    }
+
+    private async Task RefreshSelectedCommissionOwnerAsync(
+        TradeOrder order,
+        CancellationTokenSource cancellation)
+    {
+        try
+        {
+            // Let the requesting surface render before authenticated owner work begins.
+            await Task.Delay(150, cancellation.Token);
+            await HostedOrderSync.RefreshOwnerProjectionAsync(
+                order.Id,
+                cancellation.Token);
+            if (!_isDisposed &&
+                !cancellation.IsCancellationRequested &&
+                _selectedOrder?.Id == order.Id)
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            var refreshCompleted = false;
+            if (ReferenceEquals(_selectedCommissionOwnerRefreshCancellation, cancellation))
+            {
+                _selectedCommissionOwnerRefreshCancellation = null;
+                _selectedCommissionOwnerRefreshOrderId = null;
+                refreshCompleted = true;
+            }
+            cancellation.Dispose();
+            if (refreshCompleted && !_isDisposed)
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private bool IsSelectedCommissionOwnerRefreshPending =>
+        _selectedOrder != null &&
+        _selectedCommissionOwnerRefreshOrderId == _selectedOrder.Id &&
+        _selectedCommissionOwnerRefreshCancellation is { IsCancellationRequested: false };
+
+    private void InvalidateSelectedCommissionOwnerRefresh()
+    {
+        var cancellation = _selectedCommissionOwnerRefreshCancellation;
+        _selectedCommissionOwnerRefreshCancellation = null;
+        _selectedCommissionOwnerRefreshOrderId = null;
+        cancellation?.Cancel();
+    }
+
     private bool IsSelectedOrderArchived => _selectedOrder != null && TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status);
 
     private Guid? TryGetOrderIdFromNavigation()
@@ -425,6 +499,12 @@ public partial class TradeOrders
     {
         if (!_pendingNavigationOrderId.HasValue)
         {
+            return;
+        }
+
+        if (_showNewOrderPanel)
+        {
+            _pendingNavigationOrderId = null;
             return;
         }
 
@@ -548,9 +628,14 @@ public partial class TradeOrders
 
     private bool SelectOrderAfterReload(Guid orderId, string missingMessage)
     {
-        var reloadedOrder = VisibleOrders.FirstOrDefault(order => order.Id == orderId) ??
-            DeviceOnlyOrders.FirstOrDefault(order =>
-                order.Id == orderId && order.CompanyCommission == null);
+        var localOrder = _orders.FirstOrDefault(order => order.Id == orderId);
+        var preferLocal = localOrder?.CompanyCommission == null &&
+            (FindOrderConflict(orderId) != null || IsOrderPending(orderId));
+        var reloadedOrder = preferLocal
+            ? localOrder
+            : VisibleOrders.FirstOrDefault(order => order.Id == orderId) ??
+              DeviceOnlyOrders.FirstOrDefault(order =>
+                  order.Id == orderId && order.CompanyCommission == null);
         if (reloadedOrder == null)
         {
             _selectedOrder = null;
@@ -565,6 +650,10 @@ public partial class TradeOrders
         }
 
         SelectOrder(reloadedOrder);
+        if (preferLocal)
+        {
+            _selectedLocalHostedCollision = HostedOrders.Get(orderId);
+        }
         ExpandGroupForOrder(reloadedOrder);
         return true;
     }
