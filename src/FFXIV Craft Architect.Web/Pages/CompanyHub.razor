@@ -8,6 +8,7 @@
 @inject TradeOperationsPersistenceService TradeOperations
 @inject DiscordIdentityClient DiscordIdentityClient
 @inject ProfileHostClient ProfileHostClient
+@inject ProfileSyncService ProfileSync
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 
@@ -186,6 +187,9 @@ else
         profile.UpdatedAtUtc = DateTime.UtcNow;
         profile.SyncState = TradeSyncState.PendingSync;
         if (!await TradeOperations.SaveCompanyProfileAsync(profile)) throw new InvalidOperationException("Company theme could not be saved.");
+        await ProfileSync.QueueLocalSaveAsync(
+            ProfileSyncCollections.TradeCompanyProfiles,
+            profile.Id.ToString("D"));
         _editing = false;
         Snackbar.Add("Company hub published.", Severity.Success);
     }
