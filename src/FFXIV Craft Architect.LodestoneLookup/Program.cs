@@ -17,21 +17,31 @@ const string PrivateNetworkAccessRequestHeader = "Access-Control-Request-Private
 const string PrivateNetworkAccessResponseHeader = "Access-Control-Allow-Private-Network";
 
 var builder = WebApplication.CreateBuilder(args);
+var allowedOrigins = new[]
+{
+    "http://localhost:5000",
+    "http://localhost:5001",
+    "http://127.0.0.1:5001",
+    "https://localhost:5001",
+    "https://franfkntastic.github.io",
+    "https://dev.xivcraftarchitect.com",
+    "https://xivcraftarchitect.com"
+};
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(CorsPolicyName, policy =>
     {
         policy
-            .WithOrigins(
-                "http://localhost:5000",
-                "http://localhost:5001",
-                "http://127.0.0.1:5001",
-                "https://localhost:5001",
-                "https://franfkntastic.github.io",
-                "https://dev.xivcraftarchitect.com",
-                "https://xivcraftarchitect.com")
+            .WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod();
+
+        if (builder.Environment.IsDevelopment())
+        {
+            policy.SetIsOriginAllowed(origin =>
+                allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase) ||
+                IsHttpLoopbackOrigin(origin));
+        }
     });
 });
 builder.Services.AddSingleton<ILodestoneCrafterLookupService, NetStoneLodestoneCrafterLookupService>();
@@ -100,7 +110,6 @@ var discordIdentityOptions = new DiscordIdentityOptions
     ClientId = builder.Configuration["DiscordIdentity:ClientId"] ?? string.Empty,
     ClientSecret = builder.Configuration["DiscordIdentity:ClientSecret"] ?? string.Empty,
     BootstrapSecret = builder.Configuration["DiscordIdentity:BootstrapSecret"] ?? string.Empty,
-    CallbackUri = builder.Configuration["DiscordIdentity:CallbackUri"] ?? string.Empty,
     SignInCallbackUri = builder.Configuration["DiscordIdentity:SignInCallbackUri"] ?? string.Empty,
     ApplicationBaseUri = builder.Configuration["DiscordIdentity:ApplicationBaseUri"]
         ?? "https://dev.xivcraftarchitect.com/",
@@ -127,7 +136,6 @@ discordIdentityOptions.Validate();
 builder.Services.AddSingleton(discordIdentityOptions);
 builder.Services.AddSingleton<SqliteDiscordIdentityStore>();
 builder.Services.AddSingleton<DiscordIdentityAuthorization>();
-builder.Services.AddSingleton<DiscordIdentityLinkService>();
 builder.Services.AddSingleton<DiscordIdentitySignInService>();
 builder.Services.AddSingleton<IDiscordCanonicalInteractionAuthority, HostedDiscordInteractionAuthority>();
 builder.Services.AddSingleton<DiscordInteractionAccessResolver>();
@@ -186,6 +194,7 @@ builder.Services.AddSingleton(_ =>
 builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
 builder.Services.AddSingleton<TradeCompanyAuthorization>();
 builder.Services.AddSingleton<MembershipAccessResolver>();
+builder.Services.AddSingleton<CompanyHubService>();
 builder.Services.AddHostedService<FounderMembershipReconciler>();
 builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();
 builder.Services.AddSingleton<HostedCompanyCommissionService>();
@@ -351,6 +360,7 @@ app.MapCommissionBriefEndpoints();
 app.MapCompanyCommissionBriefEndpoints();
 app.MapCompanyCommissionEndpoints();
 app.MapMembershipEndpoints();
+app.MapCompanyHubEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
 app.MapDiscordNotificationEndpoints();
@@ -508,5 +518,11 @@ static void WriteJson(object payload)
         WriteIndented = true
     }));
 }
+
+static bool IsHttpLoopbackOrigin(string origin) =>
+    Uri.TryCreate(origin, UriKind.Absolute, out var uri) &&
+    uri.Scheme == Uri.UriSchemeHttp &&
+    (string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+     string.Equals(uri.Host, "127.0.0.1", StringComparison.Ordinal));
 
 public partial class Program;

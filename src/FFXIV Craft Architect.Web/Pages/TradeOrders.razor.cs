@@ -400,6 +400,18 @@ public partial class TradeOrders
         try
         {
             _loadError = null;
+            if ((await TradeOperationsPersistence.LoadCompanyProfilesAsync()).Count == 0)
+            {
+                var settings = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+                var signedIn = settings.IsConfigured &&
+                    (await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!)).Linked;
+                if (!signedIn)
+                {
+                    var authorization = await DiscordIdentityClient.StartSignInAsync(ProfileHostClient.DefaultHostUrl, "/trade/orders");
+                    NavigationManager.NavigateTo(authorization.AbsoluteUri, true);
+                    return;
+                }
+            }
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();

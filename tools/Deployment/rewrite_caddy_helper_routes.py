@@ -121,18 +121,6 @@ def _all_on(port: str) -> dict[str, str]:
     return {prefix: port for prefix in MANAGED_PREFIXES}
 
 
-def _development_split() -> dict[str, str]:
-    routes = _all_on(STAGING_PORT)
-    for prefix in (
-        "/api/profile-host",
-        "/api/trade",
-        "/api/xivdata/commission-briefs",
-        "/api/identity",
-    ):
-        routes[prefix] = CANONICAL_PORT
-    return routes
-
-
 def _requested_sites(
     target: str, canonicalized: bool
 ) -> tuple[tuple[str, dict[str, str]], ...]:
@@ -141,11 +129,10 @@ def _requested_sites(
             (PRODUCTION_HOST, _all_on(CANONICAL_PORT))
         ]
         if canonicalized:
-            sites.append((DEVELOPMENT_HOST, _development_split()))
+            sites.append((DEVELOPMENT_HOST, _all_on(STAGING_PORT)))
         return tuple(sites)
     if target == "staging":
-        routes = _development_split() if canonicalized else _all_on(STAGING_PORT)
-        return ((DEVELOPMENT_HOST, routes),)
+        return ((DEVELOPMENT_HOST, _all_on(STAGING_PORT)),)
     raise RouteRewriteError(f"Unsupported helper target: {target}.")
 
 

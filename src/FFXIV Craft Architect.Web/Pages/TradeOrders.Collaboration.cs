@@ -16,9 +16,6 @@ public partial class TradeOrders
     private bool _isPublishingCommission;
     private bool _isRevokingCommission;
     private bool _isReconcilingDiscordPublication;
-    private string? _activeInterestClaimId;
-    private readonly Dictionary<string, Guid?> _interestCrafterSelections =
-        new(StringComparer.Ordinal);
 
     private bool HasLiveCommissionPublication =>
         _selectedOrder?.CommissionPublication is { RevokedAtUtc: null };
@@ -84,11 +81,6 @@ public partial class TradeOrders
     private bool CanPublishCanonicalCommissionToDiscord =>
         !_isPublishingCommission &&
         CanonicalDiscordPublishUnavailableReason == null;
-
-    private IReadOnlyList<TradeCommissionInterest> SelectedPendingInterests =>
-        _selectedOrder == null
-            ? []
-            : TradeCollaboration.GetPendingInterests(_selectedOrder.Id);
 
     private ProfileSyncConflict? SelectedOrderConflict =>
         _selectedOrder == null ? null : FindOrderConflict(_selectedOrder.Id);
@@ -210,19 +202,7 @@ public partial class TradeOrders
             _companyProfile?.CommissionContact ??
             string.Empty;
         _commissionDeliveryInstructions = terms?.DeliveryInstructions ?? string.Empty;
-        if (order.CompanyCommission == null)
-        {
-            foreach (var claim in TradeCollaboration.GetPendingInterests(order.Id))
-            {
-                _interestCrafterSelections.TryAdd(claim.ClaimId, claim.MatchedCrafterId);
-            }
-
-            if (order.CommissionPublication == null)
-            {
-                return;
-            }
-        }
-
+        _ = RefreshCollaborationAsync(order);
     }
 
     private async Task RefreshCollaborationAsync(TradeOrder order)
@@ -237,10 +217,6 @@ public partial class TradeOrders
         try
         {
             await TradeCollaboration.RefreshAsync(_companyProfile.Id, order.Id);
-            foreach (var claim in TradeCollaboration.GetPendingInterests(order.Id))
-            {
-                _interestCrafterSelections.TryAdd(claim.ClaimId, claim.MatchedCrafterId);
-            }
             await InvokeAsync(StateHasChanged);
         }
         catch (Exception exception)
@@ -642,95 +618,6 @@ public partial class TradeOrders
         Snackbar.Add(
             "The order could not retain the new link, so the brief was revoked.",
             Severity.Warning);
-    }
-
-    private string GetInterestCrafterValue(TradeCommissionInterest claim)
-    {
-        if (_interestCrafterSelections.TryGetValue(claim.ClaimId, out var selected))
-        {
-            return selected?.ToString("D") ?? string.Empty;
-        }
-
-        return claim.MatchedCrafterId?.ToString("D") ?? string.Empty;
-    }
-
-    private void SetInterestCrafterValue(TradeCommissionInterest claim, string value)
-    {
-        _interestCrafterSelections[claim.ClaimId] = Guid.TryParse(value, out var crafterId)
-            ? crafterId
-            : null;
-    }
-
-    private async Task AcceptInterestAsync(TradeCommissionInterest claim)
-    {
-        if (_selectedOrder == null ||
-            !_interestCrafterSelections.TryGetValue(claim.ClaimId, out var crafterId) ||
-            !crafterId.HasValue)
-        {
-            Snackbar.Add("Choose an existing company crafter before assigning this interest.", Severity.Warning);
-            return;
-        }
-
-        _activeInterestClaimId = claim.ClaimId;
-        try
-        {
-            var orderId = _selectedOrder.Id;
-            var result = await TradeCollaboration.AcceptInterestAsync(
-                _selectedOrder,
-                claim,
-                crafterId.Value);
-            if (!result.Success)
-            {
-                Snackbar.Add(
-                    result.Message ?? "Crafter interest could not be accepted.",
-                    result.Disposition == TradeCompanyMutationDisposition.Conflict
-                        ? Severity.Warning
-                        : Severity.Error);
-                return;
-            }
-
-            await LoadAsync();
-            SelectOrderAfterReload(orderId, "The assignment was accepted, but the order could not be reloaded.");
-            _activeOpsTab = SharingTabIndex;
-            Snackbar.Add("Crafter interest accepted and order assigned", Severity.Success);
-        }
-        finally
-        {
-            _activeInterestClaimId = null;
-        }
-    }
-
-    private async Task DeclineInterestAsync(TradeCommissionInterest claim)
-    {
-        if (_selectedOrder == null)
-        {
-            return;
-        }
-
-        _activeInterestClaimId = claim.ClaimId;
-        try
-        {
-            var orderId = _selectedOrder.Id;
-            var result = await TradeCollaboration.DeclineInterestAsync(_selectedOrder, claim);
-            if (!result.Success)
-            {
-                Snackbar.Add(
-                    result.Message ?? "Crafter interest could not be declined.",
-                    result.Disposition == TradeCompanyMutationDisposition.Conflict
-                        ? Severity.Warning
-                        : Severity.Error);
-                return;
-            }
-
-            await LoadAsync();
-            SelectOrderAfterReload(orderId, "The interest was declined, but the order could not be reloaded.");
-            _activeOpsTab = SharingTabIndex;
-            Snackbar.Add("Crafter interest declined", Severity.Success);
-        }
-        finally
-        {
-            _activeInterestClaimId = null;
-        }
     }
 
     private async Task UseHostedOrderVersionAsync()

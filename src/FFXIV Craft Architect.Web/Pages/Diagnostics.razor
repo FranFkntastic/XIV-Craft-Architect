@@ -1,0 +1,39 @@
+@page "/diagnostics"
+@using FFXIV_Craft_Architect.Web.Services.Diagnostics
+@inject ClientRequestLog RequestLog
+
+<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pa-4">
+    <div class="d-flex align-center mb-2">
+        <MudText Typo="Typo.h5">Client requests</MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Outlined" Size="Size.Small" OnClick="Clear">Clear</MudButton>
+    </div>
+
+    <MudTable Items="@RequestLog.GetNewestFirst()" Dense="true" Hover="true" Elevation="0">
+        <HeaderContent>
+            <MudTh>UTC time</MudTh>
+            <MudTh>Method</MudTh>
+            <MudTh>Path</MudTh>
+            <MudTh>Result</MudTh>
+            <MudTh>Duration</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="UTC time">@context.TimestampUtc.ToString("HH:mm:ss.fff")</MudTd>
+            <MudTd DataLabel="Method">@context.Method</MudTd>
+            <MudTd DataLabel="Path">@context.Url</MudTd>
+            <MudTd DataLabel="Result">@context.Result</MudTd>
+            <MudTd DataLabel="Duration">@context.DurationMilliseconds ms</MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="pa-2">No requests recorded.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudContainer>
+
+@code {
+    private void Clear()
+    {
+        RequestLog.Clear();
+        StateHasChanged();
+    }
+}

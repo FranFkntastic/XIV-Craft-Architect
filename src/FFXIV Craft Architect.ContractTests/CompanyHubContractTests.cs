@@ -1,0 +1,447 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace FFXIV_Craft_Architect.ContractTests;
+
+public sealed class CompanyHubContractTests
+{
+    [Theory]
+    [InlineData("anonymous")]
+    [InlineData("non-member")]
+    [InlineData("pending")]
+    public async Task TeaserWhitelistsOnlyLandingFields(string viewer)
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany(showCount: true);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, CreateOrder(company.Id));
+        HttpClient client;
+        if (viewer == "anonymous")
+        {
+            client = fixture.Application.CreateClient();
+        }
+        else
+        {
+            var account = await fixture.CreateAccountAsync(viewer);
+            client = fixture.CreateClient(account.Key);
+            if (viewer == "pending")
+            {
+                using var requested = await client.PostAsJsonAsync(
+                    $"/trade/v1/companies/{company.Id:D}/membership-requests",
+                    new MembershipRequestBody(null));
+                requested.EnsureSuccessStatusCode();
+            }
+        }
+
+        using var response = await client.GetAsync("/trade/v1/companies/sapphire-avenue/hub");
+        var json = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("\"kind\":\"teaser\"", json);
+        Assert.DoesNotContain("openCommissions", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("assignments", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("roster", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("output", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("payment", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("termsVersion", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("deliveryInstructions", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("publicBriefId", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("projectionRevision", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("completedQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("readyQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("acceptedQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("settlementState", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TeaserShowsOpenCountOnlyWhenEnabled()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var hidden = CreateCompany(showCount: false);
+        var shown = CreateCompany("Count visible", showCount: true);
+        using var client = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(client, hidden);
+        await PutCompanyAsync(client, shown);
+        await PutOrderAsync(client, CreateOrder(hidden.Id));
+        await PutOrderAsync(client, CreateOrder(shown.Id));
+
+        using var hiddenResponse = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        using var shownResponse = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/count-visible/hub");
+        using var hiddenJson = JsonDocument.Parse(await hiddenResponse.Content.ReadAsStringAsync());
+        using var shownJson = JsonDocument.Parse(await shownResponse.Content.ReadAsStringAsync());
+
+        Assert.Equal(JsonValueKind.Null, hiddenJson.RootElement.GetProperty("openCommissionCount").ValueKind);
+        Assert.Equal(1, shownJson.RootElement.GetProperty("openCommissionCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task ActiveMemberGetsHubAndOwnerGetsPendingCount()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var member = await fixture.CreateAccountAsync("Member");
+        var pending = await fixture.CreateAccountAsync("Pending");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var memberClient = fixture.CreateClient(member.Key);
+        using var pendingClient = fixture.CreateClient(pending.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, CreateOrder(company.Id));
+        await RequestAsync(memberClient, company.Id);
+        await RequestAsync(pendingClient, company.Id);
+        using var approved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{member.ProfileId:D}/approve",
+            null);
+        approved.EnsureSuccessStatusCode();
+
+        using var memberResponse = await memberClient.GetAsync("/trade/v1/companies/sapphire-avenue/hub");
+        using var ownerResponse = await ownerClient.GetAsync("/trade/v1/companies/sapphire-avenue/hub");
+        using var memberJson = JsonDocument.Parse(await memberResponse.Content.ReadAsStringAsync());
+        using var ownerJson = JsonDocument.Parse(await ownerResponse.Content.ReadAsStringAsync());
+
+        Assert.Equal("hub", memberJson.RootElement.GetProperty("kind").GetString());
+        var commission = Assert.Single(memberJson.RootElement.GetProperty("openCommissions").EnumerateArray());
+        Assert.Equal(1, commission.GetProperty("termsVersion").GetInt32());
+        Assert.Equal("Deliver to the workshop.", commission.GetProperty("deliveryInstructions").GetString());
+        Assert.Equal("brief", commission.GetProperty("publicBriefId").GetString());
+        Assert.Equal(7, commission.GetProperty("projectionRevision").GetInt64());
+        Assert.Equal("notdue", commission.GetProperty("settlementState").GetString());
+        var output = Assert.Single(commission.GetProperty("outputs").EnumerateArray());
+        Assert.Equal(80, output.GetProperty("completedQuantity").GetInt32());
+        Assert.Equal(60, output.GetProperty("readyQuantity").GetInt32());
+        Assert.Equal(40, output.GetProperty("acceptedQuantity").GetInt32());
+        Assert.Equal("hub", ownerJson.RootElement.GetProperty("kind").GetString());
+        Assert.Equal(1, ownerJson.RootElement.GetProperty("pendingMembershipRequestCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task RevokedMemberGetsTeaser()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var member = await fixture.CreateAccountAsync("Member");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var memberClient = fixture.CreateClient(member.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(memberClient, company.Id);
+        using var approved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{member.ProfileId:D}/approve",
+            null);
+        using var revoked = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{member.ProfileId:D}/revoke",
+            null);
+
+        using var response = await memberClient.GetAsync("/trade/v1/companies/sapphire-avenue/hub");
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal("teaser", json.RootElement.GetProperty("kind").GetString());
+        Assert.Equal("none", json.RootElement.GetProperty("standing").GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task HostileThemeIsClampedAndSanitizedOnProjection()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany();
+        var payload = $"{{\"id\":\"{company.Id:D}\",\"name\":\"Sapphire Avenue\",\"createdAtUtc\":\"2026-01-01T00:00:00Z\",\"landing\":{{\"accent\":\"malicious\",\"bannerStyle\":999,\"emblem\":\"evil\",\"tagline\":\"{new string('x', 200)}\",\"about\":\"[bad](javascript:alert) **safe** [good](https://example.test/path)\"}}}}";
+        using var client = fixture.CreateClient(owner.Key);
+        using var put = await client.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{company.Id:D}",
+            new ProfileSyncPutRequest { PayloadJson = payload, ExpectedRevision = 0 });
+        put.EnsureSuccessStatusCode();
+
+        using var response = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        var json = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(json);
+        var theme = document.RootElement.GetProperty("theme");
+
+        Assert.Equal("deep-blue", theme.GetProperty("accent").GetString());
+        Assert.Equal("gradient", theme.GetProperty("bannerStyle").GetString());
+        Assert.Equal("star", theme.GetProperty("emblem").GetString());
+        Assert.Equal(120, theme.GetProperty("tagline").GetString()!.Length);
+        Assert.DoesNotContain("javascript:", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("https://example.test/path", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SlugCollisionUsesOrdinalAndGuidResolves()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var firstOwner = await fixture.CreateAccountAsync("First owner");
+        var secondOwner = await fixture.CreateAccountAsync("Second owner");
+        var first = CreateCompany();
+        var second = CreateCompany();
+        second.CreatedAtUtc = first.CreatedAtUtc.AddMinutes(1);
+        using var firstClient = fixture.CreateClient(firstOwner.Key);
+        using var secondClient = fixture.CreateClient(secondOwner.Key);
+        await PutCompanyAsync(firstClient, first);
+        await PutCompanyAsync(secondClient, second);
+
+        using var bare = await fixture.Application.CreateClient().GetAsync("/trade/v1/companies/sapphire-avenue/hub");
+        using var ordinal = await fixture.Application.CreateClient().GetAsync("/trade/v1/companies/sapphire-avenue-2/hub");
+        using var guid = await fixture.Application.CreateClient().GetAsync(
+            $"/trade/v1/companies/{second.Id:D}/hub");
+        using var bareJson = JsonDocument.Parse(await bare.Content.ReadAsStringAsync());
+        using var ordinalJson = JsonDocument.Parse(await ordinal.Content.ReadAsStringAsync());
+        using var guidJson = JsonDocument.Parse(await guid.Content.ReadAsStringAsync());
+
+        Assert.Equal(first.Id.ToString("D"), bareJson.RootElement.GetProperty("companyId").GetString());
+        Assert.Equal(second.Id.ToString("D"), ordinalJson.RootElement.GetProperty("companyId").GetString());
+        Assert.Equal(second.Id.ToString("D"), guidJson.RootElement.GetProperty("companyId").GetString());
+        Assert.Equal("sapphire-avenue-2", guidJson.RootElement.GetProperty("slug").GetString());
+    }
+
+    [Fact]
+    public async Task CachedDirectoryInvalidatesAfterCompanyRenameWithoutExpandingTeaser()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany(showCount: true);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, CreateOrder(company.Id));
+
+        using var initial = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        company.Name = "Moonlit Provisioners";
+        await PutCompanyAsync(ownerClient, company, expectedRevision: 1);
+        using var oldSlug = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        using var renamed = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/moonlit-provisioners/hub");
+        var json = await renamed.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, initial.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, oldSlug.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, renamed.StatusCode);
+        Assert.Contains("\"kind\":\"teaser\"", json);
+        Assert.DoesNotContain("openCommissions", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("assignments", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("roster", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CachedTeaserMaintainsWhitelist()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany(showCount: true);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, CreateOrder(company.Id));
+
+        using var first = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        using var second = await fixture.Application.CreateClient().GetAsync(
+            "/trade/v1/companies/sapphire-avenue/hub");
+        var json = await second.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Contains("\"kind\":\"teaser\"", json);
+        Assert.DoesNotContain("openCommissions", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("assignments", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("roster", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("output", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("payment", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("termsVersion", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("deliveryInstructions", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("publicBriefId", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("projectionRevision", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("completedQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("readyQuantity", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("acceptedQuantity", json, StringComparison.Ordinal);
+    }
+
+    private static TradeCompanyProfile CreateCompany(string name = "Sapphire Avenue", bool showCount = false)
+    {
+        var company = TradeCompanyProfile.CreateLocal(name, DateTime.UtcNow);
+        company.Landing = new CompanyLandingTheme
+        {
+            Tagline = "Coordinated craft.",
+            About = "A **workshop** for members.",
+            ShowOpenCommissionCount = showCount
+        };
+        return company;
+    }
+
+    private static TradeOrder CreateOrder(Guid companyId)
+    {
+        var now = DateTime.UtcNow;
+        var orderId = Guid.NewGuid();
+        var outputLineId = Guid.NewGuid();
+        var terms = new CompanyCommissionTermsVersion
+        {
+            Version = 1,
+            CreatedAtUtc = now,
+            CreatedBy = new("owner", CompanyCommissionActorKind.Commissioner),
+            Outputs = [new(outputLineId, 100, "Rarefied Sykon Bavarois", 120, false)],
+            Payment = new(CompanyCommissionPaymentSchedule.OnDelivery, "Delivery", 0, 0, 180000, 180000),
+            DeliveryInstructions = "Deliver to the workshop.",
+            PricingEvidence = new("test", "test", "test", now)
+        };
+        return new TradeOrder
+        {
+            Id = orderId,
+            CompanyProfileId = companyId,
+            Title = "Member commission",
+            Status = TradeOrderStatus.ReadyToAssign,
+            CompanyCommission = new TradeCompanyCommission
+            {
+                CommissionId = orderId,
+                CompanyId = new CompanyId(companyId),
+                CommissionerActorId = "owner",
+                Reference = "SA-1",
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+                CurrentTermsVersion = 1,
+                TermsVersions = [terms],
+                PublicMetadata = new() { PublicBriefId = "brief", ViewState = CompanyCommissionPublicViewState.Published },
+                ActiveClaimCapabilityRevision = 1,
+                Gates = new(
+                    new(CompanyCommissionClearanceState.NotRequired),
+                    new(CompanyCommissionClearanceState.NotRequired),
+                    new(CompanyCommissionClearanceState.NotRequired, [])),
+                OutputProgress = [new(
+                    outputLineId,
+                    100,
+                    120,
+                    80,
+                    60,
+                    40,
+                    now,
+                    new("crafter", CompanyCommissionActorKind.Crafter))],
+                DeliveryReadiness = new(false),
+                SettlementState = CompanyCommissionSettlementState.NotDue,
+                Activity = [new CompanyCommissionActivityEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    CommissionId = orderId,
+                    CommissionRevision = 7,
+                    Actor = new("crafter", CompanyCommissionActorKind.Crafter),
+                    SourceSurface = CompanyCommissionSourceSurface.TradeArchitect,
+                    CreatedAtUtc = now,
+                    Kind = CompanyCommissionActivityKind.ProgressReported,
+                    TermsVersion = 1
+                }]
+            }
+        };
+    }
+
+    private static async Task PutCompanyAsync(
+        HttpClient client,
+        TradeCompanyProfile company,
+        long expectedRevision = 0)
+    {
+        using var response = await client.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeCompanyProfiles}/{company.Id:D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = JsonSerializer.Serialize(company, ProfileSyncJson.CreateOptions()),
+                ExpectedRevision = expectedRevision
+            });
+        response.EnsureSuccessStatusCode();
+    }
+
+    private static async Task PutOrderAsync(HttpClient client, TradeOrder order)
+    {
+        using var response = await client.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeOrders}/{order.Id:D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = JsonSerializer.Serialize(order, ProfileSyncJson.CreateOptions()),
+                ExpectedRevision = 0
+            });
+        response.EnsureSuccessStatusCode();
+    }
+
+    private static async Task RequestAsync(HttpClient client, Guid companyId)
+    {
+        using var response = await client.PostAsJsonAsync(
+            $"/trade/v1/companies/{companyId:D}/membership-requests",
+            new MembershipRequestBody(null));
+        response.EnsureSuccessStatusCode();
+    }
+
+    private sealed class HubFixture : IAsyncDisposable
+    {
+        private readonly string root;
+        private readonly WebApplicationFactory<Program> application;
+
+        private HubFixture(string root, WebApplicationFactory<Program> application)
+        {
+            this.root = root;
+            this.application = application;
+            Profiles = application.Services.GetRequiredService<SqliteProfileHostStore>();
+            Identities = application.Services.GetRequiredService<SqliteDiscordIdentityStore>();
+        }
+
+        public WebApplicationFactory<Program> Application => application;
+        public SqliteProfileHostStore Profiles { get; }
+        public SqliteDiscordIdentityStore Identities { get; }
+
+        public static Task<HubFixture> CreateAsync()
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"craft-hub-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(root);
+            var application = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+                builder.ConfigureAppConfiguration((_, configuration) =>
+                    configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["ProfileHost:Enabled"] = "true",
+                        ["ProfileHost:DatabasePath"] = Path.Combine(root, "profiles.db"),
+                        ["ProfileHost:ArchiveBackupDirectory"] = Path.Combine(root, "archive"),
+                        ["TradeMemberships:DatabasePath"] = Path.Combine(root, "memberships.db")
+                    })));
+            return Task.FromResult(new HubFixture(root, application));
+        }
+
+        public HttpClient CreateClient(string key)
+        {
+            var client = application.CreateClient();
+            client.DefaultRequestHeaders.Add("X-Profile-Key", key);
+            return client;
+        }
+
+        public async Task<Account> CreateAccountAsync(string displayName)
+        {
+            var hasher = new ProfileAccessKeyHasher();
+            var key = hasher.CreateAccessKey();
+            var profile = await Profiles.CreateProfileAsync(displayName, CancellationToken.None);
+            await Profiles.AddAccessKeyAsync(profile.ProfileId, key.StoredHash, CancellationToken.None);
+            var profileId = Guid.Parse(profile.ProfileId);
+            var linked = await Identities.LinkAsync(
+                profileId,
+                $"{100000000000000000L + Math.Abs((long)profileId.GetHashCode()):D18}",
+                displayName,
+                DateTimeOffset.UtcNow);
+            Assert.Equal(DiscordIdentityLinkResultStatus.Linked, linked.Status);
+            return new Account(profileId, key.PlaintextKey);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await application.DisposeAsync();
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed record Account(Guid ProfileId, string Key);
+}

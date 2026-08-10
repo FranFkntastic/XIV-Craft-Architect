@@ -213,6 +213,9 @@
                     <MudMenuItem OnClick="OnOptions" Icon="@Icons.Material.Filled.Settings">
                         Options...
                     </MudMenuItem>
+                    <MudMenuItem OnClick="@(() => NavigateTo("diagnostics"))" Icon="@Icons.Material.Filled.Troubleshoot">
+                        Diagnostics
+                    </MudMenuItem>
                     @if (IsDebugToolsAvailable)
                     {
                         <MudDivider />
