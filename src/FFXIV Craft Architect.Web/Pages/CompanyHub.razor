@@ -75,16 +75,16 @@ else
                 <div class="commission-table">
                     @foreach (var commission in _hub.OpenCommissions ?? [])
                     {
-                        <button class="commission-row" @onclick="() => _selectedCommission = commission"><div><strong>@commission.Title</strong><small>Ref @commission.Reference</small></div><div>@foreach (var output in commission.Outputs) { <span>@output.Name ×@output.Quantity</span> }</div><div>@Payment(commission.Payment)</div><span class="state">@commission.State</span></button>
+                        <button class="commission-row" @onclick="() => _selectedCommission = commission"><div><strong>@commission.Title</strong><small>Ref @commission.Reference</small></div><div>@foreach (var output in commission.Outputs) { <span>@output.Name ×@output.Quantity</span> }</div><div>@Payment(commission.Payment)</div><span class="state">@CommissionStateLabel(commission.State)</span></button>
                     }
                 </div>
             </section>
             @if (_selectedCommission != null)
             {
                 <section class="card commission-detail">
-                    <div class="section-heading"><div><small>@_selectedCommission.Reference · terms v@_selectedCommission.TermsVersion</small><h2>@_selectedCommission.Title</h2></div><span>@_selectedCommission.State</span></div>
+                    <div class="section-heading"><div><small>@_selectedCommission.Reference · terms v@_selectedCommission.TermsVersion</small><h2>@_selectedCommission.Title</h2></div><span>@CommissionStateLabel(_selectedCommission.State)</span></div>
                     <div>@foreach (var output in _selectedCommission.Outputs) { <div><strong>@output.Name</strong> ×@output.Quantity <small>@output.CompletedQuantity completed · @output.ReadyQuantity ready · @output.AcceptedQuantity accepted</small></div> }</div>
-                    <div><strong>@_selectedCommission.Payment.Total.ToString("N0") gil</strong> · @_selectedCommission.Payment.Schedule · @_selectedCommission.Payment.Label</div>
+                    <div><strong>@_selectedCommission.Payment.Total.ToString("N0") gil</strong> · @PaymentScheduleLabel(_selectedCommission.Payment.Schedule) · @_selectedCommission.Payment.Label</div>
                     <div><strong>Delivery</strong><div>@_selectedCommission.DeliveryInstructions</div></div>
                     @if (_confirmingClaim)
                     {
@@ -102,8 +102,8 @@ else
             }
             <div class="lower-grid">
                 <section class="card"><h2>My assignments</h2>@foreach (var assignment in _hub.Assignments ?? []) { <button class="feed" @onclick="() => _selectedCommission = assignment"><strong>@assignment.Title</strong><span>@assignment.Outputs.FirstOrDefault()?.Name · @AssignmentState(assignment)</span></button> }</section>
-                <section class="card"><h2>Members</h2>@foreach (var member in _hub.Roster ?? []) { <div class="feed"><strong>@member.DisplayName</strong><span>@member.Role</span></div> }</section>
-                <section class="card"><h2>Recent activity</h2>@foreach (var activity in _hub.RecentActivity ?? []) { <div class="feed"><strong>@activity.Reference · @activity.Kind</strong><span>@activity.OccurredAtUtc.ToLocalTime().ToString("g")</span></div> }</section>
+                <section class="card"><h2>Members</h2>@foreach (var member in _hub.Roster ?? []) { <div class="feed"><strong>@member.DisplayName</strong><span>@SentenceCase(member.Role)</span></div> }</section>
+                <section class="card"><h2>Recent activity</h2>@foreach (var activity in _hub.RecentActivity ?? []) { <div class="feed"><strong>@activity.Reference · @ActivityLabel(activity.Kind)</strong><span>@activity.OccurredAtUtc.ToLocalTime().ToString("g")</span></div> }</section>
             </div>
         }
         else
@@ -148,7 +148,7 @@ else
     private static readonly string[] Banners = ["none", "gradient", "pattern"];
     private static readonly string[] Emblems = ["star", "prism", "crest", "workshop", "moon", "compass"];
     private bool CanCustomize => _hub?.Standing.Role is "owner" or "operator";
-    private string StandingLabel => _hub!.Standing.State == "active" ? _hub.Standing.Role ?? "member" : _hub.Standing.State;
+    private string StandingLabel => SentenceCase(_hub!.Standing.State == "active" ? _hub.Standing.Role ?? "member" : _hub.Standing.State);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -199,10 +199,18 @@ else
     private async Task ReportProgressAsync() { _claiming = true; try { await HubClient.ReportProgressAsync(_selectedCommission!); await ReloadSelectedAsync(); Snackbar.Add("Progress reported.", Severity.Success); } catch (HttpRequestException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Conflict) { await ReloadSelectedAsync(); } finally { _claiming = false; } }
     private async Task DeclareReadinessAsync() { _claiming = true; try { await HubClient.DeclareReadinessAsync(_selectedCommission!); await ReloadSelectedAsync(); Snackbar.Add("Delivery readiness declared.", Severity.Success); } catch (HttpRequestException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Conflict) { await ReloadSelectedAsync(); } finally { _claiming = false; } }
     private async Task ReloadSelectedAsync() { var id = _selectedCommission!.CommissionId; _hub = await HubClient.LoadAsync(_hub!.Slug); _selectedCommission = _hub!.Assignments!.Single(assignment => assignment.CommissionId == id); }
-    private static string AssignmentState(CompanyHubCommission assignment) => assignment.Outputs.All(output => output.AcceptedQuantity >= output.Quantity) ? $"Delivered · settlement {SettlementLabel(assignment.SettlementState)}" : assignment.Outputs.All(output => output.ReadyQuantity >= output.Quantity) ? "Ready for delivery" : assignment.Outputs.Any(output => output.CompletedQuantity > 0) ? "In progress" : assignment.State;
-    private static string SettlementLabel(string state) => state switch { "notdue" => "not due", "due" => "due", "satisfied" => "satisfied", _ => state };
+    private static string AssignmentState(CompanyHubCommission assignment) => assignment.Outputs.All(output => output.AcceptedQuantity >= output.Quantity) ? $"Delivered · settlement {SettlementLabel(assignment.SettlementState)}" : assignment.Outputs.All(output => output.ReadyQuantity >= output.Quantity) ? "Ready for delivery" : assignment.Outputs.Any(output => output.CompletedQuantity > 0) ? "In progress" : CommissionStateLabel(assignment.State);
+    private static string CommissionStateLabel(string state) => EnumLabel<TradeOrderStatus>(state);
+    private static string PaymentScheduleLabel(string schedule) => EnumLabel<CompanyCommissionPaymentSchedule>(schedule);
+    private static string ActivityLabel(string kind) => EnumLabel<CompanyCommissionActivityKind>(kind);
+    private static string SettlementLabel(string state) => EnumLabel<CompanyCommissionSettlementState>(state).ToLowerInvariant();
+    private static string EnumLabel<TEnum>(string value) where TEnum : struct, Enum =>
+        Enum.TryParse<TEnum>(value, true, out var parsed)
+            ? SentenceCase(Regex.Replace(parsed.ToString(), "([a-z0-9])([A-Z])", "$1 $2").ToLowerInvariant())
+            : SentenceCase(value);
+    private static string SentenceCase(string value) => string.IsNullOrEmpty(value) ? value : char.ToUpperInvariant(value[0]) + value[1..];
     private static string TokenClass(string selected, string token) => selected == token ? "selected" : string.Empty;
-    private static string Payment(CompanyHubPayment payment) => $"{payment.Schedule} · {payment.Total:N0} gil";
+    private static string Payment(CompanyHubPayment payment) => $"{PaymentScheduleLabel(payment.Schedule)} · {payment.Total:N0} gil";
     private static string AccentColor(string token) => token switch { "crimson" => "#b34a58", "gold" => "#b88a35", "emerald" => "#3f9673", "violet" => "#8065b3", "amber" => "#c27d32", "teal" => "#398f92", "rose" => "#b75f82", "slate" => "#718096", "ivory" => "#d8cfb6", _ => "#4c78b5" };
     private static string EmblemGlyph(string token) => token switch { "prism" => "◆", "crest" => "◈", "workshop" => "⚒", "moon" => "☾", "compass" => "✥", _ => "✦" };
     private static string RenderMarkdown(string source) => Regex.Replace(source, @"\[(?<text>[^\]]+)\]\((?<url>https://[^\s)]+)\)|\*\*(?<bold>[^*]+)\*\*|\*(?<italic>[^*]+)\*", match => match.Groups["url"].Success ? $"<a href=\"{match.Groups["url"].Value}\" target=\"_blank\" rel=\"noopener\">{match.Groups["text"].Value}</a>" : match.Groups["bold"].Success ? $"<strong>{match.Groups["bold"].Value}</strong>" : $"<em>{match.Groups["italic"].Value}</em>");
