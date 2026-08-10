@@ -3,6 +3,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using FFXIV_Craft_Architect.Web;
 using FFXIV_Craft_Architect.Web.Services;
+using FFXIV_Craft_Architect.Web.Services.Diagnostics;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 using Microsoft.AspNetCore.Components.Web;
@@ -13,12 +14,12 @@ var builder = WebAssemblyHostBuilder.CreateDefault(args);
 builder.RootComponents.Add<App>("#app");
 // HeadOutlet removed - add back if you need dynamic <PageTitle> support
 
-// Register HttpClient for API calls with extended timeout for Universalis
-builder.Services.AddScoped(sp => new HttpClient
-{
-    BaseAddress = new Uri(builder.HostEnvironment.BaseAddress),
-    Timeout = TimeSpan.FromSeconds(60) // Extended timeout for large bulk requests
-});
+builder.Services.AddSingleton<ClientRequestLog>();
+// Register HttpClient for API calls with extended timeout for Universalis.
+builder.Services.AddScoped(sp => CreateDiagnosticHttpClient(
+    sp,
+    new Uri(builder.HostEnvironment.BaseAddress),
+    TimeSpan.FromSeconds(60)));
 
 // Register MudBlazor
 builder.Services.AddMudServices();
@@ -89,7 +90,8 @@ builder.Services.AddScoped<TradeCompanyCollaborationService>();
 builder.Services.AddScoped<TradeCommissionOperationsClient>();
 builder.Services.AddScoped<TradeCommissionOperationsService>();
 builder.Services.AddScoped(services => new CommissionBriefClient(
-    services.GetRequiredService<ProfileHostClientOptions>()));
+    services.GetRequiredService<ProfileHostClientOptions>(),
+    CreateDiagnosticHttpClient(services, null, TimeSpan.FromSeconds(20))));
 builder.Services.AddScoped<CommissionBriefLocalStateService>();
 builder.Services.AddSingleton(new ProfileHostClientOptions(
     ResolveProfileHostBaseAddress(
@@ -118,11 +120,7 @@ builder.Services.AddScoped<ILodestoneCrafterLookupService>(sp =>
     var options = sp.GetRequiredService<LodestoneLookupClientOptions>();
     var logger = sp.GetRequiredService<ILogger<HttpLodestoneCrafterLookupService>>();
     return new HttpLodestoneCrafterLookupService(
-        new HttpClient
-        {
-            BaseAddress = options.BaseAddress,
-            Timeout = TimeSpan.FromSeconds(30)
-        },
+        CreateDiagnosticHttpClient(sp, options.BaseAddress, TimeSpan.FromSeconds(30)),
         options,
         logger);
 });
@@ -151,4 +149,22 @@ static string ResolveProfileHostBaseAddress(string? configuredBaseAddress, strin
         ? new Uri(new Uri(hostBaseAddress), "api/").AbsoluteUri
         : configuredBaseAddress;
     return ProfileHostClient.NormalizeHostUrl(candidate);
+}
+
+static HttpClient CreateDiagnosticHttpClient(
+    IServiceProvider services,
+    Uri? baseAddress,
+    TimeSpan timeout)
+{
+    var handler = new DiagnosticRequestHandler(
+        services.GetRequiredService<ClientRequestLog>(),
+        services.GetRequiredService<ILogger<DiagnosticRequestHandler>>())
+    {
+        InnerHandler = new HttpClientHandler()
+    };
+    return new HttpClient(handler)
+    {
+        BaseAddress = baseAddress,
+        Timeout = timeout
+    };
 }

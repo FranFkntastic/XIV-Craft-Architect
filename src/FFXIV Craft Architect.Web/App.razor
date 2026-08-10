@@ -5,7 +5,7 @@
                 <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
                 <FocusOnNavigate RouteData="@routeData" Selector="h1" />
             </ChildContent>
-            <ErrorContent>
+            <ErrorContent Context="exception">
                 <MudContainer MaxWidth="MaxWidth.Medium" Class="pa-4">
                     <MudPaper Outlined="true" Class="pa-6 mt-4">
                         <MudText Typo="Typo.h4" Class="mb-2">This screen could not be loaded</MudText>
@@ -20,6 +20,12 @@
                                 Recipe Planner
                             </MudButton>
                         </MudStack>
+                        <details class="mt-4">
+                            <summary>Technical detail</summary>
+                            <MudText Typo="Typo.body2" Class="mt-2">
+                                @exception.GetType().Name: @exception.Message
+                            </MudText>
+                        </details>
                     </MudPaper>
                 </MudContainer>
             </ErrorContent>

@@ -17,21 +17,31 @@ const string PrivateNetworkAccessRequestHeader = "Access-Control-Request-Private
 const string PrivateNetworkAccessResponseHeader = "Access-Control-Allow-Private-Network";
 
 var builder = WebApplication.CreateBuilder(args);
+var allowedOrigins = new[]
+{
+    "http://localhost:5000",
+    "http://localhost:5001",
+    "http://127.0.0.1:5001",
+    "https://localhost:5001",
+    "https://franfkntastic.github.io",
+    "https://dev.xivcraftarchitect.com",
+    "https://xivcraftarchitect.com"
+};
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(CorsPolicyName, policy =>
     {
         policy
-            .WithOrigins(
-                "http://localhost:5000",
-                "http://localhost:5001",
-                "http://127.0.0.1:5001",
-                "https://localhost:5001",
-                "https://franfkntastic.github.io",
-                "https://dev.xivcraftarchitect.com",
-                "https://xivcraftarchitect.com")
+            .WithOrigins(allowedOrigins)
             .AllowAnyHeader()
             .AllowAnyMethod();
+
+        if (builder.Environment.IsDevelopment())
+        {
+            policy.SetIsOriginAllowed(origin =>
+                allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase) ||
+                IsHttpLoopbackOrigin(origin));
+        }
     });
 });
 builder.Services.AddSingleton<ILodestoneCrafterLookupService, NetStoneLodestoneCrafterLookupService>();
@@ -508,5 +518,11 @@ static void WriteJson(object payload)
         WriteIndented = true
     }));
 }
+
+static bool IsHttpLoopbackOrigin(string origin) =>
+    Uri.TryCreate(origin, UriKind.Absolute, out var uri) &&
+    uri.Scheme == Uri.UriSchemeHttp &&
+    (string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+     string.Equals(uri.Host, "127.0.0.1", StringComparison.Ordinal));
 
 public partial class Program;
