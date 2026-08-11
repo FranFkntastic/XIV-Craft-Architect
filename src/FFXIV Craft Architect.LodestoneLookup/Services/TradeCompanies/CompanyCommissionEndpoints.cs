@@ -2,6 +2,7 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
@@ -414,6 +415,8 @@ public static class CompanyCommissionEndpoints
                  HttpRequest request,
                  SqliteCompanyCommissionCapabilityStore capabilities,
                  DiscordClaimContactCommitter claimContacts,
+                 SqliteDiscordIdentityStore identities,
+                 SqliteProfileHostStore profiles,
                  HostedCompanyCommissionService commissions,
                  MembershipAccessResolver accessResolver,
                  ProfileHostedTradeCompanyService companyService,
@@ -511,9 +514,17 @@ public static class CompanyCommissionEndpoints
                         "A bounded browser-generated participant credential is required.");
                 }
 
+                var verifiedActorDisplayName = command is ClaimCompanyCommissionCommand
+                    ? await claimContacts.ResolveVerifiedActorDisplayNameAsync(
+                        capability,
+                        identities,
+                        profiles,
+                        cancellationToken)
+                    : null;
                 var mutation = await commissions.ExecuteCapabilityAsync(
                     capability,
                     command,
+                    verifiedActorDisplayName,
                     cancellationToken);
                 if (!mutation.Success)
                 {

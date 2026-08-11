@@ -86,7 +86,9 @@ public partial class TradeOrders
     private bool _selectedOrderPaymentTermsDirty;
     private string _manualNote = string.Empty;
     private string? _loadError;
-    private Guid? _pendingNavigationOrderId;
+    private TradeOrderNotificationNavigationHint? _pendingNotificationNavigation;
+    private Guid? _focusedTimelineEventId;
+    private Guid? _pendingTimelineFocusEventId;
     private bool _isArchiveCollapsed = true;
     private bool _isDeviceOnlyCollapsed = true;
     private HashSet<string> _collapsedAttentionGroups = new(StringComparer.Ordinal);
@@ -302,7 +304,13 @@ public partial class TradeOrders
         ArchiveSummaries.Changed += OnArchiveSummariesChanged;
         ProfileSync.StatusChanged += OnProfileSyncStatusChanged;
         WorkerProjections.Changed += OnWorkerProjectionChangedForPlanRestoration;
-        _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
+        var notificationNavigation = TradeOrderNotificationNavigation.Parse(
+            NavigationManager.ToAbsoluteUri(NavigationManager.Uri));
+        _pendingNotificationNavigation = notificationNavigation.HasHint
+            ? notificationNavigation
+            : AppState.SelectedTradeOrderId is { } selectedOrderId
+                ? TradeOrderNotificationNavigationHint.ForOrder(selectedOrderId)
+                : null;
         await LoadAsync();
         try
         {
@@ -327,6 +335,14 @@ public partial class TradeOrders
             string.IsNullOrWhiteSpace(_loadError))
         {
             await RegisterTradeOrdersLayoutAsync();
+        }
+        if (_pendingTimelineFocusEventId is { } eventId &&
+            _tradeOrdersLayoutModule != null)
+        {
+            _pendingTimelineFocusEventId = null;
+            await _tradeOrdersLayoutModule.InvokeVoidAsync(
+                "focusTradeOrderActivity",
+                eventId.ToString("D"));
         }
     }
 
@@ -396,7 +412,7 @@ public partial class TradeOrders
         Guid? selectedCanonicalOrderId =
             _selectedOrder?.CompanyCommission == null ? null : _selectedOrder.Id;
         var selectedTab = _activeOpsTab;
-        var hadPendingNavigation = _pendingNavigationOrderId.HasValue;
+        var hadPendingNavigation = _pendingNotificationNavigation != null;
         try
         {
             _loadError = null;
@@ -407,7 +423,12 @@ public partial class TradeOrders
                     (await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!)).Linked;
                 if (!signedIn)
                 {
-                    var authorization = await DiscordIdentityClient.StartSignInAsync(ProfileHostClient.DefaultHostUrl, "/trade/orders");
+                    var returnPath = NavigationManager
+                        .ToAbsoluteUri(NavigationManager.Uri)
+                        .PathAndQuery;
+                    var authorization = await DiscordIdentityClient.StartSignInAsync(
+                        ProfileHostClient.DefaultHostUrl,
+                        returnPath);
                     NavigationManager.NavigateTo(authorization.AbsoluteUri, true);
                     return;
                 }
@@ -415,7 +436,7 @@ public partial class TradeOrders
             _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
-            SelectPendingNavigationOrder();
+            await SelectPendingNavigationOrderAsync();
             await RefreshArchiveSummariesAsync();
             await LoadOrderHostedRevisionsAsync();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();

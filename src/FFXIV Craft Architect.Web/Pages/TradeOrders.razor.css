@@ -2090,6 +2090,13 @@ button.trade-orders-rail-order.is-device-only:hover {
   border-bottom: 1px solid #333;
 }
 
+.trade-orders-timeline-item.is-focused {
+  outline: 2px solid #69a8d4;
+  outline-offset: -2px;
+  background: #21303b;
+  box-shadow: inset 3px 0 #69a8d4;
+}
+
 .trade-orders-timeline-item.is-attention {
   background: #30231f;
   box-shadow: inset 3px 0 #c46f51;

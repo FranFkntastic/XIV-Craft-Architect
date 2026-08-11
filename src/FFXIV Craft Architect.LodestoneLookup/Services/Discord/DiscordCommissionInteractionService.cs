@@ -233,6 +233,45 @@ internal sealed class DiscordClaimContactCommitter(
     ICompanyCommissionDiscordDelivery discordDelivery,
     TimeProvider timeProvider)
 {
+    public async Task<string?> ResolveVerifiedActorDisplayNameAsync(
+        CompanyCommissionCapabilityResolution claimCapability,
+        SqliteDiscordIdentityStore identities,
+        SqliteProfileHostStore profiles,
+        CancellationToken cancellationToken = default)
+    {
+        if (claimCapability.Kind != CompanyCommissionCapabilityKind.Claim ||
+            claimCapability.CapabilityId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var expectation = await notifications.LoadPendingClaimContactAsync(
+            claimCapability.CompanyId,
+            claimCapability.CommissionId,
+            claimCapability.PublicBriefId,
+            claimCapability.CapabilityId,
+            claimCapability.CapabilityRevision,
+            timeProvider.GetUtcNow(),
+            cancellationToken);
+        if (expectation == null)
+        {
+            return null;
+        }
+
+        var identity = await identities.LoadByDiscordUserAsync(
+            expectation.Contact.DiscordUserId,
+            cancellationToken);
+        if (identity == null)
+        {
+            return null;
+        }
+
+        var profile = await profiles.LoadProfileAsync(
+            identity.ProfileId.ToString("D"),
+            cancellationToken);
+        return profile?.DisplayName;
+    }
+
     public async Task<bool> CaptureMemberAsync(
         Guid profileId,
         SqliteDiscordIdentityStore identities,

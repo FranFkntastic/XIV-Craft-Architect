@@ -26,6 +26,7 @@ public sealed class CompanyMemberCommissionContractTests
             await response.Content.ReadAsStringAsync());
         var projection = await response.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>();
         var claimId = await fixture.LoadActiveClaimIdAsync();
+        var claimActorDisplayName = await fixture.LoadClaimActorDisplayNameAsync(claimId);
         var captured = await fixture.Notifications.HasCommittedClaimContactAsync(
             new CompanyId(fixture.Company.Id),
             fixture.Order.Id,
@@ -36,6 +37,7 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.Equal(fixture.Order.Id, projection!.Public.CommissionId);
         Assert.True(projection.Public.IsClaimed);
         Assert.True(captured);
+        Assert.Equal("Crafter", claimActorDisplayName);
     }
 
     [Fact]
@@ -383,6 +385,14 @@ public sealed class CompanyMemberCommissionContractTests
         {
             var order = await LoadCanonicalOrderAsync();
             return order.CompanyCommission!.ActiveClaim!.ClaimId;
+        }
+
+        public async Task<string?> LoadClaimActorDisplayNameAsync(Guid claimId)
+        {
+            var order = await LoadCanonicalOrderAsync();
+            return order.CompanyCommission!.Activity
+                .Single(item => item.CommandId == claimId)
+                .Actor.DisplayName;
         }
 
         public async Task<Guid> LoadActiveCrafterIdAsync()

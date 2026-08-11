@@ -41,9 +41,7 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
 
         var commission = committed.Order.CompanyCommission;
         var publicUrl = commission?.PublicMetadata.PublicUrl;
-        if (activity.Actor.Kind != CompanyCommissionActorKind.Crafter ||
-            commission?.PublicMetadata.ViewState !=
-                CompanyCommissionPublicViewState.Published ||
+        if (commission == null ||
             !Uri.TryCreate(publicUrl, UriKind.Absolute, out var publicUri))
         {
             return;
@@ -51,35 +49,47 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
 
         var delivery = scope.ServiceProvider
             .GetRequiredService<ICompanyCommissionDiscordDelivery>();
-        var activityUrl = new UriBuilder(publicUri)
-        {
-            Fragment = $"activity={activity.EventId:D}"
-        }.Uri;
+        var publicBrief = CompanyCommissionProjectionService.CreatePublicBrief(
+            committed.Order,
+            committed.CompanyDisplayName);
+        var activityUrl = CompanyCommissionNotificationLinks.BuildOperatorActivityUrl(
+            publicUri,
+            activity.CommissionId,
+            activity.EventId);
         var notification = new CommittedCompanyCommissionNotification(
             access.CompanyId,
-            CompanyCommissionProjectionService.CreatePublicBrief(
-                committed.Order,
-                committed.CompanyDisplayName),
+            publicBrief,
             activity.EventId,
             activity.CommissionRevision,
             activity.Kind,
             activity.CreatedAtUtc,
-            BuildSummary(activity),
+            BuildSummary(activity, publicBrief),
             activity.Actor.DisplayName,
+            ResolveActionLabel(activity.Kind, publicBrief),
             activityUrl);
         try
         {
-            var result = await delivery.NotifyAsync(notification, cancellationToken);
-            if (result.Status == DiscordNotificationEnqueueStatus.Invalid)
+            if (ShouldNotifyCommissioner(activity))
             {
-                logger.LogError(
-                    "Committed Discord notification was rejected for commission " +
-                    "{CommissionId}, event {EventId}: {Error}",
-                    activity.CommissionId,
-                    activity.EventId,
-                    result.Error ?? "invalid notification projection");
+                var result = await delivery.NotifyAsync(notification, cancellationToken);
+                if (result.Status == DiscordNotificationEnqueueStatus.Invalid)
+                {
+                    logger.LogError(
+                        "Committed Discord notification was rejected for commission " +
+                        "{CommissionId}, event {EventId}: {Error}",
+                        activity.CommissionId,
+                        activity.EventId,
+                        result.Error ?? "invalid notification projection");
+                }
             }
-            await delivery.NotifyMembersAsync(notification, commission, publicUri, cancellationToken);
+            if (ShouldNotifyMembers(activity))
+            {
+                await delivery.NotifyMembersAsync(
+                    notification,
+                    commission,
+                    publicUri,
+                    cancellationToken);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -96,19 +106,22 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
         }
     }
 
-    private static string BuildSummary(CompanyCommissionActivityEvent activity) =>
-        activity.Kind switch
+    internal static string BuildSummary(
+        CompanyCommissionActivityEvent activity,
+        CompanyCommissionPublicBrief commission)
+    {
+        var changedFact = activity.Kind switch
         {
             CompanyCommissionActivityKind.CommissionOpened =>
                 "The commission was opened.",
             CompanyCommissionActivityKind.ClaimAccepted =>
-                "A crafter claimed the commission.",
+                "The crafter's claim was accepted.",
             CompanyCommissionActivityKind.ClaimRejected =>
                 "The crafter claim was rejected.",
             CompanyCommissionActivityKind.ClaimReleased =>
                 "The crafter released the commission.",
             CompanyCommissionActivityKind.ClaimResolutionRequired =>
-                "The crafter withdrew after work or an exchange began. Company resolution is required.",
+                "The crafter withdrew after work or an exchange began.",
             CompanyCommissionActivityKind.ClaimRecovered =>
                 "Crafter access to the commission was recovered.",
             CompanyCommissionActivityKind.ProvisionalIdentitySubmitted =>
@@ -184,4 +197,101 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                 activity.Kind,
                 null)
         };
+
+        var resultingState = ResolveResultingState(commission);
+        return string.Equals(changedFact, resultingState, StringComparison.Ordinal)
+            ? changedFact
+            : $"{changedFact} {resultingState}";
+    }
+
+    internal static string ResolveActionLabel(
+        CompanyCommissionActivityKind eventKind,
+        CompanyCommissionPublicBrief commission) =>
+        eventKind switch
+        {
+            CompanyCommissionActivityKind.ClaimResolutionRequired => "Review claim",
+            CompanyCommissionActivityKind.ClaimAccepted
+                when commission.Gates.Identity == CompanyCommissionClearanceState.Pending =>
+                "Review identity",
+            CompanyCommissionActivityKind.ProvisionalIdentitySubmitted => "Review identity",
+            CompanyCommissionActivityKind.PaymentPolicyChangeRequested => "Review payment",
+            CompanyCommissionActivityKind.CompanyMaterialsReceived => "View order",
+            CompanyCommissionActivityKind.DeliveryReadinessDeclared => "Review delivery",
+            CompanyCommissionActivityKind.ProgressReported => "View progress",
+            CompanyCommissionActivityKind.CommentAdded => "View comment",
+            _ => "View order"
+        };
+
+    internal static bool ShouldNotifyCommissioner(
+        CompanyCommissionActivityEvent activity) =>
+        activity.Actor.Kind == CompanyCommissionActorKind.Crafter &&
+        activity.Visibility == CompanyCommissionActivityVisibility.Shared &&
+        activity.Kind != CompanyCommissionActivityKind.DraftUpdated;
+
+    internal static bool ShouldNotifyMembers(
+        CompanyCommissionActivityEvent activity) =>
+        activity.Visibility == CompanyCommissionActivityVisibility.Shared &&
+        activity.Kind != CompanyCommissionActivityKind.DraftUpdated;
+
+    private static string ResolveResultingState(
+        CompanyCommissionPublicBrief commission)
+    {
+        if (commission.RequiresManualResolution ||
+            commission.Status == TradeOrderStatus.ResolutionRequired)
+        {
+            return "Company resolution is required before work can continue.";
+        }
+
+        if (commission.Status == TradeOrderStatus.Canceled)
+        {
+            return "The commission is canceled and no longer publicly actionable.";
+        }
+
+        if (commission.Status == TradeOrderStatus.Completed)
+        {
+            return commission.SettlementState == CompanyCommissionSettlementState.Satisfied
+                ? "Delivery and settlement are complete."
+                : "Delivery is accepted; final settlement remains pending.";
+        }
+
+        if (commission.DeliveryReadiness.IsReady ||
+            commission.Status == TradeOrderStatus.AwaitingDelivery)
+        {
+            return "The completed outputs are ready for delivery review.";
+        }
+
+        if (commission.Status == TradeOrderStatus.InProgress)
+        {
+            return "Work remains in progress.";
+        }
+
+        if (!commission.IsClaimed)
+        {
+            return "The single claim slot is open.";
+        }
+
+        if (commission.Gates.Identity == CompanyCommissionClearanceState.Pending)
+        {
+            return "Identity review is required before work can begin.";
+        }
+
+        if (!commission.ClearedToWork)
+        {
+            var pending = new List<string>();
+            if (commission.Gates.Payment == CompanyCommissionClearanceState.Pending)
+            {
+                pending.Add("payment");
+            }
+            if (commission.Gates.CompanyMaterials == CompanyCommissionClearanceState.Pending)
+            {
+                pending.Add("company materials");
+            }
+
+            return pending.Count == 0
+                ? "The commission remains assigned pending work clearance."
+                : $"The commission remains assigned pending {string.Join(" and ", pending)}.";
+        }
+
+        return "The commission is cleared for work.";
+    }
 }

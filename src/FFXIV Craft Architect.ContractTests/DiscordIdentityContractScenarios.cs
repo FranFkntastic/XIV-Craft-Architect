@@ -307,6 +307,12 @@ public sealed class DiscordIdentityContractTests
                 null,
                 5,
                 claimCapabilityId);
+            Assert.Equal(
+                "Participant",
+                await committer.ResolveVerifiedActorDisplayNameAsync(
+                    capability,
+                    identities,
+                    profiles));
             var claimId = Guid.NewGuid();
             var mutation = ClaimMutation(
                 commissionId,

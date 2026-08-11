@@ -52,10 +52,40 @@ public sealed class MemberNotificationContractTests
                 item.DestinationKey == $"dm:{CommissionerDiscordId}");
         Assert.DoesNotContain("capability", member.PayloadJson, StringComparison.OrdinalIgnoreCase);
         using var payload = JsonDocument.Parse(member.PayloadJson);
-        Assert.Equal(fixture.PublicUrl.AbsoluteUri, payload.RootElement
+        Assert.Equal(
+            $"https://example.test/companies/{CompanyId.Value:D}" +
+            $"?commissionId={CommissionId:D}" +
+            "&activityId=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            payload.RootElement
             .GetProperty("embeds")[0]
             .GetProperty("url")
             .GetString());
+        Assert.DoesNotContain("Contract Crafter", member.PayloadJson, StringComparison.Ordinal);
+
+        var commissioner = Assert.Single(
+            items,
+            item => item.DestinationKind == 0 &&
+                item.DestinationKey == $"dm:{CommissionerDiscordId}");
+        using var commissionerPayload = JsonDocument.Parse(commissioner.PayloadJson);
+        var commissionerEmbed = commissionerPayload.RootElement
+            .GetProperty("embeds")[0];
+        Assert.Contains("Contract commission", commissionerEmbed.GetProperty("title").GetString());
+        Assert.Contains("MEMBER-1", commissionerEmbed.GetProperty("title").GetString());
+        Assert.Equal("Contract Crafter", commissionerEmbed
+            .GetProperty("fields")[0]
+            .GetProperty("value")
+            .GetString());
+        Assert.Equal(
+            "Review identity",
+            commissionerPayload.RootElement
+                .GetProperty("components")[0]
+                .GetProperty("components")[0]
+                .GetProperty("label")
+                .GetString());
+        Assert.Equal(
+            $"https://example.test/trade/orders?orderId={CommissionId:D}" +
+            "&activityId=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            commissionerEmbed.GetProperty("url").GetString());
     }
 
     [Fact]
@@ -90,6 +120,25 @@ public sealed class MemberNotificationContractTests
             fixture.PublicUrl);
 
         Assert.Equal(DiscordNotificationEnqueueStatus.Suppressed, result.Status);
+        Assert.Empty(await fixture.LoadOutboxAsync());
+    }
+
+    [Fact]
+    public async Task NotificationRejectsNonCanonicalOperatorDestination()
+    {
+        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
+        var notification = fixture.Notification(
+            CompanyCommissionActivityKind.ProvisionalIdentitySubmitted) with
+        {
+            ActivityUrl = new Uri(
+                $"https://example.test/trade/orders?orderId={CommissionId:D}" +
+                "&activityId=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" +
+                "&capability=must-not-travel")
+        };
+
+        var result = await fixture.Delivery.NotifyAsync(notification);
+
+        Assert.Equal(DiscordNotificationEnqueueStatus.Invalid, result.Status);
         Assert.Empty(await fixture.LoadOutboxAsync());
     }
 
@@ -205,7 +254,11 @@ public sealed class MemberNotificationContractTests
                 DateTime.UtcNow,
                 "Commission activity changed.",
                 "Contract Crafter",
-                new Uri($"https://example.test/commission/brief#activity={eventId:D}"));
+                "Review identity",
+                CompanyCommissionNotificationLinks.BuildOperatorActivityUrl(
+                    PublicUrl,
+                    CommissionId,
+                    eventId));
         }
 
         public async Task<IReadOnlyList<OutboxItem>> LoadOutboxAsync()

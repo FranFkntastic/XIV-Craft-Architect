@@ -259,7 +259,7 @@ public partial class TradeOrders
         StateHasChanged();
     }
 
-    private void ApplyHostedOrderRestoreState(HostedOrderRestoreState state)
+    private async Task ApplyHostedOrderRestoreState(HostedOrderRestoreState state)
     {
         if (_isDisposed)
         {
@@ -275,6 +275,11 @@ public partial class TradeOrders
         {
             _archiveSummaryRecords = [];
             _orderHostedRevisions.Clear();
+        }
+        else if (state.ShowsCompleteProjection &&
+                 _pendingNotificationNavigation?.ActivityId != null)
+        {
+            await SelectPendingNavigationOrderAsync();
         }
         else if (state.ShowsCompleteProjection &&
                  _selectedOrder != null &&

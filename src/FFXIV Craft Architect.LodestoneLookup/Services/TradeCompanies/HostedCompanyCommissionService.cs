@@ -299,7 +299,7 @@ public sealed class HostedCompanyCommissionService(
             cancellationToken);
     }
 
-    public Task<CompanyCommissionMutationResult> ExecuteMemberAsync(
+    public async Task<CompanyCommissionMutationResult> ExecuteMemberAsync(
         TradeCompanyAccessContext access,
         Guid accountProfileId,
         ICompanyCommissionParticipantCommand command,
@@ -307,13 +307,17 @@ public sealed class HostedCompanyCommissionService(
     {
         if (accountProfileId == Guid.Empty || access.GrantId != accountProfileId)
         {
-            return Task.FromResult(Unauthorized());
+            return Unauthorized();
         }
 
+        var profile = await profileHost.LoadProfileAsync(
+            accountProfileId.ToString("D"),
+            cancellationToken);
         var actor = new CompanyCommissionActor(
             $"account-profile:{accountProfileId:D}",
-            CompanyCommissionActorKind.Crafter);
-        return ExecuteAuthenticatedAsync(
+            CompanyCommissionActorKind.Crafter,
+            NormalizeActorDisplayName(profile?.DisplayName));
+        return await ExecuteAuthenticatedAsync(
             access,
             command,
             actor,
@@ -340,9 +344,20 @@ public sealed class HostedCompanyCommissionService(
                 snapshot.CompanyDisplayName);
     }
 
+    public Task<CompanyCommissionMutationResult> ExecuteCapabilityAsync(
+        CompanyCommissionCapabilityResolution capability,
+        ICompanyCommissionParticipantCommand command,
+        CancellationToken cancellationToken = default) =>
+        ExecuteCapabilityAsync(
+            capability,
+            command,
+            verifiedActorDisplayNameSnapshot: null,
+            cancellationToken);
+
     public async Task<CompanyCommissionMutationResult> ExecuteCapabilityAsync(
         CompanyCommissionCapabilityResolution capability,
         ICompanyCommissionParticipantCommand command,
+        string? verifiedActorDisplayNameSnapshot,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -392,7 +407,10 @@ public sealed class HostedCompanyCommissionService(
                     $"recovery-grant:{capability.GrantId:D}",
                 _ => $"participant-grant:{capability.GrantId:D}"
             },
-            CompanyCommissionActorKind.Crafter);
+            CompanyCommissionActorKind.Crafter,
+            ResolveCapabilityActorDisplayName(
+                commission!,
+                verifiedActorDisplayNameSnapshot));
         return await ExecuteAuthenticatedAsync(
             access,
             command,
@@ -404,6 +422,39 @@ public sealed class HostedCompanyCommissionService(
                 actor,
                 timeProvider.GetUtcNow().UtcDateTime),
             cancellationToken);
+    }
+
+    private static string? ResolveCapabilityActorDisplayName(
+        TradeCompanyCommission commission,
+        string? verifiedActorDisplayNameSnapshot)
+    {
+        var displayName = NormalizeActorDisplayName(verifiedActorDisplayNameSnapshot);
+        if (displayName != null)
+        {
+            return displayName;
+        }
+
+        var claimId = commission.ActiveClaim?.ClaimId;
+        return claimId.HasValue
+            ? commission.Activity
+                .LastOrDefault(item =>
+                    item.CommandId == claimId.Value &&
+                    item.Kind == CompanyCommissionActivityKind.ClaimAccepted)
+                ?.Actor.DisplayName
+            : null;
+    }
+
+    private static string? NormalizeActorDisplayName(string? displayName)
+    {
+        var normalized = displayName?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        return normalized.Length <= 120
+            ? normalized
+            : normalized[..120];
     }
 
     private async Task<CompanyCommissionMutationResult> ExecuteAuthenticatedAsync(
