@@ -35,6 +35,68 @@ public sealed class DiscordCommissionMessageLifecycleTests
     }
 
     [Fact]
+    public async Task DiscordClaimContactStoreAddsClaimIdentityToExistingDatabase()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-contact-migration-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    CREATE TABLE discord_claim_contacts (
+                        interaction_id TEXT PRIMARY KEY,
+                        company_id TEXT NOT NULL,
+                        commission_id TEXT NOT NULL,
+                        claim_event_id TEXT NOT NULL,
+                        commission_revision INTEGER NOT NULL,
+                        discord_user_id TEXT NOT NULL,
+                        display_name_snapshot TEXT NOT NULL,
+                        committed_at_utc TEXT NOT NULL,
+                        UNIQUE(company_id, commission_id, discord_user_id)
+                    );
+                    """;
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var store = new SqliteDiscordNotificationStore(
+                CreateDiscordOptions(databasePath));
+            await store.InitializeAsync();
+            await store.CaptureCommittedClaimContactAsync(
+                new CommittedDiscordClaimContact(
+                    CompanyId,
+                    CommissionId,
+                    ClaimId,
+                    Guid.NewGuid(),
+                    2,
+                    CompanyCommissionActivityKind.ClaimAccepted,
+                    CapturedAt,
+                    "100000000000000004",
+                    new DiscordOriginContact(
+                        "100000000000000005",
+                        "Migration Crafter")));
+
+            Assert.True(await store.HasCommittedClaimContactAsync(
+                CompanyId,
+                CommissionId,
+                ClaimId,
+                "100000000000000005"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
     public void PreWorkReleaseReturnsCommissionToOpen()
     {
         var source = CreateAssignedOrder();

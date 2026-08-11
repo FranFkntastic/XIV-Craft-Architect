@@ -145,12 +145,42 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                     );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
+            await EnsureColumnAsync(
+                connection,
+                "discord_claim_contacts",
+                "claim_id",
+                "TEXT NULL",
+                cancellationToken);
             _schemaReady = true;
         }
         finally
         {
             _schemaGate.Release();
         }
+    }
+
+    private static async Task EnsureColumnAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        await using var inspect = connection.CreateCommand();
+        inspect.CommandText = $"PRAGMA table_info({tableName});";
+        await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        await reader.DisposeAsync();
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition};";
+        await alter.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<DiscordNotificationRouteConfiguration?> LoadRouteAsync(
