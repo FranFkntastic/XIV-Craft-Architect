@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
@@ -167,7 +168,7 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
             CompanyCommissionActivityKind.WorkClearanceAchieved =>
                 "The commission is cleared for work.",
             CompanyCommissionActivityKind.ProgressReported =>
-                "The crafter updated production progress.",
+                BuildProgressChangedFact(activity, commission),
             CompanyCommissionActivityKind.CommentAdded =>
                 DiscordProjectionSanitizer.Text(
                     activity.Comment ?? "A commission comment was added.",
@@ -216,6 +217,99 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
         return string.Equals(changedFact, resultingState, StringComparison.Ordinal)
             ? changedFact
             : $"{changedFact} {resultingState}";
+    }
+
+    private static string BuildProgressChangedFact(
+        CompanyCommissionActivityEvent activity,
+        CompanyCommissionPublicBrief commission)
+    {
+        if (string.IsNullOrWhiteSpace(activity.PayloadJson))
+        {
+            throw new InvalidOperationException(
+                "A progress notification requires the committed progress payload.");
+        }
+
+        CompanyCommissionProgressQuantity[] reported;
+        try
+        {
+            reported = JsonSerializer.Deserialize<CompanyCommissionProgressQuantity[]>(
+                activity.PayloadJson) ?? [];
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException(
+                "The committed progress payload is invalid.",
+                exception);
+        }
+
+        var outputs = commission.Terms.Outputs;
+        if (activity.TermsVersion != commission.Terms.Version)
+        {
+            throw new InvalidOperationException(
+                "The committed progress payload does not match the active commission terms.");
+        }
+
+        var byLineId = reported
+            .GroupBy(item => item.LineId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        if (outputs.Count == 0 ||
+            reported.Length != outputs.Count ||
+            byLineId.Count != reported.Length)
+        {
+            throw new InvalidOperationException(
+                "The committed progress payload does not match the commission outputs.");
+        }
+
+        var details = new List<string>();
+        foreach (var output in outputs)
+        {
+            if (!byLineId.TryGetValue(output.LineId, out var matches) ||
+                matches.Length != 1)
+            {
+                throw new InvalidOperationException(
+                    "The committed progress payload does not match the commission outputs.");
+            }
+
+            var quantity = matches[0];
+            if (quantity.ItemId != output.ItemId ||
+                quantity.CompletedQuantity < 0 ||
+                quantity.CompletedQuantity > output.RequiredQuantity ||
+                quantity.ReadyQuantity < 0 ||
+                quantity.ReadyQuantity > quantity.CompletedQuantity)
+            {
+                throw new InvalidOperationException(
+                    "The committed progress payload contains invalid output quantities.");
+            }
+
+            if (details.Count < 20)
+            {
+                details.Add(
+                    $"{DiscordProjectionSanitizer.Text(output.Name, 64)}: " +
+                    $"{quantity.CompletedQuantity:N0} of {output.RequiredQuantity:N0} completed, " +
+                    $"{quantity.ReadyQuantity:N0} ready");
+            }
+        }
+
+        var omitted = outputs.Count - details.Count;
+        var changedFact =
+            $"The crafter reported production progress: {string.Join("; ", details)}";
+        if (omitted > 0)
+        {
+            changedFact += $"; plus {omitted:N0} more output lines";
+        }
+
+        changedFact += ".";
+        if (!string.IsNullOrWhiteSpace(activity.Comment))
+        {
+            var comment = DiscordProjectionSanitizer.Text(activity.Comment, 800);
+            changedFact += $" Comment: {comment}";
+            if (comment[^1] is not ('.' or '!' or '?'))
+            {
+                changedFact += ".";
+            }
+        }
+
+        return changedFact;
     }
 
     internal static string ResolveActionLabel(
