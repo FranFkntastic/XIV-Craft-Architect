@@ -67,6 +67,8 @@ public sealed class HostedOrderSyncCoordinatorTests
             NullLogger<HostedOrderSyncCoordinator>.Instance);
         SetField(coordinator, "_activeProfileId", profileId);
         SetField(coordinator, "_session", new CancellationTokenSource());
+        var metadataRefreshCount = 0;
+        profileSync.ProfileMetadataMayHaveChanged += () => metadataRefreshCount++;
 
         await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
         await ownerHandler.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -80,6 +82,7 @@ public sealed class HostedOrderSyncCoordinatorTests
 
         Assert.Equal(1, ownerHandler.RequestCount);
         Assert.Equal(3, dataChangeCount);
+        Assert.Equal(1, metadataRefreshCount);
         Assert.Equal(1, store.GetOwnerProjection(order.Id)!.ObjectRevision.Value);
         Assert.Equal(order.Id, runtime.DurableOrder?.Id);
     }

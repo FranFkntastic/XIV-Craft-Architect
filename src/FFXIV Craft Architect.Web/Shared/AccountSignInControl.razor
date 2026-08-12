@@ -49,9 +49,15 @@ else
     {
         await RefreshAsync();
         ProfileSync.ConnectionChanged += OnConnectionChanged;
+        ProfileSync.ProfileMetadataMayHaveChanged += OnProfileMetadataMayHaveChanged;
     }
 
     private async void OnConnectionChanged()
+    {
+        await InvokeAsync(RefreshAsync);
+    }
+
+    private async void OnProfileMetadataMayHaveChanged()
     {
         await InvokeAsync(RefreshAsync);
     }
@@ -61,6 +67,37 @@ else
         try
         {
             var settings = await LocalState.LoadConnectionSettingsAsync();
+            if (settings.IsConfigured)
+            {
+                try
+                {
+                    var profile = await ProfileHostClient.GetProfileAsync(
+                        settings.HostUrl!,
+                        settings.AccessKey!,
+                        CancellationToken.None);
+                    if (!string.Equals(settings.ConnectedProfileName, profile.DisplayName, StringComparison.Ordinal) ||
+                        settings.ConnectedProfileMetadataRevision != profile.MetadataRevision)
+                    {
+                        var saved = await LocalState.TrySaveConnectedProfileNameAsync(
+                            settings,
+                            profile.DisplayName,
+                            profile.MetadataRevision);
+                        if (saved == ConnectedProfileNameSaveResult.Saved)
+                        {
+                            settings.ConnectedProfileName = profile.DisplayName;
+                            settings.ConnectedProfileMetadataRevision = profile.MetadataRevision;
+                        }
+                        else
+                        {
+                            settings = await LocalState.LoadConnectionSettingsAsync();
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    // Keep the last truthful account name while the host is unavailable.
+                }
+            }
             _connected = settings.IsConfigured;
             _displayName = settings.ConnectedProfileName;
             _signInEnabled = !_connected &&
@@ -105,6 +142,7 @@ else
             var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
             var dialog = await DialogService.ShowAsync<AccountDialog>("Account", options);
             await dialog.Result;
+            await RefreshAsync();
         }
         finally
         {
@@ -115,5 +153,6 @@ else
     public void Dispose()
     {
         ProfileSync.ConnectionChanged -= OnConnectionChanged;
+        ProfileSync.ProfileMetadataMayHaveChanged -= OnProfileMetadataMayHaveChanged;
     }
 }

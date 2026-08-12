@@ -164,6 +164,19 @@ public sealed class IndexedDbService
             "save settings",
             settings);
 
+    public Task<int> SaveSettingsWhenSettingsMatchAndRevisionNotNewerAsync(
+        Dictionary<string, string> settings,
+        Dictionary<string, string> expectedSettings,
+        string revisionKey,
+        long revision) =>
+        InvokeRequiredAsync<int>(
+            "IndexedDB.saveSettingsWhenSettingsMatchAndRevisionNotNewer",
+            "conditionally save revision-ordered settings",
+            settings,
+            expectedSettings,
+            revisionKey,
+            JsonSerializer.Serialize(revision));
+
     public Task<bool> SavePlansBatchAsync(IReadOnlyList<StoredPlan> plans) =>
         InvokeOrDefaultAsync(
             "IndexedDB.savePlansBatch",

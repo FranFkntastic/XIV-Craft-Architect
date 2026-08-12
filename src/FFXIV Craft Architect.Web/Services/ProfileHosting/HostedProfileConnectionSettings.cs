@@ -7,6 +7,7 @@ public sealed class HostedProfileConnectionSettings
     public bool RememberAccessKey { get; set; }
     public string? ConnectedProfileId { get; set; }
     public string? ConnectedProfileName { get; set; }
+    public long ConnectedProfileMetadataRevision { get; set; }
 
     public string? ProfileScopeId =>
         Guid.TryParse(ConnectedProfileId, out var profileId) &&
@@ -30,6 +31,14 @@ public sealed class HostedProfileConnectionSettings
             AccessKey = AccessKey,
             RememberAccessKey = RememberAccessKey,
             ConnectedProfileId = ProfileScopeId,
-            ConnectedProfileName = ConnectedProfileName
+            ConnectedProfileName = ConnectedProfileName,
+            ConnectedProfileMetadataRevision = ConnectedProfileMetadataRevision
         };
+}
+
+public enum ConnectedProfileNameSaveResult
+{
+    ConnectionChanged = 0,
+    Saved = 1,
+    Stale = 2
 }

@@ -15,7 +15,47 @@
         else
         {
             <div class="account-heading">
-                <MudText Typo="Typo.h6">@(_settings.IsConfigured ? AccountDisplayName : "Connect account")</MudText>
+                @if (_settings.IsConfigured && _editingDisplayName)
+                {
+                    <div class="account-name-editor">
+                        <MudTextField @bind-Value="_displayNameDraft"
+                                      Label="Account name"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true"
+                                      MaxLength="120"
+                                      Disabled="_accountBusy"
+                                      Class="account-name-field" />
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   OnClick="SaveDisplayNameAsync"
+                                   Disabled="_accountBusy">
+                            Save
+                        </MudButton>
+                        <MudButton Variant="Variant.Text"
+                                   Size="Size.Small"
+                                   OnClick="CancelDisplayNameEdit"
+                                   Disabled="_accountBusy">
+                            Cancel
+                        </MudButton>
+                    </div>
+                }
+                else
+                {
+                    <div class="account-heading-row">
+                        <MudText Typo="Typo.h6">@(_settings.IsConfigured ? AccountDisplayName : "Connect account")</MudText>
+                        @if (_settings.IsConfigured)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                           Size="Size.Small"
+                                           Color="Color.Secondary"
+                                           OnClick="BeginDisplayNameEdit"
+                                           Disabled="_accountBusy"
+                                           aria-label="Edit account name" />
+                        }
+                    </div>
+                }
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
                     @if (_settings.IsConfigured)
                     {
@@ -208,6 +248,9 @@
     private bool _loading = true;
     private bool _accountBusy;
     private bool _managingKeys;
+    private bool _editingDisplayName;
+    private string _displayNameDraft = string.Empty;
+    private long _profileMetadataRevision;
     private string _busyMessage = "Working...";
     private string? _statusMessage;
     private Color _statusColor = Color.Secondary;
@@ -260,6 +303,7 @@
     {
         _loading = true;
         _settings = await LocalState.LoadConnectionSettingsAsync();
+        _profileMetadataRevision = _settings.ConnectedProfileMetadataRevision;
         _hostUrl = string.IsNullOrWhiteSpace(_settings.HostUrl)
             ? ProfileHostClient.DefaultHostUrl
             : _settings.HostUrl;
@@ -267,9 +311,153 @@
         _useCustomHost = !AddressesMatch(_hostUrl, ProfileHostClient.DefaultHostUrl);
         if (_settings.IsConfigured)
         {
-            await Task.WhenAll(RefreshDiscordAsync(), RefreshKeysAsync());
+            await Task.WhenAll(RefreshProfileAsync(), RefreshDiscordAsync(), RefreshKeysAsync());
         }
         _loading = false;
+    }
+
+    private async Task RefreshProfileAsync()
+    {
+        try
+        {
+            var profile = await ProfileHostClient.GetProfileAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+            await ApplyCanonicalProfileAsync(profile);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, Color.Warning);
+        }
+    }
+
+    private void BeginDisplayNameEdit()
+    {
+        _displayNameDraft = AccountDisplayName;
+        _editingDisplayName = true;
+        _statusMessage = null;
+    }
+
+    private void CancelDisplayNameEdit()
+    {
+        _displayNameDraft = AccountDisplayName;
+        _editingDisplayName = false;
+    }
+
+    private async Task SaveDisplayNameAsync()
+    {
+        if (!ProfileHostDisplayNamePolicy.TryNormalize(_displayNameDraft, out var displayName))
+        {
+            SetStatus("Account names must contain 1 to 120 visible characters.", Color.Error);
+            return;
+        }
+        if (string.Equals(displayName, _settings.ConnectedProfileName, StringComparison.Ordinal))
+        {
+            _editingDisplayName = false;
+            return;
+        }
+
+        _accountBusy = true;
+        _busyMessage = "Updating account name...";
+        try
+        {
+            var currentConnection = await LocalState.LoadConnectionSettingsAsync();
+            if (!string.Equals(
+                    currentConnection.ConnectionScopeId,
+                    _settings.ConnectionScopeId,
+                    StringComparison.Ordinal))
+            {
+                _settings = currentConnection;
+                _editingDisplayName = false;
+                SetStatus("The account connection changed while the name was being updated.", Color.Warning);
+                return;
+            }
+
+            var profile = await ProfileHostClient.UpdateProfileDisplayNameAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                _profileMetadataRevision,
+                displayName,
+                CancellationToken.None);
+            if (!await ApplyCanonicalProfileAsync(profile))
+            {
+                _editingDisplayName = false;
+                SetStatus("The account connection changed while the name was being updated.", Color.Warning);
+                return;
+            }
+            _displayNameDraft = AccountDisplayName;
+            _editingDisplayName = false;
+            SetStatus("Account name updated.", Color.Success);
+        }
+        catch (ProfileHostConnectionException ex)
+            when (ex.Failure == ProfileHostConnectionFailure.ProfileNameConflict)
+        {
+            try
+            {
+                var profile = await ProfileHostClient.GetProfileAsync(
+                    _settings.HostUrl!,
+                    _settings.AccessKey!,
+                    CancellationToken.None);
+                if (!await ApplyCanonicalProfileAsync(profile))
+                {
+                    _editingDisplayName = false;
+                    SetStatus("The account connection changed while the name was being updated.", Color.Warning);
+                    return;
+                }
+                _displayNameDraft = AccountDisplayName;
+                SetStatus("The name changed in another browser. The current account name has been restored here.", Color.Warning);
+            }
+            catch (Exception refreshError)
+            {
+                SetStatus(refreshError.Message, Color.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, Color.Error);
+        }
+        finally
+        {
+            _accountBusy = false;
+        }
+    }
+
+    private async Task<bool> ApplyCanonicalProfileAsync(ProfileHostProfileResponse profile)
+    {
+        if (!string.Equals(_settings.ConnectedProfileId, profile.ProfileId, StringComparison.Ordinal))
+        {
+            _settings = await LocalState.LoadConnectionSettingsAsync();
+            return false;
+        }
+
+        if (string.Equals(_settings.ConnectedProfileName, profile.DisplayName, StringComparison.Ordinal) &&
+            _settings.ConnectedProfileMetadataRevision == profile.MetadataRevision)
+        {
+            _profileMetadataRevision = profile.MetadataRevision;
+            return true;
+        }
+
+        var saved = await LocalState.TrySaveConnectedProfileNameAsync(
+            _settings,
+            profile.DisplayName,
+            profile.MetadataRevision);
+        if (saved == ConnectedProfileNameSaveResult.ConnectionChanged)
+        {
+            _settings = await LocalState.LoadConnectionSettingsAsync();
+            return false;
+        }
+        if (saved == ConnectedProfileNameSaveResult.Stale)
+        {
+            _settings = await LocalState.LoadConnectionSettingsAsync();
+            _profileMetadataRevision = _settings.ConnectedProfileMetadataRevision;
+            return true;
+        }
+
+        _settings.ConnectedProfileName = profile.DisplayName;
+        _settings.ConnectedProfileMetadataRevision = profile.MetadataRevision;
+        _profileMetadataRevision = profile.MetadataRevision;
+        return true;
     }
 
     private async Task RefreshKeysAsync()
@@ -444,7 +632,8 @@
                     AccessKey = redeemed.AccessKey,
                     RememberAccessKey = true,
                     ConnectedProfileId = redeemed.Profile.ProfileId,
-                    ConnectedProfileName = redeemed.Profile.DisplayName
+                    ConnectedProfileName = redeemed.Profile.DisplayName,
+                    ConnectedProfileMetadataRevision = redeemed.Profile.MetadataRevision
                 },
                 redeemed.Profile);
         }
@@ -464,6 +653,7 @@
     {
         settings.ConnectedProfileId = profile.ProfileId;
         settings.ConnectedProfileName = profile.DisplayName;
+        settings.ConnectedProfileMetadataRevision = profile.MetadataRevision;
         _busyMessage = "Comparing browser and hosted data...";
         var preview = await ProfileSync.PreviewFirstConnectAsync(settings);
         if (preview.LocalObjectCount > 0 && preview.RemoteObjectCount > 0 && !preview.ContentsMatch)

@@ -2,6 +2,22 @@
     margin-bottom: 18px;
 }
 
+.account-heading-row,
+.account-name-editor {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.account-name-editor {
+    margin-bottom: 6px;
+}
+
+.account-name-field {
+    flex: 1;
+    min-width: 0;
+}
+
 .account-section-label {
     margin-top: 16px;
     color: #9aa1a7;
@@ -61,8 +77,13 @@
 }
 
 @media (max-width: 560px) {
-    .account-row {
+    .account-row,
+    .account-name-editor {
         align-items: flex-start;
         flex-wrap: wrap;
+    }
+
+    .account-name-field {
+        flex-basis: 100%;
     }
 }
