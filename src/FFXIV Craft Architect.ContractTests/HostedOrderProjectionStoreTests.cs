@@ -183,6 +183,33 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.Same(newer, resolvedRace);
         Assert.Same(newer, raced.Store.Get(raced.Current.Order.Id)?.OwnerProjection);
 
+        var failedPersistence = await CenterOperationFixture.CreateAsync(publishOwner: false);
+        AlignCommissionIdentity(failedPersistence);
+        var inMemoryWinner = failedPersistence.Owner("Unpersisted winner", 5, 9);
+        failedPersistence.Runtime.SaveTradeOrderResult = false;
+        failedPersistence.Runtime.BeforeSaveTradeOrderAsync = _ =>
+        {
+            Assert.True(failedPersistence.Store.TryPublishOwner(inMemoryWinner));
+            return Task.CompletedTask;
+        };
+        var rejectedPersistence = await failedPersistence.Service.ResolveNotificationNavigationAsync(
+            failedPersistence.Current.Order.CompanyProfileId,
+            failedPersistence.Current.Order.Id);
+        Assert.Null(rejectedPersistence);
+        Assert.Null(failedPersistence.Runtime.DurableOrder);
+
+        var deleted = await CenterOperationFixture.CreateAsync(publishOwner: false);
+        AlignCommissionIdentity(deleted);
+        deleted.Handler.BeforeResponse = _ => Assert.True(deleted.Store.TryPublishTombstone(
+            deleted.Current.Order.Id,
+            5,
+            deleted.Current.Order.CompanyProfileId));
+        var rejectedDeletion = await deleted.Service.ResolveNotificationNavigationAsync(
+            deleted.Current.Order.CompanyProfileId,
+            deleted.Current.Order.Id);
+        Assert.Null(rejectedDeletion);
+        Assert.True(deleted.Store.Get(deleted.Current.Order.Id)?.Deleted);
+
         var wrongCompany = await CenterOperationFixture.CreateAsync(publishOwner: false);
         AlignCommissionIdentity(wrongCompany);
         var rejectedCompany = await wrongCompany.Service.ResolveNotificationNavigationAsync(
@@ -649,6 +676,7 @@ public sealed class HostedOrderProjectionStoreTests
         };
         public int SaveTradeOrderCount { get; private set; }
         public TradeOrder? DurableOrder { get; private set; }
+        public bool SaveTradeOrderResult { get; set; } = true;
         public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
         public Action? BeforeSaveTradeCrafter { get; set; }
         public void SaveRawSetting(string key, string value) => _settings[key] = value;
@@ -679,7 +707,12 @@ public sealed class HostedOrderProjectionStoreTests
         private async ValueTask<TValue> SaveOrderAsync<TValue>(TradeOrder order)
         {
             await (BeforeSaveTradeOrderAsync?.Invoke(order) ?? Task.CompletedTask);
-            SaveTradeOrderCount++; DurableOrder = order; return (TValue)(object)true;
+            SaveTradeOrderCount++;
+            if (SaveTradeOrderResult)
+            {
+                DurableOrder = order;
+            }
+            return (TValue)(object)SaveTradeOrderResult;
         }
     }
 

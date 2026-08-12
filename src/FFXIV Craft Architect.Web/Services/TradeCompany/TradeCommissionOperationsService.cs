@@ -188,32 +188,31 @@ public sealed class TradeCommissionOperationsService(
             }
 
             ValidateProjection(companyId, commissionId, projection);
-            try
-            {
-                await ApplyProjectionAsync(authority, projection);
-            }
-            catch (InvalidOperationException)
+            var adoption = await ApplyProjectionAsync(
+                authority,
+                projection,
+                allowStale: true);
+            if (adoption == HostedOrderCommittedProjectionResult.Stale)
             {
                 var newer = await ResolveNewerNotificationWinnerAsync(
                     authority,
                     companyId,
                     commissionId,
                     projection);
-                if (newer == null)
+                if (newer != null)
                 {
-                    throw;
+                    _errors.Remove(commissionId);
                 }
-
-                _errors.Remove(commissionId);
                 return newer;
             }
 
             var current = hostedOrders.Get(commissionId)?.OwnerProjection;
-            if (current != null)
+            if (current == null)
             {
-                ValidateProjection(companyId, commissionId, current);
-                projection = current;
+                return null;
             }
+            ValidateProjection(companyId, commissionId, current);
+            projection = current;
             _errors.Remove(commissionId);
             return projection;
         }
@@ -1095,9 +1094,10 @@ public sealed class TradeCommissionOperationsService(
         return new OrderCommandAuthority(projection, connection.Snapshot());
     }
 
-    private async Task ApplyProjectionAsync(
+    private async Task<HostedOrderCommittedProjectionResult> ApplyProjectionAsync(
         OrderCommandAuthority authority,
-        CompanyCommissionOwnerProjection projection)
+        CompanyCommissionOwnerProjection projection,
+        bool allowStale = false)
     {
         var adoption = await hostedOrders.AdoptAndPersistCommittedOwnerAsync(
             authority.Projection,
@@ -1129,6 +1129,10 @@ public sealed class TradeCommissionOperationsService(
         {
             await RepairDurableOrderFromCurrentProjectionAsync(projection.Order.Id);
         }
+        if (allowStale && adoption == HostedOrderCommittedProjectionResult.Stale)
+        {
+            return adoption;
+        }
         if (adoption is not (
             HostedOrderCommittedProjectionResult.Adopted or
             HostedOrderCommittedProjectionResult.AlreadyCurrent))
@@ -1139,6 +1143,7 @@ public sealed class TradeCommissionOperationsService(
         _errors.Remove(projection.Order.Id);
         _missingCanonicalOwners.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
+        return adoption;
     }
 
     private async Task<bool> IsCurrentAuthorityAsync(OrderCommandAuthority authority)
