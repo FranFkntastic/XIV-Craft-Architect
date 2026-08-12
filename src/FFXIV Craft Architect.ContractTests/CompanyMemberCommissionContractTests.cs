@@ -278,6 +278,33 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task HostingProfileOwnerRetainsAuthorityWhenCompanyIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        await fixture.DuplicateCompanyIdentityAsync();
+
+        using var response = await fixture.LoadOwnerCommissionAsync(fixture.Owner);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task MembershipAccountFailsClosedWhenCompanyIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var account = await fixture.AddActiveMemberAsync("Operator");
+        await fixture.SetRoleAsync(account, MembershipRole.Operator);
+        await fixture.DuplicateCompanyIdentityAsync();
+
+        using var response = await fixture.LoadOwnerCommissionAsync(account);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task RevokedMemberCannotClaimAfterPreviouslyBeingActive()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -472,6 +499,37 @@ public sealed class CompanyMemberCommissionContractTests
             var client = CreateClient(account.Key);
             return client.GetAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/owner");
+        }
+
+        public async Task DuplicateCompanyIdentityAsync()
+        {
+            var duplicate = await CreateAccountAsync("Duplicate host");
+            await using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(root, "profiles.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO sync_objects (
+                    profile_id,
+                    collection,
+                    object_id,
+                    payload_json,
+                    revision,
+                    updated_at_utc,
+                    deleted,
+                    deleted_at_utc)
+                VALUES ($profileId, $collection, $objectId, $payload, 1, $updatedAt, 0, NULL);
+                """;
+            command.Parameters.AddWithValue("$profileId", duplicate.ProfileId.ToString("D"));
+            command.Parameters.AddWithValue(
+                "$collection",
+                ProfileSyncCollections.TradeCompanyProfiles);
+            command.Parameters.AddWithValue("$objectId", Company.Id.ToString("D"));
+            command.Parameters.AddWithValue(
+                "$payload",
+                JsonSerializer.Serialize(Company, ProfileSyncJson.CreateOptions()));
+            command.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToString("O"));
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
         }
 
         public async Task SetRoleAsync(Account account, MembershipRole role)

@@ -470,12 +470,12 @@ public sealed class ProfileHostedTradeCompanyService(
 
     private static string RequireHostProfile(TradeCompanyAccessContext access)
     {
-        if (access.Role != TradeCompanyRole.Owner ||
+        if (access.Role is not (TradeCompanyRole.Owner or TradeCompanyRole.Operator) ||
             access.HostProfileId is not { } hostProfileId ||
             hostProfileId == Guid.Empty)
         {
             throw new UnauthorizedAccessException(
-                "A hosted-profile owner capability is required.");
+                "A hosted company operator capability is required.");
         }
 
         return hostProfileId.ToString("D");
