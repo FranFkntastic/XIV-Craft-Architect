@@ -342,7 +342,8 @@ else
     {
         var parameters = new DialogParameters
         {
-            [nameof(SettingsDialog.InitialSection)] = SettingsSection.Workspace
+            [nameof(SettingsDialog.InitialSection)] = SettingsSection.Workspace,
+            [nameof(SettingsDialog.InitialWorkspaceCompanyId)] = _hub!.CompanyId
         };
         var options = new DialogOptions
         {

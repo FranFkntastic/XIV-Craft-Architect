@@ -72,10 +72,15 @@ public sealed class UnifiedSettingsContractTests
         var settings = File.ReadAllText(Path.Combine(web, "Dialogs", "SettingsDialog.razor"));
         Assert.Contains("OnWorkspaceCompanyChangedAsync", settings, StringComparison.Ordinal);
         Assert.Contains("hub.Standing.Role is \"owner\" or \"operator\"", settings, StringComparison.Ordinal);
+        Assert.Contains("InitialCompanyId=\"@InitialWorkspaceCompanyId\"", settings, StringComparison.Ordinal);
+        Assert.DoesNotContain("InitialCompanyId=\"@(_companyProfile", settings, StringComparison.Ordinal);
         var switcher = File.ReadAllText(Path.Combine(web, "Shared", "TradeCompanySwitcher.razor"));
         Assert.Contains("LoadMembershipsAsync", switcher, StringComparison.Ordinal);
         Assert.Contains("SelectWorkspaceCompanyAsync", switcher, StringComparison.Ordinal);
         Assert.Contains("WorkspaceCompanyContext", switcher, StringComparison.Ordinal);
+        Assert.Contains("SettingsDialog.InitialWorkspaceCompanyId", switcher, StringComparison.Ordinal);
+        var companyHub = File.ReadAllText(Path.Combine(web, "Pages", "CompanyHub.razor"));
+        Assert.Contains("SettingsDialog.InitialWorkspaceCompanyId", companyHub, StringComparison.Ordinal);
     }
 
     [Fact]
