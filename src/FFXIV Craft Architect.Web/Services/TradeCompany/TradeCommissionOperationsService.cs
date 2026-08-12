@@ -159,6 +159,94 @@ public sealed class TradeCommissionOperationsService(
         }
     }
 
+    public async Task<CompanyCommissionOwnerProjection?> ResolveNotificationNavigationAsync(
+        Guid companyId,
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
+        if (companyId == Guid.Empty || commissionId == Guid.Empty)
+        {
+            return null;
+        }
+        if (HasProtectedHostedOrderState(commissionId))
+        {
+            return null;
+        }
+
+        try
+        {
+            var authority = await CaptureOrderAuthorityAsync();
+            var projection = await client.LoadOwnerProjectionAsync(
+                authority.Connection,
+                companyId,
+                commissionId,
+                cancellationToken);
+            if (!await IsCurrentAuthorityAsync(authority) ||
+                HasProtectedHostedOrderState(commissionId))
+            {
+                return null;
+            }
+
+            ValidateProjection(companyId, commissionId, projection);
+            var adoption = await ApplyProjectionAsync(
+                authority,
+                projection,
+                allowStale: true);
+            if (adoption == HostedOrderCommittedProjectionResult.Stale)
+            {
+                var newer = await ResolveNewerNotificationWinnerAsync(
+                    authority,
+                    companyId,
+                    commissionId,
+                    projection);
+                if (newer != null)
+                {
+                    _errors.Remove(commissionId);
+                    _missingCanonicalOwners.Remove(commissionId);
+                }
+                return newer;
+            }
+
+            var current = hostedOrders.Get(commissionId)?.OwnerProjection;
+            if (current == null)
+            {
+                return null;
+            }
+            ValidateProjection(companyId, commissionId, current);
+            projection = current;
+            _errors.Remove(commissionId);
+            return projection;
+        }
+        catch (Exception exception)
+        {
+            _errors[commissionId] = exception.Message;
+            return null;
+        }
+    }
+
+    private async Task<CompanyCommissionOwnerProjection?> ResolveNewerNotificationWinnerAsync(
+        OrderCommandAuthority authority,
+        Guid companyId,
+        Guid commissionId,
+        CompanyCommissionOwnerProjection fetched)
+    {
+        if (!await IsCurrentAuthorityAsync(authority) ||
+            HasProtectedHostedOrderState(commissionId))
+        {
+            return null;
+        }
+
+        var winner = hostedOrders.Get(commissionId)?.OwnerProjection;
+        if (winner == null ||
+            winner.ObjectRevision.Value <= fetched.ObjectRevision.Value)
+        {
+            return null;
+        }
+
+        ValidateProjection(companyId, commissionId, winner);
+        return winner;
+    }
+
     public async Task<TradeCommissionOperatorResult> ConfirmIdentityAsync(
         CompanyCommissionOwnerProjection current,
         TradeCrafterProfile crafter,
@@ -1007,9 +1095,10 @@ public sealed class TradeCommissionOperationsService(
         return new OrderCommandAuthority(projection, connection.Snapshot());
     }
 
-    private async Task ApplyProjectionAsync(
+    private async Task<HostedOrderCommittedProjectionResult> ApplyProjectionAsync(
         OrderCommandAuthority authority,
-        CompanyCommissionOwnerProjection projection)
+        CompanyCommissionOwnerProjection projection,
+        bool allowStale = false)
     {
         var adoption = await hostedOrders.AdoptAndPersistCommittedOwnerAsync(
             authority.Projection,
@@ -1041,6 +1130,10 @@ public sealed class TradeCommissionOperationsService(
         {
             await RepairDurableOrderFromCurrentProjectionAsync(projection.Order.Id);
         }
+        if (allowStale && adoption == HostedOrderCommittedProjectionResult.Stale)
+        {
+            return adoption;
+        }
         if (adoption is not (
             HostedOrderCommittedProjectionResult.Adopted or
             HostedOrderCommittedProjectionResult.AlreadyCurrent))
@@ -1051,6 +1144,7 @@ public sealed class TradeCommissionOperationsService(
         _errors.Remove(projection.Order.Id);
         _missingCanonicalOwners.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
+        return adoption;
     }
 
     private async Task<bool> IsCurrentAuthorityAsync(OrderCommandAuthority authority)
@@ -1191,13 +1285,7 @@ public sealed class TradeCommissionOperationsService(
             return false;
         }
 
-        var objectId = order.Id.ToString("D");
-        if (profileSync.PendingSaves.Any(item =>
-                string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
-                string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)) ||
-            profileSync.Conflicts.Any(item =>
-                string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
-                string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)))
+        if (HasProtectedHostedOrderState(order.Id))
         {
             reason = "Resolve the pending hosted order update before operating its commission.";
             return false;
@@ -1205,6 +1293,17 @@ public sealed class TradeCommissionOperationsService(
 
         reason = string.Empty;
         return true;
+    }
+
+    private bool HasProtectedHostedOrderState(Guid orderId)
+    {
+        var objectId = orderId.ToString("D");
+        return profileSync.PendingSaves.Any(item =>
+                   string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
+                   string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)) ||
+               profileSync.Conflicts.Any(item =>
+                   string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
+                   string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase));
     }
 
     private static CompanyCommissionCommandContext CreateContext(
@@ -1248,6 +1347,25 @@ public sealed class TradeCommissionOperationsService(
             commission.CommissionId != expectedCommissionId ||
             expectedCompanyId == null ||
             commission.CompanyId != expectedCompanyId ||
+            projection.ObjectRevision.Value <= 0 ||
+            projection.CompanyRevision.Value <= 0)
+        {
+            throw new InvalidOperationException(
+                "The owner endpoint returned the wrong commission or omitted authoritative revisions.");
+        }
+    }
+
+    private static void ValidateProjection(
+        Guid expectedCompanyId,
+        Guid expectedCommissionId,
+        CompanyCommissionOwnerProjection projection)
+    {
+        var commission = projection.Order.CompanyCommission;
+        if (projection.Order.Id != expectedCommissionId ||
+            projection.Order.CompanyProfileId != expectedCompanyId ||
+            commission == null ||
+            commission.CommissionId != expectedCommissionId ||
+            commission.CompanyId.Value != expectedCompanyId ||
             projection.ObjectRevision.Value <= 0 ||
             projection.CompanyRevision.Value <= 0)
         {
