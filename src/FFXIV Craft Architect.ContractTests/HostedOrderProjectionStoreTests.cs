@@ -175,6 +175,10 @@ public sealed class HostedOrderProjectionStoreTests
 
         var raced = await CenterOperationFixture.CreateAsync(publishOwner: false);
         AlignCommissionIdentity(raced);
+        raced.Handler.OwnerMissing = true;
+        await raced.Service.RefreshAsync(raced.Current.Order);
+        Assert.True(raced.Service.IsCanonicalOwnerMissing(raced.Current.Order.Id));
+        raced.Handler.OwnerMissing = false;
         var newer = raced.Owner("Newer background winner", 5, 9);
         raced.Handler.BeforeResponse = _ => Assert.True(raced.Store.TryPublishOwner(newer));
         var resolvedRace = await raced.Service.ResolveNotificationNavigationAsync(
@@ -182,6 +186,7 @@ public sealed class HostedOrderProjectionStoreTests
             raced.Current.Order.Id);
         Assert.Same(newer, resolvedRace);
         Assert.Same(newer, raced.Store.Get(raced.Current.Order.Id)?.OwnerProjection);
+        Assert.False(raced.Service.IsCanonicalOwnerMissing(raced.Current.Order.Id));
 
         var failedPersistence = await CenterOperationFixture.CreateAsync(publishOwner: false);
         AlignCommissionIdentity(failedPersistence);

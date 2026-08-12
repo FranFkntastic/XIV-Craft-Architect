@@ -202,6 +202,7 @@ public sealed class TradeCommissionOperationsService(
                 if (newer != null)
                 {
                     _errors.Remove(commissionId);
+                    _missingCanonicalOwners.Remove(commissionId);
                 }
                 return newer;
             }
