@@ -422,7 +422,7 @@ public sealed class HostedCompanyCommissionService(
         {
             RequireCompanyOperator(access);
         }
-        var canonicalAccess = requireCompanyOperator ? access : ToCanonicalAccess(access);
+        var canonicalAccess = ToCanonicalAccess(access);
         var context = command.Context;
         var fingerprint = CreateFingerprint(command);
         var validationError = ValidateCommandContext(access, context);

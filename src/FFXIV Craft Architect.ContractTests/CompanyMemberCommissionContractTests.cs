@@ -7,6 +7,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -228,6 +229,54 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.True(projection!.Public.IsClaimed);
     }
 
+    [Theory]
+    [InlineData(MembershipRole.Owner)]
+    [InlineData(MembershipRole.Operator)]
+    public async Task AuthorizedMembershipAccountCanLoadAndCommandOwnerCommission(
+        MembershipRole role)
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var account = await fixture.AddActiveMemberAsync(role.ToString());
+        await fixture.SetRoleAsync(account, role);
+
+        using var loaded = await fixture.LoadOwnerCommissionAsync(account);
+        Assert.True(
+            loaded.IsSuccessStatusCode,
+            await loaded.Content.ReadAsStringAsync());
+        var projection = await loaded.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerProjection>();
+        Assert.Equal(fixture.Order.Id, projection!.Order.Id);
+
+        using var cancelled = await fixture.CancelCommissionAsync(account);
+        Assert.True(
+            cancelled.IsSuccessStatusCode,
+            await cancelled.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CrafterMembershipCannotLoadOwnerCommission()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var crafter = await fixture.AddActiveMemberAsync("Crafter");
+
+        using var response = await fixture.LoadOwnerCommissionAsync(crafter);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task HostingProfileOwnerRetainsOwnerCommissionAuthority()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+
+        using var response = await fixture.LoadOwnerCommissionAsync(fixture.Owner);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+    }
+
     [Fact]
     public async Task RevokedMemberCannotClaimAfterPreviouslyBeingActive()
     {
@@ -418,10 +467,39 @@ public sealed class CompanyMemberCommissionContractTests
             return order.CompanyCommission!.ActiveClaim!.CrafterId!.Value;
         }
 
-        public async Task<HttpResponseMessage> CancelCommissionAsync()
+        public Task<HttpResponseMessage> LoadOwnerCommissionAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync(
+                $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/owner");
+        }
+
+        public async Task SetRoleAsync(Account account, MembershipRole role)
+        {
+            await using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(root, "memberships.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE company_memberships
+                SET role = $role
+                WHERE company_id = $companyId AND account_profile_id = $profileId;
+                """;
+            command.Parameters.AddWithValue(
+                "$role",
+                role.ToString().ToLowerInvariant());
+            command.Parameters.AddWithValue("$companyId", Company.Id.ToString("D"));
+            command.Parameters.AddWithValue("$profileId", account.ProfileId.ToString("D"));
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        public Task<HttpResponseMessage> CancelCommissionAsync() =>
+            CancelCommissionAsync(Owner);
+
+        public async Task<HttpResponseMessage> CancelCommissionAsync(Account account)
         {
             var access = await Companies.ResolveMembershipAccessAsync(
-                Owner.ProfileId,
+                account.ProfileId,
                 new CompanyId(Company.Id),
                 CancellationToken.None);
             var snapshot = await Commissions.LoadOwnerAsync(
@@ -437,7 +515,7 @@ public sealed class CompanyMemberCommissionContractTests
                     Guid.NewGuid(),
                     CompanyCommissionProtocol.Version1),
                 "Cancelled by contract fixture");
-            var client = CreateClient(Owner.Key);
+            var client = CreateClient(account.Key);
             return await client.PostAsJsonAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/commands/cancel",
                 command);
