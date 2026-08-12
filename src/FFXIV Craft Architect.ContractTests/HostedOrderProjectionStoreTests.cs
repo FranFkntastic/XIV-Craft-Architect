@@ -191,6 +191,18 @@ public sealed class HostedOrderProjectionStoreTests
             replacedAuthority.Current.Order.Id);
         Assert.Null(rejectedAuthority);
         Assert.Null(replacedAuthority.Runtime.DurableOrder);
+
+        var protectedLocal = await CenterOperationFixture.CreateAsync(publishOwner: false);
+        AlignCommissionIdentity(protectedLocal);
+        Assert.IsType<List<ProfileSyncPendingSave>>(protectedLocal.ProfileSync.PendingSaves)
+            .Add(new(ProfileSyncCollections.TradeOrders, protectedLocal.Current.Order.Id.ToString("D")));
+        var rejectedPending = await protectedLocal.Service.ResolveNotificationNavigationAsync(
+            protectedLocal.Current.Order.CompanyProfileId,
+            protectedLocal.Current.Order.Id);
+        Assert.Null(rejectedPending);
+        Assert.Null(protectedLocal.Handler.LastRequestUri);
+        Assert.Null(protectedLocal.Store.Get(protectedLocal.Current.Order.Id));
+        Assert.Null(protectedLocal.Runtime.DurableOrder);
     }
 
     private static void AlignCommissionIdentity(CenterOperationFixture fixture) =>
@@ -491,7 +503,7 @@ public sealed class HostedOrderProjectionStoreTests
     }
 
     private sealed record CenterOperationFixture(CompanyCommissionOwnerProjection Current, HostedOrderProjectionStore Store, CenterOperationRuntime Runtime,
-        ProfileSyncLocalStateService LocalState, OwnerMutationHandler Handler, TradeCommissionOperationsService Service)
+        ProfileSyncLocalStateService LocalState, ProfileSyncService ProfileSync, OwnerMutationHandler Handler, TradeCommissionOperationsService Service)
     {
         public const string Host = "https://profiles.example/api/";
         public CompanyCommissionOwnerProjection Owner(string title, long orderRevision, long companyRevision)
@@ -557,7 +569,7 @@ public sealed class HostedOrderProjectionStoreTests
             var service = new TradeCommissionOperationsService(new TradeCommissionOperationsClient(new HttpClient(handler) { BaseAddress = new Uri(Host) }, localState),
                 new TradeCompanyCollaborationClient(http, localState), new TradeOperationsPersistenceService(indexedDb, new TradeCompanyProfilePackageService()),
                 localState, profileSync, store, new WebPlanPersistenceService(indexedDb), new AppState());
-            return new(current, store, runtime, localState, handler, service);
+            return new(current, store, runtime, localState, profileSync, handler, service);
         }
         private static TradeOrder CreateCommissionOrder(Guid companyProfileId) => new()
         {

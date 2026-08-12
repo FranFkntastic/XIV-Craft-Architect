@@ -168,6 +168,10 @@ public sealed class TradeCommissionOperationsService(
         {
             return null;
         }
+        if (HasProtectedHostedOrderState(commissionId))
+        {
+            return null;
+        }
 
         try
         {
@@ -177,7 +181,8 @@ public sealed class TradeCommissionOperationsService(
                 companyId,
                 commissionId,
                 cancellationToken);
-            if (!await IsCurrentAuthorityAsync(authority))
+            if (!await IsCurrentAuthorityAsync(authority) ||
+                HasProtectedHostedOrderState(commissionId))
             {
                 return null;
             }
@@ -1226,13 +1231,7 @@ public sealed class TradeCommissionOperationsService(
             return false;
         }
 
-        var objectId = order.Id.ToString("D");
-        if (profileSync.PendingSaves.Any(item =>
-                string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
-                string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)) ||
-            profileSync.Conflicts.Any(item =>
-                string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
-                string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)))
+        if (HasProtectedHostedOrderState(order.Id))
         {
             reason = "Resolve the pending hosted order update before operating its commission.";
             return false;
@@ -1240,6 +1239,17 @@ public sealed class TradeCommissionOperationsService(
 
         reason = string.Empty;
         return true;
+    }
+
+    private bool HasProtectedHostedOrderState(Guid orderId)
+    {
+        var objectId = orderId.ToString("D");
+        return profileSync.PendingSaves.Any(item =>
+                   string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
+                   string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)) ||
+               profileSync.Conflicts.Any(item =>
+                   string.Equals(item.Collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal) &&
+                   string.Equals(item.ObjectId, objectId, StringComparison.OrdinalIgnoreCase));
     }
 
     private static CompanyCommissionCommandContext CreateContext(
