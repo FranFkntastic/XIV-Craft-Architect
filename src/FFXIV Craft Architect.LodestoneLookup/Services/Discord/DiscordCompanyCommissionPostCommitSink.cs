@@ -1,11 +1,14 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
 public sealed class DiscordCompanyCommissionPostCommitSink(
     IServiceScopeFactory scopeFactory,
+    TimeProvider timeProvider,
     ILogger<DiscordCompanyCommissionPostCommitSink> logger)
     : ICompanyCommissionPostCommitSink
 {
@@ -56,20 +59,31 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
             publicUri,
             activity.CommissionId,
             activity.EventId);
-        var notification = new CommittedCompanyCommissionNotification(
-            access.CompanyId,
-            publicBrief,
-            activity.EventId,
-            activity.CommissionRevision,
-            activity.Kind,
-            activity.CreatedAtUtc,
-            BuildSummary(activity, publicBrief),
-            activity.Actor.DisplayName,
-            ResolveActionLabel(activity.Kind, publicBrief),
-            activityUrl);
         try
         {
-            if (ShouldNotifyCommissioner(activity))
+            var notifyCommissioner = ShouldNotifyCommissioner(activity);
+            var actorDisplayName = notifyCommissioner
+                ? await ResolveActorDisplayNameAsync(
+                    commission,
+                    activity,
+                    scope.ServiceProvider.GetRequiredService<SqliteDiscordNotificationStore>(),
+                    scope.ServiceProvider.GetRequiredService<SqliteDiscordIdentityStore>(),
+                    scope.ServiceProvider.GetRequiredService<SqliteProfileHostStore>(),
+                    timeProvider,
+                    cancellationToken)
+                : null;
+            var notification = new CommittedCompanyCommissionNotification(
+                access.CompanyId,
+                publicBrief,
+                activity.EventId,
+                activity.CommissionRevision,
+                activity.Kind,
+                activity.CreatedAtUtc,
+                BuildSummary(activity, publicBrief),
+                actorDisplayName,
+                ResolveActionLabel(activity.Kind, publicBrief),
+                activityUrl);
+            if (notifyCommissioner)
             {
                 var result = await delivery.NotifyAsync(notification, cancellationToken);
                 if (result.Status == DiscordNotificationEnqueueStatus.Invalid)
@@ -232,6 +246,113 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
         CompanyCommissionActivityEvent activity) =>
         activity.Visibility == CompanyCommissionActivityVisibility.Shared &&
         activity.Kind != CompanyCommissionActivityKind.DraftUpdated;
+
+    internal static async Task<string?> ResolveActorDisplayNameAsync(
+        TradeCompanyCommission commission,
+        CompanyCommissionActivityEvent activity,
+        SqliteDiscordNotificationStore notifications,
+        SqliteDiscordIdentityStore identities,
+        SqliteProfileHostStore profiles,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken = default)
+    {
+        const string accountPrefix = "account-profile:";
+        const string claimPrefix = "claim-capability:";
+        const string participantPrefix = "participant-grant:";
+        const string recoveryPrefix = "recovery-grant:";
+
+        var actorId = activity.Actor.ActorId;
+        if (actorId.StartsWith(accountPrefix, StringComparison.Ordinal) &&
+            Guid.TryParse(actorId[accountPrefix.Length..], out var profileId) &&
+            profileId != Guid.Empty)
+        {
+            var profile = await profiles.LoadProfileAsync(
+                profileId.ToString("D"),
+                cancellationToken);
+            return NormalizeActorDisplayName(profile?.DisplayName);
+        }
+
+        string? discordUserId = null;
+        if (actorId.StartsWith(claimPrefix, StringComparison.Ordinal))
+        {
+            var parts = actorId[claimPrefix.Length..].Split(':', 2);
+            if (parts.Length == 2 &&
+                Guid.TryParse(parts[0], out var capabilityId) &&
+                capabilityId != Guid.Empty &&
+                long.TryParse(parts[1], out var capabilityRevision) &&
+                capabilityRevision > 0)
+            {
+                var pending = await notifications.LoadPendingClaimContactAsync(
+                    commission.CompanyId,
+                    commission.CommissionId,
+                    commission.PublicMetadata.PublicBriefId,
+                    capabilityId,
+                    capabilityRevision,
+                    timeProvider.GetUtcNow(),
+                    cancellationToken);
+                discordUserId = pending?.Contact.DiscordUserId;
+            }
+        }
+        else
+        {
+            Guid? claimId = null;
+            if (actorId.StartsWith(participantPrefix, StringComparison.Ordinal) &&
+                Guid.TryParse(actorId[participantPrefix.Length..], out var participantGrantId) &&
+                participantGrantId != Guid.Empty &&
+                commission.ParticipantGrant?.GrantId == participantGrantId)
+            {
+                claimId = commission.ParticipantGrant.ClaimId;
+            }
+            else if (actorId.StartsWith(recoveryPrefix, StringComparison.Ordinal) &&
+                     Guid.TryParse(actorId[recoveryPrefix.Length..], out var recoveryGrantId) &&
+                     recoveryGrantId != Guid.Empty)
+            {
+                claimId = commission.ParticipantGrant?.ClaimId ??
+                    commission.ActiveClaim?.ClaimId;
+            }
+
+            if (claimId.HasValue)
+            {
+                discordUserId = await notifications
+                    .LoadCommittedClaimContactDiscordUserIdAsync(
+                        commission.CompanyId,
+                        commission.CommissionId,
+                        claimId.Value,
+                        cancellationToken);
+            }
+        }
+
+        if (discordUserId == null)
+        {
+            return null;
+        }
+
+        var identity = await identities.LoadByDiscordUserAsync(
+            discordUserId,
+            cancellationToken);
+        if (identity == null)
+        {
+            return null;
+        }
+
+        var verifiedProfile = await profiles.LoadProfileAsync(
+            identity.ProfileId.ToString("D"),
+            cancellationToken);
+        return NormalizeActorDisplayName(verifiedProfile?.DisplayName);
+    }
+
+    private static string? NormalizeActorDisplayName(string? displayName)
+    {
+        var normalized = displayName?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        return normalized.Length <= 120
+            ? normalized
+            : normalized[..120];
+    }
 
     private static string ResolveResultingState(
         CompanyCommissionPublicBrief commission)

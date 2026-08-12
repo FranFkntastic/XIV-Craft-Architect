@@ -307,16 +307,11 @@ public sealed class DiscordIdentityContractTests
                 null,
                 5,
                 claimCapabilityId);
-            Assert.Equal(
-                "Participant",
-                await committer.ResolveVerifiedActorDisplayNameAsync(
-                    capability,
-                    identities,
-                    profiles));
             var claimId = Guid.NewGuid();
             var mutation = ClaimMutation(
                 commissionId,
                 now.GetUtcNow().UtcDateTime,
+                claimCapabilityId,
                 CreateAssignedCommission(
                     companyId,
                     commissionId,
@@ -327,6 +322,16 @@ public sealed class DiscordIdentityContractTests
                         new CompanyRecordRevision(1)),
                     now.GetUtcNow().UtcDateTime,
                     claimId));
+            Assert.Null(mutation.Activity!.Actor.DisplayName);
+            Assert.Equal(
+                "Participant",
+                await DiscordCompanyCommissionPostCommitSink.ResolveActorDisplayNameAsync(
+                    mutation.Order!.CompanyCommission!,
+                    mutation.Activity,
+                    notifications,
+                    identities,
+                    profiles,
+                    now));
             Assert.True(await committer.CaptureAsync(capability, mutation));
             Assert.True(await notifications.HasCommittedClaimContactAsync(
                 companyId,
@@ -338,6 +343,21 @@ public sealed class DiscordIdentityContractTests
                 commissionId,
                 Guid.NewGuid(),
                 DiscordUser));
+            Assert.Equal(
+                "Participant",
+                await DiscordCompanyCommissionPostCommitSink.ResolveActorDisplayNameAsync(
+                    mutation.Order.CompanyCommission!,
+                    mutation.Activity with
+                    {
+                        Actor = new(
+                            $"participant-grant:{claimId:D}",
+                            CompanyCommissionActorKind.Crafter),
+                        Kind = CompanyCommissionActivityKind.ProgressReported
+                    },
+                    notifications,
+                    identities,
+                    profiles,
+                    now));
             Assert.Null(await notifications.LoadPendingClaimContactAsync(
                 companyId,
                 commissionId,
@@ -693,6 +713,7 @@ public sealed class DiscordIdentityContractTests
     private static CompanyCommissionMutationResult ClaimMutation(
         Guid commissionId,
         DateTime committedAtUtc,
+        Guid claimCapabilityId,
         TradeOrder order) =>
         new(
             CompanyCommissionMutationStatus.Applied,
@@ -704,7 +725,7 @@ public sealed class DiscordIdentityContractTests
                 CommissionId = commissionId,
                 CommissionRevision = 2,
                 Actor = new CompanyCommissionActor(
-                    "claim-revision:5",
+                    $"claim-capability:{claimCapabilityId:D}:5",
                     CompanyCommissionActorKind.Crafter),
                 SourceSurface = CompanyCommissionSourceSurface.PublicBrief,
                 CreatedAtUtc = committedAtUtc,

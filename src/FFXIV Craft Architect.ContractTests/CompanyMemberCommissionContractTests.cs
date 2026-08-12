@@ -27,6 +27,8 @@ public sealed class CompanyMemberCommissionContractTests
         var projection = await response.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>();
         var claimId = await fixture.LoadActiveClaimIdAsync();
         var claimActorDisplayName = await fixture.LoadClaimActorDisplayNameAsync(claimId);
+        var notificationActorDisplayName = await fixture
+            .ResolveClaimNotificationActorDisplayNameAsync(claimId);
         var captured = await fixture.Notifications.HasCommittedClaimContactAsync(
             new CompanyId(fixture.Company.Id),
             fixture.Order.Id,
@@ -37,7 +39,8 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.Equal(fixture.Order.Id, projection!.Public.CommissionId);
         Assert.True(projection.Public.IsClaimed);
         Assert.True(captured);
-        Assert.Equal("Crafter", claimActorDisplayName);
+        Assert.Null(claimActorDisplayName);
+        Assert.Equal("Crafter", notificationActorDisplayName);
     }
 
     [Fact]
@@ -393,6 +396,20 @@ public sealed class CompanyMemberCommissionContractTests
             return order.CompanyCommission!.Activity
                 .Single(item => item.CommandId == claimId)
                 .Actor.DisplayName;
+        }
+
+        public async Task<string?> ResolveClaimNotificationActorDisplayNameAsync(Guid claimId)
+        {
+            var order = await LoadCanonicalOrderAsync();
+            var commission = order.CompanyCommission!;
+            var activity = commission.Activity.Single(item => item.CommandId == claimId);
+            return await DiscordCompanyCommissionPostCommitSink.ResolveActorDisplayNameAsync(
+                commission,
+                activity,
+                Notifications,
+                Identities,
+                Profiles,
+                TimeProvider.System);
         }
 
         public async Task<Guid> LoadActiveCrafterIdAsync()
