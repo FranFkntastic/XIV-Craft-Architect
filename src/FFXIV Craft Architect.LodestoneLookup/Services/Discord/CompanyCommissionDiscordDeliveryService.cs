@@ -60,7 +60,8 @@ public sealed class CompanyCommissionDiscordDeliveryService(
         {
             payload = CompanyCommissionDiscordMessage.CreatePublication(
                 projection,
-                actionToken);
+                actionToken,
+                options.CrafterWorkspaceEnabled);
         }
         catch (InvalidOperationException exception)
         {

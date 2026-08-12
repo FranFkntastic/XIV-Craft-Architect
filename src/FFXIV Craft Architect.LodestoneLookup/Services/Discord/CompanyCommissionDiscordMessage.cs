@@ -16,7 +16,8 @@ public static class CompanyCommissionDiscordMessage
 
     public static object CreatePublication(
         CommittedCompanyCommissionDiscordProjection projection,
-        string? actionToken = null)
+        string? actionToken = null,
+        bool crafterWorkspaceEnabled = false)
     {
         var commission = projection.Commission;
         var state = ResolveProjectionState(commission);
@@ -42,6 +43,14 @@ public static class CompanyCommissionDiscordMessage
                 buttons.Add(ActionButton(
                     "Claim with Discord",
                     $"claim-discord:{actionToken}",
+                    style: 1));
+            }
+            else if (state == DiscordPublicationState.Assigned &&
+                     crafterWorkspaceEnabled)
+            {
+                buttons.Add(ActionButton(
+                    "Open my workspace",
+                    $"open-workspace:{actionToken}",
                     style: 1));
             }
         }

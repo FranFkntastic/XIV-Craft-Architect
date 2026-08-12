@@ -66,8 +66,11 @@ internal sealed class DiscordCommissionInteractionService(
                     target,
                     contact,
                     cancellationToken),
-            DiscordCommissionComponentAction.OpenWorkspace =>
+            DiscordCommissionComponentAction.OpenWorkspace
+                when options.CrafterWorkspaceEnabled =>
                 await OpenWorkspaceAsync(publication, target, cancellationToken),
+            DiscordCommissionComponentAction.OpenWorkspace =>
+                Refusal("This commission workspace is not available."),
             _ => Refusal("This commission action is no longer available.")
         };
     }

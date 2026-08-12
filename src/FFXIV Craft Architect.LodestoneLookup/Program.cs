@@ -166,6 +166,9 @@ builder.Services.AddSingleton(_ =>
     return new DiscordCommissionOptions
     {
         Enabled = builder.Configuration.GetValue("Discord:Enabled", false),
+        CrafterWorkspaceEnabled = builder.Configuration.GetValue(
+            "Discord:CrafterWorkspaceEnabled",
+            false),
         CompanyId = builder.Configuration["Discord:CompanyId"] ?? string.Empty,
         ApplicationId = builder.Configuration["Discord:ApplicationId"] ?? string.Empty,
         PublicKey = builder.Configuration["Discord:PublicKey"] ?? string.Empty,
