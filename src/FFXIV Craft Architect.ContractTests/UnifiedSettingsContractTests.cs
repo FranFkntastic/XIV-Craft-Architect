@@ -61,6 +61,10 @@ public sealed class UnifiedSettingsContractTests
             "CompanyHubClient.cs")), StringComparison.Ordinal);
         Assert.DoesNotContain(">linked account<", workspace, StringComparison.Ordinal);
         Assert.Contains("Send test", workspace, StringComparison.Ordinal);
+        Assert.Contains("CompanyChanged.InvokeAsync", workspace, StringComparison.Ordinal);
+        var settings = File.ReadAllText(Path.Combine(web, "Dialogs", "SettingsDialog.razor"));
+        Assert.Contains("OnWorkspaceCompanyChangedAsync", settings, StringComparison.Ordinal);
+        Assert.Contains("hub.Standing.Role is \"owner\" or \"operator\"", settings, StringComparison.Ordinal);
     }
 
     [Fact]

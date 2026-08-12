@@ -371,7 +371,8 @@ public sealed class CompanyHubService(
             companyId,
             account.ProfileId,
             cancellationToken);
-        if (membership is not { State: MembershipState.Active })
+        if (membership is not { State: MembershipState.Active } &&
+            account.ProfileId != company.HostProfileId)
         {
             return new(CompanyHubAttentionReadStatus.Forbidden);
         }

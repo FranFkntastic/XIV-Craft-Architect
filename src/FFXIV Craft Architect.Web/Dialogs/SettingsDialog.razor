@@ -66,7 +66,8 @@
             else if (_activePanel == SettingsSection.Workspace)
             {
                 <WorkspaceSettingsPanel InitialCompanyId="@(_companyProfile?.Id.ToString("D"))"
-                                        OpenProfile="@(() => SelectTab(SettingsSection.Profile))" />
+                                        OpenProfile="@(() => SelectTab(SettingsSection.Profile))"
+                                        CompanyChanged="OnWorkspaceCompanyChangedAsync" />
             }
             else if (_activePanel == SettingsSection.MarketAndRoutes)
             {
@@ -1035,21 +1036,7 @@
         _marketMafiosoAutoSyncEvidence = await Settings.GetAsync("marketmafioso.auto_sync_evidence", true);
 
         await LoadCompanyProfileAsync();
-        if (_companyProfile != null)
-        {
-            try
-            {
-                _canAdministerCompany = (await CompanyHubClient.LoadMembershipsAsync())
-                    .Any(membership =>
-                        string.Equals(membership.CompanyId, _companyProfile.Id.ToString("D"), StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(membership.State, "active", StringComparison.OrdinalIgnoreCase) &&
-                        membership.Role is "owner" or "operator");
-            }
-            catch
-            {
-                _canAdministerCompany = false;
-            }
-        }
+        await RefreshCompanyAdministrationAccessAsync();
         if (!VisibleSettingsSections.Any(section => section.Panel == _activePanel))
         {
             _activePanel = SettingsSection.MarketAndRoutes;
@@ -1058,6 +1045,37 @@
         if (_activePanel == SettingsSection.Diagnostics)
         {
             await PrepareDiagnosticsAsync();
+        }
+    }
+
+    private async Task OnWorkspaceCompanyChangedAsync(string companyId)
+    {
+        await LoadCompanyProfileAsync();
+        await RefreshCompanyAdministrationAccessAsync();
+        if (_companyProfile == null ||
+            !string.Equals(_companyProfile.Id.ToString("D"), companyId, StringComparison.OrdinalIgnoreCase))
+        {
+            _canAdministerCompany = false;
+        }
+    }
+
+    private async Task RefreshCompanyAdministrationAccessAsync()
+    {
+        _canAdministerCompany = false;
+        if (_companyProfile == null)
+        {
+            return;
+        }
+        try
+        {
+            var hub = await CompanyHubClient.LoadAsync(_companyProfile.Id.ToString("D"));
+            _canAdministerCompany = hub?.Kind == "hub" &&
+                string.Equals(hub.Standing.State, "active", StringComparison.OrdinalIgnoreCase) &&
+                hub.Standing.Role is "owner" or "operator";
+        }
+        catch
+        {
+            _canAdministerCompany = false;
         }
     }
 

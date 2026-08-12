@@ -6,6 +6,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -321,6 +322,32 @@ public sealed class CompanyHubContractTests
     }
 
     [Fact]
+    public async Task HostOwnerCanMarkAssignedAttentionReadBeforeFounderReconciliation()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Host owner");
+        var company = CreateCompany();
+        var order = CreateAssignedOrderWithCommissionerUpdate(company.Id, owner.ProfileId);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, order);
+        await fixture.DeleteMembershipAsync(company.Id, owner.ProfileId);
+
+        using var hub = await ownerClient.GetAsync($"/trade/v1/companies/{company.Id:D}/hub");
+        hub.EnsureSuccessStatusCode();
+        using var hubJson = JsonDocument.Parse(await hub.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "owner",
+            hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+        Assert.Single(hubJson.RootElement.GetProperty("assignments").EnumerateArray());
+
+        using var marked = await ownerClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/commissions/{order.Id:D}/attention/read",
+            new CompanyHubAttentionReadRequest(9));
+        marked.EnsureSuccessStatusCode();
+    }
+
+    [Fact]
     public async Task HostileThemeIsClampedAndSanitizedOnProjection()
     {
         await using var fixture = await HubFixture.CreateAsync();
@@ -633,6 +660,21 @@ public sealed class CompanyHubContractTests
         public WebApplicationFactory<Program> Application => application;
         public SqliteProfileHostStore Profiles { get; }
         public SqliteDiscordIdentityStore Identities { get; }
+
+        public async Task DeleteMembershipAsync(Guid companyId, Guid profileId)
+        {
+            await using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(root, "memberships.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                DELETE FROM company_memberships
+                WHERE company_id = $companyId AND account_profile_id = $profileId;
+                """;
+            command.Parameters.AddWithValue("$companyId", companyId.ToString("D"));
+            command.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
 
         public static Task<HubFixture> CreateAsync()
         {

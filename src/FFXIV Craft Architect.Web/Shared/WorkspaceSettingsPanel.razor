@@ -181,6 +181,7 @@ else if (_selected is { } company)
 
     [Parameter] public string? InitialCompanyId { get; set; }
     [Parameter] public EventCallback OpenProfile { get; set; }
+    [Parameter] public EventCallback<string> CompanyChanged { get; set; }
 
     private static string DiscordDestinationSummary(MemberCompany company) =>
         company.TestReadiness.Ready
@@ -252,6 +253,7 @@ else if (_selected is { } company)
         {
             await TradeOperationsPersistence.SelectCompanyProfileAsync(parsed);
         }
+        await CompanyChanged.InvokeAsync(companyId);
     }
 
     private async Task SavePreferenceAsync(
