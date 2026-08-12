@@ -141,7 +141,7 @@ else
                         @foreach (var assignment in _hub.Assignments ?? [])
                         {
                             <article class="assignment-card">
-                                <div class="assignment-main"><div><h3>@assignment.Title</h3><span>@assignment.Reference · terms v@assignment.TermsVersion</span><strong>@OutputSummary(assignment)</strong></div><div class="assignment-state"><strong>@AssignmentState(assignment)</strong><span>@AssignmentSupport(assignment)</span></div><button class="button primary" type="button" @onclick="() => SelectCommission(assignment)">Open workspace</button></div>
+                                <div class="assignment-main"><div><h3>@assignment.Title</h3><span>@assignment.Reference · terms v@(assignment.TermsVersion)</span><strong>@OutputSummary(assignment)</strong></div><div class="assignment-state"><strong>@AssignmentState(assignment)</strong><span>@AssignmentSupport(assignment)</span></div><button class="button primary" type="button" @onclick="() => SelectCommission(assignment)">Open workspace</button></div>
                             </article>
                         }
                     }
@@ -169,7 +169,7 @@ else
             @if (_selectedCommission != null)
             {
                 <section class="panel commission-detail" id="commission-workspace">
-                    <div class="section-header"><div><span class="detail-reference">@_selectedCommission.Reference · terms v@_selectedCommission.TermsVersion</span><h2>@_selectedCommission.Title</h2></div><span class="standing">@AssignmentState(_selectedCommission)</span></div>
+                    <div class="section-header"><div><span class="detail-reference">@_selectedCommission.Reference · terms v@(_selectedCommission.TermsVersion)</span><h2>@_selectedCommission.Title</h2></div><span class="standing">@AssignmentState(_selectedCommission)</span></div>
                     <div class="detail-grid">
                         <div><span class="label">Requested output</span>@foreach (var output in _selectedCommission.Outputs) { <div><strong>@output.Name ×@output.Quantity</strong><span>@output.CompletedQuantity completed · @output.ReadyQuantity ready · @output.AcceptedQuantity accepted</span></div> }</div>
                         <div><span class="label">Payment</span><strong>@_selectedCommission.Payment.Total.ToString("N0") gil</strong><span>@PaymentScheduleLabel(_selectedCommission.Payment.Schedule) · @_selectedCommission.Payment.Label</span></div>
