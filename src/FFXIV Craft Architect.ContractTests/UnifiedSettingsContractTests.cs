@@ -39,6 +39,11 @@ public sealed class UnifiedSettingsContractTests
         Assert.Contains("SettingsSection.Workspace", hub, StringComparison.Ordinal);
         Assert.Contains("SettingsSection.MarketAndRoutes", market, StringComparison.Ordinal);
         Assert.Contains("SettingsSection.Integrations", procurement, StringComparison.Ordinal);
+
+        var workspaceReceiver = File.ReadAllText(Path.Combine(web, "Pages", "WorkspaceSettingsReceiver.razor"));
+        Assert.Contains("ToBaseRelativePath", workspaceReceiver, StringComparison.Ordinal);
+        Assert.Contains("account/workspaces", workspaceReceiver, StringComparison.Ordinal);
+        Assert.DoesNotContain("await dialog.Result;\n        Navigation.NavigateTo(\"/\");", workspaceReceiver, StringComparison.Ordinal);
     }
 
     [Fact]
