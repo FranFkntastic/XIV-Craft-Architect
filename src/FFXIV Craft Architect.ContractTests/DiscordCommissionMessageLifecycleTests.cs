@@ -387,7 +387,9 @@ public sealed class DiscordCommissionMessageLifecycleTests
                 create.LeaseId,
                 "900000000000000020",
                 DateTimeOffset.UtcNow);
-            await SetProjectionFormatVersionAsync(databasePath, 0);
+            await SetProjectionFormatVersionAsync(
+                databasePath,
+                DiscordPublicationProjectionFormat.CurrentVersion - 1);
 
             var refresher = new RecordingPublicationRefresher(store);
             await using var services = new ServiceCollection()

@@ -54,18 +54,10 @@ public sealed class DiscordIdentityContractTests
             const string interactionId = "333333333333333333";
             const string ownerInteractionId = "444444444444444444";
             var actionToken = SqliteDiscordCollaborationStore.CreateActionToken();
-            var discordOptions = new DiscordCommissionOptions
-            {
-                Enabled = true,
-                CompanyId = companyId.Value.ToString("D"),
-                ApplicationId = "100000000000000001",
-                PublicKey = new string('a', 64),
-                BotToken = "test-token",
-                AllowedGuildId = "100000000000000002",
-                AllowedChannelId = "100000000000000003",
-                CommissionBaseUrl = "https://example.test/commission.html?id=",
-                DatabasePath = Path.Combine(root, "discord.db")
-            };
+            var discordOptions = CreateDiscordOptions(
+                companyId,
+                root,
+                crafterWorkspaceEnabled: true);
             var collaboration = new SqliteDiscordCollaborationStore(discordOptions);
             var created = await collaboration.CreatePublicationAsync(
                 new TradeCompanyPublicationOwnership(
@@ -273,6 +265,33 @@ public sealed class DiscordIdentityContractTests
                 now.GetUtcNow());
             Assert.NotNull(expectation);
             Assert.Equal(DiscordUser, expectation.Contact.DiscordUserId);
+
+            var disabledInteractions = new DiscordCommissionInteractionService(
+                CreateDiscordOptions(
+                    companyId,
+                    root,
+                    crafterWorkspaceEnabled: false),
+                collaboration,
+                identities,
+                profiles,
+                companies,
+                memberships,
+                notifications,
+                claimIssuer,
+                resolver,
+                now);
+            var disabledWorkspace = await disabledInteractions.HandleAsync(
+                ComponentInteraction(
+                    "343434343434343434",
+                    DiscordUser,
+                    $"open-workspace:{actionToken}"));
+            using (var response = JsonDocument.Parse(
+                JsonSerializer.Serialize(disabledWorkspace)))
+            {
+                Assert.Contains(
+                    "workspace is not available",
+                    response.RootElement.GetProperty("content").GetString());
+            }
 
             var ownerResponse = await interactions.HandleAsync(
                 ComponentInteraction(
@@ -852,6 +871,24 @@ public sealed class DiscordIdentityContractTests
             }
         };
     }
+
+    private static DiscordCommissionOptions CreateDiscordOptions(
+        CompanyId companyId,
+        string root,
+        bool crafterWorkspaceEnabled) =>
+        new()
+        {
+            Enabled = true,
+            CrafterWorkspaceEnabled = crafterWorkspaceEnabled,
+            CompanyId = companyId.Value.ToString("D"),
+            ApplicationId = "100000000000000001",
+            PublicKey = new string('a', 64),
+            BotToken = "test-token",
+            AllowedGuildId = "100000000000000002",
+            AllowedChannelId = "100000000000000003",
+            CommissionBaseUrl = "https://example.test/commission.html?id=",
+            DatabasePath = Path.Combine(root, "discord.db")
+        };
 
     private static DiscordIdentityOptions CreateOptions(string root) => new()
     {
