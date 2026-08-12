@@ -33,7 +33,7 @@ public sealed class CompanyHubClient(
             $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-requests",
             new { RequestNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim() },
             cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureHubSuccessAsync(response, cancellationToken);
     }
 
     public async Task ClaimAsync(string companyId, string commissionId, CancellationToken cancellationToken = default)
@@ -44,6 +44,52 @@ public sealed class CompanyHubClient(
             null,
             cancellationToken);
         response.EnsureSuccessStatusCode();
+    }
+
+    public async Task UpdateThemeAsync(
+        string companyId,
+        long expectedProfileRevision,
+        CompanyHubTheme theme,
+        bool showOpenCommissionCount,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Put,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/hub/theme",
+            new
+            {
+                ExpectedProfileRevision = expectedProfileRevision,
+                theme.Accent,
+                theme.BannerStyle,
+                theme.Emblem,
+                theme.Tagline,
+                theme.About,
+                ShowOpenCommissionCount = showOpenCommissionCount
+            },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+    }
+
+    public async Task PostUpdateAsync(
+        string companyId,
+        long expectedProfileRevision,
+        string title,
+        string body,
+        bool isPinned,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/hub/updates",
+            new
+            {
+                ExpectedProfileRevision = expectedProfileRevision,
+                Title = title,
+                Body = body,
+                IsPinned = isPinned
+            },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
     }
 
     public async Task<IReadOnlyList<CompanyMembership>> LoadMembershipsAsync(CancellationToken cancellationToken = default)
@@ -110,7 +156,33 @@ public sealed class CompanyHubClient(
             CommandId = Guid.NewGuid(),
             Command = command
         }, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureHubSuccessAsync(response, cancellationToken);
+    }
+
+    private static async Task EnsureHubSuccessAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        CompanyHubError? error = null;
+        try
+        {
+            error = await response.Content.ReadFromJsonAsync<CompanyHubError>(
+                JsonOptions,
+                cancellationToken);
+        }
+        catch (JsonException)
+        {
+        }
+
+        throw new CompanyHubRequestException(
+            response.StatusCode,
+            error?.Error,
+            error?.Message ?? $"The company hub request failed with status {(int)response.StatusCode}.");
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, CancellationToken cancellationToken)
@@ -145,20 +217,37 @@ public sealed record CompanyHubProjection(
     string DisplayName,
     CompanyHubTheme Theme,
     CompanyHubStanding Standing,
+    long ProfileRevision,
+    IReadOnlyList<CompanyHubUpdate>? Updates,
     int? OpenCommissionCount,
     IReadOnlyList<CompanyHubCommission>? OpenCommissions,
     IReadOnlyList<CompanyHubCommission>? Assignments,
     IReadOnlyList<CompanyHubRosterMember>? Roster,
-    IReadOnlyList<CompanyHubActivity>? RecentActivity,
     int? PendingMembershipRequestCount);
 
-public sealed record CompanyHubTheme(string Accent, string BannerStyle, string Emblem, string? Tagline, string? About);
+public sealed record CompanyHubTheme(
+    string Accent,
+    string BannerStyle,
+    string Emblem,
+    string? Tagline,
+    string? About,
+    bool ShowOpenCommissionCount);
 public sealed record CompanyHubStanding(string State, string? Role);
 public sealed record CompanyHubOutput(Guid LineId, int ItemId, string Name, int Quantity, int CompletedQuantity, int ReadyQuantity, int AcceptedQuantity);
 public sealed record CompanyHubPayment(string Schedule, string Label, decimal Total);
-public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State);
+public sealed record CompanyHubUpdate(Guid Id, string Title, string Body, string AuthorDisplayName, DateTime PublishedAtUtc, DateTime? EditedAtUtc, bool IsPinned);
+public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State, bool CanWork, bool CanReportProgress, bool CanDeclareReadiness, string? WorkBlockedReason);
 public sealed record CompanyHubRosterMember(string DisplayName, string Role);
-public sealed record CompanyHubActivity(string CommissionId, string Reference, string Kind, DateTime OccurredAtUtc);
 public sealed record CompanyMembership(string CompanyId, Guid AccountProfileId, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, Guid? DecidedByProfileId, string? RequestNote);
 public sealed record CompanyMembershipNotifications(string CompanyId, bool OptedOut);
 public sealed record CompanyMember(Guid AccountProfileId, string DisplayName, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, bool DiscordLinked);
+
+public sealed class CompanyHubRequestException(
+    HttpStatusCode statusCode,
+    string? errorCode,
+    string message) : HttpRequestException(message, null, statusCode)
+{
+    public string? ErrorCode { get; } = errorCode;
+}
+
+file sealed record CompanyHubError(string? Error, string? Message);
