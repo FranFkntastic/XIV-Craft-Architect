@@ -497,19 +497,15 @@ public partial class TradeOrders
             .GroupBy(order => order.Id)
             .Select(group => group.First())
             .ToArray();
-        var visibleCanonicalOrders = visibleOrders
-            .Where(order => order.CompanyCommission != null)
-            .ToArray();
         TradeOrderNotificationNavigationResolution resolution;
         if (hint.ActivityId.HasValue &&
             hint.IsValid &&
-            hint.OrderId is { } notificationOrderId)
+            hint.OrderId is { } notificationOrderId &&
+            _companyProfile != null)
         {
-            var candidate = visibleCanonicalOrders.FirstOrDefault(
-                order => order.Id == notificationOrderId);
-            var fresh = candidate == null
-                ? null
-                : await CommissionOperations.ResolveNotificationNavigationAsync(candidate);
+            var fresh = await CommissionOperations.ResolveNotificationNavigationAsync(
+                _companyProfile.Id,
+                notificationOrderId);
             resolution = fresh == null
                 ? new(TradeOrderNotificationNavigationStatus.Unavailable)
                 : TradeOrderNotificationNavigation.Resolve(hint, [fresh.Order]);

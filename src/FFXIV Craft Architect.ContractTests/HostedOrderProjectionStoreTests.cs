@@ -34,6 +34,7 @@ public sealed class HostedOrderProjectionStoreTests
     [InlineData(ProjectionStoreScenario.CenterOperationCommittedFailure)]
     [InlineData(ProjectionStoreScenario.StaleMissingOwner)]
     [InlineData(ProjectionStoreScenario.BatchHydration)]
+    [InlineData(ProjectionStoreScenario.DirectNotificationHydration)]
     public async Task ProjectionStorePreservesCanonicalIdentityAndRestoreTruth(ProjectionStoreScenario scenario)
     {
         await (scenario switch
@@ -56,6 +57,7 @@ public sealed class HostedOrderProjectionStoreTests
             ProjectionStoreScenario.CenterOperationCommittedFailure => CenterOperationRetainsCommittedProjectionOnAdoptionFailure(),
             ProjectionStoreScenario.StaleMissingOwner => StaleMissingOwnerCannotClearReplacementProjection(),
             ProjectionStoreScenario.BatchHydration => Run(BatchHydrationPublishesOneNotification),
+            ProjectionStoreScenario.DirectNotificationHydration => DirectNotificationHydratesMissingOrder(),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null)
         });
     }
@@ -152,6 +154,50 @@ public sealed class HostedOrderProjectionStoreTests
         await VerifyDurableAuthorityRepair(replacementHasWinner: false);
         await VerifyDurableAuthorityRepair(replacementHasWinner: true);
     }
+
+    private static async Task DirectNotificationHydratesMissingOrder()
+    {
+        var fixture = await CenterOperationFixture.CreateAsync(publishOwner: false);
+        AlignCommissionIdentity(fixture);
+
+        var projection = await fixture.Service.ResolveNotificationNavigationAsync(
+            fixture.Current.Order.CompanyProfileId,
+            fixture.Current.Order.Id);
+
+        Assert.NotNull(projection);
+        Assert.Equal(fixture.Current.Order.Id, projection.Order.Id);
+        Assert.Equal(fixture.Current.ObjectRevision, projection.ObjectRevision);
+        Assert.Equal(fixture.Current.CompanyRevision, projection.CompanyRevision);
+        Assert.Same(
+            projection,
+            fixture.Store.Get(fixture.Current.Order.Id)?.OwnerProjection);
+        Assert.Equal(fixture.Current.Order.Id, fixture.Runtime.DurableOrder?.Id);
+
+        var wrongCompany = await CenterOperationFixture.CreateAsync(publishOwner: false);
+        AlignCommissionIdentity(wrongCompany);
+        var rejectedCompany = await wrongCompany.Service.ResolveNotificationNavigationAsync(
+            Guid.NewGuid(),
+            wrongCompany.Current.Order.Id);
+        Assert.Null(rejectedCompany);
+        Assert.Null(wrongCompany.Store.Get(wrongCompany.Current.Order.Id));
+        Assert.Null(wrongCompany.Runtime.DurableOrder);
+
+        var replacedAuthority = await CenterOperationFixture.CreateAsync(publishOwner: false);
+        AlignCommissionIdentity(replacedAuthority);
+        replacedAuthority.Handler.BeforeResponse = _ =>
+            replacedAuthority.ReplaceAuthority(replaceProfile: false);
+        var rejectedAuthority = await replacedAuthority.Service.ResolveNotificationNavigationAsync(
+            replacedAuthority.Current.Order.CompanyProfileId,
+            replacedAuthority.Current.Order.Id);
+        Assert.Null(rejectedAuthority);
+        Assert.Null(replacedAuthority.Runtime.DurableOrder);
+    }
+
+    private static void AlignCommissionIdentity(CenterOperationFixture fixture) =>
+        fixture.Current.Order.CompanyCommission = fixture.Current.Order.CompanyCommission! with
+        {
+            CommissionId = fixture.Current.Order.Id
+        };
 
     private static async Task CenterOperationRejectsHostAndProfileReplacement()
     {
@@ -482,7 +528,9 @@ public sealed class HostedOrderProjectionStoreTests
             { CompanyProfileId = Current.Order.CompanyProfileId, DisplayName = "Test", LodestoneCharacterId = "123" }, "123"),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null)
         };
-        public static async Task<CenterOperationFixture> CreateAsync(bool draft = false)
+        public static async Task<CenterOperationFixture> CreateAsync(
+            bool draft = false,
+            bool publishOwner = true)
         {
             var profileId = Guid.NewGuid().ToString("D");
             var current = new CompanyCommissionOwnerProjection { Order = CreateCommissionOrder(Guid.NewGuid()), ObjectRevision = new(4), CompanyRevision = new(8) };
@@ -495,7 +543,10 @@ public sealed class HostedOrderProjectionStoreTests
             var localState = new ProfileSyncLocalStateService(indexedDb, new ProfileHostClientOptions(Host));
             await localState.LoadConnectionSettingsAsync();
             var store = RestoringStore(profileId, 4, $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
-            Assert.True(store.TryPublishOwner(current));
+            if (publishOwner)
+            {
+                Assert.True(store.TryPublishOwner(current));
+            }
             var recovery = CreateOwner(current.Order, 5, 9);
             recovery.Order.CompanyCommission = recovery.Order.CompanyCommission! with { RecoveryGrant = new(Guid.NewGuid(), Guid.NewGuid(), 1, Now) };
             var handler = new OwnerMutationHandler { Projection = current, RecoveryProjection = recovery };
@@ -617,6 +668,6 @@ public sealed class HostedOrderProjectionStoreTests
         CanonicalRevisionAndTombstone, CompanyProfileIsImmutable, ProfileResetClearsRevisionHistory, OwnerUpgradeAtSameRevision, SameProfileReconnect,
         ScopeChange, RestoreRevisionCannotRollBack, CompanySnapshotComposition, SameProfileConnectionReplacement, ConnectionScopePathCase,
         SameRevisionOwnerPersistence, LiveTombstonePersistence, OwnerTombstonePersistence, CenterOperationWinner, CenterOperationAuthoritySwitch,
-        CenterOperationCommittedFailure, StaleMissingOwner, BatchHydration
+        CenterOperationCommittedFailure, StaleMissingOwner, BatchHydration, DirectNotificationHydration
     }
 }

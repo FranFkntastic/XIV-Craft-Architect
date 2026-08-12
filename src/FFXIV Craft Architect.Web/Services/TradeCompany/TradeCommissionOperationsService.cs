@@ -159,6 +159,41 @@ public sealed class TradeCommissionOperationsService(
         }
     }
 
+    public async Task<CompanyCommissionOwnerProjection?> ResolveNotificationNavigationAsync(
+        Guid companyId,
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
+        if (companyId == Guid.Empty || commissionId == Guid.Empty)
+        {
+            return null;
+        }
+
+        try
+        {
+            var authority = await CaptureOrderAuthorityAsync();
+            var projection = await client.LoadOwnerProjectionAsync(
+                authority.Connection,
+                companyId,
+                commissionId,
+                cancellationToken);
+            if (!await IsCurrentAuthorityAsync(authority))
+            {
+                return null;
+            }
+
+            ValidateProjection(companyId, commissionId, projection);
+            await ApplyProjectionAsync(authority, projection);
+            _errors.Remove(commissionId);
+            return projection;
+        }
+        catch (Exception exception)
+        {
+            _errors[commissionId] = exception.Message;
+            return null;
+        }
+    }
+
     public async Task<TradeCommissionOperatorResult> ConfirmIdentityAsync(
         CompanyCommissionOwnerProjection current,
         TradeCrafterProfile crafter,
@@ -1248,6 +1283,25 @@ public sealed class TradeCommissionOperationsService(
             commission.CommissionId != expectedCommissionId ||
             expectedCompanyId == null ||
             commission.CompanyId != expectedCompanyId ||
+            projection.ObjectRevision.Value <= 0 ||
+            projection.CompanyRevision.Value <= 0)
+        {
+            throw new InvalidOperationException(
+                "The owner endpoint returned the wrong commission or omitted authoritative revisions.");
+        }
+    }
+
+    private static void ValidateProjection(
+        Guid expectedCompanyId,
+        Guid expectedCommissionId,
+        CompanyCommissionOwnerProjection projection)
+    {
+        var commission = projection.Order.CompanyCommission;
+        if (projection.Order.Id != expectedCommissionId ||
+            projection.Order.CompanyProfileId != expectedCompanyId ||
+            commission == null ||
+            commission.CommissionId != expectedCommissionId ||
+            commission.CompanyId.Value != expectedCompanyId ||
             projection.ObjectRevision.Value <= 0 ||
             projection.CompanyRevision.Value <= 0)
         {
