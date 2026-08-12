@@ -3,6 +3,7 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 public sealed class DiscordCommissionOptions
 {
     public bool Enabled { get; init; }
+    public bool CrafterWorkspaceEnabled { get; init; }
     public string CompanyId { get; init; } = string.Empty;
     public string ApplicationId { get; init; } = string.Empty;
     public string PublicKey { get; init; } = string.Empty;
