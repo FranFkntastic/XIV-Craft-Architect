@@ -246,7 +246,7 @@ jobs:
           set -euo pipefail
           mkdir -p "dist/subject/tools/IndexedDbBrowserTests"
           mkdir -p "dist/subject/fixtures/browser"
-          cp tools/IndexedDbBrowserTests/truth-suite.mjs tools/IndexedDbBrowserTests/engine-worker.test.mjs "dist/subject/tools/IndexedDbBrowserTests/"
+          cp tools/IndexedDbBrowserTests/truth-suite.mjs tools/IndexedDbBrowserTests/engine-worker.test.mjs tools/IndexedDbBrowserTests/commission-access.test.mjs "dist/subject/tools/IndexedDbBrowserTests/"
           cp tools/IndexedDbBrowserTests/package.json tools/IndexedDbBrowserTests/package-lock.json "dist/subject/tools/IndexedDbBrowserTests/"
           cp -R fixtures/browser/. "dist/subject/fixtures/browser/"
           timeout --signal=KILL 2m npm --prefix "dist/subject/tools/IndexedDbBrowserTests" ci
@@ -299,6 +299,7 @@ jobs:
             dist/evidence/**
             dist/subject/tools/IndexedDbBrowserTests/truth-suite.mjs
             dist/subject/tools/IndexedDbBrowserTests/engine-worker.test.mjs
+            dist/subject/tools/IndexedDbBrowserTests/commission-access.test.mjs
             dist/subject/tools/IndexedDbBrowserTests/package.json
             dist/subject/tools/IndexedDbBrowserTests/package-lock.json
             dist/subject/fixtures/browser/**

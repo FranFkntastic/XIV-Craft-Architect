@@ -3,9 +3,10 @@ import {
     CommissionClientError,
     LodestoneExistenceClient,
     ParticipantAccessStore,
-    clearCapabilityFragment,
     createCommandAuthorization,
+    loadPortableCommissionProjection,
     readCapabilityFragment,
+    replaceParticipantCapabilityFragment,
     resolveParticipantPreworkChoices
 } from "./commission-client.js";
 
@@ -208,7 +209,8 @@ async function load() {
             Boolean(
                 state.capabilities.claimCapability ||
                 state.capabilities.recoveryCapability ||
-                state.capabilities.bootstrapToken);
+                state.capabilities.bootstrapToken ||
+                state.capabilities.participantCapability);
         if (!canReplaceDamagedAccess) throw caught;
         state.store.discard();
         state.access = null;
@@ -220,38 +222,35 @@ async function load() {
             state.capabilities.bootstrapToken,
             state.access.participantSecret);
     }
-    const hasAuthorityFragment = Boolean(
-        state.capabilities.claimCapability ||
-        state.capabilities.recoveryCapability ||
-        state.capabilities.bootstrapToken);
-    const loadSecret = state.access?.pending || !hasAuthorityFragment
-        ? state.access?.participantSecret ?? null
-        : null;
-    try {
-        state.projection = await state.client.load(loadSecret);
-    } catch (caught) {
-        const pendingAuthorityIsNotInstalled =
-            caught instanceof CommissionClientError &&
-            caught.status === 401 &&
-            Boolean(loadSecret && state.access?.pending);
-        if (!pendingAuthorityIsNotInstalled) throw caught;
-        state.projection = await state.client.load();
-    }
+    const loaded = await loadPortableCommissionProjection(
+        state.client,
+        state.capabilities,
+        state.access);
+    state.projection = loaded.projection;
+    state.capabilities.participantCapability = loaded.participantCapability;
 
     if (state.projection.public.publicBriefId !== publicId) {
         throw new CommissionClientError(
             "The commission service returned a different public brief.",
             "public-id-mismatch");
     }
-    if (state.projection.kind === "participant" && state.access?.pending) {
-        state.store.completeAuthorityExchange(state.access);
-        state.access = state.store.load();
-        clearCapabilityFragment();
+    if (state.projection.kind === "participant") {
+        if (state.capabilities.participantCapability) {
+            state.access = state.store.adoptParticipantSecret(
+                state.capabilities.participantCapability);
+        } else if (state.access?.pending) {
+            state.store.completeAuthorityExchange(state.access);
+            state.access = state.store.load();
+        }
+        if (state.access?.participantSecret) {
+            replaceParticipantCapabilityFragment(state.access.participantSecret);
+        }
         state.capabilities = {
             claimCapability: null,
             recoveryCapability: null,
             recoveryGrantId: null,
-            bootstrapToken: null
+            bootstrapToken: null,
+            participantCapability: null
         };
     }
 
@@ -970,13 +969,13 @@ function renderAccess() {
                 "strong",
                 null,
                 canMutate
-                    ? "This browser can update the commission."
+                    ? "This private workspace can update the commission."
                     : "This participant access is retained for reference."),
             element(
                 "small",
                 null,
                 canMutate
-                    ? "The public URL is view-only. A commissioner-issued recovery link can reissue this access without replacing the commission or its progress."
+                    ? "This private workspace link stays valid while your participant access is active. Keep it private: anyone holding it can act as you."
                     : "Canceled and fulfilled commissions do not accept ordinary participant mutations.")
         );
         if (projection.provisionalCrafter) {
@@ -985,6 +984,11 @@ function renderAccess() {
                 "small",
                 null,
                 `${crafter.characterName} · ${crafter.homeWorld} · ${crafter.contactMethod}: ${crafter.contactValue}`));
+        }
+        if (state.access?.participantSecret) {
+            actions.append(createButton(
+                "Copy private workspace link",
+                copyPrivateWorkspaceLink));
         }
         if (canMutate) {
             actions.append(createButton(
@@ -1004,9 +1008,27 @@ function renderAccess() {
             "small",
             null,
             state.projection.public.isClaimed
-                ? "Use saved participant access, or ask the commissioner for a fresh recovery link after browser-data loss or a device change."
+                ? "Open the private workspace link from your browser history or bookmarks, or use your signed-in company workspace."
                 : "A separate claim-capable link is required to reserve the one active claim slot.")
     );
+}
+
+async function copyPrivateWorkspaceLink() {
+    const secret = state.access?.participantSecret;
+    if (!secret) {
+        throw new CommissionClientError(
+            "This browser does not hold participant access.",
+            "participant-authority-missing");
+    }
+
+    replaceParticipantCapabilityFragment(secret);
+    if (!navigator.clipboard?.writeText) {
+        throw new CommissionClientError(
+            "Clipboard access is unavailable. Copy the private URL from the address bar.",
+            "clipboard-unavailable");
+    }
+    await navigator.clipboard.writeText(window.location.href);
+    showToast("Private workspace link copied");
 }
 
 function renderActivity() {
@@ -1265,7 +1287,7 @@ async function submitClaim(contact) {
         "claim",
         access,
         state.capabilities.claimCapability,
-        "Commission claimed. Participant access is saved in this browser.");
+        "Commission claimed. Your private workspace link is ready; keep it private.");
 }
 
 async function retryClaim() {
@@ -1277,7 +1299,7 @@ async function retryClaim() {
         "claim",
         access,
         state.capabilities.claimCapability,
-        "Commission claimed. Participant access is saved in this browser.");
+        "Commission claimed. Your private workspace link is ready; keep it private.");
 }
 
 async function recoverAccess() {
@@ -1294,7 +1316,7 @@ async function recoverAccess() {
         "redeem-participant-recovery",
         access,
         state.capabilities.recoveryCapability,
-        "Participant access restored in this browser.");
+        "Participant access restored. Your private workspace link is ready; keep it private.");
 }
 
 async function sendAuthorityExchange(command, access, authority, successMessage) {
@@ -1324,12 +1346,13 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
             authorization);
         applied = true;
         state.store.completeAuthorityExchange(access);
-        clearCapabilityFragment();
+        replaceParticipantCapabilityFragment(access.participantSecret);
         state.capabilities = {
             claimCapability: null,
             recoveryCapability: null,
             recoveryGrantId: null,
-            bootstrapToken: null
+            bootstrapToken: null,
+            participantCapability: null
         };
         await reloadProjection(successMessage);
     } catch (caught) {
