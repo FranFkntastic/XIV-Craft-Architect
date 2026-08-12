@@ -116,6 +116,77 @@ public sealed class ProfileHostClient
         }
     }
 
+    public async Task<ProfileHostProfileResponse> UpdateProfileDisplayNameAsync(
+        string hostUrl,
+        string accessKey,
+        long expectedMetadataRevision,
+        string displayName,
+        CancellationToken ct)
+    {
+        try
+        {
+            using var request = CreateRequest(HttpMethod.Put, hostUrl, "/profile-host/profile", accessKey);
+            request.Content = JsonContent.Create(new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = expectedMetadataRevision,
+                DisplayName = displayName
+            });
+            using var response = await _httpClient.SendAsync(request, ct);
+            if (response.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.AccessKeyRejected,
+                    "This browser session is no longer authorized.");
+            }
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.ProfileHostingDisabled,
+                    "This hosted profile is no longer available.");
+            }
+            if (response.StatusCode == HttpStatusCode.BadRequest)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.InvalidProfileName,
+                    "Account names must contain 1 to 120 visible characters.");
+            }
+            if (response.StatusCode == HttpStatusCode.Conflict)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.ProfileNameConflict,
+                    "The account name changed in another browser.");
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.HostUnavailable,
+                    "The profile host could not update the account name.");
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<ProfileHostDisplayNameUpdateResponse>(
+                cancellationToken: ct);
+            return result?.Profile
+                ?? throw new ProfileHostConnectionException(
+                    ProfileHostConnectionFailure.IncompatibleHost,
+                    "The server returned an invalid account-name response.");
+        }
+        catch (ProfileHostConnectionException)
+        {
+            throw;
+        }
+        catch (UriFormatException ex)
+        {
+            throw InvalidAddress(ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new ProfileHostConnectionException(
+                ProfileHostConnectionFailure.HostUnavailable,
+                "This browser lost contact with the profile host while updating the account name.",
+                ex);
+        }
+    }
+
     public async Task<ProfileHostPairingCodeResponse> CreatePairingCodeAsync(
         string hostUrl,
         string accessKey,

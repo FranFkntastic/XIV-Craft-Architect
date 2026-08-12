@@ -16,7 +16,7 @@ const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 27;
+const MODULE_REVISION = 29;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -1547,6 +1547,73 @@ async function saveSettingsBatch(settings) {
     });
 }
 
+async function saveSettingsWhenSettingsMatchAndRevisionNotNewer(
+    settings,
+    expectedSettings,
+    revisionKey,
+    revisionValue) {
+    const database = await initDB();
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_SETTINGS], 'readwrite');
+        const store = transaction.objectStore(STORE_SETTINGS);
+        const expectedEntries = Object.entries(expectedSettings || {});
+        let remaining = expectedEntries.length + 1;
+        let matches = true;
+        let storedRevision = 0n;
+        let outcome = 1;
+
+        const finishComparison = () => {
+            if (remaining !== 0) {
+                return;
+            }
+
+            if (!matches) {
+                outcome = 0;
+                return;
+            }
+
+            if (storedRevision > BigInt(revisionValue)) {
+                outcome = 2;
+                return;
+            }
+
+            for (const [settingKey, settingValue] of Object.entries(settings || {})) {
+                store.put({ key: settingKey, value: settingValue });
+            }
+        };
+
+        for (const [expectedKey, expectedValue] of expectedEntries) {
+            const request = store.get(expectedKey);
+            request.onerror = () => transaction.abort();
+            request.onsuccess = () => {
+                if (request.result?.value !== expectedValue) {
+                    matches = false;
+                }
+
+                remaining--;
+                finishComparison();
+            };
+        }
+
+        const revisionRequest = store.get(revisionKey);
+        revisionRequest.onerror = () => transaction.abort();
+        revisionRequest.onsuccess = () => {
+            try {
+                storedRevision = BigInt(revisionRequest.result?.value ?? '0');
+                remaining--;
+                finishComparison();
+            } catch {
+                transaction.abort();
+            }
+        };
+
+        transaction.oncomplete = () => resolve(outcome);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
 async function savePlansBatch(plans) {
     const database = await initDB();
 
@@ -2091,6 +2158,7 @@ window.IndexedDB = {
     loadSetting,
     loadAllSettings,
     saveSettingsBatch,
+    saveSettingsWhenSettingsMatchAndRevisionNotNewer,
     clearAllPlans,
     clearMarketCache,
     saveMarketData,

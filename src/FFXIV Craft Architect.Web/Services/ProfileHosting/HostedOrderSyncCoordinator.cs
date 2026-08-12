@@ -337,6 +337,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 return 0;
             }
 
+            var before = Math.Max(0, _profileSync.CurrentStatus.LastSyncRevision);
             if (replayAfterRevision.HasValue)
             {
                 await _profileSync.SyncFromRevisionAsync(
@@ -349,6 +350,10 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 await _profileSync.SyncNowAsync(cancellationToken);
             }
             var after = Math.Max(0, _profileSync.CurrentStatus.LastSyncRevision);
+            if (after > before)
+            {
+                _profileSync.NotifyProfileMetadataMayHaveChanged();
+            }
             _appState.NotifyTradeOperationsDataChanged();
 
             UpdateDiagnostics(Diagnostics with

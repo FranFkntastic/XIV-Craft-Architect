@@ -64,7 +64,8 @@
                     AccessKey = accessKey,
                     RememberAccessKey = true,
                     ConnectedProfileId = profile.ProfileId,
-                    ConnectedProfileName = profile.DisplayName
+                    ConnectedProfileName = profile.DisplayName,
+                    ConnectedProfileMetadataRevision = profile.MetadataRevision
                 });
             }
             else if (fragment.Kind == "error")

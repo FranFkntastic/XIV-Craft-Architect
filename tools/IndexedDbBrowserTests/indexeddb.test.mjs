@@ -19,13 +19,13 @@ before(async () => {
       response.end('<!doctype html>');
       return;
     }
-    if (request.url === '/indexedDB.js?v=20') {
+    if (request.url === '/indexedDB.js?v=29') {
       response.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' });
       response.end(script);
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
-    response.end('<!doctype html><script src="/indexedDB.js?v=20"></script>');
+    response.end('<!doctype html><script src="/indexedDB.js?v=29"></script>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -36,6 +36,74 @@ after(async () => {
 });
 
 for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]) {
+  test(`${name}: conditional setting save respects the active account scope`, { timeout: 30_000 }, async () => {
+    const browser = await browserType.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(origin, { waitUntil: 'load' });
+      await page.waitForFunction(() =>
+        typeof window.IndexedDB?.saveSettingsWhenSettingsMatchAndRevisionNotNewer === 'function');
+
+      const result = await page.evaluate(async () => {
+        await IndexedDB.saveSetting('profileHost.hostUrl', '"https://host-a.example/api"');
+        await IndexedDB.saveSetting('profileHost.connectedProfileId', '"profile-a"');
+        await IndexedDB.saveSetting('profileHost.connectedProfileName', '"Old name"');
+        await IndexedDB.saveSetting('profileHost.connectedProfileMetadataRevision', '0');
+
+        const matched = await IndexedDB.saveSettingsWhenSettingsMatchAndRevisionNotNewer(
+          {
+            'profileHost.connectedProfileName': '"Canonical name"',
+            'profileHost.connectedProfileMetadataRevision': '1'
+          },
+          {
+            'profileHost.hostUrl': '"https://host-a.example/api"',
+            'profileHost.connectedProfileId': '"profile-a"'
+          },
+          'profileHost.connectedProfileMetadataRevision',
+          '1');
+        const afterMatch = await IndexedDB.loadSetting('profileHost.connectedProfileName');
+
+        const staleRevision = await IndexedDB.saveSettingsWhenSettingsMatchAndRevisionNotNewer(
+          {
+            'profileHost.connectedProfileName': '"Stale name"',
+            'profileHost.connectedProfileMetadataRevision': '0'
+          },
+          {
+            'profileHost.hostUrl': '"https://host-a.example/api"',
+            'profileHost.connectedProfileId': '"profile-a"'
+          },
+          'profileHost.connectedProfileMetadataRevision',
+          '0');
+        const afterStaleRevision = await IndexedDB.loadSetting('profileHost.connectedProfileName');
+
+        const staleScope = await IndexedDB.saveSettingsWhenSettingsMatchAndRevisionNotNewer(
+          {
+            'profileHost.connectedProfileName': '"Wrong account"',
+            'profileHost.connectedProfileMetadataRevision': '2'
+          },
+          {
+            'profileHost.hostUrl': '"https://host-a.example/api"',
+            'profileHost.connectedProfileId': '"profile-b"'
+          },
+          'profileHost.connectedProfileMetadataRevision',
+          '2');
+        const afterStaleScope = await IndexedDB.loadSetting('profileHost.connectedProfileName');
+        return { matched, afterMatch, staleRevision, afterStaleRevision, staleScope, afterStaleScope };
+      });
+
+      assert.deepEqual(result, {
+        matched: 1,
+        afterMatch: '"Canonical name"',
+        staleRevision: 2,
+        afterStaleRevision: '"Canonical name"',
+        staleScope: 0,
+        afterStaleScope: '"Canonical name"'
+      });
+    } finally {
+      await browser.close();
+    }
+  });
+
   test(`${name}: repair creates complete Worker session schema`, { timeout: 30_000 }, async () => {
     const browser = await browserType.launch({ headless: true });
     try {
@@ -61,7 +129,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
       const page = await context.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
       const repaired = await page.evaluate(async () => {
         await IndexedDB.getTradeStoreDiagnostics();
         const request = indexedDB.open('FFXIVCraftArchitect');
@@ -100,7 +168,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       });
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
 
       const result = await page.evaluate(async () => {
         await window.IndexedDB.clearMarketCache();
@@ -161,7 +229,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
 
       const patched = await page.evaluate(async () => {
         await IndexedDB.savePlan({
@@ -194,7 +262,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
 
       const migrated = await page.evaluate(async () => {
         await IndexedDB.loadPlan('initialize-schema');
@@ -268,7 +336,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 20);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
 
       const patched = await page.evaluate(async () => {
         const marketIntelligenceJson = JSON.stringify({ evidence: 'x'.repeat(1024 * 1024) });

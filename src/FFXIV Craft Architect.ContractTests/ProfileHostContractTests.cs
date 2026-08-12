@@ -65,6 +65,317 @@ public sealed class ProfileHostContractTests
     }
 
     [Fact]
+    public async Task ProfileDisplayNameUpdate_RejectsMissingAccessKey()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient(withAccessKey: false);
+
+        using var response = await client.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = "Gooseworks"
+            });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ProfileDisplayNameUpdate_PersistsAcrossAccessKeysAndReplays()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        var hasher = new ProfileAccessKeyHasher();
+        var otherAccessKey = hasher.CreateAccessKey();
+        await fixture.Store.AddAccessKeyAsync(
+            fixture.ProfileId,
+            otherAccessKey.StoredHash,
+            CancellationToken.None);
+        using var firstClient = fixture.CreateClient();
+        using var secondClient = fixture.CreateClient(accessKey: otherAccessKey.PlaintextKey);
+        var update = new ProfileHostDisplayNameUpdateRequest
+        {
+            ExpectedMetadataRevision = 0,
+            DisplayName = "  Gooseworks  "
+        };
+
+        using var firstResponse = await firstClient.PutAsJsonAsync("/profile-host/profile", update);
+        using var replayResponse = await firstClient.PutAsJsonAsync("/profile-host/profile", update);
+        var profile = await secondClient.GetFromJsonAsync<ProfileHostProfileResponse>("/profile-host/profile");
+
+        firstResponse.EnsureSuccessStatusCode();
+        replayResponse.EnsureSuccessStatusCode();
+        Assert.NotNull(profile);
+        Assert.Equal(fixture.ProfileId, profile.ProfileId);
+        Assert.Equal("Gooseworks", profile.DisplayName);
+        Assert.Equal(1, profile.MetadataRevision);
+    }
+
+    [Fact]
+    public async Task ProfileDisplayNameUpdate_RejectsStaleExpectedNameWithoutOverwritingCanonicalName()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+        using var firstResponse = await client.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = "Gooseworks"
+            });
+        firstResponse.EnsureSuccessStatusCode();
+
+        using var staleResponse = await client.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = "Stale overwrite"
+            });
+        var conflict = await staleResponse.Content.ReadFromJsonAsync<ProfileHostDisplayNameUpdateResponse>();
+        var profile = await client.GetFromJsonAsync<ProfileHostProfileResponse>("/profile-host/profile");
+
+        Assert.Equal(HttpStatusCode.Conflict, staleResponse.StatusCode);
+        Assert.NotNull(conflict);
+        Assert.True(conflict.Conflict);
+        Assert.Equal("Gooseworks", conflict.Profile?.DisplayName);
+        Assert.Equal(1, conflict.Profile?.MetadataRevision);
+        Assert.Equal("Gooseworks", profile?.DisplayName);
+    }
+
+    [Fact]
+    public async Task ProfileDisplayNameUpdate_RejectsReplayAfterNameReturnsToPriorValue()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+        var originalUpdate = new ProfileHostDisplayNameUpdateRequest
+        {
+            ExpectedMetadataRevision = 0,
+            DisplayName = "Gooseworks"
+        };
+
+        using var firstResponse = await client.PutAsJsonAsync("/profile-host/profile", originalUpdate);
+        using var returnResponse = await client.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 1,
+                DisplayName = "Sapphire Avenue"
+            });
+        using var staleReplay = await client.PutAsJsonAsync("/profile-host/profile", originalUpdate);
+        var conflict = await staleReplay.Content.ReadFromJsonAsync<ProfileHostDisplayNameUpdateResponse>();
+
+        firstResponse.EnsureSuccessStatusCode();
+        returnResponse.EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Conflict, staleReplay.StatusCode);
+        Assert.Equal("Sapphire Avenue", conflict?.Profile?.DisplayName);
+        Assert.Equal(2, conflict?.Profile?.MetadataRevision);
+    }
+
+    [Fact]
+    public async Task ProfileDisplayNameUpdate_ConcurrentResponsesReturnOneCanonicalProfile()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var firstClient = fixture.CreateClient();
+        using var secondClient = fixture.CreateClient();
+
+        var firstTask = firstClient.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = "First browser"
+            });
+        var secondTask = secondClient.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = "Second browser"
+            });
+        var responses = await Task.WhenAll(firstTask, secondTask);
+        using var firstResponse = responses[0];
+        using var secondResponse = responses[1];
+        var firstResult = await firstResponse.Content.ReadFromJsonAsync<ProfileHostDisplayNameUpdateResponse>();
+        var secondResult = await secondResponse.Content.ReadFromJsonAsync<ProfileHostDisplayNameUpdateResponse>();
+        var canonical = await firstClient.GetFromJsonAsync<ProfileHostProfileResponse>("/profile-host/profile");
+
+        Assert.Equal(1, responses.Count(response => response.IsSuccessStatusCode));
+        Assert.Equal(1, responses.Count(response => response.StatusCode == HttpStatusCode.Conflict));
+        Assert.NotNull(canonical);
+        Assert.All(
+            new[] { firstResult, secondResult },
+            result =>
+            {
+                Assert.Equal(canonical.DisplayName, result?.Profile?.DisplayName);
+                Assert.Equal(canonical.MetadataRevision, result?.Profile?.MetadataRevision);
+            });
+    }
+
+    [Fact]
+    public async Task EnsureProfile_PreservesUserRenamedDisplayName()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+        using var rename = await client.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = "Gooseworks"
+            });
+        rename.EnsureSuccessStatusCode();
+
+        var ensured = await fixture.Store.EnsureProfileAsync(
+            fixture.ProfileId,
+            "Sapphire Avenue",
+            fixture.AccessKey,
+            new ProfileAccessKeyHasher(),
+            CancellationToken.None);
+
+        Assert.False(ensured.Created);
+        Assert.Equal("Gooseworks", ensured.Profile.DisplayName);
+        Assert.Equal(1, ensured.Profile.MetadataRevision);
+
+        var wrongKey = new ProfileAccessKeyHasher().CreateAccessKey();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Store.EnsureProfileAsync(
+                fixture.ProfileId,
+                "Sapphire Avenue",
+                wrongKey.PlaintextKey,
+                new ProfileAccessKeyHasher(),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ExistingProfileSchema_AddsMetadataRevisionWithoutChangingIdentity()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"ca-profile-metadata-{Guid.NewGuid():N}.db");
+        var profileId = Guid.NewGuid().ToString("D");
+        try
+        {
+            await using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    create table hosted_profiles (
+                        id text primary key,
+                        display_name text not null,
+                        created_at_utc text not null,
+                        updated_at_utc text not null,
+                        disabled_at_utc text null
+                    );
+                    insert into hosted_profiles (id, display_name, created_at_utc, updated_at_utc)
+                    values ($id, 'Sapphire Avenue', $now, $now);
+                    """;
+                command.Parameters.AddWithValue("$id", profileId);
+                command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var store = new SqliteProfileHostStore(new ProfileHostOptions { DatabasePath = databasePath });
+            var profile = await store.LoadProfileAsync(profileId, CancellationToken.None);
+
+            Assert.NotNull(profile);
+            Assert.Equal(profileId, profile.ProfileId);
+            Assert.Equal("Sapphire Avenue", profile.DisplayName);
+            Assert.Equal(0, profile.MetadataRevision);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(databasePath);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("Line\nBreak")]
+    [InlineData("Alpha\u2028Beta")]
+    [InlineData("Alpha\u2029Beta")]
+    [InlineData("\u200B")]
+    [InlineData("\u200B\u200C\u200D")]
+    [InlineData("\uFE0F")]
+    [InlineData("\U000E0100")]
+    public async Task ProfileDisplayNameUpdate_RejectsInvalidNames(string displayName)
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+
+        using var response = await client.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = displayName
+            });
+        var profile = await client.GetFromJsonAsync<ProfileHostProfileResponse>("/profile-host/profile");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("Sapphire Avenue", profile?.DisplayName);
+    }
+
+    [Fact]
+    public async Task ProfileDisplayNameUpdate_PublishesOneServerRevisionOnlyAfterCommit()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"ca-profile-name-signal-{Guid.NewGuid():N}.db");
+        try
+        {
+            var signal = new ProfileHostChangeSignal();
+            var store = new SqliteProfileHostStore(
+                new ProfileHostOptions { DatabasePath = databasePath },
+                signal);
+            var profile = await store.CreateProfileAsync("Signal Profile", CancellationToken.None);
+            var observation = signal.Observe(profile.ProfileId);
+
+            var renamed = await store.UpdateProfileDisplayNameAsync(
+                profile.ProfileId,
+                profile.MetadataRevision,
+                "Renamed profile",
+                CancellationToken.None);
+            await observation.Changed.WaitAsync(TimeSpan.FromSeconds(1));
+            var replayObservation = signal.Observe(profile.ProfileId);
+            var replayed = await store.UpdateProfileDisplayNameAsync(
+                profile.ProfileId,
+                profile.MetadataRevision,
+                "Renamed profile",
+                CancellationToken.None);
+
+            Assert.True(renamed.Success);
+            Assert.Equal(1, renamed.Profile?.ServerRevision);
+            Assert.Equal(1, signal.Observe(profile.ProfileId).LastPublishedRevision);
+            Assert.True(replayed.Success);
+            Assert.Equal(1, replayed.Profile?.ServerRevision);
+            Assert.False(replayObservation.Changed.IsCompleted);
+        }
+        finally
+        {
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ProfileDisplayNameUpdate_RejectsNamesLongerThanMaximum()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+
+        using var response = await client.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = new string('A', 121)
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task ProfileAuthentication_RejectsUnknownKeysAndQueuesValidBursts()
     {
         await using var fixture = await ProfileFixture.CreateAsync();

@@ -115,6 +115,7 @@ public sealed class ProfileSyncService
 
     public event Action? StatusChanged;
     public event Action? ConnectionChanged;
+    public event Action? ProfileMetadataMayHaveChanged;
 
     public ProfileSyncStatus CurrentStatus { get; private set; } = ProfileSyncStatus.LocalOnly();
 
@@ -187,6 +188,7 @@ public sealed class ProfileSyncService
         adopted.HostUrl = CanonicalProfileHostUrl;
         adopted.ConnectedProfileId = canonicalProfile.ProfileId;
         adopted.ConnectedProfileName = canonicalProfile.DisplayName;
+        adopted.ConnectedProfileMetadataRevision = canonicalProfile.MetadataRevision;
         await _localState.SaveConnectionSettingsAsync(adopted);
         _pendingSaves.Clear();
         _conflicts.Clear();
@@ -196,6 +198,9 @@ public sealed class ProfileSyncService
 
     public Task SyncNowAsync(CancellationToken ct = default) =>
         SyncAndAwaitBackgroundAsync(null, null, ct);
+
+    internal void NotifyProfileMetadataMayHaveChanged() =>
+        ProfileMetadataMayHaveChanged?.Invoke();
 
     public Task SyncFromRevisionAsync(
         long replayAfterRevision,

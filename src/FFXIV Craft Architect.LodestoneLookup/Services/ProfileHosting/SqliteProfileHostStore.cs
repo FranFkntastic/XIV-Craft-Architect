@@ -18,9 +18,13 @@ public sealed class SqliteProfileHostStore
         string StoredHash,
         string CreatedAtUtc,
         string? RevokedAtUtc);
+    private sealed record ActiveProfileMetadata(
+        string DisplayName,
+        long MetadataRevision);
     private sealed record AccessKeyAuthenticationCandidate(
         string ProfileId,
         string DisplayName,
+        long MetadataRevision,
         string KeyId,
         string StoredHash);
     private sealed record CachedAccessKeyAuthentication(
@@ -105,13 +109,14 @@ public sealed class SqliteProfileHostStore
             ct);
 
         string? existingDisplayName = null;
+        var existingMetadataRevision = 0L;
         var existingDisabled = false;
         await using (var profile = connection.CreateCommand())
         {
             profile.Transaction = (SqliteTransaction)transaction;
             profile.CommandText =
                 """
-                SELECT display_name, disabled_at_utc
+                SELECT display_name, metadata_revision, disabled_at_utc
                 FROM hosted_profiles
                 WHERE id = $profileId;
                 """;
@@ -120,14 +125,14 @@ public sealed class SqliteProfileHostStore
             if (await reader.ReadAsync(ct))
             {
                 existingDisplayName = reader.GetString(0);
-                existingDisabled = !reader.IsDBNull(1);
+                existingMetadataRevision = reader.GetInt64(1);
+                existingDisabled = !reader.IsDBNull(2);
             }
         }
 
         if (existingDisplayName != null)
         {
-            if (existingDisabled ||
-                !string.Equals(existingDisplayName, displayName, StringComparison.Ordinal))
+            if (existingDisabled)
             {
                 await transaction.RollbackAsync(ct);
                 throw new InvalidOperationException(
@@ -160,7 +165,7 @@ public sealed class SqliteProfileHostStore
                 profileId,
                 ct,
                 (SqliteTransaction)transaction);
-            if (!keyMatches && revision != 0)
+            if (!keyMatches && (revision != 0 || existingMetadataRevision != 0))
             {
                 await transaction.RollbackAsync(ct);
                 throw new InvalidOperationException(
@@ -210,6 +215,7 @@ public sealed class SqliteProfileHostStore
                 {
                     ProfileId = profileId,
                     DisplayName = existingDisplayName,
+                    MetadataRevision = existingMetadataRevision,
                     ServerRevision = revision
                 },
                 Created: false);
@@ -367,14 +373,14 @@ public sealed class SqliteProfileHostStore
         // That freezes credential revocation/rotation and also makes a filesystem
         // alias of the target fail on the second write reservation.
         await using var source = await OpenDatabaseAsync(sourcePath, SqliteOpenMode.ReadWrite, ct);
+        await EnsureProfileMetadataRevisionSchemaAsync(source, ct);
         await using var sourceTransaction = source.BeginTransaction(
             IsolationLevel.Serializable,
             deferred: false);
-        await ValidateActiveProfileAsync(
+        var sourceProfile = await LoadActiveProfileMetadataAsync(
             source,
             sourceTransaction,
             profileId,
-            expectedDisplayName,
             "source",
             ct);
         var sourceKeys = await LoadActiveAccessKeysAsync(
@@ -388,13 +394,49 @@ public sealed class SqliteProfileHostStore
         await using var targetTransaction = (SqliteTransaction)await target.BeginTransactionAsync(
             IsolationLevel.Serializable,
             ct);
-        await ValidateActiveProfileAsync(
+        var targetProfile = await LoadActiveProfileMetadataAsync(
             target,
             targetTransaction,
             profileId,
-            expectedDisplayName,
             "target",
             ct);
+        var importedMetadataRevision = string.Equals(
+            targetProfile.DisplayName,
+            sourceProfile.DisplayName,
+            StringComparison.Ordinal)
+                ? Math.Max(targetProfile.MetadataRevision, sourceProfile.MetadataRevision)
+                : Math.Max(
+                    checked(targetProfile.MetadataRevision + 1),
+                    sourceProfile.MetadataRevision);
+
+        var profileMetadataChanged = false;
+        await using (var copyProfileMetadata = target.CreateCommand())
+        {
+            copyProfileMetadata.Transaction = targetTransaction;
+            copyProfileMetadata.CommandText =
+                """
+                UPDATE hosted_profiles
+                SET display_name = $displayName,
+                    metadata_revision = $metadataRevision,
+                    updated_at_utc = $updatedAtUtc
+                WHERE id = $profileId
+                  AND disabled_at_utc IS NULL
+                  AND (
+                    display_name <> $displayName OR
+                    metadata_revision <> $metadataRevision
+                  );
+                """;
+            copyProfileMetadata.Parameters.AddWithValue("$profileId", profileId);
+            copyProfileMetadata.Parameters.AddWithValue("$displayName", sourceProfile.DisplayName);
+            copyProfileMetadata.Parameters.AddWithValue(
+                "$metadataRevision",
+                importedMetadataRevision);
+            copyProfileMetadata.Parameters.AddWithValue("$updatedAtUtc", DateTime.UtcNow.ToString("O"));
+            profileMetadataChanged = await copyProfileMetadata.ExecuteNonQueryAsync(ct) == 1;
+        }
+        var importedServerRevision = profileMetadataChanged
+            ? await ReserveNextRevisionAsync(target, targetTransaction, profileId, ct)
+            : (long?)null;
 
         var targetKeys = await LoadRelevantTargetAccessKeysAsync(
             target,
@@ -451,6 +493,10 @@ public sealed class SqliteProfileHostStore
 
         await targetTransaction.CommitAsync(ct);
         await sourceTransaction.CommitAsync(ct);
+        if (importedServerRevision.HasValue)
+        {
+            _changeSignal?.Publish(profileId, importedServerRevision.Value);
+        }
         return new ProfileAccessKeyImportResult(
             profileId,
             sourceKeys.Count,
@@ -458,11 +504,10 @@ public sealed class SqliteProfileHostStore
             alreadyPresentIds.ToArray());
     }
 
-    private static async Task ValidateActiveProfileAsync(
+    private static async Task<ActiveProfileMetadata> LoadActiveProfileMetadataAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         string profileId,
-        string expectedDisplayName,
         string databaseRole,
         CancellationToken ct)
     {
@@ -470,19 +515,19 @@ public sealed class SqliteProfileHostStore
         command.Transaction = transaction;
         command.CommandText =
             """
-            SELECT display_name, disabled_at_utc
+            SELECT display_name, metadata_revision, disabled_at_utc
             FROM hosted_profiles
             WHERE id = $profileId;
             """;
         command.Parameters.AddWithValue("$profileId", profileId);
         await using var reader = await command.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct) ||
-            !reader.IsDBNull(1) ||
-            !string.Equals(reader.GetString(0), expectedDisplayName, StringComparison.Ordinal))
+        if (!await reader.ReadAsync(ct) || !reader.IsDBNull(2))
         {
             throw new InvalidOperationException(
                 $"The {databaseRole} database does not contain the expected active profile identity.");
         }
+
+        return new ActiveProfileMetadata(reader.GetString(0), reader.GetInt64(1));
     }
 
     private static async Task<List<ImportedAccessKey>> LoadActiveAccessKeysAsync(
@@ -654,11 +699,12 @@ public sealed class SqliteProfileHostStore
 
         string? profileId = null;
         string? displayName = null;
+        var metadataRevision = 0L;
         await using (var select = connection.CreateCommand())
         {
             select.Transaction = transaction;
             select.CommandText = """
-                select p.id, p.display_name
+                select p.id, p.display_name, p.metadata_revision
                 from profile_pairing_codes c
                 inner join hosted_profiles p on p.id = c.profile_id
                 where c.token_hash = $tokenHash
@@ -673,6 +719,7 @@ public sealed class SqliteProfileHostStore
             {
                 profileId = reader.GetString(0);
                 displayName = reader.GetString(1);
+                metadataRevision = reader.GetInt64(2);
             }
         }
 
@@ -724,6 +771,7 @@ public sealed class SqliteProfileHostStore
         {
             ProfileId = profileId,
             DisplayName = displayName,
+            MetadataRevision = metadataRevision,
             ServerRevision = await GetServerRevisionAsync(connection, profileId, ct)
         };
     }
@@ -734,7 +782,7 @@ public sealed class SqliteProfileHostStore
         await using var connection = await OpenAsync(ct);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            select id, display_name
+            select id, display_name, metadata_revision
             from hosted_profiles
             where id = $profileId and disabled_at_utc is null;
             """;
@@ -747,13 +795,128 @@ public sealed class SqliteProfileHostStore
         }
 
         var displayName = reader.GetString(1);
+        var metadataRevision = reader.GetInt64(2);
         await reader.DisposeAsync();
 
         return new ProfileHostProfileResponse
         {
             ProfileId = profileId,
             DisplayName = displayName,
+            MetadataRevision = metadataRevision,
             ServerRevision = await GetServerRevisionAsync(connection, profileId, ct)
+        };
+    }
+
+    public async Task<ProfileHostDisplayNameUpdateResponse> UpdateProfileDisplayNameAsync(
+        string profileId,
+        long expectedMetadataRevision,
+        string displayName,
+        CancellationToken ct)
+    {
+        if (expectedMetadataRevision < 0 ||
+            expectedMetadataRevision == long.MaxValue ||
+            !ProfileHostDisplayNamePolicy.TryNormalize(displayName, out var normalizedDisplayName))
+        {
+            return new ProfileHostDisplayNameUpdateResponse
+            {
+                ErrorCode = "invalid_profile_name",
+                ErrorMessage = "Account names must contain 1 to 120 visible characters."
+            };
+        }
+
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+        var updated = 0;
+        await using (var update = connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = """
+                update hosted_profiles
+                set display_name = $displayName,
+                    metadata_revision = metadata_revision + 1,
+                    updated_at_utc = $updatedAtUtc
+                where id = $profileId
+                  and disabled_at_utc is null
+                  and metadata_revision = $expectedMetadataRevision
+                  and display_name <> $displayName;
+                """;
+            update.Parameters.AddWithValue("$displayName", normalizedDisplayName);
+            update.Parameters.AddWithValue("$updatedAtUtc", DateTime.UtcNow.ToString("O"));
+            update.Parameters.AddWithValue("$profileId", profileId);
+            update.Parameters.AddWithValue("$expectedMetadataRevision", expectedMetadataRevision);
+            updated = await update.ExecuteNonQueryAsync(ct);
+        }
+
+        string? currentDisplayName = null;
+        var currentMetadataRevision = 0L;
+        await using (var current = connection.CreateCommand())
+        {
+            current.Transaction = transaction;
+            current.CommandText = """
+                select display_name, metadata_revision
+                from hosted_profiles
+                where id = $profileId and disabled_at_utc is null;
+                """;
+            current.Parameters.AddWithValue("$profileId", profileId);
+            await using var reader = await current.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                currentDisplayName = reader.GetString(0);
+                currentMetadataRevision = reader.GetInt64(1);
+            }
+        }
+
+        if (currentDisplayName == null)
+        {
+            await transaction.RollbackAsync(ct);
+            return new ProfileHostDisplayNameUpdateResponse
+            {
+                ErrorCode = "profile_unavailable",
+                ErrorMessage = "This hosted profile is no longer available."
+            };
+        }
+
+        var publishedRevision = updated == 1
+            ? await ReserveNextRevisionAsync(connection, transaction, profileId, ct)
+            : (long?)null;
+        var currentProfile = new ProfileHostProfileResponse
+        {
+            ProfileId = profileId,
+            DisplayName = currentDisplayName,
+            MetadataRevision = currentMetadataRevision,
+            ServerRevision = publishedRevision ?? await GetServerRevisionAsync(
+                    connection,
+                    profileId,
+                    ct,
+                    transaction)
+        };
+        if (updated == 1 ||
+            ((currentMetadataRevision == expectedMetadataRevision ||
+             currentMetadataRevision == expectedMetadataRevision + 1) &&
+             string.Equals(currentDisplayName, normalizedDisplayName, StringComparison.Ordinal)))
+        {
+            await transaction.CommitAsync(ct);
+            if (publishedRevision.HasValue)
+            {
+                _changeSignal?.Publish(profileId, publishedRevision.Value);
+            }
+            return new ProfileHostDisplayNameUpdateResponse
+            {
+                Success = true,
+                Profile = currentProfile
+            };
+        }
+
+        await transaction.CommitAsync(ct);
+        return new ProfileHostDisplayNameUpdateResponse
+        {
+            Conflict = true,
+            Profile = currentProfile,
+            ErrorCode = "profile_name_conflict",
+            ErrorMessage = "The account name changed in another browser."
         };
     }
 
@@ -930,6 +1093,7 @@ public sealed class SqliteProfileHostStore
             .Select(candidate => (
                 candidate.ProfileId,
                 candidate.DisplayName,
+                candidate.MetadataRevision,
                 candidate.KeyId))
             .ToList();
 
@@ -954,6 +1118,7 @@ public sealed class SqliteProfileHostStore
             {
                 ProfileId = profileId,
                 DisplayName = matches[0].DisplayName,
+                MetadataRevision = matches[0].MetadataRevision,
                 ServerRevision = revision
             },
             matches.Select(match => match.KeyId).ToArray());
@@ -1003,6 +1168,7 @@ public sealed class SqliteProfileHostStore
             {
                 ProfileId = profileId,
                 DisplayName = candidates[0].DisplayName,
+                MetadataRevision = candidates[0].MetadataRevision,
                 ServerRevision = revision
             },
             candidates.Select(candidate => candidate.KeyId).ToArray());
@@ -1043,7 +1209,7 @@ public sealed class SqliteProfileHostStore
         await using var command = connection.CreateCommand();
         command.CommandText = fingerprint == null
             ? """
-                select p.id, p.display_name, k.id, k.key_hash
+                select p.id, p.display_name, p.metadata_revision, k.id, k.key_hash
                 from profile_access_keys k
                 inner join hosted_profiles p on p.id = k.profile_id
                 where k.key_fingerprint is null
@@ -1051,7 +1217,7 @@ public sealed class SqliteProfileHostStore
                   and p.disabled_at_utc is null;
                 """
             : """
-                select p.id, p.display_name, k.id, k.key_hash
+                select p.id, p.display_name, p.metadata_revision, k.id, k.key_hash
                 from profile_access_keys k
                 inner join hosted_profiles p on p.id = k.profile_id
                 where k.key_fingerprint = $fingerprint
@@ -1070,8 +1236,9 @@ public sealed class SqliteProfileHostStore
             candidates.Add(new AccessKeyAuthenticationCandidate(
                 reader.GetString(0),
                 reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3)));
+                reader.GetInt64(2),
+                reader.GetString(3),
+                reader.GetString(4)));
         }
 
         return candidates;
@@ -1113,7 +1280,7 @@ public sealed class SqliteProfileHostStore
         }
 
         command.CommandText = $"""
-            select p.id, p.display_name, k.id, k.key_hash
+            select p.id, p.display_name, p.metadata_revision, k.id, k.key_hash
             from profile_access_keys k
             inner join hosted_profiles p on p.id = k.profile_id
             where k.key_hash in ({string.Join(", ", parameters)})
@@ -1127,8 +1294,9 @@ public sealed class SqliteProfileHostStore
             candidates.Add(new AccessKeyAuthenticationCandidate(
                 reader.GetString(0),
                 reader.GetString(1),
-                reader.GetString(2),
-                reader.GetString(3)));
+                reader.GetInt64(2),
+                reader.GetString(3),
+                reader.GetString(4)));
         }
 
         return candidates;
@@ -2220,6 +2388,7 @@ public sealed class SqliteProfileHostStore
                 create table if not exists hosted_profiles (
                     id text primary key,
                     display_name text not null,
+                    metadata_revision integer not null default 0,
                     created_at_utc text not null,
                     updated_at_utc text not null,
                     disabled_at_utc text null
@@ -2273,12 +2442,44 @@ public sealed class SqliteProfileHostStore
                     revision = max(profile_revisions.revision, excluded.revision);
                 """;
             await command.ExecuteNonQueryAsync(ct);
+            await EnsureProfileMetadataRevisionSchemaAsync(connection, ct);
             await EnsureAccessKeyFingerprintSchemaAsync(connection, ct);
             _schemaReady = true;
         }
         finally
         {
             _schemaGate.Release();
+        }
+    }
+
+    private static async Task EnsureProfileMetadataRevisionSchemaAsync(
+        SqliteConnection connection,
+        CancellationToken ct)
+    {
+        var hasMetadataRevision = false;
+        await using (var columns = connection.CreateCommand())
+        {
+            columns.CommandText = "pragma table_info(hosted_profiles);";
+            await using var reader = await columns.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                if (string.Equals(
+                        reader.GetString(1),
+                        "metadata_revision",
+                        StringComparison.Ordinal))
+                {
+                    hasMetadataRevision = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasMetadataRevision)
+        {
+            await using var addColumn = connection.CreateCommand();
+            addColumn.CommandText =
+                "alter table hosted_profiles add column metadata_revision integer not null default 0;";
+            await addColumn.ExecuteNonQueryAsync(ct);
         }
     }
 
