@@ -1,7 +1,7 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.Web.Pages;
-using System.Text.Json;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
