@@ -515,6 +515,46 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(1, requestCount);
     }
     [Fact]
+    public async Task PortablePublicationReturnsTheInitialClaimCapability()
+    {
+        var fixture = new ProjectionFixture("Portable claim capability");
+        await fixture.PrepareCollaborationAsync();
+        var committed = fixture.PublishedOrder("Published portable claim");
+        var publication = committed.CommissionPublication!;
+        var claimUrl = $"{publication.PublicUrl}#claim={new string('a', 43)}";
+        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(_ =>
+            Ok(new CommissionBriefCreateResponse
+            {
+                PublicId = publication.PublicId,
+                PublicUrl = publication.PublicUrl!,
+                ClaimUrl = claimUrl,
+                EditorToken = string.Empty,
+                Version = publication.Version,
+                PublishedAtUtc = publication.PublishedAtUtc,
+                OrderRecord = new(
+                    new(committed.CompanyProfileId),
+                    TradeCompanyRecordKinds.Order,
+                    Key(committed),
+                    JsonSerializer.Serialize(
+                        committed,
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                    new(5),
+                    DateTime.UtcNow)
+            })));
+
+        var link = await collaboration.PublishPortableLinkAsync(
+            fixture.Order,
+            new CommissionBriefDocument());
+        var adopted = Assert.IsType<HostedOrderProjectionSnapshot>(
+            fixture.Store.Get(fixture.Order.Id));
+        var adoptedOrder = Assert.IsType<TradeOrder>(adopted.Order);
+
+        Assert.Equal(claimUrl, link.Url);
+        Assert.Equal(publication.PublicUrl, link.PublicUrl);
+        Assert.Equal(committed.Title, adoptedOrder.Title);
+        Assert.Equal(5, adopted.ObjectRevision);
+    }
+    [Fact]
     public async Task DelayedCollaborationResponseCannotPersistOverNewerProjection()
     {
         var fixture = new ProjectionFixture("Revision four");

@@ -652,7 +652,14 @@ public sealed class TradeCompanyCollaborationService(
                 publication.PublicId,
                 published.Link.PublicId,
                 StringComparison.Ordinal) ||
-            validatedLink != published.Link)
+            validatedLink == null ||
+            !string.Equals(
+                validatedLink.PublicUrl,
+                published.Link.PublicUrl,
+                StringComparison.Ordinal) ||
+            validatedLink.Version != published.Link.Version ||
+            validatedLink.PublishedAtUtc != published.Link.PublishedAtUtc ||
+            validatedLink.EditorToken != published.Link.EditorToken)
         {
             throw new InvalidOperationException(
                 "Portable commission publication returned inconsistent authoritative link ownership.");
