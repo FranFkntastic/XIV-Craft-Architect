@@ -173,6 +173,16 @@ public sealed class HostedOrderProjectionStoreTests
             fixture.Store.Get(fixture.Current.Order.Id)?.OwnerProjection);
         Assert.Equal(fixture.Current.Order.Id, fixture.Runtime.DurableOrder?.Id);
 
+        var raced = await CenterOperationFixture.CreateAsync(publishOwner: false);
+        AlignCommissionIdentity(raced);
+        var newer = raced.Owner("Newer background winner", 5, 9);
+        raced.Handler.BeforeResponse = _ => Assert.True(raced.Store.TryPublishOwner(newer));
+        var resolvedRace = await raced.Service.ResolveNotificationNavigationAsync(
+            raced.Current.Order.CompanyProfileId,
+            raced.Current.Order.Id);
+        Assert.Same(newer, resolvedRace);
+        Assert.Same(newer, raced.Store.Get(raced.Current.Order.Id)?.OwnerProjection);
+
         var wrongCompany = await CenterOperationFixture.CreateAsync(publishOwner: false);
         AlignCommissionIdentity(wrongCompany);
         var rejectedCompany = await wrongCompany.Service.ResolveNotificationNavigationAsync(

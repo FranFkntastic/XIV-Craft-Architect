@@ -188,7 +188,32 @@ public sealed class TradeCommissionOperationsService(
             }
 
             ValidateProjection(companyId, commissionId, projection);
-            await ApplyProjectionAsync(authority, projection);
+            try
+            {
+                await ApplyProjectionAsync(authority, projection);
+            }
+            catch (InvalidOperationException)
+            {
+                var newer = await ResolveNewerNotificationWinnerAsync(
+                    authority,
+                    companyId,
+                    commissionId,
+                    projection);
+                if (newer == null)
+                {
+                    throw;
+                }
+
+                _errors.Remove(commissionId);
+                return newer;
+            }
+
+            var current = hostedOrders.Get(commissionId)?.OwnerProjection;
+            if (current != null)
+            {
+                ValidateProjection(companyId, commissionId, current);
+                projection = current;
+            }
             _errors.Remove(commissionId);
             return projection;
         }
@@ -197,6 +222,29 @@ public sealed class TradeCommissionOperationsService(
             _errors[commissionId] = exception.Message;
             return null;
         }
+    }
+
+    private async Task<CompanyCommissionOwnerProjection?> ResolveNewerNotificationWinnerAsync(
+        OrderCommandAuthority authority,
+        Guid companyId,
+        Guid commissionId,
+        CompanyCommissionOwnerProjection fetched)
+    {
+        if (!await IsCurrentAuthorityAsync(authority) ||
+            HasProtectedHostedOrderState(commissionId))
+        {
+            return null;
+        }
+
+        var winner = hostedOrders.Get(commissionId)?.OwnerProjection;
+        if (winner == null ||
+            winner.ObjectRevision.Value <= fetched.ObjectRevision.Value)
+        {
+            return null;
+        }
+
+        ValidateProjection(companyId, commissionId, winner);
+        return winner;
     }
 
     public async Task<TradeCommissionOperatorResult> ConfirmIdentityAsync(
