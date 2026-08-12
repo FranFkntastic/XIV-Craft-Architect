@@ -87,8 +87,9 @@ public sealed class DiscordNotificationOutboxDispatcher(
         }
 
         var channelId = workItem.ChannelId;
-        if (workItem.DestinationKind ==
-                DiscordNotificationDestinationKind.CommissionerDirectMessage &&
+        if (workItem.DestinationKind is (
+                DiscordNotificationDestinationKind.CommissionerDirectMessage or
+                DiscordNotificationDestinationKind.MemberDirectMessage) &&
             string.IsNullOrWhiteSpace(channelId))
         {
             var channelResult = await discord.ResolveDirectMessageChannelAsync(

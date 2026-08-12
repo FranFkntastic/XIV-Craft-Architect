@@ -124,6 +124,30 @@ public sealed class MemberNotificationContractTests
     }
 
     [Fact]
+    public async Task MemberDmDispatchResolvesRecipientBeforeCreatingMessage()
+    {
+        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
+        var enqueued = await fixture.Delivery.NotifyMembersAsync(
+            fixture.Notification(CompanyCommissionActivityKind.CommentAdded),
+            fixture.Commission,
+            fixture.PublicUrl);
+        Assert.True(enqueued.Success, enqueued.Error);
+
+        var discord = new RecordingMemberDmClient();
+        await fixture.CreateDispatcher(discord).DispatchDueAsync(default);
+
+        Assert.Equal(CrafterDiscordId, discord.ResolvedRecipientUserId);
+        Assert.Equal(RecordingMemberDmClient.DirectMessageChannelId, discord.CreatedChannelId);
+        var delivery = await fixture.LoadMemberDeliveryAsync();
+        Assert.Equal((int)DiscordOutboxState.Succeeded, delivery.State);
+        Assert.Equal(1, delivery.AttemptCount);
+        Assert.Equal(RecordingMemberDmClient.DirectMessageChannelId, delivery.ChannelId);
+        Assert.Equal(RecordingMemberDmClient.MessageId, delivery.MessageId);
+        Assert.Null(delivery.LastError);
+        Assert.Null(delivery.FailureCode);
+    }
+
+    [Fact]
     public async Task NotificationRejectsNonCanonicalOperatorDestination()
     {
         await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
@@ -146,6 +170,7 @@ public sealed class MemberNotificationContractTests
     {
         private readonly string databasePath;
         private readonly SqliteDiscordNotificationStore notifications;
+        private readonly DiscordCommissionOptions options;
 
         private NotificationFixture(
             string databasePath,
@@ -158,6 +183,7 @@ public sealed class MemberNotificationContractTests
         {
             this.databasePath = databasePath;
             this.notifications = notifications;
+            this.options = options;
             Memberships = memberships;
             Commission = commission;
             Delivery = delivery;
@@ -167,6 +193,14 @@ public sealed class MemberNotificationContractTests
         public SqliteMembershipStore Memberships { get; }
         public TradeCompanyCommission Commission { get; }
         public Uri PublicUrl { get; } = new("https://example.test/commission/brief");
+
+        public DiscordNotificationOutboxDispatcher CreateDispatcher(IDiscordApiClient discord) =>
+            new(
+                notifications,
+                discord,
+                options,
+                TimeProvider.System,
+                NullLogger<DiscordNotificationOutboxDispatcher>.Instance);
 
         public static async Task<NotificationFixture> CreateAsync(bool linkDiscord)
         {
@@ -281,6 +315,31 @@ public sealed class MemberNotificationContractTests
             return items;
         }
 
+        public async Task<MemberDelivery> LoadMemberDeliveryAsync()
+        {
+            await using var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT state, attempt_count, channel_id, message_id, last_error, failure_code
+                FROM discord_notification_outbox
+                WHERE destination_kind = $destinationKind;
+                """;
+            command.Parameters.AddWithValue(
+                "$destinationKind",
+                (int)DiscordNotificationDestinationKind.MemberDirectMessage);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            return new(
+                reader.GetInt32(0),
+                reader.GetInt32(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5));
+        }
+
         public ValueTask DisposeAsync()
         {
             try
@@ -356,5 +415,68 @@ public sealed class MemberNotificationContractTests
         };
 
         public sealed record OutboxItem(int DestinationKind, string DestinationKey, string PayloadJson);
+        public sealed record MemberDelivery(
+            int State,
+            int AttemptCount,
+            string? ChannelId,
+            string? MessageId,
+            string? LastError,
+            string? FailureCode);
+    }
+
+    private sealed class RecordingMemberDmClient : IDiscordApiClient
+    {
+        public const string DirectMessageChannelId = "100000000000000099";
+        public const string MessageId = "100000000000000100";
+
+        public string? ResolvedRecipientUserId { get; private set; }
+        public string? CreatedChannelId { get; private set; }
+
+        public Task<DiscordApiResult> ResolveDirectMessageChannelAsync(
+            string recipientUserId,
+            CancellationToken cancellationToken = default)
+        {
+            ResolvedRecipientUserId = recipientUserId;
+            return Task.FromResult(new DiscordApiResult(
+                DiscordApiOutcome.Succeeded,
+                DirectMessageChannelId));
+        }
+
+        public Task<DiscordApiResult> CreateNotificationMessageAsync(
+            string channelId,
+            object payload,
+            string? allowedMentionUserId,
+            CancellationToken cancellationToken = default)
+        {
+            CreatedChannelId = channelId;
+            return Task.FromResult(new DiscordApiResult(
+                DiscordApiOutcome.Succeeded,
+                MessageId));
+        }
+
+        public Task<DiscordApiResult> CreateMessageAsync(
+            string channelId,
+            object payload,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DiscordApiResult> EditMessageAsync(
+            string channelId,
+            string messageId,
+            object payload,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DiscordApiResult> DeleteMessageAsync(
+            string channelId,
+            string messageId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DiscordApiResult> GetMessageAsync(
+            string channelId,
+            string messageId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }
