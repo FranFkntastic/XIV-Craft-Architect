@@ -132,6 +132,121 @@ public sealed class MemberNotificationContractTests
             item => item.DestinationKind == 2);
     }
 
+    [Theory]
+    [InlineData(CompanyCommissionActivityKind.ClaimAccepted, false, true, true)]
+    [InlineData(CompanyCommissionActivityKind.CommentAdded, true, false, true)]
+    [InlineData(CompanyCommissionActivityKind.ProgressReported, true, true, false)]
+    public async Task DisabledMemberCategorySuppressesOnlyItsMappedEvents(
+        CompanyCommissionActivityKind eventKind,
+        bool actionRequired,
+        bool commissionerMessages,
+        bool progressAndStatus)
+    {
+        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
+        var membership = await fixture.Memberships.SetNotificationPreferencesAsync(
+            CompanyId,
+            CrafterId,
+            new MemberNotificationPreferences(
+                actionRequired,
+                commissionerMessages,
+                progressAndStatus));
+
+        Assert.NotNull(membership);
+        var result = await fixture.Delivery.NotifyMembersAsync(
+            fixture.Notification(eventKind),
+            fixture.Commission,
+            fixture.PublicUrl);
+
+        Assert.Equal(DiscordNotificationEnqueueStatus.Suppressed, result.Status);
+        Assert.DoesNotContain(
+            await fixture.LoadOutboxAsync(),
+            item => item.DestinationKind == 2);
+    }
+
+    [Fact]
+    public async Task EnabledMemberCategoryStillDeliversWhenAnotherCategoryIsDisabled()
+    {
+        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
+        await fixture.Memberships.SetNotificationPreferencesAsync(
+            CompanyId,
+            CrafterId,
+            new MemberNotificationPreferences(
+                ActionRequired: false,
+                CommissionerMessages: true,
+                ProgressAndStatus: false));
+
+        var result = await fixture.Delivery.NotifyMembersAsync(
+            fixture.Notification(CompanyCommissionActivityKind.CommentAdded),
+            fixture.Commission,
+            fixture.PublicUrl);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains(
+            await fixture.LoadOutboxAsync(),
+            item => item.DestinationKind == 2);
+    }
+
+    [Fact]
+    public async Task LegacyOptOutMigratesToEquivalentCategoryDefaults()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-member-preference-migration-{Guid.NewGuid():N}.db");
+        var optedIn = Guid.NewGuid();
+        var optedOut = Guid.NewGuid();
+        try
+        {
+            await using (var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString()))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TABLE company_memberships (
+                        company_id TEXT NOT NULL,
+                        account_profile_id TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        requested_at_utc TEXT NOT NULL,
+                        decided_at_utc TEXT NULL,
+                        decided_by_profile_id TEXT NULL,
+                        request_note TEXT NULL,
+                        notifications_opted_out INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY(company_id, account_profile_id));
+                    INSERT INTO company_memberships VALUES
+                        ($companyId, $optedIn, 'crafter', 'active', $now, NULL, NULL, NULL, 0),
+                        ($companyId, $optedOut, 'crafter', 'active', $now, NULL, NULL, NULL, 1);
+                    """;
+                command.Parameters.AddWithValue("$companyId", CompanyId.ToString());
+                command.Parameters.AddWithValue("$optedIn", optedIn.ToString("D"));
+                command.Parameters.AddWithValue("$optedOut", optedOut.ToString("D"));
+                command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var store = new SqliteMembershipStore(
+                new TradeMembershipOptions { DatabasePath = databasePath },
+                TimeProvider.System,
+                NullLogger<SqliteMembershipStore>.Instance);
+            var included = await store.LoadForAccountAsync(CompanyId, optedIn);
+            var excluded = await store.LoadForAccountAsync(CompanyId, optedOut);
+
+            Assert.True(included!.NotifyActionRequired);
+            Assert.True(included.NotifyCommissionerMessages);
+            Assert.True(included.NotifyProgressAndStatus);
+            Assert.False(excluded!.NotifyActionRequired);
+            Assert.False(excluded.NotifyCommissionerMessages);
+            Assert.False(excluded.NotifyProgressAndStatus);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(databasePath);
+            File.Delete(databasePath + "-shm");
+            File.Delete(databasePath + "-wal");
+        }
+    }
+
     [Fact]
     public async Task ActiveParticipantWithoutLinkedDiscordReceivesNoMemberDm()
     {
@@ -168,6 +283,33 @@ public sealed class MemberNotificationContractTests
         Assert.Equal(RecordingMemberDmClient.MessageId, delivery.MessageId);
         Assert.Null(delivery.LastError);
         Assert.Null(delivery.FailureCode);
+    }
+
+    [Fact]
+    public async Task ExplicitMemberTestUsesCanonicalOutboxAndDoesNotMutateACommission()
+    {
+        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
+        var testId = Guid.NewGuid();
+        var enqueued = await fixture.EnqueueMemberTestAsync(testId);
+
+        Assert.True(enqueued.Success, enqueued.Error);
+        var workItemId = Assert.Single(enqueued.WorkItemIds);
+        var pending = await fixture.LoadMemberTestAsync(workItemId);
+        Assert.NotNull(pending);
+        Assert.Equal(DiscordOutboxState.Pending, pending.State);
+
+        var discord = new RecordingMemberDmClient();
+        await fixture.CreateDispatcher(discord).DispatchDueAsync(default);
+
+        var delivered = await fixture.LoadMemberTestAsync(workItemId);
+        Assert.NotNull(delivered);
+        Assert.Equal(DiscordOutboxState.Succeeded, delivered.State);
+        Assert.Equal(RecordingMemberDmClient.MessageId, delivered.MessageId);
+        Assert.Contains(
+            await fixture.LoadOutboxAsync(),
+            item => item.PayloadJson.Contains(
+                "No commission was changed by this test.",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -224,6 +366,34 @@ public sealed class MemberNotificationContractTests
                 options,
                 TimeProvider.System,
                 NullLogger<DiscordNotificationOutboxDispatcher>.Instance);
+
+        public async Task<DiscordNotificationEnqueueResult> EnqueueMemberTestAsync(Guid testId)
+        {
+            var route = await notifications.LoadRouteAsync(CompanyId);
+            Assert.NotNull(route);
+            var payload = JsonSerializer.Serialize(new
+            {
+                content = "Private updates from Contract company can reach this Discord account.",
+                footer = "No commission was changed by this test."
+            });
+            return await notifications.EnqueueMemberAsync(
+                CompanyId,
+                testId,
+                testId,
+                0,
+                DiscordNotificationAttentionClass.Routine,
+                route.Revision,
+                payload,
+                [CrafterDiscordId],
+                DateTimeOffset.UtcNow,
+                isMemberTest: true);
+        }
+
+        public Task<DiscordMemberNotificationTestDelivery?> LoadMemberTestAsync(Guid workItemId) =>
+            notifications.LoadMemberTestDeliveryAsync(
+                CompanyId,
+                workItemId,
+                CrafterDiscordId);
 
         public static async Task<NotificationFixture> CreateAsync(bool linkDiscord)
         {

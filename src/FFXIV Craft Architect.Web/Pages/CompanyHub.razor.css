@@ -141,6 +141,11 @@
 .work-grid { display: grid; grid-template-columns: 1.65fr .9fr; gap: 14px; margin-top: 14px; }
 .work-panel, .open-panel { min-width: 0; }
 .assignment-card { margin: 14px 15px; padding: 14px; border: 1px solid #455d76; border-radius: 7px; background: #222d38; }
+.assignment-card.state-blocked { border-left: 4px solid #8e6670; background: #2c252a; }
+.assignment-card.state-open { border-left: 4px solid #5d8ebc; background: #222d38; }
+.assignment-card.state-crafting { border-left: 4px solid #c49339; background: #302b20; }
+.assignment-card.state-ready { border-left: 4px solid #4ca073; background: #213029; }
+.assignment-card.state-complete { border-left: 4px solid #7b8792; background: #272b2e; }
 .assignment-main { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(160px, .85fr) auto; gap: 16px; align-items: center; }
 .assignment-main h3 { margin: 0 0 2px; font-size: 15px; }
 .assignment-main span { display: block; color: #9fabb6; font-size: 11px; }
@@ -148,6 +153,9 @@
 .assignment-state strong, .assignment-state span { display: block; }
 .assignment-state strong { color: #9fc6ee; font-size: 12px; }
 .assignment-state span { margin-top: 3px; line-height: 1.3; }
+.assignment-state-heading { display: flex; align-items: center; gap: 7px; }
+.unread-update { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; color: #f0bf46; border: 1px solid #8c6f27; border-radius: 50%; background: #332d1d; cursor: help; }
+.unread-update:focus-visible { outline: 2px solid #90caf9; outline-offset: 2px; }
 
 .commission-list { padding: 3px 14px 12px; }
 .commission-row {
@@ -167,9 +175,7 @@
 .commission-top, .commission-bottom { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
 .commission-bottom { color: #aaa; font-size: 12px; }
 .crafter-note { max-width: 185px; display: -webkit-box; overflow: hidden; color: #b9cee5; font-size: 12px; line-height: 1.3; text-align: right; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.note-popover { position: absolute; right: 0; top: calc(100% - 4px); z-index: 8; width: min(360px, calc(100% - 24px)); padding: 10px 12px; color: #e3edf8; font-size: 12px; line-height: 1.45; text-align: left; border: 1px solid #61748b; border-radius: 6px; background: #202a35; box-shadow: 0 10px 24px rgba(0, 0, 0, .42); opacity: 0; transform: translateY(-3px); pointer-events: none; transition: opacity .12s ease, transform .12s ease; }
-.commission-row:hover .note-popover, .commission-row:focus-visible .note-popover { opacity: 1; transform: translateY(0); }
-.commission-row[aria-expanded="true"] .note-popover { opacity: 0; transform: translateY(-3px); }
+::deep .commission-note-disclosure { display: block; width: 100%; }
 
 .commission-detail { margin-top: 14px; padding-bottom: 14px; }
 .commission-detail > .section-header { padding-top: 10px; padding-bottom: 10px; }
@@ -220,7 +226,6 @@
     .update-composer textarea { grid-column: auto; }
     .commission-top { align-items: flex-start; flex-direction: column; gap: 4px; }
     .crafter-note { max-width: 100%; text-align: left; }
-    .note-popover { left: 0; right: auto; width: calc(100% - 24px); }
     .archive-row { grid-template-columns: 1fr; gap: 4px; }
     .workspace-gate { flex-direction: column; gap: 4px; }
 }

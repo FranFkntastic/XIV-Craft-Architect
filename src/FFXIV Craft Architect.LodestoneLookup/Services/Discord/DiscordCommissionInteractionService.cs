@@ -95,7 +95,7 @@ internal sealed class DiscordCommissionInteractionService(
                 cancellationToken) == null)
         {
             return Refusal(
-                "Link Discord in Craft Architect Options before claiming with Discord.");
+                "Link Discord in Craft Architect Settings before claiming with Discord.");
         }
         var holdingProfile = await companies.ResolveProfileAccessAsync(
             link.ProfileId,

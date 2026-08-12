@@ -318,15 +318,16 @@
     {
         var parameters = new DialogParameters
         {
-            [nameof(OptionsDialog.InitialPanelIndex)] = 1
+            [nameof(SettingsDialog.InitialSection)] = SettingsSection.MarketAndRoutes
         };
-        var dialog = DialogService.Show<OptionsDialog>(
-            "Options",
+        var dialog = DialogService.Show<SettingsDialog>(
+            "Settings",
             parameters,
             new DialogOptions
             {
-                CloseOnEscapeKey = true,
-                MaxWidth = MaxWidth.Small
+                CloseOnEscapeKey = false,
+                MaxWidth = MaxWidth.ExtraLarge,
+                FullWidth = true
             });
         await dialog.Result;
     }

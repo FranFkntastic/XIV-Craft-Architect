@@ -1,0 +1,316 @@
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+@inject CompanyHubClient HubClient
+@inject FFXIV_Craft_Architect.Web.Services.TradeOperationsPersistenceService TradeOperationsPersistence
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else if (_companies.Count == 0)
+{
+    <MudText Typo="Typo.h6">No company workspace</MudText>
+    <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-2">
+        Company access begins from a company link or invitation. Craft Architect settings remain available without a company.
+    </MudText>
+}
+else if (_selected is { } company)
+{
+    @if (_companies.Count > 1)
+    {
+        <MudSelect T="string" Label="Company" Value="@company.Membership.CompanyId" ValueChanged="SelectCompany" Variant="Variant.Outlined" Margin="Margin.Dense" Class="workspace-company-select">
+            @foreach (var option in _companies)
+            {
+                <MudSelectItem T="string" Value="@option.Membership.CompanyId">@option.Hub.DisplayName</MudSelectItem>
+            }
+        </MudSelect>
+    }
+
+    <div class="workspace-heading">
+        <div>
+            <MudText Typo="Typo.h6">@company.Hub.DisplayName</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                @SentenceCase(company.Membership.Role) · active member since @company.Membership.RequestedAtUtc.ToLocalTime().ToString("yyyy-MM-dd")
+            </MudText>
+        </div>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Href="@($"/companies/{company.Hub.Slug}")" StartIcon="@Icons.Material.Filled.Home">
+            Open workspace
+        </MudButton>
+    </div>
+
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+        @RoleOrientation(company.Membership.Role)
+    </MudAlert>
+
+    <div class="workspace-section-label">Discord notifications</div>
+    @if (company.HasMembership)
+    {
+    <MudPaper Variant="Variant.Outlined" Class="workspace-notifications">
+        <div class="notification-destination">
+            <div>
+                <MudText Typo="Typo.subtitle2">Private commission updates</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@DiscordDestinationSummary(company)</MudText>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(company.TestReadiness.DestinationDisplayName))
+            {
+                <div class="notification-test-actions">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success">@company.TestReadiness.DestinationDisplayName</MudChip>
+                    <MudButton Variant="Variant.Outlined"
+                               Size="Size.Small"
+                               Color="Color.Primary"
+                               Disabled="@(!company.TestReadiness.Ready || _testBusy)"
+                               OnClick="@(() => SendTestAsync(company))">
+                        @(_testBusy ? "Sending..." : "Send test")
+                    </MudButton>
+                </div>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Warning" OnClick="OpenProfileAsync">Open Profile</MudButton>
+            }
+        </div>
+        @if (!string.IsNullOrWhiteSpace(_testStatus))
+        {
+            <MudText Typo="Typo.caption" Color="@_testStatusColor" Class="notification-test-status">@_testStatus</MudText>
+        }
+        <div class="notification-row">
+            <div><MudText Typo="Typo.subtitle2">Action required</MudText><MudText Typo="Typo.caption" Color="Color.Secondary">Claim, identity, materials, payment, and delivery decisions.</MudText></div>
+            <MudSwitch T="bool" Value="@company.Preferences.ActionRequired" ValueChanged="value => SavePreferenceAsync(company, NotificationCategory.ActionRequired, value)" Color="Color.Primary" Disabled="_saving" aria-label="Action required" />
+        </div>
+        <div class="notification-row">
+            <div><MudText Typo="Typo.subtitle2">Commissioner messages and terms</MudText><MudText Typo="Typo.caption" Color="Color.Secondary">Comments, instructions, revised terms, and cancellation.</MudText></div>
+            <MudSwitch T="bool" Value="@company.Preferences.CommissionerMessages" ValueChanged="value => SavePreferenceAsync(company, NotificationCategory.CommissionerMessages, value)" Color="Color.Primary" Disabled="_saving" aria-label="Commissioner messages and terms" />
+        </div>
+        <div class="notification-row">
+            <div><MudText Typo="Typo.subtitle2">Progress and status</MudText><MudText Typo="Typo.caption" Color="Color.Secondary">Requirement clearance, progress, delivery responses, and settlement.</MudText></div>
+            <MudSwitch T="bool" Value="@company.Preferences.ProgressAndStatus" ValueChanged="value => SavePreferenceAsync(company, NotificationCategory.ProgressAndStatus, value)" Color="Color.Primary" Disabled="_saving" aria-label="Progress and status" />
+        </div>
+    </MudPaper>
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Info" Dense="true">Personal member DMs become available when this account also has an active company membership.</MudAlert>
+    }
+
+    @if (company.Membership.Role is "owner" or "operator")
+    {
+        <div class="workspace-section-label">Company administration</div>
+        <MudPaper Variant="Variant.Outlined" Class="pa-3">
+            <MudText Typo="Typo.subtitle2">@SentenceCase(company.Membership.Role) controls are available in Company administration.</MudText>
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                Company defaults and the private operator notification route stay separate from member work and announcements.
+            </MudText>
+        </MudPaper>
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private bool _testBusy;
+    private string? _testStatus;
+    private Color _testStatusColor = Color.Secondary;
+    private List<MemberCompany> _companies = [];
+    private MemberCompany? _selected;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            foreach (var membership in (await HubClient.LoadMembershipsAsync())
+                .Where(item => string.Equals(item.State, "active", StringComparison.OrdinalIgnoreCase)))
+            {
+                var hub = await HubClient.LoadAsync(membership.CompanyId);
+                if (hub?.Kind == "hub")
+                {
+                    var preferencesTask = HubClient.LoadNotificationPreferencesAsync(membership.CompanyId);
+                    var readinessTask = HubClient.LoadNotificationTestReadinessAsync(membership.CompanyId);
+                    await Task.WhenAll(preferencesTask, readinessTask);
+                    _companies.Add(new MemberCompany(
+                        membership,
+                        hub,
+                        await preferencesTask,
+                        await readinessTask));
+                }
+            }
+            foreach (var profile in await TradeOperationsPersistence.LoadCompanyProfilesAsync())
+            {
+                var companyId = profile.Id.ToString("D");
+                if (_companies.Any(item => item.Membership.CompanyId == companyId))
+                {
+                    continue;
+                }
+                var hub = await HubClient.LoadAsync(companyId);
+                if (hub?.Kind != "hub" || hub.Standing.State != "active" ||
+                    hub.Standing.Role is not ("owner" or "operator" or "crafter"))
+                {
+                    continue;
+                }
+                _companies.Add(new MemberCompany(
+                    new CompanyMembership(
+                        companyId,
+                        Guid.Empty,
+                        hub.Standing.Role,
+                        hub.Standing.State,
+                        new DateTimeOffset(profile.CreatedAtUtc),
+                        null,
+                        null,
+                        null),
+                    hub,
+                    new CompanyMembershipNotifications(companyId, false, false, false),
+                    new MemberNotificationTestReadiness(
+                        false,
+                        null,
+                        "Personal member DMs require an active company membership."),
+                    hasMembership: false));
+            }
+            _selected = _companies.FirstOrDefault(item =>
+                string.Equals(item.Membership.CompanyId, InitialCompanyId, StringComparison.OrdinalIgnoreCase))
+                ?? _companies.FirstOrDefault();
+        }
+        catch (Exception exception)
+        {
+            Snackbar.Add($"Workspace settings could not be loaded: {exception.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    [Parameter] public string? InitialCompanyId { get; set; }
+    [Parameter] public EventCallback OpenProfile { get; set; }
+
+    private static string DiscordDestinationSummary(MemberCompany company) =>
+        company.TestReadiness.Ready
+            ? $"Ready to deliver privately to {company.TestReadiness.DestinationDisplayName}."
+            : company.TestReadiness.Reason ??
+                "Private Discord delivery is not ready for this company.";
+
+    private Task OpenProfileAsync() => OpenProfile.HasDelegate
+        ? OpenProfile.InvokeAsync()
+        : Task.CompletedTask;
+
+    private async Task SendTestAsync(MemberCompany company)
+    {
+        if (_testBusy || !company.TestReadiness.Ready)
+        {
+            return;
+        }
+
+        _testBusy = true;
+        _testStatus = $"Sending a private test to {company.TestReadiness.DestinationDisplayName}...";
+        _testStatusColor = Color.Info;
+        try
+        {
+            var delivery = await HubClient.SendNotificationTestAsync(company.Membership.CompanyId);
+            for (var attempt = 0; attempt < 12 && delivery.State is "pending" or "inflight" or "retry"; attempt++)
+            {
+                await Task.Delay(500);
+                delivery = await HubClient.LoadNotificationTestAsync(
+                    company.Membership.CompanyId,
+                    delivery.TestId);
+            }
+
+            if (delivery.State == "succeeded")
+            {
+                _testStatus = $"Test delivered to {delivery.DestinationDisplayName}.";
+                _testStatusColor = Color.Success;
+            }
+            else if (delivery.State is "failed" or "reconciliationrequired")
+            {
+                _testStatus = $"Discord could not confirm delivery to {delivery.DestinationDisplayName}. {delivery.Error}";
+                _testStatusColor = Color.Error;
+            }
+            else
+            {
+                _testStatus = $"The test is still queued for {delivery.DestinationDisplayName}.";
+                _testStatusColor = Color.Warning;
+            }
+        }
+        catch (Exception exception)
+        {
+            _testStatus = $"Private delivery could not be tested: {exception.Message}";
+            _testStatusColor = Color.Error;
+        }
+        finally
+        {
+            _testBusy = false;
+        }
+    }
+
+    private async Task SelectCompany(string companyId)
+    {
+        _selected = _companies.FirstOrDefault(item => item.Membership.CompanyId == companyId);
+        if (!Guid.TryParse(companyId, out var parsed))
+        {
+            return;
+        }
+        var local = await TradeOperationsPersistence.LoadCompanyProfilesAsync();
+        if (local.Any(profile => profile.Id == parsed))
+        {
+            await TradeOperationsPersistence.SelectCompanyProfileAsync(parsed);
+        }
+    }
+
+    private async Task SavePreferenceAsync(
+        MemberCompany company,
+        NotificationCategory category,
+        bool value)
+    {
+        if (_saving)
+        {
+            return;
+        }
+        var previous = company.Preferences;
+        company.Preferences = category switch
+        {
+            NotificationCategory.ActionRequired => previous with { ActionRequired = value },
+            NotificationCategory.CommissionerMessages => previous with { CommissionerMessages = value },
+            _ => previous with { ProgressAndStatus = value }
+        };
+        _saving = true;
+        try
+        {
+            await HubClient.SetNotificationPreferencesAsync(
+                company.Membership.CompanyId,
+                company.Preferences);
+        }
+        catch (Exception exception)
+        {
+            company.Preferences = previous;
+            Snackbar.Add($"Notification preference was not saved: {exception.Message}", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private static string RoleOrientation(string role) => role switch
+    {
+        "owner" => "You own this company context: company defaults and the private operator route are your responsibility, while announcements and commission work stay in the company workspace.",
+        "operator" => "You can operate company commissions and approved company settings. Your personal Discord preferences apply only to updates sent to you as a member.",
+        _ => "This is your company update and commission workspace. Your Discord preferences below control which private commission changes are pushed to you."
+    };
+
+    private static string SentenceCase(string value) =>
+        string.IsNullOrWhiteSpace(value) ? value : char.ToUpperInvariant(value[0]) + value[1..];
+
+    private enum NotificationCategory { ActionRequired, CommissionerMessages, ProgressAndStatus }
+
+    private sealed class MemberCompany(
+        CompanyMembership membership,
+        CompanyHubProjection hub,
+        CompanyMembershipNotifications preferences,
+        MemberNotificationTestReadiness testReadiness,
+        bool hasMembership = true)
+    {
+        public CompanyMembership Membership { get; } = membership;
+        public CompanyHubProjection Hub { get; } = hub;
+        public CompanyMembershipNotifications Preferences { get; set; } = preferences;
+        public MemberNotificationTestReadiness TestReadiness { get; } = testReadiness;
+        public bool HasMembership { get; } = hasMembership;
+    }
+}

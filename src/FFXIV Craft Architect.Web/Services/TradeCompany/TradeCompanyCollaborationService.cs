@@ -32,7 +32,7 @@ public sealed class TradeCompanyCollaborationService(
     {
         if (!profileSync.CurrentStatus.IsConnected)
         {
-            reason = "Connect Profile Hosting in Options first.";
+            reason = "Connect this browser in Settings first.";
             return false;
         }
 

@@ -175,7 +175,7 @@ public sealed class TradeCommissionOperationsClient(
         if (!connection.IsConfigured)
         {
             throw new InvalidOperationException(
-                "Connect Profile Hosting in Options before operating a company commission.");
+                "Connect this browser in Settings before operating a company commission.");
         }
 
         var hostUri = new Uri(connection.HostUrl!.Trim().TrimEnd('/') + "/");

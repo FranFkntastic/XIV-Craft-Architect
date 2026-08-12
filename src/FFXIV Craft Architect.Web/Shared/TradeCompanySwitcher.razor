@@ -1,10 +1,14 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Web.Services
 @using FFXIV_Craft_Architect.Web.Services.ProfileHosting
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject ProfileSyncService ProfileSync
+@inject ProfileSyncLocalStateService LocalState
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.CompanyHubClient CompanyHubClient
 @implements IDisposable
 
 @if (_activeCompany != null)
@@ -21,7 +25,7 @@
                        Class="trade-company-switcher-button"
                        aria-label="Switch active Trade company">
                 <span class="trade-company-switcher-name">@_activeCompany.Name</span>
-                <span class="trade-company-switcher-id">@FormatCompanyId(_activeCompany.Id)</span>
+                <span class="trade-company-switcher-id">@(_activeRole == null ? FormatCompanyId(_activeCompany.Id) : $"{_activeRole} · {FormatCompanyId(_activeCompany.Id)}")</span>
             </MudButton>
         </ActivatorContent>
         <ChildContent>
@@ -43,8 +47,22 @@
                     </span>
                 </MudMenuItem>
             }
+            <MudDivider />
+            <MudMenuItem OnClick="OpenWorkspaceSettingsAsync" Icon="@Icons.Material.Filled.Notifications">
+                Workspace settings and notifications
+            </MudMenuItem>
         </ChildContent>
     </MudMenu>
+}
+else
+{
+    <MudButton Variant="Variant.Text"
+               Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Business"
+               Class="trade-company-switcher-button"
+               OnClick="OpenWorkspaceSettingsAsync">
+        No company workspace
+    </MudButton>
 }
 
 @code {
@@ -52,6 +70,7 @@
     private IReadOnlyList<TradeCompanyProfile> _companies = [];
     private bool _refreshQueued;
     private bool _disposed;
+    private string? _activeRole;
 
     protected override async Task OnInitializedAsync()
     {
@@ -85,18 +104,74 @@
     {
         try
         {
-            _activeCompany = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
-            _companies = (await TradeOperationsPersistence.LoadCompanyProfilesAsync())
+            var localCompanies = (await TradeOperationsPersistence.LoadCompanyProfilesAsync())
                 .OrderBy(company => company.Name, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(company => company.Id)
                 .ToArray();
+            _companies = await FilterAuthorizedCompaniesAsync(localCompanies);
+            _activeCompany = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
+            if (_activeCompany == null || _companies.All(company => company.Id != _activeCompany.Id))
+            {
+                _activeCompany = _companies.FirstOrDefault();
+                if (_activeCompany != null)
+                {
+                    await TradeOperationsPersistence.SelectCompanyProfileAsync(_activeCompany.Id);
+                }
+            }
+            _activeRole = null;
+            if (_activeCompany != null)
+            {
+                try
+                {
+                    var hub = await CompanyHubClient.LoadAsync(_activeCompany.Id.ToString("D"));
+                    _activeRole = hub?.Kind == "hub" ? SentenceCase(hub.Standing.Role) : null;
+                }
+                catch
+                {
+                    // The local company context remains truthful while hosted role data is unavailable.
+                }
+            }
         }
         catch (Exception exception)
         {
             _activeCompany = null;
             _companies = [];
+            _activeRole = null;
             Snackbar.Add($"Trade companies could not be loaded: {exception.Message}", Severity.Error);
         }
+    }
+
+    private async Task<IReadOnlyList<TradeCompanyProfile>> FilterAuthorizedCompaniesAsync(
+        IReadOnlyList<TradeCompanyProfile> localCompanies)
+    {
+        var connection = await LocalState.LoadConnectionSettingsAsync();
+        if (!connection.IsConfigured)
+        {
+            return localCompanies;
+        }
+
+        var authorized = new List<TradeCompanyProfile>(localCompanies.Count);
+        foreach (var company in localCompanies)
+        {
+            CompanyHubProjection? hub;
+            try
+            {
+                hub = await CompanyHubClient.LoadAsync(company.Id.ToString("D"));
+            }
+            catch
+            {
+                // A temporary host failure cannot prove that local company access was revoked.
+                return localCompanies;
+            }
+
+            if (hub?.Kind == "hub" &&
+                string.Equals(hub.Standing.State, "active", StringComparison.OrdinalIgnoreCase))
+            {
+                authorized.Add(company);
+            }
+        }
+
+        return authorized;
     }
 
     private async Task SelectCompanyAsync(TradeCompanyProfile company)
@@ -115,6 +190,23 @@
         {
             Snackbar.Add($"Trade company could not be switched: {exception.Message}", Severity.Error);
         }
+    }
+
+    private async Task OpenWorkspaceSettingsAsync()
+    {
+        var parameters = new DialogParameters
+        {
+            [nameof(SettingsDialog.InitialSection)] = SettingsSection.Workspace
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = false,
+            MaxWidth = MaxWidth.ExtraLarge,
+            FullWidth = true
+        };
+        var dialog = DialogService.Show<SettingsDialog>("Settings", parameters, options);
+        await dialog.Result;
+        await LoadCompaniesAsync();
     }
 
     private static string FormatCompanyId(Guid companyId) =>
@@ -145,6 +237,10 @@
         }
         return slug.Length == 0 ? "company" : slug.ToString();
     }
+
+    private static string? SentenceCase(string? value) => string.IsNullOrWhiteSpace(value)
+        ? null
+        : char.ToUpperInvariant(value[0]) + value[1..];
 
     public void Dispose()
     {

@@ -3,15 +3,14 @@
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService LocalState
 @inject ProfileSyncService ProfileSync
-@inject NavigationManager NavigationManager
 @inject IDialogService DialogService
 @implements IDisposable
 
 @if (_signInEnabled && !_connected)
 {
     <MudButton Variant="Variant.Text"
-               OnClick="SignInAsync"
-               Disabled="_busy"
+               OnClick="OpenAccountAsync"
+               Disabled="_settingsOpen"
                Style="color: #d4a73a; text-transform: none; font-size: 14px;">
         <MudIcon Icon="@Icons.Material.Filled.Forum" Size="Size.Small" Style="color: #7289da; margin-right: 8px;" />
         Sign in with Discord
@@ -22,7 +21,7 @@ else if (_connected)
     <MudButton Variant="Variant.Text"
                StartIcon="@Icons.Material.Filled.AccountCircle"
                OnClick="OpenAccountAsync"
-               Disabled="_accountDialogOpen"
+               Disabled="_settingsOpen"
                Style="color: #cccccc; text-transform: none; font-size: 14px;">
         @(string.IsNullOrWhiteSpace(_displayName) ? "Account" : _displayName)
     </MudButton>
@@ -32,7 +31,7 @@ else
     <MudButton Variant="Variant.Text"
                StartIcon="@Icons.Material.Filled.AccountCircle"
                OnClick="OpenAccountAsync"
-               Disabled="_accountDialogOpen"
+               Disabled="_settingsOpen"
                Style="color: #cccccc; text-transform: none; font-size: 14px;">
         Connect account
     </MudButton>
@@ -41,8 +40,7 @@ else
 @code {
     private bool _signInEnabled;
     private bool _connected;
-    private bool _busy;
-    private bool _accountDialogOpen;
+    private bool _settingsOpen;
     private string? _displayName;
 
     protected override async Task OnInitializedAsync()
@@ -113,40 +111,28 @@ else
         await InvokeAsync(StateHasChanged);
     }
 
-    private async Task SignInAsync()
-    {
-        _busy = true;
-        try
-        {
-            var authorizationUri = await DiscordIdentityClient.StartSignInAsync(
-                ProfileHostClient.DefaultHostUrl,
-                CancellationToken.None);
-            NavigationManager.NavigateTo(authorizationUri.AbsoluteUri, forceLoad: true);
-        }
-        catch (Exception)
-        {
-            _busy = false;
-        }
-    }
-
     private async Task OpenAccountAsync()
     {
-        if (_accountDialogOpen)
+        if (_settingsOpen)
         {
             return;
         }
 
-        _accountDialogOpen = true;
+        _settingsOpen = true;
         try
         {
-            var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-            var dialog = await DialogService.ShowAsync<AccountDialog>("Account", options);
+            var parameters = new DialogParameters
+            {
+                [nameof(SettingsDialog.InitialSection)] = SettingsSection.Profile
+            };
+            var options = new DialogOptions { CloseOnEscapeKey = false, MaxWidth = MaxWidth.ExtraLarge, FullWidth = true };
+            var dialog = await DialogService.ShowAsync<SettingsDialog>("Settings", parameters, options);
             await dialog.Result;
             await RefreshAsync();
         }
         finally
         {
-            _accountDialogOpen = false;
+            _settingsOpen = false;
         }
     }
 

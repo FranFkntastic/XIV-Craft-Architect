@@ -21,10 +21,7 @@
     </div>
     
     <div class="status-center">
-        @if (IsTradeRoute)
-        {
-            <TradeCompanySwitcher @key="NavigationManager.Uri" />
-        }
+        <TradeCompanySwitcher @key="NavigationManager.Uri" />
         @if (!string.IsNullOrEmpty(SelectedRegion))
         {
             <span class="status-badge region-badge">
@@ -179,11 +176,6 @@
     private int TargetCount => WorkerProjections.Shell.ProjectItemCount;
     private static string FormatCount(int count, string noun) =>
         $"{count:N0} {noun}{(count == 1 ? string.Empty : "s")}";
-
-    private bool IsTradeRoute => NavigationManager
-        .ToBaseRelativePath(NavigationManager.Uri)
-        .TrimStart('/')
-        .StartsWith("trade", StringComparison.OrdinalIgnoreCase);
 
     protected override void OnInitialized()
     {

@@ -242,7 +242,9 @@ public sealed class CompanyCommissionDiscordDeliveryService(
                     notification.CompanyId,
                     identity.ProfileId,
                     cancellationToken);
-            if (membership is not { NotificationsOptedOut: true })
+            if (membership != null && CompanyCommissionNotificationPolicy.AllowsMemberNotification(
+                    membership,
+                    notification.EventKind))
             {
                 ids.Add(contact);
             }
@@ -253,7 +255,9 @@ public sealed class CompanyCommissionDiscordDeliveryService(
                 notification.CompanyId,
                 crafterId,
                 cancellationToken);
-            if (membership is { State: MembershipState.Active, NotificationsOptedOut: false })
+            if (membership != null && CompanyCommissionNotificationPolicy.AllowsMemberNotification(
+                    membership,
+                    notification.EventKind))
             {
                 var identity = await identities.LoadByProfileAsync(crafterId, cancellationToken);
                 if (identity != null)

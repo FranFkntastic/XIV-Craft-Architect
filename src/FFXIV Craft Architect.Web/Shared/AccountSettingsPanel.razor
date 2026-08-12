@@ -3,17 +3,19 @@
 @inject DiscordIdentityClient DiscordIdentityClient
 @inject ProfileSyncLocalStateService LocalState
 @inject ProfileSyncService ProfileSync
+@inject NavigationManager NavigationManager
 @inject IJSRuntime JSRuntime
 @inject ISnackbar Snackbar
 
-<MudDialog Class="account-dialog">
-    <DialogContent>
+<div class="account-dialog">
         @if (_loading)
         {
             <MudProgressLinear Indeterminate="true" Class="my-4" />
         }
         else
         {
+            @if (Section == AccountSettingsSection.Profile)
+            {
             <div class="account-heading">
                 @if (_settings.IsConfigured && _editingDisplayName)
                 {
@@ -63,7 +65,7 @@
                     }
                     else
                     {
-                        <span>Connect this browser with an access key or one-time pairing code.</span>
+                        <span>Sign in with Discord, or connect this browser with an access key or one-time pairing code.</span>
                     }
                 </MudText>
             </div>
@@ -90,9 +92,33 @@
                     {
                         <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success">linked</MudChip>
                     }
-                }
                 </div>
+            }
+            else if (_discordSignInEnabled)
+            {
+                <div class="account-section-label">Discord identity</div>
+                <div class="account-row">
+                    <div class="account-row-main">
+                        <MudText Typo="Typo.subtitle2">Use Discord to create or reconnect your account</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">The same identity receives private commission notifications after you join a company.</MudText>
+                    </div>
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Forum"
+                               OnClick="SignInWithDiscordAsync"
+                               Disabled="_accountBusy">
+                        Sign in with Discord
+                    </MudButton>
+                </div>
+            }
 
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                    Your Craft Architect account name is presentation only. Discord identifies where private notifications go, while FFXIV character identity is confirmed separately for each commission.
+                </MudAlert>
+            }
+
+            @if (Section == AccountSettingsSection.AccessAndDevices && _settings.IsConfigured)
+            {
                 <div class="account-section-label">This browser</div>
                 <div class="account-row">
                     <div class="account-row-main">
@@ -143,6 +169,8 @@
                 </div>
             }
 
+            @if (Section == AccountSettingsSection.AccessAndDevices)
+            {
             <MudExpansionPanels Class="account-advanced" Elevation="0">
                 <MudExpansionPanel Text="Advanced: access key, pairing, custom host" Expanded="@(!_settings.IsConfigured)">
                     <MudTextField @bind-Value="_accessKey"
@@ -230,19 +258,17 @@
             {
                 <MudText Typo="Typo.caption" Color="@_statusColor" Class="mt-2 d-block">@_statusMessage</MudText>
             }
+            }
         }
-    </DialogContent>
-    <DialogActions>
-        <MudButton OnClick="Close">Close</MudButton>
-    </DialogActions>
-</MudDialog>
+</div>
 
 @code {
-    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public AccountSettingsSection Section { get; set; } = AccountSettingsSection.Profile;
 
     private HostedProfileConnectionSettings _settings = new();
     private DiscordIdentityWebStatus? _discordStatus;
     private bool _discordStatusLoaded;
+    private bool _discordSignInEnabled;
     private IReadOnlyList<ProfileHostAccessKeyMetadata> _keys = [];
     private bool _keysLoaded;
     private bool _loading = true;
@@ -309,11 +335,39 @@
             : _settings.HostUrl;
         _accessKey = _settings.AccessKey ?? string.Empty;
         _useCustomHost = !AddressesMatch(_hostUrl, ProfileHostClient.DefaultHostUrl);
+        try
+        {
+            _discordSignInEnabled = (await DiscordIdentityClient.GetSignInStatusAsync(
+                ProfileHostClient.DefaultHostUrl,
+                CancellationToken.None)).Enabled;
+        }
+        catch
+        {
+            _discordSignInEnabled = false;
+        }
         if (_settings.IsConfigured)
         {
             await Task.WhenAll(RefreshProfileAsync(), RefreshDiscordAsync(), RefreshKeysAsync());
         }
         _loading = false;
+    }
+
+    private async Task SignInWithDiscordAsync()
+    {
+        _accountBusy = true;
+        _busyMessage = "Opening Discord sign in...";
+        try
+        {
+            var authorizationUri = await DiscordIdentityClient.StartSignInAsync(
+                ProfileHostClient.DefaultHostUrl,
+                CancellationToken.None);
+            NavigationManager.NavigateTo(authorizationUri.AbsoluteUri, forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, Color.Error);
+            _accountBusy = false;
+        }
     }
 
     private async Task RefreshProfileAsync()
@@ -517,7 +571,8 @@
                 _settings.AccessKey!,
                 CancellationToken.None);
             await ProfileSync.DisconnectAsync();
-            MudDialog.Close(DialogResult.Ok(true));
+            await LoadAsync();
+            SetStatus("This browser is signed out.", Color.Success);
         }
         catch (Exception ex)
         {
@@ -790,5 +845,4 @@
         _statusMessage = message;
         _statusColor = color;
     }
-    private void Close() => MudDialog.Close();
 }

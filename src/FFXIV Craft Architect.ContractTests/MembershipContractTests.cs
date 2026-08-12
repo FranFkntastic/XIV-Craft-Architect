@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -435,6 +436,119 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
+    public async Task MemberNotificationCategoriesPersistIndependentlyAndRevokeRefusesAccess()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var member = await fixture.CreateAccountAsync("Member");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var memberClient = fixture.CreateClient(member.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(memberClient, company.Id, "Commission updates please");
+        using var approved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{member.ProfileId:D}/approve",
+            null);
+        approved.EnsureSuccessStatusCode();
+
+        using var changed = await memberClient.PutAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-notifications",
+            new
+            {
+                ActionRequired = true,
+                CommissionerMessages = false,
+                ProgressAndStatus = true
+            });
+        changed.EnsureSuccessStatusCode();
+        using var loaded = await memberClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-notifications");
+        var preferences = await loaded.Content.ReadFromJsonAsync<
+            MembershipNotificationPreferenceResponse>();
+
+        Assert.True(preferences!.ActionRequired);
+        Assert.False(preferences.CommissionerMessages);
+        Assert.True(preferences.ProgressAndStatus);
+
+        using var revoked = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{member.ProfileId:D}/revoke",
+            null);
+        revoked.EnsureSuccessStatusCode();
+        using var deniedRead = await memberClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-notifications");
+        using var deniedWrite = await memberClient.PutAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-notifications",
+            new
+            {
+                ActionRequired = true,
+                CommissionerMessages = true,
+                ProgressAndStatus = true
+            });
+
+        Assert.Equal(HttpStatusCode.NotFound, deniedRead.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, deniedWrite.StatusCode);
+    }
+
+    [Fact]
+    public async Task MemberNotificationTestRequiresCanonicalReadinessAndQueuesNoCommissionMutation()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var member = await fixture.CreateAccountAsync("Member destination");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var memberClient = fixture.CreateClient(member.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(memberClient, company.Id, string.Empty);
+        using var approved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{member.ProfileId:D}/approve",
+            null);
+        approved.EnsureSuccessStatusCode();
+
+        var route = await fixture.Notifications.PutRouteAsync(
+            new CompanyId(company.Id),
+            new DiscordNotificationRouteUpdate(
+                "100000000000000001",
+                DiscordNotificationDestinationMode.CommissionerDirectMessage,
+                null,
+                DiscordDirectMessageFallback.None,
+                DiscordNotificationMentionBehavior.NoPing,
+                DiscordNotificationMentionBehavior.Push,
+                DiscordNotificationMentionBehavior.Push,
+                0,
+                $"member-test-{Guid.NewGuid():N}"),
+            DateTimeOffset.UtcNow);
+        Assert.True(route.Success, route.Error);
+
+        var readiness = await memberClient.GetFromJsonAsync<
+            MembershipNotificationTestReadinessResponse>(
+            $"/trade/v1/companies/{company.Id:D}/membership-notifications/test-readiness");
+        Assert.True(readiness!.Ready);
+        Assert.Equal("Member destination", readiness.DestinationDisplayName);
+
+        using var sent = await memberClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-notifications/test",
+            null);
+        Assert.Equal(HttpStatusCode.Accepted, sent.StatusCode);
+        var delivery = await sent.Content.ReadFromJsonAsync<MembershipNotificationTestResponse>();
+        Assert.NotNull(delivery);
+        Assert.Equal("Member destination", delivery.DestinationDisplayName);
+        var stored = await fixture.Notifications.LoadMemberTestDeliveryAsync(
+            new CompanyId(company.Id),
+            delivery.TestId,
+            await fixture.LoadDiscordUserIdAsync(member.ProfileId));
+        Assert.NotNull(stored);
+        Assert.Equal(DiscordOutboxState.Pending, stored.State);
+
+        using var revoked = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{member.ProfileId:D}/revoke",
+            null);
+        revoked.EnsureSuccessStatusCode();
+        using var denied = await memberClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-notifications/test/{delivery.TestId:D}");
+        Assert.Equal(HttpStatusCode.NotFound, denied.StatusCode);
+    }
+
+    [Fact]
     public async Task PeriodicReconciliationRepairsMissedFounderBinding()
     {
         await using var fixture = await MembershipFixture.CreateAsync(
@@ -580,6 +694,7 @@ public sealed class MembershipContractTests
             ExistingKeyOnlyOwner = existingKeyOnlyOwner;
             Profiles = application.Services.GetRequiredService<SqliteProfileHostStore>();
             Identities = application.Services.GetRequiredService<SqliteDiscordIdentityStore>();
+            Notifications = application.Services.GetRequiredService<SqliteDiscordNotificationStore>();
             Memberships = application.Services.GetRequiredService<SqliteMembershipStore>();
             Reconciler = application.Services
                 .GetServices<IHostedService>()
@@ -590,6 +705,7 @@ public sealed class MembershipContractTests
         public SqliteProfileHostStore Profiles { get; }
         public SqliteDiscordIdentityStore Identities { get; }
         public SqliteMembershipStore Memberships { get; }
+        public SqliteDiscordNotificationStore Notifications { get; }
         public FounderMembershipReconciler Reconciler { get; }
         public Guid? ExistingProfileId { get; }
         public Guid? ExistingCompanyId { get; }
@@ -721,6 +837,9 @@ public sealed class MembershipContractTests
             return new AccountFixture(Guid.Parse(profile.ProfileId), key.PlaintextKey);
         }
 
+        public async Task<string> LoadDiscordUserIdAsync(Guid profileId) =>
+            (await Identities.LoadByProfileAsync(profileId))!.DiscordUserId;
+
         public async Task<CompanyMembership> WaitForMembershipAsync(
             CompanyId companyId,
             Guid profileId)
@@ -803,7 +922,13 @@ public sealed class MembershipContractTests
                         ["ProfileHost:ArchiveBackupDirectory"] = Path.Combine(root, "archive"),
                         ["TradeMemberships:DatabasePath"] = Path.Combine(root, "memberships.db"),
                         ["TradeMemberships:FounderReconciliationIntervalSeconds"] =
-                            founderReconciliationIntervalSeconds.ToString()
+                            founderReconciliationIntervalSeconds.ToString(),
+                        ["Discord:Enabled"] = "true",
+                        ["Discord:RuntimeBotToken"] = "contract-token",
+                        ["Discord:CommissionBaseUrl"] = "https://example.test/commission/",
+                        ["Discord:ApiBaseUrl"] = "https://example.test/discord/",
+                        ["Discord:DatabasePath"] = Path.Combine(root, "discord-collaboration.db"),
+                        ["Discord:OutboxPollSeconds"] = "60"
                     })));
     }
 

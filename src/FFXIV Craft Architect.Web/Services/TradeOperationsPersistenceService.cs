@@ -84,6 +84,24 @@ public sealed class TradeOperationsPersistenceService
         return profiles;
     }
 
+    public async Task<TradeCompanyProfile?> LoadActiveCompanyProfileAsync()
+    {
+        var profiles = await LoadCompanyProfilesAsync();
+        var selectedProfileId = await LoadSelectedCompanyProfileIdAsync();
+        var profile = selectedProfileId.HasValue
+            ? profiles.FirstOrDefault(candidate => candidate.Id == selectedProfileId.Value)
+            : null;
+        profile ??= profiles
+            .OrderBy(candidate => candidate.CreatedAtUtc)
+            .ThenBy(candidate => candidate.Id)
+            .FirstOrDefault();
+        if (profile != null && selectedProfileId != profile.Id)
+        {
+            await SaveSelectedCompanyProfileIdAsync(profile.Id);
+        }
+        return profile;
+    }
+
     public async Task<bool> SaveCompanyProfileAsync(TradeCompanyProfile profile)
     {
         NormalizeProfile(profile);
