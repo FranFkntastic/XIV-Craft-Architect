@@ -156,6 +156,58 @@ public sealed class CompanyHubContractTests
     }
 
     [Fact]
+    public async Task DiscordLinkedAssignmentResolvesFromGuidLinkOnlyForCurrentParticipant()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var assigned = await fixture.CreateAccountAsync("Assigned crafter");
+        var other = await fixture.CreateAccountAsync("Other crafter");
+        var company = CreateCompany();
+        var order = CreateAssignedOrder(company.Id, assigned.ProfileId);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var assignedClient = fixture.CreateClient(assigned.Key);
+        using var otherClient = fixture.CreateClient(other.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, order);
+        await RequestAsync(assignedClient, company.Id);
+        await RequestAsync(otherClient, company.Id);
+        using var assignedApproved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{assigned.ProfileId:D}/approve",
+            null);
+        using var otherApproved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{other.ProfileId:D}/approve",
+            null);
+        assignedApproved.EnsureSuccessStatusCode();
+        otherApproved.EnsureSuccessStatusCode();
+
+        using var assignedResponse = await assignedClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub");
+        using var otherResponse = await otherClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub");
+        using var assignedJson = JsonDocument.Parse(
+            await assignedResponse.Content.ReadAsStringAsync());
+        using var otherJson = JsonDocument.Parse(
+            await otherResponse.Content.ReadAsStringAsync());
+
+        Assert.Equal("hub", assignedJson.RootElement.GetProperty("kind").GetString());
+        var assignment = Assert.Single(
+            assignedJson.RootElement.GetProperty("assignments").EnumerateArray());
+        Assert.Equal(order.Id.ToString("D"), assignment.GetProperty("commissionId").GetString());
+        Assert.Empty(otherJson.RootElement.GetProperty("assignments").EnumerateArray());
+
+        using var revoked = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{assigned.ProfileId:D}/revoke",
+            null);
+        revoked.EnsureSuccessStatusCode();
+        using var revokedResponse = await assignedClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub");
+        using var revokedJson = JsonDocument.Parse(
+            await revokedResponse.Content.ReadAsStringAsync());
+        Assert.Equal("teaser", revokedJson.RootElement.GetProperty("kind").GetString());
+        Assert.False(revokedJson.RootElement.TryGetProperty("assignments", out _));
+    }
+
+    [Fact]
     public async Task OwnerCanPublishHubWhileMemberCannotMutateIt()
     {
         await using var fixture = await HubFixture.CreateAsync();

@@ -46,9 +46,27 @@ public sealed class MembershipAccessResolver(
     public async Task<TradeCompanyAccessContext?> ResolveCompanyAccessAsync(
         MembershipAccount account,
         CompanyId companyId,
-        CancellationToken cancellationToken = default) =>
-        await companies.ResolveMembershipAccessAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var profileAccess = await companies.ResolveProfileAccessAsync(
             account.ProfileId,
             companyId,
             cancellationToken);
+        if (profileAccess != null)
+        {
+            return profileAccess;
+        }
+
+        try
+        {
+            return await companies.ResolveMembershipAccessAsync(
+                account.ProfileId,
+                companyId,
+                cancellationToken);
+        }
+        catch (DuplicateHostedObjectIdentityException)
+        {
+            return null;
+        }
+    }
 }

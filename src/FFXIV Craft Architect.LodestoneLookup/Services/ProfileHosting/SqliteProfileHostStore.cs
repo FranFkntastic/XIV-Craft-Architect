@@ -1936,8 +1936,7 @@ public sealed class SqliteProfileHostStore
         var found = ReadHostedObject(reader, collection, objectId);
         if (await reader.ReadAsync(ct))
         {
-            throw new InvalidOperationException(
-                $"Hosted object identity '{collection}/{objectId}' is duplicated across active profiles.");
+            throw new DuplicateHostedObjectIdentityException(collection, objectId);
         }
 
         return found;
@@ -2552,6 +2551,11 @@ public sealed class SqliteProfileHostStore
         return connection;
     }
 }
+
+public sealed class DuplicateHostedObjectIdentityException(
+    string collection,
+    string objectId) : InvalidOperationException(
+        $"Hosted object identity '{collection}/{objectId}' is duplicated across active profiles.");
 
 public sealed record HostedProfileObject(
     string ProfileId,
