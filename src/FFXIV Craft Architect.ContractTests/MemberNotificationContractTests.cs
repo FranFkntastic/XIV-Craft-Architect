@@ -29,14 +29,25 @@ public sealed class MemberNotificationContractTests
         CompanyCommissionActivityKind eventKind)
     {
         await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
+        var notification = fixture.Notification(eventKind);
+        if (eventKind == CompanyCommissionActivityKind.ProgressReported)
+        {
+            notification = notification with
+            {
+                Summary = "The crafter reported production progress: " +
+                    "Iron Nails: 1 of 1 completed, 1 ready. " +
+                    "Comment: First batch is staged. Work remains in progress.",
+                ActionLabel = "View progress"
+            };
+        }
 
         var result = await fixture.Delivery.NotifyMembersAsync(
-            fixture.Notification(eventKind),
+            notification,
             fixture.Commission,
             fixture.PublicUrl);
         Assert.True(result.Success);
 
-        var commissionerResult = await fixture.Delivery.NotifyAsync(fixture.Notification(eventKind));
+        var commissionerResult = await fixture.Delivery.NotifyAsync(notification);
         Assert.True(commissionerResult.Success, commissionerResult.Error);
         Assert.True(
             commissionerResult.WorkItemIds.Count > 0,
@@ -61,6 +72,11 @@ public sealed class MemberNotificationContractTests
             .GetProperty("url")
             .GetString());
         Assert.DoesNotContain("Contract Crafter", member.PayloadJson, StringComparison.Ordinal);
+        if (eventKind == CompanyCommissionActivityKind.ProgressReported)
+        {
+            Assert.Contains("Iron Nails: 1 of 1 completed, 1 ready", member.PayloadJson);
+            Assert.Contains("First batch is staged", member.PayloadJson);
+        }
 
         var commissioner = Assert.Single(
             items,
@@ -76,12 +92,19 @@ public sealed class MemberNotificationContractTests
             .GetProperty("value")
             .GetString());
         Assert.Equal(
-            "Review identity",
+            eventKind == CompanyCommissionActivityKind.ProgressReported
+                ? "View progress"
+                : "Review identity",
             commissionerPayload.RootElement
                 .GetProperty("components")[0]
                 .GetProperty("components")[0]
                 .GetProperty("label")
                 .GetString());
+        if (eventKind == CompanyCommissionActivityKind.ProgressReported)
+        {
+            Assert.Contains("Iron Nails: 1 of 1 completed, 1 ready", commissioner.PayloadJson);
+            Assert.Contains("First batch is staged", commissioner.PayloadJson);
+        }
         Assert.Equal(
             $"https://example.test/trade/orders?orderId={CommissionId:D}" +
             "&activityId=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",

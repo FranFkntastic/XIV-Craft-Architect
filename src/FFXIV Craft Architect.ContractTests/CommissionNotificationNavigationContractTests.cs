@@ -1,6 +1,7 @@
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.Web.Pages;
+using System.Text.Json;
 
 namespace FFXIV_Craft_Architect.ContractTests;
 
@@ -12,6 +13,10 @@ public sealed class CommissionNotificationNavigationContractTests
         "22222222-2222-2222-2222-222222222222");
     private static readonly Guid EventId = Guid.Parse(
         "33333333-3333-3333-3333-333333333333");
+    private static readonly Guid NailsLineId = Guid.Parse(
+        "66666666-6666-6666-6666-666666666666");
+    private static readonly Guid RivetsLineId = Guid.Parse(
+        "77777777-7777-7777-7777-777777777777");
     private static readonly Uri PublicUrl = new(
         "https://example.test/commission/brief");
 
@@ -89,6 +94,119 @@ public sealed class CommissionNotificationNavigationContractTests
 
         Assert.Contains("claim was accepted", summary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Identity review is required", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProgressCopyIncludesCanonicalQuantitiesExactCommentAndResultingState()
+    {
+        var brief = CreateBrief() with
+        {
+            Terms = CreateBrief().Terms with
+            {
+                Outputs =
+                [
+                    new(NailsLineId, 12, "Iron Nails", 1, false),
+                    new(RivetsLineId, 34, "Bronze Rivets", 4, false)
+                ]
+            },
+            Status = TradeOrderStatus.InProgress,
+            ClearedToWork = true
+        };
+        var activity = CreateActivity(
+            CompanyCommissionActivityKind.ProgressReported,
+            CompanyCommissionActorKind.Crafter) with
+        {
+            Comment = "First batch is staged.",
+            PayloadJson = JsonSerializer.Serialize(
+                new[]
+                {
+                    new CompanyCommissionProgressQuantity(NailsLineId, 12, 1, 1),
+                    new CompanyCommissionProgressQuantity(RivetsLineId, 34, 3, 2)
+                })
+        };
+
+        var summary = DiscordCompanyCommissionPostCommitSink.BuildSummary(
+            activity,
+            brief);
+
+        Assert.Equal(
+            "The crafter reported production progress: " +
+            "Iron Nails: 1 of 1 completed, 1 ready; " +
+            "Bronze Rivets: 3 of 4 completed, 2 ready. " +
+            "Comment: First batch is staged. Work remains in progress.",
+            summary);
+        Assert.Equal(
+            "View progress",
+            DiscordCompanyCommissionPostCommitSink.ResolveActionLabel(
+                activity.Kind,
+                brief));
+    }
+
+    [Fact]
+    public void ProgressCopyRefusesPayloadThatDoesNotMatchCanonicalOutputs()
+    {
+        var brief = CreateBrief() with
+        {
+            Terms = CreateBrief().Terms with
+            {
+                Outputs = [new(NailsLineId, 12, "Iron Nails", 1, false)]
+            }
+        };
+        var activity = CreateActivity(
+            CompanyCommissionActivityKind.ProgressReported,
+            CompanyCommissionActorKind.Crafter) with
+        {
+            PayloadJson = JsonSerializer.Serialize(
+                new[]
+                {
+                    new CompanyCommissionProgressQuantity(NailsLineId, 999, 1, 1)
+                })
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            DiscordCompanyCommissionPostCommitSink.BuildSummary(activity, brief));
+
+        Assert.Contains("invalid output quantities", exception.Message);
+    }
+
+    [Fact]
+    public void ProgressCopyStaysWithinDiscordDescriptionLimit()
+    {
+        var outputs = Enumerable.Range(1, 100)
+            .Select(index => new CompanyCommissionOutputTerm(
+                Guid.Parse($"00000000-0000-0000-0000-{index:000000000000}"),
+                index,
+                new string('X', 200),
+                int.MaxValue,
+                false))
+            .ToArray();
+        var brief = CreateBrief() with
+        {
+            Terms = CreateBrief().Terms with { Outputs = outputs },
+            Status = TradeOrderStatus.InProgress,
+            ClearedToWork = true
+        };
+        var activity = CreateActivity(
+            CompanyCommissionActivityKind.ProgressReported,
+            CompanyCommissionActorKind.Crafter) with
+        {
+            Comment = new string('C', 2_000),
+            PayloadJson = JsonSerializer.Serialize(outputs.Select(output =>
+                new CompanyCommissionProgressQuantity(
+                    output.LineId,
+                    output.ItemId,
+                    int.MaxValue,
+                    int.MaxValue)))
+        };
+
+        var summary = DiscordCompanyCommissionPostCommitSink.BuildSummary(
+            activity,
+            brief);
+
+        Assert.True(summary.Length <= 4_096, $"Summary length was {summary.Length}.");
+        Assert.Contains("plus 80 more output lines", summary);
+        Assert.Contains(new string('C', 797) + "...", summary);
+        Assert.EndsWith("Work remains in progress.", summary);
     }
 
     [Fact]
