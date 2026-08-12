@@ -1,16 +1,16 @@
 @page "/companies/{Slug}"
+@using System.Net
 @using System.Text.RegularExpressions
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Web.Services.ProfileHosting
 @using FFXIV_Craft_Architect.Web.Services.TradeCompany
 @inject CompanyHubClient HubClient
 @inject ProfileSyncLocalStateService LocalState
-@inject TradeOperationsPersistenceService TradeOperations
 @inject DiscordIdentityClient DiscordIdentityClient
 @inject ProfileHostClient ProfileHostClient
-@inject ProfileSyncService ProfileSync
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
+@inject IJSRuntime JSRuntime
 
 @if (_loading)
 {
@@ -25,10 +25,10 @@ else
     <main class="company-hub banner-@_draft.BannerStyle" style="--hub-accent: @AccentColor(_draft.Accent)">
         <div class="hub-banner"></div>
         <header class="hub-heading">
-            <div class="emblem" aria-hidden="true">@EmblemGlyph(_draft.Emblem)</div>
+            <div class="emblem" aria-hidden="true"><MudIcon Icon="@EmblemIcon(_draft.Emblem)" /></div>
             <div class="heading-copy">
                 <h1>@_hub.DisplayName</h1>
-                @if (_editing)
+                @if (_editingTheme)
                 {
                     <input class="inline-title" maxlength="120" @bind="_draft.Tagline" placeholder="Company tagline" />
                 }
@@ -38,30 +38,27 @@ else
                 }
             </div>
             <span class="standing">@StandingLabel</span>
-            @if (CanCustomize && !_editing)
+            @if (_hub.Kind == "hub")
             {
-                <button class="button" @onclick="BeginCustomize">Customize</button>
+                <button class="button quiet" type="button" @onclick="OpenDetails">@RosterCountLabel</button>
+                <button class="button quiet" type="button" @onclick="OpenDetails">Company details</button>
+            }
+            @if (CanCustomize && !_editingTheme)
+            {
+                <button class="button" type="button" @onclick="BeginCustomize">Customize</button>
             }
         </header>
 
-        @if (_editing)
+        @if (_editingTheme)
         {
-            <section class="customize card">
-                <div><span class="label">Accent</span><div class="tokens">@foreach (var token in Accents) { <button class="@TokenClass(_draft.Accent, token)" @onclick="() => _draft.Accent = token">@token</button> }</div></div>
-                <div><span class="label">Banner</span><div class="tokens">@foreach (var token in Banners) { <button class="@TokenClass(_draft.BannerStyle, token)" @onclick="() => _draft.BannerStyle = token">@token</button> }</div></div>
-                <div><span class="label">Emblem</span><div class="tokens">@foreach (var token in Emblems) { <button class="@TokenClass(_draft.Emblem, token)" @onclick="() => _draft.Emblem = token">@EmblemGlyph(token) @token</button> }</div></div>
+            <section class="customize panel">
+                <div><span class="label">Accent</span><div class="tokens">@foreach (var token in Accents) { <button type="button" class="@TokenClass(_draft.Accent, token)" @onclick="() => _draft.Accent = token">@token</button> }</div></div>
+                <div><span class="label">Banner</span><div class="tokens">@foreach (var token in Banners) { <button type="button" class="@TokenClass(_draft.BannerStyle, token)" @onclick="() => _draft.BannerStyle = token">@token</button> }</div></div>
+                <div><span class="label">Emblem</span><div class="tokens">@foreach (var token in Emblems) { <button type="button" class="@TokenClass(_draft.Emblem, token)" @onclick="() => _draft.Emblem = token"><MudIcon Icon="@EmblemIcon(token)" Size="Size.Small" /> @token</button> }</div></div>
                 <label class="count-toggle"><input type="checkbox" @bind="_draft.ShowOpenCommissionCount" /> Show open-commission count on teaser</label>
-                <div class="edit-actions"><button class="button" @onclick="Discard">Discard</button><button class="button primary" @onclick="PublishAsync">Publish</button></div>
+                <textarea class="about-edit" maxlength="2000" @bind="_draft.About" placeholder="About this company (bold, italic, and HTTPS links supported)"></textarea>
+                <div class="edit-actions"><button class="button quiet" type="button" @onclick="DiscardTheme">Discard</button><button class="button primary" type="button" disabled="@_saving" @onclick="PublishThemeAsync">Publish changes</button></div>
             </section>
-        }
-
-        @if (_editing)
-        {
-            <textarea class="about-edit card" maxlength="2000" @bind="_draft.About" placeholder="About this company (bold, italic, and HTTPS links supported)"></textarea>
-        }
-        else if (!string.IsNullOrWhiteSpace(_draft.About))
-        {
-            <section class="about card"><span class="label">About @_hub.DisplayName</span><p>@((MarkupString)RenderMarkdown(_draft.About))</p></section>
         }
 
         @if (_hub.Kind == "hub")
@@ -70,53 +67,158 @@ else
             {
                 <a class="request-notice" href="/trade/crafters?company=@_hub.CompanyId">@_hub.PendingMembershipRequestCount membership requests need review</a>
             }
-            <section class="card board">
-                <div class="section-heading"><h2>Open commissions</h2><span>@(_hub.OpenCommissions?.Count ?? 0) available</span></div>
-                <div class="commission-table">
-                    @foreach (var commission in _hub.OpenCommissions ?? [])
-                    {
-                        <button class="commission-row" @onclick="() => _selectedCommission = commission"><div><strong>@commission.Title</strong><small>Ref @commission.Reference</small></div><div>@foreach (var output in commission.Outputs) { <span>@output.Name ×@output.Quantity</span> }</div><div>@Payment(commission.Payment)</div><span class="state">@CommissionStateLabel(commission.State)</span></button>
-                    }
+
+            <section class="panel updates" aria-labelledby="updates-heading">
+                <div class="section-header">
+                    <div class="section-title"><h2 id="updates-heading">Company updates</h2><span>@UpdateCountLabel</span></div>
+                    <div class="section-actions">
+                        @if (CanCustomize)
+                        {
+                            <button class="button quiet" type="button" @onclick="ToggleUpdateComposer">@(_postingUpdate ? "Cancel post" : "Post update")</button>
+                        }
+                        @if (ArchivedUpdates.Count > 0)
+                        {
+                            <button class="button quiet" type="button" aria-expanded="@_showArchive" @onclick="() => _showArchive = !_showArchive">@(_showArchive ? "Hide archive" : "View archive")</button>
+                        }
+                    </div>
                 </div>
+
+                @if (_postingUpdate)
+                {
+                    <div class="update-composer">
+                        <input maxlength="160" @bind="_newUpdateTitle" placeholder="Update title" />
+                        <textarea maxlength="2000" @bind="_newUpdateBody" placeholder="What should company members know?"></textarea>
+                        <label><input type="checkbox" @bind="_newUpdatePinned" /> Pin this update</label>
+                        <button class="button primary" type="button" disabled="@(!CanPublishUpdate)" @onclick="PublishUpdateAsync">Publish update</button>
+                    </div>
+                }
+
+                @if (PinnedUpdate == null && RecentUpdates.Count == 0)
+                {
+                    <div class="updates-empty">No company updates yet.</div>
+                }
+                else
+                {
+                    <div class="updates-grid">
+                        @if (PinnedUpdate is { } pinned)
+                        {
+                            <article class="featured-update">
+                                <div class="eyebrow">Pinned announcement</div>
+                                <h3>@pinned.Title</h3>
+                                <p>@((MarkupString)RenderMarkdown(pinned.Body))</p>
+                                <div class="meta"><strong>@pinned.AuthorDisplayName</strong><span>@FormatTimestamp(pinned.PublishedAtUtc)</span>@if (pinned.EditedAtUtc != null) { <span>Edited</span> }</div>
+                            </article>
+                        }
+                        <div class="update-list" aria-label="Recent company updates">
+                            @foreach (var update in RecentUpdates)
+                            {
+                                <article class="update-item"><strong>@update.Title</strong><span>@update.AuthorDisplayName · @FormatTimestamp(update.PublishedAtUtc)</span></article>
+                            }
+                        </div>
+                    </div>
+                }
+
+                @if (_showArchive)
+                {
+                    <div class="archive">
+                        @foreach (var update in ArchivedUpdates)
+                        {
+                            <article class="archive-row"><time>@update.PublishedAtUtc.ToLocalTime().ToString("d")</time><div><strong>@update.Title</strong><span>@update.AuthorDisplayName</span></div><span>@((MarkupString)RenderMarkdown(update.Body))</span></article>
+                        }
+                    </div>
+                }
             </section>
-            @if (_selectedCommission != null)
-            {
-                <section class="card commission-detail">
-                    <div class="section-heading"><div><small>@_selectedCommission.Reference · terms v@_selectedCommission.TermsVersion</small><h2>@_selectedCommission.Title</h2></div><span>@CommissionStateLabel(_selectedCommission.State)</span></div>
-                    <div>@foreach (var output in _selectedCommission.Outputs) { <div><strong>@output.Name</strong> ×@output.Quantity <small>@output.CompletedQuantity completed · @output.ReadyQuantity ready · @output.AcceptedQuantity accepted</small></div> }</div>
-                    <div><strong>@_selectedCommission.Payment.Total.ToString("N0") gil</strong> · @PaymentScheduleLabel(_selectedCommission.Payment.Schedule) · @_selectedCommission.Payment.Label</div>
-                    <div><strong>Delivery</strong><div>@_selectedCommission.DeliveryInstructions</div></div>
-                    @if (_confirmingClaim)
+
+            <div class="work-grid">
+                <section class="panel work-panel" aria-labelledby="my-work-heading">
+                    <div class="section-header"><div class="section-title"><h2 id="my-work-heading">My work</h2><span>@AssignmentCountLabel</span></div></div>
+                    @if ((_hub.Assignments?.Count ?? 0) == 0)
                     {
-                        <div class="edit-actions"><button class="button" @onclick="() => _confirmingClaim = false">Cancel</button><button class="button primary" disabled="@_claiming" @onclick="ClaimAsync">Confirm claim</button></div>
-                    }
-                    else if ((_hub.Assignments ?? []).Any(assignment => assignment.CommissionId == _selectedCommission.CommissionId))
-                    {
-                        <div class="edit-actions"><button class="button" @onclick="() => _selectedCommission = null">Back</button><button class="button primary" disabled="@_claiming" @onclick="ReportProgressAsync">Report outputs ready</button>@if (_selectedCommission.Outputs.All(output => output.ReadyQuantity >= output.Quantity)) { <button class="button primary" disabled="@_claiming" @onclick="DeclareReadinessAsync">Declare ready for delivery</button> }</div>
+                        <div class="work-empty">Nothing assigned right now.</div>
                     }
                     else
                     {
-                        <div class="edit-actions"><button class="button" @onclick="() => _selectedCommission = null">Back to board</button><button class="button primary" @onclick="() => _confirmingClaim = true">Claim commission</button></div>
+                        @foreach (var assignment in _hub.Assignments ?? [])
+                        {
+                            <article class="assignment-card">
+                                <div class="assignment-main"><div><h3>@assignment.Title</h3><span>@assignment.Reference · terms v@assignment.TermsVersion</span><strong>@OutputSummary(assignment)</strong></div><div class="assignment-state"><strong>@AssignmentState(assignment)</strong><span>@AssignmentSupport(assignment)</span></div><button class="button primary" type="button" @onclick="() => SelectCommission(assignment)">Open workspace</button></div>
+                            </article>
+                        }
                     }
                 </section>
-            }
-            <div class="lower-grid">
-                <section class="card"><h2>My assignments</h2>@foreach (var assignment in _hub.Assignments ?? []) { <button class="feed" @onclick="() => _selectedCommission = assignment"><strong>@assignment.Title</strong><span>@assignment.Outputs.FirstOrDefault()?.Name · @AssignmentState(assignment)</span></button> }</section>
-                <section class="card"><h2>Members</h2>@foreach (var member in _hub.Roster ?? []) { <div class="feed"><strong>@member.DisplayName</strong><span>@SentenceCase(member.Role)</span></div> }</section>
-                <section class="card"><h2>Recent activity</h2>@foreach (var activity in _hub.RecentActivity ?? []) { <div class="feed"><strong>@activity.Reference · @ActivityLabel(activity.Kind)</strong><span>@activity.OccurredAtUtc.ToLocalTime().ToString("g")</span></div> }</section>
+
+                <section class="panel open-panel" aria-labelledby="open-work-heading">
+                    <div class="section-header"><div class="section-title"><h2 id="open-work-heading">Open commissions</h2><span>@OpenCountLabel</span></div></div>
+                    <div class="commission-list">
+                        @foreach (var commission in _hub.OpenCommissions ?? [])
+                        {
+                            <button class="commission-row" type="button" aria-expanded="@(_selectedCommission?.CommissionId == commission.CommissionId)" @onclick="() => SelectCommission(commission)">
+                                <span class="commission-top"><strong>@commission.Title</strong><span class="crafter-note">@CrafterNote(commission)</span></span>
+                                <span class="commission-bottom"><span>@OutputSummary(commission)</span><span>@commission.Payment.Total.ToString("N0") gil</span></span>
+                                <span class="note-popover" aria-hidden="true">@CrafterNote(commission)</span>
+                            </button>
+                        }
+                    </div>
+                    @if ((_hub.OpenCommissions?.Count ?? 0) == 0)
+                    {
+                        <div class="work-empty">No commissions are open right now.</div>
+                    }
+                </section>
             </div>
+
+            @if (_selectedCommission != null)
+            {
+                <section class="panel commission-detail" id="commission-workspace">
+                    <div class="section-header"><div><span class="detail-reference">@_selectedCommission.Reference · terms v@_selectedCommission.TermsVersion</span><h2>@_selectedCommission.Title</h2></div><span class="standing">@AssignmentState(_selectedCommission)</span></div>
+                    <div class="detail-grid">
+                        <div><span class="label">Requested output</span>@foreach (var output in _selectedCommission.Outputs) { <div><strong>@output.Name ×@output.Quantity</strong><span>@output.CompletedQuantity completed · @output.ReadyQuantity ready · @output.AcceptedQuantity accepted</span></div> }</div>
+                        <div><span class="label">Payment</span><strong>@_selectedCommission.Payment.Total.ToString("N0") gil</strong><span>@PaymentScheduleLabel(_selectedCommission.Payment.Schedule) · @_selectedCommission.Payment.Label</span></div>
+                    </div>
+                    <div class="full-note"><span class="label">Crafter note</span><span>@CrafterNote(_selectedCommission)</span></div>
+                    @if (IsAssignment(_selectedCommission))
+                    {
+                        <div class="workspace-gate @(_selectedCommission.CanWork ? "ready" : "blocked")"><strong>@AssignmentState(_selectedCommission)</strong><span>@AssignmentSupport(_selectedCommission)</span></div>
+                    }
+                    <div class="detail-actions">
+                        <button class="button quiet" type="button" @onclick="CloseCommission">Close</button>
+                        @if (_confirmingClaim)
+                        {
+                            <button class="button quiet" type="button" @onclick="() => _confirmingClaim = false">Cancel claim</button><button class="button primary" type="button" disabled="@_saving" @onclick="ClaimAsync">Confirm claim</button>
+                        }
+                        else if (IsAssignment(_selectedCommission))
+                        {
+                            @if (_selectedCommission.CanReportProgress)
+                            {
+                                <button class="button primary" type="button" disabled="@_saving" @onclick="ReportProgressAsync">Report outputs ready</button>
+                            }
+                            @if (_selectedCommission.CanDeclareReadiness)
+                            {
+                                <button class="button primary" type="button" disabled="@_saving" @onclick="DeclareReadinessAsync">Declare ready for delivery</button>
+                            }
+                        }
+                        else
+                        {
+                            <button class="button primary" type="button" @onclick="() => _confirmingClaim = true">Claim commission</button>
+                        }
+                    </div>
+                </section>
+            }
         }
         else
         {
+            @if (!string.IsNullOrWhiteSpace(_draft.About))
+            {
+                <section class="panel about"><span class="label">About @_hub.DisplayName</span><p>@((MarkupString)RenderMarkdown(_draft.About))</p></section>
+            }
             <div class="teaser-grid">
-                @if (_hub.OpenCommissionCount is int count || (_editing && _draft.ShowOpenCommissionCount))
+                @if (_hub.OpenCommissionCount is int count || (_editingTheme && _draft.ShowOpenCommissionCount))
                 {
-                    <section class="card count"><strong>@(_hub.OpenCommissionCount ?? 0) open commissions</strong><span>Terms available to members.</span></section>
+                    <section class="panel count"><strong>@(_hub.OpenCommissionCount ?? 0) open commissions</strong><span>Terms available to members.</span></section>
                 }
-                <aside class="card join">
+                <aside class="panel join">
                     @if (!_signedIn)
                     {
-                        <h2>Join @_hub.DisplayName</h2><button class="button primary" @onclick="SignInAsync">Sign in with Discord to request membership</button>
+                        <h2>Join @_hub.DisplayName</h2><button class="button primary" type="button" @onclick="SignInAsync">Sign in with Discord to request membership</button>
                     }
                     else if (_hub.Standing.State == "pending")
                     {
@@ -124,85 +226,323 @@ else
                     }
                     else
                     {
-                        <h2>Request membership</h2><textarea @bind="_membershipNote" placeholder="Optional note to company operators"></textarea><button class="button primary" disabled="@_requesting" @onclick="RequestMembershipAsync">Send request</button>
+                        <h2>Request membership</h2><textarea @bind="_membershipNote" placeholder="Optional note to company operators"></textarea><button class="button primary" type="button" disabled="@_saving" @onclick="RequestMembershipAsync">Send request</button>
                     }
                 </aside>
             </div>
         }
     </main>
+
+    @if (_detailsOpen && _hub.Kind == "hub")
+    {
+        <div class="drawer-scrim" role="presentation" @onclick="CloseDetails">
+            <aside class="company-drawer" aria-labelledby="company-details-heading" @onclick:stopPropagation="true">
+                <div class="drawer-header"><h2 id="company-details-heading">Company details</h2><button class="button quiet" type="button" @onclick="CloseDetails">Close</button></div>
+                @if (!string.IsNullOrWhiteSpace(_draft.About))
+                {
+                    <div class="drawer-about">@((MarkupString)RenderMarkdown(_draft.About))</div>
+                }
+                <span class="label">Members</span>
+                @foreach (var member in _hub.Roster ?? [])
+                {
+                    <div class="member-row"><span class="member-avatar">@MemberInitial(member.DisplayName)</span><div><strong>@member.DisplayName</strong><span>@SentenceCase(member.Role)</span></div></div>
+                }
+            </aside>
+        </div>
+    }
 }
 
 @code {
     [Parameter] public string Slug { get; set; } = string.Empty;
+    [SupplyParameterFromQuery(Name = "commissionId")] public string? CommissionId { get; set; }
+    [SupplyParameterFromQuery(Name = "activityId")] public string? ActivityId { get; set; }
+
     private CompanyHubProjection? _hub;
     private ThemeDraft _draft = new();
     private bool _loading = true;
     private bool _signedIn;
-    private bool _editing;
-    private bool _requesting;
-    private bool _claiming;
+    private bool _editingTheme;
+    private bool _postingUpdate;
+    private bool _showArchive;
+    private bool _detailsOpen;
+    private bool _saving;
     private bool _confirmingClaim;
+    private bool _scrollToLinkedCommission;
+    private string? _appliedDeepLink;
     private CompanyHubCommission? _selectedCommission;
     private string? _membershipNote;
+    private string _newUpdateTitle = string.Empty;
+    private string _newUpdateBody = string.Empty;
+    private bool _newUpdatePinned;
     private static readonly string[] Accents = ["deep-blue", "crimson", "gold", "emerald", "violet", "amber", "teal", "rose", "slate", "ivory"];
     private static readonly string[] Banners = ["none", "gradient", "pattern"];
     private static readonly string[] Emblems = ["star", "prism", "crest", "workshop", "moon", "compass"];
+
     private bool CanCustomize => _hub?.Standing.Role is "owner" or "operator";
+    private bool CanPublishUpdate => !_saving && !string.IsNullOrWhiteSpace(_newUpdateTitle) && !string.IsNullOrWhiteSpace(_newUpdateBody);
     private string StandingLabel => SentenceCase(_hub!.Standing.State == "active" ? _hub.Standing.Role ?? "member" : _hub.Standing.State);
+    private string RosterCountLabel => $"{_hub?.Roster?.Count ?? 0} {((_hub?.Roster?.Count ?? 0) == 1 ? "member" : "members")}";
+    private string UpdateCountLabel => $"{_hub?.Updates?.Count ?? 0} {((_hub?.Updates?.Count ?? 0) == 1 ? "post" : "posts")}";
+    private string AssignmentCountLabel => $"{_hub?.Assignments?.Count ?? 0} active {((_hub?.Assignments?.Count ?? 0) == 1 ? "assignment" : "assignments")}";
+    private string OpenCountLabel => $"{_hub?.OpenCommissions?.Count ?? 0} available";
+    private CompanyHubUpdate? PinnedUpdate => _hub?.Updates?.FirstOrDefault(update => update.IsPinned);
+    private IReadOnlyList<CompanyHubUpdate> RecentUpdates => (_hub?.Updates ?? []).Where(update => !update.IsPinned).Take(3).ToArray();
+    private IReadOnlyList<CompanyHubUpdate> ArchivedUpdates => (_hub?.Updates ?? []).Where(update => !update.IsPinned).Skip(3).ToArray();
 
     protected override async Task OnParametersSetAsync()
     {
         _loading = true;
         var settings = await LocalState.LoadConnectionSettingsAsync();
-        _signedIn = settings.IsConfigured &&
-            (await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!)).Linked;
-        _hub = await HubClient.LoadAsync(Slug);
-        if (_hub != null)
+        if (settings.IsConfigured)
         {
-            _draft = ThemeDraft.From(_hub.Theme, _hub.OpenCommissionCount != null);
+            var status = await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!);
+            _signedIn = status.Linked;
         }
+        else
+        {
+            _signedIn = false;
+        }
+        await ReloadHubAsync(Slug);
+        ApplyDeepLink();
         _loading = false;
     }
 
-    private void BeginCustomize() => _editing = true;
-    private void Discard() { _draft = ThemeDraft.From(_hub!.Theme, _hub.OpenCommissionCount != null); _editing = false; }
-    private async Task PublishAsync()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        var profile = (await TradeOperations.LoadCompanyProfilesAsync())
-            .FirstOrDefault(company => company.Id == Guid.Parse(_hub!.CompanyId));
-        if (profile == null)
+        if (!_scrollToLinkedCommission)
         {
-            Snackbar.Add("This company is not available in this browser, so its theme could not be published.", Severity.Error);
             return;
         }
-        profile.Landing = new CompanyLandingTheme
-        {
-            Accent = Enum.Parse<CompanyLandingAccent>(_draft.Accent.Replace("-", string.Empty), true),
-            BannerStyle = Enum.Parse<CompanyLandingBannerStyle>(_draft.BannerStyle, true),
-            Emblem = Enum.Parse<CompanyLandingEmblem>(_draft.Emblem, true),
-            Tagline = string.IsNullOrWhiteSpace(_draft.Tagline) ? null : _draft.Tagline.Trim(),
-            About = string.IsNullOrWhiteSpace(_draft.About) ? null : _draft.About.Trim(),
-            ShowOpenCommissionCount = _draft.ShowOpenCommissionCount
-        };
-        profile.UpdatedAtUtc = DateTime.UtcNow;
-        profile.SyncState = TradeSyncState.PendingSync;
-        if (!await TradeOperations.SaveCompanyProfileAsync(profile)) throw new InvalidOperationException("Company theme could not be saved.");
-        await ProfileSync.QueueLocalSaveAsync(
-            ProfileSyncCollections.TradeCompanyProfiles,
-            profile.Id.ToString("D"));
-        _editing = false;
-        Snackbar.Add("Company hub published.", Severity.Success);
+
+        _scrollToLinkedCommission = false;
+        await JSRuntime.InvokeVoidAsync(
+            "mudScrollManager.scrollIntoView",
+            "#commission-workspace",
+            "smooth");
     }
-    private async Task SignInAsync() { var uri = await DiscordIdentityClient.StartSignInAsync(ProfileHostClient.DefaultHostUrl, $"/companies/{Uri.EscapeDataString(Slug)}"); Navigation.NavigateTo(uri.AbsoluteUri, true); }
-    private async Task RequestMembershipAsync() { _requesting = true; try { await HubClient.RequestMembershipAsync(_hub!.CompanyId, _membershipNote); _hub = await HubClient.LoadAsync(_hub.Slug); Snackbar.Add("Membership request sent.", Severity.Success); } finally { _requesting = false; } }
-    private async Task ClaimAsync() { _claiming = true; try { await HubClient.ClaimAsync(_hub!.CompanyId, _selectedCommission!.CommissionId); _hub = await HubClient.LoadAsync(_hub.Slug); _selectedCommission = null; _confirmingClaim = false; Snackbar.Add("Commission claimed.", Severity.Success); } finally { _claiming = false; } }
-    private async Task ReportProgressAsync() { _claiming = true; try { await HubClient.ReportProgressAsync(_selectedCommission!); await ReloadSelectedAsync(); Snackbar.Add("Progress reported.", Severity.Success); } catch (HttpRequestException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Conflict) { await ReloadSelectedAsync(); } finally { _claiming = false; } }
-    private async Task DeclareReadinessAsync() { _claiming = true; try { await HubClient.DeclareReadinessAsync(_selectedCommission!); await ReloadSelectedAsync(); Snackbar.Add("Delivery readiness declared.", Severity.Success); } catch (HttpRequestException exception) when (exception.StatusCode == System.Net.HttpStatusCode.Conflict) { await ReloadSelectedAsync(); } finally { _claiming = false; } }
-    private async Task ReloadSelectedAsync() { var id = _selectedCommission!.CommissionId; _hub = await HubClient.LoadAsync(_hub!.Slug); _selectedCommission = _hub!.Assignments!.Single(assignment => assignment.CommissionId == id); }
-    private static string AssignmentState(CompanyHubCommission assignment) => assignment.Outputs.All(output => output.AcceptedQuantity >= output.Quantity) ? $"Delivered · settlement {SettlementLabel(assignment.SettlementState)}" : assignment.Outputs.All(output => output.ReadyQuantity >= output.Quantity) ? "Ready for delivery" : assignment.Outputs.Any(output => output.CompletedQuantity > 0) ? "In progress" : CommissionStateLabel(assignment.State);
-    private static string CommissionStateLabel(string state) => EnumLabel<TradeOrderStatus>(state);
+
+    private async Task ReloadHubAsync(string slugOrGuid)
+    {
+        _hub = await HubClient.LoadAsync(slugOrGuid);
+        if (_hub != null)
+        {
+            _draft = ThemeDraft.From(_hub.Theme);
+        }
+    }
+
+    private void BeginCustomize() => _editingTheme = true;
+    private void DiscardTheme() { _draft = ThemeDraft.From(_hub!.Theme); _editingTheme = false; }
+    private void ToggleUpdateComposer() => _postingUpdate = !_postingUpdate;
+    private void OpenDetails() => _detailsOpen = true;
+    private void CloseDetails() => _detailsOpen = false;
+    private void SelectCommission(CompanyHubCommission commission) { _selectedCommission = commission; _confirmingClaim = false; }
+    private void CloseCommission() { _selectedCommission = null; _confirmingClaim = false; }
+
+    private async Task PublishThemeAsync()
+    {
+        _saving = true;
+        try
+        {
+            await HubClient.UpdateThemeAsync(
+                _hub!.CompanyId,
+                _hub.ProfileRevision,
+                _draft.ToProjection(),
+                _draft.ShowOpenCommissionCount);
+            await ReloadHubAsync(_hub.CompanyId);
+            _editingTheme = false;
+            Snackbar.Add("Company hub published.", Severity.Success);
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            await HandleHubFailureAsync(exception);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task PublishUpdateAsync()
+    {
+        _saving = true;
+        try
+        {
+            await HubClient.PostUpdateAsync(
+                _hub!.CompanyId,
+                _hub.ProfileRevision,
+                _newUpdateTitle,
+                _newUpdateBody,
+                _newUpdatePinned);
+            await ReloadHubAsync(_hub.CompanyId);
+            _newUpdateTitle = string.Empty;
+            _newUpdateBody = string.Empty;
+            _newUpdatePinned = false;
+            _postingUpdate = false;
+            Snackbar.Add("Company update published.", Severity.Success);
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            await HandleHubFailureAsync(exception);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task SignInAsync()
+    {
+        var uri = await DiscordIdentityClient.StartSignInAsync(
+            ProfileHostClient.DefaultHostUrl,
+            $"/companies/{Uri.EscapeDataString(Slug)}");
+        Navigation.NavigateTo(uri.AbsoluteUri, true);
+    }
+
+    private async Task RequestMembershipAsync()
+    {
+        _saving = true;
+        try
+        {
+            await HubClient.RequestMembershipAsync(_hub!.CompanyId, _membershipNote);
+            await ReloadHubAsync(_hub.CompanyId);
+            Snackbar.Add("Membership request sent.", Severity.Success);
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            await ReloadHubAsync(_hub!.CompanyId);
+            Snackbar.Add(exception.Message, Severity.Warning);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ClaimAsync()
+    {
+        var commissionId = _selectedCommission!.CommissionId;
+        _saving = true;
+        try
+        {
+            await HubClient.ClaimAsync(_hub!.CompanyId, commissionId);
+            await ReloadHubAsync(_hub.CompanyId);
+            _selectedCommission = _hub.Assignments?.FirstOrDefault(item => item.CommissionId == commissionId);
+            _confirmingClaim = false;
+            Snackbar.Add("Commission claimed.", Severity.Success);
+        }
+        catch (HttpRequestException exception)
+        {
+            await ReloadHubAsync(_hub!.CompanyId);
+            _selectedCommission = null;
+            _confirmingClaim = false;
+            Snackbar.Add(exception.StatusCode == HttpStatusCode.Conflict ? "Another crafter claimed this commission first." : "The commission could not be claimed.", Severity.Warning);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ReportProgressAsync() => await RunParticipantActionAsync(
+        HubClient.ReportProgressAsync,
+        "Progress reported.");
+
+    private async Task DeclareReadinessAsync() => await RunParticipantActionAsync(
+        HubClient.DeclareReadinessAsync,
+        "Delivery readiness declared.");
+
+    private async Task RunParticipantActionAsync(
+        Func<CompanyHubCommission, CancellationToken, Task> action,
+        string successMessage)
+    {
+        var commissionId = _selectedCommission!.CommissionId;
+        _saving = true;
+        try
+        {
+            await action(_selectedCommission, CancellationToken.None);
+            await ReloadSelectedAsync(commissionId);
+            Snackbar.Add(successMessage, Severity.Success);
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            await ReloadSelectedAsync(commissionId);
+            Snackbar.Add(exception.Message, Severity.Warning);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ReloadSelectedAsync(string commissionId)
+    {
+        await ReloadHubAsync(_hub!.CompanyId);
+        _selectedCommission = _hub!.Assignments?.FirstOrDefault(item => item.CommissionId == commissionId)
+            ?? _hub.OpenCommissions?.FirstOrDefault(item => item.CommissionId == commissionId);
+    }
+
+    private async Task HandleHubFailureAsync(CompanyHubRequestException exception)
+    {
+        await ReloadHubAsync(_hub!.CompanyId);
+        Snackbar.Add(
+            exception.StatusCode == HttpStatusCode.Conflict
+                ? "The company hub changed elsewhere. Its latest version has been loaded."
+                : exception.Message,
+            Severity.Warning);
+    }
+
+    private bool IsAssignment(CompanyHubCommission commission) =>
+        (_hub?.Assignments ?? []).Any(item => item.CommissionId == commission.CommissionId);
+
+    private void ApplyDeepLink()
+    {
+        var signature = $"{Slug}|{CommissionId}|{ActivityId}";
+        if (_appliedDeepLink == signature)
+        {
+            return;
+        }
+
+        _appliedDeepLink = signature;
+        if (_hub?.Kind != "hub" || !Guid.TryParse(CommissionId, out var commissionId))
+        {
+            return;
+        }
+
+        _selectedCommission = (_hub.Assignments ?? [])
+            .Concat(_hub.OpenCommissions ?? [])
+            .FirstOrDefault(item => Guid.TryParse(item.CommissionId, out var candidateId) && candidateId == commissionId);
+        if (_selectedCommission != null)
+        {
+            _scrollToLinkedCommission = true;
+        }
+        else
+        {
+            Snackbar.Add("That linked commission is no longer available here.", Severity.Info);
+        }
+    }
+
+    private static string AssignmentState(CompanyHubCommission assignment) =>
+        assignment.Outputs.All(output => output.AcceptedQuantity >= output.Quantity)
+            ? $"Delivered · settlement {SettlementLabel(assignment.SettlementState)}"
+            : assignment.Outputs.All(output => output.ReadyQuantity >= output.Quantity)
+                ? assignment.CanDeclareReadiness ? "Ready to declare" : "Ready for delivery"
+                : assignment.Outputs.Any(output => output.CompletedQuantity > 0)
+                    ? "In progress"
+                    : assignment.CanWork ? "Ready to begin" : "Waiting to begin";
+
+    private static string AssignmentSupport(CompanyHubCommission assignment) =>
+        assignment.WorkBlockedReason ??
+        (assignment.CanWork ? "Pre-work requirements confirmed" : "Waiting for the company");
+
+    private static string CrafterNote(CompanyHubCommission commission) =>
+        string.IsNullOrWhiteSpace(commission.DeliveryInstructions)
+            ? "Open the commission to review the complete terms."
+            : commission.DeliveryInstructions;
+
+    private static string OutputSummary(CompanyHubCommission commission) =>
+        string.Join(", ", commission.Outputs.Select(output => $"{output.Name} ×{output.Quantity}"));
+
     private static string PaymentScheduleLabel(string schedule) => EnumLabel<CompanyCommissionPaymentSchedule>(schedule);
-    private static string ActivityLabel(string kind) => EnumLabel<CompanyCommissionActivityKind>(kind);
     private static string SettlementLabel(string state) => EnumLabel<CompanyCommissionSettlementState>(state).ToLowerInvariant();
     private static string EnumLabel<TEnum>(string value) where TEnum : struct, Enum =>
         Enum.TryParse<TEnum>(value, true, out var parsed)
@@ -210,9 +550,26 @@ else
             : SentenceCase(value);
     private static string SentenceCase(string value) => string.IsNullOrEmpty(value) ? value : char.ToUpperInvariant(value[0]) + value[1..];
     private static string TokenClass(string selected, string token) => selected == token ? "selected" : string.Empty;
-    private static string Payment(CompanyHubPayment payment) => $"{PaymentScheduleLabel(payment.Schedule)} · {payment.Total:N0} gil";
+    private static string FormatTimestamp(DateTime timestamp) => timestamp.ToLocalTime().Date == DateTime.Now.Date ? $"Today, {timestamp.ToLocalTime():t}" : timestamp.ToLocalTime().ToString("g");
+    private static string MemberInitial(string displayName) => string.IsNullOrWhiteSpace(displayName) ? "?" : displayName.Trim()[0].ToString().ToUpperInvariant();
     private static string AccentColor(string token) => token switch { "crimson" => "#b34a58", "gold" => "#b88a35", "emerald" => "#3f9673", "violet" => "#8065b3", "amber" => "#c27d32", "teal" => "#398f92", "rose" => "#b75f82", "slate" => "#718096", "ivory" => "#d8cfb6", _ => "#4c78b5" };
-    private static string EmblemGlyph(string token) => token switch { "prism" => "◆", "crest" => "◈", "workshop" => "⚒", "moon" => "☾", "compass" => "✥", _ => "✦" };
-    private static string RenderMarkdown(string source) => Regex.Replace(source, @"\[(?<text>[^\]]+)\]\((?<url>https://[^\s)]+)\)|\*\*(?<bold>[^*]+)\*\*|\*(?<italic>[^*]+)\*", match => match.Groups["url"].Success ? $"<a href=\"{match.Groups["url"].Value}\" target=\"_blank\" rel=\"noopener\">{match.Groups["text"].Value}</a>" : match.Groups["bold"].Success ? $"<strong>{match.Groups["bold"].Value}</strong>" : $"<em>{match.Groups["italic"].Value}</em>");
-    private sealed class ThemeDraft { public string Accent { get; set; } = "deep-blue"; public string BannerStyle { get; set; } = "gradient"; public string Emblem { get; set; } = "star"; public string? Tagline { get; set; } public string? About { get; set; } public bool ShowOpenCommissionCount { get; set; } public static ThemeDraft From(CompanyHubTheme theme, bool showCount) => new() { Accent = theme.Accent, BannerStyle = theme.BannerStyle, Emblem = theme.Emblem, Tagline = theme.Tagline, About = theme.About, ShowOpenCommissionCount = showCount }; }
+    private static string EmblemIcon(string token) => token switch { "prism" => Icons.Material.Filled.Diamond, "crest" => Icons.Material.Filled.Shield, "workshop" => Icons.Material.Filled.Construction, "moon" => Icons.Material.Filled.DarkMode, "compass" => Icons.Material.Filled.Explore, _ => Icons.Material.Filled.AutoAwesome };
+    private static string RenderMarkdown(string source)
+    {
+        var rendered = Regex.Replace(source, @"\[(?<text>[^\]]+)\]\((?<url>https://[^\s)]+)\)|\*\*(?<bold>[^*]+)\*\*|\*(?<italic>[^*]+)\*", match => match.Groups["url"].Success ? $"<a href=\"{match.Groups["url"].Value}\" target=\"_blank\" rel=\"noopener\">{match.Groups["text"].Value}</a>" : match.Groups["bold"].Success ? $"<strong>{match.Groups["bold"].Value}</strong>" : $"<em>{match.Groups["italic"].Value}</em>");
+        return Regex.Replace(rendered, "\\r?\\n", "<br />");
+    }
+
+    private sealed class ThemeDraft
+    {
+        public string Accent { get; set; } = "deep-blue";
+        public string BannerStyle { get; set; } = "gradient";
+        public string Emblem { get; set; } = "star";
+        public string? Tagline { get; set; }
+        public string? About { get; set; }
+        public bool ShowOpenCommissionCount { get; set; }
+
+        public CompanyHubTheme ToProjection() => new(Accent, BannerStyle, Emblem, Tagline?.Trim(), About?.Trim(), ShowOpenCommissionCount);
+        public static ThemeDraft From(CompanyHubTheme theme) => new() { Accent = theme.Accent, BannerStyle = theme.BannerStyle, Emblem = theme.Emblem, Tagline = theme.Tagline, About = theme.About, ShowOpenCommissionCount = theme.ShowOpenCommissionCount };
+    }
 }

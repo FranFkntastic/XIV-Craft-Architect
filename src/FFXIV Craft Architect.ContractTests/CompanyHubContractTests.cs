@@ -61,6 +61,9 @@ public sealed class CompanyHubContractTests
         Assert.DoesNotContain("readyQuantity", json, StringComparison.Ordinal);
         Assert.DoesNotContain("acceptedQuantity", json, StringComparison.Ordinal);
         Assert.DoesNotContain("settlementState", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("profileRevision", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("updates", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("canReportProgress", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -95,11 +98,23 @@ public sealed class CompanyHubContractTests
         var member = await fixture.CreateAccountAsync("Member");
         var pending = await fixture.CreateAccountAsync("Pending");
         var company = CreateCompany();
+        company.Updates =
+        [
+            new TradeCompanyUpdate
+            {
+                Title = "Workshop schedule",
+                Body = "Please finish starred work **first**.",
+                AuthorDisplayName = "Owner",
+                PublishedAtUtc = DateTime.UtcNow,
+                IsPinned = true
+            }
+        ];
         using var ownerClient = fixture.CreateClient(owner.Key);
         using var memberClient = fixture.CreateClient(member.Key);
         using var pendingClient = fixture.CreateClient(pending.Key);
         await PutCompanyAsync(ownerClient, company);
         await PutOrderAsync(ownerClient, CreateOrder(company.Id));
+        await PutOrderAsync(ownerClient, CreateAssignedOrder(company.Id, member.ProfileId));
         await RequestAsync(memberClient, company.Id);
         await RequestAsync(pendingClient, company.Id);
         using var approved = await ownerClient.PostAsync(
@@ -113,6 +128,10 @@ public sealed class CompanyHubContractTests
         using var ownerJson = JsonDocument.Parse(await ownerResponse.Content.ReadAsStringAsync());
 
         Assert.Equal("hub", memberJson.RootElement.GetProperty("kind").GetString());
+        Assert.Equal(1, memberJson.RootElement.GetProperty("profileRevision").GetInt64());
+        var update = Assert.Single(memberJson.RootElement.GetProperty("updates").EnumerateArray());
+        Assert.Equal("Workshop schedule", update.GetProperty("title").GetString());
+        Assert.True(update.GetProperty("isPinned").GetBoolean());
         var commission = Assert.Single(memberJson.RootElement.GetProperty("openCommissions").EnumerateArray());
         Assert.Equal(1, commission.GetProperty("termsVersion").GetInt32());
         Assert.Equal("Deliver to the workshop.", commission.GetProperty("deliveryInstructions").GetString());
@@ -123,8 +142,94 @@ public sealed class CompanyHubContractTests
         Assert.Equal(80, output.GetProperty("completedQuantity").GetInt32());
         Assert.Equal(60, output.GetProperty("readyQuantity").GetInt32());
         Assert.Equal(40, output.GetProperty("acceptedQuantity").GetInt32());
+        Assert.False(commission.GetProperty("canWork").GetBoolean());
+        Assert.False(commission.GetProperty("canReportProgress").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, commission.GetProperty("workBlockedReason").ValueKind);
+        var assignment = Assert.Single(memberJson.RootElement.GetProperty("assignments").EnumerateArray());
+        Assert.True(assignment.GetProperty("canWork").GetBoolean());
+        Assert.True(assignment.GetProperty("canReportProgress").GetBoolean());
+        Assert.False(assignment.GetProperty("canDeclareReadiness").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, assignment.GetProperty("workBlockedReason").ValueKind);
         Assert.Equal("hub", ownerJson.RootElement.GetProperty("kind").GetString());
         Assert.Equal(1, ownerJson.RootElement.GetProperty("pendingMembershipRequestCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task OwnerCanPublishHubWhileMemberCannotMutateIt()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var member = await fixture.CreateAccountAsync("Member");
+        var company = CreateCompany();
+        company.Updates =
+        [
+            new TradeCompanyUpdate
+            {
+                Title = "Old pin",
+                Body = "Old announcement.",
+                AuthorDisplayName = "Owner",
+                PublishedAtUtc = DateTime.UtcNow.AddDays(-1),
+                IsPinned = true
+            }
+        ];
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var memberClient = fixture.CreateClient(member.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(memberClient, company.Id);
+        using var approved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{member.ProfileId:D}/approve",
+            null);
+        approved.EnsureSuccessStatusCode();
+
+        using var memberAttempt = await memberClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/updates",
+            new { ExpectedProfileRevision = 1, Title = "Nope", Body = "Nope", IsPinned = false });
+        using var published = await ownerClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/updates",
+            new
+            {
+                ExpectedProfileRevision = 1,
+                Title = "  Priority work  ",
+                Body = "[unsafe](javascript:alert) **Bring materials.**",
+                IsPinned = true
+            });
+        using var stale = await ownerClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/updates",
+            new { ExpectedProfileRevision = 1, Title = "Stale", Body = "Stale", IsPinned = false });
+        using var themed = await ownerClient.PutAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/theme",
+            new
+            {
+                ExpectedProfileRevision = 2,
+                Accent = "violet",
+                BannerStyle = "pattern",
+                Emblem = "workshop",
+                Tagline = "  Built together  ",
+                About = "A **member** company.",
+                ShowOpenCommissionCount = true
+            });
+        using var hub = await memberClient.GetAsync($"/trade/v1/companies/{company.Id:D}/hub");
+        var json = await hub.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(json);
+        var updates = document.RootElement.GetProperty("updates").EnumerateArray().ToArray();
+
+        Assert.Equal(HttpStatusCode.Forbidden, memberAttempt.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, published.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, themed.StatusCode);
+        Assert.Equal(3, document.RootElement.GetProperty("profileRevision").GetInt64());
+        var theme = document.RootElement.GetProperty("theme");
+        Assert.Equal("violet", theme.GetProperty("accent").GetString());
+        Assert.Equal("pattern", theme.GetProperty("bannerStyle").GetString());
+        Assert.Equal("workshop", theme.GetProperty("emblem").GetString());
+        Assert.Equal("Built together", theme.GetProperty("tagline").GetString());
+        Assert.True(theme.GetProperty("showOpenCommissionCount").GetBoolean());
+        Assert.Equal(2, updates.Length);
+        Assert.Single(updates, item => item.GetProperty("isPinned").GetBoolean());
+        Assert.Equal("Priority work", updates[0].GetProperty("title").GetString());
+        Assert.Equal("Owner", updates[0].GetProperty("authorDisplayName").GetString());
+        Assert.Contains("**Bring materials.**", updates[0].GetProperty("body").GetString());
+        Assert.DoesNotContain("javascript:", json, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -342,6 +447,23 @@ public sealed class CompanyHubContractTests
                 }]
             }
         };
+    }
+
+    private static TradeOrder CreateAssignedOrder(Guid companyId, Guid crafterId)
+    {
+        var order = CreateOrder(companyId);
+        order.Title = "Assigned member commission";
+        order.CompanyCommission = order.CompanyCommission! with
+        {
+            ActiveClaim = new CompanyCommissionClaim(
+                Guid.NewGuid(),
+                1,
+                DateTime.UtcNow,
+                crafterId,
+                null),
+            ParticipantAcknowledgedTermsVersion = 1
+        };
+        return order;
     }
 
     private static async Task PutCompanyAsync(

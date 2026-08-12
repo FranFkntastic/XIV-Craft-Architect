@@ -77,6 +77,8 @@ public sealed class TradeCompanyProfilePackageService
             SchemaVersion = profile.SchemaVersion,
             Name = profile.Name,
             Description = profile.Description,
+            Landing = profile.Landing,
+            Updates = profile.Updates.ToArray(),
             CommissionContact = profile.CommissionContact,
             RemoteId = profile.RemoteId,
             SyncState = profile.SyncState,
