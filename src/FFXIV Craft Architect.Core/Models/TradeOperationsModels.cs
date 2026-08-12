@@ -31,13 +31,14 @@ public sealed class TradeCompanyDiscordInstallationBinding
 
 public sealed class TradeCompanyProfile
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public Guid Id { get; set; } = Guid.NewGuid();
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
     public CompanyLandingTheme? Landing { get; set; }
+    public IReadOnlyList<TradeCompanyUpdate> Updates { get; set; } = [];
     public string? CommissionContact { get; set; }
     public TradeCompanyDiscordInstallationBinding? DiscordInstallation { get; set; }
     public string? RemoteId { get; set; }
@@ -59,6 +60,17 @@ public sealed class TradeCompanyProfile
             PaymentPolicy = TradePaymentPolicy.LegacyDefault
         };
     }
+}
+
+public sealed record TradeCompanyUpdate
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+    public string Title { get; init; } = string.Empty;
+    public string Body { get; init; } = string.Empty;
+    public string AuthorDisplayName { get; init; } = string.Empty;
+    public DateTime PublishedAtUtc { get; init; } = DateTime.UtcNow;
+    public DateTime? EditedAtUtc { get; init; }
+    public bool IsPinned { get; init; }
 }
 
 public enum CompanyLandingAccent
