@@ -387,7 +387,8 @@ public sealed class HostedCompanyCommissionService(
             capability.Kind switch
             {
                 CompanyCommissionCapabilityKind.Claim =>
-                    $"claim-revision:{capability.CapabilityRevision}",
+                    $"claim-capability:{capability.CapabilityId:D}:" +
+                    capability.CapabilityRevision,
                 CompanyCommissionCapabilityKind.Recovery =>
                     $"recovery-grant:{capability.GrantId:D}",
                 _ => $"participant-grant:{capability.GrantId:D}"

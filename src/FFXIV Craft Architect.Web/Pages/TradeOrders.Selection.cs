@@ -373,6 +373,11 @@ public partial class TradeOrders
         if (!isSameOrder)
         {
             _activeOpsTab = 0;
+            if (_pendingNotificationNavigation?.OrderId != order.Id)
+            {
+                _focusedTimelineEventId = null;
+                _pendingTimelineFocusEventId = null;
+            }
         }
         _detailTitle = order.Title;
         _detailCrafterId = order.AssignedCrafterId;
@@ -469,48 +474,73 @@ public partial class TradeOrders
 
     private bool IsSelectedOrderArchived => _selectedOrder != null && TradeOrderStatusWorkflow.IsArchived(_selectedOrder.Status);
 
-    private Guid? TryGetOrderIdFromNavigation()
+    private async Task SelectPendingNavigationOrderAsync()
     {
-        var uri = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
-        var query = uri.Query;
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            return null;
-        }
-
-        foreach (var pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var parts = pair.Split('=', 2);
-            if (parts.Length != 2 ||
-                !string.Equals(Uri.UnescapeDataString(parts[0]), "orderId", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            return Guid.TryParse(Uri.UnescapeDataString(parts[1]), out var orderId)
-                ? orderId
-                : null;
-        }
-
-        return null;
-    }
-
-    private void SelectPendingNavigationOrder()
-    {
-        if (!_pendingNavigationOrderId.HasValue)
+        if (_pendingNotificationNavigation is not { } hint)
         {
             return;
         }
 
         if (_showNewOrderPanel)
         {
-            _pendingNavigationOrderId = null;
+            _pendingNotificationNavigation = null;
+            return;
+        }
+        if (hint.ActivityId.HasValue && !OrderRestoreState.ShowsCompleteProjection)
+        {
+            return;
+        }
+        _pendingNotificationNavigation = null;
+
+        var visibleOrders = VisibleOrders
+            .Concat(DeviceOnlyOrders)
+            .GroupBy(order => order.Id)
+            .Select(group => group.First())
+            .ToArray();
+        var visibleCanonicalOrders = visibleOrders
+            .Where(order => order.CompanyCommission != null)
+            .ToArray();
+        TradeOrderNotificationNavigationResolution resolution;
+        if (hint.ActivityId.HasValue &&
+            hint.IsValid &&
+            hint.OrderId is { } notificationOrderId)
+        {
+            var candidate = visibleCanonicalOrders.FirstOrDefault(
+                order => order.Id == notificationOrderId);
+            var fresh = candidate == null
+                ? null
+                : await CommissionOperations.ResolveNotificationNavigationAsync(candidate);
+            resolution = fresh == null
+                ? new(TradeOrderNotificationNavigationStatus.Unavailable)
+                : TradeOrderNotificationNavigation.Resolve(hint, [fresh.Order]);
+        }
+        else
+        {
+            resolution = TradeOrderNotificationNavigation.Resolve(
+                hint,
+                visibleOrders);
+        }
+        if (resolution.Status != TradeOrderNotificationNavigationStatus.Resolved ||
+            resolution.Order == null)
+        {
+            _selectedOrder = null;
+            _focusedTimelineEventId = null;
+            _pendingTimelineFocusEventId = null;
+            AppState.SelectTradeOrder(null);
+            ClearSelectedOrderNavigation();
+            Snackbar.Add("Linked commission activity is unavailable.", Severity.Info);
             return;
         }
 
-        var orderId = _pendingNavigationOrderId.Value;
-        _pendingNavigationOrderId = null;
-        SelectOrderAfterReload(orderId, "Linked Trade order could not be loaded.");
+        SelectOrder(resolution.Order);
+        ExpandGroupForOrder(resolution.Order);
+        if (resolution.ActivityEventId is { } activityEventId)
+        {
+            _activeOpsTab = TimelineTabIndex;
+            _focusedTimelineEventId = activityEventId;
+            _pendingTimelineFocusEventId = activityEventId;
+            PersistSelectedOrderInNavigation(resolution.Order.Id);
+        }
     }
 
     private bool IsAttentionGroupCollapsed(string key)
@@ -661,10 +691,13 @@ public partial class TradeOrders
     private void PersistSelectedOrderInNavigation(Guid orderId)
     {
         var current = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
-        var target = new UriBuilder(current)
-        {
-            Query = $"orderId={Uri.EscapeDataString(orderId.ToString("D"))}"
-        }.Uri;
+        var activityId = _focusedTimelineEventId.HasValue &&
+            _selectedOrder?.Id == orderId
+                ? _focusedTimelineEventId
+                : null;
+        var target = new Uri(
+            current,
+            TradeOrderNotificationNavigation.BuildPath(orderId, activityId));
         if (!string.Equals(current.PathAndQuery, target.PathAndQuery, StringComparison.Ordinal))
         {
             NavigationManager.NavigateTo(target.PathAndQuery, replace: true);
@@ -680,4 +713,137 @@ public partial class TradeOrders
         }
     }
 
+}
+
+public sealed record TradeOrderNotificationNavigationHint(
+    bool HasHint,
+    bool IsValid,
+    Guid? OrderId,
+    Guid? ActivityId)
+{
+    public static TradeOrderNotificationNavigationHint ForOrder(Guid orderId) =>
+        new(true, orderId != Guid.Empty, orderId, null);
+}
+
+public enum TradeOrderNotificationNavigationStatus
+{
+    NoHint,
+    Unavailable,
+    Resolved
+}
+
+public sealed record TradeOrderNotificationNavigationResolution(
+    TradeOrderNotificationNavigationStatus Status,
+    TradeOrder? Order = null,
+    Guid? ActivityEventId = null);
+
+public static class TradeOrderNotificationNavigation
+{
+    public static TradeOrderNotificationNavigationHint Parse(Uri uri)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        string? orderValue = null;
+        string? activityValue = null;
+        var hasHint = false;
+        var invalid = false;
+        foreach (var pair in uri.Query
+                     .TrimStart('?')
+                     .Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split('=', 2);
+            if (parts.Length != 2)
+            {
+                continue;
+            }
+
+            string name;
+            string value;
+            try
+            {
+                name = Uri.UnescapeDataString(parts[0]);
+                value = Uri.UnescapeDataString(parts[1]);
+            }
+            catch (UriFormatException)
+            {
+                invalid = true;
+                continue;
+            }
+
+            if (string.Equals(name, "orderId", StringComparison.OrdinalIgnoreCase))
+            {
+                hasHint = true;
+                invalid |= orderValue != null;
+                orderValue = value;
+            }
+            else if (string.Equals(name, "activityId", StringComparison.OrdinalIgnoreCase))
+            {
+                hasHint = true;
+                invalid |= activityValue != null;
+                activityValue = value;
+            }
+        }
+
+        if (!hasHint)
+        {
+            return new(false, true, null, null);
+        }
+
+        var hasOrder = Guid.TryParse(orderValue, out var orderId) &&
+            orderId != Guid.Empty;
+        var activityId = Guid.Empty;
+        var hasActivity = activityValue == null ||
+            Guid.TryParse(activityValue, out activityId) &&
+            activityId != Guid.Empty;
+        return new(
+            true,
+            !invalid && hasOrder && hasActivity,
+            hasOrder ? orderId : null,
+            activityValue != null && hasActivity ? activityId : null);
+    }
+
+    public static TradeOrderNotificationNavigationResolution Resolve(
+        TradeOrderNotificationNavigationHint hint,
+        IEnumerable<TradeOrder> authorizedOrders)
+    {
+        ArgumentNullException.ThrowIfNull(hint);
+        ArgumentNullException.ThrowIfNull(authorizedOrders);
+        if (!hint.HasHint)
+        {
+            return new(TradeOrderNotificationNavigationStatus.NoHint);
+        }
+        if (!hint.IsValid || hint.OrderId is not { } orderId)
+        {
+            return new(TradeOrderNotificationNavigationStatus.Unavailable);
+        }
+
+        var order = authorizedOrders.FirstOrDefault(item => item.Id == orderId);
+        if (order == null)
+        {
+            return new(TradeOrderNotificationNavigationStatus.Unavailable);
+        }
+
+        if (hint.ActivityId is not { } activityId)
+        {
+            return new(TradeOrderNotificationNavigationStatus.Resolved, order);
+        }
+
+        return order.CompanyCommission?.Activity.Any(item => item.EventId == activityId) == true
+            ? new(
+                TradeOrderNotificationNavigationStatus.Resolved,
+                order,
+                activityId)
+            : new(TradeOrderNotificationNavigationStatus.Unavailable);
+    }
+
+    public static string BuildPath(Guid orderId, Guid? activityId = null)
+    {
+        if (orderId == Guid.Empty || activityId == Guid.Empty)
+        {
+            throw new ArgumentException("Navigation identities cannot be empty.");
+        }
+
+        return activityId.HasValue
+            ? $"/trade/orders?orderId={orderId:D}&activityId={activityId.Value:D}"
+            : $"/trade/orders?orderId={orderId:D}";
+    }
 }

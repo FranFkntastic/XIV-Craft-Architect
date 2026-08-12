@@ -135,11 +135,14 @@ public static class CompanyCommissionDiscordMessage
             {
                 new
                 {
-                    title = $"{AttentionLabel(attentionClass)} - " +
-                        DiscordProjectionSanitizer.Text(notification.Commission.Reference, 220),
+                    title = DiscordProjectionSanitizer.Text(
+                        $"{AttentionLabel(attentionClass)} - " +
+                        $"{notification.Commission.Title} [{notification.Commission.Reference}]",
+                        256),
                     description = DiscordProjectionSanitizer.Text(notification.Summary, 4096),
                     color = AttentionColor(attentionClass),
-                    fields = string.IsNullOrWhiteSpace(notification.ActorDisplayName)
+                    fields = destinationKind == DiscordNotificationDestinationKind.MemberDirectMessage ||
+                        string.IsNullOrWhiteSpace(notification.ActorDisplayName)
                         ? Array.Empty<object>()
                         :
                         [
@@ -163,7 +166,9 @@ public static class CompanyCommissionDiscordMessage
                     type = 1,
                     components = new[]
                     {
-                        LinkButton("Open activity", notification.ActivityUrl.AbsoluteUri)
+                        LinkButton(
+                            ResolveNotificationActionLabel(notification, destinationKind),
+                            notification.ActivityUrl.AbsoluteUri)
                     }
                 }
             },
@@ -181,6 +186,18 @@ public static class CompanyCommissionDiscordMessage
 
         return payload;
     }
+
+    private static string ResolveNotificationActionLabel(
+        CommittedCompanyCommissionNotification notification,
+        DiscordNotificationDestinationKind destinationKind) =>
+        destinationKind == DiscordNotificationDestinationKind.MemberDirectMessage
+            ? notification.EventKind switch
+            {
+                CompanyCommissionActivityKind.ProgressReported => "View progress",
+                CompanyCommissionActivityKind.CommentAdded => "View comment",
+                _ => "View commission"
+            }
+            : DiscordProjectionSanitizer.Text(notification.ActionLabel, 80);
 
     private static object LinkButton(string label, string url) => new
     {

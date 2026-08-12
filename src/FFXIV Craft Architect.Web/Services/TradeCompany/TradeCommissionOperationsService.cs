@@ -124,6 +124,41 @@ public sealed class TradeCommissionOperationsService(
         }
     }
 
+    public async Task<CompanyCommissionOwnerProjection?> ResolveNotificationNavigationAsync(
+        TradeOrder order,
+        CancellationToken cancellationToken = default)
+    {
+        if (order.CompanyCommission == null ||
+            !CanPerformExternalAction(order, out _))
+        {
+            return null;
+        }
+
+        try
+        {
+            var authority = await CaptureOrderAuthorityAsync();
+            var projection = await client.LoadOwnerProjectionAsync(
+                authority.Connection,
+                order.CompanyCommission.CompanyId.Value,
+                order.CompanyCommission.CommissionId,
+                cancellationToken);
+            if (!await IsCurrentAuthorityAsync(authority))
+            {
+                return null;
+            }
+
+            ValidateProjection(order, projection);
+            await ApplyProjectionAsync(authority, projection);
+            _errors.Remove(order.Id);
+            return projection;
+        }
+        catch (Exception exception)
+        {
+            _errors[order.Id] = exception.Message;
+            return null;
+        }
+    }
+
     public async Task<TradeCommissionOperatorResult> ConfirmIdentityAsync(
         CompanyCommissionOwnerProjection current,
         TradeCrafterProfile crafter,

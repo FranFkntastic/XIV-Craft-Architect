@@ -580,6 +580,34 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
         return result;
     }
 
+    internal async Task<string?> LoadCommittedClaimContactDiscordUserIdAsync(
+        CompanyId companyId,
+        Guid commissionId,
+        Guid claimId,
+        CancellationToken cancellationToken = default)
+    {
+        if (commissionId == Guid.Empty || claimId == Guid.Empty)
+        {
+            return null;
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT discord_user_id
+            FROM discord_claim_contacts
+            WHERE company_id = $companyId
+              AND commission_id = $commissionId
+              AND claim_id = $claimId
+            ORDER BY committed_at_utc DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+        command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
+        return await command.ExecuteScalarAsync(cancellationToken) as string;
+    }
+
     internal async Task<DiscordNotificationEnqueueResult> EnqueueMemberAsync(
         CompanyId companyId,
         Guid commissionId,

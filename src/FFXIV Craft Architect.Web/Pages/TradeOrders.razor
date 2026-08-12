@@ -1811,7 +1811,10 @@
                                                  </summary>
                                                  @foreach (var routineItem in group.Items)
                                                  {
-                                                     <article class="@GetTimelineItemClass(routineItem)" @key="routineItem.Id">
+                                                     <article id="@GetTimelineItemDomId(routineItem.Id)"
+                                                              class="@GetTimelineItemClass(routineItem)"
+                                                              tabindex="-1"
+                                                              @key="routineItem.Id">
                                                          <time>@routineItem.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt")</time>
                                                          <span class="trade-orders-timeline-dot"></span>
                                                          <div>
@@ -1829,7 +1832,10 @@
                                          else
                                          {
                                              var item = group.Items[0];
-                                             <article class="@GetTimelineItemClass(item)" @key="item.Id">
+                                             <article id="@GetTimelineItemDomId(item.Id)"
+                                                      class="@GetTimelineItemClass(item)"
+                                                      tabindex="-1"
+                                                      @key="item.Id">
                                                  <time>@item.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt")</time>
                                                  <span class="trade-orders-timeline-dot"></span>
                                                  <div>
