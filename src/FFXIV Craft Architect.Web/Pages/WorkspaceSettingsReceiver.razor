@@ -26,6 +26,10 @@
         };
         var dialog = DialogService.Show<SettingsDialog>("Settings", parameters, options);
         await dialog.Result;
-        Navigation.NavigateTo("/");
+        var currentRoute = Navigation.ToBaseRelativePath(Navigation.Uri).TrimEnd('/');
+        if (string.Equals(currentRoute, "account/workspaces", StringComparison.OrdinalIgnoreCase))
+        {
+            Navigation.NavigateTo("/");
+        }
     }
 }

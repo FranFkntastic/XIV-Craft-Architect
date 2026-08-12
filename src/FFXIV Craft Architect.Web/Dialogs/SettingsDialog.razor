@@ -65,7 +65,7 @@
             }
             else if (_activePanel == SettingsSection.Workspace)
             {
-                <WorkspaceSettingsPanel InitialCompanyId="@(_companyProfile?.Id.ToString("D"))"
+                <WorkspaceSettingsPanel InitialCompanyId="@InitialWorkspaceCompanyId"
                                         OpenProfile="@(() => SelectTab(SettingsSection.Profile))"
                                         CompanyChanged="OnWorkspaceCompanyChangedAsync" />
             }
@@ -815,6 +815,7 @@
 @code {
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
     [Parameter] public SettingsSection InitialSection { get; set; } = SettingsSection.MarketAndRoutes;
+    [Parameter] public string? InitialWorkspaceCompanyId { get; set; }
 
     private static readonly IReadOnlyList<SettingsNavItem> AllSettingsSections =
     [

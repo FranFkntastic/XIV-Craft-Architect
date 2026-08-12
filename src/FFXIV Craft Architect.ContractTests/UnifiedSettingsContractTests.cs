@@ -39,6 +39,11 @@ public sealed class UnifiedSettingsContractTests
         Assert.Contains("SettingsSection.Workspace", hub, StringComparison.Ordinal);
         Assert.Contains("SettingsSection.MarketAndRoutes", market, StringComparison.Ordinal);
         Assert.Contains("SettingsSection.Integrations", procurement, StringComparison.Ordinal);
+
+        var workspaceReceiver = File.ReadAllText(Path.Combine(web, "Pages", "WorkspaceSettingsReceiver.razor"));
+        Assert.Contains("ToBaseRelativePath", workspaceReceiver, StringComparison.Ordinal);
+        Assert.Contains("account/workspaces", workspaceReceiver, StringComparison.Ordinal);
+        Assert.DoesNotContain("await dialog.Result;\n        Navigation.NavigateTo(\"/\");", workspaceReceiver, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -62,9 +67,20 @@ public sealed class UnifiedSettingsContractTests
         Assert.DoesNotContain(">linked account<", workspace, StringComparison.Ordinal);
         Assert.Contains("Send test", workspace, StringComparison.Ordinal);
         Assert.Contains("CompanyChanged.InvokeAsync", workspace, StringComparison.Ordinal);
+        Assert.Contains("LoadSelectedWorkspaceCompanyIdAsync", workspace, StringComparison.Ordinal);
+        Assert.Contains("SelectWorkspaceCompanyAsync", workspace, StringComparison.Ordinal);
         var settings = File.ReadAllText(Path.Combine(web, "Dialogs", "SettingsDialog.razor"));
         Assert.Contains("OnWorkspaceCompanyChangedAsync", settings, StringComparison.Ordinal);
         Assert.Contains("hub.Standing.Role is \"owner\" or \"operator\"", settings, StringComparison.Ordinal);
+        Assert.Contains("InitialCompanyId=\"@InitialWorkspaceCompanyId\"", settings, StringComparison.Ordinal);
+        Assert.DoesNotContain("InitialCompanyId=\"@(_companyProfile", settings, StringComparison.Ordinal);
+        var switcher = File.ReadAllText(Path.Combine(web, "Shared", "TradeCompanySwitcher.razor"));
+        Assert.Contains("LoadMembershipsAsync", switcher, StringComparison.Ordinal);
+        Assert.Contains("SelectWorkspaceCompanyAsync", switcher, StringComparison.Ordinal);
+        Assert.Contains("WorkspaceCompanyContext", switcher, StringComparison.Ordinal);
+        Assert.Contains("SettingsDialog.InitialWorkspaceCompanyId", switcher, StringComparison.Ordinal);
+        var companyHub = File.ReadAllText(Path.Combine(web, "Pages", "CompanyHub.razor"));
+        Assert.Contains("SettingsDialog.InitialWorkspaceCompanyId", companyHub, StringComparison.Ordinal);
     }
 
     [Fact]

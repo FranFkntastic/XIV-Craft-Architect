@@ -9,6 +9,7 @@ public sealed class TradeOperationsPersistenceService
     private const string DefaultCompanyProfileName = "FFXIV Trade Company";
     private const string PrototypeDefaultCommissionContact = "franfkntastic";
     private const string SelectedCompanyProfileIdKey = "trade.selected_company_profile_id";
+    private const string SelectedWorkspaceCompanyIdKey = "trade.selected_workspace_company_id";
 
     private readonly IndexedDbService _indexedDb;
     private readonly TradeCompanyProfilePackageService _profilePackageService;
@@ -124,6 +125,29 @@ public sealed class TradeOperationsPersistenceService
         }
 
         await SaveSelectedCompanyProfileIdAsync(companyProfileId);
+        await SelectWorkspaceCompanyAsync(companyProfileId);
+    }
+
+    public async Task<Guid?> LoadSelectedWorkspaceCompanyIdAsync()
+    {
+        var serializedId = await _indexedDb.LoadSettingAsync<string>(SelectedWorkspaceCompanyIdKey);
+        if (Guid.TryParse(serializedId, out var selectedWorkspaceCompanyId))
+        {
+            return selectedWorkspaceCompanyId;
+        }
+
+        return await LoadSelectedCompanyProfileIdAsync();
+    }
+
+    public async Task SelectWorkspaceCompanyAsync(Guid companyId)
+    {
+        if (!await _indexedDb.SaveSettingAsync(
+                SelectedWorkspaceCompanyIdKey,
+                companyId.ToString("D")))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not persist selected company workspace '{companyId:D}'.");
+        }
     }
 
     public async Task RequireCompanyProfileAsync(
