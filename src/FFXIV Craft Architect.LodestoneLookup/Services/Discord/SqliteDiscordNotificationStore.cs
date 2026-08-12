@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using FFXIV_Craft_Architect.Core.Models;
@@ -26,6 +27,14 @@ internal sealed record DiscordNotificationOutboxWorkItem(
     string? FallbackChannelId,
     bool IsFallback,
     int AttemptCount);
+
+public sealed record DiscordMemberNotificationTestDelivery(
+    Guid WorkItemId,
+    DiscordOutboxState State,
+    int AttemptCount,
+    string? MessageId,
+    string? Error,
+    DateTimeOffset UpdatedAtUtc);
 
 public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions options)
 {
@@ -92,6 +101,7 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                     last_error TEXT NULL,
                     failure_code TEXT NULL,
                     fallback_source_id TEXT NULL,
+                    is_member_test INTEGER NOT NULL DEFAULT 0,
                     created_at_utc TEXT NOT NULL,
                     updated_at_utc TEXT NOT NULL,
                     UNIQUE (
@@ -150,6 +160,12 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                 "discord_claim_contacts",
                 "claim_id",
                 "TEXT NULL",
+                cancellationToken);
+            await EnsureColumnAsync(
+                connection,
+                "discord_notification_outbox",
+                "is_member_test",
+                "INTEGER NOT NULL DEFAULT 0",
                 cancellationToken);
             _schemaReady = true;
         }
@@ -618,7 +634,8 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
         string payloadJson,
         IReadOnlyCollection<string> discordUserIds,
         DateTimeOffset now,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool isMemberTest = false)
     {
         if (discordUserIds.Count == 0 || string.IsNullOrWhiteSpace(payloadJson))
         {
@@ -653,12 +670,12 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                     allowed_mention_user_id, channel_id, payload_json,
                     fallback_payload_json, fallback_allowed_mention_user_id,
                     fallback_channel_id, state, attempt_count, next_attempt_at_utc,
-                    created_at_utc, updated_at_utc)
+                    is_member_test, created_at_utc, updated_at_utc)
                 VALUES ($workItemId, $companyId, $commissionId, $eventId,
                     $desiredProjectionRevision, $attentionClass, $routeRevision,
                     $destinationKind, $destinationKey, $commissionerUserId,
                     NULL, NULL, $payloadJson, NULL, NULL, NULL, $state, 0,
-                    $now, $now, $now);
+                    $now, $isMemberTest, $now, $now);
                 """;
             command.Parameters.AddWithValue("$workItemId", workItemId.ToString("D"));
             command.Parameters.AddWithValue("$companyId", companyId.ToString());
@@ -672,6 +689,7 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
             command.Parameters.AddWithValue("$commissionerUserId", discordUserId);
             command.Parameters.AddWithValue("$payloadJson", payloadJson);
             command.Parameters.AddWithValue("$state", (int)DiscordOutboxState.Pending);
+            command.Parameters.AddWithValue("$isMemberTest", isMemberTest ? 1 : 0);
             command.Parameters.AddWithValue("$now", now.ToString("O"));
             if (await command.ExecuteNonQueryAsync(cancellationToken) == 1)
             {
@@ -696,6 +714,43 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
             inserted ? DiscordNotificationEnqueueStatus.Queued : DiscordNotificationEnqueueStatus.Replayed,
             attentionClass,
             ids);
+    }
+
+    public async Task<DiscordMemberNotificationTestDelivery?> LoadMemberTestDeliveryAsync(
+        CompanyId companyId,
+        Guid workItemId,
+        string discordUserId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT state, attempt_count, message_id, last_error, updated_at_utc
+            FROM discord_notification_outbox
+            WHERE work_item_id = $workItemId
+              AND company_id = $companyId
+              AND destination_kind = $destinationKind
+              AND destination_key = $destinationKey
+              AND is_member_test = 1;
+            """;
+        command.Parameters.AddWithValue("$workItemId", workItemId.ToString("D"));
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue(
+            "$destinationKind",
+            (int)DiscordNotificationDestinationKind.MemberDirectMessage);
+        command.Parameters.AddWithValue("$destinationKey", discordUserId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+        return new DiscordMemberNotificationTestDelivery(
+            workItemId,
+            (DiscordOutboxState)reader.GetInt32(0),
+            reader.GetInt32(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture));
     }
 
     public async Task CaptureCommittedClaimContactAsync(

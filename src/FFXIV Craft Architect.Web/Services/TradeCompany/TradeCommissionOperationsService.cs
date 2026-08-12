@@ -1181,7 +1181,7 @@ public sealed class TradeCommissionOperationsService(
     {
         if (!profileSync.CurrentStatus.IsConnected)
         {
-            reason = "Connect Profile Hosting in Options before operating this company commission.";
+            reason = "Connect this browser in Settings before operating this company commission.";
             return false;
         }
 

@@ -315,7 +315,7 @@ public sealed class TradeCompanyCollaborationClient(
         if (!connection.IsConfigured)
         {
             throw new InvalidOperationException(
-                "Connect Profile Hosting in Options before using Discord collaboration.");
+                "Connect this browser in Settings before using Discord collaboration.");
         }
 
         var baseUri = new Uri(connection.HostUrl!.Trim().TrimEnd('/') + "/");

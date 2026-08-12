@@ -11,6 +11,7 @@
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 @inject IJSRuntime JSRuntime
+@inject IDialogService DialogService
 
 @if (_loading)
 {
@@ -40,6 +41,7 @@ else
             <span class="standing">@StandingLabel</span>
             @if (_hub.Kind == "hub")
             {
+                <button class="button quiet" type="button" @onclick="OpenWorkspaceSettingsAsync">Workspace settings</button>
                 <button class="button quiet" type="button" @onclick="OpenDetails">@RosterCountLabel</button>
                 <button class="button quiet" type="button" @onclick="OpenDetails">Company details</button>
             }
@@ -140,8 +142,8 @@ else
                     {
                         @foreach (var assignment in _hub.Assignments ?? [])
                         {
-                            <article class="assignment-card">
-                                <div class="assignment-main"><div><h3>@assignment.Title</h3><span>@assignment.Reference · terms v@(assignment.TermsVersion)</span><strong>@OutputSummary(assignment)</strong></div><div class="assignment-state"><strong>@AssignmentState(assignment)</strong><span>@AssignmentSupport(assignment)</span></div><button class="button primary" type="button" @onclick="() => SelectCommission(assignment)">Open workspace</button></div>
+                            <article class="assignment-card @AssignmentTone(assignment)">
+                                <div class="assignment-main"><div><h3>@assignment.Title</h3><span>@assignment.Reference · terms v@(assignment.TermsVersion)</span><strong>@OutputSummary(assignment)</strong></div><div class="assignment-state"><div class="assignment-state-heading"><strong>@AssignmentState(assignment)</strong>@if (assignment.UnreadCommissionerUpdate is { } update) { <FullTextPopover Text="@update.Text" Heading="Commissioner update"><button class="unread-update" type="button" aria-label="Unread commissioner update"><MudIcon Icon="@Icons.Material.Filled.MarkUnreadChatAlt" Size="Size.Small" /></button></FullTextPopover> }</div><span>@AssignmentSupport(assignment)</span></div><button class="button primary" type="button" @onclick="() => SelectCommissionAsync(assignment)">Open workspace</button></div>
                             </article>
                         }
                     }
@@ -152,11 +154,12 @@ else
                     <div class="commission-list">
                         @foreach (var commission in _hub.OpenCommissions ?? [])
                         {
-                            <button class="commission-row" type="button" aria-expanded="@(_selectedCommission?.CommissionId == commission.CommissionId)" @onclick="() => SelectCommission(commission)">
-                                <span class="commission-top"><strong>@commission.Title</strong><span class="crafter-note">@CrafterNote(commission)</span></span>
-                                <span class="commission-bottom"><span>@OutputSummary(commission)</span><span>@commission.Payment.Total.ToString("N0") gil</span></span>
-                                <span class="note-popover" aria-hidden="true">@CrafterNote(commission)</span>
-                            </button>
+                            <FullTextPopover Text="@CrafterNote(commission)" Heading="Crafter note" Class="commission-note-disclosure">
+                                <button class="commission-row" type="button" aria-expanded="@(_selectedCommission?.CommissionId == commission.CommissionId)" @onclick="() => SelectCommissionAsync(commission)">
+                                    <span class="commission-top"><strong>@commission.Title</strong><span class="crafter-note">@CrafterNote(commission)</span></span>
+                                    <span class="commission-bottom"><span>@OutputSummary(commission)</span><span>@commission.Payment.Total.ToString("N0") gil</span></span>
+                                </button>
+                            </FullTextPopover>
                         }
                     </div>
                     @if ((_hub.OpenCommissions?.Count ?? 0) == 0)
@@ -303,7 +306,7 @@ else
             _signedIn = false;
         }
         await ReloadHubAsync(Slug);
-        ApplyDeepLink();
+        await ApplyDeepLinkAsync();
         _loading = false;
     }
 
@@ -335,7 +338,51 @@ else
     private void ToggleUpdateComposer() => _postingUpdate = !_postingUpdate;
     private void OpenDetails() => _detailsOpen = true;
     private void CloseDetails() => _detailsOpen = false;
-    private void SelectCommission(CompanyHubCommission commission) { _selectedCommission = commission; _confirmingClaim = false; }
+    private async Task OpenWorkspaceSettingsAsync()
+    {
+        var parameters = new DialogParameters
+        {
+            [nameof(SettingsDialog.InitialSection)] = SettingsSection.Workspace
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = false,
+            MaxWidth = MaxWidth.ExtraLarge,
+            FullWidth = true
+        };
+        var dialog = DialogService.Show<SettingsDialog>("Settings", parameters, options);
+        await dialog.Result;
+        await ReloadHubAsync(_hub!.CompanyId);
+    }
+    private async Task SelectCommissionAsync(CompanyHubCommission commission)
+    {
+        _selectedCommission = commission;
+        _confirmingClaim = false;
+        if (!IsAssignment(commission) || commission.UnreadCommissionerUpdate == null)
+        {
+            return;
+        }
+
+        try
+        {
+            await HubClient.MarkCommissionReadAsync(
+                _hub!.CompanyId,
+                commission.CommissionId,
+                commission.ProjectionRevision);
+            var opened = commission with { UnreadCommissionerUpdate = null };
+            _selectedCommission = opened;
+            _hub = _hub with
+            {
+                Assignments = (_hub.Assignments ?? [])
+                    .Select(item => item.CommissionId == opened.CommissionId ? opened : item)
+                    .ToArray()
+            };
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Warning);
+        }
+    }
     private void CloseCommission() { _selectedCommission = null; _confirmingClaim = false; }
 
     private async Task PublishThemeAsync()
@@ -494,7 +541,7 @@ else
     private bool IsAssignment(CompanyHubCommission commission) =>
         (_hub?.Assignments ?? []).Any(item => item.CommissionId == commission.CommissionId);
 
-    private void ApplyDeepLink()
+    private async Task ApplyDeepLinkAsync()
     {
         var signature = $"{Slug}|{CommissionId}|{ActivityId}";
         if (_appliedDeepLink == signature)
@@ -514,6 +561,7 @@ else
         if (_selectedCommission != null)
         {
             _scrollToLinkedCommission = true;
+            await SelectCommissionAsync(_selectedCommission);
         }
         else
         {
@@ -529,6 +577,15 @@ else
                 : assignment.Outputs.Any(output => output.CompletedQuantity > 0)
                     ? "In progress"
                     : assignment.CanWork ? "Ready to begin" : "Waiting to begin";
+
+    private static string AssignmentTone(CompanyHubCommission assignment) =>
+        assignment.Outputs.All(output => output.AcceptedQuantity >= output.Quantity)
+            ? "state-complete"
+            : assignment.Outputs.All(output => output.ReadyQuantity >= output.Quantity)
+                ? "state-ready"
+                : assignment.Outputs.Any(output => output.CompletedQuantity > 0)
+                    ? "state-crafting"
+                    : assignment.CanWork ? "state-open" : "state-blocked";
 
     private static string AssignmentSupport(CompanyHubCommission assignment) =>
         assignment.WorkBlockedReason ??

@@ -858,15 +858,15 @@
             Severity.Info);
         var parameters = new DialogParameters
         {
-            [nameof(OptionsDialog.InitialPanelIndex)] = 2
+            [nameof(SettingsDialog.InitialSection)] = SettingsSection.Integrations
         };
-        var dialog = DialogService.Show<OptionsDialog>(
-            "Options",
+        var dialog = DialogService.Show<SettingsDialog>(
+            "Settings",
             parameters,
             new DialogOptions
             {
-                CloseOnEscapeKey = true,
-                MaxWidth = MaxWidth.Small,
+                CloseOnEscapeKey = false,
+                MaxWidth = MaxWidth.ExtraLarge,
                 FullWidth = true
             });
         var result = await dialog.Result;

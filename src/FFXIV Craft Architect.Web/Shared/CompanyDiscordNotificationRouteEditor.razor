@@ -324,6 +324,13 @@
         }
     }
 
+    public bool HasPendingChanges =>
+        _hasLoaded &&
+        !string.Equals(
+            BuildRouteFingerprint(),
+            _persistedRouteFingerprint,
+            StringComparison.Ordinal);
+
     private string? Validate()
     {
         if (!IsSnowflake(_commissionerDiscordUserId))

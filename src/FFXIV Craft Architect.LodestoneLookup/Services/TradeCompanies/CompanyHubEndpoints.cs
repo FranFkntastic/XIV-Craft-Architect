@@ -2,6 +2,8 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -36,6 +38,12 @@ public sealed record CompanyHubOutputResponse(
 
 public sealed record CompanyHubPaymentResponse(string Schedule, string Label, decimal Total);
 
+public sealed record CompanyHubCommissionAttentionResponse(
+    Guid EventId,
+    long Revision,
+    string Text,
+    DateTime CreatedAtUtc);
+
 public sealed record CompanyHubUpdateResponse(
     Guid Id,
     string Title,
@@ -60,7 +68,8 @@ public sealed record CompanyHubCommissionResponse(
     bool CanWork,
     bool CanReportProgress,
     bool CanDeclareReadiness,
-    string? WorkBlockedReason);
+    string? WorkBlockedReason,
+    CompanyHubCommissionAttentionResponse? UnreadCommissionerUpdate = null);
 
 public sealed record CompanyHubRosterMemberResponse(string DisplayName, string Role);
 
@@ -94,6 +103,8 @@ public sealed record CompanyHubPostUpdateRequest(
     bool IsPinned);
 
 public sealed record CompanyHubMutationResponse(long ProfileRevision);
+public sealed record CompanyHubAttentionReadRequest(long OpenedRevision);
+public sealed record CompanyHubAttentionReadResponse(long ReadRevision);
 
 public enum CompanyHubMutationStatus
 {
@@ -176,6 +187,49 @@ public static class CompanyHubEndpoints
                 var result = await hubs.PostUpdateAsync(slugOrGuid, account, body, cancellationToken);
                 return ToMutationResult(result);
             });
+
+        app.MapPost(
+            "/trade/v1/companies/{slugOrGuid}/hub/commissions/{commissionId:guid}/attention/read",
+            async (
+                string slugOrGuid,
+                Guid commissionId,
+                CompanyHubAttentionReadRequest body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                CompanyHubService hubs,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                var result = await hubs.MarkCommissionReadAsync(
+                    slugOrGuid,
+                    commissionId,
+                    account,
+                    body.OpenedRevision,
+                    cancellationToken);
+                return result.Status switch
+                {
+                    CompanyHubAttentionReadStatus.Applied => Results.Ok(
+                        new CompanyHubAttentionReadResponse(result.ReadRevision!.Value)),
+                    CompanyHubAttentionReadStatus.NotFound => Results.NotFound(),
+                    CompanyHubAttentionReadStatus.Forbidden =>
+                        Results.StatusCode(StatusCodes.Status403Forbidden),
+                    _ => Results.Conflict(new
+                    {
+                        error = "company_hub_attention_revision_conflict",
+                        message = "The commission changed before it could be marked read."
+                    })
+                };
+            });
     }
 
     private static IResult ToMutationResult(CompanyHubMutationResult result) =>
@@ -198,6 +252,18 @@ public static class CompanyHubEndpoints
             })
         };
 }
+
+public enum CompanyHubAttentionReadStatus
+{
+    Applied,
+    NotFound,
+    Forbidden,
+    Conflict
+}
+
+public sealed record CompanyHubAttentionReadResult(
+    CompanyHubAttentionReadStatus Status,
+    long? ReadRevision = null);
 
 public sealed class CompanyHubService(
     SqliteProfileHostStore profiles,
@@ -262,10 +328,14 @@ public sealed class CompanyHubService(
         var roster = await ProjectRosterAsync(company, active, cancellationToken);
         var assignments = account == null
             ? []
-            : orders.Where(order => order.CompanyCommission?.ActiveClaim is { } claim &&
-                (claim.CrafterId == account.ProfileId || claim.ProvisionalCrafterId == account.ProfileId))
-                .Select(ProjectCommission)
-                .ToArray();
+            : await Task.WhenAll(orders.Where(order =>
+                    IsAssignmentFor(order, account.ProfileId))
+                .Select(order => ProjectAssignmentAsync(
+                    order,
+                    new CompanyId(company.Profile.Id),
+                    account.ProfileId,
+                    company.Profile.Name,
+                    cancellationToken)));
         var pendingCount = standing.Role is "owner" or "operator"
             ? (await memberships.LoadPendingAsync(new CompanyId(company.Profile.Id), cancellationToken)).Count
             : (int?)null;
@@ -282,6 +352,48 @@ public sealed class CompanyHubService(
             assignments,
             roster,
             pendingCount);
+    }
+
+    public async Task<CompanyHubAttentionReadResult> MarkCommissionReadAsync(
+        string slugOrGuid,
+        Guid commissionId,
+        MembershipAccount account,
+        long openedRevision,
+        CancellationToken cancellationToken = default)
+    {
+        var company = await ResolveCompanyAsync(slugOrGuid, cancellationToken);
+        if (company == null)
+        {
+            return new(CompanyHubAttentionReadStatus.NotFound);
+        }
+        var companyId = new CompanyId(company.Profile.Id);
+        var membership = await memberships.LoadForAccountAsync(
+            companyId,
+            account.ProfileId,
+            cancellationToken);
+        if (membership is not { State: MembershipState.Active } &&
+            account.ProfileId != company.HostProfileId)
+        {
+            return new(CompanyHubAttentionReadStatus.Forbidden);
+        }
+        var order = (await LoadOrdersAsync(company, cancellationToken))
+            .SingleOrDefault(candidate => candidate.Id == commissionId);
+        if (order == null || !IsAssignmentFor(order, account.ProfileId))
+        {
+            return new(CompanyHubAttentionReadStatus.NotFound);
+        }
+        var currentRevision = order.CompanyCommission!.Activity.LastOrDefault()?.CommissionRevision ?? 0;
+        if (openedRevision < 0 || openedRevision > currentRevision)
+        {
+            return new(CompanyHubAttentionReadStatus.Conflict);
+        }
+        var readRevision = await memberships.AdvanceCommissionReadRevisionAsync(
+            companyId,
+            account.ProfileId,
+            commissionId,
+            openedRevision,
+            cancellationToken);
+        return new(CompanyHubAttentionReadStatus.Applied, readRevision);
     }
 
     public async Task<CompanyHubMutationResult> UpdateThemeAsync(
@@ -658,6 +770,52 @@ public sealed class CompanyHubService(
         order.CompanyCommission is { ActiveClaim: null } commission &&
         commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published;
 
+    private static bool IsAssignmentFor(TradeOrder order, Guid accountProfileId) =>
+        order.CompanyCommission?.ActiveClaim is { } claim &&
+        (claim.CrafterId == accountProfileId ||
+            claim.ProvisionalCrafterId == accountProfileId);
+
+    private async Task<CompanyHubCommissionResponse> ProjectAssignmentAsync(
+        TradeOrder order,
+        CompanyId companyId,
+        Guid accountProfileId,
+        string companyDisplayName,
+        CancellationToken cancellationToken)
+    {
+        var commission = order.CompanyCommission!;
+        var claim = commission.ActiveClaim!;
+        var readRevision = await memberships.LoadCommissionReadRevisionAsync(
+            companyId,
+            accountProfileId,
+            order.Id,
+            cancellationToken);
+        var latest = commission.Activity
+            .Where(activity =>
+                activity.Actor.Kind == CompanyCommissionActorKind.Commissioner &&
+                activity.Visibility == CompanyCommissionActivityVisibility.Shared &&
+                activity.Kind != CompanyCommissionActivityKind.DraftUpdated &&
+                activity.CreatedAtUtc >= claim.ClaimedAtUtc &&
+                activity.CommissionRevision > (readRevision ?? 0))
+            .OrderByDescending(activity => activity.CommissionRevision)
+            .FirstOrDefault();
+        CompanyHubCommissionAttentionResponse? attention = null;
+        if (latest != null)
+        {
+            var brief = CompanyCommissionProjectionService.CreatePublicBrief(
+                order,
+                companyDisplayName);
+            attention = new CompanyHubCommissionAttentionResponse(
+                latest.EventId,
+                latest.CommissionRevision,
+                ClampText(
+                    DiscordCompanyCommissionPostCommitSink.BuildSummary(latest, brief),
+                    800,
+                    "The commissioner updated this commission."),
+                latest.CreatedAtUtc);
+        }
+        return ProjectCommission(order) with { UnreadCommissionerUpdate = attention };
+    }
+
     private static CompanyHubCommissionResponse ProjectCommission(TradeOrder order)
     {
         var commission = order.CompanyCommission!;
@@ -701,7 +859,8 @@ public sealed class CompanyHubService(
             canWork,
             canWork && !commission.DeliveryReadiness.IsReady && !allOutputsReady,
             canWork && !commission.DeliveryReadiness.IsReady && allOutputsReady,
-            WorkBlockedReason(commission));
+            WorkBlockedReason(commission),
+            null);
     }
 
     private static string? WorkBlockedReason(TradeCompanyCommission commission)

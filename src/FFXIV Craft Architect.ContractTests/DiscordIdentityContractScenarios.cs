@@ -146,7 +146,7 @@ public sealed class DiscordIdentityContractTests
             {
                 Assert.Equal(64, response.RootElement.GetProperty("flags").GetInt32());
                 Assert.Contains(
-                    "Link Discord in Craft Architect Options",
+                    "Link Discord in Craft Architect Settings",
                     response.RootElement.GetProperty("content").GetString());
             }
             Assert.Null(await notifications.LoadPendingClaimContactAsync(
@@ -180,7 +180,7 @@ public sealed class DiscordIdentityContractTests
             using (var response = JsonDocument.Parse(JsonSerializer.Serialize(inactive)))
             {
                 Assert.Contains(
-                    "Link Discord in Craft Architect Options",
+                    "Link Discord in Craft Architect Settings",
                     response.RootElement.GetProperty("content").GetString());
             }
             Assert.Null(await notifications.LoadPendingClaimContactAsync(

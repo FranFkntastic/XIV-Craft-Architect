@@ -87,7 +87,7 @@ public sealed class MarketRegionScopeContractTests
         Assert.Contains("MarketFetchScope.EntireRegion", tradeProcurement, StringComparison.Ordinal);
         Assert.Contains("$\"{order.SourceSnapshot.Region} region\"", tradeProcurement, StringComparison.Ordinal);
 
-        var options = File.ReadAllText(Path.Combine(web, "Dialogs", "OptionsDialog.razor")); var controls = File.ReadAllText(Path.Combine(web, "Shared", "MarketAnalysisControlsPanel.razor"));
+        var options = File.ReadAllText(Path.Combine(web, "Dialogs", "SettingsDialog.razor")); var controls = File.ReadAllText(Path.Combine(web, "Shared", "MarketAnalysisControlsPanel.razor"));
         Assert.Contains("CompactMultiSelectField", options, StringComparison.Ordinal);
         Assert.Contains("market.comparison_regions", options, StringComparison.Ordinal);
         Assert.DoesNotContain("Search entire region", controls, StringComparison.Ordinal);

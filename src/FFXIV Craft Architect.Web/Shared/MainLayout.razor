@@ -210,10 +210,10 @@
                                EndIcon="@Icons.Material.Filled.KeyboardArrowDown">Tools</MudButton>
                 </ActivatorContent>
                 <ChildContent>
-                    <MudMenuItem OnClick="OnOptions" Icon="@Icons.Material.Filled.Settings">
-                        Options...
+                    <MudMenuItem OnClick="() => OpenSettingsAsync(SettingsSection.MarketAndRoutes)" Icon="@Icons.Material.Filled.Settings">
+                        Settings...
                     </MudMenuItem>
-                    <MudMenuItem OnClick="@(() => NavigateTo("diagnostics"))" Icon="@Icons.Material.Filled.Troubleshoot">
+                    <MudMenuItem OnClick="() => OpenSettingsAsync(SettingsSection.Diagnostics)" Icon="@Icons.Material.Filled.Troubleshoot">
                         Diagnostics
                     </MudMenuItem>
                     @if (IsDebugToolsAvailable)
@@ -972,10 +972,14 @@
 
     // ==================== TOOLS MENU ====================
     
-    private async Task OnOptions()
+    private async Task OpenSettingsAsync(SettingsSection section)
     {
-        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
-        var dialog = DialogService.Show<OptionsDialog>("Options", options);
+        var parameters = new DialogParameters
+        {
+            [nameof(SettingsDialog.InitialSection)] = section
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = false, MaxWidth = MaxWidth.ExtraLarge, FullWidth = true };
+        var dialog = DialogService.Show<SettingsDialog>("Settings", parameters, options);
         await dialog.Result;
     }
 

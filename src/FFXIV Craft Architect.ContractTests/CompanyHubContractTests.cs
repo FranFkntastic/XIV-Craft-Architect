@@ -6,6 +6,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -258,6 +259,95 @@ public sealed class CompanyHubContractTests
     }
 
     [Fact]
+    public async Task AssignmentAttentionIsMemberScopedAndClearsOnlyAfterExplicitOpen()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var member = await fixture.CreateAccountAsync("Member");
+        var company = CreateCompany();
+        var order = CreateAssignedOrderWithCommissionerUpdate(company.Id, member.ProfileId);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var memberClient = fixture.CreateClient(member.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, order);
+        await RequestAsync(memberClient, company.Id);
+        using var approved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{member.ProfileId:D}/approve",
+            null);
+        approved.EnsureSuccessStatusCode();
+
+        using var first = await memberClient.GetAsync($"/trade/v1/companies/{company.Id:D}/hub");
+        using var second = await memberClient.GetAsync($"/trade/v1/companies/{company.Id:D}/hub");
+        using var firstJson = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        using var secondJson = JsonDocument.Parse(await second.Content.ReadAsStringAsync());
+        var firstAttention = Assert.Single(firstJson.RootElement
+            .GetProperty("assignments").EnumerateArray())
+            .GetProperty("unreadCommissionerUpdate");
+        var secondAttention = Assert.Single(secondJson.RootElement
+            .GetProperty("assignments").EnumerateArray())
+            .GetProperty("unreadCommissionerUpdate");
+
+        Assert.Equal(9, firstAttention.GetProperty("revision").GetInt64());
+        Assert.StartsWith("Please stage the finished batch at the workshop bell.",
+            firstAttention.GetProperty("text").GetString());
+        Assert.Equal(9, secondAttention.GetProperty("revision").GetInt64());
+
+        using var future = await memberClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/commissions/{order.Id:D}/attention/read",
+            new CompanyHubAttentionReadRequest(11));
+        Assert.Equal(HttpStatusCode.Conflict, future.StatusCode);
+
+        using var marked = await memberClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/commissions/{order.Id:D}/attention/read",
+            new CompanyHubAttentionReadRequest(9));
+        marked.EnsureSuccessStatusCode();
+        using var replay = await memberClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/commissions/{order.Id:D}/attention/read",
+            new CompanyHubAttentionReadRequest(8));
+        replay.EnsureSuccessStatusCode();
+        using var replayJson = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
+        Assert.Equal(9, replayJson.RootElement.GetProperty("readRevision").GetInt64());
+
+        using var cleared = await memberClient.GetAsync($"/trade/v1/companies/{company.Id:D}/hub");
+        using var clearedJson = JsonDocument.Parse(await cleared.Content.ReadAsStringAsync());
+        var clearedAttention = Assert.Single(clearedJson.RootElement
+            .GetProperty("assignments").EnumerateArray())
+            .GetProperty("unreadCommissionerUpdate");
+        Assert.Equal(JsonValueKind.Null, clearedAttention.ValueKind);
+
+        using var ownerAttempt = await ownerClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/commissions/{order.Id:D}/attention/read",
+            new CompanyHubAttentionReadRequest(9));
+        Assert.Equal(HttpStatusCode.NotFound, ownerAttempt.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostOwnerCanMarkAssignedAttentionReadBeforeFounderReconciliation()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Host owner");
+        var company = CreateCompany();
+        var order = CreateAssignedOrderWithCommissionerUpdate(company.Id, owner.ProfileId);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await PutOrderAsync(ownerClient, order);
+        await fixture.DeleteMembershipAsync(company.Id, owner.ProfileId);
+
+        using var hub = await ownerClient.GetAsync($"/trade/v1/companies/{company.Id:D}/hub");
+        hub.EnsureSuccessStatusCode();
+        using var hubJson = JsonDocument.Parse(await hub.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "owner",
+            hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+        Assert.Single(hubJson.RootElement.GetProperty("assignments").EnumerateArray());
+
+        using var marked = await ownerClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/hub/commissions/{order.Id:D}/attention/read",
+            new CompanyHubAttentionReadRequest(9));
+        marked.EnsureSuccessStatusCode();
+    }
+
+    [Fact]
     public async Task HostileThemeIsClampedAndSanitizedOnProjection()
     {
         await using var fixture = await HubFixture.CreateAsync();
@@ -466,6 +556,59 @@ public sealed class CompanyHubContractTests
         return order;
     }
 
+    private static TradeOrder CreateAssignedOrderWithCommissionerUpdate(
+        Guid companyId,
+        Guid crafterId)
+    {
+        var order = CreateAssignedOrder(companyId, crafterId);
+        var commission = order.CompanyCommission!;
+        var claimedAt = commission.ActiveClaim!.ClaimedAtUtc;
+        order.Status = TradeOrderStatus.Assigned;
+        order.CompanyCommission = commission with
+        {
+            Activity =
+            [
+                new CompanyCommissionActivityEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    CommissionId = order.Id,
+                    CommissionRevision = 8,
+                    Actor = new("owner", CompanyCommissionActorKind.Commissioner),
+                    SourceSurface = CompanyCommissionSourceSurface.TradeArchitect,
+                    CreatedAtUtc = claimedAt,
+                    Kind = CompanyCommissionActivityKind.ClaimAccepted,
+                    TermsVersion = 1
+                },
+                new CompanyCommissionActivityEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    CommissionId = order.Id,
+                    CommissionRevision = 9,
+                    Actor = new("owner", CompanyCommissionActorKind.Commissioner),
+                    SourceSurface = CompanyCommissionSourceSurface.TradeArchitect,
+                    CreatedAtUtc = claimedAt.AddSeconds(1),
+                    Kind = CompanyCommissionActivityKind.CommentAdded,
+                    TermsVersion = 1,
+                    Comment = "Please stage the finished batch at the workshop bell."
+                },
+                new CompanyCommissionActivityEvent
+                {
+                    EventId = Guid.NewGuid(),
+                    CommissionId = order.Id,
+                    CommissionRevision = 10,
+                    Actor = new("owner", CompanyCommissionActorKind.Commissioner),
+                    SourceSurface = CompanyCommissionSourceSurface.TradeArchitect,
+                    CreatedAtUtc = claimedAt.AddSeconds(2),
+                    Kind = CompanyCommissionActivityKind.CommentAdded,
+                    Visibility = CompanyCommissionActivityVisibility.CompanyOnly,
+                    TermsVersion = 1,
+                    Comment = "Private operator note."
+                }
+            ]
+        };
+        return order;
+    }
+
     private static async Task PutCompanyAsync(
         HttpClient client,
         TradeCompanyProfile company,
@@ -517,6 +660,21 @@ public sealed class CompanyHubContractTests
         public WebApplicationFactory<Program> Application => application;
         public SqliteProfileHostStore Profiles { get; }
         public SqliteDiscordIdentityStore Identities { get; }
+
+        public async Task DeleteMembershipAsync(Guid companyId, Guid profileId)
+        {
+            await using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(root, "memberships.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                DELETE FROM company_memberships
+                WHERE company_id = $companyId AND account_profile_id = $profileId;
+                """;
+            command.Parameters.AddWithValue("$companyId", companyId.ToString("D"));
+            command.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
 
         public static Task<HubFixture> CreateAsync()
         {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
@@ -338,6 +339,49 @@ public interface ICompanyCommissionDiscordDelivery
 
 public static class CompanyCommissionNotificationPolicy
 {
+    public enum MemberCategory
+    {
+        ActionRequired,
+        CommissionerMessages,
+        ProgressAndStatus
+    }
+
+    public static MemberCategory ClassifyForMember(
+        CompanyCommissionActivityKind eventKind) =>
+        eventKind switch
+        {
+            CompanyCommissionActivityKind.CommentAdded or
+            CompanyCommissionActivityKind.TermsAmended or
+            CompanyCommissionActivityKind.CommissionCanceled or
+            CompanyCommissionActivityKind.CommissionReopened =>
+                MemberCategory.CommissionerMessages,
+
+            CompanyCommissionActivityKind.ProgressReported or
+            CompanyCommissionActivityKind.PaymentClearanceRecorded or
+            CompanyCommissionActivityKind.WorkClearanceAchieved or
+            CompanyCommissionActivityKind.CommissionOpened or
+            CompanyCommissionActivityKind.CommissionClosed or
+            CompanyCommissionActivityKind.SettlementRecorded or
+            CompanyCommissionActivityKind.MigratedFromTradeOrder or
+            CompanyCommissionActivityKind.MigratedTradeOrderHistory or
+            CompanyCommissionActivityKind.ParticipantRecoveryRedeemed =>
+                MemberCategory.ProgressAndStatus,
+
+            _ => MemberCategory.ActionRequired
+        };
+
+    public static bool AllowsMemberNotification(
+        CompanyMembership membership,
+        CompanyCommissionActivityKind eventKind) =>
+        membership.State == MembershipState.Active &&
+        (ClassifyForMember(eventKind) switch
+        {
+            MemberCategory.ActionRequired => membership.NotifyActionRequired,
+            MemberCategory.CommissionerMessages => membership.NotifyCommissionerMessages,
+            MemberCategory.ProgressAndStatus => membership.NotifyProgressAndStatus,
+            _ => false
+        });
+
     public static DiscordNotificationAttentionClass Classify(
         CompanyCommissionActivityKind eventKind) =>
         eventKind switch
