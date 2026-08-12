@@ -343,6 +343,8 @@ public sealed class DiscordIdentityContractTests
                 commissionId,
                 Guid.NewGuid(),
                 DiscordUser));
+            var participantGrantId = mutation.Order.CompanyCommission!
+                .ParticipantGrant!.GrantId;
             Assert.Equal(
                 "Participant",
                 await DiscordCompanyCommissionPostCommitSink.ResolveActorDisplayNameAsync(
@@ -350,7 +352,7 @@ public sealed class DiscordIdentityContractTests
                     mutation.Activity with
                     {
                         Actor = new(
-                            $"participant-grant:{claimId:D}",
+                            $"participant-grant:{participantGrantId:D}",
                             CompanyCommissionActorKind.Crafter),
                         Kind = CompanyCommissionActivityKind.ProgressReported
                     },
