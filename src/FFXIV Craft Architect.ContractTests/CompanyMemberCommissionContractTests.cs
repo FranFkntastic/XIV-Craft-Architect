@@ -286,7 +286,8 @@ public sealed class CompanyMemberCommissionContractTests
             membershipRows!,
             item => item.CompanyId == fixture.Company.Id.ToString("D") &&
                 item.Role == "operator" &&
-                item.State == "active");
+                item.State == "active" &&
+                item.HasMembership);
         hub.EnsureSuccessStatusCode();
         using var hubJson = JsonDocument.Parse(await hub.Content.ReadAsStringAsync());
         Assert.Equal(
@@ -322,7 +323,8 @@ public sealed class CompanyMemberCommissionContractTests
             membershipRows!,
             item => item.CompanyId == fixture.Company.Id.ToString("D") &&
                 item.Role == "operator" &&
-                item.State == "active");
+                item.State == "active" &&
+                !item.HasMembership);
     }
 
     [Fact]
@@ -342,6 +344,7 @@ public sealed class CompanyMemberCommissionContractTests
             item => item.CompanyId == fixture.Company.Id.ToString("D"));
         Assert.Equal("operator", company.Role);
         Assert.Equal("active", company.State);
+        Assert.False(company.HasMembership);
     }
 
     [Fact]

@@ -17,7 +17,8 @@ public sealed record MembershipResponse(
     DateTimeOffset RequestedAtUtc,
     DateTimeOffset? DecidedAtUtc,
     Guid? DecidedByProfileId,
-    string? RequestNote);
+    string? RequestNote,
+    bool HasMembership);
 
 public sealed record MembershipErrorResponse(string Error, string Message);
 public sealed record MembershipNotificationPreferenceBody(
@@ -256,6 +257,16 @@ public static class MembershipEndpoints
                             continue;
                         }
 
+                        if (response.TryGetValue(route.CompanyId, out var existing) &&
+                            existing is { HasMembership: true, State: "active" })
+                        {
+                            response[route.CompanyId] = existing with
+                            {
+                                Role = access.Role.ToString().ToLowerInvariant()
+                            };
+                            continue;
+                        }
+
                         response[route.CompanyId] = new MembershipResponse(
                             route.CompanyId.ToString(),
                             account.ProfileId,
@@ -264,7 +275,8 @@ public static class MembershipEndpoints
                             route.UpdatedAt,
                             route.UpdatedAt,
                             null,
-                            null);
+                            null,
+                            false);
                     }
                 }
 
@@ -668,7 +680,8 @@ public static class MembershipEndpoints
             membership.RequestedAtUtc,
             membership.DecidedAtUtc,
             membership.DecidedByProfileId,
-             membership.RequestNote);
+            membership.RequestNote,
+            true);
 
     private sealed record CompanyAuthorizationResult(
         CompanyId CompanyId,

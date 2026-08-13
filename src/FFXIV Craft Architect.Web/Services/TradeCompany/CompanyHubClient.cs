@@ -315,7 +315,7 @@ public sealed record CompanyHubCommission(string CommissionId, string Title, str
 public sealed record CompanyHubCommissionAttention(Guid EventId, long Revision, string Text, DateTime CreatedAtUtc);
 public sealed record CompanyHubAttentionRead(long ReadRevision);
 public sealed record CompanyHubRosterMember(string DisplayName, string Role);
-public sealed record CompanyMembership(string CompanyId, Guid AccountProfileId, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, Guid? DecidedByProfileId, string? RequestNote);
+public sealed record CompanyMembership(string CompanyId, Guid AccountProfileId, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, Guid? DecidedByProfileId, string? RequestNote, bool HasMembership);
 public sealed record CompanyMembershipNotifications(
     string CompanyId,
     bool ActionRequired,
