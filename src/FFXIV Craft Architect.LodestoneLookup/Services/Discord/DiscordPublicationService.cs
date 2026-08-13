@@ -731,6 +731,7 @@ public sealed class DiscordPublicationService(
 
         var access = await companies.ResolvePublicAccessAsync(
             ownership,
+            publication.PublicId,
             cancellationToken);
         var order = access == null
             ? null

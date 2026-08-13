@@ -563,11 +563,12 @@ public sealed class ProfileHostedTradeCompanyService(
 
     public async Task<(TradeCompanyRecordEnvelope Envelope, TradeOrder Order)?> LoadPublicOrderAsync(
         TradeCompanyPublicationOwnership ownership,
+        string publicId,
         CancellationToken cancellationToken = default)
     {
-        var found = await profiles.FindObjectAsync(
-            ProfileSyncCollections.TradeOrders,
-            ownership.OrderId.ToString("D"),
+        var found = await LoadCanonicalPublishedOrderAsync(
+            ownership,
+            publicId,
             cancellationToken);
         if (found is not { Object.Deleted: false })
         {
@@ -627,11 +628,12 @@ public sealed class ProfileHostedTradeCompanyService(
 
     public async Task<TradeCompanyAccessContext?> ResolvePublicAccessAsync(
         TradeCompanyPublicationOwnership ownership,
+        string publicId,
         CancellationToken cancellationToken = default)
     {
-        var found = await profiles.FindObjectAsync(
-            ProfileSyncCollections.TradeOrders,
-            ownership.OrderId.ToString("D"),
+        var found = await LoadCanonicalPublishedOrderAsync(
+            ownership,
+            publicId,
             cancellationToken);
         if (found is not { Object.Deleted: false } ||
             !Guid.TryParse(found.ProfileId, out var hostProfileId) ||
@@ -667,6 +669,31 @@ public sealed class ProfileHostedTradeCompanyService(
         {
             return null;
         }
+    }
+
+    private async Task<HostedProfileObject?> LoadCanonicalPublishedOrderAsync(
+        TradeCompanyPublicationOwnership ownership,
+        string publicId,
+        CancellationToken cancellationToken)
+    {
+        var publication = await profiles.FindObjectAsync(
+            ToCollection(TradeCompanyRecordKinds.Publication),
+            publicId,
+            cancellationToken);
+        if (publication == null ||
+            DeserializeOwnership(publication.Object.PayloadJson) != ownership)
+        {
+            return null;
+        }
+
+        var order = await profiles.LoadObjectAsync(
+            publication.ProfileId,
+            ProfileSyncCollections.TradeOrders,
+            ownership.OrderId.ToString("D"),
+            cancellationToken);
+        return order == null
+            ? null
+            : new HostedProfileObject(publication.ProfileId, order);
     }
 
     private async Task<TradeCompanyProfile?> LoadCompanyProfileAsync(

@@ -95,6 +95,7 @@ public sealed class HostedCompanyCommissionService(
 
         var canonical = await companies.LoadPublicOrderAsync(
             ownership,
+            publicBriefId,
             cancellationToken);
         if (canonical == null)
         {
@@ -113,11 +114,18 @@ public sealed class HostedCompanyCommissionService(
             return null;
         }
 
-        var profile = await companies.LoadPublicCompanyProfileAsync(
-            ownership.CompanyId,
-            cancellationToken)
-            ?? throw new InvalidOperationException(
+        var publicAccess = await companies.ResolvePublicAccessAsync(
+            ownership,
+            publicBriefId,
+            cancellationToken);
+        var profile = publicAccess == null
+            ? null
+            : await companies.LoadCompanyProfileAsync(publicAccess, cancellationToken);
+        if (profile == null)
+        {
+            throw new InvalidOperationException(
                 "The canonical commission company profile is unavailable.");
+        }
         return CompanyCommissionProjectionService.CreatePublicBrief(order, profile.Name);
     }
 
@@ -144,6 +152,7 @@ public sealed class HostedCompanyCommissionService(
 
         var canonical = await companies.LoadPublicOrderAsync(
             ownership,
+            capability.PublicBriefId,
             cancellationToken);
         if (canonical == null)
         {
@@ -161,11 +170,18 @@ public sealed class HostedCompanyCommissionService(
             return null;
         }
 
-        var profile = await companies.LoadPublicCompanyProfileAsync(
-            ownership.CompanyId,
-            cancellationToken)
-            ?? throw new InvalidOperationException(
+        var publicAccess = await companies.ResolvePublicAccessAsync(
+            ownership,
+            capability.PublicBriefId,
+            cancellationToken);
+        var profile = publicAccess == null
+            ? null
+            : await companies.LoadCompanyProfileAsync(publicAccess, cancellationToken);
+        if (profile == null)
+        {
+            throw new InvalidOperationException(
                 "The canonical commission company profile is unavailable.");
+        }
         return CompanyCommissionProjectionService.CreateParticipantBrief(order, profile.Name);
     }
 
@@ -191,6 +207,7 @@ public sealed class HostedCompanyCommissionService(
 
         var canonical = await companies.LoadPublicOrderAsync(
             ownership,
+            capability.PublicBriefId,
             cancellationToken);
         var commission = canonical?.Order.CompanyCommission;
         if (commission?.RecoveryGrant is not
@@ -237,6 +254,7 @@ public sealed class HostedCompanyCommissionService(
 
         var access = await companies.ResolvePublicAccessAsync(
             ownership,
+            capability.PublicBriefId,
             cancellationToken);
         if (access == null)
         {
@@ -358,6 +376,7 @@ public sealed class HostedCompanyCommissionService(
 
         var access = await companies.ResolvePublicAccessAsync(
             ownership,
+            capability.PublicBriefId,
             cancellationToken);
         if (access == null)
         {

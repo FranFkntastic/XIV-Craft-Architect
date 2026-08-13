@@ -84,6 +84,7 @@ internal sealed class HostedDiscordInteractionAuthority(
 
             canonicalAccess = await companies.ResolvePublicAccessAsync(
                 ownership,
+                target.PublicBriefId,
                 cancellationToken);
         }
 
