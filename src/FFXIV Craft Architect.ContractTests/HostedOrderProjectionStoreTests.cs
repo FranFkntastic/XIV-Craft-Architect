@@ -304,6 +304,12 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.Null(missingLinked.Service.GetForOrder(missingLinked.Current.Order.Id));
         Assert.True(missingLinked.Service.IsCanonicalOwnerMissing(missingLinked.Current.Order.Id));
         Assert.Equal("Unsynced local draft", missingLinked.Runtime.DurableOrder?.Title);
+
+        var dismissedLinked = await CreateProtectedLinkedFixtureAsync();
+        dismissedLinked.Service.DismissLinkedProjectionForLocalOrder(
+            dismissedLinked.Current.Order.Id);
+        Assert.Null(dismissedLinked.Service.GetForOrder(dismissedLinked.Current.Order.Id));
+        Assert.Equal("Unsynced local draft", dismissedLinked.Runtime.DurableOrder?.Title);
     }
 
     private static async Task<CenterOperationFixture> CreateProtectedLinkedFixtureAsync()

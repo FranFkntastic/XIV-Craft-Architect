@@ -253,6 +253,32 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void SelectingDeviceOnlyCopyDetachesTheLinkedCanonicalView()
+    {
+        var selectionSource = File.ReadAllText(Path.Combine(
+            LocateRepositoryRoot(),
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Pages",
+            "TradeOrders.Selection.cs"));
+        var selectionStart = selectionSource.IndexOf(
+            "private void SelectOrder",
+            StringComparison.Ordinal);
+        var selectionEnd = selectionSource.IndexOf(
+            "private void ScheduleSelectedCommissionOwnerRefresh",
+            selectionStart,
+            StringComparison.Ordinal);
+
+        Assert.True(selectionStart >= 0 && selectionEnd > selectionStart);
+        var selectionBoundary = selectionSource[selectionStart..selectionEnd];
+        Assert.Contains("order.CompanyCommission == null", selectionBoundary, StringComparison.Ordinal);
+        Assert.Contains(
+            "CommissionOperations.DismissLinkedProjectionForLocalOrder(order.Id)",
+            selectionBoundary,
+            StringComparison.Ordinal);
+    }
+
     private static TradeOrderWorkspaceProjectionAction Decide(
         Guid? selectedOrderId,
         bool selectedOrderIsCanonical,

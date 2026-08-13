@@ -34,6 +34,9 @@ public sealed class TradeCommissionOperationsService(
     public CompanyCommissionOwnerProjection? GetForOrder(Guid orderId) =>
         GetCurrentLinkedProjection(orderId) ?? hostedOrders.GetOwnerProjection(orderId);
 
+    public void DismissLinkedProjectionForLocalOrder(Guid orderId) =>
+        _linkedOwnerProjections.Remove(orderId);
+
     public string? GetErrorForOrder(Guid orderId) =>
         _errors.GetValueOrDefault(orderId);
 
