@@ -107,17 +107,34 @@ else
                 .OrderBy(company => company.Name, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(company => company.Id)
                 .ToArray();
-            _companies = await LoadSelectableCompaniesAsync(localCompanies);
+            var load = await LoadSelectableCompaniesAsync(localCompanies);
 
             var selectedWorkspaceId = await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
             var activeLocal = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
-            _activeCompany = selectedWorkspaceId.HasValue
-                ? _companies.FirstOrDefault(company => company.Id == selectedWorkspaceId.Value)
+            var activeCompany = selectedWorkspaceId.HasValue
+                ? load.Companies.FirstOrDefault(company => company.Id == selectedWorkspaceId.Value)
                 : null;
-            _activeCompany ??= activeLocal == null
+
+            if (activeCompany == null && selectedWorkspaceId.HasValue && !load.IsAuthoritative)
+            {
+                // A transient host failure cannot revoke the selected hosted workspace. Keep the
+                // last truthful selector state and never rewrite its durable identity to a local
+                // fallback merely because this opportunistic refresh was incomplete.
+                _companies = load.Companies;
+                if (_activeCompany?.Id != selectedWorkspaceId.Value)
+                {
+                    _activeCompany = null;
+                }
+                return;
+            }
+
+            activeCompany ??= activeLocal == null
                 ? null
-                : _companies.FirstOrDefault(company => company.Id == activeLocal.Id);
-            _activeCompany ??= _companies.FirstOrDefault();
+                : load.Companies.FirstOrDefault(company => company.Id == activeLocal.Id);
+            activeCompany ??= load.Companies.FirstOrDefault();
+
+            _companies = load.Companies;
+            _activeCompany = activeCompany;
             if (_activeCompany != null && selectedWorkspaceId != _activeCompany.Id)
             {
                 await TradeOperationsPersistence.SelectWorkspaceCompanyAsync(_activeCompany.Id);
@@ -125,20 +142,21 @@ else
         }
         catch (Exception exception)
         {
-            _activeCompany = null;
-            _companies = [];
-            Snackbar.Add($"Trade companies could not be loaded: {exception.Message}", Severity.Error);
+            if (_activeCompany == null && _companies.Count == 0)
+            {
+                Snackbar.Add($"Trade companies could not be loaded: {exception.Message}", Severity.Error);
+            }
         }
     }
 
-    private async Task<IReadOnlyList<WorkspaceCompanyContext>> LoadSelectableCompaniesAsync(
+    private async Task<SelectableCompanyLoad> LoadSelectableCompaniesAsync(
         IReadOnlyList<TradeCompanyProfile> localCompanies)
     {
         var localById = localCompanies.ToDictionary(company => company.Id);
         var connection = await LocalState.LoadConnectionSettingsAsync();
         if (!connection.IsConfigured)
         {
-            return LocalContexts(localCompanies);
+            return new SelectableCompanyLoad(LocalContexts(localCompanies), IsAuthoritative: true);
         }
 
         var contexts = new Dictionary<Guid, WorkspaceCompanyContext>();
@@ -185,24 +203,70 @@ else
         }
         catch
         {
-            // A temporary host failure cannot prove that browser-held company access was revoked.
-            return LocalContexts(localCompanies);
+            // Preserve every last truthful hosted option, apply any metadata that was refreshed
+            // before the failure, and fold in authoritative local changes. This keeps periodic
+            // synchronization lazy and permissive without manufacturing a workspace revocation.
+            return new SelectableCompanyLoad(
+                MergeCachedContexts(localCompanies, contexts.Values),
+                IsAuthoritative: false);
         }
 
-        return contexts.Values
-            .OrderBy(company => company.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(company => company.Id)
-            .ToArray();
+        return new SelectableCompanyLoad(SortContexts(contexts.Values), IsAuthoritative: true);
+    }
+
+    private IReadOnlyList<WorkspaceCompanyContext> MergeCachedContexts(
+        IReadOnlyList<TradeCompanyProfile> localCompanies,
+        IEnumerable<WorkspaceCompanyContext> refreshedContexts)
+    {
+        var localById = localCompanies.ToDictionary(company => company.Id);
+        var merged = new Dictionary<Guid, WorkspaceCompanyContext>();
+        foreach (var cached in _companies)
+        {
+            if (cached.Role != null)
+            {
+                localById.TryGetValue(cached.Id, out var localProfile);
+                merged[cached.Id] = cached with { LocalProfile = localProfile };
+            }
+            else if (localById.TryGetValue(cached.Id, out var localProfile))
+            {
+                merged[cached.Id] = cached with
+                {
+                    Name = localProfile.Name,
+                    Slug = Slugify(localProfile.Name),
+                    LocalProfile = localProfile
+                };
+            }
+        }
+
+        foreach (var local in localCompanies.Where(company => !merged.ContainsKey(company.Id)))
+        {
+            merged[local.Id] = LocalContext(local);
+        }
+
+        foreach (var refreshed in refreshedContexts)
+        {
+            merged[refreshed.Id] = refreshed;
+        }
+
+        return SortContexts(merged.Values);
     }
 
     private static IReadOnlyList<WorkspaceCompanyContext> LocalContexts(
         IReadOnlyList<TradeCompanyProfile> localCompanies) => localCompanies
-        .Select(company => new WorkspaceCompanyContext(
-            company.Id,
-            company.Name,
-            Slugify(company.Name),
-            null,
-            company))
+        .Select(LocalContext)
+        .ToArray();
+
+    private static WorkspaceCompanyContext LocalContext(TradeCompanyProfile company) => new(
+        company.Id,
+        company.Name,
+        Slugify(company.Name),
+        null,
+        company);
+
+    private static IReadOnlyList<WorkspaceCompanyContext> SortContexts(
+        IEnumerable<WorkspaceCompanyContext> contexts) => contexts
+        .OrderBy(company => company.Name, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(company => company.Id)
         .ToArray();
 
     private async Task SelectCompanyAsync(WorkspaceCompanyContext company)
@@ -294,4 +358,8 @@ else
         string Slug,
         string? Role,
         TradeCompanyProfile? LocalProfile);
+
+    private sealed record SelectableCompanyLoad(
+        IReadOnlyList<WorkspaceCompanyContext> Companies,
+        bool IsAuthoritative);
 }
