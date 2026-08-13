@@ -487,10 +487,12 @@ public sealed class HostedCompanyCommissionService(
                 ErrorMessage: "The hosted commission or company changed before the command was applied.");
         }
 
+        var linkedPlanPublication = new LinkedPlanCommandPublication();
         var linkedPlanValidation = await ValidateLinkedPlanCommandAsync(
             access,
             snapshot.Order,
             command,
+            linkedPlanPublication,
             cancellationToken);
         if (linkedPlanValidation != null)
         {
@@ -556,7 +558,7 @@ public sealed class HostedCompanyCommissionService(
             context.ExpectedObjectRevision,
             $"commission-command:{context.CommandId:D}",
             cancellationToken,
-            context.ExpectedCompanyRevision);
+            linkedPlanPublication.CompanyRevision ?? context.ExpectedCompanyRevision);
         if (mutation.Success)
         {
             var committedEnvelope = mutation.Record
@@ -774,6 +776,7 @@ public sealed class HostedCompanyCommissionService(
         TradeCompanyAccessContext access,
         TradeOrder current,
         ICompanyCommissionCommand command,
+        LinkedPlanCommandPublication publication,
         CancellationToken cancellationToken)
     {
         CompanyCommissionDraftWorkPackage? workPackage = command switch
@@ -824,7 +827,40 @@ public sealed class HostedCompanyCommissionService(
             cancellationToken);
         if (hostedPlan is not { Deleted: false })
         {
-            return "The exact linked plan snapshot is not present in this hosted profile.";
+            var grantProfileId = access.GrantId.ToString("D");
+            var sourcePlan = await profileHost.LoadObjectAsync(
+                grantProfileId,
+                ProfileSyncCollections.Plans,
+                workPackage.CraftPlanId,
+                cancellationToken);
+            if (sourcePlan is not { Deleted: false })
+            {
+                return "The exact linked plan snapshot is not present in this hosted profile.";
+            }
+
+            var sourceSnapshot = ProfileSyncPlanPayloadCodec.Deserialize(
+                sourcePlan.PayloadJson,
+                workPackage.CraftPlanId);
+            if (sourceSnapshot.LinkedOrderId != current.Id ||
+                sourceSnapshot.SavedAt != workPackage.CraftPlanSavedAtUtc.Value)
+            {
+                return "The hosted plan snapshot does not match this order and saved revision.";
+            }
+
+            var adopted = await profileHost.PutObjectAsync(
+                profileId,
+                ProfileSyncCollections.Plans,
+                workPackage.CraftPlanId,
+                sourcePlan.PayloadJson,
+                expectedRevision: 0,
+                ct: cancellationToken);
+            if (!adopted.Success || adopted.Object is not { Deleted: false })
+            {
+                return adopted.ErrorMessage ??
+                       "The revised linked plan could not be adopted by the hosted company profile.";
+            }
+            hostedPlan = adopted.Object;
+            publication.CompanyRevision = new CompanyRecordRevision(adopted.ServerRevision);
         }
 
         var snapshot = ProfileSyncPlanPayloadCodec.Deserialize(
@@ -834,6 +870,11 @@ public sealed class HostedCompanyCommissionService(
                snapshot.SavedAt == workPackage.CraftPlanSavedAtUtc.Value
             ? null
             : "The hosted plan snapshot does not match this order and saved revision.";
+    }
+
+    private sealed class LinkedPlanCommandPublication
+    {
+        public CompanyRecordRevision? CompanyRevision { get; set; }
     }
 
     private static CompanyCommissionMutationResult? ResolveReplay(

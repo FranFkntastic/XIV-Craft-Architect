@@ -16,6 +16,90 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class CompanyMemberCommissionContractTests
 {
     [Fact]
+    public async Task OperatorTermsRevisionAdoptsExactLinkedPlanIntoCanonicalProfile()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var operatorAccount = await fixture.AddActiveMemberAsync("Operator");
+        await fixture.SetRoleAsync(operatorAccount, MembershipRole.Operator);
+        var access = await fixture.Companies.ResolveMembershipAccessAsync(
+            operatorAccount.ProfileId,
+            new CompanyId(fixture.Company.Id),
+            CancellationToken.None);
+        var current = await fixture.Commissions.LoadOwnerAsync(
+            access!,
+            fixture.Order.Id,
+            CancellationToken.None);
+        var planId = Guid.NewGuid().ToString("D");
+        var savedAt = DateTime.UtcNow;
+        var sourcePlan = await fixture.Profiles.PutObjectAsync(
+            operatorAccount.ProfileId.ToString("D"),
+            ProfileSyncCollections.Plans,
+            planId,
+            ProfileSyncPlanPayloadCodec.Serialize(new ProfileSyncPlanSnapshot
+            {
+                Id = planId,
+                SavedAt = savedAt,
+                LinkedOrderId = fixture.Order.Id,
+                PlanJson = "{\"recipe\":true}"
+            }),
+            expectedRevision: 0,
+            ct: CancellationToken.None);
+        Assert.True(sourcePlan.Success);
+        var terms = current!.Order.CompanyCommission!.CurrentTerms with
+        {
+            Version = 2,
+            CreatedAtUtc = savedAt,
+            ChangeSummary = "Repriced"
+        };
+        var command = new AmendCompanyCommissionTermsCommand(
+            new(
+                new CompanyId(fixture.Company.Id),
+                fixture.Order.Id,
+                current.Envelope.RecordRevision,
+                current.CompanyRevision,
+                Guid.NewGuid(),
+                CompanyCommissionProtocol.Version2),
+            terms,
+            "Repriced",
+            new(
+                terms.Outputs.Select(output => new TradeRequestedOrderOutput(
+                    output.ItemId,
+                    output.Name,
+                    output.RequiredQuantity,
+                    output.MustBeHq,
+                    0)).ToArray(),
+                new TradeOrderSourceSnapshot
+                {
+                    RootItems = terms.Outputs.Select(output => new TradeOrderRootItemSnapshot(
+                        output.ItemId,
+                        output.Name,
+                        output.RequiredQuantity,
+                        output.MustBeHq,
+                        0)).ToArray()
+                },
+                planId,
+                "Repriced plan",
+                savedAt,
+                TradeOrderCraftPlanLinkKind.OrderGenerated));
+
+        var result = await fixture.Commissions.ExecuteCompanyAsync(
+            access!,
+            command,
+            CancellationToken.None);
+        var canonicalPlan = await fixture.Profiles.LoadObjectAsync(
+            fixture.Owner.ProfileId.ToString("D"),
+            ProfileSyncCollections.Plans,
+            planId,
+            CancellationToken.None);
+
+        Assert.True(
+            result.Status == CompanyCommissionMutationStatus.Applied,
+            $"{result.ErrorCode}: {result.ErrorMessage}");
+        Assert.Equal(2, result.Order?.CompanyCommission?.CurrentTermsVersion);
+        Assert.NotNull(canonicalPlan);
+    }
+
+    [Fact]
     public async Task PublicBriefUsesPublicationProfileWhenOrderIdentityIsDuplicated()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
