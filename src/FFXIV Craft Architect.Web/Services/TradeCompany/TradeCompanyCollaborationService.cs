@@ -611,25 +611,7 @@ public sealed class TradeCompanyCollaborationService(
                 "The hosted order authority changed before its linked plan could be verified.");
         }
 
-        var profileId = authority.Connection.ProfileScopeId
-            ?? throw new InvalidOperationException(
-                "Linked-plan verification requires a captured profile authority.");
         var planId = order.CraftPlanId;
-        var revision = await localState.LoadObjectRevisionAsync(
-            profileId,
-            ProfileSyncCollections.Plans,
-            planId);
-        var pending = profileSync.PendingSaves.Any(item =>
-            string.Equals(item.Collection, ProfileSyncCollections.Plans, StringComparison.Ordinal) &&
-            string.Equals(item.ObjectId, planId, StringComparison.Ordinal));
-        var conflict = profileSync.Conflicts.Any(item =>
-            string.Equals(item.Collection, ProfileSyncCollections.Plans, StringComparison.Ordinal) &&
-            string.Equals(item.ObjectId, planId, StringComparison.Ordinal));
-        if (revision > 0 && !pending && !conflict)
-        {
-            return;
-        }
-
         var publication = await profileSync.PublishLocalObjectAsync(
             ProfileSyncCollections.Plans,
             planId,

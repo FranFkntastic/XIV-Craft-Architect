@@ -681,7 +681,7 @@ public sealed class ProfileSyncDeletionProjectionTests
             if (request.Method == HttpMethod.Put)
             {
                 planPutCount++;
-                Assert.Equal(0, adoptionCount);
+                Assert.Equal(planPutCount - 1, adoptionCount);
                 plan.Revision = 5;
                 return Ok(new ProfileSyncPutResponse
                 {
@@ -693,7 +693,7 @@ public sealed class ProfileSyncDeletionProjectionTests
             if (IsAdoptionRequest(request))
             {
                 adoptionCount++;
-                Assert.Equal(1, planPutCount);
+                Assert.Equal(adoptionCount, planPutCount);
                 return Adoption(order, 4);
             }
 
@@ -740,7 +740,7 @@ public sealed class ProfileSyncDeletionProjectionTests
 
         Check(
             () => Assert.NotNull(ownership),
-            () => Assert.Equal(1, planPutCount),
+            () => Assert.Equal(2, planPutCount),
             () => Assert.Equal(2, adoptionCount),
             () => Assert.Equal(profileId, profileSync.CurrentStatus.ProfileId),
             () => Assert.Equal(ProfileSyncStage.Ready, profileSync.CurrentStatus.Stage),
