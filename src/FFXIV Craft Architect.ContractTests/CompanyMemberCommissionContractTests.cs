@@ -328,6 +328,22 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task CommissionerDiscordRecipientAuthorityDoesNotDependOnDeliveryDestination()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Update-channel commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(
+            recipient,
+            destinationMode: DiscordNotificationDestinationMode.UpdateChannel);
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task CommissionerDiscordRecipientOverridesPendingMembershipInWorkspaceList()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -645,14 +661,19 @@ public sealed class CompanyMemberCommissionContractTests
 
         public async Task ConfigureCommissionerRouteAsync(
             Account account,
-            long expectedRevision = 0)
+            long expectedRevision = 0,
+            DiscordNotificationDestinationMode destinationMode =
+                DiscordNotificationDestinationMode.CommissionerDirectMessage)
         {
             var route = await Notifications.PutRouteAsync(
                 new CompanyId(Company.Id),
                 new DiscordNotificationRouteUpdate(
                     account.DiscordUserId,
-                    DiscordNotificationDestinationMode.CommissionerDirectMessage,
-                    null,
+                    destinationMode,
+                    destinationMode is DiscordNotificationDestinationMode.UpdateChannel or
+                        DiscordNotificationDestinationMode.Both
+                        ? "123456789012345678"
+                        : null,
                     DiscordDirectMessageFallback.None,
                     DiscordNotificationMentionBehavior.NoPing,
                     DiscordNotificationMentionBehavior.Push,
