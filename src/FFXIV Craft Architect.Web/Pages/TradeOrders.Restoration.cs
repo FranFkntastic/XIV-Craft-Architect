@@ -299,15 +299,8 @@ public partial class TradeOrders
                     SelectOrder(hosted.OwnerProjection?.Order ?? hosted.Order);
                 }
             }
-            else if (linkedOwner?.Order.CompanyProfileId == _companyProfile.Id)
-            {
-                var selectedTab = _activeOpsTab;
-                var planExpanded = _isPlanPaneExpanded;
-                SelectOrder(linkedOwner.Order);
-                _activeOpsTab = selectedTab;
-                _isPlanPaneExpanded = planExpanded;
-            }
-            else if (_selectedOrder.CompanyCommission != null)
+            else if (_selectedOrder.CompanyCommission != null &&
+                     linkedOwner?.Order.CompanyProfileId != _companyProfile.Id)
             {
                 ClearUnavailableSelectedOrder(
                     "That device-only order is stored separately from the hosted workspace.");
