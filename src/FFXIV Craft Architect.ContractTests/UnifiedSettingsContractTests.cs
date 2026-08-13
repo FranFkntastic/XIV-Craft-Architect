@@ -47,6 +47,18 @@ public sealed class UnifiedSettingsContractTests
     }
 
     [Fact]
+    public void OAuthCallbackPublishesThePersistedConnectionToMountedAccountReaders()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var session = File.ReadAllText(Path.Combine(web, "Shared", "HostedOrderSyncSession.razor"));
+        var account = File.ReadAllText(Path.Combine(web, "Shared", "AccountSignInControl.razor"));
+
+        Assert.Contains("ProfileSync.AdoptAuthenticatedConnectionAsync", session, StringComparison.Ordinal);
+        Assert.DoesNotContain("LocalState.SaveConnectionSettingsAsync", session, StringComparison.Ordinal);
+        Assert.Contains("ProfileSync.ConnectionChanged += OnConnectionChanged", account, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WorkspaceSettingsDoNotDuplicateCompanyWorkAndPickerIsGlobal()
     {
         var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
