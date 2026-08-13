@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -207,7 +209,55 @@ public sealed class ProfileHostProfileResponse
 {
     public string ProfileId { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
+    public long MetadataRevision { get; set; }
     public long ServerRevision { get; set; }
+}
+
+public static class ProfileHostDisplayNamePolicy
+{
+    public const int MaximumLength = 120;
+
+    public static bool TryNormalize(string? candidate, out string displayName)
+    {
+        displayName = candidate?.Trim() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(displayName) &&
+               displayName.Length <= MaximumLength &&
+               !displayName.Any(char.IsControl) &&
+               displayName.EnumerateRunes().All(IsPermittedProfileNameRune) &&
+               displayName.EnumerateRunes().Any(IsRenderedBaseRune);
+    }
+
+    private static bool IsPermittedProfileNameRune(Rune rune) =>
+        Rune.GetUnicodeCategory(rune) is not (
+            UnicodeCategory.Control or
+            UnicodeCategory.LineSeparator or
+            UnicodeCategory.ParagraphSeparator);
+
+    private static bool IsRenderedBaseRune(Rune rune) =>
+        Rune.GetUnicodeCategory(rune) is not (
+            UnicodeCategory.Control or
+            UnicodeCategory.Format or
+            UnicodeCategory.NonSpacingMark or
+            UnicodeCategory.SpacingCombiningMark or
+            UnicodeCategory.EnclosingMark or
+            UnicodeCategory.LineSeparator or
+            UnicodeCategory.ParagraphSeparator or
+            UnicodeCategory.SpaceSeparator);
+}
+
+public sealed class ProfileHostDisplayNameUpdateRequest
+{
+    public long ExpectedMetadataRevision { get; set; }
+    public string DisplayName { get; set; } = string.Empty;
+}
+
+public sealed class ProfileHostDisplayNameUpdateResponse
+{
+    public bool Success { get; set; }
+    public bool Conflict { get; set; }
+    public ProfileHostProfileResponse? Profile { get; set; }
+    public string? ErrorCode { get; set; }
+    public string? ErrorMessage { get; set; }
 }
 
 public sealed class ProfileHostAccessKeyMetadata

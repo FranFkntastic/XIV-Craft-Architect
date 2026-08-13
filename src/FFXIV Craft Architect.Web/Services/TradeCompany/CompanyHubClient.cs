@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
@@ -26,6 +27,23 @@ public sealed class CompanyHubClient(
             ?? throw new InvalidOperationException("Company hub returned an empty response.");
     }
 
+    public async Task<TradeCompanyWorkspaceProfile> LoadWorkspaceProfileAsync(
+        Guid companyId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{companyId:D}/workspace-profile",
+            null,
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The selected company workspace returned an empty profile.");
+    }
+
     public async Task RequestMembershipAsync(string companyId, string? note, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(
@@ -33,7 +51,7 @@ public sealed class CompanyHubClient(
             $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-requests",
             new { RequestNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim() },
             cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureHubSuccessAsync(response, cancellationToken);
     }
 
     public async Task ClaimAsync(string companyId, string commissionId, CancellationToken cancellationToken = default)
@@ -46,6 +64,52 @@ public sealed class CompanyHubClient(
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task UpdateThemeAsync(
+        string companyId,
+        long expectedProfileRevision,
+        CompanyHubTheme theme,
+        bool showOpenCommissionCount,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Put,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/hub/theme",
+            new
+            {
+                ExpectedProfileRevision = expectedProfileRevision,
+                theme.Accent,
+                theme.BannerStyle,
+                theme.Emblem,
+                theme.Tagline,
+                theme.About,
+                ShowOpenCommissionCount = showOpenCommissionCount
+            },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+    }
+
+    public async Task PostUpdateAsync(
+        string companyId,
+        long expectedProfileRevision,
+        string title,
+        string body,
+        bool isPinned,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/hub/updates",
+            new
+            {
+                ExpectedProfileRevision = expectedProfileRevision,
+                Title = title,
+                Body = body,
+                IsPinned = isPinned
+            },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<CompanyMembership>> LoadMembershipsAsync(CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(HttpMethod.Get, "trade/v1/memberships", null, cancellationToken);
@@ -53,17 +117,92 @@ public sealed class CompanyHubClient(
         return await response.Content.ReadFromJsonAsync<IReadOnlyList<CompanyMembership>>(JsonOptions, cancellationToken) ?? [];
     }
 
-    public async Task<bool> LoadNotificationOptOutAsync(string companyId, CancellationToken cancellationToken = default)
+    public async Task<CompanyMembershipNotifications> LoadNotificationPreferencesAsync(string companyId, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(HttpMethod.Get, $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-notifications", null, cancellationToken);
         response.EnsureSuccessStatusCode();
-        return (await response.Content.ReadFromJsonAsync<CompanyMembershipNotifications>(JsonOptions, cancellationToken))!.OptedOut;
+        return (await response.Content.ReadFromJsonAsync<CompanyMembershipNotifications>(JsonOptions, cancellationToken))!;
     }
 
-    public async Task SetNotificationOptOutAsync(string companyId, bool optedOut, CancellationToken cancellationToken = default)
+    public async Task SetNotificationPreferencesAsync(
+        string companyId,
+        CompanyMembershipNotifications preferences,
+        CancellationToken cancellationToken = default)
     {
-        using var response = await SendAsync(HttpMethod.Put, $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-notifications", new { OptedOut = optedOut }, cancellationToken);
+        using var response = await SendAsync(
+            HttpMethod.Put,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-notifications",
+            new
+            {
+                preferences.ActionRequired,
+                preferences.CommissionerMessages,
+                preferences.ProgressAndStatus
+            },
+            cancellationToken);
         response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<MemberNotificationTestReadiness> LoadNotificationTestReadinessAsync(
+        string companyId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-notifications/test-readiness",
+            null,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<MemberNotificationTestReadiness>(
+            JsonOptions,
+            cancellationToken))!;
+    }
+
+    public async Task<MemberNotificationTestDelivery> SendNotificationTestAsync(
+        string companyId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-notifications/test",
+            null,
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<MemberNotificationTestDelivery>(
+            JsonOptions,
+            cancellationToken))!;
+    }
+
+    public async Task<MemberNotificationTestDelivery> LoadNotificationTestAsync(
+        string companyId,
+        Guid testId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-notifications/test/{testId:D}",
+            null,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<MemberNotificationTestDelivery>(
+            JsonOptions,
+            cancellationToken))!;
+    }
+
+    public async Task<long> MarkCommissionReadAsync(
+        string companyId,
+        string commissionId,
+        long openedRevision,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/hub/commissions/{Uri.EscapeDataString(commissionId)}/attention/read",
+            new { OpenedRevision = openedRevision },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<CompanyHubAttentionRead>(
+            JsonOptions,
+            cancellationToken))!.ReadRevision;
     }
 
     public async Task ReportProgressAsync(CompanyHubCommission commission, CancellationToken cancellationToken = default)
@@ -110,7 +249,33 @@ public sealed class CompanyHubClient(
             CommandId = Guid.NewGuid(),
             Command = command
         }, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureHubSuccessAsync(response, cancellationToken);
+    }
+
+    private static async Task EnsureHubSuccessAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        CompanyHubError? error = null;
+        try
+        {
+            error = await response.Content.ReadFromJsonAsync<CompanyHubError>(
+                JsonOptions,
+                cancellationToken);
+        }
+        catch (JsonException)
+        {
+        }
+
+        throw new CompanyHubRequestException(
+            response.StatusCode,
+            error?.Error,
+            error?.Message ?? $"The company hub request failed with status {(int)response.StatusCode}.");
     }
 
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, CancellationToken cancellationToken)
@@ -145,20 +310,75 @@ public sealed record CompanyHubProjection(
     string DisplayName,
     CompanyHubTheme Theme,
     CompanyHubStanding Standing,
+    long ProfileRevision,
+    IReadOnlyList<CompanyHubUpdate>? Updates,
     int? OpenCommissionCount,
     IReadOnlyList<CompanyHubCommission>? OpenCommissions,
     IReadOnlyList<CompanyHubCommission>? Assignments,
     IReadOnlyList<CompanyHubRosterMember>? Roster,
-    IReadOnlyList<CompanyHubActivity>? RecentActivity,
     int? PendingMembershipRequestCount);
 
-public sealed record CompanyHubTheme(string Accent, string BannerStyle, string Emblem, string? Tagline, string? About);
+public sealed record TradeCompanyWorkspaceProfile(
+    Guid Id,
+    string Name,
+    string? CommissionContact,
+    TradePaymentPolicy PaymentPolicy,
+    DateTime CreatedAtUtc,
+    DateTime UpdatedAtUtc)
+{
+    public TradeCompanyProfile ToTransientProfile() => new()
+    {
+        Id = Id,
+        Name = Name,
+        CommissionContact = CommissionContact,
+        PaymentPolicy = PaymentPolicy,
+        RemoteId = Id.ToString("D"),
+        SyncState = TradeSyncState.Synced,
+        CreatedAtUtc = CreatedAtUtc,
+        UpdatedAtUtc = UpdatedAtUtc
+    };
+}
+
+public sealed record CompanyHubTheme(
+    string Accent,
+    string BannerStyle,
+    string Emblem,
+    string? Tagline,
+    string? About,
+    bool ShowOpenCommissionCount);
 public sealed record CompanyHubStanding(string State, string? Role);
 public sealed record CompanyHubOutput(Guid LineId, int ItemId, string Name, int Quantity, int CompletedQuantity, int ReadyQuantity, int AcceptedQuantity);
 public sealed record CompanyHubPayment(string Schedule, string Label, decimal Total);
-public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State);
+public sealed record CompanyHubUpdate(Guid Id, string Title, string Body, string AuthorDisplayName, DateTime PublishedAtUtc, DateTime? EditedAtUtc, bool IsPinned);
+public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State, bool CanWork, bool CanReportProgress, bool CanDeclareReadiness, string? WorkBlockedReason, CompanyHubCommissionAttention? UnreadCommissionerUpdate);
+public sealed record CompanyHubCommissionAttention(Guid EventId, long Revision, string Text, DateTime CreatedAtUtc);
+public sealed record CompanyHubAttentionRead(long ReadRevision);
 public sealed record CompanyHubRosterMember(string DisplayName, string Role);
-public sealed record CompanyHubActivity(string CommissionId, string Reference, string Kind, DateTime OccurredAtUtc);
-public sealed record CompanyMembership(string CompanyId, Guid AccountProfileId, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, Guid? DecidedByProfileId, string? RequestNote);
-public sealed record CompanyMembershipNotifications(string CompanyId, bool OptedOut);
+public sealed record CompanyMembership(string CompanyId, Guid AccountProfileId, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, Guid? DecidedByProfileId, string? RequestNote, bool HasMembership);
+public sealed record CompanyMembershipNotifications(
+    string CompanyId,
+    bool ActionRequired,
+    bool CommissionerMessages,
+    bool ProgressAndStatus);
+public sealed record MemberNotificationTestReadiness(
+    bool Ready,
+    string? DestinationDisplayName,
+    string? Reason);
+public sealed record MemberNotificationTestDelivery(
+    Guid TestId,
+    string State,
+    string DestinationDisplayName,
+    int AttemptCount,
+    string? MessageId,
+    string? Error);
 public sealed record CompanyMember(Guid AccountProfileId, string DisplayName, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, bool DiscordLinked);
+
+public sealed class CompanyHubRequestException(
+    HttpStatusCode statusCode,
+    string? errorCode,
+    string message) : HttpRequestException(message, null, statusCode)
+{
+    public string? ErrorCode { get; } = errorCode;
+}
+
+file sealed record CompanyHubError(string? Error, string? Message);

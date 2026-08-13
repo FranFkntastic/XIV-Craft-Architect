@@ -54,18 +54,10 @@ public sealed class DiscordIdentityContractTests
             const string interactionId = "333333333333333333";
             const string ownerInteractionId = "444444444444444444";
             var actionToken = SqliteDiscordCollaborationStore.CreateActionToken();
-            var discordOptions = new DiscordCommissionOptions
-            {
-                Enabled = true,
-                CompanyId = companyId.Value.ToString("D"),
-                ApplicationId = "100000000000000001",
-                PublicKey = new string('a', 64),
-                BotToken = "test-token",
-                AllowedGuildId = "100000000000000002",
-                AllowedChannelId = "100000000000000003",
-                CommissionBaseUrl = "https://example.test/commission.html?id=",
-                DatabasePath = Path.Combine(root, "discord.db")
-            };
+            var discordOptions = CreateDiscordOptions(
+                companyId,
+                root,
+                crafterWorkspaceEnabled: true);
             var collaboration = new SqliteDiscordCollaborationStore(discordOptions);
             var created = await collaboration.CreatePublicationAsync(
                 new TradeCompanyPublicationOwnership(
@@ -154,7 +146,7 @@ public sealed class DiscordIdentityContractTests
             {
                 Assert.Equal(64, response.RootElement.GetProperty("flags").GetInt32());
                 Assert.Contains(
-                    "Link Discord in Craft Architect Options",
+                    "Link Discord in Craft Architect Settings",
                     response.RootElement.GetProperty("content").GetString());
             }
             Assert.Null(await notifications.LoadPendingClaimContactAsync(
@@ -188,7 +180,7 @@ public sealed class DiscordIdentityContractTests
             using (var response = JsonDocument.Parse(JsonSerializer.Serialize(inactive)))
             {
                 Assert.Contains(
-                    "Link Discord in Craft Architect Options",
+                    "Link Discord in Craft Architect Settings",
                     response.RootElement.GetProperty("content").GetString());
             }
             Assert.Null(await notifications.LoadPendingClaimContactAsync(
@@ -274,6 +266,33 @@ public sealed class DiscordIdentityContractTests
             Assert.NotNull(expectation);
             Assert.Equal(DiscordUser, expectation.Contact.DiscordUserId);
 
+            var disabledInteractions = new DiscordCommissionInteractionService(
+                CreateDiscordOptions(
+                    companyId,
+                    root,
+                    crafterWorkspaceEnabled: false),
+                collaboration,
+                identities,
+                profiles,
+                companies,
+                memberships,
+                notifications,
+                claimIssuer,
+                resolver,
+                now);
+            var disabledWorkspace = await disabledInteractions.HandleAsync(
+                ComponentInteraction(
+                    "343434343434343434",
+                    DiscordUser,
+                    $"open-workspace:{actionToken}"));
+            using (var response = JsonDocument.Parse(
+                JsonSerializer.Serialize(disabledWorkspace)))
+            {
+                Assert.Contains(
+                    "workspace is not available",
+                    response.RootElement.GetProperty("content").GetString());
+            }
+
             var ownerResponse = await interactions.HandleAsync(
                 ComponentInteraction(
                     ownerInteractionId,
@@ -311,6 +330,7 @@ public sealed class DiscordIdentityContractTests
             var mutation = ClaimMutation(
                 commissionId,
                 now.GetUtcNow().UtcDateTime,
+                claimCapabilityId,
                 CreateAssignedCommission(
                     companyId,
                     commissionId,
@@ -321,6 +341,16 @@ public sealed class DiscordIdentityContractTests
                         new CompanyRecordRevision(1)),
                     now.GetUtcNow().UtcDateTime,
                     claimId));
+            Assert.Null(mutation.Activity!.Actor.DisplayName);
+            Assert.Equal(
+                "Participant",
+                await DiscordCompanyCommissionPostCommitSink.ResolveActorDisplayNameAsync(
+                    mutation.Order!.CompanyCommission!,
+                    mutation.Activity,
+                    notifications,
+                    identities,
+                    profiles,
+                    now));
             Assert.True(await committer.CaptureAsync(capability, mutation));
             Assert.True(await notifications.HasCommittedClaimContactAsync(
                 companyId,
@@ -332,6 +362,23 @@ public sealed class DiscordIdentityContractTests
                 commissionId,
                 Guid.NewGuid(),
                 DiscordUser));
+            var participantGrantId = mutation.Order.CompanyCommission!
+                .ParticipantGrant!.GrantId;
+            Assert.Equal(
+                "Participant",
+                await DiscordCompanyCommissionPostCommitSink.ResolveActorDisplayNameAsync(
+                    mutation.Order.CompanyCommission!,
+                    mutation.Activity with
+                    {
+                        Actor = new(
+                            $"participant-grant:{participantGrantId:D}",
+                            CompanyCommissionActorKind.Crafter),
+                        Kind = CompanyCommissionActivityKind.ProgressReported
+                    },
+                    notifications,
+                    identities,
+                    profiles,
+                    now));
             Assert.Null(await notifications.LoadPendingClaimContactAsync(
                 companyId,
                 commissionId,
@@ -498,6 +545,32 @@ public sealed class DiscordIdentityContractTests
                     "not available for this account",
                     revokedPayload.RootElement.GetProperty("content").GetString());
             }
+
+            var commissionerRoute = await notifications.PutRouteAsync(
+                companyId,
+                new DiscordNotificationRouteUpdate(
+                    DiscordUser,
+                    DiscordNotificationDestinationMode.CommissionerDirectMessage,
+                    null,
+                    DiscordDirectMessageFallback.None,
+                    DiscordNotificationMentionBehavior.NoPing,
+                    DiscordNotificationMentionBehavior.Push,
+                    DiscordNotificationMentionBehavior.Push,
+                    0,
+                    "discord-interaction-commissioner-route"),
+                now.GetUtcNow());
+            Assert.True(commissionerRoute.Success, commissionerRoute.Error);
+            var commissionerAuthorized = await authority.ResolveAsync(
+                linkedIdentity!,
+                new DiscordInteractionTarget(
+                    "121212121212121212",
+                    DiscordUser,
+                    companyId,
+                    commissionId,
+                    publicId));
+            Assert.NotNull(commissionerAuthorized);
+            Assert.True(commissionerAuthorized.IsCompanyOperator);
+            Assert.False(commissionerAuthorized.IsActiveParticipant);
 
             Assert.Equal(
                 DiscordIdentityLinkResultStatus.Linked,
@@ -687,6 +760,7 @@ public sealed class DiscordIdentityContractTests
     private static CompanyCommissionMutationResult ClaimMutation(
         Guid commissionId,
         DateTime committedAtUtc,
+        Guid claimCapabilityId,
         TradeOrder order) =>
         new(
             CompanyCommissionMutationStatus.Applied,
@@ -698,7 +772,7 @@ public sealed class DiscordIdentityContractTests
                 CommissionId = commissionId,
                 CommissionRevision = 2,
                 Actor = new CompanyCommissionActor(
-                    "claim-revision:5",
+                    $"claim-capability:{claimCapabilityId:D}:5",
                     CompanyCommissionActorKind.Crafter),
                 SourceSurface = CompanyCommissionSourceSurface.PublicBrief,
                 CreatedAtUtc = committedAtUtc,
@@ -823,6 +897,24 @@ public sealed class DiscordIdentityContractTests
             }
         };
     }
+
+    private static DiscordCommissionOptions CreateDiscordOptions(
+        CompanyId companyId,
+        string root,
+        bool crafterWorkspaceEnabled) =>
+        new()
+        {
+            Enabled = true,
+            CrafterWorkspaceEnabled = crafterWorkspaceEnabled,
+            CompanyId = companyId.Value.ToString("D"),
+            ApplicationId = "100000000000000001",
+            PublicKey = new string('a', 64),
+            BotToken = "test-token",
+            AllowedGuildId = "100000000000000002",
+            AllowedChannelId = "100000000000000003",
+            CommissionBaseUrl = "https://example.test/commission.html?id=",
+            DatabasePath = Path.Combine(root, "discord.db")
+        };
 
     private static DiscordIdentityOptions CreateOptions(string root) => new()
     {

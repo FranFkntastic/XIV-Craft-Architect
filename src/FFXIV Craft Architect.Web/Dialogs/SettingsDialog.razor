@@ -4,6 +4,7 @@
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
 @using FFXIV_Craft_Architect.Web.Services.ProfileHosting
+@using System.Globalization
 @using System.Text.Json
 @inject AppState AppState
 @inject ISettingsService Settings
@@ -25,41 +26,50 @@
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.CompanyHubClient CompanyHubClient
 
-<MudDialog Class="options-dialog" Style="width: min(800px, calc(100vw - 32px)); max-width: 800px;">
+<MudDialog Class="settings-dialog"
+           Style="width: min(1120px, calc(100vw - 32px)); max-width: 1120px;"
+           @onkeydown="HandleDialogKeyDown">
     <DialogContent>
-        <div class="options-shell">
-            <div class="options-tab-list" role="tablist" aria-label="Options sections">
-                @for (var index = 0; index < VisibleOptionsTabs.Count; index++)
+        <div class="settings-shell">
+            <nav class="settings-nav" aria-label="Settings sections">
+                <div class="settings-nav-heading">Account</div>
+                @for (var index = 0; index < VisibleSettingsSections.Count; index++)
                 {
                     var tabIndex = index;
-                    var tab = VisibleOptionsTabs[tabIndex];
+                    var tab = VisibleSettingsSections[tabIndex];
+                    @if (tab.GroupBreak)
+                    {
+                        <div class="settings-nav-heading">Craft Architect</div>
+                    }
                     <button type="button"
                             @ref="_tabElements[tabIndex]"
                             id="@GetTabId(tab.Panel)"
-                            class="options-tab @(tab.Panel == _activePanel ? "is-active" : null)"
-                            role="tab"
-                            aria-selected="@(tab.Panel == _activePanel ? "true" : "false")"
-                            aria-controls="@GetPanelId(tab.Panel)"
+                            class="settings-nav-item @(tab.Panel == _activePanel ? "is-active" : null)"
+                            aria-current="@(tab.Panel == _activePanel ? "page" : null)"
                             tabindex="@(tab.Panel == _activePanel ? 0 : -1)"
                             @onclick="() => SelectTab(tab.Panel)"
                             @onkeydown="args => HandleTabKeyDown(args, tabIndex)">
+                        <MudIcon Icon="@tab.Icon" Size="Size.Small" />
                         @tab.Label
                     </button>
                 }
-            </div>
-            <div class="options-tab-panel"
-                 id="@GetPanelId(_activePanel)"
-                 role="tabpanel"
-                 aria-labelledby="@GetTabId(_activePanel)">
-            @if (_activePanel == OptionsPanel.General)
+            </nav>
+            <section class="settings-content"
+                     id="@GetPanelId(_activePanel)"
+                     aria-labelledby="@GetTabId(_activePanel)">
+            @if (_activePanel == SettingsSection.Profile)
             {
-                <MudText Typo="Typo.body2" Color="Color.Secondary">
-                    Craft Architect saves each accepted plan change in this browser.
-                </MudText>
+                <AccountSettingsPanel Section="AccountSettingsSection.Profile" />
             }
-            
-            else if (_activePanel == OptionsPanel.Market)
+            else if (_activePanel == SettingsSection.Workspace)
+            {
+                <WorkspaceSettingsPanel InitialCompanyId="@InitialWorkspaceCompanyId"
+                                        OpenProfile="@(() => SelectTab(SettingsSection.Profile))"
+                                        CompanyChanged="OnWorkspaceCompanyChangedAsync" />
+            }
+            else if (_activePanel == SettingsSection.MarketAndRoutes)
             {
                 <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
                     Configure your default market settings for price lookups.
@@ -85,7 +95,8 @@
 
                 <CompactSelectField Id="options-market-scope"
                                     Label="Market search scope"
-                                    @bind-Value="DefaultMarketFetchScopeValue"
+                                    Value="@DefaultMarketFetchScopeValue"
+                                    ValueChanged="OnMarketFetchScopeChanged"
                                     Options="MarketFetchScopeOptions"
                                     Class="options-select my-3" />
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
@@ -106,7 +117,8 @@
                 }
 
                 <MudSwitch T="bool"
-                           @bind-Value="_procurementEnableSplitWorldPurchases"
+                           Value="@_procurementEnableSplitWorldPurchases"
+                           ValueChanged="OnSplitWorldPurchasesChanged"
                            Label="Allow split purchases"
                            Color="Color.Primary"
                            Class="mt-4" />
@@ -115,7 +127,8 @@
                 </MudText>
 
                 <MudSwitch T="bool"
-                           @bind-Value="_procurementStartFromHomeDataCenter"
+                           Value="@_procurementStartFromHomeDataCenter"
+                           ValueChanged="OnProcurementOriginChanged"
                            Label="Start procurement routes from the home data center"
                            Color="Color.Primary"
                            Class="mt-4" />
@@ -125,7 +138,8 @@
 
                 <CompactSelectField Id="options-travel-priority"
                                     Label="Route travel priority"
-                                    @bind-Value="ProcurementTravelPriorityValue"
+                                    Value="@ProcurementTravelPriorityValue"
+                                    ValueChanged="OnTravelPriorityChanged"
                                     Options="TravelPriorityOptions"
                                     Class="options-select mt-4" />
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
@@ -137,7 +151,7 @@
                 </MudText>
             }
 
-            else if (_activePanel == OptionsPanel.Integrations)
+            else if (_activePanel == SettingsSection.Integrations)
             {
                 <MudPaper Variant="Variant.Outlined" Class="pa-4">
                     <div class="d-flex align-center justify-space-between gap-3 mb-1">
@@ -156,7 +170,8 @@
                     </div>
 
                     <MudSwitch T="bool"
-                               @bind-Value="_marketMafiosoEnabled"
+                               Value="@_marketMafiosoEnabled"
+                               ValueChanged="OnMarketMafiosoEnabledChanged"
                                Label="Enable MarketMafioso integration"
                                Color="Color.Primary"
                                Class="mt-3" />
@@ -166,7 +181,8 @@
 
                     @if (_marketMafiosoEnabled)
                     {
-                    <MudTextField @bind-Value="_marketMafiosoApiUrl"
+                    <MudTextField T="string" Value="@_marketMafiosoApiUrl"
+                                  ValueChanged="OnMarketMafiosoApiUrlChanged"
                                   id="market-mafioso-api-url"
                                   Label="Workshop Host API URL"
                                   Placeholder="https://host.example/marketmafioso/api/"
@@ -176,7 +192,8 @@
                                   Immediate="true"
                                   Disabled="_marketMafiosoConnectionIsBusy"
                                   Class="mt-4" />
-                    <MudTextField @bind-Value="_marketMafiosoApiKey"
+                    <MudTextField T="string" Value="@_marketMafiosoApiKey"
+                                  ValueChanged="OnMarketMafiosoApiKeyChanged"
                                   id="market-mafioso-access-key"
                                   Label="Craft Architect access key"
                                   HelperText="Generate a Craft Architect key in the Workshop Host key manager. It is stored only in this browser profile and can be revoked independently."
@@ -206,7 +223,8 @@
 
                     <MudGrid Spacing="2" Class="mt-2">
                         <MudItem xs="12" sm="7">
-                            <MudTextField @bind-Value="_marketMafiosoTargetCharacter"
+                            <MudTextField T="string" Value="@_marketMafiosoTargetCharacter"
+                                          ValueChanged="OnMarketMafiosoTargetCharacterChanged"
                                           id="market-mafioso-target-character"
                                           Label="Claiming character"
                                           Placeholder="Eriana Ning"
@@ -215,7 +233,8 @@
                                           Immediate="true" />
                         </MudItem>
                         <MudItem xs="12" sm="5">
-                            <MudTextField @bind-Value="_marketMafiosoTargetWorld"
+                            <MudTextField T="string" Value="@_marketMafiosoTargetWorld"
+                                          ValueChanged="OnMarketMafiosoTargetWorldChanged"
                                           id="market-mafioso-target-world"
                                           Label="Home world"
                                           Placeholder="Siren"
@@ -229,7 +248,8 @@
                     </MudText>
 
                     <MudSwitch T="bool"
-                               @bind-Value="_marketMafiosoAutoSyncEvidence"
+                               Value="@_marketMafiosoAutoSyncEvidence"
+                               ValueChanged="OnMarketMafiosoAutoSyncChanged"
                                Label="Automatically import refreshed evidence"
                                Color="Color.Primary"
                                Class="mt-3" />
@@ -277,7 +297,7 @@
                 </MudPaper>
             }
 
-            else if (_activePanel == OptionsPanel.Company)
+            else if (_activePanel == SettingsSection.CompanyAdministration)
             {
                 @if (!string.IsNullOrWhiteSpace(_companyLoadError))
                 {
@@ -312,7 +332,7 @@
                                        Color="Color.Secondary"
                                        Size="Size.Small"
                                        StartIcon="@Icons.Material.Filled.CloudSync"
-                                       OnClick="@(() => SelectTab(OptionsPanel.Hosting))">
+                                       OnClick="@(() => SelectTab(SettingsSection.AccessAndDevices))">
                                 Browser sync
                             </MudButton>
                         </div>
@@ -424,8 +444,10 @@
                 }
             }
 
-            else if (_activePanel == OptionsPanel.Hosting)
+            else if (_activePanel == SettingsSection.AccessAndDevices)
             {
+                <AccountSettingsPanel Section="AccountSettingsSection.AccessAndDevices" />
+                <MudDivider Class="my-4" />
                 <MudPaper Variant="Variant.Outlined" Class="pa-4">
                     <div class="d-flex align-center justify-space-between gap-3">
                         <div>
@@ -450,15 +472,8 @@
                     @if (!ProfileSync.CurrentStatus.IsConnected)
                     {
                         <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mt-4">
-                            This browser is using local storage. Account credentials are managed in the dedicated account dialog.
+                            This browser is using local storage. Connect or pair it above to enable hosted browser-profile sync.
                         </MudText>
-                        <MudButton Variant="Variant.Text"
-                                   Color="Color.Secondary"
-                                   StartIcon="@Icons.Material.Filled.AccountCircle"
-                                   OnClick="OpenAccountDialogAsync"
-                                   Class="mt-2">
-                            Account connection…
-                        </MudButton>
                     }
                     else
                     {
@@ -552,7 +567,7 @@
                 }
             }
 
-            else if (_activePanel == OptionsPanel.Storage)
+            else if (_activePanel == SettingsSection.Storage)
             {
                 <MudText Typo="Typo.body2" Class="mb-4">
                     Manage the named plans stored in this browser.
@@ -575,7 +590,7 @@
                 </MudText>
             }
 
-            else if (_activePanel == OptionsPanel.Diagnostics)
+            else if (_activePanel == SettingsSection.Diagnostics)
             {
                 <div class="diagnostics-heading">
                     <div>
@@ -739,7 +754,7 @@
                 </section>
             }
 
-            else if (_activePanel == OptionsPanel.About)
+            else if (_activePanel == SettingsSection.About)
             {
                 <div class="d-flex flex-column align-center py-4" style="position: relative; min-height: 180px;">
                     <MudText Typo="Typo.h5" Class="mb-2">FFXIV Craft Architect</MudText>
@@ -783,50 +798,48 @@
                                    Style="position: absolute; bottom: 8px; left: 8px; opacity: 0.35;" />
                 </div>
             }
-            </div>
+            </section>
         </div>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="Cancel">Cancel</MudButton>
-        <MudButton Color="Color.Primary" OnClick="Save" Disabled="@_isSaving">
-            @(_isSaving ? "Applying..." : "Save")
-        </MudButton>
+        @if (SectionHasExplicitSave)
+        {
+            <MudButton Color="Color.Primary" OnClick="SaveCurrentSectionAsync" Disabled="@_isSaving">
+                @(_isSaving ? "Applying..." : SaveButtonLabel)
+            </MudButton>
+        }
+        <MudButton OnClick="Close">Close</MudButton>
     </DialogActions>
 </MudDialog>
 
 @code {
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
-    [Parameter] public int InitialPanelIndex { get; set; }
+    [Parameter] public SettingsSection InitialSection { get; set; } = SettingsSection.MarketAndRoutes;
+    [Parameter] public string? InitialWorkspaceCompanyId { get; set; }
 
-    private static readonly IReadOnlyList<OptionsTab> AllOptionsTabs =
+    private static readonly IReadOnlyList<SettingsNavItem> AllSettingsSections =
     [
-        new(OptionsPanel.General, "General"),
-        new(OptionsPanel.Market, "Market"),
-        new(OptionsPanel.Integrations, "Integrations"),
-        new(OptionsPanel.Company, "Company"),
-        new(OptionsPanel.Hosting, "Hosting"),
-        new(OptionsPanel.Storage, "Storage"),
-        new(OptionsPanel.Diagnostics, "Diagnostics", DeveloperOnly: true),
-        new(OptionsPanel.About, "About")
+        new(SettingsSection.Profile, "Profile", Icons.Material.Filled.Person),
+        new(SettingsSection.Workspace, "Workspace", Icons.Material.Filled.BusinessCenter),
+        new(SettingsSection.AccessAndDevices, "Access & devices", Icons.Material.Filled.Devices),
+        new(SettingsSection.MarketAndRoutes, "Market & routes", Icons.Material.Filled.Public, GroupBreak: true),
+        new(SettingsSection.Integrations, "Integrations", Icons.Material.Filled.Hub),
+        new(SettingsSection.CompanyAdministration, "Company administration", Icons.Material.Filled.AdminPanelSettings, AdministratorOnly: true),
+        new(SettingsSection.Storage, "Storage", Icons.Material.Filled.Storage),
+        new(SettingsSection.Diagnostics, "Diagnostics", Icons.Material.Filled.Troubleshoot),
+        new(SettingsSection.About, "About", Icons.Material.Filled.Info)
     ];
 
-    private IReadOnlyList<OptionsTab> VisibleOptionsTabs => AllOptionsTabs
-        .Where(tab => !tab.DeveloperOnly || AppState.SecretDebugToolsEnabled)
+    private IReadOnlyList<SettingsNavItem> VisibleSettingsSections => AllSettingsSections
+        .Where(tab => !tab.AdministratorOnly || _canAdministerCompany)
         .ToList();
 
-    private enum OptionsPanel
-    {
-        General,
-        Market,
-        Integrations,
-        Company,
-        Hosting,
-        Storage,
-        Diagnostics,
-        About
-    }
-
-    private sealed record OptionsTab(OptionsPanel Panel, string Label, bool DeveloperOnly = false);
+    private sealed record SettingsNavItem(
+        SettingsSection Panel,
+        string Label,
+        string Icon,
+        bool GroupBreak = false,
+        bool AdministratorOnly = false);
     private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
     [
         new("North America", "North America"),
@@ -849,21 +862,34 @@
         new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
         new(nameof(TradePaymentContractMode.LaborStandard), "Labor standard")
     ];
-    private readonly ElementReference[] _tabElements = new ElementReference[AllOptionsTabs.Count];
-    private OptionsPanel _activePanel = OptionsPanel.General;
+    private readonly ElementReference[] _tabElements = new ElementReference[AllSettingsSections.Count];
+    private SettingsSection _activePanel = SettingsSection.MarketAndRoutes;
+    private bool _canAdministerCompany;
 
-    private static string GetTabId(OptionsPanel panel) => $"options-tab-{panel.ToString().ToLowerInvariant()}";
-    private static string GetPanelId(OptionsPanel panel) => $"options-panel-{panel.ToString().ToLowerInvariant()}";
+    private static string GetTabId(SettingsSection panel) => $"settings-nav-{panel.ToString().ToLowerInvariant()}";
+    private static string GetPanelId(SettingsSection panel) => $"settings-section-{panel.ToString().ToLowerInvariant()}";
 
-    private async Task SelectTab(OptionsPanel panel)
+    private async Task SelectTab(SettingsSection panel)
     {
-        if (!VisibleOptionsTabs.Any(tab => tab.Panel == panel))
+        if (panel != _activePanel && HasPendingCompanyChanges)
         {
-            panel = OptionsPanel.General;
+            var discard = await ConfirmDiscardCompanyChangesAsync();
+            if (!discard)
+            {
+                return;
+            }
+            if (_companyProfile != null)
+            {
+                ApplyCompanyProfileFields(_companyProfile);
+            }
+        }
+        if (!VisibleSettingsSections.Any(tab => tab.Panel == panel))
+        {
+            panel = SettingsSection.MarketAndRoutes;
         }
 
         _activePanel = panel;
-        if (_activePanel == OptionsPanel.Diagnostics)
+        if (_activePanel == SettingsSection.Diagnostics)
         {
             await PrepareDiagnosticsAsync();
         }
@@ -871,11 +897,11 @@
 
     private async Task HandleTabKeyDown(KeyboardEventArgs args, int currentIndex)
     {
-        var visibleTabs = VisibleOptionsTabs;
+        var visibleTabs = VisibleSettingsSections;
         var nextIndex = args.Key switch
         {
-            "ArrowRight" => (currentIndex + 1) % visibleTabs.Count,
-            "ArrowLeft" => (currentIndex - 1 + visibleTabs.Count) % visibleTabs.Count,
+            "ArrowDown" => (currentIndex + 1) % visibleTabs.Count,
+            "ArrowUp" => (currentIndex - 1 + visibleTabs.Count) % visibleTabs.Count,
             "Home" => 0,
             "End" => visibleTabs.Count - 1,
             _ => currentIndex
@@ -906,29 +932,9 @@
         MarketFetchScope Scope,
         IReadOnlyList<string> ComparisonRegions);
 
-    private string DefaultMarketFetchScopeValue
-    {
-        get => _defaultMarketFetchScope.ToString();
-        set
-        {
-            if (Enum.TryParse<MarketFetchScope>(value, out var parsed))
-            {
-                _defaultMarketFetchScope = parsed;
-            }
-        }
-    }
+    private string DefaultMarketFetchScopeValue => _defaultMarketFetchScope.ToString();
 
-    private string ProcurementTravelPriorityValue
-    {
-        get => _procurementTravelPriority.ToString();
-        set
-        {
-            if (Enum.TryParse<MarketTravelPriority>(value, out var parsed))
-            {
-                _procurementTravelPriority = parsed;
-            }
-        }
-    }
+    private string ProcurementTravelPriorityValue => _procurementTravelPriority.ToString();
 
     private string CompanyPaymentContractValue
     {
@@ -965,6 +971,7 @@
     private TradePaymentContractMode _companyPaymentContract = TradePaymentContractMode.LegacyCommission;
     private decimal _companyLegacyCommissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
     private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
+    private string? _persistedCompanyFingerprint;
     private string? _profileHostProfileName;
     private bool _profileHostIsBusy;
     private string? _profileHostStatus;
@@ -993,10 +1000,7 @@
     
     protected override async Task OnInitializedAsync()
     {
-        var initialTab = AllOptionsTabs[Math.Clamp(InitialPanelIndex, 0, AllOptionsTabs.Count - 1)];
-        _activePanel = initialTab.DeveloperOnly && !AppState.SecretDebugToolsEnabled
-            ? OptionsPanel.General
-            : initialTab.Panel;
+        _activePanel = InitialSection;
         _defaultDataCenter = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
         _comparisonRegions = await LoadComparisonRegionsAsync();
@@ -1033,10 +1037,46 @@
         _marketMafiosoAutoSyncEvidence = await Settings.GetAsync("marketmafioso.auto_sync_evidence", true);
 
         await LoadCompanyProfileAsync();
+        await RefreshCompanyAdministrationAccessAsync();
+        if (!VisibleSettingsSections.Any(section => section.Panel == _activePanel))
+        {
+            _activePanel = SettingsSection.MarketAndRoutes;
+        }
         await LoadProfileHostSettingsAsync();
-        if (_activePanel == OptionsPanel.Diagnostics)
+        if (_activePanel == SettingsSection.Diagnostics)
         {
             await PrepareDiagnosticsAsync();
+        }
+    }
+
+    private async Task OnWorkspaceCompanyChangedAsync(string companyId)
+    {
+        await LoadCompanyProfileAsync();
+        await RefreshCompanyAdministrationAccessAsync();
+        if (_companyProfile == null ||
+            !string.Equals(_companyProfile.Id.ToString("D"), companyId, StringComparison.OrdinalIgnoreCase))
+        {
+            _canAdministerCompany = false;
+        }
+    }
+
+    private async Task RefreshCompanyAdministrationAccessAsync()
+    {
+        _canAdministerCompany = false;
+        if (_companyProfile == null)
+        {
+            return;
+        }
+        try
+        {
+            var hub = await CompanyHubClient.LoadAsync(_companyProfile.Id.ToString("D"));
+            _canAdministerCompany = hub?.Kind == "hub" &&
+                string.Equals(hub.Standing.State, "active", StringComparison.OrdinalIgnoreCase) &&
+                hub.Standing.Role is "owner" or "operator";
+        }
+        catch
+        {
+            _canAdministerCompany = false;
         }
     }
 
@@ -1075,12 +1115,94 @@
         _marketMafiosoApiUrl.Trim().ToUpperInvariant(),
         _marketMafiosoApiKey.Trim());
 
+    private Task OnMarketMafiosoEnabledChanged(bool value) =>
+        SaveIntegrationSettingAsync(
+            "marketmafioso.enabled",
+            value,
+            () => _marketMafiosoEnabled,
+            saved =>
+            {
+                _marketMafiosoEnabled = saved;
+                MarketMafiosoIntegrationState.SetEnabled(saved);
+            });
+
+    private Task OnMarketMafiosoApiUrlChanged(string value) =>
+        SaveIntegrationSettingAsync(
+            "marketmafioso.workshop_host_url",
+            value.Trim(),
+            () => _marketMafiosoApiUrl,
+            saved => _marketMafiosoApiUrl = saved,
+            invalidateConnectionTest: true);
+
+    private Task OnMarketMafiosoApiKeyChanged(string value) =>
+        SaveIntegrationSettingAsync(
+            "marketmafioso.api_key",
+            value.Trim(),
+            () => _marketMafiosoApiKey,
+            saved => _marketMafiosoApiKey = saved,
+            invalidateConnectionTest: true);
+
+    private Task OnMarketMafiosoTargetCharacterChanged(string value) =>
+        SaveIntegrationSettingAsync(
+            "marketmafioso.target_character",
+            value.Trim(),
+            () => _marketMafiosoTargetCharacter,
+            saved => _marketMafiosoTargetCharacter = saved);
+
+    private Task OnMarketMafiosoTargetWorldChanged(string value) =>
+        SaveIntegrationSettingAsync(
+            "marketmafioso.target_world",
+            value.Trim(),
+            () => _marketMafiosoTargetWorld,
+            saved => _marketMafiosoTargetWorld = saved);
+
+    private Task OnMarketMafiosoAutoSyncChanged(bool value) =>
+        SaveIntegrationSettingAsync(
+            "marketmafioso.auto_sync_evidence",
+            value,
+            () => _marketMafiosoAutoSyncEvidence,
+            saved => _marketMafiosoAutoSyncEvidence = saved);
+
+    private async Task SaveIntegrationSettingAsync<T>(
+        string key,
+        T value,
+        Func<T> readCurrent,
+        Action<T> apply,
+        bool invalidateConnectionTest = false)
+    {
+        var previous = readCurrent();
+        if (EqualityComparer<T>.Default.Equals(previous, value))
+        {
+            return;
+        }
+
+        apply(value);
+        if (invalidateConnectionTest)
+        {
+            InvalidateMarketMafiosoConnectionTest();
+        }
+        try
+        {
+            await Settings.SetAsync(key, value);
+        }
+        catch (Exception exception)
+        {
+            apply(previous);
+            Snackbar.Add($"Integration setting was not saved: {exception.Message}", Severity.Error);
+        }
+    }
+
+    private void InvalidateMarketMafiosoConnectionTest()
+    {
+        _marketMafiosoConnectionTest = null;
+        _marketMafiosoConnectionStatus = null;
+        _marketMafiosoTestedConfigurationHash = null;
+    }
+
     private async Task ForgetMarketMafiosoKey()
     {
         _marketMafiosoApiKey = string.Empty;
-        _marketMafiosoConnectionTest = null;
-        _marketMafiosoConnectionStatus = string.Empty;
-        _marketMafiosoTestedConfigurationHash = null;
+        InvalidateMarketMafiosoConnectionTest();
         await Settings.SetAsync("marketmafioso.api_key", string.Empty);
         Snackbar.Add("Craft Architect access key forgotten", Severity.Info);
     }
@@ -1141,37 +1263,73 @@
     private IReadOnlyList<string> GetAvailableDataCenters() =>
         MarketFetchScopeResolver.GetDataCentersForRegion(_selectedRegion);
 
-    private Task OnRegionChanged(string region)
+    private async Task OnRegionChanged(string region)
     {
         if (string.Equals(region, _selectedRegion, StringComparison.Ordinal))
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        if (MarketFetchScopeResolver.IsDataCenterInRegion(
-                _defaultDataCenter,
-                _selectedRegion))
+        await ApplyMarketSelectionChangeAsync(() =>
         {
-            _lastDataCenterByRegion[_selectedRegion] = _defaultDataCenter;
-        }
+            if (MarketFetchScopeResolver.IsDataCenterInRegion(
+                    _defaultDataCenter,
+                    _selectedRegion))
+            {
+                _lastDataCenterByRegion[_selectedRegion] = _defaultDataCenter;
+            }
 
-        _selectedRegion = region;
-        _comparisonRegions = NormalizeComparisonRegions(_comparisonRegions, region);
-        _lastDataCenterByRegion.TryGetValue(region, out var lastDataCenter);
-        _defaultDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
-            region,
-            lastDataCenter);
-        _lastDataCenterByRegion[region] = _defaultDataCenter;
-        return Task.CompletedTask;
+            _selectedRegion = region;
+            _comparisonRegions = NormalizeComparisonRegions(_comparisonRegions, region);
+            _lastDataCenterByRegion.TryGetValue(region, out var lastDataCenter);
+            _defaultDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
+                region,
+                lastDataCenter);
+            _lastDataCenterByRegion[region] = _defaultDataCenter;
+        });
     }
 
-    private Task OnDefaultDataCenterChanged(string dataCenter)
+    private Task OnDefaultDataCenterChanged(string dataCenter) =>
+        ApplyMarketSelectionChangeAsync(() =>
+        {
+            _defaultDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
+                _selectedRegion,
+                dataCenter);
+            _lastDataCenterByRegion[_selectedRegion] = _defaultDataCenter;
+        });
+
+    private Task OnMarketFetchScopeChanged(string value) =>
+        ApplyMarketSelectionChangeAsync(() =>
+        {
+            if (Enum.TryParse<MarketFetchScope>(value, out var parsed))
+            {
+                _defaultMarketFetchScope = parsed;
+            }
+        });
+
+    private Task OnComparisonRegionsChanged(IReadOnlyList<string> comparisonRegions) =>
+        ApplyMarketSelectionChangeAsync(() =>
+            _comparisonRegions = NormalizeComparisonRegions(comparisonRegions, _selectedRegion));
+
+    private async Task ApplyMarketSelectionChangeAsync(Action mutate)
     {
-        _defaultDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
-            _selectedRegion,
-            dataCenter);
-        _lastDataCenterByRegion[_selectedRegion] = _defaultDataCenter;
-        return Task.CompletedTask;
+        var previousDataCenter = _defaultDataCenter;
+        var previousRegion = _selectedRegion;
+        var previousScope = _defaultMarketFetchScope;
+        var previousComparisons = _comparisonRegions;
+        mutate();
+        try
+        {
+            await ApplyMarketSettingsAsync();
+        }
+        catch (Exception exception)
+        {
+            _defaultDataCenter = previousDataCenter;
+            _selectedRegion = previousRegion;
+            _defaultMarketFetchScope = previousScope;
+            _comparisonRegions = previousComparisons;
+            Snackbar.Add($"Market setting was not saved: {exception.Message}", Severity.Error);
+        }
     }
 
     private static string GetRegionDataCenterSettingKey(string region) =>
@@ -1185,10 +1343,77 @@
                 StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
-    private Task OnComparisonRegionsChanged(IReadOnlyList<string> comparisonRegions)
+    private async Task OnSplitWorldPurchasesChanged(bool value)
     {
-        _comparisonRegions = NormalizeComparisonRegions(comparisonRegions, _selectedRegion);
-        return Task.CompletedTask;
+        var previous = _procurementEnableSplitWorldPurchases;
+        _procurementEnableSplitWorldPurchases = value;
+        AppState.SetProcurementSettings(
+            value,
+            AppState.ProcurementTravelTolerance,
+            AppState.TemporaryWorldBlacklistDurationMinutes);
+        try
+        {
+            await Settings.SetAsync("procurement.enable_split_world_purchases", value);
+            ScheduleCurrentPlanDerivation();
+        }
+        catch (Exception exception)
+        {
+            _procurementEnableSplitWorldPurchases = previous;
+            AppState.SetProcurementSettings(
+                previous,
+                AppState.ProcurementTravelTolerance,
+                AppState.TemporaryWorldBlacklistDurationMinutes);
+            Snackbar.Add($"Route setting was not saved: {exception.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OnProcurementOriginChanged(bool value)
+    {
+        var previous = _procurementStartFromHomeDataCenter;
+        _procurementStartFromHomeDataCenter = value;
+        AppState.SetProcurementHomeDataCenterOrigin(value);
+        try
+        {
+            await Settings.SetAsync("procurement.start_from_home_data_center", value);
+            ScheduleCurrentPlanDerivation();
+        }
+        catch (Exception exception)
+        {
+            _procurementStartFromHomeDataCenter = previous;
+            AppState.SetProcurementHomeDataCenterOrigin(previous);
+            Snackbar.Add($"Route setting was not saved: {exception.Message}", Severity.Error);
+        }
+    }
+
+    private async Task OnTravelPriorityChanged(string value)
+    {
+        if (!Enum.TryParse<MarketTravelPriority>(value, out var parsed) ||
+            parsed == _procurementTravelPriority)
+        {
+            return;
+        }
+        var previous = _procurementTravelPriority;
+        _procurementTravelPriority = parsed;
+        AppState.SetProcurementTravelPriority(parsed);
+        try
+        {
+            await Settings.SetAsync("procurement.travel_priority", parsed.ToString());
+            ScheduleCurrentPlanDerivation();
+        }
+        catch (Exception exception)
+        {
+            _procurementTravelPriority = previous;
+            AppState.SetProcurementTravelPriority(previous);
+            Snackbar.Add($"Route setting was not saved: {exception.Message}", Severity.Error);
+        }
+    }
+
+    private void ScheduleCurrentPlanDerivation()
+    {
+        if (WorkerProjections.Shell.HasSession)
+        {
+            PlanLifecycle.Schedule(new PlanDerivationRequest(UseCurrentSettingsContext: true));
+        }
     }
 
     private static IReadOnlyList<string> NormalizeComparisonRegions(
@@ -1224,7 +1449,12 @@
         try
         {
             await ProfileSync.SyncNowAsync();
-            _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            _companyProfile = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
+            if (_companyProfile == null)
+            {
+                _companyCrafterCount = 0;
+                return;
+            }
             var crafters = await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id);
             _companyCrafterCount = crafters.Count;
             ApplyCompanyProfileFields(_companyProfile);
@@ -1264,7 +1494,25 @@
         _companyPaymentContract = policy.ActiveContract;
         _companyLegacyCommissionPercent = policy.LegacyCommissionPercent;
         _companyLaborGilPerSynth = policy.LaborGilPerSynth;
+        _persistedCompanyFingerprint = BuildCompanyFingerprint();
     }
+
+    private bool HasPendingCompanyChanges =>
+        _companyProfile != null &&
+        (!string.Equals(
+            BuildCompanyFingerprint(),
+            _persistedCompanyFingerprint,
+            StringComparison.Ordinal) ||
+        _companyNotificationRouteEditor?.HasPendingChanges == true);
+
+    private string BuildCompanyFingerprint() => string.Join(
+        '\n',
+        _companyName.Trim(),
+        NormalizeOptionalText(_companyDescription) ?? string.Empty,
+        NormalizeOptionalText(_companyCommissionContact) ?? string.Empty,
+        _companyPaymentContract.ToString(),
+        _companyLegacyCommissionPercent.ToString(CultureInfo.InvariantCulture),
+        _companyLaborGilPerSynth.ToString(CultureInfo.InvariantCulture));
 
     private TradePaymentPolicy? BuildCompanyPaymentPolicy()
     {
@@ -1327,6 +1575,15 @@
             var package = JsonSerializer.Deserialize<TradeCompanyProfilePackage>(json, CompanyPackageJsonOptions)
                 ?? throw new InvalidOperationException("The selected company profile file was empty.");
             var imported = await TradeOperationsPersistence.ImportCompanyProfilePackageAsync(package, DateTime.UtcNow);
+            await ProfileSync.QueueLocalSaveAsync(
+                ProfileSyncCollections.TradeCompanyProfiles,
+                imported.Profile.Id.ToString("D"));
+            foreach (var crafter in imported.Crafters)
+            {
+                await ProfileSync.QueueLocalSaveAsync(
+                    ProfileSyncCollections.TradeCrafters,
+                    crafter.Id.ToString("D"));
+            }
             _companyProfile = imported.Profile;
             _companyCrafterCount = imported.Crafters.Count;
             ApplyCompanyProfileFields(imported.Profile);
@@ -1385,14 +1642,6 @@
         {
             _profileHostIsBusy = false;
         }
-    }
-
-    private async Task OpenAccountDialogAsync()
-    {
-        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true };
-        var dialog = await DialogService.ShowAsync<AccountDialog>("Account", options);
-        await dialog.Result;
-        await LoadProfileHostSettingsAsync();
     }
 
     private async Task AcceptRemoteConflictAsync(ProfileSyncConflict conflict)
@@ -1544,7 +1793,12 @@
         }
     }
     
-    private async Task Save()
+    private bool SectionHasExplicitSave =>
+        _activePanel == SettingsSection.CompanyAdministration;
+
+    private const string SaveButtonLabel = "Save company changes";
+
+    private async Task SaveCurrentSectionAsync()
     {
         if (_isSaving)
         {
@@ -1554,13 +1808,7 @@
         _isSaving = true;
         try
         {
-            _defaultDataCenter = MarketFetchScopeResolver.ResolveValidDataCenter(
-                _selectedRegion,
-                _defaultDataCenter);
-            _lastDataCenterByRegion[_selectedRegion] = _defaultDataCenter;
-            _comparisonRegions = NormalizeComparisonRegions(_comparisonRegions, _selectedRegion);
-
-            if (_companyProfile != null)
+            if (_activePanel == SettingsSection.CompanyAdministration && _companyProfile != null)
             {
                 if (string.IsNullOrWhiteSpace(_companyName))
                 {
@@ -1574,7 +1822,7 @@
                     return;
                 }
 
-                if (_activePanel == OptionsPanel.Company &&
+                if (_activePanel == SettingsSection.CompanyAdministration &&
                     _companyNotificationRouteEditor != null &&
                     !await _companyNotificationRouteEditor.SavePendingChangesAsync())
                 {
@@ -1591,38 +1839,14 @@
                     Snackbar.Add("Failed to save company profile.", Severity.Error);
                     return;
                 }
+                _persistedCompanyFingerprint = BuildCompanyFingerprint();
             }
 
-            var marketSettingsChanged = await ApplyMarketSettingsAsync();
-            AppState.SetProcurementSettings(
-                _procurementEnableSplitWorldPurchases,
-                AppState.ProcurementTravelTolerance,
-                AppState.TemporaryWorldBlacklistDurationMinutes);
-            AppState.SetProcurementHomeDataCenterOrigin(_procurementStartFromHomeDataCenter);
-            AppState.SetProcurementTravelPriority(_procurementTravelPriority);
-
-            await Settings.SetAsync("procurement.enable_split_world_purchases", _procurementEnableSplitWorldPurchases);
-            await Settings.SetAsync("procurement.start_from_home_data_center", _procurementStartFromHomeDataCenter);
-            await Settings.SetAsync("procurement.travel_priority", _procurementTravelPriority.ToString());
-            await Settings.SetAsync("marketmafioso.enabled", _marketMafiosoEnabled);
-            await Settings.SetAsync("marketmafioso.workshop_host_url", _marketMafiosoApiUrl.Trim());
-            await Settings.SetAsync("marketmafioso.api_key", _marketMafiosoApiKey.Trim());
-            await Settings.SetAsync("marketmafioso.target_character", _marketMafiosoTargetCharacter.Trim());
-            await Settings.SetAsync("marketmafioso.target_world", _marketMafiosoTargetWorld.Trim());
-            await Settings.SetAsync("marketmafioso.auto_sync_evidence", _marketMafiosoAutoSyncEvidence);
-            MarketMafiosoIntegrationState.SetEnabled(_marketMafiosoEnabled);
-            if (WorkerProjections.Shell.HasSession && !marketSettingsChanged)
-            {
-                PlanLifecycle.Schedule(new PlanDerivationRequest(
-                    UseCurrentSettingsContext: true));
-            }
-
-            Snackbar.Add("Settings saved", Severity.Success);
-            MudDialog.Close(DialogResult.Ok(true));
+            Snackbar.Add($"{SaveButtonLabel} saved", Severity.Success);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Settings could not be saved: {ex.Message}", Severity.Error);
+            Snackbar.Add($"{SaveButtonLabel} could not be saved: {ex.Message}", Severity.Error);
         }
         finally
         {
@@ -1946,9 +2170,31 @@
             : $"{bytes / 1024d:F1} KB";
     }
     
-    private void Cancel()
+    private async Task Close()
     {
-        MudDialog.Cancel();
+        if (HasPendingCompanyChanges)
+        {
+            if (!await ConfirmDiscardCompanyChangesAsync())
+            {
+                return;
+            }
+        }
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private async Task<bool> ConfirmDiscardCompanyChangesAsync() =>
+        await DialogService.ShowMessageBox(
+            "Discard company changes?",
+            "Company administration has unsaved changes. Keep Settings open or discard those edits.",
+            yesText: "Discard changes",
+            cancelText: "Keep editing") == true;
+
+    private async Task HandleDialogKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+        {
+            await Close();
+        }
     }
 
     private static MarketFetchScope ParseMarketFetchScope(string? value)

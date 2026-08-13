@@ -9,6 +9,7 @@ public sealed class TradeOperationsPersistenceService
     private const string DefaultCompanyProfileName = "FFXIV Trade Company";
     private const string PrototypeDefaultCommissionContact = "franfkntastic";
     private const string SelectedCompanyProfileIdKey = "trade.selected_company_profile_id";
+    private const string SelectedWorkspaceCompanyIdKey = "trade.selected_workspace_company_id";
 
     private readonly IndexedDbService _indexedDb;
     private readonly TradeCompanyProfilePackageService _profilePackageService;
@@ -84,6 +85,24 @@ public sealed class TradeOperationsPersistenceService
         return profiles;
     }
 
+    public async Task<TradeCompanyProfile?> LoadActiveCompanyProfileAsync()
+    {
+        var profiles = await LoadCompanyProfilesAsync();
+        var selectedProfileId = await LoadSelectedCompanyProfileIdAsync();
+        var profile = selectedProfileId.HasValue
+            ? profiles.FirstOrDefault(candidate => candidate.Id == selectedProfileId.Value)
+            : null;
+        profile ??= profiles
+            .OrderBy(candidate => candidate.CreatedAtUtc)
+            .ThenBy(candidate => candidate.Id)
+            .FirstOrDefault();
+        if (profile != null && selectedProfileId != profile.Id)
+        {
+            await SaveSelectedCompanyProfileIdAsync(profile.Id);
+        }
+        return profile;
+    }
+
     public async Task<bool> SaveCompanyProfileAsync(TradeCompanyProfile profile)
     {
         NormalizeProfile(profile);
@@ -106,6 +125,29 @@ public sealed class TradeOperationsPersistenceService
         }
 
         await SaveSelectedCompanyProfileIdAsync(companyProfileId);
+        await SelectWorkspaceCompanyAsync(companyProfileId);
+    }
+
+    public async Task<Guid?> LoadSelectedWorkspaceCompanyIdAsync()
+    {
+        var serializedId = await _indexedDb.LoadSettingAsync<string>(SelectedWorkspaceCompanyIdKey);
+        if (Guid.TryParse(serializedId, out var selectedWorkspaceCompanyId))
+        {
+            return selectedWorkspaceCompanyId;
+        }
+
+        return await LoadSelectedCompanyProfileIdAsync();
+    }
+
+    public async Task SelectWorkspaceCompanyAsync(Guid companyId)
+    {
+        if (!await _indexedDb.SaveSettingAsync(
+                SelectedWorkspaceCompanyIdKey,
+                companyId.ToString("D")))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not persist selected company workspace '{companyId:D}'.");
+        }
     }
 
     public async Task RequireCompanyProfileAsync(
@@ -114,7 +156,13 @@ public sealed class TradeOperationsPersistenceService
         string childId)
     {
         var profiles = await LoadCompanyProfilesAsync();
-        if (profiles.All(profile => profile.Id != companyProfileId))
+        if (profiles.Any(profile => profile.Id == companyProfileId))
+        {
+            return;
+        }
+
+        var selectedWorkspaceId = await LoadSelectedWorkspaceCompanyIdAsync();
+        if (selectedWorkspaceId != companyProfileId)
         {
             throw new MissingTradeCompanyProfileException(
                 companyProfileId,

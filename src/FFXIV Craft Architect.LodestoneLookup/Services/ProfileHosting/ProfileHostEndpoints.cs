@@ -41,6 +41,51 @@ public static class ProfileHostEndpoints
                 return profile == null ? Results.Unauthorized() : Results.Ok(profile);
             });
 
+        group.MapPut(
+            "/profile",
+            async (
+                ProfileHostDisplayNameUpdateRequest update,
+                HttpRequest request,
+                ProfileHostOptions options,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (profile == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                var result = await store.UpdateProfileDisplayNameAsync(
+                    profile.ProfileId,
+                    update.ExpectedMetadataRevision,
+                    update.DisplayName,
+                    cancellationToken);
+                if (result.Success)
+                {
+                    return Results.Ok(result);
+                }
+                if (result.Conflict)
+                {
+                    return Results.Conflict(result);
+                }
+                return string.Equals(result.ErrorCode, "profile_unavailable", StringComparison.Ordinal)
+                    ? Results.NotFound()
+                    : Results.BadRequest(result);
+            });
+
         group.MapGet(
             "/keys",
             async (

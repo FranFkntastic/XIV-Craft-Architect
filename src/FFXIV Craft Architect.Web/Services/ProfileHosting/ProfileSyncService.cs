@@ -115,6 +115,7 @@ public sealed class ProfileSyncService
 
     public event Action? StatusChanged;
     public event Action? ConnectionChanged;
+    public event Action? ProfileMetadataMayHaveChanged;
 
     public ProfileSyncStatus CurrentStatus { get; private set; } = ProfileSyncStatus.LocalOnly();
 
@@ -187,6 +188,7 @@ public sealed class ProfileSyncService
         adopted.HostUrl = CanonicalProfileHostUrl;
         adopted.ConnectedProfileId = canonicalProfile.ProfileId;
         adopted.ConnectedProfileName = canonicalProfile.DisplayName;
+        adopted.ConnectedProfileMetadataRevision = canonicalProfile.MetadataRevision;
         await _localState.SaveConnectionSettingsAsync(adopted);
         _pendingSaves.Clear();
         _conflicts.Clear();
@@ -196,6 +198,9 @@ public sealed class ProfileSyncService
 
     public Task SyncNowAsync(CancellationToken ct = default) =>
         SyncAndAwaitBackgroundAsync(null, null, ct);
+
+    internal void NotifyProfileMetadataMayHaveChanged() =>
+        ProfileMetadataMayHaveChanged?.Invoke();
 
     public Task SyncFromRevisionAsync(
         long replayAfterRevision,
@@ -246,7 +251,23 @@ public sealed class ProfileSyncService
         HostedProfileConnectionSettings capturedAuthority,
         CancellationToken ct)
     {
-        await QueueLocalSaveCoreAsync(collection, objectId, ct, capturedAuthority);
+        var adapter = GetAdapter(collection);
+        if (await LoadLocalObjectAsync(adapter, objectId, ct) == null)
+        {
+            return new ProfileSyncPublicationResult(
+                Published: false,
+                Pending: false,
+                Conflict: false,
+                Revision: 0,
+                Message: "The exact local object is unavailable.");
+        }
+
+        await QueueLocalSaveCoreAsync(
+            collection,
+            objectId,
+            ct,
+            capturedAuthority,
+            allowSuppressed: true);
         var current = await _localState.LoadConnectionSettingsAsync();
         if (!IsSameConnectionAuthority(current, capturedAuthority) ||
             current.ProfileScopeId is not { } profileId)
@@ -450,6 +471,7 @@ public sealed class ProfileSyncService
             });
             var serverRevision = baseRevision;
             var hasMore = true;
+            var companyProfileRecovery = new Dictionary<Guid, bool>();
             while (hasMore)
             {
                 var page = await ReplayChangesPageAsync(
@@ -459,6 +481,7 @@ public sealed class ProfileSyncService
                     serverRevision,
                     targetRevision,
                     appliedObjectCount,
+                    companyProfileRecovery,
                     ct);
                 appliedObjectCount = page.AppliedCount;
                 serverRevision = page.ServerRevision;
@@ -563,6 +586,7 @@ public sealed class ProfileSyncService
         long sinceRevision,
         long? targetRevision,
         int appliedObjectCount,
+        Dictionary<Guid, bool> companyProfileRecovery,
         CancellationToken ct)
     {
         var changes = await _client.GetChangesAsync(
@@ -700,11 +724,31 @@ public sealed class ProfileSyncService
                     }
                     catch (MissingTradeCompanyProfileException exception)
                     {
-                        await RestoreMissingCompanyProfileAsync(
-                            settings,
-                            profileId,
-                            exception.CompanyProfileId,
-                            ct);
+                        if (!companyProfileRecovery.TryGetValue(
+                                exception.CompanyProfileId,
+                                out var recovered))
+                        {
+                            recovered = await TryRestoreMissingCompanyProfileAsync(
+                                settings,
+                                profileId,
+                                exception.CompanyProfileId,
+                                ct);
+                            companyProfileRecovery[exception.CompanyProfileId] = recovered;
+                        }
+                        if (!recovered)
+                        {
+                            // An unavailable parent cannot make every later profile object
+                            // unverifiable. Preserve the browser's last truthful copy, mark
+                            // this hosted revision as observed, and continue restoring the
+                            // independent objects that follow it.
+                            await _localState.SaveObjectRevisionAsync(
+                                profileId,
+                                item.Collection,
+                                item.ObjectId,
+                                item.Revision);
+                            appliedObjectCount++;
+                            continue;
+                        }
                         await adapter.ApplyRemoteObjectAsync(item, ct);
                     }
                 }
@@ -766,6 +810,7 @@ public sealed class ProfileSyncService
             {
                 var cursor = baseRevision;
                 var hasMore = true;
+                var companyProfileRecovery = new Dictionary<Guid, bool>();
                 while (hasMore)
                 {
                     var page = await RunSerializedAsync(
@@ -785,6 +830,7 @@ public sealed class ProfileSyncService
                                 cursor,
                                 targetRevision,
                                 CurrentStatus.AppliedObjectCount,
+                                companyProfileRecovery,
                                 CancellationToken.None);
                         },
                         CancellationToken.None);
@@ -1141,7 +1187,7 @@ public sealed class ProfileSyncService
             _ => ProfileSyncFailure.Unverifiable
         };
 
-    private async Task RestoreMissingCompanyProfileAsync(
+    private async Task<bool> TryRestoreMissingCompanyProfileAsync(
         HostedProfileConnectionSettings settings,
         string profileId,
         Guid companyProfileId,
@@ -1178,8 +1224,7 @@ public sealed class ProfileSyncService
 
         if (companyObject == null)
         {
-            throw new InvalidOperationException(
-                $"Hosted Trade company profile '{companyObjectId}' is unavailable, so its dependent objects cannot be restored.");
+            return false;
         }
 
         var companyAdapter = GetAdapter(ProfileSyncCollections.TradeCompanyProfiles);
@@ -1193,6 +1238,7 @@ public sealed class ProfileSyncService
             companyObject.Collection,
             companyObject.ObjectId,
             companyObject.Revision);
+        return true;
     }
 
     public Task QueueLocalSaveAsync(
@@ -1596,9 +1642,10 @@ public sealed class ProfileSyncService
         string collection,
         string objectId,
         CancellationToken ct,
-        HostedProfileConnectionSettings? capturedAuthority = null)
+        HostedProfileConnectionSettings? capturedAuthority = null,
+        bool allowSuppressed = false)
     {
-        if (IsSuppressed)
+        if (IsSuppressed && !allowSuppressed)
         {
             return;
         }
@@ -1638,14 +1685,27 @@ public sealed class ProfileSyncService
             localObject);
 
         var lastRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
+        var previousStatus = CurrentStatus;
         SetStatus(new ProfileSyncStatus(
             true,
             hostReachable,
-            lastRevision,
+            Math.Max(previousStatus.LastSyncRevision, lastRevision),
             _pendingSaves.Count,
             _conflicts.Count,
-            CurrentStatus.LastSyncedAtUtc,
-            _conflicts.Count > 0 ? "Conflicts need review" : CurrentStatus.Message));
+            previousStatus.LastSyncedAtUtc,
+            _conflicts.Count > 0 ? "Conflicts need review" : previousStatus.Message) with
+        {
+            ProfileId = profileId,
+            Stage = hostReachable
+                ? ProfileSyncStage.Ready
+                : ProfileSyncStage.Failed,
+            Failure = hostReachable
+                ? ProfileSyncFailure.None
+                : ProfileSyncFailure.Offline,
+            AppliedObjectCount = previousStatus.AppliedObjectCount,
+            TargetRevision = previousStatus.TargetRevision,
+            OrderScopeReady = previousStatus.OrderScopeReady
+        });
     }
 
     private async Task RequireConnectionAuthorityAsync(
@@ -1678,6 +1738,46 @@ public sealed class ProfileSyncService
         return RunSerializedAsync(
             () => ConnectCoreAsync(snapshot, mode, ct),
             ct);
+    }
+
+    public Task AdoptAuthenticatedConnectionAsync(
+        HostedProfileConnectionSettings settings,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var snapshot = settings.Snapshot();
+        return RunSerializedAsync(
+            () => AdoptAuthenticatedConnectionCoreAsync(snapshot),
+            ct);
+    }
+
+    private async Task AdoptAuthenticatedConnectionCoreAsync(
+        HostedProfileConnectionSettings settings)
+    {
+        var profileId = settings.ProfileScopeId;
+        if (!settings.IsConfigured || profileId == null)
+        {
+            throw new InvalidOperationException(
+                "A verified hosted profile ID, host URL, and access key are required.");
+        }
+
+        await _localState.SaveConnectionSettingsAsync(settings);
+        _pendingSaves.Clear();
+        _conflicts.Clear();
+        _pendingSavesConnectionScopeId = null;
+        SetStatus(new ProfileSyncStatus(
+            true,
+            false,
+            0,
+            0,
+            0,
+            null,
+            "Connecting account")
+        {
+            ProfileId = profileId,
+            Stage = ProfileSyncStage.ReadingLocalState
+        });
+        ConnectionChanged?.Invoke();
     }
 
     public async Task<ProfileSyncBootstrapPreview> PreviewFirstConnectAsync(
@@ -2065,8 +2165,9 @@ public sealed class ProfileSyncService
                 },
                 ct);
 
-            if (await ShouldRepairLegacyLinkedPlanAsync(
+            if (ShouldRepairLegacyLinkedPlan(
                     pending,
+                    localObject,
                     response))
             {
                 response = await RepairLegacyLinkedPlanAsync(
@@ -2310,18 +2411,27 @@ public sealed class ProfileSyncService
         await adapter.DeleteLocalObjectAsync(remoteObject.ObjectId, ct);
     }
 
-    private async Task<bool> ShouldRepairLegacyLinkedPlanAsync(
+    private static bool ShouldRepairLegacyLinkedPlan(
         ProfileSyncPendingSave pending,
+        ProfileSyncObjectEnvelope localObject,
         ProfileSyncPutResponse response) =>
         response.Conflict &&
-        response.RemoteObject != null &&
-        (response.RemoteObject.Deleted ||
+        ((response.RemoteObject?.Deleted ?? false) ||
+         string.Equals(
+             response.ErrorCode,
+             "missing_remote_object",
+             StringComparison.Ordinal) ||
          string.Equals(
              response.ErrorCode,
              "linked_plan_promotion_mismatch",
              StringComparison.Ordinal)) &&
-        GetAdapter(pending.Collection) is PlansProfileSyncAdapter plansAdapter &&
-        await plansAdapter.IsLinkedOrderPlanAsync(pending.ObjectId);
+        string.Equals(
+            pending.Collection,
+            ProfileSyncCollections.Plans,
+            StringComparison.OrdinalIgnoreCase) &&
+        ProfileSyncPlanPayloadCodec.Deserialize(
+            localObject.PayloadJson,
+            pending.ObjectId).LinkedOrderId.HasValue;
 
     private async Task<ProfileSyncPutResponse> RepairLegacyLinkedPlanAsync(
         HostedProfileConnectionSettings settings,
@@ -2331,13 +2441,8 @@ public sealed class ProfileSyncService
         ProfileSyncPutResponse conflict,
         CancellationToken ct)
     {
-        if (conflict.RemoteObject == null)
-        {
-            return conflict;
-        }
-
-        var baseRevision = conflict.RemoteObject.Revision;
-        if (!conflict.RemoteObject.Deleted)
+        var baseRevision = conflict.RemoteObject?.Revision ?? 0;
+        if (conflict.RemoteObject is { Deleted: false })
         {
             var deletion = await _client.DeleteObjectAsync(
                 settings.HostUrl!,

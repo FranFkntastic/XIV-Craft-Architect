@@ -95,6 +95,7 @@ public sealed class HostedCompanyCommissionService(
 
         var canonical = await companies.LoadPublicOrderAsync(
             ownership,
+            publicBriefId,
             cancellationToken);
         if (canonical == null)
         {
@@ -113,11 +114,18 @@ public sealed class HostedCompanyCommissionService(
             return null;
         }
 
-        var profile = await companies.LoadPublicCompanyProfileAsync(
-            ownership.CompanyId,
-            cancellationToken)
-            ?? throw new InvalidOperationException(
+        var publicAccess = await companies.ResolvePublicAccessAsync(
+            ownership,
+            publicBriefId,
+            cancellationToken);
+        var profile = publicAccess == null
+            ? null
+            : await companies.LoadCompanyProfileAsync(publicAccess, cancellationToken);
+        if (profile == null)
+        {
+            throw new InvalidOperationException(
                 "The canonical commission company profile is unavailable.");
+        }
         return CompanyCommissionProjectionService.CreatePublicBrief(order, profile.Name);
     }
 
@@ -144,6 +152,7 @@ public sealed class HostedCompanyCommissionService(
 
         var canonical = await companies.LoadPublicOrderAsync(
             ownership,
+            capability.PublicBriefId,
             cancellationToken);
         if (canonical == null)
         {
@@ -161,11 +170,18 @@ public sealed class HostedCompanyCommissionService(
             return null;
         }
 
-        var profile = await companies.LoadPublicCompanyProfileAsync(
-            ownership.CompanyId,
-            cancellationToken)
-            ?? throw new InvalidOperationException(
+        var publicAccess = await companies.ResolvePublicAccessAsync(
+            ownership,
+            capability.PublicBriefId,
+            cancellationToken);
+        var profile = publicAccess == null
+            ? null
+            : await companies.LoadCompanyProfileAsync(publicAccess, cancellationToken);
+        if (profile == null)
+        {
+            throw new InvalidOperationException(
                 "The canonical commission company profile is unavailable.");
+        }
         return CompanyCommissionProjectionService.CreateParticipantBrief(order, profile.Name);
     }
 
@@ -191,6 +207,7 @@ public sealed class HostedCompanyCommissionService(
 
         var canonical = await companies.LoadPublicOrderAsync(
             ownership,
+            capability.PublicBriefId,
             cancellationToken);
         var commission = canonical?.Order.CompanyCommission;
         if (commission?.RecoveryGrant is not
@@ -237,6 +254,7 @@ public sealed class HostedCompanyCommissionService(
 
         var access = await companies.ResolvePublicAccessAsync(
             ownership,
+            capability.PublicBriefId,
             cancellationToken);
         if (access == null)
         {
@@ -358,6 +376,7 @@ public sealed class HostedCompanyCommissionService(
 
         var access = await companies.ResolvePublicAccessAsync(
             ownership,
+            capability.PublicBriefId,
             cancellationToken);
         if (access == null)
         {
@@ -387,7 +406,8 @@ public sealed class HostedCompanyCommissionService(
             capability.Kind switch
             {
                 CompanyCommissionCapabilityKind.Claim =>
-                    $"claim-revision:{capability.CapabilityRevision}",
+                    $"claim-capability:{capability.CapabilityId:D}:" +
+                    capability.CapabilityRevision,
                 CompanyCommissionCapabilityKind.Recovery =>
                     $"recovery-grant:{capability.GrantId:D}",
                 _ => $"participant-grant:{capability.GrantId:D}"
@@ -421,7 +441,7 @@ public sealed class HostedCompanyCommissionService(
         {
             RequireCompanyOperator(access);
         }
-        var canonicalAccess = requireCompanyOperator ? access : ToCanonicalAccess(access);
+        var canonicalAccess = ToCanonicalAccess(access);
         var context = command.Context;
         var fingerprint = CreateFingerprint(command);
         var validationError = ValidateCommandContext(access, context);
@@ -467,10 +487,12 @@ public sealed class HostedCompanyCommissionService(
                 ErrorMessage: "The hosted commission or company changed before the command was applied.");
         }
 
+        var linkedPlanPublication = new LinkedPlanCommandPublication();
         var linkedPlanValidation = await ValidateLinkedPlanCommandAsync(
             access,
             snapshot.Order,
             command,
+            linkedPlanPublication,
             cancellationToken);
         if (linkedPlanValidation != null)
         {
@@ -536,7 +558,7 @@ public sealed class HostedCompanyCommissionService(
             context.ExpectedObjectRevision,
             $"commission-command:{context.CommandId:D}",
             cancellationToken,
-            context.ExpectedCompanyRevision);
+            linkedPlanPublication.CompanyRevision ?? context.ExpectedCompanyRevision);
         if (mutation.Success)
         {
             var committedEnvelope = mutation.Record
@@ -754,6 +776,7 @@ public sealed class HostedCompanyCommissionService(
         TradeCompanyAccessContext access,
         TradeOrder current,
         ICompanyCommissionCommand command,
+        LinkedPlanCommandPublication publication,
         CancellationToken cancellationToken)
     {
         CompanyCommissionDraftWorkPackage? workPackage = command switch
@@ -804,7 +827,40 @@ public sealed class HostedCompanyCommissionService(
             cancellationToken);
         if (hostedPlan is not { Deleted: false })
         {
-            return "The exact linked plan snapshot is not present in this hosted profile.";
+            var grantProfileId = access.GrantId.ToString("D");
+            var sourcePlan = await profileHost.LoadObjectAsync(
+                grantProfileId,
+                ProfileSyncCollections.Plans,
+                workPackage.CraftPlanId,
+                cancellationToken);
+            if (sourcePlan is not { Deleted: false })
+            {
+                return "The exact linked plan snapshot is not present in this hosted profile.";
+            }
+
+            var sourceSnapshot = ProfileSyncPlanPayloadCodec.Deserialize(
+                sourcePlan.PayloadJson,
+                workPackage.CraftPlanId);
+            if (sourceSnapshot.LinkedOrderId != current.Id ||
+                sourceSnapshot.SavedAt != workPackage.CraftPlanSavedAtUtc.Value)
+            {
+                return "The hosted plan snapshot does not match this order and saved revision.";
+            }
+
+            var adopted = await profileHost.PutObjectAsync(
+                profileId,
+                ProfileSyncCollections.Plans,
+                workPackage.CraftPlanId,
+                sourcePlan.PayloadJson,
+                expectedRevision: 0,
+                ct: cancellationToken);
+            if (!adopted.Success || adopted.Object is not { Deleted: false })
+            {
+                return adopted.ErrorMessage ??
+                       "The revised linked plan could not be adopted by the hosted company profile.";
+            }
+            hostedPlan = adopted.Object;
+            publication.CompanyRevision = new CompanyRecordRevision(adopted.ServerRevision);
         }
 
         var snapshot = ProfileSyncPlanPayloadCodec.Deserialize(
@@ -814,6 +870,11 @@ public sealed class HostedCompanyCommissionService(
                snapshot.SavedAt == workPackage.CraftPlanSavedAtUtc.Value
             ? null
             : "The hosted plan snapshot does not match this order and saved revision.";
+    }
+
+    private sealed class LinkedPlanCommandPublication
+    {
+        public CompanyRecordRevision? CompanyRevision { get; set; }
     }
 
     private static CompanyCommissionMutationResult? ResolveReplay(

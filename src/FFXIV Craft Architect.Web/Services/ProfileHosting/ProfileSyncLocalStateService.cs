@@ -6,6 +6,8 @@ namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 public sealed class ProfileSyncLocalStateService
 {
     private const string ConnectedProfileNameKey = "profileHost.connectedProfileName";
+    private const string ConnectedProfileMetadataRevisionKey =
+        "profileHost.connectedProfileMetadataRevision";
     private const string AuthorityMigrationKey = "profileHost.authorityMigration.v1";
     private const string ProfileStatePrefix = "profileHost.authority.";
     private const string LegacyProfileStatePrefix = "profileHost.profile.";
@@ -100,7 +102,11 @@ public sealed class ProfileSyncLocalStateService
             ConnectedProfileId = ReadSetting<string>(
                 settings,
                 ProfileSyncSettingsKeys.ConnectedProfileId),
-            ConnectedProfileName = ReadSetting<string>(settings, ConnectedProfileNameKey)
+            ConnectedProfileName = ReadSetting<string>(settings, ConnectedProfileNameKey),
+            ConnectedProfileMetadataRevision = ReadSetting(
+                settings,
+                ConnectedProfileMetadataRevisionKey,
+                0L)
         };
     }
 
@@ -122,6 +128,8 @@ public sealed class ProfileSyncLocalStateService
                 JsonSerializer.Serialize(settings.ConnectedProfileId ?? string.Empty),
             [ConnectedProfileNameKey] =
                 JsonSerializer.Serialize(settings.ConnectedProfileName ?? string.Empty),
+            [ConnectedProfileMetadataRevisionKey] =
+                JsonSerializer.Serialize(settings.ConnectedProfileMetadataRevision),
             [AuthorityMigrationKey] = JsonSerializer.Serialize(true)
         };
         if (!await _indexedDb.SaveSettingsBatchAsync(serialized))
@@ -130,6 +138,55 @@ public sealed class ProfileSyncLocalStateService
                 "Browser storage could not persist the hosted-profile connection.");
         }
         _authorityScope = NormalizeAuthorityScope(hostUrl);
+    }
+
+    public async Task<ConnectedProfileNameSaveResult> TrySaveConnectedProfileNameAsync(
+        HostedProfileConnectionSettings expectedConnection,
+        string displayName,
+        long metadataRevision)
+    {
+        if (!expectedConnection.IsConfigured)
+        {
+            return ConnectedProfileNameSaveResult.ConnectionChanged;
+        }
+
+        var currentSettings = await _indexedDb.LoadAllSettingsRequiredAsync();
+        var currentConnection = new HostedProfileConnectionSettings
+        {
+            HostUrl = ResolveEffectiveHostUrl(ReadSetting<string>(
+                currentSettings,
+                ProfileSyncSettingsKeys.HostUrl)),
+            AccessKey = expectedConnection.AccessKey,
+            ConnectedProfileId = ReadSetting<string>(
+                currentSettings,
+                ProfileSyncSettingsKeys.ConnectedProfileId)
+        };
+        if (!string.Equals(
+                currentConnection.ConnectionScopeId,
+                expectedConnection.ConnectionScopeId,
+                StringComparison.Ordinal))
+        {
+            return ConnectedProfileNameSaveResult.ConnectionChanged;
+        }
+
+        var expectedSettings = new Dictionary<string, string>
+        {
+            [ProfileSyncSettingsKeys.HostUrl] = currentSettings[
+                ProfileSyncSettingsKeys.HostUrl],
+            [ProfileSyncSettingsKeys.ConnectedProfileId] = currentSettings[
+                ProfileSyncSettingsKeys.ConnectedProfileId]
+        };
+        var settings = new Dictionary<string, string>
+        {
+            [ConnectedProfileNameKey] = JsonSerializer.Serialize(displayName),
+            [ConnectedProfileMetadataRevisionKey] = JsonSerializer.Serialize(metadataRevision)
+        };
+        return (ConnectedProfileNameSaveResult)await _indexedDb
+            .SaveSettingsWhenSettingsMatchAndRevisionNotNewerAsync(
+                settings,
+                expectedSettings,
+                ConnectedProfileMetadataRevisionKey,
+                metadataRevision);
     }
 
     public async Task<long> LoadLastSyncRevisionAsync(string profileId)

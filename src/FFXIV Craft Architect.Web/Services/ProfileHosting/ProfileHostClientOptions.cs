@@ -9,7 +9,9 @@ public enum ProfileHostConnectionFailure
     ProfileHostingDisabled,
     IncompatibleHost,
     AccessKeyRejected,
-    PairingCodeRejected
+    PairingCodeRejected,
+    InvalidProfileName,
+    ProfileNameConflict
 }
 
 public sealed class ProfileHostConnectionException : InvalidOperationException

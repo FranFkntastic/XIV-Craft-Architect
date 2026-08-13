@@ -199,7 +199,16 @@ public partial class TradeOrders
             return;
         }
 
-        _ = InvokeAsync(ScheduleSelectedOrderPlanRestoration);
+        _ = InvokeAsync(async () =>
+        {
+            ScheduleSelectedOrderPlanRestoration();
+            if (_pendingNotificationNavigation?.ActivityId != null &&
+                OrderRestoreState.ShowsCompleteProjection)
+            {
+                await SelectPendingNavigationOrderAsync();
+                StateHasChanged();
+            }
+        });
     }
 
     private void OnWorkerProjectionChangedForPlanRestoration()

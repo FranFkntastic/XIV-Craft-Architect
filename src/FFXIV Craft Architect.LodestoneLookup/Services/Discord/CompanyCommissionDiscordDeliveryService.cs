@@ -60,7 +60,8 @@ public sealed class CompanyCommissionDiscordDeliveryService(
         {
             payload = CompanyCommissionDiscordMessage.CreatePublication(
                 projection,
-                actionToken);
+                actionToken,
+                options.CrafterWorkspaceEnabled);
         }
         catch (InvalidOperationException exception)
         {
@@ -203,10 +204,29 @@ public sealed class CompanyCommissionDiscordDeliveryService(
         Uri publicUrl,
         CancellationToken cancellationToken = default)
     {
+        var attentionClass = CompanyCommissionNotificationPolicy.Classify(
+            notification.EventKind);
+        var validationError = ValidateNotification(notification);
+        if (validationError != null ||
+            !options.TryBuildCommissionUrl(
+                notification.Commission.PublicBriefId,
+                out var canonicalPublicUrl) ||
+            !string.Equals(
+                canonicalPublicUrl,
+                publicUrl.AbsoluteUri,
+                StringComparison.Ordinal))
+        {
+            return new(
+                DiscordNotificationEnqueueStatus.Invalid,
+                attentionClass,
+                [],
+                validationError ?? "The member notification destination is not canonical.");
+        }
+
         if (memberships == null || identities == null)
         {
             return new(DiscordNotificationEnqueueStatus.Suppressed,
-                CompanyCommissionNotificationPolicy.Classify(notification.EventKind), []);
+                attentionClass, []);
         }
         var ids = new HashSet<string>(StringComparer.Ordinal);
         var contacts = await notifications.LoadCommittedClaimContactDiscordUserIdsAsync(
@@ -222,7 +242,9 @@ public sealed class CompanyCommissionDiscordDeliveryService(
                     notification.CompanyId,
                     identity.ProfileId,
                     cancellationToken);
-            if (membership is not { NotificationsOptedOut: true })
+            if (membership != null && CompanyCommissionNotificationPolicy.AllowsMemberNotification(
+                    membership,
+                    notification.EventKind))
             {
                 ids.Add(contact);
             }
@@ -233,7 +255,9 @@ public sealed class CompanyCommissionDiscordDeliveryService(
                 notification.CompanyId,
                 crafterId,
                 cancellationToken);
-            if (membership is { State: MembershipState.Active, NotificationsOptedOut: false })
+            if (membership != null && CompanyCommissionNotificationPolicy.AllowsMemberNotification(
+                    membership,
+                    notification.EventKind))
             {
                 var identity = await identities.LoadByProfileAsync(crafterId, cancellationToken);
                 if (identity != null)
@@ -246,11 +270,15 @@ public sealed class CompanyCommissionDiscordDeliveryService(
         if (route == null || ids.Count == 0)
         {
             return new(DiscordNotificationEnqueueStatus.Suppressed,
-                CompanyCommissionNotificationPolicy.Classify(notification.EventKind), []);
+                attentionClass, []);
         }
-        var attentionClass = CompanyCommissionNotificationPolicy.Classify(notification.EventKind);
+        var memberActivityUrl = CompanyCommissionNotificationLinks.BuildMemberActivityUrl(
+            publicUrl,
+            notification.CompanyId,
+            notification.Commission.CommissionId,
+            notification.EventId);
         var payload = CompanyCommissionDiscordMessage.CreateNotification(
-            notification with { ActivityUrl = new UriBuilder(publicUrl) { Fragment = string.Empty }.Uri },
+            notification with { ActivityUrl = memberActivityUrl },
             attentionClass,
             DiscordNotificationMentionBehavior.NoPing,
             DiscordNotificationDestinationKind.MemberDirectMessage,
@@ -353,12 +381,15 @@ public sealed class CompanyCommissionDiscordDeliveryService(
             notification.Commission.ProjectionRevision < notification.CommissionRevision ||
             notification.CommittedAtUtc == default ||
             string.IsNullOrWhiteSpace(notification.Summary) ||
+            string.IsNullOrWhiteSpace(notification.ActionLabel) ||
             !options.TryBuildCommissionUrl(
                 notification.Commission.PublicBriefId,
                 out var canonicalPublicUrl) ||
-            !IsCanonicalActivityUrl(
-                canonicalPublicUrl,
+            !Uri.TryCreate(canonicalPublicUrl, UriKind.Absolute, out var canonicalPublicUri) ||
+            !CompanyCommissionNotificationLinks.IsCanonicalOperatorActivityUrl(
+                canonicalPublicUri,
                 notification.ActivityUrl,
+                notification.Commission.CommissionId,
                 notification.EventId))
         {
             return "A sanitized notification backed by a committed canonical event is required.";
@@ -385,29 +416,6 @@ public sealed class CompanyCommissionDiscordDeliveryService(
         string.Equals(publicViewUrl.AbsolutePath, claimUrl.AbsolutePath, StringComparison.Ordinal) &&
         string.Equals(publicViewUrl.Query, claimUrl.Query, StringComparison.Ordinal) &&
         IsBoundedClaimFragment(claimUrl.Fragment);
-
-    private static bool IsCanonicalActivityUrl(
-        string canonicalPublicUrl,
-        Uri activityUrl,
-        Guid eventId)
-    {
-        if (!Uri.TryCreate(canonicalPublicUrl, UriKind.Absolute, out var publicUri) ||
-            !activityUrl.IsAbsoluteUri ||
-            !string.IsNullOrEmpty(activityUrl.UserInfo) ||
-            !string.Equals(publicUri.Scheme, activityUrl.Scheme, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(publicUri.Host, activityUrl.Host, StringComparison.OrdinalIgnoreCase) ||
-            publicUri.Port != activityUrl.Port ||
-            !string.Equals(publicUri.AbsolutePath, activityUrl.AbsolutePath, StringComparison.Ordinal) ||
-            !string.Equals(publicUri.Query, activityUrl.Query, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        const string prefix = "#activity=";
-        return activityUrl.Fragment.StartsWith(prefix, StringComparison.Ordinal) &&
-            Guid.TryParse(activityUrl.Fragment[prefix.Length..], out var parsedEventId) &&
-            parsedEventId == eventId;
-    }
 
     private static bool IsBoundedClaimFragment(string fragment)
     {

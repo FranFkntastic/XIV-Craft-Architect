@@ -109,3 +109,17 @@ export function registerTradeOrdersLayout(
         }
     };
 }
+
+export function focusTradeOrderActivity(activityId) {
+    if (!activityId) {
+        return;
+    }
+
+    const activity = document.getElementById(`trade-order-activity-${activityId}`);
+    if (!activity) {
+        return;
+    }
+
+    activity.scrollIntoView({ block: "center", behavior: "smooth" });
+    activity.focus({ preventScroll: true });
+}

@@ -1,0 +1,35 @@
+@page "/account/workspaces"
+@inject IDialogService DialogService
+@inject NavigationManager Navigation
+
+<MudProgressLinear Indeterminate="true" aria-label="Opening workspace settings" />
+
+@code {
+    private bool _opened;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _opened)
+        {
+            return;
+        }
+        _opened = true;
+        var parameters = new DialogParameters
+        {
+            [nameof(SettingsDialog.InitialSection)] = SettingsSection.Workspace
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = false,
+            MaxWidth = MaxWidth.ExtraLarge,
+            FullWidth = true
+        };
+        var dialog = DialogService.Show<SettingsDialog>("Settings", parameters, options);
+        await dialog.Result;
+        var currentRoute = Navigation.ToBaseRelativePath(Navigation.Uri).TrimEnd('/');
+        if (string.Equals(currentRoute, "account/workspaces", StringComparison.OrdinalIgnoreCase))
+        {
+            Navigation.NavigateTo("/");
+        }
+    }
+}

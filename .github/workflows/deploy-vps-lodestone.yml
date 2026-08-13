@@ -415,6 +415,7 @@ jobs:
               printf 'Discord__AllowedGuildId=%s\n' "$DISCORD_GUILD_ID"
               printf 'Discord__AllowedChannelId=%s\n' "$TARGET_DISCORD_CHANNEL_ID"
               printf 'Discord__CommissionBaseUrl=https://%s/commission.html?id=\n' '${{ steps.target.outputs.domain }}'
+              printf 'Discord__CrafterWorkspaceEnabled=true\n'
               printf 'CommissionBriefs__PublicPageUrl=https://%s/commission.html\n' '${{ steps.target.outputs.domain }}'
               printf 'DiscordIdentity__Enabled=true\n'
               printf 'DiscordIdentity__ClientId=%s\n' "$DISCORD_OAUTH_CLIENT_ID"
@@ -432,6 +433,7 @@ jobs:
           else
             {
               printf 'Discord__Enabled=false\n'
+              printf 'Discord__CrafterWorkspaceEnabled=false\n'
               printf 'DiscordIdentity__Enabled=false\n'
               printf 'Discord__DatabasePath=%s\n' '${{ steps.target.outputs.discord_db }}'
               printf 'CommissionBriefs__PublicPageUrl=https://%s/commission.html\n' '${{ steps.target.outputs.domain }}'

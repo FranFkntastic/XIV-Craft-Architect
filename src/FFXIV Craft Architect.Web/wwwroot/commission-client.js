@@ -346,7 +346,7 @@ export class ParticipantAccessStore {
             return value;
         } catch {
             throw new CommissionClientError(
-                "Saved participant access is damaged. Ask the commissioner for a fresh recovery link.",
+                "Saved participant access is damaged. Open your private workspace link or signed-in company workspace.",
                 "invalid-saved-access");
         }
     }
@@ -381,6 +381,27 @@ export class ParticipantAccessStore {
         });
     }
 
+    adoptParticipantSecret(participantSecret) {
+        const secret = optionalCapability(
+            participantSecret,
+            "Participant capability");
+        if (!secret) {
+            throw new CommissionClientError(
+                "The private participant link is incomplete.",
+                "invalid-authority");
+        }
+
+        const access = {
+            version: 1,
+            publicId: this.publicId,
+            participantSecret: secret,
+            savedAtUtc: new Date().toISOString(),
+            pending: null
+        };
+        this.save(access);
+        return access;
+    }
+
     save(access) {
         try {
             this.storage.setItem(this.key, JSON.stringify(access));
@@ -407,7 +428,15 @@ export function readCapabilityFragment(location = window.location) {
     const claimCapability = optionalCapability(fragment.get("claim"), "Claim capability");
     const recoveryAuthority = optionalText(fragment.get("recover"));
     const bootstrapToken = optionalCapability(fragment.get("bootstrap"), "Discord bootstrap");
-    if ([claimCapability, recoveryAuthority, bootstrapToken].filter(Boolean).length > 1) {
+    const participantCapability = optionalCapability(
+        fragment.get("participant"),
+        "Participant capability");
+    if ([
+        claimCapability,
+        recoveryAuthority,
+        bootstrapToken,
+        participantCapability
+    ].filter(Boolean).length > 1) {
         throw new CommissionClientError(
             "This link contains conflicting authority. Ask for a fresh link.",
             "ambiguous-authority");
@@ -417,7 +446,8 @@ export function readCapabilityFragment(location = window.location) {
             claimCapability,
             recoveryCapability: null,
             recoveryGrantId: null,
-            bootstrapToken
+            bootstrapToken,
+            participantCapability
         };
     }
 
@@ -435,12 +465,97 @@ export function readCapabilityFragment(location = window.location) {
         recoveryCapability: optionalCapability(
             recoveryAuthority.slice(separator + 1),
             "Recovery capability"),
-        bootstrapToken: null
+        bootstrapToken: null,
+        participantCapability: null
     };
 }
 
-export function clearCapabilityFragment(history = window.history, location = window.location) {
-    history.replaceState(null, "", `${location.pathname}${location.search}`);
+export function replaceParticipantCapabilityFragment(
+    participantSecret,
+    history = window.history,
+    location = window.location) {
+    const secret = optionalCapability(
+        participantSecret,
+        "Participant capability");
+    if (!secret) {
+        throw new CommissionClientError(
+            "Participant access cannot be placed in an incomplete private link.",
+            "invalid-authority");
+    }
+
+    const fragment = new URLSearchParams({ participant: secret });
+    history.replaceState(
+        null,
+        "",
+        `${location.pathname}${location.search}#${fragment.toString()}`);
+}
+
+export async function loadPortableCommissionProjection(
+    client,
+    capabilities,
+    access) {
+    const participantCapability = capabilities?.participantCapability ?? null;
+    const hasAuthorityFragment = Boolean(
+        capabilities?.claimCapability ||
+        capabilities?.recoveryCapability ||
+        capabilities?.bootstrapToken ||
+        participantCapability);
+    const loadSecret = participantCapability ??
+        (access?.pending || !hasAuthorityFragment
+            ? access?.participantSecret ?? null
+            : null);
+
+    try {
+        const projection = await client.load(loadSecret);
+        const savedParticipantCanResumeSharedClaimLink = Boolean(
+            capabilities?.claimCapability &&
+            !access?.pending &&
+            access?.participantSecret &&
+            projection?.kind === "anonymous" &&
+            projection.public?.isClaimed);
+        if (savedParticipantCanResumeSharedClaimLink) {
+            try {
+                return {
+                    projection: await client.load(access.participantSecret),
+                    participantCapability: null
+                };
+            } catch (caught) {
+                if (!(caught instanceof CommissionClientError) ||
+                    caught.status !== 401) {
+                    throw caught;
+                }
+            }
+        }
+
+        return {
+            projection,
+            participantCapability
+        };
+    } catch (caught) {
+        const savedParticipantCanRepairStaleLink =
+            caught instanceof CommissionClientError &&
+            caught.status === 401 &&
+            Boolean(
+                participantCapability &&
+                access?.participantSecret &&
+                access.participantSecret !== participantCapability);
+        if (savedParticipantCanRepairStaleLink) {
+            return {
+                projection: await client.load(access.participantSecret),
+                participantCapability: null
+            };
+        }
+
+        const pendingAuthorityIsNotInstalled =
+            caught instanceof CommissionClientError &&
+            caught.status === 401 &&
+            Boolean(loadSecret && access?.pending);
+        if (!pendingAuthorityIsNotInstalled) throw caught;
+        return {
+            projection: await client.load(),
+            participantCapability
+        };
+    }
 }
 
 export function createCommandAuthorization(projection, access, capability = {}, commandId = crypto.randomUUID()) {

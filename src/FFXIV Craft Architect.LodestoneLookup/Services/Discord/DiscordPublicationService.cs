@@ -126,7 +126,8 @@ public sealed class DiscordPublicationService(
             cancellationToken);
         var initialPayload = CompanyCommissionDiscordMessage.CreatePublication(
             projection,
-            actionToken);
+            actionToken,
+            options.CrafterWorkspaceEnabled);
         var created = await collaboration.CreatePublicationAsync(
             ownership,
             publicId,
@@ -483,7 +484,8 @@ public sealed class DiscordPublicationService(
             cancellationToken);
         var payload = CompanyCommissionDiscordMessage.CreatePublication(
             projection,
-            publication.ActionToken);
+            publication.ActionToken,
+            options.CrafterWorkspaceEnabled);
         return await collaboration.RetryFailedPublicationAsync(
             access.CompanyId,
             publication.PublicationId,
@@ -642,7 +644,8 @@ public sealed class DiscordPublicationService(
             cancellationToken);
         var payload = CompanyCommissionDiscordMessage.CreatePublication(
             projection,
-            publication.ActionToken);
+            publication.ActionToken,
+            options.CrafterWorkspaceEnabled);
         await collaboration.EnqueueProjectionAsync(
             publication.PublicationId,
             state,
@@ -728,6 +731,7 @@ public sealed class DiscordPublicationService(
 
         var access = await companies.ResolvePublicAccessAsync(
             ownership,
+            publication.PublicId,
             cancellationToken);
         var order = access == null
             ? null

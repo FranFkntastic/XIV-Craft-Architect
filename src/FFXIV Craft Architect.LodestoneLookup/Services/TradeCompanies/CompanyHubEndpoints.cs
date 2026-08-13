@@ -2,6 +2,8 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -11,7 +13,8 @@ public sealed record CompanyHubThemeResponse(
     string BannerStyle,
     string Emblem,
     string? Tagline,
-    string? About);
+    string? About,
+    bool ShowOpenCommissionCount);
 
 public sealed record CompanyHubStandingResponse(string State, string? Role);
 
@@ -35,6 +38,21 @@ public sealed record CompanyHubOutputResponse(
 
 public sealed record CompanyHubPaymentResponse(string Schedule, string Label, decimal Total);
 
+public sealed record CompanyHubCommissionAttentionResponse(
+    Guid EventId,
+    long Revision,
+    string Text,
+    DateTime CreatedAtUtc);
+
+public sealed record CompanyHubUpdateResponse(
+    Guid Id,
+    string Title,
+    string Body,
+    string AuthorDisplayName,
+    DateTime PublishedAtUtc,
+    DateTime? EditedAtUtc,
+    bool IsPinned);
+
 public sealed record CompanyHubCommissionResponse(
     string CommissionId,
     string Title,
@@ -46,15 +64,14 @@ public sealed record CompanyHubCommissionResponse(
     IReadOnlyList<CompanyHubOutputResponse> Outputs,
     CompanyHubPaymentResponse Payment,
     string SettlementState,
-    string State);
+    string State,
+    bool CanWork,
+    bool CanReportProgress,
+    bool CanDeclareReadiness,
+    string? WorkBlockedReason,
+    CompanyHubCommissionAttentionResponse? UnreadCommissionerUpdate = null);
 
 public sealed record CompanyHubRosterMemberResponse(string DisplayName, string Role);
-
-public sealed record CompanyHubActivityResponse(
-    string CommissionId,
-    string Reference,
-    string Kind,
-    DateTime OccurredAtUtc);
 
 public sealed record CompanyHubResponse(
     string Kind,
@@ -63,11 +80,47 @@ public sealed record CompanyHubResponse(
     string DisplayName,
     CompanyHubThemeResponse Theme,
     CompanyHubStandingResponse Standing,
+    long ProfileRevision,
+    IReadOnlyList<CompanyHubUpdateResponse> Updates,
     IReadOnlyList<CompanyHubCommissionResponse> OpenCommissions,
     IReadOnlyList<CompanyHubCommissionResponse> Assignments,
     IReadOnlyList<CompanyHubRosterMemberResponse> Roster,
-    IReadOnlyList<CompanyHubActivityResponse> RecentActivity,
     int? PendingMembershipRequestCount);
+
+public sealed record CompanyHubThemeUpdateRequest(
+    long ExpectedProfileRevision,
+    string Accent,
+    string BannerStyle,
+    string Emblem,
+    string? Tagline,
+    string? About,
+    bool ShowOpenCommissionCount);
+
+public sealed record CompanyHubPostUpdateRequest(
+    long ExpectedProfileRevision,
+    string Title,
+    string Body,
+    bool IsPinned);
+
+public sealed record CompanyHubMutationResponse(long ProfileRevision);
+public sealed record CompanyHubAttentionReadRequest(long OpenedRevision);
+public sealed record CompanyHubAttentionReadResponse(long ReadRevision);
+
+public enum CompanyHubMutationStatus
+{
+    Applied,
+    NotFound,
+    Unauthorized,
+    Forbidden,
+    Conflict,
+    Invalid
+}
+
+public sealed record CompanyHubMutationResult(
+    CompanyHubMutationStatus Status,
+    long? ProfileRevision = null,
+    string? ErrorCode = null,
+    string? ErrorMessage = null);
 
 public static class CompanyHubEndpoints
 {
@@ -92,18 +145,139 @@ public static class CompanyHubEndpoints
                 var projection = await hubs.LoadAsync(slugOrGuid, account, cancellationToken);
                 return projection == null ? Results.NotFound() : Results.Ok(projection);
             });
+
+        app.MapPut(
+            "/trade/v1/companies/{slugOrGuid}/hub/theme",
+            async (
+                string slugOrGuid,
+                CompanyHubThemeUpdateRequest body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                CompanyHubService hubs,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                var result = await hubs.UpdateThemeAsync(slugOrGuid, account, body, cancellationToken);
+                return ToMutationResult(result);
+            });
+
+        app.MapPost(
+            "/trade/v1/companies/{slugOrGuid}/hub/updates",
+            async (
+                string slugOrGuid,
+                CompanyHubPostUpdateRequest body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                CompanyHubService hubs,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                var result = await hubs.PostUpdateAsync(slugOrGuid, account, body, cancellationToken);
+                return ToMutationResult(result);
+            });
+
+        app.MapPost(
+            "/trade/v1/companies/{slugOrGuid}/hub/commissions/{commissionId:guid}/attention/read",
+            async (
+                string slugOrGuid,
+                Guid commissionId,
+                CompanyHubAttentionReadRequest body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                CompanyHubService hubs,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                var result = await hubs.MarkCommissionReadAsync(
+                    slugOrGuid,
+                    commissionId,
+                    account,
+                    body.OpenedRevision,
+                    cancellationToken);
+                return result.Status switch
+                {
+                    CompanyHubAttentionReadStatus.Applied => Results.Ok(
+                        new CompanyHubAttentionReadResponse(result.ReadRevision!.Value)),
+                    CompanyHubAttentionReadStatus.NotFound => Results.NotFound(),
+                    CompanyHubAttentionReadStatus.Forbidden =>
+                        Results.StatusCode(StatusCodes.Status403Forbidden),
+                    _ => Results.Conflict(new
+                    {
+                        error = "company_hub_attention_revision_conflict",
+                        message = "The commission changed before it could be marked read."
+                    })
+                };
+            });
     }
+
+    private static IResult ToMutationResult(CompanyHubMutationResult result) =>
+        result.Status switch
+        {
+            CompanyHubMutationStatus.Applied => Results.Ok(
+                new CompanyHubMutationResponse(result.ProfileRevision!.Value)),
+            CompanyHubMutationStatus.NotFound => Results.NotFound(),
+            CompanyHubMutationStatus.Unauthorized => Results.Unauthorized(),
+            CompanyHubMutationStatus.Forbidden => Results.StatusCode(StatusCodes.Status403Forbidden),
+            CompanyHubMutationStatus.Conflict => Results.Conflict(new
+            {
+                error = result.ErrorCode ?? "company_hub_conflict",
+                message = result.ErrorMessage ?? "The company hub changed before the update completed."
+            }),
+            _ => Results.BadRequest(new
+            {
+                error = result.ErrorCode ?? "company_hub_invalid",
+                message = result.ErrorMessage ?? "The company hub update is invalid."
+            })
+        };
 }
+
+public enum CompanyHubAttentionReadStatus
+{
+    Applied,
+    NotFound,
+    Forbidden,
+    Conflict
+}
+
+public sealed record CompanyHubAttentionReadResult(
+    CompanyHubAttentionReadStatus Status,
+    long? ReadRevision = null);
 
 public sealed class CompanyHubService(
     SqliteProfileHostStore profiles,
     SqliteMembershipStore memberships,
+    MembershipAccessResolver accessResolver,
     ProfileHostChangeSignal changes,
     TimeProvider timeProvider)
 {
     private const int MaximumDisplayNameLength = 120;
     private const int MaximumTaglineLength = 120;
     private const int MaximumAboutLength = 2000;
+    private const int MaximumUpdateTitleLength = 160;
+    private const int MaximumUpdateBodyLength = 2000;
+    private const int MaximumUpdates = 50;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -131,7 +305,13 @@ public sealed class CompanyHubService(
                 new CompanyId(company.Profile.Id),
                 account.ProfileId,
                 cancellationToken);
-        var standing = ResolveStanding(company, account, membership);
+        var access = account == null
+            ? null
+            : await accessResolver.ResolveCompanyAccessAsync(
+                account,
+                new CompanyId(company.Profile.Id),
+                cancellationToken);
+        var standing = ResolveStanding(company, account, membership, access);
         var theme = ProjectTheme(company.Profile.Landing);
         var slug = BuildSlug(company.Profile.Name, company.Ordinal);
         var orders = await LoadOrdersAsync(company, cancellationToken);
@@ -155,21 +335,14 @@ public sealed class CompanyHubService(
         var roster = await ProjectRosterAsync(company, active, cancellationToken);
         var assignments = account == null
             ? []
-            : orders.Where(order => order.CompanyCommission?.ActiveClaim is { } claim &&
-                (claim.CrafterId == account.ProfileId || claim.ProvisionalCrafterId == account.ProfileId))
-                .Select(ProjectCommission)
-                .ToArray();
-        var activity = orders
-            .SelectMany(order => (order.CompanyCommission?.Activity ?? [])
-                .Where(item => item.Visibility == CompanyCommissionActivityVisibility.Shared)
-                .Select(item => new CompanyHubActivityResponse(
-                    order.Id.ToString("D"),
-                    ClampText(order.CompanyCommission!.Reference, 120, string.Empty),
-                    item.Kind.ToString().ToLowerInvariant(),
-                    item.CreatedAtUtc)))
-            .OrderByDescending(item => item.OccurredAtUtc)
-            .Take(20)
-            .ToArray();
+            : await Task.WhenAll(orders.Where(order =>
+                    IsAssignmentFor(order, account.ProfileId))
+                .Select(order => ProjectAssignmentAsync(
+                    order,
+                    new CompanyId(company.Profile.Id),
+                    account.ProfileId,
+                    company.Profile.Name,
+                    cancellationToken)));
         var pendingCount = standing.Role is "owner" or "operator"
             ? (await memberships.LoadPendingAsync(new CompanyId(company.Profile.Id), cancellationToken)).Count
             : (int?)null;
@@ -180,12 +353,213 @@ public sealed class CompanyHubService(
             ClampText(company.Profile.Name, MaximumDisplayNameLength, "Trade company"),
             theme,
             standing,
+            company.ObjectRevision,
+            ProjectUpdates(company.Profile.Updates),
             open,
             assignments,
             roster,
-            activity,
             pendingCount);
     }
+
+    public async Task<CompanyHubAttentionReadResult> MarkCommissionReadAsync(
+        string slugOrGuid,
+        Guid commissionId,
+        MembershipAccount account,
+        long openedRevision,
+        CancellationToken cancellationToken = default)
+    {
+        var company = await ResolveCompanyAsync(slugOrGuid, cancellationToken);
+        if (company == null)
+        {
+            return new(CompanyHubAttentionReadStatus.NotFound);
+        }
+        var companyId = new CompanyId(company.Profile.Id);
+        var membership = await memberships.LoadForAccountAsync(
+            companyId,
+            account.ProfileId,
+            cancellationToken);
+        if (membership is not { State: MembershipState.Active } &&
+            account.ProfileId != company.HostProfileId)
+        {
+            return new(CompanyHubAttentionReadStatus.Forbidden);
+        }
+        var order = (await LoadOrdersAsync(company, cancellationToken))
+            .SingleOrDefault(candidate => candidate.Id == commissionId);
+        if (order == null || !IsAssignmentFor(order, account.ProfileId))
+        {
+            return new(CompanyHubAttentionReadStatus.NotFound);
+        }
+        var currentRevision = order.CompanyCommission!.Activity.LastOrDefault()?.CommissionRevision ?? 0;
+        if (openedRevision < 0 || openedRevision > currentRevision)
+        {
+            return new(CompanyHubAttentionReadStatus.Conflict);
+        }
+        var readRevision = await memberships.AdvanceCommissionReadRevisionAsync(
+            companyId,
+            account.ProfileId,
+            commissionId,
+            openedRevision,
+            cancellationToken);
+        return new(CompanyHubAttentionReadStatus.Applied, readRevision);
+    }
+
+    public async Task<CompanyHubMutationResult> UpdateThemeAsync(
+        string slugOrGuid,
+        MembershipAccount? account,
+        CompanyHubThemeUpdateRequest body,
+        CancellationToken cancellationToken = default)
+    {
+        var company = await ResolveCompanyAsync(slugOrGuid, cancellationToken);
+        var authorization = await AuthorizeAdministratorAsync(company, account, cancellationToken);
+        if (authorization != null)
+        {
+            return authorization;
+        }
+
+        if (body.ExpectedProfileRevision != company!.ObjectRevision)
+        {
+            return RevisionConflict();
+        }
+
+        if (!TryParseToken<CompanyLandingAccent>(body.Accent, out var accent) ||
+            !TryParseToken<CompanyLandingBannerStyle>(body.BannerStyle, out var banner) ||
+            !TryParseToken<CompanyLandingEmblem>(body.Emblem, out var emblem) ||
+            body.ExpectedProfileRevision <= 0 ||
+            (body.Tagline?.Length ?? 0) > MaximumTaglineLength ||
+            (body.About?.Length ?? 0) > MaximumAboutLength)
+        {
+            return new CompanyHubMutationResult(
+                CompanyHubMutationStatus.Invalid,
+                ErrorCode: "company_hub_theme_invalid",
+                ErrorMessage: "The company theme contains an unsupported token or exceeds its text limit.");
+        }
+
+        var updated = CloneProfile(company!.Profile);
+        updated.Landing = new CompanyLandingTheme
+        {
+            Accent = accent,
+            BannerStyle = banner,
+            Emblem = emblem,
+            Tagline = NormalizeOptionalText(body.Tagline, MaximumTaglineLength),
+            About = string.IsNullOrWhiteSpace(body.About) ? null : body.About.Trim(),
+            ShowOpenCommissionCount = body.ShowOpenCommissionCount
+        };
+        updated.UpdatedAtUtc = timeProvider.GetUtcNow().UtcDateTime;
+        updated.SyncState = TradeSyncState.Synced;
+        return await SaveProfileAsync(company, updated, body.ExpectedProfileRevision, cancellationToken);
+    }
+
+    public async Task<CompanyHubMutationResult> PostUpdateAsync(
+        string slugOrGuid,
+        MembershipAccount? account,
+        CompanyHubPostUpdateRequest body,
+        CancellationToken cancellationToken = default)
+    {
+        var company = await ResolveCompanyAsync(slugOrGuid, cancellationToken);
+        var authorization = await AuthorizeAdministratorAsync(company, account, cancellationToken);
+        if (authorization != null)
+        {
+            return authorization;
+        }
+
+        if (body.ExpectedProfileRevision != company!.ObjectRevision)
+        {
+            return RevisionConflict();
+        }
+
+        if (body.ExpectedProfileRevision <= 0 ||
+            string.IsNullOrWhiteSpace(body.Title) ||
+            body.Title.Length > MaximumUpdateTitleLength ||
+            string.IsNullOrWhiteSpace(body.Body) ||
+            body.Body.Length > MaximumUpdateBodyLength)
+        {
+            return new CompanyHubMutationResult(
+                CompanyHubMutationStatus.Invalid,
+                ErrorCode: "company_hub_update_invalid",
+                ErrorMessage: "Company updates require a title and body within the supported limits.");
+        }
+
+        var updated = CloneProfile(company!.Profile);
+        var existing = (updated.Updates ?? [])
+            .Where(item => item.Id != Guid.Empty)
+            .Select(item => body.IsPinned && item.IsPinned ? item with { IsPinned = false } : item)
+            .OrderByDescending(item => item.PublishedAtUtc)
+            .Take(MaximumUpdates - 1);
+        var companyUpdate = new TradeCompanyUpdate
+        {
+            Id = Guid.NewGuid(),
+            Title = body.Title.Trim(),
+            Body = body.Body.Trim(),
+            AuthorDisplayName = ClampText(
+                account!.Profile.DisplayName,
+                MaximumDisplayNameLength,
+                "Company member"),
+            PublishedAtUtc = timeProvider.GetUtcNow().UtcDateTime,
+            IsPinned = body.IsPinned
+        };
+        updated.Updates = existing.Prepend(companyUpdate).ToArray();
+        updated.UpdatedAtUtc = companyUpdate.PublishedAtUtc;
+        updated.SyncState = TradeSyncState.Synced;
+        return await SaveProfileAsync(company, updated, body.ExpectedProfileRevision, cancellationToken);
+    }
+
+    private async Task<CompanyHubMutationResult?> AuthorizeAdministratorAsync(
+        HostedCompany? company,
+        MembershipAccount? account,
+        CancellationToken cancellationToken)
+    {
+        if (company == null)
+        {
+            return new CompanyHubMutationResult(CompanyHubMutationStatus.NotFound);
+        }
+        if (account == null)
+        {
+            return new CompanyHubMutationResult(CompanyHubMutationStatus.Unauthorized);
+        }
+        var access = await accessResolver.ResolveCompanyAccessAsync(
+            account,
+            new CompanyId(company.Profile.Id),
+            cancellationToken);
+        return access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator }
+                ? null
+                : new CompanyHubMutationResult(CompanyHubMutationStatus.Forbidden);
+    }
+
+    private async Task<CompanyHubMutationResult> SaveProfileAsync(
+        HostedCompany company,
+        TradeCompanyProfile updated,
+        long expectedProfileRevision,
+        CancellationToken cancellationToken)
+    {
+        var result = await profiles.PutObjectAsync(
+            company.HostProfileId.ToString("D"),
+            ProfileSyncCollections.TradeCompanyProfiles,
+            company.Profile.Id.ToString("D"),
+            JsonSerializer.Serialize(updated, JsonOptions),
+            expectedProfileRevision,
+            cancellationToken,
+            allowCompanyCollection: true);
+        return result.Success
+            ? new CompanyHubMutationResult(
+                CompanyHubMutationStatus.Applied,
+                result.Object?.Revision ?? expectedProfileRevision)
+            : new CompanyHubMutationResult(
+                result.Conflict ? CompanyHubMutationStatus.Conflict : CompanyHubMutationStatus.Invalid,
+                ErrorCode: result.ErrorCode,
+                ErrorMessage: result.ErrorMessage);
+    }
+
+    private static TradeCompanyProfile CloneProfile(TradeCompanyProfile source) =>
+        JsonSerializer.Deserialize<TradeCompanyProfile>(
+            JsonSerializer.Serialize(source, JsonOptions),
+            JsonOptions)
+        ?? throw new InvalidOperationException("The company profile could not be copied.");
+
+    private static CompanyHubMutationResult RevisionConflict() =>
+        new(
+            CompanyHubMutationStatus.Conflict,
+            ErrorCode: "company_hub_revision_conflict",
+            ErrorMessage: "The company hub changed before the update completed.");
 
     private async Task<HostedCompany?> ResolveCompanyAsync(
         string slugOrGuid,
@@ -286,7 +660,11 @@ public sealed class CompanyHubService(
             cancellationToken);
         return hosted
             .Select(item => TryReadCompany(item, out var company)
-                ? new HostedCompany(company, Guid.Parse(item.ProfileId), 1)
+                ? new HostedCompany(
+                    company,
+                    Guid.Parse(item.ProfileId),
+                    item.Object.Revision,
+                    1)
                 : null)
             .Where(item => item != null)
             .Cast<HostedCompany>()
@@ -390,11 +768,64 @@ public sealed class CompanyHubService(
         order.CompanyCommission is { ActiveClaim: null } commission &&
         commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published;
 
+    private static bool IsAssignmentFor(TradeOrder order, Guid accountProfileId) =>
+        order.CompanyCommission?.ActiveClaim is { } claim &&
+        (claim.CrafterId == accountProfileId ||
+            claim.ProvisionalCrafterId == accountProfileId);
+
+    private async Task<CompanyHubCommissionResponse> ProjectAssignmentAsync(
+        TradeOrder order,
+        CompanyId companyId,
+        Guid accountProfileId,
+        string companyDisplayName,
+        CancellationToken cancellationToken)
+    {
+        var commission = order.CompanyCommission!;
+        var claim = commission.ActiveClaim!;
+        var readRevision = await memberships.LoadCommissionReadRevisionAsync(
+            companyId,
+            accountProfileId,
+            order.Id,
+            cancellationToken);
+        var latest = commission.Activity
+            .Where(activity =>
+                activity.Actor.Kind == CompanyCommissionActorKind.Commissioner &&
+                activity.Visibility == CompanyCommissionActivityVisibility.Shared &&
+                activity.Kind != CompanyCommissionActivityKind.DraftUpdated &&
+                activity.CreatedAtUtc >= claim.ClaimedAtUtc &&
+                activity.CommissionRevision > (readRevision ?? 0))
+            .OrderByDescending(activity => activity.CommissionRevision)
+            .FirstOrDefault();
+        CompanyHubCommissionAttentionResponse? attention = null;
+        if (latest != null)
+        {
+            var brief = CompanyCommissionProjectionService.CreatePublicBrief(
+                order,
+                companyDisplayName);
+            attention = new CompanyHubCommissionAttentionResponse(
+                latest.EventId,
+                latest.CommissionRevision,
+                ClampText(
+                    DiscordCompanyCommissionPostCommitSink.BuildSummary(latest, brief),
+                    800,
+                    "The commissioner updated this commission."),
+                latest.CreatedAtUtc);
+        }
+        return ProjectCommission(order) with { UnreadCommissionerUpdate = attention };
+    }
+
     private static CompanyHubCommissionResponse ProjectCommission(TradeOrder order)
     {
         var commission = order.CompanyCommission!;
         var terms = commission.CurrentTerms;
         var progressByLine = commission.OutputProgress.ToDictionary(progress => progress.LineId);
+        var canWork = commission.ActiveClaim != null &&
+            commission.ClearedToWork &&
+            commission.ParticipantAcknowledgedTermsVersion == commission.CurrentTermsVersion;
+        var allOutputsReady = terms.Outputs.All(output =>
+            progressByLine.TryGetValue(output.LineId, out var progress) &&
+            progress.CompletedQuantity >= output.RequiredQuantity &&
+            progress.ReadyQuantity >= output.RequiredQuantity);
         return new CompanyHubCommissionResponse(
             order.Id.ToString("D"),
             ClampText(order.Title, 240, "Untitled commission"),
@@ -422,14 +853,71 @@ public sealed class CompanyHubService(
                 ClampText(terms.Payment.ContractLabel, 240, "Commission"),
                 terms.Payment.Total),
             commission.SettlementState.ToString().ToLowerInvariant(),
-            order.Status.ToString().ToLowerInvariant());
+            order.Status.ToString().ToLowerInvariant(),
+            canWork,
+            canWork && !commission.DeliveryReadiness.IsReady && !allOutputsReady,
+            canWork && !commission.DeliveryReadiness.IsReady && allOutputsReady,
+            WorkBlockedReason(commission),
+            null);
     }
+
+    private static string? WorkBlockedReason(TradeCompanyCommission commission)
+    {
+        if (commission.ActiveClaim == null)
+        {
+            return null;
+        }
+        if (!GateSatisfied(commission.Gates.Identity.State))
+        {
+            return "Identity review is still required.";
+        }
+        if (!GateSatisfied(commission.Gates.Payment.State))
+        {
+            return "Payment confirmation is still required.";
+        }
+        if (!GateSatisfied(commission.Gates.CompanyMaterials.State))
+        {
+            return "Company materials have not been received.";
+        }
+        return commission.ParticipantAcknowledgedTermsVersion != commission.CurrentTermsVersion
+            ? "Review the current terms before starting work."
+            : null;
+    }
+
+    private static bool GateSatisfied(CompanyCommissionClearanceState state) =>
+        state is CompanyCommissionClearanceState.NotRequired or CompanyCommissionClearanceState.Satisfied;
+
+    private static IReadOnlyList<CompanyHubUpdateResponse> ProjectUpdates(
+        IReadOnlyList<TradeCompanyUpdate>? updates) =>
+        (updates ?? [])
+            .Where(item => item.Id != Guid.Empty &&
+                !string.IsNullOrWhiteSpace(item.Title) &&
+                !string.IsNullOrWhiteSpace(item.Body))
+            .OrderByDescending(item => item.IsPinned)
+            .ThenByDescending(item => item.PublishedAtUtc)
+            .Take(MaximumUpdates)
+            .Select(item => new CompanyHubUpdateResponse(
+                item.Id,
+                ClampText(item.Title, MaximumUpdateTitleLength, "Company update"),
+                SanitizeMarkdown(item.Body, MaximumUpdateBodyLength) ?? string.Empty,
+                ClampText(item.AuthorDisplayName, MaximumDisplayNameLength, "Company member"),
+                item.PublishedAtUtc,
+                item.EditedAtUtc,
+                item.IsPinned))
+            .ToArray();
 
     private static CompanyHubStandingResponse ResolveStanding(
         HostedCompany company,
         MembershipAccount? account,
-        CompanyMembership? membership)
+        CompanyMembership? membership,
+        TradeCompanyAccessContext? access)
     {
+        if (access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator })
+        {
+            return new CompanyHubStandingResponse(
+                "active",
+                access.Role.ToString().ToLowerInvariant());
+        }
         if (membership?.State is MembershipState.Denied or MembershipState.Revoked)
         {
             return new CompanyHubStandingResponse("none", null);
@@ -455,13 +943,18 @@ public sealed class CompanyHubService(
             IsValid(theme?.BannerStyle) ? ToToken(theme!.BannerStyle) : ToToken(CompanyLandingBannerStyle.Gradient),
             IsValid(theme?.Emblem) ? ToToken(theme!.Emblem) : ToToken(CompanyLandingEmblem.Star),
             NormalizeOptionalText(theme?.Tagline, MaximumTaglineLength),
-            SanitizeMarkdown(theme?.About));
+            SanitizeMarkdown(theme?.About),
+            theme?.ShowOpenCommissionCount == true);
 
     private static bool IsValid<T>(T? value) where T : struct, Enum =>
         value.HasValue && Enum.IsDefined(value.Value);
 
     private static string ToToken<T>(T value) where T : struct, Enum =>
         Regex.Replace(value.ToString(), "(?<!^)([A-Z])", "-$1").ToLowerInvariant();
+
+    private static bool TryParseToken<T>(string? value, out T parsed) where T : struct, Enum =>
+        Enum.TryParse(value?.Replace("-", string.Empty, StringComparison.Ordinal), true, out parsed) &&
+        Enum.IsDefined(parsed);
 
     private static string BuildSlug(string? name, int ordinal) =>
         ordinal <= 1 ? Slugify(name) : $"{Slugify(name)}-{ordinal}";
@@ -507,14 +1000,14 @@ public sealed class CompanyHubService(
             ? fallback
             : value.Trim()[..Math.Min(value.Trim().Length, maximumLength)];
 
-    private static string? SanitizeMarkdown(string? value)
+    private static string? SanitizeMarkdown(string? value, int maximumLength = MaximumAboutLength)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
             return null;
         }
 
-        var source = value.Trim()[..Math.Min(value.Trim().Length, MaximumAboutLength)];
+        var source = value.Trim()[..Math.Min(value.Trim().Length, maximumLength)];
         var sanitized = new System.Text.StringBuilder(source.Length);
         var position = 0;
         foreach (Match match in MarkdownToken.Matches(source))
@@ -544,7 +1037,7 @@ public sealed class CompanyHubService(
         }
 
         sanitized.Append(SanitizeLiteral(source[position..]));
-        return sanitized.ToString()[..Math.Min(sanitized.Length, MaximumAboutLength)];
+        return sanitized.ToString()[..Math.Min(sanitized.Length, maximumLength)];
     }
 
     private static string SanitizeLiteral(string value) =>
@@ -556,7 +1049,11 @@ public sealed class CompanyHubService(
             .Replace("(", "\\(", StringComparison.Ordinal)
             .Replace(")", "\\)", StringComparison.Ordinal);
 
-    private sealed record HostedCompany(TradeCompanyProfile Profile, Guid HostProfileId, int Ordinal);
+    private sealed record HostedCompany(
+        TradeCompanyProfile Profile,
+        Guid HostProfileId,
+        long ObjectRevision,
+        int Ordinal);
 
     private sealed record CompanyDirectoryCache(
         IReadOnlyList<HostedCompany> Companies,

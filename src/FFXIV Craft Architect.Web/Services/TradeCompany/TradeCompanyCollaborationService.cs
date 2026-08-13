@@ -32,7 +32,7 @@ public sealed class TradeCompanyCollaborationService(
     {
         if (!profileSync.CurrentStatus.IsConnected)
         {
-            reason = "Connect Profile Hosting in Options first.";
+            reason = "Connect this browser in Settings first.";
             return false;
         }
 
@@ -97,7 +97,7 @@ public sealed class TradeCompanyCollaborationService(
             throw new InvalidOperationException(
                 "The hosted order authority changed while publication ownership was being resolved.");
         }
-        var revision = await ResolveHostedOrderRevisionAsync(
+        var revision = await ResolveCanonicalOrderRevisionAsync(
             order,
             authority,
             cancellationToken);
@@ -197,7 +197,7 @@ public sealed class TradeCompanyCollaborationService(
         try
         {
             var authority = await CaptureOrderAuthorityAsync();
-            var revision = await ResolveHostedOrderRevisionAsync(
+            var revision = await ResolveCanonicalOrderRevisionAsync(
                 order,
                 authority,
                 cancellationToken);
@@ -331,7 +331,7 @@ public sealed class TradeCompanyCollaborationService(
         }
 
         var authority = await CaptureOrderAuthorityAsync();
-        var revision = await ResolveHostedOrderRevisionAsync(
+        var revision = await ResolveCanonicalOrderRevisionAsync(
             order,
             authority,
             cancellationToken);
@@ -365,7 +365,7 @@ public sealed class TradeCompanyCollaborationService(
         await AdoptCommittedOrderAsync(
             authority,
             hostedOrder,
-            published.OrderRecord.RecordRevision.Value,
+            published.ProfileOrderRevision.Value,
             "The company brief was attached by Profile Hosting, but browser storage could not apply the authoritative order.");
         AdoptDictionaryAuthority(authority);
         _publications.Remove(order.Id);
@@ -550,6 +550,85 @@ public sealed class TradeCompanyCollaborationService(
         return revision;
     }
 
+    private async Task<long> ResolveCanonicalOrderRevisionAsync(
+        TradeOrder order,
+        OrderCommandAuthority authority,
+        CancellationToken cancellationToken)
+    {
+        await EnsureLinkedPlanIsHostedAsync(
+            order,
+            authority,
+            cancellationToken);
+        var sourceRevision = await ResolveHostedOrderRevisionAsync(
+            order,
+            authority,
+            cancellationToken);
+        if (sourceRevision <= 0)
+        {
+            return 0;
+        }
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The hosted order authority changed before company adoption began.");
+        }
+
+        var adopted = await client.AdoptSynchronizedOrderAsync(
+            order.CompanyProfileId,
+            order.Id,
+            sourceRevision,
+            $"adopt-order:{order.Id:D}:{sourceRevision}",
+            cancellationToken,
+            authority.Connection);
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The hosted order authority changed while company adoption was in progress.");
+        }
+        return adopted.RecordRevision.Value;
+    }
+
+    private async Task EnsureLinkedPlanIsHostedAsync(
+        TradeOrder order,
+        OrderCommandAuthority authority,
+        CancellationToken cancellationToken)
+    {
+        if (order.CraftPlanLinkKind != TradeOrderCraftPlanLinkKind.OrderGenerated)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(order.CraftPlanId) ||
+            !order.CraftPlanSavedAtUtc.HasValue)
+        {
+            throw new InvalidOperationException(
+                "The commission's exact generated plan revision is unavailable.");
+        }
+
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The hosted order authority changed before its linked plan could be verified.");
+        }
+
+        var planId = order.CraftPlanId;
+        var publication = await profileSync.PublishLocalObjectAsync(
+            ProfileSyncCollections.Plans,
+            planId,
+            authority.Connection,
+            cancellationToken);
+        if (!publication.Published)
+        {
+            throw new InvalidOperationException(
+                $"The exact generated plan could not be synchronized before publication. {publication.Message}");
+        }
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The hosted order authority changed while its linked plan was being synchronized.");
+        }
+    }
+
     private async Task RequireCurrentPublicationAuthorityAsync(
         OrderCommandAuthority authority,
         Guid expectedOrderId,
@@ -652,10 +731,19 @@ public sealed class TradeCompanyCollaborationService(
                 publication.PublicId,
                 published.Link.PublicId,
                 StringComparison.Ordinal) ||
-            validatedLink != published.Link)
+            validatedLink == null ||
+            !string.Equals(
+                validatedLink.PublicUrl,
+                published.Link.PublicUrl,
+                StringComparison.Ordinal) ||
+            validatedLink.Version != published.Link.Version ||
+            validatedLink.PublishedAtUtc != published.Link.PublishedAtUtc ||
+            validatedLink.EditorToken != published.Link.EditorToken)
         {
             throw new InvalidOperationException(
-                "Portable commission publication returned inconsistent authoritative link ownership.");
+                "Portable commission publication returned inconsistent authoritative link ownership. " +
+                $"Expected {expectedOwnership.CompanyId}/{expectedOwnership.OrderId:D}@{expectedOwnership.OrderRevision.Value}; " +
+                $"received {publication?.Ownership?.CompanyId}/{publication?.Ownership?.OrderId:D}@{publication?.Ownership?.OrderRevision.Value}.");
         }
 
         return order;

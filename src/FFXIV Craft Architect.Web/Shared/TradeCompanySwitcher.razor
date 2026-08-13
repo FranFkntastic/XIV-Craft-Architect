@@ -1,10 +1,14 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Web.Services
 @using FFXIV_Craft_Architect.Web.Services.ProfileHosting
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject ProfileSyncService ProfileSync
+@inject ProfileSyncLocalStateService LocalState
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject CompanyHubClient CompanyHubClient
 @implements IDisposable
 
 @if (_activeCompany != null)
@@ -21,7 +25,7 @@
                        Class="trade-company-switcher-button"
                        aria-label="Switch active Trade company">
                 <span class="trade-company-switcher-name">@_activeCompany.Name</span>
-                <span class="trade-company-switcher-id">@FormatCompanyId(_activeCompany.Id)</span>
+                <span class="trade-company-switcher-id">@(_activeCompany.Role == null ? FormatCompanyId(_activeCompany.Id) : $"{_activeCompany.Role} · {FormatCompanyId(_activeCompany.Id)}")</span>
             </MudButton>
         </ActivatorContent>
         <ChildContent>
@@ -43,13 +47,27 @@
                     </span>
                 </MudMenuItem>
             }
+            <MudDivider />
+            <MudMenuItem OnClick="OpenWorkspaceSettingsAsync" Icon="@Icons.Material.Filled.Notifications">
+                Workspace settings and notifications
+            </MudMenuItem>
         </ChildContent>
     </MudMenu>
 }
+else
+{
+    <MudButton Variant="Variant.Text"
+               Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Business"
+               Class="trade-company-switcher-button"
+               OnClick="OpenWorkspaceSettingsAsync">
+        No company workspace
+    </MudButton>
+}
 
 @code {
-    private TradeCompanyProfile? _activeCompany;
-    private IReadOnlyList<TradeCompanyProfile> _companies = [];
+    private WorkspaceCompanyContext? _activeCompany;
+    private IReadOnlyList<WorkspaceCompanyContext> _companies = [];
     private bool _refreshQueued;
     private bool _disposed;
 
@@ -85,21 +103,237 @@
     {
         try
         {
-            _activeCompany = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
-            _companies = (await TradeOperationsPersistence.LoadCompanyProfilesAsync())
+            var localCompanies = (await TradeOperationsPersistence.LoadCompanyProfilesAsync())
                 .OrderBy(company => company.Name, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(company => company.Id)
                 .ToArray();
+            var load = await LoadSelectableCompaniesAsync(localCompanies);
+            var route = await LoadRouteCompanyAsync(localCompanies);
+            if (route.IsCompanyRoute && route.Company == null)
+            {
+                // The company page owns an explicit workspace identity. If that identity cannot
+                // be resolved yet, retain the last truthful selector instead of presenting and
+                // persisting an unrelated local company while the page finishes connecting.
+                return;
+            }
+            if (route.Company != null)
+            {
+                load = load with
+                {
+                    Companies = SortContexts(load.Companies
+                        .Where(company => company.Id != route.Company.Id)
+                        .Append(route.Company))
+                };
+            }
+
+            var selectedWorkspaceId = await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
+            var activeLocal = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
+            var requestedWorkspaceId = route.Company?.Id ?? selectedWorkspaceId;
+            var activeCompany = requestedWorkspaceId.HasValue
+                ? load.Companies.FirstOrDefault(company => company.Id == requestedWorkspaceId.Value)
+                : null;
+
+            if (activeCompany == null && requestedWorkspaceId.HasValue && !load.IsAuthoritative)
+            {
+                // A transient host failure cannot revoke the selected hosted workspace. Keep the
+                // last truthful selector state and never rewrite its durable identity to a local
+                // fallback merely because this opportunistic refresh was incomplete.
+                _companies = load.Companies;
+                if (_activeCompany?.Id != requestedWorkspaceId.Value)
+                {
+                    _activeCompany = null;
+                }
+                return;
+            }
+
+            activeCompany ??= activeLocal == null
+                ? null
+                : load.Companies.FirstOrDefault(company => company.Id == activeLocal.Id);
+            activeCompany ??= load.Companies.FirstOrDefault();
+
+            _companies = load.Companies;
+            _activeCompany = activeCompany;
+            if (_activeCompany != null && selectedWorkspaceId != _activeCompany.Id)
+            {
+                await TradeOperationsPersistence.SelectWorkspaceCompanyAsync(_activeCompany.Id);
+            }
+            if (_activeCompany?.LocalProfile != null && activeLocal?.Id != _activeCompany.Id)
+            {
+                // The hosted workspace selector and the local editing selector describe the
+                // same company. Reconcile the stale local pointer in place so Settings and
+                // Trade surfaces immediately read the authority the global picker presents.
+                await TradeOperationsPersistence.SelectCompanyProfileAsync(_activeCompany.Id);
+            }
         }
         catch (Exception exception)
         {
-            _activeCompany = null;
-            _companies = [];
-            Snackbar.Add($"Trade companies could not be loaded: {exception.Message}", Severity.Error);
+            if (_activeCompany == null && _companies.Count == 0)
+            {
+                Snackbar.Add($"Trade companies could not be loaded: {exception.Message}", Severity.Error);
+            }
         }
     }
 
-    private async Task SelectCompanyAsync(TradeCompanyProfile company)
+    private async Task<RouteCompanyLoad> LoadRouteCompanyAsync(
+        IReadOnlyList<TradeCompanyProfile> localCompanies)
+    {
+        var relativePath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        var path = relativePath.Split('?', '#')[0].Trim('/');
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length != 2 ||
+            !string.Equals(segments[0], "companies", StringComparison.OrdinalIgnoreCase))
+        {
+            return new RouteCompanyLoad(IsCompanyRoute: false, Company: null);
+        }
+
+        try
+        {
+            var routeIdentity = Uri.UnescapeDataString(segments[1]);
+            var hub = await CompanyHubClient.LoadAsync(routeIdentity);
+            if (hub?.Kind != "hub" ||
+                !string.Equals(hub.Standing.State, "active", StringComparison.OrdinalIgnoreCase) ||
+                !Guid.TryParse(hub.CompanyId, out var companyId))
+            {
+                return new RouteCompanyLoad(IsCompanyRoute: true, Company: null);
+            }
+
+            var localProfile = localCompanies.FirstOrDefault(company => company.Id == companyId);
+            return new RouteCompanyLoad(
+                IsCompanyRoute: true,
+                new WorkspaceCompanyContext(
+                    companyId,
+                    hub.DisplayName,
+                    hub.Slug,
+                    SentenceCase(hub.Standing.Role),
+                    localProfile));
+        }
+        catch
+        {
+            return new RouteCompanyLoad(IsCompanyRoute: true, Company: null);
+        }
+    }
+
+    private async Task<SelectableCompanyLoad> LoadSelectableCompaniesAsync(
+        IReadOnlyList<TradeCompanyProfile> localCompanies)
+    {
+        var localById = localCompanies.ToDictionary(company => company.Id);
+        var connection = await LocalState.LoadConnectionSettingsAsync();
+        if (!connection.IsConfigured)
+        {
+            return new SelectableCompanyLoad(LocalContexts(localCompanies), IsAuthoritative: true);
+        }
+
+        var contexts = new Dictionary<Guid, WorkspaceCompanyContext>();
+        try
+        {
+            foreach (var membership in (await CompanyHubClient.LoadMembershipsAsync())
+                .Where(item => string.Equals(item.State, "active", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!Guid.TryParse(membership.CompanyId, out var companyId))
+                {
+                    continue;
+                }
+
+                var hub = await CompanyHubClient.LoadAsync(membership.CompanyId);
+                if (hub?.Kind != "hub" ||
+                    !string.Equals(hub.Standing.State, "active", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                localById.TryGetValue(companyId, out var localProfile);
+                contexts[companyId] = new WorkspaceCompanyContext(
+                    companyId,
+                    hub.DisplayName,
+                    hub.Slug,
+                    SentenceCase(hub.Standing.Role),
+                    localProfile);
+            }
+
+            foreach (var local in localCompanies.Where(company => !contexts.ContainsKey(company.Id)))
+            {
+                var hub = await CompanyHubClient.LoadAsync(local.Id.ToString("D"));
+                if (hub?.Kind == "hub" &&
+                    string.Equals(hub.Standing.State, "active", StringComparison.OrdinalIgnoreCase))
+                {
+                    contexts[local.Id] = new WorkspaceCompanyContext(
+                        local.Id,
+                        hub.DisplayName,
+                        hub.Slug,
+                        SentenceCase(hub.Standing.Role),
+                        local);
+                }
+            }
+        }
+        catch
+        {
+            // Preserve every last truthful hosted option, apply any metadata that was refreshed
+            // before the failure, and fold in authoritative local changes. This keeps periodic
+            // synchronization lazy and permissive without manufacturing a workspace revocation.
+            return new SelectableCompanyLoad(
+                MergeCachedContexts(localCompanies, contexts.Values),
+                IsAuthoritative: false);
+        }
+
+        return new SelectableCompanyLoad(SortContexts(contexts.Values), IsAuthoritative: true);
+    }
+
+    private IReadOnlyList<WorkspaceCompanyContext> MergeCachedContexts(
+        IReadOnlyList<TradeCompanyProfile> localCompanies,
+        IEnumerable<WorkspaceCompanyContext> refreshedContexts)
+    {
+        var localById = localCompanies.ToDictionary(company => company.Id);
+        var merged = new Dictionary<Guid, WorkspaceCompanyContext>();
+        foreach (var cached in _companies)
+        {
+            if (cached.Role != null)
+            {
+                localById.TryGetValue(cached.Id, out var localProfile);
+                merged[cached.Id] = cached with { LocalProfile = localProfile };
+            }
+            else if (localById.TryGetValue(cached.Id, out var localProfile))
+            {
+                merged[cached.Id] = cached with
+                {
+                    Name = localProfile.Name,
+                    Slug = Slugify(localProfile.Name),
+                    LocalProfile = localProfile
+                };
+            }
+        }
+
+        foreach (var local in localCompanies.Where(company => !merged.ContainsKey(company.Id)))
+        {
+            merged[local.Id] = LocalContext(local);
+        }
+
+        foreach (var refreshed in refreshedContexts)
+        {
+            merged[refreshed.Id] = refreshed;
+        }
+
+        return SortContexts(merged.Values);
+    }
+
+    private static IReadOnlyList<WorkspaceCompanyContext> LocalContexts(
+        IReadOnlyList<TradeCompanyProfile> localCompanies) => localCompanies
+        .Select(LocalContext)
+        .ToArray();
+
+    private static WorkspaceCompanyContext LocalContext(TradeCompanyProfile company) => new(
+        company.Id,
+        company.Name,
+        Slugify(company.Name),
+        null,
+        company);
+
+    private static IReadOnlyList<WorkspaceCompanyContext> SortContexts(
+        IEnumerable<WorkspaceCompanyContext> contexts) => contexts
+        .OrderBy(company => company.Name, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(company => company.Id)
+        .ToArray();
+
+    private async Task SelectCompanyAsync(WorkspaceCompanyContext company)
     {
         if (_activeCompany?.Id == company.Id)
         {
@@ -108,8 +342,16 @@
 
         try
         {
-            await TradeOperationsPersistence.SelectCompanyProfileAsync(company.Id);
-            NavigationManager.NavigateTo(NavigationManager.Uri, forceLoad: true);
+            await TradeOperationsPersistence.SelectWorkspaceCompanyAsync(company.Id);
+            if (company.LocalProfile != null)
+            {
+                await TradeOperationsPersistence.SelectCompanyProfileAsync(company.Id);
+                NavigationManager.NavigateTo(NavigationManager.Uri, forceLoad: true);
+            }
+            else
+            {
+                NavigationManager.NavigateTo(CompanyHubUrl(company));
+            }
         }
         catch (Exception exception)
         {
@@ -117,11 +359,29 @@
         }
     }
 
+    private async Task OpenWorkspaceSettingsAsync()
+    {
+        var parameters = new DialogParameters
+        {
+            [nameof(SettingsDialog.InitialSection)] = SettingsSection.Workspace,
+            [nameof(SettingsDialog.InitialWorkspaceCompanyId)] = _activeCompany?.Id.ToString("D")
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = false,
+            MaxWidth = MaxWidth.ExtraLarge,
+            FullWidth = true
+        };
+        var dialog = DialogService.Show<SettingsDialog>("Settings", parameters, options);
+        await dialog.Result;
+        await LoadCompaniesAsync();
+    }
+
     private static string FormatCompanyId(Guid companyId) =>
         companyId.ToString("N")[..6].ToUpperInvariant();
 
-    private static string CompanyHubUrl(TradeCompanyProfile company) =>
-        $"/companies/{Slugify(company.Name)}";
+    private static string CompanyHubUrl(WorkspaceCompanyContext company) =>
+        $"/companies/{company.Slug}";
 
     private static string Slugify(string value)
     {
@@ -146,10 +406,28 @@
         return slug.Length == 0 ? "company" : slug.ToString();
     }
 
+    private static string? SentenceCase(string? value) => string.IsNullOrWhiteSpace(value)
+        ? null
+        : char.ToUpperInvariant(value[0]) + value[1..];
+
     public void Dispose()
     {
         _disposed = true;
         ProfileSync.StatusChanged -= OnProfileSyncStatusChanged;
     }
 
+    private sealed record WorkspaceCompanyContext(
+        Guid Id,
+        string Name,
+        string Slug,
+        string? Role,
+        TradeCompanyProfile? LocalProfile);
+
+    private sealed record SelectableCompanyLoad(
+        IReadOnlyList<WorkspaceCompanyContext> Companies,
+        bool IsAuthoritative);
+
+    private sealed record RouteCompanyLoad(
+        bool IsCompanyRoute,
+        WorkspaceCompanyContext? Company);
 }

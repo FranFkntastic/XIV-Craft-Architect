@@ -474,7 +474,7 @@ public sealed class HostedOrderProjectionStore
         return TryPublish(new HostedOrderProjectionSnapshot(
             projection.Order.Id,
             projection.Order.CompanyProfileId,
-            projection.ObjectRevision.Value,
+            (projection.ProfileObjectRevision ?? projection.ObjectRevision).Value,
             projection.CompanyRevision.Value,
             projection.Order,
             projection,
@@ -489,7 +489,7 @@ public sealed class HostedOrderProjectionStore
         var candidate = new HostedOrderProjectionSnapshot(
             projection.Order.Id,
             projection.Order.CompanyProfileId,
-            projection.ObjectRevision.Value,
+            (projection.ProfileObjectRevision ?? projection.ObjectRevision).Value,
             projection.CompanyRevision.Value,
             projection.Order,
             projection,

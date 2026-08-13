@@ -66,8 +66,11 @@ internal sealed class DiscordCommissionInteractionService(
                     target,
                     contact,
                     cancellationToken),
-            DiscordCommissionComponentAction.OpenWorkspace =>
+            DiscordCommissionComponentAction.OpenWorkspace
+                when options.CrafterWorkspaceEnabled =>
                 await OpenWorkspaceAsync(publication, target, cancellationToken),
+            DiscordCommissionComponentAction.OpenWorkspace =>
+                Refusal("This commission workspace is not available."),
             _ => Refusal("This commission action is no longer available.")
         };
     }
@@ -92,7 +95,7 @@ internal sealed class DiscordCommissionInteractionService(
                 cancellationToken) == null)
         {
             return Refusal(
-                "Link Discord in Craft Architect Options before claiming with Discord.");
+                "Link Discord in Craft Architect Settings before claiming with Discord.");
         }
         var holdingProfile = await companies.ResolveProfileAccessAsync(
             link.ProfileId,

@@ -1,4 +1,6 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
@@ -15,11 +17,30 @@ public sealed record MembershipResponse(
     DateTimeOffset RequestedAtUtc,
     DateTimeOffset? DecidedAtUtc,
     Guid? DecidedByProfileId,
-    string? RequestNote);
+    string? RequestNote,
+    bool HasMembership);
 
 public sealed record MembershipErrorResponse(string Error, string Message);
-public sealed record MembershipNotificationPreferenceBody(bool OptedOut);
-public sealed record MembershipNotificationPreferenceResponse(string CompanyId, bool OptedOut);
+public sealed record MembershipNotificationPreferenceBody(
+    bool ActionRequired,
+    bool CommissionerMessages,
+    bool ProgressAndStatus);
+public sealed record MembershipNotificationPreferenceResponse(
+    string CompanyId,
+    bool ActionRequired,
+    bool CommissionerMessages,
+    bool ProgressAndStatus);
+public sealed record MembershipNotificationTestReadinessResponse(
+    bool Ready,
+    string? DestinationDisplayName,
+    string? Reason);
+public sealed record MembershipNotificationTestResponse(
+    Guid TestId,
+    string State,
+    string DestinationDisplayName,
+    int AttemptCount,
+    string? MessageId,
+    string? Error);
 public sealed record CompanyMemberResponse(
     Guid AccountProfileId,
     string DisplayName,
@@ -115,7 +136,7 @@ public static class MembershipEndpoints
                 var pending = await memberships.LoadPendingAsync(
                     authorization.CompanyId,
                     cancellationToken);
-                return Results.Ok(pending.Select(ToResponse).ToArray());
+                return Results.Ok(pending.Select(item => ToResponse(item)).ToArray());
             });
 
         companies.MapGet(
@@ -183,6 +204,8 @@ public static class MembershipEndpoints
                 ProfileHostOptions options,
                 MembershipAccessResolver accessResolver,
                 SqliteMembershipStore memberships,
+                SqliteDiscordIdentityStore identities,
+                SqliteDiscordNotificationStore notifications,
                 CancellationToken cancellationToken) =>
             {
                 if (!options.Enabled)
@@ -198,7 +221,68 @@ public static class MembershipEndpoints
                 var current = await memberships.LoadCurrentForAccountAsync(
                     account.ProfileId,
                     cancellationToken);
-                return Results.Ok(current.Select(ToResponse).ToArray());
+                var response = new Dictionary<CompanyId, MembershipResponse>();
+                foreach (var membership in current)
+                {
+                    var access = await accessResolver.ResolveCompanyAccessAsync(
+                        account,
+                        membership.CompanyId,
+                        cancellationToken);
+                    var effectiveRole = access?.Role switch
+                    {
+                        TradeCompanyRole.Owner => MembershipRole.Owner,
+                        TradeCompanyRole.Operator => MembershipRole.Operator,
+                        _ => membership.Role
+                    };
+                    response[membership.CompanyId] = ToResponse(membership, effectiveRole);
+                }
+
+                var identity = await identities.LoadByProfileAsync(
+                    account.ProfileId,
+                    cancellationToken);
+                if (identity != null)
+                {
+                    var routes = await notifications.LoadRoutesForCommissionerAsync(
+                        identity.DiscordUserId,
+                        cancellationToken);
+                    foreach (var route in routes)
+                    {
+                        var access = await accessResolver.ResolveCompanyAccessAsync(
+                            account,
+                            route.CompanyId,
+                            cancellationToken);
+                        if (access is not
+                            { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator })
+                        {
+                            continue;
+                        }
+
+                        if (response.TryGetValue(route.CompanyId, out var existing) &&
+                            existing is { HasMembership: true, State: "active" })
+                        {
+                            response[route.CompanyId] = existing with
+                            {
+                                Role = access.Role.ToString().ToLowerInvariant()
+                            };
+                            continue;
+                        }
+
+                        response[route.CompanyId] = new MembershipResponse(
+                            route.CompanyId.ToString(),
+                            account.ProfileId,
+                            access.Role.ToString().ToLowerInvariant(),
+                            "active",
+                            route.UpdatedAt,
+                            route.UpdatedAt,
+                            null,
+                            null,
+                            false);
+                    }
+                }
+
+                return Results.Ok(response.Values
+                    .OrderBy(item => item.CompanyId, StringComparer.Ordinal)
+                    .ToArray());
             });
 
         companies.MapGet(
@@ -224,11 +308,13 @@ public static class MembershipEndpoints
                     parsed,
                     account.ProfileId,
                     cancellationToken);
-                return membership == null
+                return membership is not { State: MembershipState.Active }
                     ? Results.NotFound()
                     : Results.Ok(new MembershipNotificationPreferenceResponse(
                         parsed.ToString(),
-                        membership.NotificationsOptedOut));
+                        membership.NotifyActionRequired,
+                        membership.NotifyCommissionerMessages,
+                        membership.NotifyProgressAndStatus));
             });
 
         companies.MapPut(
@@ -255,16 +341,216 @@ public static class MembershipEndpoints
                 {
                     return Results.NotFound();
                 }
-                var membership = await memberships.SetNotificationsOptedOutAsync(
+                var membership = await memberships.SetNotificationPreferencesAsync(
                     parsed,
                     account.ProfileId,
-                    body.OptedOut,
+                    new MemberNotificationPreferences(
+                        body.ActionRequired,
+                        body.CommissionerMessages,
+                        body.ProgressAndStatus),
                     cancellationToken);
                 return membership == null
                     ? Results.NotFound()
                     : Results.Ok(new MembershipNotificationPreferenceResponse(
                         parsed.ToString(),
-                        membership.NotificationsOptedOut));
+                        membership.NotifyActionRequired,
+                        membership.NotifyCommissionerMessages,
+                        membership.NotifyProgressAndStatus));
+            });
+
+        companies.MapGet(
+            "/{companyId}/membership-notifications/test-readiness",
+            async (
+                string companyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                SqliteMembershipStore memberships,
+                SqliteDiscordIdentityStore identities,
+                SqliteDiscordNotificationStore notifications,
+                DiscordCommissionOptions discordOptions,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null || !CompanyId.TryParse(companyId, out var parsed))
+                {
+                    return account == null ? Results.Unauthorized() : Results.NotFound();
+                }
+                var membership = await memberships.LoadForAccountAsync(
+                    parsed,
+                    account.ProfileId,
+                    cancellationToken);
+                if (membership is not { State: MembershipState.Active })
+                {
+                    return Results.NotFound();
+                }
+                var identity = await identities.LoadByProfileAsync(
+                    account.ProfileId,
+                    cancellationToken);
+                if (identity == null)
+                {
+                    return Results.Ok(new MembershipNotificationTestReadinessResponse(
+                        false,
+                        null,
+                        "Link Discord in Profile before testing private delivery."));
+                }
+                var route = await notifications.LoadRouteAsync(parsed, cancellationToken);
+                return route == null || !discordOptions.CanPublishDirectly
+                    ? Results.Ok(new MembershipNotificationTestReadinessResponse(
+                        false,
+                        identity.DisplayNameSnapshot,
+                        route == null
+                            ? "This company does not have a Discord notification route yet."
+                            : "Private Discord delivery is not available on this deployment."))
+                    : Results.Ok(new MembershipNotificationTestReadinessResponse(
+                        true,
+                        identity.DisplayNameSnapshot,
+                        null));
+            });
+
+        companies.MapPost(
+            "/{companyId}/membership-notifications/test",
+            async (
+                string companyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                SqliteMembershipStore memberships,
+                SqliteDiscordIdentityStore identities,
+                SqliteDiscordNotificationStore notifications,
+                DiscordCommissionOptions discordOptions,
+                ProfileHostedTradeCompanyService companyService,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null || !CompanyId.TryParse(companyId, out var parsed))
+                {
+                    return account == null ? Results.Unauthorized() : Results.NotFound();
+                }
+                var membership = await memberships.LoadForAccountAsync(
+                    parsed,
+                    account.ProfileId,
+                    cancellationToken);
+                var identity = await identities.LoadByProfileAsync(
+                    account.ProfileId,
+                    cancellationToken);
+                var route = await notifications.LoadRouteAsync(parsed, cancellationToken);
+                var company = await companyService.LoadPublicCompanyProfileAsync(
+                    parsed,
+                    cancellationToken);
+                if (membership is not { State: MembershipState.Active } || company == null)
+                {
+                    return Results.NotFound();
+                }
+                if (identity == null || route == null || !discordOptions.CanPublishDirectly)
+                {
+                    return Results.Conflict(new MembershipErrorResponse(
+                        "member_notification_test_unavailable",
+                        identity == null
+                            ? "Link Discord in Profile before testing private delivery."
+                            : route == null
+                                ? "This company does not have a Discord notification route yet."
+                                : "Private Discord delivery is not available on this deployment."));
+                }
+
+                var testId = Guid.NewGuid();
+                var payload = JsonSerializer.Serialize(new
+                {
+                    embeds = new[]
+                    {
+                        new
+                        {
+                            title = "Craft Architect notification test",
+                            description = $"Private commission updates from {company.Name} can reach this Discord account.",
+                            color = 0x4CA073,
+                            footer = new { text = "No commission was changed by this test." }
+                        }
+                    },
+                    allowed_mentions = new { parse = Array.Empty<string>() }
+                });
+                var result = await notifications.EnqueueMemberAsync(
+                    parsed,
+                    testId,
+                    testId,
+                    0,
+                    DiscordNotificationAttentionClass.Routine,
+                    route.Revision,
+                    payload,
+                    [identity.DiscordUserId],
+                    timeProvider.GetUtcNow(),
+                    cancellationToken,
+                    isMemberTest: true);
+                if (!result.Success || result.WorkItemIds.Count != 1)
+                {
+                    return Results.Conflict(new MembershipErrorResponse(
+                        "member_notification_test_not_queued",
+                        result.Error ?? "The private test notification could not be queued."));
+                }
+                return Results.Accepted(value: new MembershipNotificationTestResponse(
+                    result.WorkItemIds[0],
+                    "pending",
+                    identity.DisplayNameSnapshot,
+                    0,
+                    null,
+                    null));
+            });
+
+        companies.MapGet(
+            "/{companyId}/membership-notifications/test/{testId:guid}",
+            async (
+                string companyId,
+                Guid testId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                SqliteMembershipStore memberships,
+                SqliteDiscordIdentityStore identities,
+                SqliteDiscordNotificationStore notifications,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null || !CompanyId.TryParse(companyId, out var parsed))
+                {
+                    return account == null ? Results.Unauthorized() : Results.NotFound();
+                }
+                var membership = await memberships.LoadForAccountAsync(
+                    parsed,
+                    account.ProfileId,
+                    cancellationToken);
+                var identity = await identities.LoadByProfileAsync(
+                    account.ProfileId,
+                    cancellationToken);
+                if (membership is not { State: MembershipState.Active } || identity == null)
+                {
+                    return Results.NotFound();
+                }
+                var delivery = await notifications.LoadMemberTestDeliveryAsync(
+                    parsed,
+                    testId,
+                    identity.DiscordUserId,
+                    cancellationToken);
+                return delivery == null
+                    ? Results.NotFound()
+                    : Results.Ok(new MembershipNotificationTestResponse(
+                        delivery.WorkItemId,
+                        delivery.State.ToString().ToLowerInvariant(),
+                        identity.DisplayNameSnapshot,
+                        delivery.AttemptCount,
+                        delivery.MessageId,
+                        delivery.Error));
             });
     }
 
@@ -383,16 +669,19 @@ public static class MembershipEndpoints
                 Results.StatusCode(StatusCodes.Status403Forbidden));
     }
 
-    private static MembershipResponse ToResponse(CompanyMembership membership) =>
+    private static MembershipResponse ToResponse(
+        CompanyMembership membership,
+        MembershipRole? effectiveRole = null) =>
         new(
             membership.CompanyId.ToString(),
             membership.AccountProfileId,
-            membership.Role.ToString().ToLowerInvariant(),
+            (effectiveRole ?? membership.Role).ToString().ToLowerInvariant(),
             membership.State.ToString().ToLowerInvariant(),
             membership.RequestedAtUtc,
             membership.DecidedAtUtc,
             membership.DecidedByProfileId,
-             membership.RequestNote);
+            membership.RequestNote,
+            true);
 
     private sealed record CompanyAuthorizationResult(
         CompanyId CompanyId,

@@ -38,7 +38,18 @@ public sealed record CompanyMembership(
     DateTimeOffset? DecidedAtUtc,
     Guid? DecidedByProfileId,
     string? RequestNote,
-    bool NotificationsOptedOut = false);
+    bool NotificationsOptedOut = false,
+    bool NotifyActionRequired = true,
+    bool NotifyCommissionerMessages = true,
+    bool NotifyProgressAndStatus = true);
+
+public sealed record MemberNotificationPreferences(
+    bool ActionRequired,
+    bool CommissionerMessages,
+    bool ProgressAndStatus)
+{
+    public bool AllowsAny => ActionRequired || CommissionerMessages || ProgressAndStatus;
+}
 
 public sealed record MembershipEvent(
     Guid EventId,
@@ -400,7 +411,10 @@ public sealed class SqliteMembershipStore(
         await using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE company_memberships
-            SET notifications_opted_out = $optedOut
+            SET notifications_opted_out = $optedOut,
+                notify_action_required = CASE WHEN $optedOut = 1 THEN 0 ELSE 1 END,
+                notify_commissioner_messages = CASE WHEN $optedOut = 1 THEN 0 ELSE 1 END,
+                notify_progress_status = CASE WHEN $optedOut = 1 THEN 0 ELSE 1 END
             WHERE company_id = $companyId AND account_profile_id = $accountProfileId;
             """;
         AddMembershipIdentity(command, companyId, accountProfileId);
@@ -410,6 +424,105 @@ public sealed class SqliteMembershipStore(
             return null;
         }
         return await LoadAsync(connection, null, companyId, accountProfileId, cancellationToken);
+    }
+
+    public async Task<CompanyMembership?> SetNotificationPreferencesAsync(
+        CompanyId companyId,
+        Guid accountProfileId,
+        MemberNotificationPreferences preferences,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE company_memberships
+            SET notifications_opted_out = $optedOut,
+                notify_action_required = $actionRequired,
+                notify_commissioner_messages = $commissionerMessages,
+                notify_progress_status = $progressAndStatus
+            WHERE company_id = $companyId
+              AND account_profile_id = $accountProfileId
+              AND state = 'active';
+            """;
+        AddMembershipIdentity(command, companyId, accountProfileId);
+        command.Parameters.AddWithValue("$optedOut", preferences.AllowsAny ? 0 : 1);
+        command.Parameters.AddWithValue("$actionRequired", preferences.ActionRequired ? 1 : 0);
+        command.Parameters.AddWithValue("$commissionerMessages", preferences.CommissionerMessages ? 1 : 0);
+        command.Parameters.AddWithValue("$progressAndStatus", preferences.ProgressAndStatus ? 1 : 0);
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            return null;
+        }
+        return await LoadAsync(connection, null, companyId, accountProfileId, cancellationToken);
+    }
+
+    public async Task<long?> LoadCommissionReadRevisionAsync(
+        CompanyId companyId,
+        Guid accountProfileId,
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
+        RequireIdentity(companyId, accountProfileId);
+        if (commissionId == Guid.Empty)
+        {
+            throw new ArgumentException("A valid commission identity is required.");
+        }
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT last_read_revision
+            FROM membership_commission_attention
+            WHERE company_id = $companyId
+              AND account_profile_id = $accountProfileId
+              AND commission_id = $commissionId;
+            """;
+        AddMembershipIdentity(command, companyId, accountProfileId);
+        command.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        return value == null || value == DBNull.Value
+            ? null
+            : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    public async Task<long> AdvanceCommissionReadRevisionAsync(
+        CompanyId companyId,
+        Guid accountProfileId,
+        Guid commissionId,
+        long openedRevision,
+        CancellationToken cancellationToken = default)
+    {
+        RequireIdentity(companyId, accountProfileId);
+        if (commissionId == Guid.Empty || openedRevision < 0)
+        {
+            throw new ArgumentException("A valid commission identity and revision are required.");
+        }
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO membership_commission_attention (
+                company_id, account_profile_id, commission_id, last_read_revision, updated_at_utc)
+            VALUES ($companyId, $accountProfileId, $commissionId, $openedRevision, $updatedAtUtc)
+            ON CONFLICT(company_id, account_profile_id, commission_id) DO UPDATE SET
+                last_read_revision = MAX(last_read_revision, excluded.last_read_revision),
+                updated_at_utc = CASE
+                    WHEN excluded.last_read_revision > last_read_revision
+                    THEN excluded.updated_at_utc
+                    ELSE updated_at_utc
+                END;
+            """;
+        AddMembershipIdentity(command, companyId, accountProfileId);
+        command.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+        command.Parameters.AddWithValue("$openedRevision", openedRevision);
+        command.Parameters.AddWithValue("$updatedAtUtc", timeProvider.GetUtcNow().ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        return (await LoadCommissionReadRevisionAsync(
+            companyId,
+            accountProfileId,
+            commissionId,
+            cancellationToken))!.Value;
     }
 
     public async Task<IReadOnlyList<MembershipEvent>> LoadEventsAsync(
@@ -561,7 +674,8 @@ public sealed class SqliteMembershipStore(
         command.CommandText = $"""
              SELECT company_id, account_profile_id, role, state, requested_at_utc,
                     decided_at_utc, decided_by_profile_id, request_note,
-                    notifications_opted_out
+                    notifications_opted_out, notify_action_required,
+                    notify_commissioner_messages, notify_progress_status
             FROM company_memberships
             WHERE {predicate}
             ORDER BY requested_at_utc, company_id, account_profile_id;
@@ -588,7 +702,8 @@ public sealed class SqliteMembershipStore(
         command.CommandText = """
             SELECT company_id, account_profile_id, role, state, requested_at_utc,
                    decided_at_utc, decided_by_profile_id, request_note,
-                   notifications_opted_out
+                   notifications_opted_out, notify_action_required,
+                   notify_commissioner_messages, notify_progress_status
             FROM company_memberships
             WHERE company_id = $companyId AND account_profile_id = $accountProfileId;
             """;
@@ -717,6 +832,9 @@ public sealed class SqliteMembershipStore(
                     decided_by_profile_id TEXT NULL,
                     request_note TEXT NULL CHECK(request_note IS NULL OR length(request_note) <= 500),
                     notifications_opted_out INTEGER NOT NULL DEFAULT 0,
+                    notify_action_required INTEGER NULL,
+                    notify_commissioner_messages INTEGER NULL,
+                    notify_progress_status INTEGER NULL,
                     PRIMARY KEY(company_id, account_profile_id),
                     CHECK(role <> 'owner' OR state IN ('active', 'revoked'))
                 );
@@ -741,12 +859,36 @@ public sealed class SqliteMembershipStore(
                     ON company_memberships(account_profile_id, state);
                 CREATE INDEX IF NOT EXISTS ix_membership_events_company_account
                     ON membership_events(company_id, account_profile_id, created_at_utc);
+
+                CREATE TABLE IF NOT EXISTS membership_commission_attention (
+                    company_id TEXT NOT NULL,
+                    account_profile_id TEXT NOT NULL,
+                    commission_id TEXT NOT NULL,
+                    last_read_revision INTEGER NOT NULL CHECK(last_read_revision >= 0),
+                    updated_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(company_id, account_profile_id, commission_id)
+                );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
             await AddMembershipColumnIfMissingAsync(
                 connection,
                 "notifications_opted_out",
                 "INTEGER NOT NULL DEFAULT 0",
+                cancellationToken);
+            await AddMembershipColumnIfMissingAsync(
+                connection,
+                "notify_action_required",
+                "INTEGER NULL",
+                cancellationToken);
+            await AddMembershipColumnIfMissingAsync(
+                connection,
+                "notify_commissioner_messages",
+                "INTEGER NULL",
+                cancellationToken);
+            await AddMembershipColumnIfMissingAsync(
+                connection,
+                "notify_progress_status",
+                "INTEGER NULL",
                 cancellationToken);
             await AddEventColumnIfMissingAsync(connection, "role", "TEXT NULL", cancellationToken);
             await AddEventColumnIfMissingAsync(
@@ -865,7 +1007,18 @@ public sealed class SqliteMembershipStore(
                 : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
             reader.IsDBNull(6) ? null : Guid.Parse(reader.GetString(6)),
              reader.IsDBNull(7) ? null : reader.GetString(7),
-             !reader.IsDBNull(8) && reader.GetInt32(8) != 0);
+             !reader.IsDBNull(8) && reader.GetInt32(8) != 0,
+             ReadNotificationPreference(reader, 9, 8),
+             ReadNotificationPreference(reader, 10, 8),
+             ReadNotificationPreference(reader, 11, 8));
+
+    private static bool ReadNotificationPreference(
+        SqliteDataReader reader,
+        int preferenceOrdinal,
+        int legacyOptOutOrdinal) =>
+        reader.IsDBNull(preferenceOrdinal)
+            ? reader.IsDBNull(legacyOptOutOrdinal) || reader.GetInt32(legacyOptOutOrdinal) == 0
+            : reader.GetInt32(preferenceOrdinal) != 0;
 
     private static void AddMembershipIdentity(
         SqliteCommand command,

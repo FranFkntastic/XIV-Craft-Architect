@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
@@ -59,7 +60,153 @@ public sealed record CommittedCompanyCommissionNotification(
     DateTime CommittedAtUtc,
     string Summary,
     string? ActorDisplayName,
+    string ActionLabel,
     Uri ActivityUrl);
+
+public static class CompanyCommissionNotificationLinks
+{
+    public static Uri BuildOperatorActivityUrl(
+        Uri publicViewUrl,
+        Guid commissionId,
+        Guid eventId) =>
+        Build(
+            publicViewUrl,
+            "/trade/orders",
+            ("orderId", commissionId),
+            ("activityId", eventId));
+
+    public static Uri BuildMemberActivityUrl(
+        Uri publicViewUrl,
+        CompanyId companyId,
+        Guid commissionId,
+        Guid eventId) =>
+        Build(
+            publicViewUrl,
+            $"/companies/{companyId.Value:D}",
+            ("commissionId", commissionId),
+            ("activityId", eventId));
+
+    public static bool IsCanonicalOperatorActivityUrl(
+        Uri publicViewUrl,
+        Uri activityUrl,
+        Guid commissionId,
+        Guid eventId) =>
+        IsCanonical(
+            publicViewUrl,
+            activityUrl,
+            "/trade/orders",
+            ("orderId", commissionId),
+            ("activityId", eventId));
+
+    public static bool IsCanonicalMemberActivityUrl(
+        Uri publicViewUrl,
+        Uri activityUrl,
+        CompanyId companyId,
+        Guid commissionId,
+        Guid eventId) =>
+        IsCanonical(
+            publicViewUrl,
+            activityUrl,
+            $"/companies/{companyId.Value:D}",
+            ("commissionId", commissionId),
+            ("activityId", eventId));
+
+    private static Uri Build(
+        Uri publicViewUrl,
+        string path,
+        params (string Name, Guid Value)[] query)
+    {
+        ArgumentNullException.ThrowIfNull(publicViewUrl);
+        if (!publicViewUrl.IsAbsoluteUri ||
+            publicViewUrl.Scheme is not ("https" or "http") ||
+            publicViewUrl.Scheme == "http" && !publicViewUrl.IsLoopback ||
+            !string.IsNullOrEmpty(publicViewUrl.UserInfo))
+        {
+            throw new ArgumentException(
+                "A safe absolute Craft Architect URL is required.",
+                nameof(publicViewUrl));
+        }
+
+        if (query.Any(item => item.Value == Guid.Empty))
+        {
+            throw new ArgumentException("Notification link identities cannot be empty.");
+        }
+
+        return new UriBuilder(publicViewUrl)
+        {
+            Path = path,
+            Query = string.Join(
+                '&',
+                query.Select(item => $"{item.Name}={item.Value:D}")),
+            Fragment = string.Empty
+        }.Uri;
+    }
+
+    private static bool IsCanonical(
+        Uri publicViewUrl,
+        Uri activityUrl,
+        string expectedPath,
+        params (string Name, Guid Value)[] expectedQuery)
+    {
+        if (!publicViewUrl.IsAbsoluteUri ||
+            !activityUrl.IsAbsoluteUri ||
+            !string.IsNullOrEmpty(activityUrl.UserInfo) ||
+            !string.IsNullOrEmpty(activityUrl.Fragment) ||
+            !string.Equals(
+                publicViewUrl.Scheme,
+                activityUrl.Scheme,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                publicViewUrl.Host,
+                activityUrl.Host,
+                StringComparison.OrdinalIgnoreCase) ||
+            publicViewUrl.Port != activityUrl.Port ||
+            !string.Equals(activityUrl.AbsolutePath, expectedPath, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var pairs = activityUrl.Query
+            .TrimStart('?')
+            .Split('&', StringSplitOptions.RemoveEmptyEntries);
+        if (pairs.Length != expectedQuery.Length)
+        {
+            return false;
+        }
+
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in pairs)
+        {
+            var parts = pair.Split('=', 2);
+            if (parts.Length != 2)
+            {
+                return false;
+            }
+
+            string name;
+            string value;
+            try
+            {
+                name = Uri.UnescapeDataString(parts[0]);
+                value = Uri.UnescapeDataString(parts[1]);
+            }
+            catch (UriFormatException)
+            {
+                return false;
+            }
+
+            if (!values.TryAdd(name, value))
+            {
+                return false;
+            }
+        }
+
+        return expectedQuery.All(expected =>
+            values.TryGetValue(expected.Name, out var value) &&
+            Guid.TryParse(value, out var parsed) &&
+            parsed == expected.Value);
+    }
+}
 
 public sealed record DiscordNotificationRouteConfiguration(
     CompanyId CompanyId,
@@ -192,6 +339,49 @@ public interface ICompanyCommissionDiscordDelivery
 
 public static class CompanyCommissionNotificationPolicy
 {
+    public enum MemberCategory
+    {
+        ActionRequired,
+        CommissionerMessages,
+        ProgressAndStatus
+    }
+
+    public static MemberCategory ClassifyForMember(
+        CompanyCommissionActivityKind eventKind) =>
+        eventKind switch
+        {
+            CompanyCommissionActivityKind.CommentAdded or
+            CompanyCommissionActivityKind.TermsAmended or
+            CompanyCommissionActivityKind.CommissionCanceled or
+            CompanyCommissionActivityKind.CommissionReopened =>
+                MemberCategory.CommissionerMessages,
+
+            CompanyCommissionActivityKind.ProgressReported or
+            CompanyCommissionActivityKind.PaymentClearanceRecorded or
+            CompanyCommissionActivityKind.WorkClearanceAchieved or
+            CompanyCommissionActivityKind.CommissionOpened or
+            CompanyCommissionActivityKind.CommissionClosed or
+            CompanyCommissionActivityKind.SettlementRecorded or
+            CompanyCommissionActivityKind.MigratedFromTradeOrder or
+            CompanyCommissionActivityKind.MigratedTradeOrderHistory or
+            CompanyCommissionActivityKind.ParticipantRecoveryRedeemed =>
+                MemberCategory.ProgressAndStatus,
+
+            _ => MemberCategory.ActionRequired
+        };
+
+    public static bool AllowsMemberNotification(
+        CompanyMembership membership,
+        CompanyCommissionActivityKind eventKind) =>
+        membership.State == MembershipState.Active &&
+        (ClassifyForMember(eventKind) switch
+        {
+            MemberCategory.ActionRequired => membership.NotifyActionRequired,
+            MemberCategory.CommissionerMessages => membership.NotifyCommissionerMessages,
+            MemberCategory.ProgressAndStatus => membership.NotifyProgressAndStatus,
+            _ => false
+        });
+
     public static DiscordNotificationAttentionClass Classify(
         CompanyCommissionActivityKind eventKind) =>
         eventKind switch

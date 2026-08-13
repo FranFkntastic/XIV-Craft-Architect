@@ -73,6 +73,13 @@ public partial class TradeOrders
 
         foreach (var item in GetSelectedTimelineItems())
         {
+            if (item.Id == _focusedTimelineEventId)
+            {
+                FlushRoutine();
+                groups.Add(new CommissionTimelineGroup([item]));
+                continue;
+            }
+
             if (item.Importance == CommissionTimelineImportance.Routine)
             {
                 routine.Add(item);
@@ -136,8 +143,14 @@ public partial class TradeOrders
             CommissionTimelineImportance.Milestone => "is-milestone",
             _ => "is-routine"
         };
-        return $"trade-orders-timeline-item {visibilityClass} {importanceClass}";
+        var focusedClass = item.Id == _focusedTimelineEventId
+            ? " is-focused"
+            : string.Empty;
+        return $"trade-orders-timeline-item {visibilityClass} {importanceClass}{focusedClass}";
     }
+
+    private static string GetTimelineItemDomId(Guid eventId) =>
+        $"trade-order-activity-{eventId:D}";
 
     private static string FormatTimelineImportance(CommissionTimelineImportance importance) =>
         importance switch

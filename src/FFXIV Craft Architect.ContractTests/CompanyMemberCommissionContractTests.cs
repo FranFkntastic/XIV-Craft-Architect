@@ -7,6 +7,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -14,6 +15,101 @@ namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class CompanyMemberCommissionContractTests
 {
+    [Fact]
+    public async Task OperatorTermsRevisionAdoptsExactLinkedPlanIntoCanonicalProfile()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var operatorAccount = await fixture.AddActiveMemberAsync("Operator");
+        await fixture.SetRoleAsync(operatorAccount, MembershipRole.Operator);
+        var access = await fixture.Companies.ResolveMembershipAccessAsync(
+            operatorAccount.ProfileId,
+            new CompanyId(fixture.Company.Id),
+            CancellationToken.None);
+        var current = await fixture.Commissions.LoadOwnerAsync(
+            access!,
+            fixture.Order.Id,
+            CancellationToken.None);
+        var planId = Guid.NewGuid().ToString("D");
+        var savedAt = DateTime.UtcNow;
+        var sourcePlan = await fixture.Profiles.PutObjectAsync(
+            operatorAccount.ProfileId.ToString("D"),
+            ProfileSyncCollections.Plans,
+            planId,
+            ProfileSyncPlanPayloadCodec.Serialize(new ProfileSyncPlanSnapshot
+            {
+                Id = planId,
+                SavedAt = savedAt,
+                LinkedOrderId = fixture.Order.Id,
+                PlanJson = "{\"recipe\":true}"
+            }),
+            expectedRevision: 0,
+            ct: CancellationToken.None);
+        Assert.True(sourcePlan.Success);
+        var terms = current!.Order.CompanyCommission!.CurrentTerms with
+        {
+            Version = 2,
+            CreatedAtUtc = savedAt,
+            ChangeSummary = "Repriced"
+        };
+        var command = new AmendCompanyCommissionTermsCommand(
+            new(
+                new CompanyId(fixture.Company.Id),
+                fixture.Order.Id,
+                current.Envelope.RecordRevision,
+                current.CompanyRevision,
+                Guid.NewGuid(),
+                CompanyCommissionProtocol.Version2),
+            terms,
+            "Repriced",
+            new(
+                terms.Outputs.Select(output => new TradeRequestedOrderOutput(
+                    output.ItemId,
+                    output.Name,
+                    output.RequiredQuantity,
+                    output.MustBeHq,
+                    0)).ToArray(),
+                new TradeOrderSourceSnapshot
+                {
+                    RootItems = terms.Outputs.Select(output => new TradeOrderRootItemSnapshot(
+                        output.ItemId,
+                        output.Name,
+                        output.RequiredQuantity,
+                        output.MustBeHq,
+                        0)).ToArray()
+                },
+                planId,
+                "Repriced plan",
+                savedAt,
+                TradeOrderCraftPlanLinkKind.OrderGenerated));
+
+        var result = await fixture.Commissions.ExecuteCompanyAsync(
+            access!,
+            command,
+            CancellationToken.None);
+        var canonicalPlan = await fixture.Profiles.LoadObjectAsync(
+            fixture.Owner.ProfileId.ToString("D"),
+            ProfileSyncCollections.Plans,
+            planId,
+            CancellationToken.None);
+
+        Assert.True(
+            result.Status == CompanyCommissionMutationStatus.Applied,
+            $"{result.ErrorCode}: {result.ErrorMessage}");
+        Assert.Equal(2, result.Order?.CompanyCommission?.CurrentTermsVersion);
+        Assert.NotNull(canonicalPlan);
+    }
+
+    [Fact]
+    public async Task PublicBriefUsesPublicationProfileWhenOrderIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        await fixture.DuplicateOrderIdentityAsync();
+
+        var projection = await fixture.LoadPublicBriefAsync();
+
+        Assert.Equal(fixture.Order.Id, projection?.CommissionId);
+    }
+
     [Fact]
     public async Task ActiveMemberClaimsOpenCommissionAndCapturesLinkedDiscordContact()
     {
@@ -26,6 +122,9 @@ public sealed class CompanyMemberCommissionContractTests
             await response.Content.ReadAsStringAsync());
         var projection = await response.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>();
         var claimId = await fixture.LoadActiveClaimIdAsync();
+        var claimActorDisplayName = await fixture.LoadClaimActorDisplayNameAsync(claimId);
+        var notificationActorDisplayName = await fixture
+            .ResolveClaimNotificationActorDisplayNameAsync(claimId);
         var captured = await fixture.Notifications.HasCommittedClaimContactAsync(
             new CompanyId(fixture.Company.Id),
             fixture.Order.Id,
@@ -36,6 +135,8 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.Equal(fixture.Order.Id, projection!.Public.CommissionId);
         Assert.True(projection.Public.IsClaimed);
         Assert.True(captured);
+        Assert.Null(claimActorDisplayName);
+        Assert.Equal("Crafter", notificationActorDisplayName);
     }
 
     [Fact]
@@ -223,6 +324,256 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.True(projection!.Public.IsClaimed);
     }
 
+    [Theory]
+    [InlineData(MembershipRole.Owner)]
+    [InlineData(MembershipRole.Operator)]
+    public async Task AuthorizedMembershipAccountCanLoadAndCommandOwnerCommission(
+        MembershipRole role)
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var account = await fixture.AddActiveMemberAsync(role.ToString());
+        await fixture.SetRoleAsync(account, role);
+
+        using var loaded = await fixture.LoadOwnerCommissionAsync(account);
+        Assert.True(
+            loaded.IsSuccessStatusCode,
+            await loaded.Content.ReadAsStringAsync());
+        var projection = await loaded.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerProjection>();
+        Assert.Equal(fixture.Order.Id, projection!.Order.Id);
+        Assert.NotNull(projection.ProfileObjectRevision);
+
+        using var cancelled = await fixture.CancelCommissionAsync(account);
+        Assert.True(
+            cancelled.IsSuccessStatusCode,
+            await cancelled.Content.ReadAsStringAsync());
+        var cancelledProjection = await cancelled.Content
+            .ReadFromJsonAsync<TradeCommissionOwnerCommandResponse>();
+        Assert.NotNull(cancelledProjection?.Projection?.ProfileObjectRevision);
+    }
+
+    [Fact]
+    public async Task CrafterMembershipCannotLoadOwnerCommission()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var crafter = await fixture.AddActiveMemberAsync("Crafter");
+
+        using var response = await fixture.LoadOwnerCommissionAsync(crafter);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientCanOperateFromCrafterAccountContext()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.AddActiveMemberAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+        using var memberships = await fixture.LoadMembershipsAsync(recipient);
+        using var hub = await fixture.LoadCompanyHubAsync(recipient);
+        using var published = await fixture.PostCompanyUpdateAsync(recipient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+        memberships.EnsureSuccessStatusCode();
+        var membershipRows = await memberships.Content.ReadFromJsonAsync<MembershipResponse[]>();
+        Assert.Contains(
+            membershipRows!,
+            item => item.CompanyId == fixture.Company.Id.ToString("D") &&
+                item.Role == "operator" &&
+                item.State == "active" &&
+                item.HasMembership);
+        hub.EnsureSuccessStatusCode();
+        using var hubJson = JsonDocument.Parse(await hub.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "operator",
+            hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+        Assert.True(
+            published.IsSuccessStatusCode,
+            await published.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientDoesNotRequireACompanyMembership()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+        using var hub = await fixture.LoadCompanyHubAsync(recipient);
+        using var memberships = await fixture.LoadMembershipsAsync(recipient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+        hub.EnsureSuccessStatusCode();
+        using var hubJson = JsonDocument.Parse(await hub.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "operator",
+            hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+        memberships.EnsureSuccessStatusCode();
+        var membershipRows = await memberships.Content.ReadFromJsonAsync<MembershipResponse[]>();
+        Assert.Contains(
+            membershipRows!,
+            item => item.CompanyId == fixture.Company.Id.ToString("D") &&
+                item.Role == "operator" &&
+                item.State == "active" &&
+                !item.HasMembership);
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientAuthorityDoesNotDependOnDeliveryDestination()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Update-channel commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(
+            recipient,
+            destinationMode: DiscordNotificationDestinationMode.UpdateChannel);
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientOverridesPendingMembershipInWorkspaceList()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Pending Discord commissioner");
+        await fixture.RequestMembershipAsync(recipient);
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var memberships = await fixture.LoadMembershipsAsync(recipient);
+
+        memberships.EnsureSuccessStatusCode();
+        var membershipRows = await memberships.Content.ReadFromJsonAsync<MembershipResponse[]>();
+        var company = Assert.Single(
+            membershipRows!,
+            item => item.CompanyId == fixture.Company.Id.ToString("D"));
+        Assert.Equal("operator", company.Role);
+        Assert.Equal("active", company.State);
+        Assert.False(company.HasMembership);
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientFailsClosedWhenCompanyIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+        await fixture.DuplicateCompanyIdentityAsync();
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientLosesOperatorAccessWhenRouteMoves()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Former Discord commissioner");
+        var replacement = await fixture.CreateAccountAsync("Current Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var authorized = await fixture.LoadOwnerCommissionAsync(recipient);
+        Assert.True(
+            authorized.IsSuccessStatusCode,
+            await authorized.Content.ReadAsStringAsync());
+
+        await fixture.ConfigureCommissionerRouteAsync(replacement, expectedRevision: 1);
+        using var denied = await fixture.LoadOwnerCommissionAsync(recipient);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+        Assert.Empty(await denied.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task NotificationOwnerLinkResolvesWithoutActiveCompanyContext()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        var crafter = await fixture.AddActiveMemberAsync("Crafter");
+        var outsider = await fixture.CreateAccountAsync("Outsider");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var ownerResponse = await fixture.LoadNotificationOwnerCommissionAsync(
+            fixture.Owner);
+        using var recipientResponse = await fixture.LoadNotificationOwnerCommissionAsync(
+            recipient);
+        using var crafterResponse = await fixture.LoadNotificationOwnerCommissionAsync(crafter);
+        using var outsiderResponse = await fixture.LoadNotificationOwnerCommissionAsync(outsider);
+
+        ownerResponse.EnsureSuccessStatusCode();
+        recipientResponse.EnsureSuccessStatusCode();
+        var projection = await recipientResponse.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerProjection>();
+        Assert.Equal(fixture.Order.Id, projection!.Order.Id);
+        Assert.Equal(fixture.Company.Id, projection.Order.CompanyProfileId);
+        Assert.Equal(HttpStatusCode.NotFound, crafterResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, outsiderResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task NotificationOwnerLinkFailsClosedWhenCompanyIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+        await fixture.DuplicateCompanyIdentityAsync();
+
+        using var response = await fixture.LoadNotificationOwnerCommissionAsync(recipient);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostingProfileOwnerRetainsOwnerCommissionAuthority()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+
+        using var response = await fixture.LoadOwnerCommissionAsync(fixture.Owner);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task HostingProfileOwnerRetainsAuthorityWhenCompanyIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        await fixture.DuplicateCompanyIdentityAsync();
+
+        using var response = await fixture.LoadOwnerCommissionAsync(fixture.Owner);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task MembershipAccountFailsClosedWhenCompanyIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var account = await fixture.AddActiveMemberAsync("Operator");
+        await fixture.SetRoleAsync(account, MembershipRole.Operator);
+        await fixture.DuplicateCompanyIdentityAsync();
+
+        using var response = await fixture.LoadOwnerCommissionAsync(account);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
     [Fact]
     public async Task RevokedMemberCannotClaimAfterPreviouslyBeingActive()
     {
@@ -346,6 +697,24 @@ public sealed class CompanyMemberCommissionContractTests
                 null);
         }
 
+        public Task<CompanyCommissionPublicBrief?> LoadPublicBriefAsync() =>
+            Commissions.LoadPublicAsync(
+                Order.CommissionPublication!.PublicId,
+                CancellationToken.None);
+
+        public async Task DuplicateOrderIdentityAsync()
+        {
+            var duplicate = await CreateAccountAsync("Duplicate order profile");
+            var put = await Profiles.PutObjectAsync(
+                duplicate.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                JsonSerializer.Serialize(Order, JsonOptions),
+                expectedRevision: 0,
+                ct: CancellationToken.None);
+            Assert.True(put.Success);
+        }
+
         public Task<HttpResponseMessage> ReportProgressAsync(Account account, long projectionRevision) =>
             PostProgressAsync(CreateClient(account.Key), null, projectionRevision);
 
@@ -385,16 +754,155 @@ public sealed class CompanyMemberCommissionContractTests
             return order.CompanyCommission!.ActiveClaim!.ClaimId;
         }
 
+        public async Task<string?> LoadClaimActorDisplayNameAsync(Guid claimId)
+        {
+            var order = await LoadCanonicalOrderAsync();
+            return order.CompanyCommission!.Activity
+                .Single(item => item.CommandId == claimId)
+                .Actor.DisplayName;
+        }
+
+        public async Task<string?> ResolveClaimNotificationActorDisplayNameAsync(Guid claimId)
+        {
+            var order = await LoadCanonicalOrderAsync();
+            var commission = order.CompanyCommission!;
+            var activity = commission.Activity.Single(item => item.CommandId == claimId);
+            return await DiscordCompanyCommissionPostCommitSink.ResolveActorDisplayNameAsync(
+                commission,
+                activity,
+                Notifications,
+                Identities,
+                Profiles,
+                TimeProvider.System);
+        }
+
         public async Task<Guid> LoadActiveCrafterIdAsync()
         {
             var order = await LoadCanonicalOrderAsync();
             return order.CompanyCommission!.ActiveClaim!.CrafterId!.Value;
         }
 
-        public async Task<HttpResponseMessage> CancelCommissionAsync()
+        public Task<HttpResponseMessage> LoadOwnerCommissionAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync(
+                $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/owner");
+        }
+
+        public Task<HttpResponseMessage> LoadNotificationOwnerCommissionAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync($"/trade/v1/commissions/{Order.Id:D}/owner");
+        }
+
+        public Task<HttpResponseMessage> LoadMembershipsAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync("/trade/v1/memberships");
+        }
+
+        public Task<HttpResponseMessage> LoadCompanyHubAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync($"/trade/v1/companies/{Company.Id:D}/hub");
+        }
+
+        public Task<HttpResponseMessage> PostCompanyUpdateAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.PostAsJsonAsync(
+                $"/trade/v1/companies/{Company.Id:D}/hub/updates",
+                new
+                {
+                    ExpectedProfileRevision = 1,
+                    Title = "Commissioner update",
+                    Body = "Delegated operator mutation proof.",
+                    IsPinned = false
+                });
+        }
+
+        public async Task ConfigureCommissionerRouteAsync(
+            Account account,
+            long expectedRevision = 0,
+            DiscordNotificationDestinationMode destinationMode =
+                DiscordNotificationDestinationMode.CommissionerDirectMessage)
+        {
+            var route = await Notifications.PutRouteAsync(
+                new CompanyId(Company.Id),
+                new DiscordNotificationRouteUpdate(
+                    account.DiscordUserId,
+                    destinationMode,
+                    destinationMode is DiscordNotificationDestinationMode.UpdateChannel or
+                        DiscordNotificationDestinationMode.Both
+                        ? "123456789012345678"
+                        : null,
+                    DiscordDirectMessageFallback.None,
+                    DiscordNotificationMentionBehavior.NoPing,
+                    DiscordNotificationMentionBehavior.Push,
+                    DiscordNotificationMentionBehavior.Push,
+                    expectedRevision,
+                    $"commissioner-route-{Guid.NewGuid():N}"),
+                DateTimeOffset.UtcNow);
+            Assert.True(route.Success, route.Error);
+        }
+
+        public async Task DuplicateCompanyIdentityAsync()
+        {
+            var duplicate = await CreateAccountAsync("Duplicate host");
+            await using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(root, "profiles.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO sync_objects (
+                    profile_id,
+                    collection,
+                    object_id,
+                    payload_json,
+                    revision,
+                    updated_at_utc,
+                    deleted,
+                    deleted_at_utc)
+                VALUES ($profileId, $collection, $objectId, $payload, 1, $updatedAt, 0, NULL);
+                """;
+            command.Parameters.AddWithValue("$profileId", duplicate.ProfileId.ToString("D"));
+            command.Parameters.AddWithValue(
+                "$collection",
+                ProfileSyncCollections.TradeCompanyProfiles);
+            command.Parameters.AddWithValue("$objectId", Company.Id.ToString("D"));
+            command.Parameters.AddWithValue(
+                "$payload",
+                JsonSerializer.Serialize(Company, ProfileSyncJson.CreateOptions()));
+            command.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToString("O"));
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        public async Task SetRoleAsync(Account account, MembershipRole role)
+        {
+            await using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(root, "memberships.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE company_memberships
+                SET role = $role
+                WHERE company_id = $companyId AND account_profile_id = $profileId;
+                """;
+            command.Parameters.AddWithValue(
+                "$role",
+                role.ToString().ToLowerInvariant());
+            command.Parameters.AddWithValue("$companyId", Company.Id.ToString("D"));
+            command.Parameters.AddWithValue("$profileId", account.ProfileId.ToString("D"));
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        public Task<HttpResponseMessage> CancelCommissionAsync() =>
+            CancelCommissionAsync(Owner);
+
+        public async Task<HttpResponseMessage> CancelCommissionAsync(Account account)
         {
             var access = await Companies.ResolveMembershipAccessAsync(
-                Owner.ProfileId,
+                account.ProfileId,
                 new CompanyId(Company.Id),
                 CancellationToken.None);
             var snapshot = await Commissions.LoadOwnerAsync(
@@ -410,7 +918,7 @@ public sealed class CompanyMemberCommissionContractTests
                     Guid.NewGuid(),
                     CompanyCommissionProtocol.Version1),
                 "Cancelled by contract fixture");
-            var client = CreateClient(Owner.Key);
+            var client = CreateClient(account.Key);
             return await client.PostAsJsonAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/commands/cancel",
                 command);

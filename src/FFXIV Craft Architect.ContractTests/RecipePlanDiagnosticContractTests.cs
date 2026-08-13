@@ -50,7 +50,7 @@ public sealed class RecipePlanDiagnosticContractTests
         var options = File.ReadAllText(Path.Combine(
             web,
             "Dialogs",
-            "OptionsDialog.razor"));
+            "SettingsDialog.razor"));
         var planner = File.ReadAllText(Path.Combine(web, "Pages", "Index.razor"));
         var marketPage = File.ReadAllText(Path.Combine(
             web,

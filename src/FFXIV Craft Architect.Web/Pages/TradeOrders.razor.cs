@@ -36,6 +36,8 @@ public partial class TradeOrders
     private List<TradePayrollWorkflowDraft> _payrollDrafts = [];
     private TradeOrder? _pendingImport;
     private TradeOrder? _selectedOrder;
+    private long? _selectedOrderProjectionRevision;
+    private HostedOrderProjectionSnapshot? _pendingSelectedOrderProjection;
     private HostedOrderProjectionSnapshot? _selectedLocalHostedCollision;
     private bool _showNewOrderPanel;
     private string _newOrderTitle = string.Empty;
@@ -86,7 +88,11 @@ public partial class TradeOrders
     private bool _selectedOrderPaymentTermsDirty;
     private string _manualNote = string.Empty;
     private string? _loadError;
-    private Guid? _pendingNavigationOrderId;
+    private TradeOrderNotificationNavigationHint? _pendingNotificationNavigation;
+    private bool _isResolvingPendingNotificationNavigation;
+    private bool _pendingNotificationNavigationRetryRequested;
+    private Guid? _focusedTimelineEventId;
+    private Guid? _pendingTimelineFocusEventId;
     private bool _isArchiveCollapsed = true;
     private bool _isDeviceOnlyCollapsed = true;
     private HashSet<string> _collapsedAttentionGroups = new(StringComparer.Ordinal);
@@ -302,7 +308,13 @@ public partial class TradeOrders
         ArchiveSummaries.Changed += OnArchiveSummariesChanged;
         ProfileSync.StatusChanged += OnProfileSyncStatusChanged;
         WorkerProjections.Changed += OnWorkerProjectionChangedForPlanRestoration;
-        _pendingNavigationOrderId = TryGetOrderIdFromNavigation() ?? AppState.SelectedTradeOrderId;
+        var notificationNavigation = TradeOrderNotificationNavigation.Parse(
+            NavigationManager.ToAbsoluteUri(NavigationManager.Uri));
+        _pendingNotificationNavigation = notificationNavigation.HasHint
+            ? notificationNavigation
+            : AppState.SelectedTradeOrderId is { } selectedOrderId
+                ? TradeOrderNotificationNavigationHint.ForOrder(selectedOrderId)
+                : null;
         await LoadAsync();
         try
         {
@@ -322,11 +334,23 @@ public partial class TradeOrders
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (ApplyPendingSelectedOrderProjectionIfIdle())
+        {
+            await InvokeAsync(StateHasChanged);
+        }
         await EnsureLiveProcurementSnapshotAsync();
         if (_tradeOrdersLayoutRegistration == null &&
             string.IsNullOrWhiteSpace(_loadError))
         {
             await RegisterTradeOrdersLayoutAsync();
+        }
+        if (_pendingTimelineFocusEventId is { } eventId &&
+            _tradeOrdersLayoutModule != null)
+        {
+            _pendingTimelineFocusEventId = null;
+            await _tradeOrdersLayoutModule.InvokeVoidAsync(
+                "focusTradeOrderActivity",
+                eventId.ToString("D"));
         }
     }
 
@@ -396,7 +420,7 @@ public partial class TradeOrders
         Guid? selectedCanonicalOrderId =
             _selectedOrder?.CompanyCommission == null ? null : _selectedOrder.Id;
         var selectedTab = _activeOpsTab;
-        var hadPendingNavigation = _pendingNavigationOrderId.HasValue;
+        var hadPendingNavigation = _pendingNotificationNavigation != null;
         try
         {
             _loadError = null;
@@ -407,15 +431,20 @@ public partial class TradeOrders
                     (await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!)).Linked;
                 if (!signedIn)
                 {
-                    var authorization = await DiscordIdentityClient.StartSignInAsync(ProfileHostClient.DefaultHostUrl, "/trade/orders");
+                    var returnPath = NavigationManager
+                        .ToAbsoluteUri(NavigationManager.Uri)
+                        .PathAndQuery;
+                    var authorization = await DiscordIdentityClient.StartSignInAsync(
+                        ProfileHostClient.DefaultHostUrl,
+                        returnPath);
                     NavigationManager.NavigateTo(authorization.AbsoluteUri, true);
                     return;
                 }
             }
-            _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            _companyProfile = await ResolveSelectedWorkspaceProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
-            SelectPendingNavigationOrder();
+            await SelectPendingNavigationOrderAsync();
             await RefreshArchiveSummariesAsync();
             await LoadOrderHostedRevisionsAsync();
             _payrollDrafts = (await TradePayrollPersistence.LoadDraftsAsync(_companyProfile.Id)).ToList();
@@ -440,9 +469,35 @@ public partial class TradeOrders
             _orderHostedRevisions.Clear();
             _payrollDrafts = [];
             _selectedOrder = null;
+            _selectedOrderProjectionRevision = null;
             _loadError = ex.Message;
-            Snackbar.Add("Trade operations storage is unavailable.", Severity.Error);
+            Snackbar.Add("Trade orders could not load.", Severity.Error);
         }
+    }
+
+    private async Task<TradeCompanyProfile> ResolveSelectedWorkspaceProfileAsync()
+    {
+        var profiles = await TradeOperationsPersistence.LoadCompanyProfilesAsync();
+        var selectedWorkspaceId =
+            await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
+        if (!selectedWorkspaceId.HasValue)
+        {
+            return await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+        }
+
+        var local = profiles.FirstOrDefault(profile => profile.Id == selectedWorkspaceId.Value);
+        if (local != null)
+        {
+            return local;
+        }
+
+        var hosted = await CompanyHubs.LoadWorkspaceProfileAsync(selectedWorkspaceId.Value);
+        if (hosted.Id != selectedWorkspaceId.Value)
+        {
+            throw new InvalidOperationException(
+                "The selected company workspace returned a different company identity.");
+        }
+        return hosted.ToTransientProfile();
     }
 
     private void OnHostedOrderProjectionChanged(HostedOrderProjectionSnapshot snapshot)
@@ -478,26 +533,16 @@ public partial class TradeOrders
     private void OnHostedOrderRestoreStateChanged(HostedOrderRestoreState state) =>
         _ = InvokeAsync(() => ApplyHostedOrderRestoreState(state));
 
-    private bool ShouldPreserveCanonicalEditor()
-    {
-        if (HasSelectedLocalDraftEditorChanges)
-        {
-            return true;
-        }
-
-        if (IsEditingCommissionTermsRevision)
-        {
-            return _commissionTermsRevisionDirty ||
-                   HasCanonicalDraftDetailChanges ||
-                   !string.IsNullOrWhiteSpace(_commissionTermsRevisionReason);
-        }
-
-        return CanEditCanonicalDraft &&
-               (HasSelectedOrderOutputChanges ||
-                HasCanonicalDraftDetailChanges ||
-                _selectedOrderPaymentTermsDirty ||
-                HasSelectedOrderDetailChanges());
-    }
+    private bool OwnsSelectedWorkspaceWorkingState()
+        => TradeOrderWorkspaceProjectionPolicy.OwnsWorkingState(
+            HasSelectedLocalDraftEditorChanges,
+            IsEditingCommissionTermsRevision,
+            IsPlanMutationTransactionRunning,
+            CanEditCanonicalDraft,
+            HasSelectedOrderOutputChanges,
+            HasCanonicalDraftDetailChanges,
+            _selectedOrderPaymentTermsDirty,
+            HasSelectedOrderDetailChanges());
 
     private bool HasSelectedOrderDetailChanges() =>
         _selectedOrder != null &&
@@ -596,6 +641,7 @@ public partial class TradeOrders
         _pendingImport = result.Order;
         _newOrderTitle = result.Order.Title;
         _selectedOrder = null;
+        _selectedOrderProjectionRevision = null;
         _showNewOrderPanel = false;
         AppState.SelectTradeOrder(null);
         ClearSelectedOrderNavigation();
@@ -613,6 +659,7 @@ public partial class TradeOrders
         ClearLiveProcurementSnapshot();
         _pendingImport = null;
         _selectedOrder = null;
+        _selectedOrderProjectionRevision = null;
         _showNewOrderPanel = true;
         _activeOpsTab = 0;
         AppState.SelectTradeOrder(null);

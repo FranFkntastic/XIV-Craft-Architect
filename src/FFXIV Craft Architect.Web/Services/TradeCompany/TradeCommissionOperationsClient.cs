@@ -39,6 +39,39 @@ public sealed class TradeCommissionOperationsClient(
             contentType: null,
             cancellationToken,
             connection);
+        return await ReadOwnerProjectionAsync(
+            response,
+            companyId,
+            commissionId,
+            cancellationToken);
+    }
+
+    public async Task<CompanyCommissionOwnerProjection> LoadOwnerProjectionAsync(
+        HostedProfileConnectionSettings connection,
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/commissions/{commissionId:D}/owner",
+            content: null,
+            contentType: null,
+            cancellationToken,
+            connection);
+        return await ReadOwnerProjectionAsync(
+            response,
+            Guid.Empty,
+            commissionId,
+            cancellationToken);
+    }
+
+    private static async Task<CompanyCommissionOwnerProjection> ReadOwnerProjectionAsync(
+        HttpResponseMessage response,
+        Guid companyId,
+        Guid commissionId,
+        CancellationToken cancellationToken)
+    {
         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             var problem = await ReadProblemAsync(response, cancellationToken);
@@ -175,7 +208,7 @@ public sealed class TradeCommissionOperationsClient(
         if (!connection.IsConfigured)
         {
             throw new InvalidOperationException(
-                "Connect Profile Hosting in Options before operating a company commission.");
+                "Connect this browser in Settings before operating a company commission.");
         }
 
         var hostUri = new Uri(connection.HostUrl!.Trim().TrimEnd('/') + "/");

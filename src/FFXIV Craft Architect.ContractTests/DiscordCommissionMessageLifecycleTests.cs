@@ -35,6 +35,86 @@ public sealed class DiscordCommissionMessageLifecycleTests
     }
 
     [Fact]
+    public void AssignedPublicationOmitsWorkspaceWhenDeploymentCapabilityIsDisabled()
+    {
+        var payload = CompanyCommissionDiscordMessage.CreatePublication(
+            CreateProjection(
+                TradeOrderStatus.Assigned,
+                projectionRevision: 2,
+                eventKind: CompanyCommissionActivityKind.ClaimAccepted,
+                claimed: true),
+            "ca:v1:workspace-capability-disabled");
+
+        AssertPublicationPayload(
+            JsonSerializer.Serialize(payload),
+            0xD18B18,
+            expectsClaimButton: false,
+            expectsWorkspaceButton: false);
+    }
+
+    [Fact]
+    public async Task DiscordClaimContactStoreAddsClaimIdentityToExistingDatabase()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-contact-migration-{Guid.NewGuid():N}.db");
+        try
+        {
+            await using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    CREATE TABLE discord_claim_contacts (
+                        interaction_id TEXT PRIMARY KEY,
+                        company_id TEXT NOT NULL,
+                        commission_id TEXT NOT NULL,
+                        claim_event_id TEXT NOT NULL,
+                        commission_revision INTEGER NOT NULL,
+                        discord_user_id TEXT NOT NULL,
+                        display_name_snapshot TEXT NOT NULL,
+                        committed_at_utc TEXT NOT NULL,
+                        UNIQUE(company_id, commission_id, discord_user_id)
+                    );
+                    """;
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var store = new SqliteDiscordNotificationStore(
+                CreateDiscordOptions(databasePath));
+            await store.InitializeAsync();
+            await store.CaptureCommittedClaimContactAsync(
+                new CommittedDiscordClaimContact(
+                    CompanyId,
+                    CommissionId,
+                    ClaimId,
+                    Guid.NewGuid(),
+                    2,
+                    CompanyCommissionActivityKind.ClaimAccepted,
+                    CapturedAt,
+                    "100000000000000004",
+                    new DiscordOriginContact(
+                        "100000000000000005",
+                        "Migration Crafter")));
+
+            Assert.True(await store.HasCommittedClaimContactAsync(
+                CompanyId,
+                CommissionId,
+                ClaimId,
+                "100000000000000005"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
     public void PreWorkReleaseReturnsCommissionToOpen()
     {
         var source = CreateAssignedOrder();
@@ -133,7 +213,9 @@ public sealed class DiscordCommissionMessageLifecycleTests
             $"craft-architect-discord-lifecycle-{Guid.NewGuid():N}.db");
         try
         {
-            var options = CreateDiscordOptions(databasePath);
+            var options = CreateDiscordOptions(
+                databasePath,
+                crafterWorkspaceEnabled: true);
             var store = new SqliteDiscordCollaborationStore(options);
             await store.InitializeAsync();
             var delivery = new CompanyCommissionDiscordDeliveryService(
@@ -150,7 +232,11 @@ public sealed class DiscordCommissionMessageLifecycleTests
             Assert.True(open.Success, open.Error);
             var create = Assert.Single(await LeaseAsync(store));
             Assert.Equal(DiscordOutboxOperation.CreateMessage, create.Operation);
-            AssertPublicationPayload(create.PayloadJson, 0x2E6EA6, expectsClaimButton: true);
+            AssertPublicationPayload(
+                create.PayloadJson,
+                0x2E6EA6,
+                expectsClaimButton: true,
+                expectsWorkspaceButton: false);
             await store.CompleteAsync(create.WorkItemId, create.LeaseId, "900000000000000001", DateTimeOffset.UtcNow);
 
             await delivery.ProjectAsync(CreateProjection(
@@ -160,7 +246,11 @@ public sealed class DiscordCommissionMessageLifecycleTests
                 claimed: true));
             var edit = Assert.Single(await LeaseAsync(store));
             Assert.Equal(DiscordOutboxOperation.EditMessage, edit.Operation);
-            AssertPublicationPayload(edit.PayloadJson, 0xD18B18, expectsClaimButton: false);
+            AssertPublicationPayload(
+                edit.PayloadJson,
+                0xD18B18,
+                expectsClaimButton: false,
+                expectsWorkspaceButton: true);
             await store.CompleteAsync(edit.WorkItemId, edit.LeaseId, edit.MessageId, DateTimeOffset.UtcNow);
 
             await delivery.ProjectAsync(CreateProjection(
@@ -297,7 +387,9 @@ public sealed class DiscordCommissionMessageLifecycleTests
                 create.LeaseId,
                 "900000000000000020",
                 DateTimeOffset.UtcNow);
-            await SetProjectionFormatVersionAsync(databasePath, 0);
+            await SetProjectionFormatVersionAsync(
+                databasePath,
+                DiscordPublicationProjectionFormat.CurrentVersion - 1);
 
             var refresher = new RecordingPublicationRefresher(store);
             await using var services = new ServiceCollection()
@@ -753,10 +845,13 @@ public sealed class DiscordCommissionMessageLifecycleTests
     private static CompanyCommissionCommandContext Context() =>
         new(CompanyId, CommissionId, new(1), new(1), Guid.NewGuid(), 1);
 
-    private static DiscordCommissionOptions CreateDiscordOptions(string databasePath) =>
+    private static DiscordCommissionOptions CreateDiscordOptions(
+        string databasePath,
+        bool crafterWorkspaceEnabled = false) =>
         new()
         {
             Enabled = true,
+            CrafterWorkspaceEnabled = crafterWorkspaceEnabled,
             CompanyId = CompanyId.Value.ToString("D"),
             ApplicationId = "100000000000000001",
             PublicKey = new string('a', 64),
@@ -911,7 +1006,8 @@ public sealed class DiscordCommissionMessageLifecycleTests
     private static void AssertPublicationPayload(
         string payloadJson,
         int expectedColor,
-        bool expectsClaimButton)
+        bool expectsClaimButton,
+        bool expectsWorkspaceButton)
     {
         using var payload = JsonDocument.Parse(payloadJson);
         var embed = payload.RootElement.GetProperty("embeds")[0];
@@ -928,7 +1024,9 @@ public sealed class DiscordCommissionMessageLifecycleTests
         Assert.Contains("View commission", buttons);
         Assert.Equal(expectsClaimButton, buttons.Contains("Claim commission"));
         Assert.Equal(expectsClaimButton, buttons.Contains("Claim with Discord"));
-        Assert.DoesNotContain("Open my workspace", buttons);
+        Assert.Equal(
+            expectsWorkspaceButton,
+            buttons.Contains("Open my workspace"));
         var customIds = payload.RootElement
             .GetProperty("components")[0]
             .GetProperty("components")
@@ -936,8 +1034,10 @@ public sealed class DiscordCommissionMessageLifecycleTests
             .Where(button => button.TryGetProperty("custom_id", out _))
             .Select(button => button.GetProperty("custom_id").GetString())
             .ToArray();
-        Assert.DoesNotContain(customIds, value =>
-            value!.StartsWith("open-workspace:ca:v1:", StringComparison.Ordinal));
+        Assert.Equal(
+            expectsWorkspaceButton,
+            customIds.Any(value =>
+                value!.StartsWith("open-workspace:ca:v1:", StringComparison.Ordinal)));
         Assert.Equal(
             expectsClaimButton,
             customIds.Any(value =>

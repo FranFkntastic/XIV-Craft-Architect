@@ -1,0 +1,10 @@
+.workspace-company-select { max-width: 360px; }
+.workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 4px; }
+.workspace-section-label { margin: 22px 0 8px; color: #98a2aa; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.workspace-notifications { padding: 0 14px; }
+.notification-destination, .notification-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 62px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.notification-row:last-child { border-bottom: 0; }
+.notification-row > div, .notification-destination > div { display: grid; min-width: 0; }
+.notification-test-actions { display: flex !important; grid-auto-flow: column; align-items: center; gap: 8px; }
+.notification-test-status { display: block; padding: 0 0 10px; }
+@media (max-width: 680px) { .workspace-heading, .notification-destination, .notification-row { align-items: flex-start; flex-direction: column; } }
