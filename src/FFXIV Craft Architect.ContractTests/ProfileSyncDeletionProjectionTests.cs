@@ -653,7 +653,13 @@ public sealed class ProfileSyncDeletionProjectionTests
         {
             Collection = ProfileSyncCollections.Plans,
             ObjectId = planId,
-            PayloadJson = "{}",
+            PayloadJson = ProfileSyncPlanPayloadCodec.Serialize(new ProfileSyncPlanSnapshot
+            {
+                Id = planId,
+                SavedAt = order.CraftPlanSavedAtUtc.Value,
+                LinkedOrderId = order.Id,
+                PlanJson = "{\"recipe\":true}"
+            }),
             UpdatedAtUtc = DateTime.UtcNow
         };
         var committed = CreatePublishedOrder(order, 4);
@@ -679,14 +685,31 @@ public sealed class ProfileSyncDeletionProjectionTests
             ProfileSyncCollections.Plans,
             planId,
             5);
-        var planPutCount = 0;
+        var planPutAttemptCount = 0;
+        var successfulPlanPutCount = 0;
         var adoptionCount = 0;
+        var planPutExpectedRevisions = new List<long>();
         HttpResponseMessage Respond(HttpRequestMessage request)
         {
             if (request.Method == HttpMethod.Put)
             {
-                planPutCount++;
-                Assert.Equal(planPutCount - 1, adoptionCount);
+                planPutAttemptCount++;
+                var put = JsonSerializer.Deserialize<ProfileSyncPutRequest>(
+                    request.Content!.ReadAsStringAsync().GetAwaiter().GetResult(),
+                    ProfileSyncJson.CreateOptions());
+                planPutExpectedRevisions.Add(put!.ExpectedRevision);
+                if (planPutAttemptCount == 1)
+                {
+                    return Ok(new ProfileSyncPutResponse
+                    {
+                        Conflict = true,
+                        ServerRevision = 4,
+                        ErrorCode = "missing_remote_object",
+                        ErrorMessage = "Remote object does not exist."
+                    });
+                }
+
+                successfulPlanPutCount++;
                 plan.Revision = 5;
                 return Ok(new ProfileSyncPutResponse
                 {
@@ -698,7 +721,6 @@ public sealed class ProfileSyncDeletionProjectionTests
             if (IsAdoptionRequest(request))
             {
                 adoptionCount++;
-                Assert.Equal(adoptionCount, planPutCount);
                 return Adoption(order, 4);
             }
 
@@ -749,8 +771,10 @@ public sealed class ProfileSyncDeletionProjectionTests
 
         Check(
             () => Assert.NotNull(ownership),
-            () => Assert.Equal(2, planPutCount),
+            () => Assert.Equal(3, planPutAttemptCount),
+            () => Assert.Equal(2, successfulPlanPutCount),
             () => Assert.Equal(2, adoptionCount),
+            () => Assert.Equal([5, 0, 5], planPutExpectedRevisions),
             () => Assert.Equal(profileId, profileSync.CurrentStatus.ProfileId),
             () => Assert.Equal(ProfileSyncStage.Ready, profileSync.CurrentStatus.Stage),
             () => Assert.Equal(4, profileSync.CurrentStatus.LastSyncRevision),

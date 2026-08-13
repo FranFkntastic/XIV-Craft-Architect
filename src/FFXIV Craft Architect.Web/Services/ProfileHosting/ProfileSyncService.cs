@@ -2125,8 +2125,9 @@ public sealed class ProfileSyncService
                 },
                 ct);
 
-            if (await ShouldRepairLegacyLinkedPlanAsync(
+            if (ShouldRepairLegacyLinkedPlan(
                     pending,
+                    localObject,
                     response))
             {
                 response = await RepairLegacyLinkedPlanAsync(
@@ -2370,18 +2371,27 @@ public sealed class ProfileSyncService
         await adapter.DeleteLocalObjectAsync(remoteObject.ObjectId, ct);
     }
 
-    private async Task<bool> ShouldRepairLegacyLinkedPlanAsync(
+    private static bool ShouldRepairLegacyLinkedPlan(
         ProfileSyncPendingSave pending,
+        ProfileSyncObjectEnvelope localObject,
         ProfileSyncPutResponse response) =>
         response.Conflict &&
-        response.RemoteObject != null &&
-        (response.RemoteObject.Deleted ||
+        ((response.RemoteObject?.Deleted ?? false) ||
+         string.Equals(
+             response.ErrorCode,
+             "missing_remote_object",
+             StringComparison.Ordinal) ||
          string.Equals(
              response.ErrorCode,
              "linked_plan_promotion_mismatch",
              StringComparison.Ordinal)) &&
-        GetAdapter(pending.Collection) is PlansProfileSyncAdapter plansAdapter &&
-        await plansAdapter.IsLinkedOrderPlanAsync(pending.ObjectId);
+        string.Equals(
+            pending.Collection,
+            ProfileSyncCollections.Plans,
+            StringComparison.OrdinalIgnoreCase) &&
+        ProfileSyncPlanPayloadCodec.Deserialize(
+            localObject.PayloadJson,
+            pending.ObjectId).LinkedOrderId.HasValue;
 
     private async Task<ProfileSyncPutResponse> RepairLegacyLinkedPlanAsync(
         HostedProfileConnectionSettings settings,
@@ -2391,13 +2401,8 @@ public sealed class ProfileSyncService
         ProfileSyncPutResponse conflict,
         CancellationToken ct)
     {
-        if (conflict.RemoteObject == null)
-        {
-            return conflict;
-        }
-
-        var baseRevision = conflict.RemoteObject.Revision;
-        if (!conflict.RemoteObject.Deleted)
+        var baseRevision = conflict.RemoteObject?.Revision ?? 0;
+        if (conflict.RemoteObject is { Deleted: false })
         {
             var deletion = await _client.DeleteObjectAsync(
                 settings.HostUrl!,
