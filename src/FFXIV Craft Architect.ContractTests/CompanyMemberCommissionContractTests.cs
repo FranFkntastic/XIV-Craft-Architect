@@ -398,6 +398,45 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task NotificationOwnerLinkResolvesWithoutActiveCompanyContext()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        var crafter = await fixture.AddActiveMemberAsync("Crafter");
+        var outsider = await fixture.CreateAccountAsync("Outsider");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var ownerResponse = await fixture.LoadNotificationOwnerCommissionAsync(
+            fixture.Owner);
+        using var recipientResponse = await fixture.LoadNotificationOwnerCommissionAsync(
+            recipient);
+        using var crafterResponse = await fixture.LoadNotificationOwnerCommissionAsync(crafter);
+        using var outsiderResponse = await fixture.LoadNotificationOwnerCommissionAsync(outsider);
+
+        ownerResponse.EnsureSuccessStatusCode();
+        recipientResponse.EnsureSuccessStatusCode();
+        var projection = await recipientResponse.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerProjection>();
+        Assert.Equal(fixture.Order.Id, projection!.Order.Id);
+        Assert.Equal(fixture.Company.Id, projection.Order.CompanyProfileId);
+        Assert.Equal(HttpStatusCode.NotFound, crafterResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, outsiderResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task NotificationOwnerLinkFailsClosedWhenCompanyIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+        await fixture.DuplicateCompanyIdentityAsync();
+
+        using var response = await fixture.LoadNotificationOwnerCommissionAsync(recipient);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HostingProfileOwnerRetainsOwnerCommissionAuthority()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -631,6 +670,12 @@ public sealed class CompanyMemberCommissionContractTests
             var client = CreateClient(account.Key);
             return client.GetAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/owner");
+        }
+
+        public Task<HttpResponseMessage> LoadNotificationOwnerCommissionAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync($"/trade/v1/commissions/{Order.Id:D}/owner");
         }
 
         public Task<HttpResponseMessage> LoadMembershipsAsync(Account account)

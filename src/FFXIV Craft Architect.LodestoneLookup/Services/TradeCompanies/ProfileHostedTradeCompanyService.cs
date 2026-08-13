@@ -260,6 +260,49 @@ public sealed class ProfileHostedTradeCompanyService(
         return found == null ? null : DeserializeOwnership(found.Object.PayloadJson);
     }
 
+    public async Task<CompanyId?> ResolveCommissionCompanyAsync(
+        Guid commissionId,
+        CancellationToken cancellationToken = default)
+    {
+        if (commissionId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var found = await profiles.FindObjectAsync(
+            ProfileSyncCollections.TradeOrders,
+            commissionId.ToString("D"),
+            cancellationToken);
+        if (found is not { Object.Deleted: false })
+        {
+            return null;
+        }
+
+        try
+        {
+            var order = JsonSerializer.Deserialize<TradeOrder>(
+                found.Object.PayloadJson,
+                JsonOptions);
+            var commission = order?.CompanyCommission;
+            if (order?.Id != commissionId ||
+                commission?.CommissionId != commissionId ||
+                order.CompanyProfileId != commission.CompanyId.Value ||
+                await LoadCompanyProfileAsync(
+                    found.ProfileId,
+                    commission.CompanyId,
+                    cancellationToken) == null)
+            {
+                return null;
+            }
+
+            return commission.CompanyId;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     public async Task<CompanyRecordRevision> LoadCompanyRevisionAsync(
         TradeCompanyAccessContext access,
         CancellationToken cancellationToken = default)

@@ -178,11 +178,10 @@ public sealed class TradeCommissionOperationsService(
     }
 
     public async Task<CompanyCommissionOwnerProjection?> ResolveNotificationNavigationAsync(
-        Guid companyId,
         Guid commissionId,
         CancellationToken cancellationToken = default)
     {
-        if (companyId == Guid.Empty || commissionId == Guid.Empty)
+        if (commissionId == Guid.Empty)
         {
             return null;
         }
@@ -198,7 +197,6 @@ public sealed class TradeCommissionOperationsService(
             AllowLinkedProjection(authority.Projection, commissionId);
             var projection = await client.LoadOwnerProjectionAsync(
                 authority.Connection,
-                companyId,
                 commissionId,
                 cancellationToken);
             if (!await IsCurrentAuthorityAsync(authority))
@@ -206,7 +204,7 @@ public sealed class TradeCommissionOperationsService(
                 return null;
             }
 
-            ValidateProjection(companyId, commissionId, projection);
+            ValidateProjection(commissionId, projection);
             var adoption = await ApplyProjectionAsync(
                 authority,
                 projection,
@@ -215,7 +213,6 @@ public sealed class TradeCommissionOperationsService(
             {
                 var newer = await ResolveNewerNotificationWinnerAsync(
                     authority,
-                    companyId,
                     commissionId,
                     projection);
                 if (newer != null)
@@ -231,7 +228,7 @@ public sealed class TradeCommissionOperationsService(
             {
                 return null;
             }
-            ValidateProjection(companyId, commissionId, current);
+            ValidateProjection(commissionId, current);
             projection = current;
             _errors.Remove(commissionId);
             return projection;
@@ -255,7 +252,6 @@ public sealed class TradeCommissionOperationsService(
 
     private async Task<CompanyCommissionOwnerProjection?> ResolveNewerNotificationWinnerAsync(
         OrderCommandAuthority authority,
-        Guid companyId,
         Guid commissionId,
         CompanyCommissionOwnerProjection fetched)
     {
@@ -271,7 +267,7 @@ public sealed class TradeCommissionOperationsService(
             return null;
         }
 
-        ValidateProjection(companyId, commissionId, winner);
+        ValidateProjection(commissionId, winner);
         return winner;
     }
 
@@ -1546,16 +1542,15 @@ public sealed class TradeCommissionOperationsService(
     }
 
     private static void ValidateProjection(
-        Guid expectedCompanyId,
         Guid expectedCommissionId,
         CompanyCommissionOwnerProjection projection)
     {
         var commission = projection.Order.CompanyCommission;
         if (projection.Order.Id != expectedCommissionId ||
-            projection.Order.CompanyProfileId != expectedCompanyId ||
             commission == null ||
             commission.CommissionId != expectedCommissionId ||
-            commission.CompanyId.Value != expectedCompanyId ||
+            commission.CompanyId.Value == Guid.Empty ||
+            projection.Order.CompanyProfileId != commission.CompanyId.Value ||
             projection.ObjectRevision.Value <= 0 ||
             projection.CompanyRevision.Value <= 0)
         {
