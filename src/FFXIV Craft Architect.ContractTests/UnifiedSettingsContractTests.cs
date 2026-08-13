@@ -110,6 +110,25 @@ public sealed class UnifiedSettingsContractTests
     }
 
     [Fact]
+    public void CompanyRefreshCannotReplaceHostedSelectionWithLocalFallback()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var switcher = File.ReadAllText(Path.Combine(web, "Shared", "TradeCompanySwitcher.razor"));
+
+        Assert.Contains("MergeCachedContexts(localCompanies, contexts.Values)", switcher, StringComparison.Ordinal);
+        Assert.Contains("IsAuthoritative: false", switcher, StringComparison.Ordinal);
+        Assert.Contains(
+            "activeCompany == null && selectedWorkspaceId.HasValue && !load.IsAuthoritative",
+            switcher,
+            StringComparison.Ordinal);
+        Assert.Contains("_activeCompany?.Id != selectedWorkspaceId.Value", switcher, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "catch\n        {\n            // A temporary host failure cannot prove that browser-held company access was revoked.\n            return LocalContexts(localCompanies);",
+            switcher,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SimpleSettingsPersistImmediatelyAndOnlyCompanyEditsUseGroupedSave()
     {
         var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
