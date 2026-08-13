@@ -268,6 +268,7 @@ public sealed record CompanyHubAttentionReadResult(
 public sealed class CompanyHubService(
     SqliteProfileHostStore profiles,
     SqliteMembershipStore memberships,
+    MembershipAccessResolver accessResolver,
     ProfileHostChangeSignal changes,
     TimeProvider timeProvider)
 {
@@ -304,7 +305,13 @@ public sealed class CompanyHubService(
                 new CompanyId(company.Profile.Id),
                 account.ProfileId,
                 cancellationToken);
-        var standing = ResolveStanding(company, account, membership);
+        var access = account == null
+            ? null
+            : await accessResolver.ResolveCompanyAccessAsync(
+                account,
+                new CompanyId(company.Profile.Id),
+                cancellationToken);
+        var standing = ResolveStanding(company, account, membership, access);
         var theme = ProjectTheme(company.Profile.Landing);
         var slug = BuildSlug(company.Profile.Name, company.Ordinal);
         var orders = await LoadOrdersAsync(company, cancellationToken);
@@ -911,8 +918,15 @@ public sealed class CompanyHubService(
     private static CompanyHubStandingResponse ResolveStanding(
         HostedCompany company,
         MembershipAccount? account,
-        CompanyMembership? membership)
+        CompanyMembership? membership,
+        TradeCompanyAccessContext? access)
     {
+        if (access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator })
+        {
+            return new CompanyHubStandingResponse(
+                "active",
+                access.Role.ToString().ToLowerInvariant());
+        }
         if (membership?.State is MembershipState.Denied or MembershipState.Revoked)
         {
             return new CompanyHubStandingResponse("none", null);

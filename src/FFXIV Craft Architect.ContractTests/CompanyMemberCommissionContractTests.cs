@@ -266,6 +266,88 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task CommissionerDiscordRecipientCanOperateFromCrafterAccountContext()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.AddActiveMemberAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+        using var memberships = await fixture.LoadMembershipsAsync(recipient);
+        using var hub = await fixture.LoadCompanyHubAsync(recipient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+        memberships.EnsureSuccessStatusCode();
+        var membershipRows = await memberships.Content.ReadFromJsonAsync<MembershipResponse[]>();
+        Assert.Contains(
+            membershipRows!,
+            item => item.CompanyId == fixture.Company.Id.ToString("D") &&
+                item.Role == "operator" &&
+                item.State == "active");
+        hub.EnsureSuccessStatusCode();
+        using var hubJson = JsonDocument.Parse(await hub.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "operator",
+            hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientDoesNotRequireACompanyMembership()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+        using var hub = await fixture.LoadCompanyHubAsync(recipient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+        hub.EnsureSuccessStatusCode();
+        using var hubJson = JsonDocument.Parse(await hub.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "operator",
+            hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientFailsClosedWhenCompanyIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+        await fixture.DuplicateCompanyIdentityAsync();
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientLosesOperatorAccessWhenRouteMoves()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Former Discord commissioner");
+        var replacement = await fixture.CreateAccountAsync("Current Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var authorized = await fixture.LoadOwnerCommissionAsync(recipient);
+        Assert.True(
+            authorized.IsSuccessStatusCode,
+            await authorized.Content.ReadAsStringAsync());
+
+        await fixture.ConfigureCommissionerRouteAsync(replacement, expectedRevision: 1);
+        using var denied = await fixture.LoadOwnerCommissionAsync(recipient);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+        Assert.Empty(await denied.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task HostingProfileOwnerRetainsOwnerCommissionAuthority()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -499,6 +581,38 @@ public sealed class CompanyMemberCommissionContractTests
             var client = CreateClient(account.Key);
             return client.GetAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/owner");
+        }
+
+        public Task<HttpResponseMessage> LoadMembershipsAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync("/trade/v1/memberships");
+        }
+
+        public Task<HttpResponseMessage> LoadCompanyHubAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync($"/trade/v1/companies/{Company.Id:D}/hub");
+        }
+
+        public async Task ConfigureCommissionerRouteAsync(
+            Account account,
+            long expectedRevision = 0)
+        {
+            var route = await Notifications.PutRouteAsync(
+                new CompanyId(Company.Id),
+                new DiscordNotificationRouteUpdate(
+                    account.DiscordUserId,
+                    DiscordNotificationDestinationMode.CommissionerDirectMessage,
+                    null,
+                    DiscordDirectMessageFallback.None,
+                    DiscordNotificationMentionBehavior.NoPing,
+                    DiscordNotificationMentionBehavior.Push,
+                    DiscordNotificationMentionBehavior.Push,
+                    expectedRevision,
+                    $"commissioner-route-{Guid.NewGuid():N}"),
+                DateTimeOffset.UtcNow);
+            Assert.True(route.Success, route.Error);
         }
 
         public async Task DuplicateCompanyIdentityAsync()

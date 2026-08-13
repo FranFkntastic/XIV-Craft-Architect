@@ -135,7 +135,7 @@ public static class MembershipEndpoints
                 var pending = await memberships.LoadPendingAsync(
                     authorization.CompanyId,
                     cancellationToken);
-                return Results.Ok(pending.Select(ToResponse).ToArray());
+                return Results.Ok(pending.Select(item => ToResponse(item)).ToArray());
             });
 
         companies.MapGet(
@@ -218,7 +218,22 @@ public static class MembershipEndpoints
                 var current = await memberships.LoadCurrentForAccountAsync(
                     account.ProfileId,
                     cancellationToken);
-                return Results.Ok(current.Select(ToResponse).ToArray());
+                var response = new List<MembershipResponse>(current.Count);
+                foreach (var membership in current)
+                {
+                    var access = await accessResolver.ResolveCompanyAccessAsync(
+                        account,
+                        membership.CompanyId,
+                        cancellationToken);
+                    var effectiveRole = access?.Role switch
+                    {
+                        TradeCompanyRole.Owner => MembershipRole.Owner,
+                        TradeCompanyRole.Operator => MembershipRole.Operator,
+                        _ => membership.Role
+                    };
+                    response.Add(ToResponse(membership, effectiveRole));
+                }
+                return Results.Ok(response);
             });
 
         companies.MapGet(
@@ -605,11 +620,13 @@ public static class MembershipEndpoints
                 Results.StatusCode(StatusCodes.Status403Forbidden));
     }
 
-    private static MembershipResponse ToResponse(CompanyMembership membership) =>
+    private static MembershipResponse ToResponse(
+        CompanyMembership membership,
+        MembershipRole? effectiveRole = null) =>
         new(
             membership.CompanyId.ToString(),
             membership.AccountProfileId,
-            membership.Role.ToString().ToLowerInvariant(),
+            (effectiveRole ?? membership.Role).ToString().ToLowerInvariant(),
             membership.State.ToString().ToLowerInvariant(),
             membership.RequestedAtUtc,
             membership.DecidedAtUtc,
