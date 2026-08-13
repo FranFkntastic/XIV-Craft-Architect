@@ -1672,7 +1672,7 @@ public sealed class ProfileSyncService
         SetStatus(new ProfileSyncStatus(
             true,
             hostReachable,
-            lastRevision,
+            Math.Max(previousStatus.LastSyncRevision, lastRevision),
             _pendingSaves.Count,
             _conflicts.Count,
             previousStatus.LastSyncedAtUtc,

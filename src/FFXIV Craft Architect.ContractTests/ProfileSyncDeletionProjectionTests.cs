@@ -744,6 +744,7 @@ public sealed class ProfileSyncDeletionProjectionTests
             () => Assert.Equal(2, adoptionCount),
             () => Assert.Equal(profileId, profileSync.CurrentStatus.ProfileId),
             () => Assert.Equal(ProfileSyncStage.Ready, profileSync.CurrentStatus.Stage),
+            () => Assert.Equal(4, profileSync.CurrentStatus.LastSyncRevision),
             () => Assert.Equal(
                 5,
                 localState.LoadObjectRevisionAsync(
