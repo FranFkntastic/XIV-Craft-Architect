@@ -22,6 +22,16 @@ public sealed class TradeCompanyAuthorization(
             return null;
         }
 
+        return await ResolveAsync(account, companyId, cancellationToken);
+    }
+
+    public async Task<TradeCompanyAccessContext?> ResolveAsync(
+        MembershipAccount account,
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(account);
+
         var access = await accessResolver.ResolveCompanyAccessAsync(
             account,
             companyId,

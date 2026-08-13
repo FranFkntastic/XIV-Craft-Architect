@@ -161,7 +161,6 @@ public sealed class HostedOrderProjectionStoreTests
         AlignCommissionIdentity(fixture);
 
         var projection = await fixture.Service.ResolveNotificationNavigationAsync(
-            fixture.Current.Order.CompanyProfileId,
             fixture.Current.Order.Id);
 
         Assert.NotNull(projection);
@@ -182,7 +181,6 @@ public sealed class HostedOrderProjectionStoreTests
         var newer = raced.Owner("Newer background winner", 5, 9);
         raced.Handler.BeforeResponse = _ => Assert.True(raced.Store.TryPublishOwner(newer));
         var resolvedRace = await raced.Service.ResolveNotificationNavigationAsync(
-            raced.Current.Order.CompanyProfileId,
             raced.Current.Order.Id);
         Assert.Same(newer, resolvedRace);
         Assert.Same(newer, raced.Store.Get(raced.Current.Order.Id)?.OwnerProjection);
@@ -198,7 +196,6 @@ public sealed class HostedOrderProjectionStoreTests
             return Task.CompletedTask;
         };
         var rejectedPersistence = await failedPersistence.Service.ResolveNotificationNavigationAsync(
-            failedPersistence.Current.Order.CompanyProfileId,
             failedPersistence.Current.Order.Id);
         Assert.Null(rejectedPersistence);
         Assert.Null(failedPersistence.Runtime.DurableOrder);
@@ -210,26 +207,15 @@ public sealed class HostedOrderProjectionStoreTests
             5,
             deleted.Current.Order.CompanyProfileId));
         var rejectedDeletion = await deleted.Service.ResolveNotificationNavigationAsync(
-            deleted.Current.Order.CompanyProfileId,
             deleted.Current.Order.Id);
         Assert.Null(rejectedDeletion);
         Assert.True(deleted.Store.Get(deleted.Current.Order.Id)?.Deleted);
-
-        var wrongCompany = await CenterOperationFixture.CreateAsync(publishOwner: false);
-        AlignCommissionIdentity(wrongCompany);
-        var rejectedCompany = await wrongCompany.Service.ResolveNotificationNavigationAsync(
-            Guid.NewGuid(),
-            wrongCompany.Current.Order.Id);
-        Assert.Null(rejectedCompany);
-        Assert.Null(wrongCompany.Store.Get(wrongCompany.Current.Order.Id));
-        Assert.Null(wrongCompany.Runtime.DurableOrder);
 
         var replacedAuthority = await CenterOperationFixture.CreateAsync(publishOwner: false);
         AlignCommissionIdentity(replacedAuthority);
         replacedAuthority.Handler.BeforeResponse = _ =>
             replacedAuthority.ReplaceAuthority(replaceProfile: false);
         var rejectedAuthority = await replacedAuthority.Service.ResolveNotificationNavigationAsync(
-            replacedAuthority.Current.Order.CompanyProfileId,
             replacedAuthority.Current.Order.Id);
         Assert.Null(rejectedAuthority);
         Assert.Null(replacedAuthority.Runtime.DurableOrder);
@@ -243,11 +229,13 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.IsType<List<ProfileSyncPendingSave>>(protectedLocal.ProfileSync.PendingSaves)
             .Add(new(ProfileSyncCollections.TradeOrders, protectedLocal.Current.Order.Id.ToString("D")));
         var resolvedPending = await protectedLocal.Service.ResolveNotificationNavigationAsync(
-            protectedLocal.Current.Order.CompanyProfileId,
             protectedLocal.Current.Order.Id);
 
         Assert.NotNull(resolvedPending);
         Assert.NotNull(protectedLocal.Handler.LastRequestUri);
+        Assert.Equal(
+            $"/api/trade/v1/commissions/{protectedLocal.Current.Order.Id:D}/owner",
+            protectedLocal.Handler.LastRequestUri!.AbsolutePath);
         Assert.Null(protectedLocal.Store.Get(protectedLocal.Current.Order.Id));
         Assert.Equal("Unsynced local draft", protectedLocal.Runtime.DurableOrder?.Title);
         Assert.Null(protectedLocal.Runtime.DurableOrder?.CompanyCommission);
@@ -268,7 +256,6 @@ public sealed class HostedOrderProjectionStoreTests
         var afterProtection = protectedLocal.Owner("Canonical after protection", 6, 10);
         protectedLocal.Handler.Projection = afterProtection;
         var resolvedAfterProtection = await protectedLocal.Service.ResolveNotificationNavigationAsync(
-            protectedLocal.Current.Order.CompanyProfileId,
             protectedLocal.Current.Order.Id);
         Assert.Equal(6, resolvedAfterProtection?.ObjectRevision.Value);
         Assert.Null(protectedLocal.Store.Get(protectedLocal.Current.Order.Id));
@@ -278,7 +265,6 @@ public sealed class HostedOrderProjectionStoreTests
         var afterCollision = protectedLocal.Owner("Canonical after collision", 7, 11);
         protectedLocal.Handler.Projection = afterCollision;
         var resolvedAfterCollision = await protectedLocal.Service.ResolveNotificationNavigationAsync(
-            protectedLocal.Current.Order.CompanyProfileId,
             protectedLocal.Current.Order.Id);
         Assert.Equal(7, resolvedAfterCollision?.ObjectRevision.Value);
         Assert.Same(
@@ -344,7 +330,6 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.IsType<List<ProfileSyncPendingSave>>(fixture.ProfileSync.PendingSaves)
             .Add(new(ProfileSyncCollections.TradeOrders, fixture.Current.Order.Id.ToString("D")));
         Assert.NotNull(await fixture.Service.ResolveNotificationNavigationAsync(
-            fixture.Current.Order.CompanyProfileId,
             fixture.Current.Order.Id));
         return fixture;
     }

@@ -510,7 +510,6 @@ public partial class TradeOrders
             _companyProfile != null)
         {
             var fresh = await CommissionOperations.ResolveNotificationNavigationAsync(
-                _companyProfile.Id,
                 notificationOrderId);
             resolution = fresh == null
                 ? new(TradeOrderNotificationNavigationStatus.Unavailable)

@@ -2,6 +2,7 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
@@ -43,6 +44,67 @@ public static class CompanyCommissionEndpoints
 
     public static void MapCompanyCommissionEndpoints(this WebApplication app)
     {
+        app.MapGet(
+            "/trade/v1/commissions/{commissionId:guid}/owner",
+            async (
+                Guid commissionId,
+                HttpRequest request,
+                MembershipAccessResolver accessResolver,
+                TradeCompanyAuthorization authorization,
+                ProfileHostedTradeCompanyService companyService,
+                HostedCompanyCommissionService commissions,
+                CancellationToken cancellationToken) =>
+            {
+                var account = await accessResolver.ResolveAccountAsync(
+                    request,
+                    cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                try
+                {
+                    var companyId = await companyService.ResolveCommissionCompanyAsync(
+                        commissionId,
+                        cancellationToken);
+                    if (companyId == null)
+                    {
+                        return MissingCanonicalCommission();
+                    }
+
+                    var access = await authorization.ResolveAsync(
+                        account,
+                        companyId.Value,
+                        cancellationToken);
+                    if (access == null)
+                    {
+                        return MissingCanonicalCommission();
+                    }
+
+                    var snapshot = await commissions.LoadOwnerAsync(
+                        access,
+                        commissionId,
+                        cancellationToken);
+                    return snapshot == null
+                        ? MissingCanonicalCommission()
+                        : Results.Ok(new CompanyCommissionOwnerProjection
+                        {
+                            Order = snapshot.Order,
+                            ObjectRevision = snapshot.Envelope.RecordRevision,
+                            CompanyRevision = snapshot.CompanyRevision
+                        });
+                }
+                catch (DuplicateHostedObjectIdentityException)
+                {
+                    return MissingCanonicalCommission();
+                }
+                catch (InvalidOperationException)
+                {
+                    return MissingCanonicalCommission();
+                }
+            });
+
         var company = app.MapGroup(
             "/trade/v1/companies/{companyId}/commissions");
 
