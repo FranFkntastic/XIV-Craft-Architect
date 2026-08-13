@@ -26,6 +26,7 @@ public sealed class TradeCommissionOperationsService(
         CompanyCommissionOwnerProjection Projection);
     private readonly Dictionary<Guid, string> _errors = [];
     private readonly Dictionary<Guid, LinkedOwnerProjection> _linkedOwnerProjections = [];
+    private readonly Dictionary<Guid, HostedOrderAuthorityScope> _dismissedLinkedProjections = [];
     private readonly HashSet<Guid> _missingCanonicalOwners = [];
     private readonly Dictionary<Guid, IReadOnlyList<TradeDiscordNotificationDiagnostic>>
         _notificationDiagnostics = [];
@@ -34,8 +35,15 @@ public sealed class TradeCommissionOperationsService(
     public CompanyCommissionOwnerProjection? GetForOrder(Guid orderId) =>
         GetCurrentLinkedProjection(orderId) ?? hostedOrders.GetOwnerProjection(orderId);
 
-    public void DismissLinkedProjectionForLocalOrder(Guid orderId) =>
+    public void DismissLinkedProjectionForLocalOrder(Guid orderId)
+    {
+        if (_linkedOwnerProjections.TryGetValue(orderId, out var linked) &&
+            hostedOrders.IsCurrentAuthority(linked.Authority))
+        {
+            _dismissedLinkedProjections[orderId] = linked.Authority;
+        }
         _linkedOwnerProjections.Remove(orderId);
+    }
 
     public string? GetErrorForOrder(Guid orderId) =>
         _errors.GetValueOrDefault(orderId);
@@ -146,6 +154,7 @@ public sealed class TradeCommissionOperationsService(
         try
         {
             authority = await CaptureOrderAuthorityAsync();
+            AllowLinkedProjection(authority.Projection, order.Id);
             var projection = await client.LoadOwnerProjectionAsync(
                 authority.Connection,
                 order.CompanyCommission.CompanyId.Value,
@@ -186,6 +195,7 @@ public sealed class TradeCommissionOperationsService(
         try
         {
             authority = await CaptureOrderAuthorityAsync();
+            AllowLinkedProjection(authority.Projection, commissionId);
             var projection = await client.LoadOwnerProjectionAsync(
                 authority.Connection,
                 companyId,
@@ -1191,6 +1201,10 @@ public sealed class TradeCommissionOperationsService(
         {
             return HostedOrderCommittedProjectionResult.ScopeChanged;
         }
+        if (IsLinkedProjectionDismissed(authority.Projection, projection.Order.Id))
+        {
+            return HostedOrderCommittedProjectionResult.AlreadyCurrent;
+        }
 
         var current = GetCurrentLinkedProjection(projection.Order.Id);
         if (current != null)
@@ -1246,6 +1260,23 @@ public sealed class TradeCommissionOperationsService(
         return null;
     }
 
+    private bool IsLinkedProjectionDismissed(
+        HostedOrderAuthorityScope authority,
+        Guid orderId) =>
+        _dismissedLinkedProjections.TryGetValue(orderId, out var dismissed) &&
+        dismissed == authority;
+
+    private void AllowLinkedProjection(
+        HostedOrderAuthorityScope authority,
+        Guid orderId)
+    {
+        if (_dismissedLinkedProjections.TryGetValue(orderId, out var dismissed) &&
+            dismissed == authority)
+        {
+            _dismissedLinkedProjections.Remove(orderId);
+        }
+    }
+
     private async Task<bool> ShouldApplyLinkedProjectionAsync(
         CompanyCommissionOwnerProjection projection)
     {
@@ -1279,6 +1310,11 @@ public sealed class TradeCommissionOperationsService(
             linked.Authority == authority)
         {
             _linkedOwnerProjections.Remove(orderId);
+        }
+        if (_dismissedLinkedProjections.TryGetValue(orderId, out var dismissed) &&
+            dismissed == authority)
+        {
+            _dismissedLinkedProjections.Remove(orderId);
         }
     }
 

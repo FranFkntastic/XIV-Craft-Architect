@@ -310,6 +310,27 @@ public sealed class HostedOrderProjectionStoreTests
             dismissedLinked.Current.Order.Id);
         Assert.Null(dismissedLinked.Service.GetForOrder(dismissedLinked.Current.Order.Id));
         Assert.Equal("Unsynced local draft", dismissedLinked.Runtime.DurableOrder?.Title);
+
+        var dismissedInFlight = await CreateProtectedLinkedFixtureAsync();
+        var inFlightOwner = dismissedInFlight.Service.GetForOrder(
+            dismissedInFlight.Current.Order.Id)!;
+        dismissedInFlight.Handler.Projection = dismissedInFlight.Owner(
+            "Committed after local selection",
+            5,
+            9);
+        dismissedInFlight.Handler.BeforeResponse = request =>
+        {
+            if (request.Method == HttpMethod.Post)
+            {
+                dismissedInFlight.Service.DismissLinkedProjectionForLocalOrder(
+                    dismissedInFlight.Current.Order.Id);
+            }
+        };
+        var dismissedResult = await dismissedInFlight.Service.AcceptDeliveryAsync(inFlightOwner);
+        Assert.True(dismissedResult.Success);
+        Assert.True(dismissedResult.HostCommitted);
+        Assert.Null(dismissedInFlight.Service.GetForOrder(dismissedInFlight.Current.Order.Id));
+        Assert.Equal("Unsynced local draft", dismissedInFlight.Runtime.DurableOrder?.Title);
     }
 
     private static async Task<CenterOperationFixture> CreateProtectedLinkedFixtureAsync()

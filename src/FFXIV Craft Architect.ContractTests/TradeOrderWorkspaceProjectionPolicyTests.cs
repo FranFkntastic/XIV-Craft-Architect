@@ -277,6 +277,21 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
             "CommissionOperations.DismissLinkedProjectionForLocalOrder(order.Id)",
             selectionBoundary,
             StringComparison.Ordinal);
+
+        var commissionSource = File.ReadAllText(Path.Combine(
+            LocateRepositoryRoot(),
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Pages",
+            "TradeOrders.CompanyCommission.cs"));
+        Assert.Contains(
+            "CommissionOperations.GetForOrder(candidate.Order.Id)",
+            commissionSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "_selectedOrder?.CompanyCommission == null",
+            commissionSource,
+            StringComparison.Ordinal);
     }
 
     private static TradeOrderWorkspaceProjectionAction Decide(
