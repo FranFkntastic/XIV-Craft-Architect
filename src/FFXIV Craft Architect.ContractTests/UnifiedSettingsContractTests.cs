@@ -166,6 +166,30 @@ public sealed class UnifiedSettingsContractTests
     }
 
     [Fact]
+    public void AccountsReleaseEnablesCrafterWorkspacesWhereDiscordIsEnabled()
+    {
+        var workflow = File.ReadAllText(Path.Combine(
+            LocateRepositoryRoot(),
+            ".github",
+            "workflows",
+            "deploy-vps-lodestone.yml"));
+
+        Assert.Contains(
+            "printf 'Discord__Enabled=true\\n'",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "printf 'Discord__CrafterWorkspaceEnabled=true\\n'",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "if [[ '${{ steps.target.outputs.target }}' == 'staging' ]]; then\n" +
+            "                printf 'Discord__CrafterWorkspaceEnabled=true\\n'",
+            workflow,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MemberCompanyDeepLinkBecomesTheGlobalWorkspaceContext()
     {
         var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
