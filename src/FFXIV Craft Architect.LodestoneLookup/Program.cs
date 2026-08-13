@@ -197,6 +197,7 @@ builder.Services.AddSingleton(_ =>
 builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
 builder.Services.AddSingleton<TradeCompanyAuthorization>();
 builder.Services.AddSingleton<MembershipAccessResolver>();
+builder.Services.AddSingleton<LegacyCrafterAccountResolver>();
 builder.Services.AddSingleton<CompanyHubService>();
 builder.Services.AddHostedService<FounderMembershipReconciler>();
 builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();

@@ -8,6 +8,7 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 public sealed record MembershipRequestBody(string? RequestNote);
 public sealed record MembershipTransitionBody(string? Reason);
+public sealed record LegacyCrafterBindingBody(Guid AccountProfileId);
 
 public sealed record MembershipResponse(
     string CompanyId,
@@ -49,6 +50,19 @@ public sealed record CompanyMemberResponse(
     DateTimeOffset RequestedAtUtc,
     DateTimeOffset? DecidedAtUtc,
     bool DiscordLinked);
+public sealed record LegacyCrafterCandidateResponse(
+    Guid LegacyCrafterId,
+    string DisplayName,
+    string? WorldName,
+    string? LodestoneCharacterId);
+public sealed record LegacyCrafterBindingResponse(
+    Guid LegacyCrafterId,
+    Guid AccountProfileId,
+    string Evidence,
+    DateTimeOffset CreatedAtUtc);
+public sealed record LegacyCrafterMigrationResponse(
+    IReadOnlyList<LegacyCrafterCandidateResponse> LegacyCrafters,
+    IReadOnlyList<LegacyCrafterBindingResponse> Bindings);
 
 public static class MembershipEndpoints
 {
@@ -66,6 +80,7 @@ public static class MembershipEndpoints
                 SqliteDiscordIdentityStore identities,
                 ProfileHostedTradeCompanyService companyService,
                 SqliteMembershipStore memberships,
+                LegacyCrafterAccountResolver crafterAccounts,
                 CancellationToken cancellationToken) =>
             {
                 if (!options.Enabled)
@@ -99,6 +114,10 @@ public static class MembershipEndpoints
                         parsedCompanyId,
                         account.ProfileId,
                         body.RequestNote,
+                        cancellationToken);
+                    await crafterAccounts.DiscoverCommittedDiscordBindingsAsync(
+                        parsedCompanyId,
+                        account.ProfileId,
                         cancellationToken);
                     return Results.Ok(ToResponse(result.Membership!));
                 }
@@ -188,6 +207,159 @@ public static class MembershipEndpoints
                     }
                 }
                 return Results.Ok(response);
+            });
+
+        companies.MapGet(
+            "/{companyId}/legacy-crafter-migration",
+            async (
+                string companyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                LegacyCrafterAccountResolver crafterAccounts,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeCompanyAdministratorAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+
+                var companyMemberships = await memberships.LoadForCompanyAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                foreach (var membership in companyMemberships.Where(item =>
+                             item.State is MembershipState.Pending or MembershipState.Active))
+                {
+                    await crafterAccounts.DiscoverCommittedDiscordBindingsAsync(
+                        authorization.CompanyId,
+                        membership.AccountProfileId,
+                        cancellationToken);
+                }
+
+                var candidates = await crafterAccounts.LoadCandidatesAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                var bindings = await memberships.LoadCrafterBindingsAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                return Results.Ok(new LegacyCrafterMigrationResponse(
+                    candidates.Select(item => new LegacyCrafterCandidateResponse(
+                        item.LegacyCrafterId,
+                        item.DisplayName,
+                        item.WorldName,
+                        item.LodestoneCharacterId)).ToArray(),
+                    bindings.Select(item => new LegacyCrafterBindingResponse(
+                        item.LegacyCrafterId,
+                        item.AccountProfileId,
+                        item.Evidence.ToString(),
+                        item.CreatedAtUtc)).ToArray()));
+            });
+
+        companies.MapPut(
+            "/{companyId}/legacy-crafter-bindings/{legacyCrafterId:guid}",
+            async (
+                string companyId,
+                Guid legacyCrafterId,
+                LegacyCrafterBindingBody body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                LegacyCrafterAccountResolver crafterAccounts,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeCompanyAdministratorAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+                var targetMembership = body.AccountProfileId == Guid.Empty
+                    ? null
+                    : await memberships.LoadAsync(
+                        authorization.CompanyId,
+                        body.AccountProfileId,
+                        cancellationToken);
+                if (targetMembership is not
+                        { State: MembershipState.Pending or MembershipState.Active } ||
+                    !await crafterAccounts.IsCompanyCrafterAsync(
+                        authorization.CompanyId,
+                        legacyCrafterId,
+                        cancellationToken))
+                {
+                    return Results.BadRequest(new MembershipErrorResponse(
+                        "invalid_crafter_binding",
+                        "Choose a company member and a legacy crafter from this company."));
+                }
+
+                var result = await memberships.BindCrafterAsync(
+                    authorization.CompanyId,
+                    legacyCrafterId,
+                    body.AccountProfileId,
+                    CrafterAccountBindingEvidence.OperatorConfirmed,
+                    authorization.Account!.ProfileId,
+                    cancellationToken);
+                return result.Status switch
+                {
+                    CrafterAccountBindingMutationStatus.Applied or
+                        CrafterAccountBindingMutationStatus.Replayed => Results.Ok(
+                            new LegacyCrafterBindingResponse(
+                                result.Binding!.LegacyCrafterId,
+                                result.Binding.AccountProfileId,
+                                result.Binding.Evidence.ToString(),
+                                result.Binding.CreatedAtUtc)),
+                    _ => Results.Conflict(new MembershipErrorResponse(
+                        "crafter_already_connected",
+                        "That legacy crafter history is already connected to another account."))
+                };
+            });
+
+        companies.MapDelete(
+            "/{companyId}/legacy-crafter-bindings/{legacyCrafterId:guid}",
+            async (
+                string companyId,
+                Guid legacyCrafterId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeCompanyAdministratorAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+                var result = await memberships.UnbindCrafterAsync(
+                    authorization.CompanyId,
+                    legacyCrafterId,
+                    authorization.Account!.ProfileId,
+                    cancellationToken);
+                return result.Status == CrafterAccountBindingMutationStatus.NotFound
+                    ? Results.NotFound()
+                    : Results.NoContent();
             });
 
         MapTransition(companies, "approve", static (store, companyId, accountId, actorId, _, ct) =>

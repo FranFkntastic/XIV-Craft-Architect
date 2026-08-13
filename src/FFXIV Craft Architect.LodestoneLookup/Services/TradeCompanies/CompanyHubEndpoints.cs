@@ -269,6 +269,7 @@ public sealed class CompanyHubService(
     SqliteProfileHostStore profiles,
     SqliteMembershipStore memberships,
     MembershipAccessResolver accessResolver,
+    LegacyCrafterAccountResolver crafterAccounts,
     ProfileHostChangeSignal changes,
     TimeProvider timeProvider)
 {
@@ -333,16 +334,27 @@ public sealed class CompanyHubService(
             new CompanyId(company.Profile.Id),
             cancellationToken);
         var roster = await ProjectRosterAsync(company, active, cancellationToken);
-        var assignments = account == null
-            ? []
-            : await Task.WhenAll(orders.Where(order =>
-                    IsAssignmentFor(order, account.ProfileId))
-                .Select(order => ProjectAssignmentAsync(
-                    order,
-                    new CompanyId(company.Profile.Id),
-                    account.ProfileId,
-                    company.Profile.Name,
-                    cancellationToken)));
+        var assignments = new List<CompanyHubCommissionResponse>();
+        if (account != null)
+        {
+            var companyId = new CompanyId(company.Profile.Id);
+            var crafterScope = await crafterAccounts.ResolveScopeAsync(
+                companyId,
+                account.ProfileId,
+                cancellationToken);
+            foreach (var order in orders)
+            {
+                if (crafterScope.Owns(order.CompanyCommission?.ActiveClaim))
+                {
+                    assignments.Add(await ProjectAssignmentAsync(
+                        order,
+                        companyId,
+                        account.ProfileId,
+                        company.Profile.Name,
+                        cancellationToken));
+                }
+            }
+        }
         var pendingCount = standing.Role is "owner" or "operator"
             ? (await memberships.LoadPendingAsync(new CompanyId(company.Profile.Id), cancellationToken)).Count
             : (int?)null;
@@ -385,7 +397,12 @@ public sealed class CompanyHubService(
         }
         var order = (await LoadOrdersAsync(company, cancellationToken))
             .SingleOrDefault(candidate => candidate.Id == commissionId);
-        if (order == null || !IsAssignmentFor(order, account.ProfileId))
+        if (order == null ||
+            !await crafterAccounts.IsClaimOwnedByAccountAsync(
+                companyId,
+                order.CompanyCommission?.ActiveClaim,
+                account.ProfileId,
+                cancellationToken))
         {
             return new(CompanyHubAttentionReadStatus.NotFound);
         }
@@ -767,11 +784,6 @@ public sealed class CompanyHubService(
         order.Status == TradeOrderStatus.ReadyToAssign &&
         order.CompanyCommission is { ActiveClaim: null } commission &&
         commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published;
-
-    private static bool IsAssignmentFor(TradeOrder order, Guid accountProfileId) =>
-        order.CompanyCommission?.ActiveClaim is { } claim &&
-        (claim.CrafterId == accountProfileId ||
-            claim.ProvisionalCrafterId == accountProfileId);
 
     private async Task<CompanyHubCommissionResponse> ProjectAssignmentAsync(
         TradeOrder order,

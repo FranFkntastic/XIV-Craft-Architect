@@ -499,6 +499,7 @@ public static class CompanyCommissionEndpoints
                  MembershipAccessResolver accessResolver,
                  ProfileHostedTradeCompanyService companyService,
                  SqliteMembershipStore memberships,
+                 LegacyCrafterAccountResolver crafterAccounts,
                  TimeProvider timeProvider,
                 CancellationToken cancellationToken) =>
             {
@@ -539,6 +540,7 @@ public static class CompanyCommissionEndpoints
                         accessResolver,
                         companyService,
                         memberships,
+                        crafterAccounts,
                         commissions,
                         cancellationToken);
                 }
@@ -668,6 +670,7 @@ public static class CompanyCommissionEndpoints
         MembershipAccessResolver accessResolver,
         ProfileHostedTradeCompanyService companyService,
         SqliteMembershipStore memberships,
+        LegacyCrafterAccountResolver crafterAccounts,
         HostedCompanyCommissionService commissions,
         CancellationToken cancellationToken)
     {
@@ -721,7 +724,12 @@ public static class CompanyCommissionEndpoints
 
         var activeClaim = commission.ActiveClaim;
         var participantIsLive =
-            activeClaim?.CrafterId == account.ProfileId &&
+            activeClaim != null &&
+            await crafterAccounts.IsClaimOwnedByAccountAsync(
+                ownership.CompanyId,
+                activeClaim,
+                account.ProfileId,
+                cancellationToken) &&
             commission.ParticipantGrant is { RevokedAtUtc: null } participant &&
             participant.ClaimId == activeClaim.ClaimId &&
             snapshot.Order.Status != TradeOrderStatus.Canceled &&

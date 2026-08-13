@@ -232,6 +232,49 @@ public sealed class CompanyHubClient(
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task<LegacyCrafterMigration> LoadLegacyCrafterMigrationAsync(
+        string companyId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/legacy-crafter-migration",
+            null,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<LegacyCrafterMigration>(
+                   JsonOptions,
+                   cancellationToken)
+               ?? new LegacyCrafterMigration([], []);
+    }
+
+    public async Task ConnectLegacyCrafterAsync(
+        string companyId,
+        Guid legacyCrafterId,
+        Guid accountProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Put,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/legacy-crafter-bindings/{legacyCrafterId:D}",
+            new { AccountProfileId = accountProfileId },
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task DisconnectLegacyCrafterAsync(
+        string companyId,
+        Guid legacyCrafterId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Delete,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/legacy-crafter-bindings/{legacyCrafterId:D}",
+            null,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     private async Task<IReadOnlyList<T>> GetListAsync<T>(string path, CancellationToken cancellationToken)
     {
         using var response = await SendAsync(HttpMethod.Get, path, null, cancellationToken);
@@ -372,6 +415,19 @@ public sealed record MemberNotificationTestDelivery(
     string? MessageId,
     string? Error);
 public sealed record CompanyMember(Guid AccountProfileId, string DisplayName, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, bool DiscordLinked);
+public sealed record LegacyCrafterMigration(
+    IReadOnlyList<LegacyCrafterCandidate> LegacyCrafters,
+    IReadOnlyList<LegacyCrafterBinding> Bindings);
+public sealed record LegacyCrafterCandidate(
+    Guid LegacyCrafterId,
+    string DisplayName,
+    string? WorldName,
+    string? LodestoneCharacterId);
+public sealed record LegacyCrafterBinding(
+    Guid LegacyCrafterId,
+    Guid AccountProfileId,
+    string Evidence,
+    DateTimeOffset CreatedAtUtc);
 
 public sealed class CompanyHubRequestException(
     HttpStatusCode statusCode,
