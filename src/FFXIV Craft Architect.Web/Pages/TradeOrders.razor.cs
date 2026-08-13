@@ -37,6 +37,7 @@ public partial class TradeOrders
     private TradeOrder? _pendingImport;
     private TradeOrder? _selectedOrder;
     private long? _selectedOrderProjectionRevision;
+    private HostedOrderProjectionSnapshot? _pendingSelectedOrderProjection;
     private HostedOrderProjectionSnapshot? _selectedLocalHostedCollision;
     private bool _showNewOrderPanel;
     private string _newOrderTitle = string.Empty;
@@ -331,6 +332,10 @@ public partial class TradeOrders
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (ApplyPendingSelectedOrderProjectionIfIdle())
+        {
+            await InvokeAsync(StateHasChanged);
+        }
         await EnsureLiveProcurementSnapshotAsync();
         if (_tradeOrdersLayoutRegistration == null &&
             string.IsNullOrWhiteSpace(_loadError))

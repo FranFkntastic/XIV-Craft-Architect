@@ -8,6 +8,7 @@ public enum TradeOrderWorkspaceProjectionAction
     ClearUnavailableSelection,
     ClearLocalCollision,
     RecordLocalCollision,
+    AdoptHostedCanonicalWorkspace,
     PreserveWorkingState,
     RefreshReadModel
 }
@@ -44,10 +45,20 @@ public static class TradeOrderWorkspaceProjectionPolicy
         !appliedObjectRevision.HasValue ||
         availableObjectRevision > appliedObjectRevision.Value;
 
+    public static bool CanApplyPendingProjection(
+        bool ownsWorkingState,
+        long? appliedObjectRevision,
+        long pendingObjectRevision) =>
+        !ownsWorkingState &&
+        ShouldApplyRestoreProjection(
+            appliedObjectRevision,
+            pendingObjectRevision);
+
     public static TradeOrderWorkspaceProjectionAction Decide(
         Guid? selectedOrderId,
         bool selectedOrderIsCanonical,
         HostedOrderProjectionSnapshot snapshot,
+        bool incomingOrderIsCanonical,
         bool hasLocalDraftEditorChanges,
         bool ownsWorkingState)
     {
@@ -64,13 +75,27 @@ public static class TradeOrderWorkspaceProjectionPolicy
                 : TradeOrderWorkspaceProjectionAction.ClearLocalCollision;
         }
 
-        if (!selectedOrderIsCanonical && hasLocalDraftEditorChanges)
+        if (!selectedOrderIsCanonical)
         {
-            return TradeOrderWorkspaceProjectionAction.RecordLocalCollision;
+            if (hasLocalDraftEditorChanges)
+            {
+                return TradeOrderWorkspaceProjectionAction.RecordLocalCollision;
+            }
         }
 
-        return ownsWorkingState
-            ? TradeOrderWorkspaceProjectionAction.PreserveWorkingState
-            : TradeOrderWorkspaceProjectionAction.RefreshReadModel;
+        if (ownsWorkingState)
+        {
+            return TradeOrderWorkspaceProjectionAction.PreserveWorkingState;
+        }
+
+        if (!selectedOrderIsCanonical)
+        {
+            if (incomingOrderIsCanonical)
+            {
+                return TradeOrderWorkspaceProjectionAction.AdoptHostedCanonicalWorkspace;
+            }
+        }
+
+        return TradeOrderWorkspaceProjectionAction.RefreshReadModel;
     }
 }

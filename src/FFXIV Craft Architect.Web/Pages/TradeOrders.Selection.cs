@@ -369,6 +369,7 @@ public partial class TradeOrders
         _selectedOrderPlanRestoreError = null;
         _selectedOrder = order;
         _selectedOrderProjectionRevision = HostedOrders.Get(order.Id)?.ObjectRevision;
+        _pendingSelectedOrderProjection = null;
         _pendingImport = null;
         _showNewOrderPanel = false;
         if (!isSameOrder)

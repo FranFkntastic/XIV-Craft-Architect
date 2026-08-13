@@ -74,6 +74,35 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
                 snapshot));
     }
 
+    [Fact]
+    public void CleanLocalDraftUsesFullAdoptionForANewCanonicalAuthority()
+    {
+        var snapshot = CreateSnapshot(SelectedOrderId);
+
+        Assert.Equal(
+            TradeOrderWorkspaceProjectionAction.AdoptHostedCanonicalWorkspace,
+            Decide(
+                SelectedOrderId,
+                selectedOrderIsCanonical: false,
+                snapshot,
+                incomingOrderIsCanonical: true));
+    }
+
+    [Fact]
+    public void InFlightLocalDraftDefersANewCanonicalAuthority()
+    {
+        var snapshot = CreateSnapshot(SelectedOrderId);
+
+        Assert.Equal(
+            TradeOrderWorkspaceProjectionAction.PreserveWorkingState,
+            Decide(
+                SelectedOrderId,
+                selectedOrderIsCanonical: false,
+                snapshot,
+                incomingOrderIsCanonical: true,
+                ownsWorkingState: true));
+    }
+
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -128,8 +157,24 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
                     : null,
                 availableObjectRevision));
 
+    [Theory]
+    [InlineData(true, 11, 12, false)]
+    [InlineData(false, 11, 12, true)]
+    [InlineData(false, 12, 12, false)]
+    public void DeferredProjectionAppliesOnTheFirstIdleRender(
+        bool ownsWorkingState,
+        int appliedObjectRevision,
+        int pendingObjectRevision,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            TradeOrderWorkspaceProjectionPolicy.CanApplyPendingProjection(
+                ownsWorkingState,
+                appliedObjectRevision,
+                pendingObjectRevision));
+
     [Fact]
-    public void BackgroundProjectionReconciliationNeverRemountsTheOrderWorkspace()
+    public void CompatibleBackgroundProjectionReconciliationNeverRemountsTheOrderWorkspace()
     {
         var repositoryRoot = LocateRepositoryRoot();
         var source = File.ReadAllText(Path.Combine(
@@ -171,25 +216,37 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
             "private bool HasSelectedOrderDetailChanges",
             ownershipStart,
             StringComparison.Ordinal);
+        var adoptionStart = source.IndexOf(
+            "private void AdoptHostedCanonicalWorkspace",
+            StringComparison.Ordinal);
+        var adoptionEnd = source.IndexOf(
+            "private async Task ApplyHostedOrderRestoreState",
+            adoptionStart,
+            StringComparison.Ordinal);
 
         Assert.True(projectionStart >= 0 && projectionEnd > projectionStart);
         Assert.True(restoreStart >= 0 && restoreEnd > restoreStart);
         Assert.True(ownershipStart >= 0 && ownershipEnd > ownershipStart);
+        Assert.True(adoptionStart >= 0 && adoptionEnd > adoptionStart);
         var projectionBoundary = source[projectionStart..projectionEnd];
         var restoreBoundary = source[restoreStart..restoreEnd];
         var ownershipBoundary = pageSource[ownershipStart..ownershipEnd];
+        var adoptionBoundary = source[adoptionStart..adoptionEnd];
 
         Assert.DoesNotContain("SelectOrder(", projectionBoundary, StringComparison.Ordinal);
         Assert.DoesNotContain("SelectOrder(", restoreBoundary, StringComparison.Ordinal);
         Assert.DoesNotContain("PrepareCompanyCommissionEditor", projectionBoundary, StringComparison.Ordinal);
         Assert.DoesNotContain("PrepareCompanyCommissionEditor", restoreBoundary, StringComparison.Ordinal);
         Assert.Contains("RefreshSelectedOrderReadModel", projectionBoundary, StringComparison.Ordinal);
+        Assert.Contains("AdoptHostedCanonicalWorkspace", projectionBoundary, StringComparison.Ordinal);
         Assert.Contains("!HasSelectedOrderDetailChanges()", projectionBoundary, StringComparison.Ordinal);
         Assert.Contains("!HasSelectedOrderOutputChanges", projectionBoundary, StringComparison.Ordinal);
         Assert.Contains("!_selectedOrderPaymentTermsDirty", projectionBoundary, StringComparison.Ordinal);
         Assert.Contains("!HasCanonicalDraftDetailChanges", projectionBoundary, StringComparison.Ordinal);
         Assert.Contains("IsEditingCommissionTermsRevision", ownershipBoundary, StringComparison.Ordinal);
         Assert.Contains("IsPlanMutationTransactionRunning", ownershipBoundary, StringComparison.Ordinal);
+        Assert.Contains("SelectOrder(order)", adoptionBoundary, StringComparison.Ordinal);
+        Assert.Contains("ApplyPendingSelectedOrderProjectionIfIdle", pageSource, StringComparison.Ordinal);
         Assert.Contains(
             "_selectedOrder?.CompanyCommission is { } commission",
             collaborationSource,
@@ -200,12 +257,14 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
         Guid? selectedOrderId,
         bool selectedOrderIsCanonical,
         HostedOrderProjectionSnapshot snapshot,
+        bool incomingOrderIsCanonical = false,
         bool hasLocalDraftEditorChanges = false,
         bool ownsWorkingState = false) =>
         TradeOrderWorkspaceProjectionPolicy.Decide(
             selectedOrderId,
             selectedOrderIsCanonical,
             snapshot,
+            incomingOrderIsCanonical,
             hasLocalDraftEditorChanges,
             ownsWorkingState);
 
