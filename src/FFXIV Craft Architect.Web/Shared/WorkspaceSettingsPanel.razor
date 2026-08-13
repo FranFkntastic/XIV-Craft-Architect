@@ -31,7 +31,7 @@ else if (_selected is { } company)
         <div>
             <MudText Typo="Typo.h6">@company.Hub.DisplayName</MudText>
             <MudText Typo="Typo.caption" Color="Color.Secondary">
-                @SentenceCase(company.Membership.Role) · active member since @company.Membership.RequestedAtUtc.ToLocalTime().ToString("yyyy-MM-dd")
+                @WorkspaceStanding(company)
             </MudText>
         </div>
         <MudButton Variant="Variant.Filled" Color="Color.Primary" Href="@($"/companies/{company.Hub.Slug}")" StartIcon="@Icons.Material.Filled.Home">
@@ -124,14 +124,29 @@ else if (_selected is { } company)
                 var hub = await HubClient.LoadAsync(membership.CompanyId);
                 if (hub?.Kind == "hub")
                 {
-                    var preferencesTask = HubClient.LoadNotificationPreferencesAsync(membership.CompanyId);
-                    var readinessTask = HubClient.LoadNotificationTestReadinessAsync(membership.CompanyId);
-                    await Task.WhenAll(preferencesTask, readinessTask);
+                    var preferences = new CompanyMembershipNotifications(
+                        membership.CompanyId,
+                        false,
+                        false,
+                        false);
+                    var readiness = new MemberNotificationTestReadiness(
+                        false,
+                        null,
+                        "Personal member DMs require an active company membership.");
+                    if (membership.HasMembership)
+                    {
+                        var preferencesTask = HubClient.LoadNotificationPreferencesAsync(membership.CompanyId);
+                        var readinessTask = HubClient.LoadNotificationTestReadinessAsync(membership.CompanyId);
+                        await Task.WhenAll(preferencesTask, readinessTask);
+                        preferences = await preferencesTask;
+                        readiness = await readinessTask;
+                    }
                     _companies.Add(new MemberCompany(
                         membership,
                         hub,
-                        await preferencesTask,
-                        await readinessTask));
+                        preferences,
+                        readiness,
+                        membership.HasMembership));
                 }
             }
             foreach (var profile in await TradeOperationsPersistence.LoadCompanyProfilesAsync())
@@ -156,7 +171,8 @@ else if (_selected is { } company)
                         new DateTimeOffset(profile.CreatedAtUtc),
                         null,
                         null,
-                        null),
+                        null,
+                        false),
                     hub,
                     new CompanyMembershipNotifications(companyId, false, false, false),
                     new MemberNotificationTestReadiness(
@@ -305,6 +321,11 @@ else if (_selected is { } company)
         "operator" => "You can operate company commissions and approved company settings. Your personal Discord preferences apply only to updates sent to you as a member.",
         _ => "This is your company update and commission workspace. Your Discord preferences below control which private commission changes are pushed to you."
     };
+
+    private static string WorkspaceStanding(MemberCompany company) =>
+        company.HasMembership
+            ? $"{SentenceCase(company.Membership.Role)} · active member since {company.Membership.RequestedAtUtc.ToLocalTime():yyyy-MM-dd}"
+            : $"{SentenceCase(company.Membership.Role)} · authorized through the commissioner Discord route";
 
     private static string SentenceCase(string value) =>
         string.IsNullOrWhiteSpace(value) ? value : char.ToUpperInvariant(value[0]) + value[1..];
