@@ -326,6 +326,25 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task CommissionerDiscordRecipientOverridesPendingMembershipInWorkspaceList()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Pending Discord commissioner");
+        await fixture.RequestMembershipAsync(recipient);
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var memberships = await fixture.LoadMembershipsAsync(recipient);
+
+        memberships.EnsureSuccessStatusCode();
+        var membershipRows = await memberships.Content.ReadFromJsonAsync<MembershipResponse[]>();
+        var company = Assert.Single(
+            membershipRows!,
+            item => item.CompanyId == fixture.Company.Id.ToString("D"));
+        Assert.Equal("operator", company.Role);
+        Assert.Equal("active", company.State);
+    }
+
+    [Fact]
     public async Task CommissionerDiscordRecipientFailsClosedWhenCompanyIdentityIsDuplicated()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();

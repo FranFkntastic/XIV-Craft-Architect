@@ -244,8 +244,7 @@ public static class MembershipEndpoints
                     var routes = await notifications.LoadRoutesForCommissionerAsync(
                         identity.DiscordUserId,
                         cancellationToken);
-                    foreach (var route in routes.Where(item =>
-                                 !response.ContainsKey(item.CompanyId)))
+                    foreach (var route in routes)
                     {
                         var access = await accessResolver.ResolveCompanyAccessAsync(
                             account,
