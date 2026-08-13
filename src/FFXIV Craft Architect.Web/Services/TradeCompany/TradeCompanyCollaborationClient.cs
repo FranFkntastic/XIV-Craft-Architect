@@ -166,6 +166,37 @@ public sealed class TradeCompanyCollaborationClient(
         return ToPublication(publication);
     }
 
+    public async Task<TradeCompanyRecordEnvelope> AdoptSynchronizedOrderAsync(
+        Guid companyProfileId,
+        Guid orderId,
+        long sourceRevision,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default,
+        HostedProfileConnectionSettings? capturedConnection = null)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{companyProfileId:D}/orders/{orderId:D}/adopt",
+            new TradeCompanyOrderAdoptionBody(
+                new CompanyRecordRevision(sourceRevision),
+                idempotencyKey),
+            cancellationToken,
+            capturedConnection);
+        await EnsureSuccessAsync(response, cancellationToken);
+        var adopted = await response.Content.ReadFromJsonAsync<TradeCompanyOrderAdoptionDto>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "Company order adoption returned an empty response.");
+        if (adopted.OrderRecord.CompanyId != new CompanyId(companyProfileId) ||
+            adopted.OrderRecord.RecordId != orderId.ToString("D"))
+        {
+            throw new InvalidOperationException(
+                "Company order adoption returned a different order identity.");
+        }
+        return adopted.OrderRecord;
+    }
+
     public async Task<TradeCommissionPublicationProjection> RetryPublicationAsync(
         Guid companyProfileId,
         string publicId,
@@ -240,8 +271,9 @@ public sealed class TradeCompanyCollaborationClient(
         return new TradeCompanyPortablePublication(
             CommissionBriefClient.CreatePortableLink(published),
             published.OrderRecord ??
-            throw new InvalidOperationException(
-                "Portable commission publication did not return its authoritative Trade order."));
+                throw new InvalidOperationException(
+                    "Portable commission publication did not return its authoritative Trade order."),
+            published.ProfileOrderRevision ?? published.OrderRecord!.RecordRevision);
     }
 
     public async Task<PortableCommissionLink> ResolvePortableLinkAsync(
@@ -387,6 +419,14 @@ public sealed class TradeCompanyCollaborationClient(
         CommissionBriefDocument Brief,
         string IdempotencyKey);
 
+    private sealed record TradeCompanyOrderAdoptionBody(
+        CompanyRecordRevision SourceRevision,
+        string IdempotencyKey);
+
+    private sealed record TradeCompanyOrderAdoptionDto(
+        TradeCompanyRecordEnvelope OrderRecord,
+        CompanyRecordRevision? CompanyRevision);
+
     private sealed record DiscordPublicationDto(
         Guid OrderId,
         string PublicId,
@@ -417,4 +457,5 @@ public sealed class TradeCompanyCollaborationClient(
 
 public sealed record TradeCompanyPortablePublication(
     PortableCommissionLink Link,
-    TradeCompanyRecordEnvelope OrderRecord);
+    TradeCompanyRecordEnvelope OrderRecord,
+    CompanyRecordRevision ProfileOrderRevision);

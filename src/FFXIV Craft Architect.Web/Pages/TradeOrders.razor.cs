@@ -439,7 +439,7 @@ public partial class TradeOrders
                     return;
                 }
             }
-            _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            _companyProfile = await ResolveSelectedWorkspaceProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
             await SelectPendingNavigationOrderAsync();
@@ -469,8 +469,33 @@ public partial class TradeOrders
             _selectedOrder = null;
             _selectedOrderProjectionRevision = null;
             _loadError = ex.Message;
-            Snackbar.Add("Trade operations storage is unavailable.", Severity.Error);
+            Snackbar.Add("Trade orders could not load.", Severity.Error);
         }
+    }
+
+    private async Task<TradeCompanyProfile> ResolveSelectedWorkspaceProfileAsync()
+    {
+        var profiles = await TradeOperationsPersistence.LoadCompanyProfilesAsync();
+        var selectedWorkspaceId =
+            await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
+        if (!selectedWorkspaceId.HasValue)
+        {
+            return await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+        }
+
+        var local = profiles.FirstOrDefault(profile => profile.Id == selectedWorkspaceId.Value);
+        if (local != null)
+        {
+            return local;
+        }
+
+        var hosted = await CompanyHubs.LoadWorkspaceProfileAsync(selectedWorkspaceId.Value);
+        if (hosted.Id != selectedWorkspaceId.Value)
+        {
+            throw new InvalidOperationException(
+                "The selected company workspace returned a different company identity.");
+        }
+        return hosted.ToTransientProfile();
     }
 
     private void OnHostedOrderProjectionChanged(HostedOrderProjectionSnapshot snapshot)

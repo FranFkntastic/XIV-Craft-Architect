@@ -15,6 +15,33 @@ public sealed class HostedOrderProjectionStoreTests
 {
     private static readonly DateTime Now = new(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc);
 
+    [Fact]
+    public void OwnerProjectionUsesProfileRevisionForRefreshAndCanonicalRevisionForCommands()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var companyId = Guid.NewGuid();
+        var draft = CreateOrder(Guid.NewGuid(), companyId, "Operator draft");
+        var canonical = CreateOrder(draft.Id, companyId, "Canonical company order");
+        var store = RestoringStore(
+            profileId,
+            7,
+            $"https://profiles.example/|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(draft, 7));
+        var owner = new CompanyCommissionOwnerProjection
+        {
+            Order = canonical,
+            ObjectRevision = new CompanyRecordRevision(2),
+            CompanyRevision = new CompanyRecordRevision(12),
+            ProfileObjectRevision = new CompanyRecordRevision(8)
+        };
+
+        Assert.True(store.TryPublishOwner(owner));
+        var projected = store.Get(draft.Id);
+        Assert.Equal(8, projected?.ObjectRevision);
+        Assert.Equal(2, projected?.OwnerProjection?.ObjectRevision.Value);
+        Assert.Equal("Canonical company order", projected?.Order?.Title);
+    }
+
     [Theory]
     [InlineData(ProjectionStoreScenario.CanonicalRevisionAndTombstone)]
     [InlineData(ProjectionStoreScenario.CompanyProfileIsImmutable)]

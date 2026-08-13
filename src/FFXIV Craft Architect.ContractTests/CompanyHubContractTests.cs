@@ -14,6 +14,174 @@ namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class CompanyHubContractTests
 {
+    [Fact]
+    public async Task OperatorLoadsExactHostedWorkspaceProfileButCrafterCannot()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var operatorAccount = await fixture.CreateAccountAsync("Operator");
+        var crafter = await fixture.CreateAccountAsync("Crafter");
+        var company = CreateCompany();
+        company.CommissionContact = "riviene-cahernaut";
+        company.PaymentPolicy = new TradePaymentPolicy(
+            TradePaymentContractMode.LaborStandard,
+            0.17m,
+            425m);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var operatorClient = fixture.CreateClient(operatorAccount.Key);
+        using var crafterClient = fixture.CreateClient(crafter.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(operatorClient, company.Id);
+        await RequestAsync(crafterClient, company.Id);
+        using (var approved = await ownerClient.PostAsync(
+                   $"/trade/v1/companies/{company.Id:D}/memberships/{operatorAccount.ProfileId:D}/approve",
+                   null))
+        {
+            approved.EnsureSuccessStatusCode();
+        }
+        using (var approved = await ownerClient.PostAsync(
+                   $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/approve",
+                   null))
+        {
+            approved.EnsureSuccessStatusCode();
+        }
+        await fixture.SetMembershipRoleAsync(
+            company.Id,
+            operatorAccount.ProfileId,
+            "operator");
+
+        using var operatorResponse = await operatorClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/workspace-profile");
+        using var crafterResponse = await crafterClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/workspace-profile");
+        var profile = await operatorResponse.Content.ReadFromJsonAsync<
+            TradeCompanyWorkspaceProfileResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, operatorResponse.StatusCode);
+        Assert.Equal(company.Id, profile?.Id);
+        Assert.Equal(company.Name, profile?.Name);
+        Assert.Equal(company.CommissionContact, profile?.CommissionContact);
+        Assert.Equal(company.PaymentPolicy, profile?.PaymentPolicy);
+        Assert.Equal(HttpStatusCode.Unauthorized, crafterResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task OperatorAdoptsExactSynchronizedDraftOnceAndCannotOverwriteCanonicalOrder()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var operatorAccount = await fixture.CreateAccountAsync("Operator");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var operatorClient = fixture.CreateClient(operatorAccount.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(operatorClient, company.Id);
+        using (var approved = await ownerClient.PostAsync(
+                   $"/trade/v1/companies/{company.Id:D}/memberships/{operatorAccount.ProfileId:D}/approve",
+                   null))
+        {
+            approved.EnsureSuccessStatusCode();
+        }
+        await fixture.SetMembershipRoleAsync(
+            company.Id,
+            operatorAccount.ProfileId,
+            "operator");
+
+        var draft = new TradeOrder
+        {
+            CompanyProfileId = company.Id,
+            Title = "Treated Spruce Lumber x1998",
+            Status = TradeOrderStatus.Draft
+        };
+        using var sourcePut = await operatorClient.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeOrders}/{draft.Id:D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = JsonSerializer.Serialize(draft, ProfileSyncJson.CreateOptions()),
+                ExpectedRevision = 0
+            });
+        sourcePut.EnsureSuccessStatusCode();
+        var source = await sourcePut.Content.ReadFromJsonAsync<ProfileSyncPutResponse>();
+        var adoptionBody = new TradeCompanyOrderAdoptionRequest(
+            new CompanyRecordRevision(source!.Object!.Revision),
+            $"adopt-order:{draft.Id:D}:{source.Object.Revision}");
+
+        using var first = await operatorClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/orders/{draft.Id:D}/adopt",
+            adoptionBody);
+        using var replay = await operatorClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/orders/{draft.Id:D}/adopt",
+            adoptionBody);
+        var firstResult = await first.Content.ReadFromJsonAsync<
+            TradeCompanyOrderAdoptionResponse>();
+        var replayResult = await replay.Content.ReadFromJsonAsync<
+            TradeCompanyOrderAdoptionResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.Equal(firstResult?.OrderRecord.RecordRevision, replayResult?.OrderRecord.RecordRevision);
+        Assert.Equal(draft.Title, JsonSerializer.Deserialize<TradeOrder>(
+            firstResult!.OrderRecord.PayloadJson,
+            ProfileSyncJson.CreateOptions())?.Title);
+
+        draft.Title = "Conflicting replacement";
+        using var changedPut = await operatorClient.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeOrders}/{draft.Id:D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = JsonSerializer.Serialize(draft, ProfileSyncJson.CreateOptions()),
+                ExpectedRevision = source.Object.Revision
+            });
+        changedPut.EnsureSuccessStatusCode();
+        var changed = await changedPut.Content.ReadFromJsonAsync<ProfileSyncPutResponse>();
+        using var conflict = await operatorClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/orders/{draft.Id:D}/adopt",
+            new TradeCompanyOrderAdoptionRequest(
+                new CompanyRecordRevision(changed!.Object!.Revision),
+                $"adopt-order:{draft.Id:D}:{changed.Object.Revision}"));
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        var canonical = await fixture.Profiles.LoadObjectAsync(
+            owner.ProfileId.ToString("D"),
+            ProfileSyncCollections.TradeOrders,
+            draft.Id.ToString("D"),
+            CancellationToken.None);
+        Assert.Equal("Treated Spruce Lumber x1998", JsonSerializer.Deserialize<TradeOrder>(
+            canonical!.PayloadJson,
+            ProfileSyncJson.CreateOptions())?.Title);
+
+        var canonicalOrder = JsonSerializer.Deserialize<TradeOrder>(
+            canonical.PayloadJson,
+            ProfileSyncJson.CreateOptions())!;
+        canonicalOrder.Title = "Canonical company update";
+        var access = new TradeCompanyAccessContext(
+            new CompanyId(company.Id),
+            operatorAccount.ProfileId,
+            TradeCompanyRole.Operator,
+            owner.ProfileId);
+        var companyUpdate = await fixture.Companies.PutRecordAsync(
+            access,
+            TradeCompanyRecordKinds.Order,
+            draft.Id.ToString("D"),
+            JsonSerializer.Serialize(canonicalOrder, ProfileSyncJson.CreateOptions()),
+            firstResult.OrderRecord.RecordRevision,
+            $"canonical-update:{draft.Id:D}");
+        Assert.True(companyUpdate.Success);
+        var mirroredRevision = await fixture.Companies.MirrorOrderToGrantAsync(
+            access,
+            canonicalOrder);
+        var mirrored = await fixture.Profiles.LoadObjectAsync(
+            operatorAccount.ProfileId.ToString("D"),
+            ProfileSyncCollections.TradeOrders,
+            draft.Id.ToString("D"),
+            CancellationToken.None);
+
+        Assert.True(mirroredRevision.Value > changed.Object.Revision);
+        Assert.Equal("Canonical company update", JsonSerializer.Deserialize<TradeOrder>(
+            mirrored!.PayloadJson,
+            ProfileSyncJson.CreateOptions())?.Title);
+    }
+
     [Theory]
     [InlineData("anonymous")]
     [InlineData("non-member")]
@@ -707,11 +875,13 @@ public sealed class CompanyHubContractTests
             this.application = application;
             Profiles = application.Services.GetRequiredService<SqliteProfileHostStore>();
             Identities = application.Services.GetRequiredService<SqliteDiscordIdentityStore>();
+            Companies = application.Services.GetRequiredService<ProfileHostedTradeCompanyService>();
         }
 
         public WebApplicationFactory<Program> Application => application;
         public SqliteProfileHostStore Profiles { get; }
         public SqliteDiscordIdentityStore Identities { get; }
+        public ProfileHostedTradeCompanyService Companies { get; }
 
         public async Task DeleteMembershipAsync(Guid companyId, Guid profileId)
         {
@@ -723,6 +893,26 @@ public sealed class CompanyHubContractTests
                 DELETE FROM company_memberships
                 WHERE company_id = $companyId AND account_profile_id = $profileId;
                 """;
+            command.Parameters.AddWithValue("$companyId", companyId.ToString("D"));
+            command.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        public async Task SetMembershipRoleAsync(
+            Guid companyId,
+            Guid profileId,
+            string role)
+        {
+            await using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(root, "memberships.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE company_memberships
+                SET role = $role
+                WHERE company_id = $companyId AND account_profile_id = $profileId;
+                """;
+            command.Parameters.AddWithValue("$role", role);
             command.Parameters.AddWithValue("$companyId", companyId.ToString("D"));
             command.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
             Assert.Equal(1, await command.ExecuteNonQueryAsync());

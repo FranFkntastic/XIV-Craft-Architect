@@ -516,9 +516,12 @@ public static class CommissionBriefEndpoints
                     }
                 }
 
-                var committedCanonical = JsonSerializer.Deserialize<TradeOrder>(
+                var committedTradeOrder = JsonSerializer.Deserialize<TradeOrder>(
                         committedOrder.PayloadJson,
-                        JsonOptions)?.CompanyCommission
+                        JsonOptions)
+                    ?? throw new InvalidOperationException(
+                        "The committed publication has no authoritative Trade order.");
+                var committedCanonical = committedTradeOrder.CompanyCommission
                     ?? throw new InvalidOperationException(
                         "The committed publication has no canonical commission.");
                 if (committedCanonical.ActiveClaim == null &&
@@ -542,6 +545,10 @@ public static class CommissionBriefEndpoints
                         issuedClaimCapability.PlaintextToken);
                 }
 
+                var profileOrderRevision = await companies.MirrorOrderToGrantAsync(
+                    access,
+                    committedTradeOrder,
+                    ct);
                 return Results.Ok(new CommissionBriefCreateResponse
                 {
                     PublicId = published.PublicId,
@@ -550,7 +557,8 @@ public static class CommissionBriefEndpoints
                     EditorToken = string.Empty,
                     Version = published.Version,
                     PublishedAtUtc = published.PublishedAtUtc,
-                    OrderRecord = committedOrder
+                    OrderRecord = committedOrder,
+                    ProfileOrderRevision = profileOrderRevision
                 });
             });
 

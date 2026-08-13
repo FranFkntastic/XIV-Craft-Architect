@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
@@ -24,6 +25,23 @@ public sealed class CompanyHubClient(
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<CompanyHubProjection>(JsonOptions, cancellationToken)
             ?? throw new InvalidOperationException("Company hub returned an empty response.");
+    }
+
+    public async Task<TradeCompanyWorkspaceProfile> LoadWorkspaceProfileAsync(
+        Guid companyId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{companyId:D}/workspace-profile",
+            null,
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(
+            JsonOptions,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The selected company workspace returned an empty profile.");
     }
 
     public async Task RequestMembershipAsync(string companyId, string? note, CancellationToken cancellationToken = default)
@@ -299,6 +317,27 @@ public sealed record CompanyHubProjection(
     IReadOnlyList<CompanyHubCommission>? Assignments,
     IReadOnlyList<CompanyHubRosterMember>? Roster,
     int? PendingMembershipRequestCount);
+
+public sealed record TradeCompanyWorkspaceProfile(
+    Guid Id,
+    string Name,
+    string? CommissionContact,
+    TradePaymentPolicy PaymentPolicy,
+    DateTime CreatedAtUtc,
+    DateTime UpdatedAtUtc)
+{
+    public TradeCompanyProfile ToTransientProfile() => new()
+    {
+        Id = Id,
+        Name = Name,
+        CommissionContact = CommissionContact,
+        PaymentPolicy = PaymentPolicy,
+        RemoteId = Id.ToString("D"),
+        SyncState = TradeSyncState.Synced,
+        CreatedAtUtc = CreatedAtUtc,
+        UpdatedAtUtc = UpdatedAtUtc
+    };
+}
 
 public sealed record CompanyHubTheme(
     string Accent,

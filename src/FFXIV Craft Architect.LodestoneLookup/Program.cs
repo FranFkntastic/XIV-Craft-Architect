@@ -364,6 +364,7 @@ app.MapCompanyCommissionBriefEndpoints();
 app.MapCompanyCommissionEndpoints();
 app.MapMembershipEndpoints();
 app.MapCompanyHubEndpoints();
+app.MapTradeCompanyWorkspaceEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
 app.MapDiscordNotificationEndpoints();

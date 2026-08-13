@@ -86,6 +86,30 @@ public sealed class UnifiedSettingsContractTests
     }
 
     [Fact]
+    public void TradeOrdersUsesSelectedWorkspaceAsItsOnlyCompanyAuthority()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var orders = File.ReadAllText(Path.Combine(web, "Pages", "TradeOrders.razor.cs"));
+        var client = File.ReadAllText(Path.Combine(
+            web,
+            "Services",
+            "TradeCompany",
+            "CompanyHubClient.cs"));
+        var persistence = File.ReadAllText(Path.Combine(
+            web,
+            "Services",
+            "TradeOperationsPersistenceService.cs"));
+
+        Assert.Contains("ResolveSelectedWorkspaceProfileAsync", orders, StringComparison.Ordinal);
+        Assert.Contains("LoadSelectedWorkspaceCompanyIdAsync", orders, StringComparison.Ordinal);
+        Assert.Contains("LoadWorkspaceProfileAsync(selectedWorkspaceId.Value)", orders, StringComparison.Ordinal);
+        Assert.Contains("profiles.FirstOrDefault(profile => profile.Id == selectedWorkspaceId.Value)", orders, StringComparison.Ordinal);
+        Assert.Contains("ToTransientProfile", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveCompanyProfileAsync", client, StringComparison.Ordinal);
+        Assert.Contains("selectedWorkspaceId != companyProfileId", persistence, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SimpleSettingsPersistImmediatelyAndOnlyCompanyEditsUseGroupedSave()
     {
         var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");

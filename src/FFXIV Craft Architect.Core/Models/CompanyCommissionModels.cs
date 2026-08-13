@@ -454,4 +454,5 @@ public sealed record CompanyCommissionOwnerProjection
     public required TradeOrder Order { get; init; }
     public required CompanyRecordRevision ObjectRevision { get; init; }
     public required CompanyRecordRevision CompanyRevision { get; init; }
+    public CompanyRecordRevision? ProfileObjectRevision { get; init; }
 }

@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
@@ -453,7 +454,7 @@ public sealed class ProfileSyncDeletionProjectionTests
 
         static async Task<ProjectionFixture> Ready() { var candidate = new ProjectionFixture("Collaboration authority"); await candidate.PrepareCollaborationAsync(); return candidate; }
         static void ChangeProfile(ProjectionFixture candidate) { var profileId = NewId(); candidate.Store.BeginProfileRestore(profileId, false, 0, DateTime.UtcNow, ConnectionScope(profileId)); }
-        static HttpResponseMessage Publication(HttpRequestMessage request, ProjectionFixture candidate, Action change) { AssertCapturedRequest(request); change(); return Ok(new { OrderId = candidate.Order.Id, PublicId = "public-id", Version = 1, PublishedAtUtc = DateTime.UtcNow, State = "Pending", DestinationLabel = "Test", Message = (string?)null }); }
+        static HttpResponseMessage Publication(HttpRequestMessage request, ProjectionFixture candidate, Action change) { AssertCapturedRequest(request); if (IsAdoptionRequest(request)) { return Adoption(candidate.Order, 4); } change(); return Ok(new { OrderId = candidate.Order.Id, PublicId = "public-id", Version = 1, PublishedAtUtc = DateTime.UtcNow, State = "Pending", DestinationLabel = "Test", Message = (string?)null }); }
         static HttpResponseMessage Revoked(HttpRequestMessage request, ProjectionFixture candidate, Action change) { AssertCapturedRequest(request); change(); return new(HttpStatusCode.NoContent); }
         static void AssertCapturedRequest(HttpRequestMessage request) { Assert.Equal(new Uri(Host).Host, request.RequestUri!.Host); Assert.Equal("access-key", request.Headers.GetValues("X-Profile-Key").Single()); }
     }
@@ -463,8 +464,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         var fixture = new ProjectionFixture("Collaboration refresh cache");
         await fixture.PrepareCollaborationAsync();
         var requestCount = 0;
-        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(_ =>
+        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(request =>
         {
+            if (IsAdoptionRequest(request))
+            {
+                return Adoption(fixture.Order, 4);
+            }
             requestCount++;
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         }));
@@ -482,8 +487,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         await fixture.PrepareCollaborationAsync();
         var committed = fixture.PublishedOrder("Published portable commission");
         var requestCount = 0;
-        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(_ =>
+        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(request =>
         {
+            if (IsAdoptionRequest(request))
+            {
+                return Adoption(fixture.Order, 4);
+            }
             requestCount++;
             var publication = committed.CommissionPublication!;
             return Ok(new CommissionBriefCreateResponse
@@ -522,16 +531,18 @@ public sealed class ProfileSyncDeletionProjectionTests
         var committed = fixture.PublishedOrder("Published portable claim");
         var publication = committed.CommissionPublication!;
         var claimUrl = $"{publication.PublicUrl}#claim={new string('a', 43)}";
-        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(_ =>
-            Ok(new CommissionBriefCreateResponse
-            {
-                PublicId = publication.PublicId,
-                PublicUrl = publication.PublicUrl!,
-                ClaimUrl = claimUrl,
-                EditorToken = string.Empty,
-                Version = publication.Version,
-                PublishedAtUtc = publication.PublishedAtUtc,
-                OrderRecord = new(
+        var collaboration = fixture.CreateUnusedCollaboration(new StubHandler(request =>
+            IsAdoptionRequest(request)
+                ? Adoption(fixture.Order, 4)
+                : Ok(new CommissionBriefCreateResponse
+                {
+                    PublicId = publication.PublicId,
+                    PublicUrl = publication.PublicUrl!,
+                    ClaimUrl = claimUrl,
+                    EditorToken = string.Empty,
+                    Version = publication.Version,
+                    PublishedAtUtc = publication.PublishedAtUtc,
+                    OrderRecord = new(
                     new(committed.CompanyProfileId),
                     TradeCompanyRecordKinds.Order,
                     Key(committed),
@@ -540,7 +551,7 @@ public sealed class ProfileSyncDeletionProjectionTests
                         new JsonSerializerOptions(JsonSerializerDefaults.Web)),
                     new(5),
                     DateTime.UtcNow)
-            })));
+                })));
 
         var link = await collaboration.PublishPortableLinkAsync(
             fixture.Order,
@@ -933,10 +944,14 @@ public sealed class ProfileSyncDeletionProjectionTests
             _ => throw new NotSupportedException(request.RequestUri?.ToString())
         });
     private static HttpMessageHandler PortablePublicationHandler(
-        TradeOrder committed, long revision, Action beforeResponse) => new StubHandler(_ =>
+        TradeOrder committed, long revision, Action beforeResponse) => new StubHandler(request =>
         {
-            beforeResponse();
             var publication = committed.CommissionPublication!;
+            if (IsAdoptionRequest(request))
+            {
+                return Adoption(committed, publication.Ownership!.OrderRevision.Value);
+            }
+            beforeResponse();
             return Ok(new CommissionBriefCreateResponse
             {
                 PublicId = publication.PublicId,
@@ -949,6 +964,19 @@ public sealed class ProfileSyncDeletionProjectionTests
                     new(revision), DateTime.UtcNow)
             });
         });
+    private static bool IsAdoptionRequest(HttpRequestMessage request) =>
+        request.Method == HttpMethod.Post &&
+        request.RequestUri!.AbsolutePath.EndsWith("/adopt", StringComparison.Ordinal);
+    private static HttpResponseMessage Adoption(TradeOrder order, long revision) =>
+        Ok(new TradeCompanyOrderAdoptionResponse(
+            new(
+                new(order.CompanyProfileId),
+                TradeCompanyRecordKinds.Order,
+                Key(order),
+                JsonSerializer.Serialize(order, ProfileSyncJson.CreateOptions()),
+                new(revision),
+                DateTime.UtcNow),
+            null));
     private static HttpMessageHandler UnusedHandler() =>
         new StubHandler(request => throw new NotSupportedException(request.RequestUri?.ToString()));
     private static HttpResponseMessage DeleteResponse(
