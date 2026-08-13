@@ -212,34 +212,130 @@ public partial class TradeOrders
     private void ApplyHostedOrderProjectionState(HostedOrderProjectionSnapshot snapshot)
     {
         _orderHostedRevisions[snapshot.OrderId] = snapshot.ObjectRevision;
-
-        if (_selectedOrder?.Id == snapshot.OrderId)
+        switch (TradeOrderWorkspaceProjectionPolicy.Decide(
+                    _selectedOrder?.Id,
+                    _selectedOrder?.CompanyCommission != null,
+                    snapshot,
+                    snapshot.Order?.CompanyCommission != null,
+                    HasSelectedLocalDraftEditorChanges,
+                    OwnsSelectedWorkspaceWorkingState()))
         {
-            if (snapshot.Deleted || snapshot.Order == null)
-            {
-                if (_selectedOrder.CompanyCommission != null)
-                {
-                    ClearUnavailableSelectedOrder("This order is no longer available.");
-                }
-                else
-                {
-                    _selectedLocalHostedCollision = null;
-                }
-            }
-            else if (!ShouldPreserveCanonicalEditor())
-            {
-                var selectedTab = _activeOpsTab;
-                var planExpanded = _isPlanPaneExpanded;
-                SelectOrder(snapshot.OwnerProjection?.Order ?? snapshot.Order);
-                _activeOpsTab = selectedTab;
-                _isPlanPaneExpanded = planExpanded;
-            }
-            else if (_selectedOrder.CompanyCommission == null)
-            {
+            case TradeOrderWorkspaceProjectionAction.Ignore:
+                break;
+            case TradeOrderWorkspaceProjectionAction.ClearUnavailableSelection:
+                ClearUnavailableSelectedOrder("This order is no longer available.");
+                break;
+            case TradeOrderWorkspaceProjectionAction.ClearLocalCollision:
+                _selectedLocalHostedCollision = null;
+                break;
+            case TradeOrderWorkspaceProjectionAction.RecordLocalCollision:
                 _selectedLocalHostedCollision = snapshot;
-            }
+                break;
+            case TradeOrderWorkspaceProjectionAction.AdoptHostedCanonicalWorkspace:
+                AdoptHostedCanonicalWorkspace(
+                    snapshot.OwnerProjection?.Order ?? snapshot.Order!,
+                    snapshot.ObjectRevision);
+                break;
+            case TradeOrderWorkspaceProjectionAction.PreserveWorkingState:
+                if (_pendingSelectedOrderProjection == null ||
+                    snapshot.ObjectRevision >= _pendingSelectedOrderProjection.ObjectRevision)
+                {
+                    _pendingSelectedOrderProjection = snapshot;
+                }
+                break;
+            case TradeOrderWorkspaceProjectionAction.RefreshReadModel:
+                RefreshSelectedOrderReadModel(
+                    snapshot.OwnerProjection?.Order ?? snapshot.Order!,
+                    snapshot.ObjectRevision);
+                break;
+        }
+    }
+
+    private void RefreshSelectedOrderReadModel(TradeOrder order, long objectRevision)
+    {
+        if (_selectedOrder == null || _selectedOrder.Id != order.Id)
+        {
+            return;
         }
 
+        var refreshDetails = !HasSelectedOrderDetailChanges();
+        var refreshOutputs = !HasSelectedOrderOutputChanges;
+        var refreshPayment = !_selectedOrderPaymentTermsDirty;
+        var refreshCommissionDetails = !HasCanonicalDraftDetailChanges;
+        var linkedPlanChanged =
+            !string.Equals(_selectedOrder.CraftPlanId, order.CraftPlanId, StringComparison.Ordinal) ||
+            _selectedOrder.CraftPlanSavedAtUtc != order.CraftPlanSavedAtUtc ||
+            _selectedOrder.CraftPlanLinkKind != order.CraftPlanLinkKind;
+
+        if (linkedPlanChanged)
+        {
+            InvalidateSelectedOrderPlanRestoration();
+            ClearLiveProcurementSnapshot();
+            _selectedOrderPlanRestoreError = null;
+        }
+
+        _selectedOrder = order;
+        _selectedOrderProjectionRevision = objectRevision;
+        _selectedLocalHostedCollision = null;
+
+        if (refreshDetails)
+        {
+            _detailTitle = order.Title;
+            _detailCrafterId = order.AssignedCrafterId;
+            _detailStatus = order.Status;
+            _detailNotes = order.Notes;
+        }
+        if (refreshOutputs)
+        {
+            _selectedOrderOutputEditors = TradeRequestedOrderEditorMapper.FromOrder(order);
+        }
+        if (refreshPayment)
+        {
+            var payment = order.CompanyCommission?.CurrentTerms.Payment;
+            _selectedOrderPaymentSchedule = payment?.Schedule ?? order.PaymentSchedule;
+            _selectedOrderCustomPaymentTerms = payment?.CustomTerms ??
+                                               order.CustomPaymentTerms ??
+                                               string.Empty;
+        }
+        if (refreshCommissionDetails)
+        {
+            var terms = order.CompanyCommission?.CurrentTerms;
+            _commissionContact = terms?.ContactInstructions ??
+                                 _companyProfile?.CommissionContact ??
+                                 string.Empty;
+            _commissionDeliveryInstructions = terms?.DeliveryInstructions ?? string.Empty;
+        }
+
+        if (linkedPlanChanged)
+        {
+            ScheduleSelectedOrderPlanRestoration();
+        }
+        ScheduleSelectedCommissionOwnerRefresh(order);
+    }
+
+    private bool ApplyPendingSelectedOrderProjectionIfIdle()
+    {
+        if (_pendingSelectedOrderProjection is not { } pending)
+        {
+            return false;
+        }
+
+        if (!TradeOrderWorkspaceProjectionPolicy.CanApplyPendingProjection(
+                OwnsSelectedWorkspaceWorkingState(),
+                _selectedOrderProjectionRevision,
+                pending.ObjectRevision))
+        {
+            if (_selectedOrderProjectionRevision.HasValue &&
+                pending.ObjectRevision <= _selectedOrderProjectionRevision.Value)
+            {
+                _pendingSelectedOrderProjection = null;
+            }
+            return false;
+        }
+
+        _pendingSelectedOrderProjection = null;
+        ApplyHostedOrderProjectionState(pending);
+        return true;
     }
 
     private async Task ApplyHostedOrderProjectionReset()
@@ -249,6 +345,7 @@ public partial class TradeOrders
             return;
         }
 
+        _pendingSelectedOrderProjection = null;
         if (_selectedOrder?.CompanyCommission != null)
         {
             ClearUnavailableSelectedOrder("The active order workspace changed.");
@@ -257,6 +354,16 @@ public partial class TradeOrders
         _orderHostedRevisions.Clear();
         await RefreshArchiveSummariesAsync();
         StateHasChanged();
+    }
+
+    private void AdoptHostedCanonicalWorkspace(TradeOrder order, long objectRevision)
+    {
+        var selectedTab = _activeOpsTab;
+        var planExpanded = _isPlanPaneExpanded;
+        SelectOrder(order);
+        _selectedOrderProjectionRevision = objectRevision;
+        _activeOpsTab = selectedTab;
+        _isPlanPaneExpanded = planExpanded;
     }
 
     private async Task ApplyHostedOrderRestoreState(HostedOrderRestoreState state)
@@ -273,6 +380,7 @@ public partial class TradeOrders
         }
         if (state.Stage == HostedOrderRestoreStage.ScopeChanging)
         {
+            _pendingSelectedOrderProjection = null;
             _archiveSummaryRecords = [];
             _orderHostedRevisions.Clear();
         }
@@ -294,9 +402,11 @@ public partial class TradeOrders
                 {
                     _selectedLocalHostedCollision = hosted;
                 }
-                else
+                else if (TradeOrderWorkspaceProjectionPolicy.ShouldApplyRestoreProjection(
+                             _selectedOrderProjectionRevision,
+                             hosted.ObjectRevision))
                 {
-                    SelectOrder(hosted.OwnerProjection?.Order ?? hosted.Order);
+                    ApplyHostedOrderProjectionState(hosted);
                 }
             }
             else if (_selectedOrder.CompanyCommission != null &&
@@ -313,6 +423,8 @@ public partial class TradeOrders
     {
         InvalidateSelectedCommissionOwnerRefresh();
         _selectedOrder = null;
+        _selectedOrderProjectionRevision = null;
+        _pendingSelectedOrderProjection = null;
         _manualNote = string.Empty;
         _showCommissionTermsRevision = false;
         _commissionTermsRevisionWorkPackage = null;

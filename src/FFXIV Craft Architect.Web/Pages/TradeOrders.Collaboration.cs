@@ -181,7 +181,7 @@ public partial class TradeOrders
         PublishCommissionUnavailableReason == null;
 
     private bool HasCanonicalDraftDetailChanges =>
-        SelectedCanonicalCommission is { } commission &&
+        _selectedOrder?.CompanyCommission is { } commission &&
         (!string.Equals(
              _commissionContact?.Trim() ?? string.Empty,
              IsEditingCommissionTermsRevision

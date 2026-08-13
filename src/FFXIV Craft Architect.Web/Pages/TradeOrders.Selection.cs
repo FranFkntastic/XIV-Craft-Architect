@@ -368,6 +368,8 @@ public partial class TradeOrders
         }
         _selectedOrderPlanRestoreError = null;
         _selectedOrder = order;
+        _selectedOrderProjectionRevision = HostedOrders.Get(order.Id)?.ObjectRevision;
+        _pendingSelectedOrderProjection = null;
         _pendingImport = null;
         _showNewOrderPanel = false;
         if (!isSameOrder)
@@ -520,6 +522,7 @@ public partial class TradeOrders
             resolution.Order == null)
         {
             _selectedOrder = null;
+            _selectedOrderProjectionRevision = null;
             _focusedTimelineEventId = null;
             _pendingTimelineFocusEventId = null;
             AppState.SelectTradeOrder(null);
@@ -665,6 +668,7 @@ public partial class TradeOrders
         if (reloadedOrder == null)
         {
             _selectedOrder = null;
+            _selectedOrderProjectionRevision = null;
             _manualNote = string.Empty;
             if (AppState.SelectedTradeOrderId == orderId)
             {

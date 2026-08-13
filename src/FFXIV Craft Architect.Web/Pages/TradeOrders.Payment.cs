@@ -567,6 +567,7 @@ public partial class TradeOrders
             await OrderLifecycle.DiscardDraftAsync(order);
             await LoadAsync();
             _selectedOrder = null;
+            _selectedOrderProjectionRevision = null;
             AppState.SelectTradeOrder(null);
             ClearSelectedOrderNavigation();
             Snackbar.Add("Draft discarded.", Severity.Success);
@@ -632,6 +633,7 @@ public partial class TradeOrders
                 {
                     await LoadAsync();
                     _selectedOrder = null;
+                    _selectedOrderProjectionRevision = null;
                     _manualNote = string.Empty;
                     if (AppState.SelectedTradeOrderId == orderId)
                     {
@@ -704,6 +706,7 @@ public partial class TradeOrders
             await OrderLifecycle.DeleteOrderAsync(order);
             await LoadAsync();
             _selectedOrder = null;
+            _selectedOrderProjectionRevision = null;
             _manualNote = string.Empty;
             if (AppState.SelectedTradeOrderId == order.Id)
             {
