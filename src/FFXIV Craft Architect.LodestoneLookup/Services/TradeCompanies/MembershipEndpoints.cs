@@ -296,7 +296,7 @@ public static class MembershipEndpoints
                         body.AccountProfileId,
                         cancellationToken);
                 if (targetMembership is not
-                        { State: MembershipState.Pending or MembershipState.Active } ||
+                    { State: MembershipState.Pending or MembershipState.Active } ||
                     !await crafterAccounts.IsCompanyCrafterAsync(
                         authorization.CompanyId,
                         legacyCrafterId,
