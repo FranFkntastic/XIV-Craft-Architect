@@ -275,6 +275,7 @@ public sealed class CompanyMemberCommissionContractTests
         using var response = await fixture.LoadOwnerCommissionAsync(recipient);
         using var memberships = await fixture.LoadMembershipsAsync(recipient);
         using var hub = await fixture.LoadCompanyHubAsync(recipient);
+        using var published = await fixture.PostCompanyUpdateAsync(recipient);
 
         Assert.True(
             response.IsSuccessStatusCode,
@@ -291,6 +292,9 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.Equal(
             "operator",
             hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+        Assert.True(
+            published.IsSuccessStatusCode,
+            await published.Content.ReadAsStringAsync());
     }
 
     [Fact]
@@ -593,6 +597,20 @@ public sealed class CompanyMemberCommissionContractTests
         {
             var client = CreateClient(account.Key);
             return client.GetAsync($"/trade/v1/companies/{Company.Id:D}/hub");
+        }
+
+        public Task<HttpResponseMessage> PostCompanyUpdateAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.PostAsJsonAsync(
+                $"/trade/v1/companies/{Company.Id:D}/hub/updates",
+                new
+                {
+                    ExpectedProfileRevision = 1,
+                    Title = "Commissioner update",
+                    Body = "Delegated operator mutation proof.",
+                    IsPinned = false
+                });
         }
 
         public async Task ConfigureCommissionerRouteAsync(

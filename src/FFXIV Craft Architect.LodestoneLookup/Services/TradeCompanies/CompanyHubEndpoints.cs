@@ -516,20 +516,11 @@ public sealed class CompanyHubService(
         {
             return new CompanyHubMutationResult(CompanyHubMutationStatus.Unauthorized);
         }
-        if (account.ProfileId == company.HostProfileId)
-        {
-            return null;
-        }
-
-        var membership = await memberships.LoadForAccountAsync(
+        var access = await accessResolver.ResolveCompanyAccessAsync(
+            account,
             new CompanyId(company.Profile.Id),
-            account.ProfileId,
             cancellationToken);
-        return membership is
-        {
-            State: MembershipState.Active,
-            Role: MembershipRole.Owner or MembershipRole.Operator
-        }
+        return access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator }
                 ? null
                 : new CompanyHubMutationResult(CompanyHubMutationStatus.Forbidden);
     }
