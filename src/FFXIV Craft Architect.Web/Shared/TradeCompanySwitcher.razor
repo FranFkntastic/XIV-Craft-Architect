@@ -108,20 +108,38 @@ else
                 .ThenBy(company => company.Id)
                 .ToArray();
             var load = await LoadSelectableCompaniesAsync(localCompanies);
+            var route = await LoadRouteCompanyAsync(localCompanies);
+            if (route.IsCompanyRoute && route.Company == null)
+            {
+                // The company page owns an explicit workspace identity. If that identity cannot
+                // be resolved yet, retain the last truthful selector instead of presenting and
+                // persisting an unrelated local company while the page finishes connecting.
+                return;
+            }
+            if (route.Company != null)
+            {
+                load = load with
+                {
+                    Companies = SortContexts(load.Companies
+                        .Where(company => company.Id != route.Company.Id)
+                        .Append(route.Company))
+                };
+            }
 
             var selectedWorkspaceId = await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
             var activeLocal = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
-            var activeCompany = selectedWorkspaceId.HasValue
-                ? load.Companies.FirstOrDefault(company => company.Id == selectedWorkspaceId.Value)
+            var requestedWorkspaceId = route.Company?.Id ?? selectedWorkspaceId;
+            var activeCompany = requestedWorkspaceId.HasValue
+                ? load.Companies.FirstOrDefault(company => company.Id == requestedWorkspaceId.Value)
                 : null;
 
-            if (activeCompany == null && selectedWorkspaceId.HasValue && !load.IsAuthoritative)
+            if (activeCompany == null && requestedWorkspaceId.HasValue && !load.IsAuthoritative)
             {
                 // A transient host failure cannot revoke the selected hosted workspace. Keep the
                 // last truthful selector state and never rewrite its durable identity to a local
                 // fallback merely because this opportunistic refresh was incomplete.
                 _companies = load.Companies;
-                if (_activeCompany?.Id != selectedWorkspaceId.Value)
+                if (_activeCompany?.Id != requestedWorkspaceId.Value)
                 {
                     _activeCompany = null;
                 }
@@ -146,6 +164,45 @@ else
             {
                 Snackbar.Add($"Trade companies could not be loaded: {exception.Message}", Severity.Error);
             }
+        }
+    }
+
+    private async Task<RouteCompanyLoad> LoadRouteCompanyAsync(
+        IReadOnlyList<TradeCompanyProfile> localCompanies)
+    {
+        var relativePath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        var path = relativePath.Split('?', '#')[0].Trim('/');
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length != 2 ||
+            !string.Equals(segments[0], "companies", StringComparison.OrdinalIgnoreCase))
+        {
+            return new RouteCompanyLoad(IsCompanyRoute: false, Company: null);
+        }
+
+        try
+        {
+            var routeIdentity = Uri.UnescapeDataString(segments[1]);
+            var hub = await CompanyHubClient.LoadAsync(routeIdentity);
+            if (hub?.Kind != "hub" ||
+                !string.Equals(hub.Standing.State, "active", StringComparison.OrdinalIgnoreCase) ||
+                !Guid.TryParse(hub.CompanyId, out var companyId))
+            {
+                return new RouteCompanyLoad(IsCompanyRoute: true, Company: null);
+            }
+
+            var localProfile = localCompanies.FirstOrDefault(company => company.Id == companyId);
+            return new RouteCompanyLoad(
+                IsCompanyRoute: true,
+                new WorkspaceCompanyContext(
+                    companyId,
+                    hub.DisplayName,
+                    hub.Slug,
+                    SentenceCase(hub.Standing.Role),
+                    localProfile));
+        }
+        catch
+        {
+            return new RouteCompanyLoad(IsCompanyRoute: true, Company: null);
         }
     }
 
@@ -362,4 +419,8 @@ else
     private sealed record SelectableCompanyLoad(
         IReadOnlyList<WorkspaceCompanyContext> Companies,
         bool IsAuthoritative);
+
+    private sealed record RouteCompanyLoad(
+        bool IsCompanyRoute,
+        WorkspaceCompanyContext? Company);
 }

@@ -118,14 +118,28 @@ public sealed class UnifiedSettingsContractTests
         Assert.Contains("MergeCachedContexts(localCompanies, contexts.Values)", switcher, StringComparison.Ordinal);
         Assert.Contains("IsAuthoritative: false", switcher, StringComparison.Ordinal);
         Assert.Contains(
-            "activeCompany == null && selectedWorkspaceId.HasValue && !load.IsAuthoritative",
+            "activeCompany == null && requestedWorkspaceId.HasValue && !load.IsAuthoritative",
             switcher,
             StringComparison.Ordinal);
-        Assert.Contains("_activeCompany?.Id != selectedWorkspaceId.Value", switcher, StringComparison.Ordinal);
+        Assert.Contains("_activeCompany?.Id != requestedWorkspaceId.Value", switcher, StringComparison.Ordinal);
         Assert.DoesNotContain(
             "catch\n        {\n            // A temporary host failure cannot prove that browser-held company access was revoked.\n            return LocalContexts(localCompanies);",
             switcher,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MemberCompanyDeepLinkBecomesTheGlobalWorkspaceContext()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var switcher = File.ReadAllText(Path.Combine(web, "Shared", "TradeCompanySwitcher.razor"));
+
+        Assert.Contains("LoadRouteCompanyAsync(localCompanies)", switcher, StringComparison.Ordinal);
+        Assert.Contains("NavigationManager.ToBaseRelativePath(NavigationManager.Uri)", switcher, StringComparison.Ordinal);
+        Assert.Contains("route.Company?.Id ?? selectedWorkspaceId", switcher, StringComparison.Ordinal);
+        Assert.Contains("CompanyHubClient.LoadAsync(routeIdentity)", switcher, StringComparison.Ordinal);
+        Assert.Contains("IsCompanyRoute: true, Company: null", switcher, StringComparison.Ordinal);
+        Assert.Contains("SelectWorkspaceCompanyAsync(_activeCompany.Id)", switcher, StringComparison.Ordinal);
     }
 
     [Fact]
