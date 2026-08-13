@@ -69,6 +69,8 @@ public sealed class UnifiedSettingsContractTests
         Assert.Contains("CompanyChanged.InvokeAsync", workspace, StringComparison.Ordinal);
         Assert.Contains("LoadSelectedWorkspaceCompanyIdAsync", workspace, StringComparison.Ordinal);
         Assert.Contains("SelectWorkspaceCompanyAsync", workspace, StringComparison.Ordinal);
+        Assert.Contains("membership.HasMembership", workspace, StringComparison.Ordinal);
+        Assert.Contains("authorized through the commissioner Discord route", workspace, StringComparison.Ordinal);
         var settings = File.ReadAllText(Path.Combine(web, "Dialogs", "SettingsDialog.razor"));
         Assert.Contains("OnWorkspaceCompanyChangedAsync", settings, StringComparison.Ordinal);
         Assert.Contains("hub.Standing.Role is \"owner\" or \"operator\"", settings, StringComparison.Ordinal);

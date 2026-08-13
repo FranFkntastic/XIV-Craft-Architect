@@ -17,7 +17,8 @@ public sealed record MembershipResponse(
     DateTimeOffset RequestedAtUtc,
     DateTimeOffset? DecidedAtUtc,
     Guid? DecidedByProfileId,
-    string? RequestNote);
+    string? RequestNote,
+    bool HasMembership);
 
 public sealed record MembershipErrorResponse(string Error, string Message);
 public sealed record MembershipNotificationPreferenceBody(
@@ -135,7 +136,7 @@ public static class MembershipEndpoints
                 var pending = await memberships.LoadPendingAsync(
                     authorization.CompanyId,
                     cancellationToken);
-                return Results.Ok(pending.Select(ToResponse).ToArray());
+                return Results.Ok(pending.Select(item => ToResponse(item)).ToArray());
             });
 
         companies.MapGet(
@@ -203,6 +204,8 @@ public static class MembershipEndpoints
                 ProfileHostOptions options,
                 MembershipAccessResolver accessResolver,
                 SqliteMembershipStore memberships,
+                SqliteDiscordIdentityStore identities,
+                SqliteDiscordNotificationStore notifications,
                 CancellationToken cancellationToken) =>
             {
                 if (!options.Enabled)
@@ -218,7 +221,68 @@ public static class MembershipEndpoints
                 var current = await memberships.LoadCurrentForAccountAsync(
                     account.ProfileId,
                     cancellationToken);
-                return Results.Ok(current.Select(ToResponse).ToArray());
+                var response = new Dictionary<CompanyId, MembershipResponse>();
+                foreach (var membership in current)
+                {
+                    var access = await accessResolver.ResolveCompanyAccessAsync(
+                        account,
+                        membership.CompanyId,
+                        cancellationToken);
+                    var effectiveRole = access?.Role switch
+                    {
+                        TradeCompanyRole.Owner => MembershipRole.Owner,
+                        TradeCompanyRole.Operator => MembershipRole.Operator,
+                        _ => membership.Role
+                    };
+                    response[membership.CompanyId] = ToResponse(membership, effectiveRole);
+                }
+
+                var identity = await identities.LoadByProfileAsync(
+                    account.ProfileId,
+                    cancellationToken);
+                if (identity != null)
+                {
+                    var routes = await notifications.LoadRoutesForCommissionerAsync(
+                        identity.DiscordUserId,
+                        cancellationToken);
+                    foreach (var route in routes)
+                    {
+                        var access = await accessResolver.ResolveCompanyAccessAsync(
+                            account,
+                            route.CompanyId,
+                            cancellationToken);
+                        if (access is not
+                            { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator })
+                        {
+                            continue;
+                        }
+
+                        if (response.TryGetValue(route.CompanyId, out var existing) &&
+                            existing is { HasMembership: true, State: "active" })
+                        {
+                            response[route.CompanyId] = existing with
+                            {
+                                Role = access.Role.ToString().ToLowerInvariant()
+                            };
+                            continue;
+                        }
+
+                        response[route.CompanyId] = new MembershipResponse(
+                            route.CompanyId.ToString(),
+                            account.ProfileId,
+                            access.Role.ToString().ToLowerInvariant(),
+                            "active",
+                            route.UpdatedAt,
+                            route.UpdatedAt,
+                            null,
+                            null,
+                            false);
+                    }
+                }
+
+                return Results.Ok(response.Values
+                    .OrderBy(item => item.CompanyId, StringComparer.Ordinal)
+                    .ToArray());
             });
 
         companies.MapGet(
@@ -605,16 +669,19 @@ public static class MembershipEndpoints
                 Results.StatusCode(StatusCodes.Status403Forbidden));
     }
 
-    private static MembershipResponse ToResponse(CompanyMembership membership) =>
+    private static MembershipResponse ToResponse(
+        CompanyMembership membership,
+        MembershipRole? effectiveRole = null) =>
         new(
             membership.CompanyId.ToString(),
             membership.AccountProfileId,
-            membership.Role.ToString().ToLowerInvariant(),
+            (effectiveRole ?? membership.Role).ToString().ToLowerInvariant(),
             membership.State.ToString().ToLowerInvariant(),
             membership.RequestedAtUtc,
             membership.DecidedAtUtc,
             membership.DecidedByProfileId,
-             membership.RequestNote);
+            membership.RequestNote,
+            true);
 
     private sealed record CompanyAuthorizationResult(
         CompanyId CompanyId,

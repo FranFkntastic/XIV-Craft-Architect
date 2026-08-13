@@ -26,10 +26,14 @@ internal sealed class HostedDiscordInteractionAuthority(
         CancellationToken cancellationToken = default)
     {
         if (link.ProfileId == Guid.Empty ||
-            link.DiscordUserId != target.DiscordUserId ||
-            await profiles.LoadProfileAsync(
-                link.ProfileId.ToString("D"),
-                cancellationToken) == null)
+            link.DiscordUserId != target.DiscordUserId)
+        {
+            return null;
+        }
+        var profile = await profiles.LoadProfileAsync(
+            link.ProfileId.ToString("D"),
+            cancellationToken);
+        if (profile == null)
         {
             return null;
         }
@@ -42,6 +46,29 @@ internal sealed class HostedDiscordInteractionAuthority(
             target.CompanyId,
             link.ProfileId,
             cancellationToken);
+        if (ownerAccess == null)
+        {
+            var route = await discordContacts.LoadRouteAsync(
+                target.CompanyId,
+                cancellationToken);
+            if (route != null && string.Equals(
+                    route.CommissionerDiscordUserId,
+                    link.DiscordUserId,
+                    StringComparison.Ordinal))
+            {
+                try
+                {
+                    ownerAccess = await companies.ResolveDelegatedOperatorAccessAsync(
+                        link.ProfileId,
+                        target.CompanyId,
+                        cancellationToken);
+                }
+                catch (DuplicateHostedObjectIdentityException)
+                {
+                    return null;
+                }
+            }
+        }
         var canonicalAccess = ownerAccess;
         if (canonicalAccess == null)
         {

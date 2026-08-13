@@ -546,6 +546,32 @@ public sealed class DiscordIdentityContractTests
                     revokedPayload.RootElement.GetProperty("content").GetString());
             }
 
+            var commissionerRoute = await notifications.PutRouteAsync(
+                companyId,
+                new DiscordNotificationRouteUpdate(
+                    DiscordUser,
+                    DiscordNotificationDestinationMode.CommissionerDirectMessage,
+                    null,
+                    DiscordDirectMessageFallback.None,
+                    DiscordNotificationMentionBehavior.NoPing,
+                    DiscordNotificationMentionBehavior.Push,
+                    DiscordNotificationMentionBehavior.Push,
+                    0,
+                    "discord-interaction-commissioner-route"),
+                now.GetUtcNow());
+            Assert.True(commissionerRoute.Success, commissionerRoute.Error);
+            var commissionerAuthorized = await authority.ResolveAsync(
+                linkedIdentity!,
+                new DiscordInteractionTarget(
+                    "121212121212121212",
+                    DiscordUser,
+                    companyId,
+                    commissionId,
+                    publicId));
+            Assert.NotNull(commissionerAuthorized);
+            Assert.True(commissionerAuthorized.IsCompanyOperator);
+            Assert.False(commissionerAuthorized.IsActiveParticipant);
+
             Assert.Equal(
                 DiscordIdentityLinkResultStatus.Linked,
                 (await identities.LinkAsync(

@@ -207,6 +207,59 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
         return await LoadRouteAsync(connection, companyId, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<DiscordNotificationRouteConfiguration>>
+        LoadRoutesForCommissionerAsync(
+            string discordUserId,
+            CancellationToken cancellationToken = default)
+    {
+        if (!DiscordSnowflake.IsValid(discordUserId))
+        {
+            return [];
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                company_id,
+                destination_mode,
+                update_channel_id,
+                dm_fallback,
+                routine_behavior,
+                action_required_behavior,
+                critical_exception_behavior,
+                revision,
+                updated_at_utc
+            FROM discord_notification_routes
+            WHERE commissioner_user_id = $discordUserId
+            ORDER BY company_id;
+            """;
+        command.Parameters.AddWithValue("$discordUserId", discordUserId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var routes = new List<DiscordNotificationRouteConfiguration>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (!CompanyId.TryParse(reader.GetString(0), out var companyId))
+            {
+                continue;
+            }
+
+            routes.Add(new DiscordNotificationRouteConfiguration(
+                companyId,
+                discordUserId,
+                (DiscordNotificationDestinationMode)reader.GetInt32(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                (DiscordDirectMessageFallback)reader.GetInt32(3),
+                (DiscordNotificationMentionBehavior)reader.GetInt32(4),
+                (DiscordNotificationMentionBehavior)reader.GetInt32(5),
+                (DiscordNotificationMentionBehavior)reader.GetInt32(6),
+                reader.GetInt64(7),
+                DateTimeOffset.Parse(reader.GetString(8))));
+        }
+        return routes;
+    }
+
     public async Task<DiscordNotificationRouteUpdateResult> PutRouteAsync(
         CompanyId companyId,
         DiscordNotificationRouteUpdate update,

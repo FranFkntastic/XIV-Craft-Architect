@@ -266,6 +266,138 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task CommissionerDiscordRecipientCanOperateFromCrafterAccountContext()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.AddActiveMemberAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+        using var memberships = await fixture.LoadMembershipsAsync(recipient);
+        using var hub = await fixture.LoadCompanyHubAsync(recipient);
+        using var published = await fixture.PostCompanyUpdateAsync(recipient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+        memberships.EnsureSuccessStatusCode();
+        var membershipRows = await memberships.Content.ReadFromJsonAsync<MembershipResponse[]>();
+        Assert.Contains(
+            membershipRows!,
+            item => item.CompanyId == fixture.Company.Id.ToString("D") &&
+                item.Role == "operator" &&
+                item.State == "active" &&
+                item.HasMembership);
+        hub.EnsureSuccessStatusCode();
+        using var hubJson = JsonDocument.Parse(await hub.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "operator",
+            hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+        Assert.True(
+            published.IsSuccessStatusCode,
+            await published.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientDoesNotRequireACompanyMembership()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+        using var hub = await fixture.LoadCompanyHubAsync(recipient);
+        using var memberships = await fixture.LoadMembershipsAsync(recipient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+        hub.EnsureSuccessStatusCode();
+        using var hubJson = JsonDocument.Parse(await hub.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "operator",
+            hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+        memberships.EnsureSuccessStatusCode();
+        var membershipRows = await memberships.Content.ReadFromJsonAsync<MembershipResponse[]>();
+        Assert.Contains(
+            membershipRows!,
+            item => item.CompanyId == fixture.Company.Id.ToString("D") &&
+                item.Role == "operator" &&
+                item.State == "active" &&
+                !item.HasMembership);
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientAuthorityDoesNotDependOnDeliveryDestination()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Update-channel commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(
+            recipient,
+            destinationMode: DiscordNotificationDestinationMode.UpdateChannel);
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+
+        Assert.True(
+            response.IsSuccessStatusCode,
+            await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientOverridesPendingMembershipInWorkspaceList()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Pending Discord commissioner");
+        await fixture.RequestMembershipAsync(recipient);
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var memberships = await fixture.LoadMembershipsAsync(recipient);
+
+        memberships.EnsureSuccessStatusCode();
+        var membershipRows = await memberships.Content.ReadFromJsonAsync<MembershipResponse[]>();
+        var company = Assert.Single(
+            membershipRows!,
+            item => item.CompanyId == fixture.Company.Id.ToString("D"));
+        Assert.Equal("operator", company.Role);
+        Assert.Equal("active", company.State);
+        Assert.False(company.HasMembership);
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientFailsClosedWhenCompanyIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+        await fixture.DuplicateCompanyIdentityAsync();
+
+        using var response = await fixture.LoadOwnerCommissionAsync(recipient);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Empty(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CommissionerDiscordRecipientLosesOperatorAccessWhenRouteMoves()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var recipient = await fixture.CreateAccountAsync("Former Discord commissioner");
+        var replacement = await fixture.CreateAccountAsync("Current Discord commissioner");
+        await fixture.ConfigureCommissionerRouteAsync(recipient);
+
+        using var authorized = await fixture.LoadOwnerCommissionAsync(recipient);
+        Assert.True(
+            authorized.IsSuccessStatusCode,
+            await authorized.Content.ReadAsStringAsync());
+
+        await fixture.ConfigureCommissionerRouteAsync(replacement, expectedRevision: 1);
+        using var denied = await fixture.LoadOwnerCommissionAsync(recipient);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+        Assert.Empty(await denied.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task HostingProfileOwnerRetainsOwnerCommissionAuthority()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -499,6 +631,57 @@ public sealed class CompanyMemberCommissionContractTests
             var client = CreateClient(account.Key);
             return client.GetAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/owner");
+        }
+
+        public Task<HttpResponseMessage> LoadMembershipsAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync("/trade/v1/memberships");
+        }
+
+        public Task<HttpResponseMessage> LoadCompanyHubAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.GetAsync($"/trade/v1/companies/{Company.Id:D}/hub");
+        }
+
+        public Task<HttpResponseMessage> PostCompanyUpdateAsync(Account account)
+        {
+            var client = CreateClient(account.Key);
+            return client.PostAsJsonAsync(
+                $"/trade/v1/companies/{Company.Id:D}/hub/updates",
+                new
+                {
+                    ExpectedProfileRevision = 1,
+                    Title = "Commissioner update",
+                    Body = "Delegated operator mutation proof.",
+                    IsPinned = false
+                });
+        }
+
+        public async Task ConfigureCommissionerRouteAsync(
+            Account account,
+            long expectedRevision = 0,
+            DiscordNotificationDestinationMode destinationMode =
+                DiscordNotificationDestinationMode.CommissionerDirectMessage)
+        {
+            var route = await Notifications.PutRouteAsync(
+                new CompanyId(Company.Id),
+                new DiscordNotificationRouteUpdate(
+                    account.DiscordUserId,
+                    destinationMode,
+                    destinationMode is DiscordNotificationDestinationMode.UpdateChannel or
+                        DiscordNotificationDestinationMode.Both
+                        ? "123456789012345678"
+                        : null,
+                    DiscordDirectMessageFallback.None,
+                    DiscordNotificationMentionBehavior.NoPing,
+                    DiscordNotificationMentionBehavior.Push,
+                    DiscordNotificationMentionBehavior.Push,
+                    expectedRevision,
+                    $"commissioner-route-{Guid.NewGuid():N}"),
+                DateTimeOffset.UtcNow);
+            Assert.True(route.Success, route.Error);
         }
 
         public async Task DuplicateCompanyIdentityAsync()

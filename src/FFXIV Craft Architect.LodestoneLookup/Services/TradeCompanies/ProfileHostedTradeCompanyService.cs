@@ -139,6 +139,38 @@ public sealed class ProfileHostedTradeCompanyService(
             hostProfileId);
     }
 
+    public async Task<TradeCompanyAccessContext?> ResolveDelegatedOperatorAccessAsync(
+        Guid grantProfileId,
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        if (grantProfileId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var hosted = await profiles.FindObjectAsync(
+            ProfileSyncCollections.TradeCompanyProfiles,
+            companyId.ToString(),
+            cancellationToken);
+        if (hosted is not { Object.Deleted: false } ||
+            !Guid.TryParse(hosted.ProfileId, out var hostProfileId) ||
+            hostProfileId == Guid.Empty ||
+            await LoadCompanyProfileAsync(
+                hosted.ProfileId,
+                companyId,
+                cancellationToken) == null)
+        {
+            return null;
+        }
+
+        return new TradeCompanyAccessContext(
+            companyId,
+            grantProfileId,
+            TradeCompanyRole.Operator,
+            hostProfileId);
+    }
+
     public async Task<TradeCompanyRecordEnvelope?> LoadRecordAsync(
         TradeCompanyAccessContext access,
         string recordKind,
