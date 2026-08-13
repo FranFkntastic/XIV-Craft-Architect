@@ -292,6 +292,80 @@ public sealed class ProfileSyncDeletionProjectionTests
         await service.InitializeAsync();
         Check(() => Assert.Equal(1, service.CurrentStatus.LastSyncRevision), () => Assert.Equal(0, adapter.DeleteCount), () => Assert.Empty(store.GetAll()));
     }
+
+    [Fact]
+    public async Task MissingCompanyQuarantinesOnlyItsDependentOrder()
+    {
+        var profileId = NewId();
+        var missingCompanyId = Guid.NewGuid();
+        var orphanedOrder = CreateOrder(Guid.NewGuid(), missingCompanyId, "Orphaned order");
+        var secondOrphanedOrder = CreateOrder(Guid.NewGuid(), missingCompanyId, "Second orphaned order");
+        var currentOrder = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Current order");
+        var orphanedEnvelope = Envelope(orphanedOrder, 1);
+        var secondOrphanedEnvelope = Envelope(secondOrphanedOrder, 2);
+        var currentEnvelope = Envelope(currentOrder, 3);
+        var orderCollections = string.Join(",", ProfileSyncCollections.OrderAuthorityScope);
+        var backgroundCollections = string.Join(",", ProfileSyncCollections.BackgroundScope);
+        var recoveryRequestCount = 0;
+        var handler = new StubHandler(request =>
+        {
+            Assert.EndsWith("/profile-host/changes", request.RequestUri!.AbsolutePath, StringComparison.Ordinal);
+            var collections = System.Web.HttpUtility.ParseQueryString(request.RequestUri.Query)["collections"];
+            if (string.Equals(collections, orderCollections, StringComparison.Ordinal))
+            {
+                return Ok(new ProfileSyncChangesResponse
+                {
+                    Objects = [orphanedEnvelope, secondOrphanedEnvelope, currentEnvelope],
+                    ServerRevision = 3
+                });
+            }
+            if (collections == null)
+            {
+                recoveryRequestCount++;
+                return Ok(new ProfileSyncChangesResponse { ServerRevision = 3 });
+            }
+            if (string.Equals(collections, backgroundCollections, StringComparison.Ordinal))
+            {
+                return Ok(new ProfileSyncChangesResponse { ServerRevision = 3 });
+            }
+            throw new InvalidOperationException($"Unexpected collection filter '{collections}'.");
+        });
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = CreateLocalState(indexedDb);
+        var adapter = new MissingCompanyOrderAdapter(
+            new HashSet<Guid> { orphanedOrder.Id, secondOrphanedOrder.Id },
+            missingCompanyId);
+        var service = new ProfileSyncService(
+            CreateHostClient(handler),
+            localState,
+            new WebSettingsService(indexedDb),
+            new HostedOrderProjectionStore(),
+            [adapter, new EmptyCollectionAdapter(ProfileSyncCollections.Plans)]);
+
+        await service.InitializeAsync();
+
+        Check(
+            () => Assert.Contains(currentOrder.Id, adapter.AppliedOrderIds),
+            () => Assert.DoesNotContain(orphanedOrder.Id, adapter.AppliedOrderIds),
+            () => Assert.DoesNotContain(secondOrphanedOrder.Id, adapter.AppliedOrderIds),
+            () => Assert.Equal(3, service.CurrentStatus.LastSyncRevision),
+            () => Assert.Equal(1, recoveryRequestCount),
+            () => Assert.True(
+                service.CurrentStatus.OrderScopeReady,
+                JsonSerializer.Serialize(service.CurrentStatus)),
+            () => Assert.True(service.CurrentStatus.HostReachable),
+            () => Assert.Empty(service.PendingSaves),
+            () => Assert.Empty(service.Conflicts));
+        Assert.Equal(1, await localState.LoadObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            Key(orphanedOrder)));
+        Assert.Equal(2, await localState.LoadObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            Key(secondOrphanedOrder)));
+    }
     private static async Task ExpectedRevisionRefusesChangedOrderBeforeDeletion()
     {
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Published winner");
@@ -911,6 +985,15 @@ public sealed class ProfileSyncDeletionProjectionTests
         public Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct) => throw new NotSupportedException();
         public Task DeleteLocalObjectAsync(string objectId, CancellationToken ct) => delete?.Invoke() ?? Task.CompletedTask;
     }
+    private sealed class EmptyCollectionAdapter(string collection) : IProfileSyncCollectionAdapter
+    {
+        public string Collection => collection;
+        public Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<ProfileSyncObjectEnvelope>>([]);
+        public Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct) =>
+            throw new NotSupportedException();
+        public Task DeleteLocalObjectAsync(string objectId, CancellationToken ct) => Task.CompletedTask;
+    }
     private sealed class RecordingOrderAdapter(ProfileSyncObjectEnvelope? local) : IProfileSyncCollectionAdapter
     {
         public string Collection => ProfileSyncCollections.TradeOrders;
@@ -924,6 +1007,30 @@ public sealed class ProfileSyncDeletionProjectionTests
             DeleteCount++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class MissingCompanyOrderAdapter(
+        IReadOnlySet<Guid> orphanedOrderIds,
+        Guid missingCompanyId) : IProfileSyncCollectionAdapter
+    {
+        public string Collection => ProfileSyncCollections.TradeOrders;
+        public List<Guid> AppliedOrderIds { get; } = [];
+        public Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadLocalObjectsAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<ProfileSyncObjectEnvelope>>([]);
+        public Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
+        {
+            var orderId = Guid.Parse(envelope.ObjectId);
+            if (orphanedOrderIds.Contains(orderId))
+            {
+                throw new MissingTradeCompanyProfileException(
+                    missingCompanyId,
+                    "order",
+                    envelope.ObjectId);
+            }
+            AppliedOrderIds.Add(orderId);
+            return Task.CompletedTask;
+        }
+        public Task DeleteLocalObjectAsync(string objectId, CancellationToken ct) => Task.CompletedTask;
     }
     private static HttpMessageHandler RevisionZeroDeletionHandler(Guid orderId) =>
         new StubHandler(request => request.RequestUri!.AbsolutePath.EndsWith("/profile-host/changes")

@@ -455,6 +455,7 @@ public sealed class ProfileSyncService
             });
             var serverRevision = baseRevision;
             var hasMore = true;
+            var companyProfileRecovery = new Dictionary<Guid, bool>();
             while (hasMore)
             {
                 var page = await ReplayChangesPageAsync(
@@ -464,6 +465,7 @@ public sealed class ProfileSyncService
                     serverRevision,
                     targetRevision,
                     appliedObjectCount,
+                    companyProfileRecovery,
                     ct);
                 appliedObjectCount = page.AppliedCount;
                 serverRevision = page.ServerRevision;
@@ -568,6 +570,7 @@ public sealed class ProfileSyncService
         long sinceRevision,
         long? targetRevision,
         int appliedObjectCount,
+        Dictionary<Guid, bool> companyProfileRecovery,
         CancellationToken ct)
     {
         var changes = await _client.GetChangesAsync(
@@ -705,11 +708,31 @@ public sealed class ProfileSyncService
                     }
                     catch (MissingTradeCompanyProfileException exception)
                     {
-                        await RestoreMissingCompanyProfileAsync(
-                            settings,
-                            profileId,
-                            exception.CompanyProfileId,
-                            ct);
+                        if (!companyProfileRecovery.TryGetValue(
+                                exception.CompanyProfileId,
+                                out var recovered))
+                        {
+                            recovered = await TryRestoreMissingCompanyProfileAsync(
+                                settings,
+                                profileId,
+                                exception.CompanyProfileId,
+                                ct);
+                            companyProfileRecovery[exception.CompanyProfileId] = recovered;
+                        }
+                        if (!recovered)
+                        {
+                            // An unavailable parent cannot make every later profile object
+                            // unverifiable. Preserve the browser's last truthful copy, mark
+                            // this hosted revision as observed, and continue restoring the
+                            // independent objects that follow it.
+                            await _localState.SaveObjectRevisionAsync(
+                                profileId,
+                                item.Collection,
+                                item.ObjectId,
+                                item.Revision);
+                            appliedObjectCount++;
+                            continue;
+                        }
                         await adapter.ApplyRemoteObjectAsync(item, ct);
                     }
                 }
@@ -771,6 +794,7 @@ public sealed class ProfileSyncService
             {
                 var cursor = baseRevision;
                 var hasMore = true;
+                var companyProfileRecovery = new Dictionary<Guid, bool>();
                 while (hasMore)
                 {
                     var page = await RunSerializedAsync(
@@ -790,6 +814,7 @@ public sealed class ProfileSyncService
                                 cursor,
                                 targetRevision,
                                 CurrentStatus.AppliedObjectCount,
+                                companyProfileRecovery,
                                 CancellationToken.None);
                         },
                         CancellationToken.None);
@@ -1146,7 +1171,7 @@ public sealed class ProfileSyncService
             _ => ProfileSyncFailure.Unverifiable
         };
 
-    private async Task RestoreMissingCompanyProfileAsync(
+    private async Task<bool> TryRestoreMissingCompanyProfileAsync(
         HostedProfileConnectionSettings settings,
         string profileId,
         Guid companyProfileId,
@@ -1183,8 +1208,7 @@ public sealed class ProfileSyncService
 
         if (companyObject == null)
         {
-            throw new InvalidOperationException(
-                $"Hosted Trade company profile '{companyObjectId}' is unavailable, so its dependent objects cannot be restored.");
+            return false;
         }
 
         var companyAdapter = GetAdapter(ProfileSyncCollections.TradeCompanyProfiles);
@@ -1198,6 +1222,7 @@ public sealed class ProfileSyncService
             companyObject.Collection,
             companyObject.ObjectId,
             companyObject.Revision);
+        return true;
     }
 
     public Task QueueLocalSaveAsync(
