@@ -203,6 +203,8 @@ public static class MembershipEndpoints
                 ProfileHostOptions options,
                 MembershipAccessResolver accessResolver,
                 SqliteMembershipStore memberships,
+                SqliteDiscordIdentityStore identities,
+                SqliteDiscordNotificationStore notifications,
                 CancellationToken cancellationToken) =>
             {
                 if (!options.Enabled)
@@ -218,7 +220,7 @@ public static class MembershipEndpoints
                 var current = await memberships.LoadCurrentForAccountAsync(
                     account.ProfileId,
                     cancellationToken);
-                var response = new List<MembershipResponse>(current.Count);
+                var response = new Dictionary<CompanyId, MembershipResponse>();
                 foreach (var membership in current)
                 {
                     var access = await accessResolver.ResolveCompanyAccessAsync(
@@ -231,9 +233,45 @@ public static class MembershipEndpoints
                         TradeCompanyRole.Operator => MembershipRole.Operator,
                         _ => membership.Role
                     };
-                    response.Add(ToResponse(membership, effectiveRole));
+                    response[membership.CompanyId] = ToResponse(membership, effectiveRole);
                 }
-                return Results.Ok(response);
+
+                var identity = await identities.LoadByProfileAsync(
+                    account.ProfileId,
+                    cancellationToken);
+                if (identity != null)
+                {
+                    var routes = await notifications.LoadRoutesForCommissionerAsync(
+                        identity.DiscordUserId,
+                        cancellationToken);
+                    foreach (var route in routes.Where(item =>
+                                 !response.ContainsKey(item.CompanyId)))
+                    {
+                        var access = await accessResolver.ResolveCompanyAccessAsync(
+                            account,
+                            route.CompanyId,
+                            cancellationToken);
+                        if (access is not
+                            { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator })
+                        {
+                            continue;
+                        }
+
+                        response[route.CompanyId] = new MembershipResponse(
+                            route.CompanyId.ToString(),
+                            account.ProfileId,
+                            access.Role.ToString().ToLowerInvariant(),
+                            "active",
+                            route.UpdatedAt,
+                            route.UpdatedAt,
+                            null,
+                            null);
+                    }
+                }
+
+                return Results.Ok(response.Values
+                    .OrderBy(item => item.CompanyId, StringComparer.Ordinal)
+                    .ToArray());
             });
 
         companies.MapGet(

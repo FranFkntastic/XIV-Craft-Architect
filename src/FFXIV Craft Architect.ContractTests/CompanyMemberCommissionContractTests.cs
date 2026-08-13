@@ -306,6 +306,7 @@ public sealed class CompanyMemberCommissionContractTests
 
         using var response = await fixture.LoadOwnerCommissionAsync(recipient);
         using var hub = await fixture.LoadCompanyHubAsync(recipient);
+        using var memberships = await fixture.LoadMembershipsAsync(recipient);
 
         Assert.True(
             response.IsSuccessStatusCode,
@@ -315,6 +316,13 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.Equal(
             "operator",
             hubJson.RootElement.GetProperty("standing").GetProperty("role").GetString());
+        memberships.EnsureSuccessStatusCode();
+        var membershipRows = await memberships.Content.ReadFromJsonAsync<MembershipResponse[]>();
+        Assert.Contains(
+            membershipRows!,
+            item => item.CompanyId == fixture.Company.Id.ToString("D") &&
+                item.Role == "operator" &&
+                item.State == "active");
     }
 
     [Fact]
