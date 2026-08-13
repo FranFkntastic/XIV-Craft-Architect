@@ -236,15 +236,36 @@ public sealed class HostedOrderProjectionStoreTests
 
         var protectedLocal = await CenterOperationFixture.CreateAsync(publishOwner: false);
         AlignCommissionIdentity(protectedLocal);
+        var localDraft = TradeOrderWorkflow.CopyOrder(protectedLocal.Current.Order);
+        localDraft.Title = "Unsynced local draft";
+        localDraft.CompanyCommission = null;
+        protectedLocal.Runtime.SeedDurableOrder(localDraft);
         Assert.IsType<List<ProfileSyncPendingSave>>(protectedLocal.ProfileSync.PendingSaves)
             .Add(new(ProfileSyncCollections.TradeOrders, protectedLocal.Current.Order.Id.ToString("D")));
-        var rejectedPending = await protectedLocal.Service.ResolveNotificationNavigationAsync(
+        var resolvedPending = await protectedLocal.Service.ResolveNotificationNavigationAsync(
             protectedLocal.Current.Order.CompanyProfileId,
             protectedLocal.Current.Order.Id);
-        Assert.Null(rejectedPending);
-        Assert.Null(protectedLocal.Handler.LastRequestUri);
+
+        Assert.NotNull(resolvedPending);
+        Assert.NotNull(protectedLocal.Handler.LastRequestUri);
         Assert.Null(protectedLocal.Store.Get(protectedLocal.Current.Order.Id));
-        Assert.Null(protectedLocal.Runtime.DurableOrder);
+        Assert.Equal("Unsynced local draft", protectedLocal.Runtime.DurableOrder?.Title);
+        Assert.Null(protectedLocal.Runtime.DurableOrder?.CompanyCommission);
+        Assert.Same(resolvedPending, protectedLocal.Service.GetForOrder(protectedLocal.Current.Order.Id));
+
+        var committed = protectedLocal.Owner("Canonical after command", 5, 9);
+        protectedLocal.Handler.Projection = committed;
+        var command = await protectedLocal.Service.AcceptDeliveryAsync(resolvedPending);
+        Assert.True(command.Success);
+        Assert.Equal(5, protectedLocal.Service.GetForOrder(protectedLocal.Current.Order.Id)?.ObjectRevision.Value);
+        Assert.Equal("Canonical after command", protectedLocal.Service.GetForOrder(protectedLocal.Current.Order.Id)?.Order.Title);
+        Assert.Null(protectedLocal.Store.Get(protectedLocal.Current.Order.Id));
+        Assert.Equal("Unsynced local draft", protectedLocal.Runtime.DurableOrder?.Title);
+        Assert.Null(protectedLocal.Runtime.DurableOrder?.CompanyCommission);
+
+        protectedLocal.ReplaceAuthority(replaceProfile: true);
+        Assert.Null(protectedLocal.Service.GetForOrder(protectedLocal.Current.Order.Id));
+        Assert.Equal("Unsynced local draft", protectedLocal.Runtime.DurableOrder?.Title);
     }
 
     private static void AlignCommissionIdentity(CenterOperationFixture fixture) =>
@@ -684,6 +705,7 @@ public sealed class HostedOrderProjectionStoreTests
         public bool SaveTradeOrderResult { get; set; } = true;
         public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
         public Action? BeforeSaveTradeCrafter { get; set; }
+        public void SeedDurableOrder(TradeOrder order) => DurableOrder = order;
         public void SaveRawSetting(string key, string value) => _settings[key] = value;
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) => InvokeAsync<TValue>(identifier, CancellationToken.None, args);
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args)

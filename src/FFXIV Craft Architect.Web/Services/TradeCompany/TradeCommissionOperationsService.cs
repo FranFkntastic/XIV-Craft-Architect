@@ -21,14 +21,18 @@ public sealed class TradeCommissionOperationsService(
     private sealed record OrderCommandAuthority(
         HostedOrderAuthorityScope Projection,
         HostedProfileConnectionSettings Connection);
+    private sealed record LinkedOwnerProjection(
+        HostedOrderAuthorityScope Authority,
+        CompanyCommissionOwnerProjection Projection);
     private readonly Dictionary<Guid, string> _errors = [];
+    private readonly Dictionary<Guid, LinkedOwnerProjection> _linkedOwnerProjections = [];
     private readonly HashSet<Guid> _missingCanonicalOwners = [];
     private readonly Dictionary<Guid, IReadOnlyList<TradeDiscordNotificationDiagnostic>>
         _notificationDiagnostics = [];
     private readonly Dictionary<Guid, string> _notificationErrors = [];
 
     public CompanyCommissionOwnerProjection? GetForOrder(Guid orderId) =>
-        hostedOrders.GetOwnerProjection(orderId);
+        GetCurrentLinkedProjection(orderId) ?? hostedOrders.GetOwnerProjection(orderId);
 
     public string? GetErrorForOrder(Guid orderId) =>
         _errors.GetValueOrDefault(orderId);
@@ -129,7 +133,7 @@ public sealed class TradeCommissionOperationsService(
         CancellationToken cancellationToken = default)
     {
         if (order.CompanyCommission == null ||
-            !CanPerformExternalAction(order, out _))
+            !CanLoadExternalProjection(out _))
         {
             return null;
         }
@@ -168,7 +172,7 @@ public sealed class TradeCommissionOperationsService(
         {
             return null;
         }
-        if (HasProtectedHostedOrderState(commissionId))
+        if (!CanLoadExternalProjection(out _))
         {
             return null;
         }
@@ -181,8 +185,7 @@ public sealed class TradeCommissionOperationsService(
                 companyId,
                 commissionId,
                 cancellationToken);
-            if (!await IsCurrentAuthorityAsync(authority) ||
-                HasProtectedHostedOrderState(commissionId))
+            if (!await IsCurrentAuthorityAsync(authority))
             {
                 return null;
             }
@@ -207,7 +210,7 @@ public sealed class TradeCommissionOperationsService(
                 return newer;
             }
 
-            var current = hostedOrders.Get(commissionId)?.OwnerProjection;
+            var current = GetForOrder(commissionId);
             if (current == null)
             {
                 return null;
@@ -230,13 +233,12 @@ public sealed class TradeCommissionOperationsService(
         Guid commissionId,
         CompanyCommissionOwnerProjection fetched)
     {
-        if (!await IsCurrentAuthorityAsync(authority) ||
-            HasProtectedHostedOrderState(commissionId))
+        if (!await IsCurrentAuthorityAsync(authority))
         {
             return null;
         }
 
-        var winner = hostedOrders.Get(commissionId)?.OwnerProjection;
+        var winner = GetForOrder(commissionId);
         if (winner == null ||
             winner.ObjectRevision.Value <= fetched.ObjectRevision.Value)
         {
@@ -1100,6 +1102,24 @@ public sealed class TradeCommissionOperationsService(
         CompanyCommissionOwnerProjection projection,
         bool allowStale = false)
     {
+        if (HasProtectedHostedOrderState(projection.Order.Id) ||
+            GetCurrentLinkedProjection(projection.Order.Id) != null)
+        {
+            var linkedAdoption = await ApplyLinkedProjectionAsync(authority, projection);
+            if (allowStale && linkedAdoption == HostedOrderCommittedProjectionResult.Stale)
+            {
+                return linkedAdoption;
+            }
+            if (linkedAdoption is not (
+                HostedOrderCommittedProjectionResult.Adopted or
+                HostedOrderCommittedProjectionResult.AlreadyCurrent))
+            {
+                throw new InvalidOperationException(
+                    $"The linked commission projection could not be applied because its authority is {linkedAdoption}.");
+            }
+            return linkedAdoption;
+        }
+
         var adoption = await hostedOrders.AdoptAndPersistCommittedOwnerAsync(
             authority.Projection,
             projection,
@@ -1143,8 +1163,66 @@ public sealed class TradeCommissionOperationsService(
         }
         _errors.Remove(projection.Order.Id);
         _missingCanonicalOwners.Remove(projection.Order.Id);
+        _linkedOwnerProjections.Remove(projection.Order.Id);
         appState.NotifyTradeOperationsDataChanged();
         return adoption;
+    }
+
+    private async Task<HostedOrderCommittedProjectionResult> ApplyLinkedProjectionAsync(
+        OrderCommandAuthority authority,
+        CompanyCommissionOwnerProjection projection)
+    {
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            return HostedOrderCommittedProjectionResult.ScopeChanged;
+        }
+
+        var current = GetCurrentLinkedProjection(projection.Order.Id);
+        if (current != null)
+        {
+            var currentCommission = RequireCommission(current);
+            var candidateCommission = RequireCommission(projection);
+            if (current.Order.CompanyProfileId != projection.Order.CompanyProfileId ||
+                currentCommission.CompanyId != candidateCommission.CompanyId ||
+                currentCommission.CommissionId != candidateCommission.CommissionId)
+            {
+                throw new InvalidOperationException(
+                    "The linked commission projection changed identity while local work was protected.");
+            }
+
+            if (projection.ObjectRevision.Value < current.ObjectRevision.Value)
+            {
+                return HostedOrderCommittedProjectionResult.Stale;
+            }
+            if (projection.ObjectRevision == current.ObjectRevision &&
+                projection.CompanyRevision.Value <= current.CompanyRevision.Value)
+            {
+                return HostedOrderCommittedProjectionResult.AlreadyCurrent;
+            }
+        }
+
+        _linkedOwnerProjections[projection.Order.Id] = new(
+            authority.Projection,
+            projection);
+        _errors.Remove(projection.Order.Id);
+        _missingCanonicalOwners.Remove(projection.Order.Id);
+        appState.NotifyTradeOperationsDataChanged();
+        return HostedOrderCommittedProjectionResult.Adopted;
+    }
+
+    private CompanyCommissionOwnerProjection? GetCurrentLinkedProjection(Guid orderId)
+    {
+        if (!_linkedOwnerProjections.TryGetValue(orderId, out var linked))
+        {
+            return null;
+        }
+        if (hostedOrders.IsCurrentAuthority(linked.Authority))
+        {
+            return linked.Projection;
+        }
+
+        _linkedOwnerProjections.Remove(orderId);
+        return null;
     }
 
     private async Task<bool> IsCurrentAuthorityAsync(OrderCommandAuthority authority)
@@ -1273,6 +1351,24 @@ public sealed class TradeCommissionOperationsService(
 
     private bool CanPerformExternalAction(TradeOrder order, out string reason)
     {
+        if (!CanLoadExternalProjection(out reason))
+        {
+            return false;
+        }
+
+        if (HasProtectedHostedOrderState(order.Id) &&
+            GetCurrentLinkedProjection(order.Id) == null)
+        {
+            reason = "Resolve the pending hosted order update before operating its commission.";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private bool CanLoadExternalProjection(out string reason)
+    {
         if (!profileSync.CurrentStatus.IsConnected)
         {
             reason = "Connect this browser in Settings before operating this company commission.";
@@ -1282,12 +1378,6 @@ public sealed class TradeCommissionOperationsService(
         if (!profileSync.CurrentStatus.HostReachable)
         {
             reason = profileSync.CurrentStatus.Message ?? "Profile Hosting is unavailable.";
-            return false;
-        }
-
-        if (HasProtectedHostedOrderState(order.Id))
-        {
-            reason = "Resolve the pending hosted order update before operating its commission.";
             return false;
         }
 
