@@ -61,6 +61,19 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
                 hasLocalDraftEditorChanges: true));
     }
 
+    [Fact]
+    public void CleanLocalDraftAcceptsTheHostedProjectionInPlace()
+    {
+        var snapshot = CreateSnapshot(SelectedOrderId);
+
+        Assert.Equal(
+            TradeOrderWorkspaceProjectionAction.RefreshReadModel,
+            Decide(
+                SelectedOrderId,
+                selectedOrderIsCanonical: false,
+                snapshot));
+    }
+
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -131,6 +144,12 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
             "FFXIV Craft Architect.Web",
             "Pages",
             "TradeOrders.razor.cs"));
+        var collaborationSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Pages",
+            "TradeOrders.Collaboration.cs"));
         var projectionStart = source.IndexOf(
             "private void ApplyHostedOrderProjectionState",
             StringComparison.Ordinal);
@@ -171,6 +190,10 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
         Assert.Contains("!HasCanonicalDraftDetailChanges", projectionBoundary, StringComparison.Ordinal);
         Assert.Contains("IsEditingCommissionTermsRevision", ownershipBoundary, StringComparison.Ordinal);
         Assert.Contains("IsPlanMutationTransactionRunning", ownershipBoundary, StringComparison.Ordinal);
+        Assert.Contains(
+            "_selectedOrder?.CompanyCommission is { } commission",
+            collaborationSource,
+            StringComparison.Ordinal);
     }
 
     private static TradeOrderWorkspaceProjectionAction Decide(
