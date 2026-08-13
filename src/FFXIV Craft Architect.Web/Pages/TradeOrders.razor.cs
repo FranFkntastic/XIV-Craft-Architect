@@ -59,6 +59,7 @@ public partial class TradeOrders
     private bool _isRefreshingLiveProcurement;
     private bool _isLoadingSelectedOrderSupplyPlan;
     private bool _selectedOrderPlanRestoreRetryRequested;
+    private int _selectedOrderPlanRestoreStaleRetryCount;
     private string? _selectedOrderPlanRestoreError;
     private long _selectedOrderPlanRestoreGeneration;
     private CancellationTokenSource? _selectedOrderPlanRestoreCancellation;

@@ -246,6 +246,7 @@ public partial class TradeOrders
         _selectedOrderPlanRestoreRetryRequested = true;
         if (!_isLoadingSelectedOrderSupplyPlan)
         {
+            _selectedOrderPlanRestoreStaleRetryCount = 0;
             _ = InvokeAsync(() => RestoreSelectedOrderPlanAsync());
         }
     }
@@ -254,6 +255,7 @@ public partial class TradeOrders
     {
         Interlocked.Increment(ref _selectedOrderPlanRestoreGeneration);
         _selectedOrderPlanRestoreRetryRequested = false;
+        _selectedOrderPlanRestoreStaleRetryCount = 0;
         _selectedOrderPlanRestoreError = null;
         var cancellation = Interlocked.Exchange(
             ref _selectedOrderPlanRestoreCancellation,
@@ -386,6 +388,7 @@ public partial class TradeOrders
                 cancellation.Token.ThrowIfCancellationRequested();
                 if (GetCurrentLiveProcurementSnapshot() != null)
                 {
+                    _selectedOrderPlanRestoreStaleRetryCount = 0;
                     return;
                 }
                 if (!IsCurrentPlanRestoreRequest(request) ||
@@ -406,16 +409,21 @@ public partial class TradeOrders
         }
         catch (WorkerSessionCommandRejectedException ex)
             when (string.Equals(
-                      ex.RejectionCode,
-                      "stale-revision",
-                      StringComparison.Ordinal) &&
-                  IsCurrentPlanRestoreRequest(request))
+                ex.RejectionCode,
+                "stale-revision",
+                StringComparison.Ordinal))
         {
-            // The rejected command already refreshed the Worker projection.
-            // Do not turn that self-induced Changed signal into a fresh retry
-            // budget. A later, independent Worker change may schedule another
-            // bounded restoration pass.
-            _selectedOrderPlanRestoreRetryRequested = false;
+            var disposition = TradeOrderPlanRestorePolicy.ResolveStaleRevision(
+                IsCurrentPlanRestoreRequest(request),
+                IsSelectedOrderLinkedPlanActive(),
+                _selectedOrderPlanRestoreStaleRetryCount);
+            _selectedOrderPlanRestoreError = null;
+            _selectedOrderPlanRestoreRetryRequested =
+                disposition == TradeOrderPlanStaleRevisionDisposition.RetryCurrentProjection;
+            if (_selectedOrderPlanRestoreRetryRequested)
+            {
+                _selectedOrderPlanRestoreStaleRetryCount++;
+            }
         }
         catch (Exception ex)
         {
