@@ -16,6 +16,17 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class CompanyMemberCommissionContractTests
 {
     [Fact]
+    public async Task PublicBriefUsesPublicationProfileWhenOrderIdentityIsDuplicated()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        await fixture.DuplicateOrderIdentityAsync();
+
+        var projection = await fixture.LoadPublicBriefAsync();
+
+        Assert.Equal(fixture.Order.Id, projection?.CommissionId);
+    }
+
+    [Fact]
     public async Task ActiveMemberClaimsOpenCommissionAndCapturesLinkedDiscordContact()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -600,6 +611,24 @@ public sealed class CompanyMemberCommissionContractTests
             return client.PostAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/claim",
                 null);
+        }
+
+        public Task<CompanyCommissionPublicBrief?> LoadPublicBriefAsync() =>
+            Commissions.LoadPublicAsync(
+                Order.CommissionPublication!.PublicId,
+                CancellationToken.None);
+
+        public async Task DuplicateOrderIdentityAsync()
+        {
+            var duplicate = await CreateAccountAsync("Duplicate order profile");
+            var put = await Profiles.PutObjectAsync(
+                duplicate.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                JsonSerializer.Serialize(Order, JsonOptions),
+                expectedRevision: 0,
+                ct: CancellationToken.None);
+            Assert.True(put.Success);
         }
 
         public Task<HttpResponseMessage> ReportProgressAsync(Account account, long projectionRevision) =>
