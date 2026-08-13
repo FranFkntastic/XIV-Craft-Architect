@@ -87,12 +87,33 @@ public sealed class CompanyHubContractTests
             operatorAccount.ProfileId,
             "operator");
 
+        var planId = Guid.NewGuid().ToString("D");
+        var savedAt = DateTime.UtcNow;
         var draft = new TradeOrder
         {
             CompanyProfileId = company.Id,
             Title = "Treated Spruce Lumber x1998",
-            Status = TradeOrderStatus.Draft
+            Status = TradeOrderStatus.Draft,
+            CraftPlanId = planId,
+            CraftPlanSavedAtUtc = savedAt,
+            CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated
         };
+        using (var planPut = await operatorClient.PutAsJsonAsync(
+                   $"/profile-host/objects/{ProfileSyncCollections.Plans}/{planId}",
+                   new ProfileSyncPutRequest
+                   {
+                       PayloadJson = ProfileSyncPlanPayloadCodec.Serialize(new ProfileSyncPlanSnapshot
+                       {
+                           Id = planId,
+                           SavedAt = savedAt,
+                           LinkedOrderId = draft.Id,
+                           PlanJson = "{\"recipe\":true}"
+                       }),
+                       ExpectedRevision = 0
+                   }))
+        {
+            planPut.EnsureSuccessStatusCode();
+        }
         using var sourcePut = await operatorClient.PutAsJsonAsync(
             $"/profile-host/objects/{ProfileSyncCollections.TradeOrders}/{draft.Id:D}",
             new ProfileSyncPutRequest
@@ -123,6 +144,17 @@ public sealed class CompanyHubContractTests
         Assert.Equal(draft.Title, JsonSerializer.Deserialize<TradeOrder>(
             firstResult!.OrderRecord.PayloadJson,
             ProfileSyncJson.CreateOptions())?.Title);
+        var canonicalPlan = await fixture.Profiles.LoadObjectAsync(
+            owner.ProfileId.ToString("D"),
+            ProfileSyncCollections.Plans,
+            planId,
+            CancellationToken.None);
+        Assert.NotNull(canonicalPlan);
+        Assert.Equal(
+            draft.Id,
+            ProfileSyncPlanPayloadCodec.Deserialize(
+                canonicalPlan!.PayloadJson,
+                planId).LinkedOrderId);
 
         draft.Title = "Conflicting replacement";
         using var changedPut = await operatorClient.PutAsJsonAsync(

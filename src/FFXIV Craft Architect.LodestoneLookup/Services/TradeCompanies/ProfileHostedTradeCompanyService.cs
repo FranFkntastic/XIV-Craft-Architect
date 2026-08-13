@@ -334,6 +334,16 @@ public sealed class ProfileHostedTradeCompanyService(
                 "Only an unpublished synchronized draft can be adopted into a company workspace.");
         }
 
+        var linkedPlan = await AdoptLinkedPlanDependencyAsync(
+            access,
+            hostProfileId,
+            sourceOrder,
+            cancellationToken);
+        if (linkedPlan != null)
+        {
+            return linkedPlan;
+        }
+
         return await PutRecordAsync(
             access,
             TradeCompanyRecordKinds.Order,
@@ -342,6 +352,62 @@ public sealed class ProfileHostedTradeCompanyService(
             CompanyRecordRevision.None,
             idempotencyKey,
             cancellationToken);
+    }
+
+    private async Task<TradeCompanyMutationResult?> AdoptLinkedPlanDependencyAsync(
+        TradeCompanyAccessContext access,
+        string hostProfileId,
+        TradeOrder sourceOrder,
+        CancellationToken cancellationToken)
+    {
+        if (sourceOrder.CraftPlanLinkKind != TradeOrderCraftPlanLinkKind.OrderGenerated)
+        {
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(sourceOrder.CraftPlanId) ||
+            !sourceOrder.CraftPlanSavedAtUtc.HasValue)
+        {
+            return Rejected(
+                "source_plan_missing",
+                "The synchronized operator draft does not retain its exact generated plan revision.");
+        }
+
+        var sourcePlan = await profiles.LoadObjectAsync(
+            access.GrantId.ToString("D"),
+            ProfileSyncCollections.Plans,
+            sourceOrder.CraftPlanId,
+            cancellationToken);
+        if (sourcePlan is not { Deleted: false })
+        {
+            return Rejected(
+                "source_plan_missing",
+                "The synchronized operator draft's generated plan is unavailable.");
+        }
+
+        var plan = ProfileSyncPlanPayloadCodec.Deserialize(
+            sourcePlan.PayloadJson,
+            sourceOrder.CraftPlanId);
+        if (plan.LinkedOrderId != sourceOrder.Id ||
+            plan.SavedAt != sourceOrder.CraftPlanSavedAtUtc.Value)
+        {
+            return Rejected(
+                "source_plan_mismatch",
+                "The synchronized operator draft's generated plan does not match its saved revision.");
+        }
+
+        var adopted = await profiles.PutObjectAsync(
+            hostProfileId,
+            ProfileSyncCollections.Plans,
+            sourceOrder.CraftPlanId,
+            sourcePlan.PayloadJson,
+            expectedRevision: 0,
+            ct: cancellationToken);
+        return adopted.Success
+            ? null
+            : Rejected(
+                adopted.ErrorCode ?? "canonical_plan_conflict",
+                adopted.ErrorMessage ??
+                "The company already has a different generated plan with this identity.");
     }
 
     public async Task<CompanyRecordRevision> MirrorOrderToGrantAsync(
