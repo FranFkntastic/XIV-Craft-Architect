@@ -86,6 +86,49 @@ public sealed class ProfileSyncAuthorityTests
     }
 
     [Fact]
+    public async Task AuthenticatedConnectionPersistsBeforePublishingOneMountedShellTransition()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var runtime = new SettingsJsRuntime([]);
+        var options = new ProfileHostClientOptions(CanonicalHost);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(indexedDb, options);
+        var sync = new ProfileSyncService(
+            new ProfileHostClient(
+                new HttpClient(new ProfileResponseHandler(HttpStatusCode.OK, profileId)),
+                options),
+            localState,
+            new WebSettingsService(indexedDb),
+            new HostedOrderProjectionStore(),
+            Array.Empty<IProfileSyncCollectionAdapter>());
+        var transitionCount = 0;
+        HostedProfileConnectionSettings? observed = null;
+        sync.ConnectionChanged += () =>
+        {
+            transitionCount++;
+            observed = localState.LoadConnectionSettingsAsync().GetAwaiter().GetResult();
+        };
+
+        await sync.AdoptAuthenticatedConnectionAsync(new HostedProfileConnectionSettings
+        {
+            HostUrl = CanonicalHost,
+            AccessKey = "cap_authenticated-browser",
+            RememberAccessKey = true,
+            ConnectedProfileId = profileId,
+            ConnectedProfileName = "They",
+            ConnectedProfileMetadataRevision = 12
+        });
+
+        Assert.Equal(1, transitionCount);
+        Assert.NotNull(observed);
+        Assert.Equal(profileId, observed.ProfileScopeId);
+        Assert.Equal("cap_authenticated-browser", observed.AccessKey);
+        Assert.Equal("They", observed.ConnectedProfileName);
+        Assert.Equal(ProfileSyncStage.ReadingLocalState, sync.CurrentStatus.Stage);
+        Assert.Equal(profileId, sync.CurrentStatus.ProfileId);
+    }
+
+    [Fact]
     public void CommissionedLocalResidueRemainsVisibleButOutsideCanonicalOrders()
     {
         var companyId = Guid.NewGuid();

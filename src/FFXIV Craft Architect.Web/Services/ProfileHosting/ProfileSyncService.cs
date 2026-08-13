@@ -1740,6 +1740,46 @@ public sealed class ProfileSyncService
             ct);
     }
 
+    public Task AdoptAuthenticatedConnectionAsync(
+        HostedProfileConnectionSettings settings,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var snapshot = settings.Snapshot();
+        return RunSerializedAsync(
+            () => AdoptAuthenticatedConnectionCoreAsync(snapshot),
+            ct);
+    }
+
+    private async Task AdoptAuthenticatedConnectionCoreAsync(
+        HostedProfileConnectionSettings settings)
+    {
+        var profileId = settings.ProfileScopeId;
+        if (!settings.IsConfigured || profileId == null)
+        {
+            throw new InvalidOperationException(
+                "A verified hosted profile ID, host URL, and access key are required.");
+        }
+
+        await _localState.SaveConnectionSettingsAsync(settings);
+        _pendingSaves.Clear();
+        _conflicts.Clear();
+        _pendingSavesConnectionScopeId = null;
+        SetStatus(new ProfileSyncStatus(
+            true,
+            false,
+            0,
+            0,
+            0,
+            null,
+            "Connecting account")
+        {
+            ProfileId = profileId,
+            Stage = ProfileSyncStage.ReadingLocalState
+        });
+        ConnectionChanged?.Invoke();
+    }
+
     public async Task<ProfileSyncBootstrapPreview> PreviewFirstConnectAsync(
         HostedProfileConnectionSettings settings,
         CancellationToken ct = default)
