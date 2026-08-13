@@ -1575,6 +1575,15 @@
             var package = JsonSerializer.Deserialize<TradeCompanyProfilePackage>(json, CompanyPackageJsonOptions)
                 ?? throw new InvalidOperationException("The selected company profile file was empty.");
             var imported = await TradeOperationsPersistence.ImportCompanyProfilePackageAsync(package, DateTime.UtcNow);
+            await ProfileSync.QueueLocalSaveAsync(
+                ProfileSyncCollections.TradeCompanyProfiles,
+                imported.Profile.Id.ToString("D"));
+            foreach (var crafter in imported.Crafters)
+            {
+                await ProfileSync.QueueLocalSaveAsync(
+                    ProfileSyncCollections.TradeCrafters,
+                    crafter.Id.ToString("D"));
+            }
             _companyProfile = imported.Profile;
             _companyCrafterCount = imported.Crafters.Count;
             ApplyCompanyProfileFields(imported.Profile);

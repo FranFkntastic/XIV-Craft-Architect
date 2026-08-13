@@ -157,6 +157,13 @@ else
             {
                 await TradeOperationsPersistence.SelectWorkspaceCompanyAsync(_activeCompany.Id);
             }
+            if (_activeCompany?.LocalProfile != null && activeLocal?.Id != _activeCompany.Id)
+            {
+                // The hosted workspace selector and the local editing selector describe the
+                // same company. Reconcile the stale local pointer in place so Settings and
+                // Trade surfaces immediately read the authority the global picker presents.
+                await TradeOperationsPersistence.SelectCompanyProfileAsync(_activeCompany.Id);
+            }
         }
         catch (Exception exception)
         {
