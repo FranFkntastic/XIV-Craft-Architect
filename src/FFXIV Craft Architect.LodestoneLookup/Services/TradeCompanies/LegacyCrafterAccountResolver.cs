@@ -38,6 +38,32 @@ public sealed class LegacyCrafterAccountResolver(
         Guid accountProfileId,
         CancellationToken cancellationToken = default)
     {
+        try
+        {
+            await DiscoverCommittedDiscordBindingsCoreAsync(
+                companyId,
+                accountProfileId,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Legacy crafter discovery for company {CompanyId}, account {AccountProfileId} was deferred.",
+                companyId,
+                accountProfileId);
+        }
+    }
+
+    private async Task DiscoverCommittedDiscordBindingsCoreAsync(
+        CompanyId companyId,
+        Guid accountProfileId,
+        CancellationToken cancellationToken)
+    {
         var identity = await identities.LoadByProfileAsync(accountProfileId, cancellationToken);
         if (identity == null)
         {
@@ -124,13 +150,27 @@ public sealed class LegacyCrafterAccountResolver(
             companyId,
             accountProfileId,
             cancellationToken);
-        var authorized = (await memberships.LoadCrafterBindingsAsync(
+        var authorized = new HashSet<Guid> { accountProfileId };
+        try
+        {
+            authorized.UnionWith((await memberships.LoadCrafterBindingsAsync(
+                    companyId,
+                    cancellationToken))
+                .Where(item => item.AccountProfileId == accountProfileId)
+                .Select(item => item.LegacyCrafterId));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Legacy crafter bindings for company {CompanyId}, account {AccountProfileId} were unavailable; direct account assignments remain authorized.",
                 companyId,
-                cancellationToken))
-            .Where(item => item.AccountProfileId == accountProfileId)
-            .Select(item => item.LegacyCrafterId)
-            .Append(accountProfileId)
-            .ToHashSet();
+                accountProfileId);
+        }
         return new LegacyCrafterAccountScope(accountProfileId, authorized);
     }
 
