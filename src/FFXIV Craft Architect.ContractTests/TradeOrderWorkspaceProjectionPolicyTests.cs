@@ -339,6 +339,18 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
 
         Assert.True(readinessCheck >= 0 && consumeHint > readinessCheck);
         Assert.Contains(
+            "if (_isResolvingPendingNotificationNavigation)",
+            navigationBoundary,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "_pendingNotificationNavigationRetryRequested = true",
+            navigationBoundary,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "while (_pendingNotificationNavigationRetryRequested &&",
+            navigationBoundary,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "await SelectPendingNavigationOrderAsync()",
             statusBoundary,
             StringComparison.Ordinal);

@@ -482,6 +482,31 @@ public partial class TradeOrders
 
     private async Task SelectPendingNavigationOrderAsync()
     {
+        if (_isResolvingPendingNotificationNavigation)
+        {
+            _pendingNotificationNavigationRetryRequested = true;
+            return;
+        }
+
+        _isResolvingPendingNotificationNavigation = true;
+        try
+        {
+            do
+            {
+                _pendingNotificationNavigationRetryRequested = false;
+                await SelectPendingNavigationOrderCoreAsync();
+            }
+            while (_pendingNotificationNavigationRetryRequested &&
+                   _pendingNotificationNavigation != null);
+        }
+        finally
+        {
+            _isResolvingPendingNotificationNavigation = false;
+        }
+    }
+
+    private async Task SelectPendingNavigationOrderCoreAsync()
+    {
         if (_pendingNotificationNavigation is not { } hint)
         {
             return;

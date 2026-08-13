@@ -89,6 +89,8 @@ public partial class TradeOrders
     private string _manualNote = string.Empty;
     private string? _loadError;
     private TradeOrderNotificationNavigationHint? _pendingNotificationNavigation;
+    private bool _isResolvingPendingNotificationNavigation;
+    private bool _pendingNotificationNavigationRetryRequested;
     private Guid? _focusedTimelineEventId;
     private Guid? _pendingTimelineFocusEventId;
     private bool _isArchiveCollapsed = true;
