@@ -496,6 +496,11 @@ public partial class TradeOrders
         {
             return;
         }
+        if (hint.ActivityId.HasValue &&
+            !await CommissionOperations.CanResolveNotificationNavigationAsync())
+        {
+            return;
+        }
         _pendingNotificationNavigation = null;
 
         var visibleOrders = VisibleOrders

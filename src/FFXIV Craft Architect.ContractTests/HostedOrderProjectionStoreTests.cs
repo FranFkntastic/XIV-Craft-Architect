@@ -157,6 +157,33 @@ public sealed class HostedOrderProjectionStoreTests
 
     private static async Task DirectNotificationHydratesMissingOrder()
     {
+        var connecting = await CenterOperationFixture.CreateAsync(publishOwner: false);
+        AlignCommissionIdentity(connecting);
+        connecting.SetProfileStatus(new ProfileSyncStatus(
+            IsConnected: false,
+            HostReachable: false,
+            LastSyncRevision: 0,
+            PendingCount: 0,
+            ConflictCount: 0,
+            LastSyncedAtUtc: null,
+            Message: "Connecting")
+        {
+            ProfileId = connecting.Store.RestoreState.ProfileId,
+            Stage = ProfileSyncStage.DownloadingChanges
+        });
+        Assert.False(await connecting.Service.CanResolveNotificationNavigationAsync());
+        Assert.Null(await connecting.Service.ResolveNotificationNavigationAsync(
+            connecting.Current.Order.Id));
+        Assert.Null(connecting.Handler.LastRequestUri);
+
+        connecting.SetProfileStatus(ReadyStatus(
+            connecting.Store.RestoreState.ProfileId!,
+            revision: 4));
+        Assert.True(await connecting.Service.CanResolveNotificationNavigationAsync());
+        Assert.NotNull(await connecting.Service.ResolveNotificationNavigationAsync(
+            connecting.Current.Order.Id));
+        Assert.NotNull(connecting.Handler.LastRequestUri);
+
         var fixture = await CenterOperationFixture.CreateAsync(publishOwner: false);
         AlignCommissionIdentity(fixture);
 
@@ -660,6 +687,12 @@ public sealed class HostedOrderProjectionStoreTests
                 Assert.True(Store.TryPublishOwner(Owner(winnerTitle, 1, 1)));
             }
         }
+        public void SetProfileStatus(ProfileSyncStatus status) =>
+            typeof(ProfileSyncService)
+                .GetProperty(
+                    nameof(ProfileSyncService.CurrentStatus),
+                    BindingFlags.Instance | BindingFlags.Public)!
+                .SetValue(ProfileSync, status);
         public Task<TradeCommissionOperatorResult> InvokeAsync(CenterAuthorityOperation operation) => operation switch
         {
             CenterAuthorityOperation.Command => Service.AcceptDeliveryAsync(Current),
