@@ -286,6 +286,7 @@ public partial class TradeOrders
                  _companyProfile != null)
         {
             var hosted = HostedOrders.Get(_selectedOrder.Id);
+            var linkedOwner = CommissionOperations.GetForOrder(_selectedOrder.Id);
             if (hosted is { Deleted: false, Order: not null } &&
                 hosted.CompanyProfileId == _companyProfile.Id)
             {
@@ -297,6 +298,14 @@ public partial class TradeOrders
                 {
                     SelectOrder(hosted.OwnerProjection?.Order ?? hosted.Order);
                 }
+            }
+            else if (linkedOwner?.Order.CompanyProfileId == _companyProfile.Id)
+            {
+                var selectedTab = _activeOpsTab;
+                var planExpanded = _isPlanPaneExpanded;
+                SelectOrder(linkedOwner.Order);
+                _activeOpsTab = selectedTab;
+                _isPlanPaneExpanded = planExpanded;
             }
             else if (_selectedOrder.CompanyCommission != null)
             {
