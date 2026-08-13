@@ -36,6 +36,7 @@ public partial class TradeOrders
     private List<TradePayrollWorkflowDraft> _payrollDrafts = [];
     private TradeOrder? _pendingImport;
     private TradeOrder? _selectedOrder;
+    private long? _selectedOrderProjectionRevision;
     private HostedOrderProjectionSnapshot? _selectedLocalHostedCollision;
     private bool _showNewOrderPanel;
     private string _newOrderTitle = string.Empty;
@@ -461,6 +462,7 @@ public partial class TradeOrders
             _orderHostedRevisions.Clear();
             _payrollDrafts = [];
             _selectedOrder = null;
+            _selectedOrderProjectionRevision = null;
             _loadError = ex.Message;
             Snackbar.Add("Trade operations storage is unavailable.", Severity.Error);
         }
@@ -499,26 +501,16 @@ public partial class TradeOrders
     private void OnHostedOrderRestoreStateChanged(HostedOrderRestoreState state) =>
         _ = InvokeAsync(() => ApplyHostedOrderRestoreState(state));
 
-    private bool ShouldPreserveCanonicalEditor()
-    {
-        if (HasSelectedLocalDraftEditorChanges)
-        {
-            return true;
-        }
-
-        if (IsEditingCommissionTermsRevision)
-        {
-            return _commissionTermsRevisionDirty ||
-                   HasCanonicalDraftDetailChanges ||
-                   !string.IsNullOrWhiteSpace(_commissionTermsRevisionReason);
-        }
-
-        return CanEditCanonicalDraft &&
-               (HasSelectedOrderOutputChanges ||
-                HasCanonicalDraftDetailChanges ||
-                _selectedOrderPaymentTermsDirty ||
-                HasSelectedOrderDetailChanges());
-    }
+    private bool OwnsSelectedWorkspaceWorkingState()
+        => TradeOrderWorkspaceProjectionPolicy.OwnsWorkingState(
+            HasSelectedLocalDraftEditorChanges,
+            IsEditingCommissionTermsRevision,
+            IsPlanMutationTransactionRunning,
+            CanEditCanonicalDraft,
+            HasSelectedOrderOutputChanges,
+            HasCanonicalDraftDetailChanges,
+            _selectedOrderPaymentTermsDirty,
+            HasSelectedOrderDetailChanges());
 
     private bool HasSelectedOrderDetailChanges() =>
         _selectedOrder != null &&
@@ -617,6 +609,7 @@ public partial class TradeOrders
         _pendingImport = result.Order;
         _newOrderTitle = result.Order.Title;
         _selectedOrder = null;
+        _selectedOrderProjectionRevision = null;
         _showNewOrderPanel = false;
         AppState.SelectTradeOrder(null);
         ClearSelectedOrderNavigation();
@@ -634,6 +627,7 @@ public partial class TradeOrders
         ClearLiveProcurementSnapshot();
         _pendingImport = null;
         _selectedOrder = null;
+        _selectedOrderProjectionRevision = null;
         _showNewOrderPanel = true;
         _activeOpsTab = 0;
         AppState.SelectTradeOrder(null);
