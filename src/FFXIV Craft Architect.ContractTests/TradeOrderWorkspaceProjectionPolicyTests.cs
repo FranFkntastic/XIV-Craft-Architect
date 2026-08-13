@@ -294,6 +294,68 @@ public sealed class TradeOrderWorkspaceProjectionPolicyTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void NotificationHintWaitsForProfileSyncAndRetriesWhenReady()
+    {
+        var repositoryRoot = LocateRepositoryRoot();
+        var selectionSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Pages",
+            "TradeOrders.Selection.cs"));
+        var procurementSource = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Pages",
+            "TradeOrders.Procurement.cs"));
+        var navigationStart = selectionSource.IndexOf(
+            "private async Task SelectPendingNavigationOrderAsync",
+            StringComparison.Ordinal);
+        var navigationEnd = selectionSource.IndexOf(
+            "private bool IsAttentionGroupCollapsed",
+            navigationStart,
+            StringComparison.Ordinal);
+        var statusStart = procurementSource.IndexOf(
+            "private void OnProfileSyncStatusChanged",
+            StringComparison.Ordinal);
+        var statusEnd = procurementSource.IndexOf(
+            "private void OnWorkerProjectionChangedForPlanRestoration",
+            statusStart,
+            StringComparison.Ordinal);
+
+        Assert.True(navigationStart >= 0 && navigationEnd > navigationStart);
+        Assert.True(statusStart >= 0 && statusEnd > statusStart);
+        var navigationBoundary = selectionSource[navigationStart..navigationEnd];
+        var statusBoundary = procurementSource[statusStart..statusEnd];
+        var readinessCheck = navigationBoundary.IndexOf(
+            "!await CommissionOperations.CanResolveNotificationNavigationAsync()",
+            StringComparison.Ordinal);
+        var consumeHint = navigationBoundary.IndexOf(
+            "_pendingNotificationNavigation = null",
+            readinessCheck,
+            StringComparison.Ordinal);
+
+        Assert.True(readinessCheck >= 0 && consumeHint > readinessCheck);
+        Assert.Contains(
+            "if (_isResolvingPendingNotificationNavigation)",
+            navigationBoundary,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "_pendingNotificationNavigationRetryRequested = true",
+            navigationBoundary,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "while (_pendingNotificationNavigationRetryRequested &&",
+            navigationBoundary,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "await SelectPendingNavigationOrderAsync()",
+            statusBoundary,
+            StringComparison.Ordinal);
+    }
+
     private static TradeOrderWorkspaceProjectionAction Decide(
         Guid? selectedOrderId,
         bool selectedOrderIsCanonical,

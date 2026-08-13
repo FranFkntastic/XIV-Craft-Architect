@@ -35,6 +35,24 @@ public sealed class TradeCommissionOperationsService(
     public CompanyCommissionOwnerProjection? GetForOrder(Guid orderId) =>
         GetCurrentLinkedProjection(orderId) ?? hostedOrders.GetOwnerProjection(orderId);
 
+    public async Task<bool> CanResolveNotificationNavigationAsync()
+    {
+        if (!CanLoadExternalProjection(out _))
+        {
+            return false;
+        }
+
+        try
+        {
+            await CaptureOrderAuthorityAsync();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     public void DismissLinkedProjectionForLocalOrder(Guid orderId)
     {
         if (_linkedOwnerProjections.TryGetValue(orderId, out var linked) &&
