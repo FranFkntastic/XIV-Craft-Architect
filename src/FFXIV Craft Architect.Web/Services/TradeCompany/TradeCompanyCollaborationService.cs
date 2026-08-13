@@ -555,6 +555,10 @@ public sealed class TradeCompanyCollaborationService(
         OrderCommandAuthority authority,
         CancellationToken cancellationToken)
     {
+        await EnsureLinkedPlanIsHostedAsync(
+            order,
+            authority,
+            cancellationToken);
         var sourceRevision = await ResolveHostedOrderRevisionAsync(
             order,
             authority,
@@ -582,6 +586,65 @@ public sealed class TradeCompanyCollaborationService(
                 "The hosted order authority changed while company adoption was in progress.");
         }
         return adopted.RecordRevision.Value;
+    }
+
+    private async Task EnsureLinkedPlanIsHostedAsync(
+        TradeOrder order,
+        OrderCommandAuthority authority,
+        CancellationToken cancellationToken)
+    {
+        if (order.CraftPlanLinkKind != TradeOrderCraftPlanLinkKind.OrderGenerated)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(order.CraftPlanId) ||
+            !order.CraftPlanSavedAtUtc.HasValue)
+        {
+            throw new InvalidOperationException(
+                "The commission's exact generated plan revision is unavailable.");
+        }
+
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The hosted order authority changed before its linked plan could be verified.");
+        }
+
+        var profileId = authority.Connection.ProfileScopeId
+            ?? throw new InvalidOperationException(
+                "Linked-plan verification requires a captured profile authority.");
+        var planId = order.CraftPlanId;
+        var revision = await localState.LoadObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.Plans,
+            planId);
+        var pending = profileSync.PendingSaves.Any(item =>
+            string.Equals(item.Collection, ProfileSyncCollections.Plans, StringComparison.Ordinal) &&
+            string.Equals(item.ObjectId, planId, StringComparison.Ordinal));
+        var conflict = profileSync.Conflicts.Any(item =>
+            string.Equals(item.Collection, ProfileSyncCollections.Plans, StringComparison.Ordinal) &&
+            string.Equals(item.ObjectId, planId, StringComparison.Ordinal));
+        if (revision > 0 && !pending && !conflict)
+        {
+            return;
+        }
+
+        var publication = await profileSync.PublishLocalObjectAsync(
+            ProfileSyncCollections.Plans,
+            planId,
+            authority.Connection,
+            cancellationToken);
+        if (!publication.Published)
+        {
+            throw new InvalidOperationException(
+                $"The exact generated plan could not be synchronized before publication. {publication.Message}");
+        }
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The hosted order authority changed while its linked plan was being synchronized.");
+        }
     }
 
     private async Task RequireCurrentPublicationAuthorityAsync(
