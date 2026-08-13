@@ -251,7 +251,23 @@ public sealed class ProfileSyncService
         HostedProfileConnectionSettings capturedAuthority,
         CancellationToken ct)
     {
-        await QueueLocalSaveCoreAsync(collection, objectId, ct, capturedAuthority);
+        var adapter = GetAdapter(collection);
+        if (await LoadLocalObjectAsync(adapter, objectId, ct) == null)
+        {
+            return new ProfileSyncPublicationResult(
+                Published: false,
+                Pending: false,
+                Conflict: false,
+                Revision: 0,
+                Message: "The exact local object is unavailable.");
+        }
+
+        await QueueLocalSaveCoreAsync(
+            collection,
+            objectId,
+            ct,
+            capturedAuthority,
+            allowSuppressed: true);
         var current = await _localState.LoadConnectionSettingsAsync();
         if (!IsSameConnectionAuthority(current, capturedAuthority) ||
             current.ProfileScopeId is not { } profileId)
@@ -1626,9 +1642,10 @@ public sealed class ProfileSyncService
         string collection,
         string objectId,
         CancellationToken ct,
-        HostedProfileConnectionSettings? capturedAuthority = null)
+        HostedProfileConnectionSettings? capturedAuthority = null,
+        bool allowSuppressed = false)
     {
-        if (IsSuppressed)
+        if (IsSuppressed && !allowSuppressed)
         {
             return;
         }

@@ -674,6 +674,11 @@ public sealed class ProfileSyncDeletionProjectionTests
             ProfileSyncCollections.TradeOrders,
             Key(order),
             4);
+        await localState.SaveObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.Plans,
+            planId,
+            5);
         var planPutCount = 0;
         var adoptionCount = 0;
         HttpResponseMessage Respond(HttpRequestMessage request)
@@ -733,10 +738,14 @@ public sealed class ProfileSyncDeletionProjectionTests
             profileSync,
             store);
 
-        var ownership = await collaboration.GetPublicationOwnershipAsync(order);
-        await collaboration.PublishPortableLinkAsync(
-            order,
-            new CommissionBriefDocument());
+        TradeCompanyPublicationOwnership? ownership;
+        using (profileSync.SuppressNotifications())
+        {
+            ownership = await collaboration.GetPublicationOwnershipAsync(order);
+            await collaboration.PublishPortableLinkAsync(
+                order,
+                new CommissionBriefDocument());
+        }
 
         Check(
             () => Assert.NotNull(ownership),
