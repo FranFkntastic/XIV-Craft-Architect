@@ -773,6 +773,15 @@ public partial class TradeOrders
             : GetCurrentCommissionProjection(result.Projection);
         if (committed == null)
         {
+            if (_selectedOrder?.CompanyCommission == null &&
+                _selectedOrder?.Id == result.Projection?.Order.Id)
+            {
+                if (!string.IsNullOrWhiteSpace(successMessage))
+                {
+                    Snackbar.Add(successMessage, Severity.Success);
+                }
+                return;
+            }
             Snackbar.Add(
                 "The hosted order authority changed before the committed order could be displayed.",
                 Severity.Error);
@@ -789,7 +798,7 @@ public partial class TradeOrders
     private CompanyCommissionOwnerProjection? GetCurrentCommissionProjection(
         CompanyCommissionOwnerProjection candidate)
     {
-        var current = HostedOrders.GetOwnerProjection(candidate.Order.Id);
+        var current = CommissionOperations.GetForOrder(candidate.Order.Id);
         return current != null &&
                current.Order.CompanyProfileId == candidate.Order.CompanyProfileId &&
                current.ObjectRevision.Value >= candidate.ObjectRevision.Value

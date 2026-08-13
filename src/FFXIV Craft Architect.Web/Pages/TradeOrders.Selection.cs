@@ -360,6 +360,10 @@ public partial class TradeOrders
             !string.IsNullOrWhiteSpace(_selectedOrder?.CraftPlanId) &&
             string.Equals(_selectedOrder.CraftPlanId, order.CraftPlanId, StringComparison.Ordinal) &&
             _selectedOrder.CraftPlanSavedAtUtc == order.CraftPlanSavedAtUtc;
+        if (order.CompanyCommission == null)
+        {
+            CommissionOperations.DismissLinkedProjectionForLocalOrder(order.Id);
+        }
         _selectedLocalHostedCollision = null;
         if (!isSameLinkedPlan)
         {

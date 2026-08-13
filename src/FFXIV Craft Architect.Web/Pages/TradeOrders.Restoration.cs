@@ -394,6 +394,7 @@ public partial class TradeOrders
                  _companyProfile != null)
         {
             var hosted = HostedOrders.Get(_selectedOrder.Id);
+            var linkedOwner = CommissionOperations.GetForOrder(_selectedOrder.Id);
             if (hosted is { Deleted: false, Order: not null } &&
                 hosted.CompanyProfileId == _companyProfile.Id)
             {
@@ -408,7 +409,8 @@ public partial class TradeOrders
                     ApplyHostedOrderProjectionState(hosted);
                 }
             }
-            else if (_selectedOrder.CompanyCommission != null)
+            else if (_selectedOrder.CompanyCommission != null &&
+                     linkedOwner?.Order.CompanyProfileId != _companyProfile.Id)
             {
                 ClearUnavailableSelectedOrder(
                     "That device-only order is stored separately from the hosted workspace.");

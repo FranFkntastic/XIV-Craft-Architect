@@ -236,15 +236,117 @@ public sealed class HostedOrderProjectionStoreTests
 
         var protectedLocal = await CenterOperationFixture.CreateAsync(publishOwner: false);
         AlignCommissionIdentity(protectedLocal);
+        var localDraft = TradeOrderWorkflow.CopyOrder(protectedLocal.Current.Order);
+        localDraft.Title = "Unsynced local draft";
+        localDraft.CompanyCommission = null;
+        protectedLocal.Runtime.SeedDurableOrder(localDraft);
         Assert.IsType<List<ProfileSyncPendingSave>>(protectedLocal.ProfileSync.PendingSaves)
             .Add(new(ProfileSyncCollections.TradeOrders, protectedLocal.Current.Order.Id.ToString("D")));
-        var rejectedPending = await protectedLocal.Service.ResolveNotificationNavigationAsync(
+        var resolvedPending = await protectedLocal.Service.ResolveNotificationNavigationAsync(
             protectedLocal.Current.Order.CompanyProfileId,
             protectedLocal.Current.Order.Id);
-        Assert.Null(rejectedPending);
-        Assert.Null(protectedLocal.Handler.LastRequestUri);
+
+        Assert.NotNull(resolvedPending);
+        Assert.NotNull(protectedLocal.Handler.LastRequestUri);
         Assert.Null(protectedLocal.Store.Get(protectedLocal.Current.Order.Id));
-        Assert.Null(protectedLocal.Runtime.DurableOrder);
+        Assert.Equal("Unsynced local draft", protectedLocal.Runtime.DurableOrder?.Title);
+        Assert.Null(protectedLocal.Runtime.DurableOrder?.CompanyCommission);
+        Assert.Same(resolvedPending, protectedLocal.Service.GetForOrder(protectedLocal.Current.Order.Id));
+
+        var committed = protectedLocal.Owner("Canonical after command", 5, 9);
+        protectedLocal.Handler.Projection = committed;
+        var command = await protectedLocal.Service.AcceptDeliveryAsync(resolvedPending);
+        Assert.True(command.Success);
+        Assert.Equal(5, protectedLocal.Service.GetForOrder(protectedLocal.Current.Order.Id)?.ObjectRevision.Value);
+        Assert.Equal("Canonical after command", protectedLocal.Service.GetForOrder(protectedLocal.Current.Order.Id)?.Order.Title);
+        Assert.Null(protectedLocal.Store.Get(protectedLocal.Current.Order.Id));
+        Assert.Equal("Unsynced local draft", protectedLocal.Runtime.DurableOrder?.Title);
+        Assert.Null(protectedLocal.Runtime.DurableOrder?.CompanyCommission);
+
+        Assert.True(Assert.IsType<List<ProfileSyncPendingSave>>(protectedLocal.ProfileSync.PendingSaves)
+            .RemoveAll(item => item.ObjectId == protectedLocal.Current.Order.Id.ToString("D")) > 0);
+        var afterProtection = protectedLocal.Owner("Canonical after protection", 6, 10);
+        protectedLocal.Handler.Projection = afterProtection;
+        var resolvedAfterProtection = await protectedLocal.Service.ResolveNotificationNavigationAsync(
+            protectedLocal.Current.Order.CompanyProfileId,
+            protectedLocal.Current.Order.Id);
+        Assert.Equal(6, resolvedAfterProtection?.ObjectRevision.Value);
+        Assert.Null(protectedLocal.Store.Get(protectedLocal.Current.Order.Id));
+        Assert.Equal("Unsynced local draft", protectedLocal.Runtime.DurableOrder?.Title);
+
+        protectedLocal.Runtime.SeedDurableOrder(null);
+        var afterCollision = protectedLocal.Owner("Canonical after collision", 7, 11);
+        protectedLocal.Handler.Projection = afterCollision;
+        var resolvedAfterCollision = await protectedLocal.Service.ResolveNotificationNavigationAsync(
+            protectedLocal.Current.Order.CompanyProfileId,
+            protectedLocal.Current.Order.Id);
+        Assert.Equal(7, resolvedAfterCollision?.ObjectRevision.Value);
+        Assert.Same(
+            resolvedAfterCollision,
+            protectedLocal.Store.Get(protectedLocal.Current.Order.Id)?.OwnerProjection);
+        Assert.Equal("Canonical after collision", protectedLocal.Runtime.DurableOrder?.Title);
+
+        protectedLocal.ReplaceAuthority(replaceProfile: true);
+        Assert.Null(protectedLocal.Service.GetForOrder(protectedLocal.Current.Order.Id));
+        Assert.Equal("Canonical after collision", protectedLocal.Runtime.DurableOrder?.Title);
+
+        var newerHosted = await CreateProtectedLinkedFixtureAsync();
+        var newerHostedProjection = newerHosted.Owner("Newer hosted owner", 6, 10);
+        Assert.True(newerHosted.Store.TryPublishOwner(newerHostedProjection));
+        Assert.Same(
+            newerHostedProjection,
+            newerHosted.Service.GetForOrder(newerHosted.Current.Order.Id));
+
+        var missingLinked = await CreateProtectedLinkedFixtureAsync();
+        missingLinked.Handler.OwnerMissing = true;
+        await missingLinked.Service.RefreshAsync(
+            missingLinked.Service.GetForOrder(missingLinked.Current.Order.Id)!.Order);
+        Assert.Null(missingLinked.Service.GetForOrder(missingLinked.Current.Order.Id));
+        Assert.True(missingLinked.Service.IsCanonicalOwnerMissing(missingLinked.Current.Order.Id));
+        Assert.Equal("Unsynced local draft", missingLinked.Runtime.DurableOrder?.Title);
+
+        var dismissedLinked = await CreateProtectedLinkedFixtureAsync();
+        dismissedLinked.Service.DismissLinkedProjectionForLocalOrder(
+            dismissedLinked.Current.Order.Id);
+        Assert.Null(dismissedLinked.Service.GetForOrder(dismissedLinked.Current.Order.Id));
+        Assert.Equal("Unsynced local draft", dismissedLinked.Runtime.DurableOrder?.Title);
+
+        var dismissedInFlight = await CreateProtectedLinkedFixtureAsync();
+        var inFlightOwner = dismissedInFlight.Service.GetForOrder(
+            dismissedInFlight.Current.Order.Id)!;
+        dismissedInFlight.Handler.Projection = dismissedInFlight.Owner(
+            "Committed after local selection",
+            5,
+            9);
+        dismissedInFlight.Handler.BeforeResponse = request =>
+        {
+            if (request.Method == HttpMethod.Post)
+            {
+                dismissedInFlight.Service.DismissLinkedProjectionForLocalOrder(
+                    dismissedInFlight.Current.Order.Id);
+            }
+        };
+        var dismissedResult = await dismissedInFlight.Service.AcceptDeliveryAsync(inFlightOwner);
+        Assert.True(dismissedResult.Success);
+        Assert.True(dismissedResult.HostCommitted);
+        Assert.Null(dismissedInFlight.Service.GetForOrder(dismissedInFlight.Current.Order.Id));
+        Assert.Equal("Unsynced local draft", dismissedInFlight.Runtime.DurableOrder?.Title);
+    }
+
+    private static async Task<CenterOperationFixture> CreateProtectedLinkedFixtureAsync()
+    {
+        var fixture = await CenterOperationFixture.CreateAsync(publishOwner: false);
+        AlignCommissionIdentity(fixture);
+        var localDraft = TradeOrderWorkflow.CopyOrder(fixture.Current.Order);
+        localDraft.Title = "Unsynced local draft";
+        localDraft.CompanyCommission = null;
+        fixture.Runtime.SeedDurableOrder(localDraft);
+        Assert.IsType<List<ProfileSyncPendingSave>>(fixture.ProfileSync.PendingSaves)
+            .Add(new(ProfileSyncCollections.TradeOrders, fixture.Current.Order.Id.ToString("D")));
+        Assert.NotNull(await fixture.Service.ResolveNotificationNavigationAsync(
+            fixture.Current.Order.CompanyProfileId,
+            fixture.Current.Order.Id));
+        return fixture;
     }
 
     private static void AlignCommissionIdentity(CenterOperationFixture fixture) =>
@@ -684,6 +786,7 @@ public sealed class HostedOrderProjectionStoreTests
         public bool SaveTradeOrderResult { get; set; } = true;
         public Func<TradeOrder, Task>? BeforeSaveTradeOrderAsync { get; set; }
         public Action? BeforeSaveTradeCrafter { get; set; }
+        public void SeedDurableOrder(TradeOrder? order) => DurableOrder = order;
         public void SaveRawSetting(string key, string value) => _settings[key] = value;
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) => InvokeAsync<TValue>(identifier, CancellationToken.None, args);
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args)
@@ -697,6 +800,7 @@ public sealed class HostedOrderProjectionStoreTests
             {
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(_settings),
                 "IndexedDB.loadSetting" => _settings.GetValueOrDefault((string)args![0]!),
+                "IndexedDB.loadTradeOrder" => DurableOrder,
                 "IndexedDB.deleteTradeOrder" => DeleteOrder(),
                 "IndexedDB.saveTradeCrafter" => SaveCrafter(),
                 "IndexedDB.saveSettingsBatch" => SaveBatch((Dictionary<string, string>)args![0]!),
