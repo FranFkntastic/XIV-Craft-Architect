@@ -138,6 +138,31 @@ public sealed class UnifiedSettingsContractTests
             "catch\n        {\n            // A temporary host failure cannot prove that browser-held company access was revoked.\n            return LocalContexts(localCompanies);",
             switcher,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "_activeCompany?.LocalProfile != null && activeLocal?.Id != _activeCompany.Id",
+            switcher,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SelectCompanyProfileAsync(_activeCompany.Id)",
+            switcher,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedCompanyAndRosterEnterHostedAuthorityImmediately()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var settings = File.ReadAllText(Path.Combine(web, "Dialogs", "SettingsDialog.razor"));
+
+        Assert.Contains(
+            "ProfileSyncCollections.TradeCompanyProfiles,\n                imported.Profile.Id.ToString(\"D\")",
+            settings,
+            StringComparison.Ordinal);
+        Assert.Contains("foreach (var crafter in imported.Crafters)", settings, StringComparison.Ordinal);
+        Assert.Contains(
+            "ProfileSyncCollections.TradeCrafters,\n                    crafter.Id.ToString(\"D\")",
+            settings,
+            StringComparison.Ordinal);
     }
 
     [Fact]
