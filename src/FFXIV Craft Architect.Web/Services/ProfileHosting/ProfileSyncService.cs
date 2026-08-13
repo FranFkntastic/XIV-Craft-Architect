@@ -1668,14 +1668,27 @@ public sealed class ProfileSyncService
             localObject);
 
         var lastRevision = await _localState.LoadLastSyncRevisionAsync(profileId);
+        var previousStatus = CurrentStatus;
         SetStatus(new ProfileSyncStatus(
             true,
             hostReachable,
-            lastRevision,
+            Math.Max(previousStatus.LastSyncRevision, lastRevision),
             _pendingSaves.Count,
             _conflicts.Count,
-            CurrentStatus.LastSyncedAtUtc,
-            _conflicts.Count > 0 ? "Conflicts need review" : CurrentStatus.Message));
+            previousStatus.LastSyncedAtUtc,
+            _conflicts.Count > 0 ? "Conflicts need review" : previousStatus.Message) with
+        {
+            ProfileId = profileId,
+            Stage = hostReachable
+                ? ProfileSyncStage.Ready
+                : ProfileSyncStage.Failed,
+            Failure = hostReachable
+                ? ProfileSyncFailure.None
+                : ProfileSyncFailure.Offline,
+            AppliedObjectCount = previousStatus.AppliedObjectCount,
+            TargetRevision = previousStatus.TargetRevision,
+            OrderScopeReady = previousStatus.OrderScopeReady
+        });
     }
 
     private async Task RequireConnectionAuthorityAsync(

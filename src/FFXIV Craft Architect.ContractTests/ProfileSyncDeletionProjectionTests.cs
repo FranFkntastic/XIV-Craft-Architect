@@ -640,6 +640,119 @@ public sealed class ProfileSyncDeletionProjectionTests
         Assert.Equal(5, adopted.ObjectRevision);
     }
     [Fact]
+    public async Task PortablePublicationSynchronizesMissingGeneratedPlanBeforeAdoption()
+    {
+        var profileId = NewId();
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Generated-plan publication");
+        var planId = Guid.NewGuid().ToString("D");
+        order.CraftPlanId = planId;
+        order.CraftPlanName = "Sealed order plan";
+        order.CraftPlanSavedAtUtc = DateTime.UtcNow;
+        order.CraftPlanLinkKind = TradeOrderCraftPlanLinkKind.OrderGenerated;
+        var plan = new ProfileSyncObjectEnvelope
+        {
+            Collection = ProfileSyncCollections.Plans,
+            ObjectId = planId,
+            PayloadJson = "{}",
+            UpdatedAtUtc = DateTime.UtcNow
+        };
+        var committed = CreatePublishedOrder(order, 4);
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            false,
+            4,
+            DateTime.UtcNow,
+            ConnectionScope(profileId));
+        Assert.True(store.TryPublishRemoteOrder(order, 4));
+        var runtime = new StorageRuntime(ConnectionSettings(profileId));
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = CreateLocalState(indexedDb);
+        await localState.LoadConnectionSettingsAsync();
+        await localState.SaveObjectRevisionAsync(
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            Key(order),
+            4);
+        var planPutCount = 0;
+        var adoptionCount = 0;
+        HttpResponseMessage Respond(HttpRequestMessage request)
+        {
+            if (request.Method == HttpMethod.Put)
+            {
+                planPutCount++;
+                Assert.Equal(0, adoptionCount);
+                plan.Revision = 5;
+                return Ok(new ProfileSyncPutResponse
+                {
+                    Success = true,
+                    ServerRevision = 5,
+                    Object = plan
+                });
+            }
+            if (IsAdoptionRequest(request))
+            {
+                adoptionCount++;
+                Assert.Equal(1, planPutCount);
+                return Adoption(order, 4);
+            }
+
+            Assert.Equal(2, adoptionCount);
+            var publication = committed.CommissionPublication!;
+            return Ok(new CommissionBriefCreateResponse
+            {
+                PublicId = publication.PublicId,
+                PublicUrl = publication.PublicUrl!,
+                EditorToken = string.Empty,
+                Version = publication.Version,
+                PublishedAtUtc = publication.PublishedAtUtc,
+                OrderRecord = new(
+                    new(committed.CompanyProfileId),
+                    TradeCompanyRecordKinds.Order,
+                    Key(committed),
+                    JsonSerializer.Serialize(committed, ProfileSyncJson.CreateOptions()),
+                    new(5),
+                    DateTime.UtcNow)
+            });
+        }
+        var profileSync = new ProfileSyncService(
+            CreateHostClient(new StubHandler(Respond)),
+            localState,
+            new WebSettingsService(indexedDb),
+            store,
+            [new RecordingCollectionAdapter(ProfileSyncCollections.Plans, plan)]);
+        SetReadyStatus(profileSync, profileId);
+        var collaboration = new TradeCompanyCollaborationService(
+            new TradeCompanyCollaborationClient(
+                new HttpClient(new StubHandler(Respond)) { BaseAddress = new Uri(Host) },
+                localState),
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            localState,
+            profileSync,
+            store);
+
+        var ownership = await collaboration.GetPublicationOwnershipAsync(order);
+        await collaboration.PublishPortableLinkAsync(
+            order,
+            new CommissionBriefDocument());
+
+        Check(
+            () => Assert.NotNull(ownership),
+            () => Assert.Equal(1, planPutCount),
+            () => Assert.Equal(2, adoptionCount),
+            () => Assert.Equal(profileId, profileSync.CurrentStatus.ProfileId),
+            () => Assert.Equal(ProfileSyncStage.Ready, profileSync.CurrentStatus.Stage),
+            () => Assert.Equal(4, profileSync.CurrentStatus.LastSyncRevision),
+            () => Assert.Equal(
+                5,
+                localState.LoadObjectRevisionAsync(
+                    profileId,
+                    ProfileSyncCollections.Plans,
+                    planId).GetAwaiter().GetResult()));
+    }
+    [Fact]
     public async Task DelayedCollaborationResponseCannotPersistOverNewerProjection()
     {
         var fixture = new ProjectionFixture("Revision four");
