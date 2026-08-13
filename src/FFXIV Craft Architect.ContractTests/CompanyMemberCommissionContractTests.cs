@@ -246,11 +246,15 @@ public sealed class CompanyMemberCommissionContractTests
         var projection = await loaded.Content
             .ReadFromJsonAsync<CompanyCommissionOwnerProjection>();
         Assert.Equal(fixture.Order.Id, projection!.Order.Id);
+        Assert.NotNull(projection.ProfileObjectRevision);
 
         using var cancelled = await fixture.CancelCommissionAsync(account);
         Assert.True(
             cancelled.IsSuccessStatusCode,
             await cancelled.Content.ReadAsStringAsync());
+        var cancelledProjection = await cancelled.Content
+            .ReadFromJsonAsync<TradeCommissionOwnerCommandResponse>();
+        Assert.NotNull(cancelledProjection?.Projection?.ProfileObjectRevision);
     }
 
     [Fact]

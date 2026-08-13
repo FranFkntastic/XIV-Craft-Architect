@@ -249,6 +249,179 @@ public sealed class ProfileHostedTradeCompanyService(
             put.ErrorMessage ?? "The hosted Trade record changed.");
     }
 
+    public async Task<TradeCompanyMutationResult> AdoptSynchronizedOrderAsync(
+        TradeCompanyAccessContext access,
+        Guid orderId,
+        CompanyRecordRevision sourceRevision,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default)
+    {
+        if (orderId == Guid.Empty ||
+            sourceRevision.Value <= 0 ||
+            string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            return Rejected(
+                "invalid_order_adoption",
+                "A synchronized Trade order revision is required for company adoption.");
+        }
+
+        var hostProfileId = RequireHostProfile(access);
+        var objectId = orderId.ToString("D");
+        var source = await profiles.LoadObjectAsync(
+            access.GrantId.ToString("D"),
+            ProfileSyncCollections.TradeOrders,
+            objectId,
+            cancellationToken);
+        if (source is not { Deleted: false })
+        {
+            return Rejected(
+                "source_order_missing",
+                "The synchronized operator draft is unavailable.");
+        }
+        if (source.Revision != sourceRevision.Value)
+        {
+            return new TradeCompanyMutationResult(
+                TradeCompanyMutationStatus.Conflict,
+                null,
+                ErrorCode: "source_revision_conflict",
+                ErrorMessage: "The synchronized operator draft changed before company adoption.");
+        }
+
+        TradeOrder? sourceOrder;
+        try
+        {
+            sourceOrder = JsonSerializer.Deserialize<TradeOrder>(source.PayloadJson, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            sourceOrder = null;
+        }
+        if (sourceOrder?.Id != orderId ||
+            !OrderBelongsToCompany(sourceOrder, access.CompanyId))
+        {
+            return Rejected(
+                "company_scope_mismatch",
+                "The synchronized operator draft does not belong to the authenticated company.");
+        }
+
+        var current = await profiles.LoadObjectAsync(
+            hostProfileId,
+            ProfileSyncCollections.TradeOrders,
+            objectId,
+            cancellationToken);
+        if (current is { Deleted: false } &&
+            string.Equals(current.PayloadJson, source.PayloadJson, StringComparison.Ordinal))
+        {
+            return new TradeCompanyMutationResult(
+                TradeCompanyMutationStatus.Replayed,
+                ToRecord(access.CompanyId, TradeCompanyRecordKinds.Order, objectId, current));
+        }
+        if (current != null)
+        {
+            return new TradeCompanyMutationResult(
+                TradeCompanyMutationStatus.Conflict,
+                null,
+                current.Deleted
+                    ? null
+                    : ToRecord(access.CompanyId, TradeCompanyRecordKinds.Order, objectId, current),
+                "canonical_order_conflict",
+                "The company already has a different authoritative order with this identity.");
+        }
+        if (sourceOrder.CompanyCommission != null)
+        {
+            return Rejected(
+                "canonical_source_not_adoptable",
+                "Only an unpublished synchronized draft can be adopted into a company workspace.");
+        }
+
+        return await PutRecordAsync(
+            access,
+            TradeCompanyRecordKinds.Order,
+            objectId,
+            source.PayloadJson,
+            CompanyRecordRevision.None,
+            idempotencyKey,
+            cancellationToken);
+    }
+
+    public async Task<CompanyRecordRevision> MirrorOrderToGrantAsync(
+        TradeCompanyAccessContext access,
+        TradeOrder order,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        var hostProfileId = RequireHostProfile(access);
+        if (order.Id == Guid.Empty ||
+            !OrderBelongsToCompany(order, access.CompanyId))
+        {
+            throw new InvalidOperationException(
+                "The authoritative Trade order cannot be mirrored outside its company scope.");
+        }
+
+        var objectId = order.Id.ToString("D");
+        if (string.Equals(
+                hostProfileId,
+                access.GrantId.ToString("D"),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var canonical = await LoadRecordAsync(
+                access,
+                TradeCompanyRecordKinds.Order,
+                objectId,
+                cancellationToken)
+                ?? throw new InvalidOperationException(
+                    "The authoritative company order is unavailable for profile reconciliation.");
+            return canonical.RecordRevision;
+        }
+
+        var payloadJson = JsonSerializer.Serialize(order, JsonOptions);
+        var grantProfileId = access.GrantId.ToString("D");
+        var current = await profiles.LoadObjectAsync(
+            grantProfileId,
+            ProfileSyncCollections.TradeOrders,
+            objectId,
+            cancellationToken);
+        if (current is { Deleted: false } &&
+            string.Equals(current.PayloadJson, payloadJson, StringComparison.Ordinal))
+        {
+            return new CompanyRecordRevision(current.Revision);
+        }
+        if (current is { Deleted: true })
+        {
+            throw new InvalidOperationException(
+                "The operator profile deleted this order before company reconciliation completed.");
+        }
+        if (current != null &&
+            !PayloadBelongsToCompany(
+                access.CompanyId,
+                TradeCompanyRecordKinds.Order,
+                current.PayloadJson))
+        {
+            throw new InvalidOperationException(
+                "The operator profile contains a conflicting cross-company order identity.");
+        }
+
+        var put = await profiles.PutObjectAsync(
+            grantProfileId,
+            ProfileSyncCollections.TradeOrders,
+            objectId,
+            payloadJson,
+            current?.Revision ?? 0,
+            cancellationToken);
+        var committed = put.Object ?? put.RemoteObject;
+        if ((put.Success && committed != null) ||
+            (committed != null &&
+             !committed.Deleted &&
+             string.Equals(committed.PayloadJson, payloadJson, StringComparison.Ordinal)))
+        {
+            return new CompanyRecordRevision(committed!.Revision);
+        }
+
+        throw new InvalidOperationException(
+            put.ErrorMessage ??
+            "The operator profile changed before company reconciliation completed.");
+    }
+
     public async Task<TradeCompanyPublicationOwnership?> ResolvePublicationOwnershipAsync(
         string publicId,
         CancellationToken cancellationToken = default)

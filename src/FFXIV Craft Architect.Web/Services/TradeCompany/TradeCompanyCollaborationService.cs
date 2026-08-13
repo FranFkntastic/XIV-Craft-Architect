@@ -97,7 +97,7 @@ public sealed class TradeCompanyCollaborationService(
             throw new InvalidOperationException(
                 "The hosted order authority changed while publication ownership was being resolved.");
         }
-        var revision = await ResolveHostedOrderRevisionAsync(
+        var revision = await ResolveCanonicalOrderRevisionAsync(
             order,
             authority,
             cancellationToken);
@@ -197,7 +197,7 @@ public sealed class TradeCompanyCollaborationService(
         try
         {
             var authority = await CaptureOrderAuthorityAsync();
-            var revision = await ResolveHostedOrderRevisionAsync(
+            var revision = await ResolveCanonicalOrderRevisionAsync(
                 order,
                 authority,
                 cancellationToken);
@@ -331,7 +331,7 @@ public sealed class TradeCompanyCollaborationService(
         }
 
         var authority = await CaptureOrderAuthorityAsync();
-        var revision = await ResolveHostedOrderRevisionAsync(
+        var revision = await ResolveCanonicalOrderRevisionAsync(
             order,
             authority,
             cancellationToken);
@@ -365,7 +365,7 @@ public sealed class TradeCompanyCollaborationService(
         await AdoptCommittedOrderAsync(
             authority,
             hostedOrder,
-            published.OrderRecord.RecordRevision.Value,
+            published.ProfileOrderRevision.Value,
             "The company brief was attached by Profile Hosting, but browser storage could not apply the authoritative order.");
         AdoptDictionaryAuthority(authority);
         _publications.Remove(order.Id);
@@ -550,6 +550,40 @@ public sealed class TradeCompanyCollaborationService(
         return revision;
     }
 
+    private async Task<long> ResolveCanonicalOrderRevisionAsync(
+        TradeOrder order,
+        OrderCommandAuthority authority,
+        CancellationToken cancellationToken)
+    {
+        var sourceRevision = await ResolveHostedOrderRevisionAsync(
+            order,
+            authority,
+            cancellationToken);
+        if (sourceRevision <= 0)
+        {
+            return 0;
+        }
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The hosted order authority changed before company adoption began.");
+        }
+
+        var adopted = await client.AdoptSynchronizedOrderAsync(
+            order.CompanyProfileId,
+            order.Id,
+            sourceRevision,
+            $"adopt-order:{order.Id:D}:{sourceRevision}",
+            cancellationToken,
+            authority.Connection);
+        if (!await IsCurrentAuthorityAsync(authority))
+        {
+            throw new InvalidOperationException(
+                "The hosted order authority changed while company adoption was in progress.");
+        }
+        return adopted.RecordRevision.Value;
+    }
+
     private async Task RequireCurrentPublicationAuthorityAsync(
         OrderCommandAuthority authority,
         Guid expectedOrderId,
@@ -662,7 +696,9 @@ public sealed class TradeCompanyCollaborationService(
             validatedLink.EditorToken != published.Link.EditorToken)
         {
             throw new InvalidOperationException(
-                "Portable commission publication returned inconsistent authoritative link ownership.");
+                "Portable commission publication returned inconsistent authoritative link ownership. " +
+                $"Expected {expectedOwnership.CompanyId}/{expectedOwnership.OrderId:D}@{expectedOwnership.OrderRevision.Value}; " +
+                $"received {publication?.Ownership?.CompanyId}/{publication?.Ownership?.OrderId:D}@{publication?.Ownership?.OrderRevision.Value}.");
         }
 
         return order;

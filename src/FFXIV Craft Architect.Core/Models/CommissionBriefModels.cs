@@ -76,6 +76,7 @@ public sealed class CommissionBriefCreateResponse
     public int Version { get; set; }
     public DateTime PublishedAtUtc { get; set; }
     public TradeCompanyRecordEnvelope? OrderRecord { get; set; }
+    public CompanyRecordRevision? ProfileOrderRevision { get; set; }
 }
 
 public sealed class CommissionBriefLinkResponse

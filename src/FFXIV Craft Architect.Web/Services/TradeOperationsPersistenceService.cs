@@ -156,7 +156,13 @@ public sealed class TradeOperationsPersistenceService
         string childId)
     {
         var profiles = await LoadCompanyProfilesAsync();
-        if (profiles.All(profile => profile.Id != companyProfileId))
+        if (profiles.Any(profile => profile.Id == companyProfileId))
+        {
+            return;
+        }
+
+        var selectedWorkspaceId = await LoadSelectedWorkspaceCompanyIdAsync();
+        if (selectedWorkspaceId != companyProfileId)
         {
             throw new MissingTradeCompanyProfileException(
                 companyProfileId,

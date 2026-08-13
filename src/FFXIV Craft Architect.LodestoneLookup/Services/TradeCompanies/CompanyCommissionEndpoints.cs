@@ -225,6 +225,7 @@ public static class CompanyCommissionEndpoints
                 Guid commissionId,
                 HttpRequest request,
                 TradeCompanyAuthorization authorization,
+                ProfileHostedTradeCompanyService companyService,
                 HostedCompanyCommissionService commissions,
                 CancellationToken cancellationToken) =>
             {
@@ -243,14 +244,21 @@ public static class CompanyCommissionEndpoints
                         access,
                         commissionId,
                         cancellationToken);
-                    return snapshot == null
-                        ? MissingCanonicalCommission()
-                        : Results.Ok(new CompanyCommissionOwnerProjection
-                        {
-                            Order = snapshot.Order,
-                            ObjectRevision = snapshot.Envelope.RecordRevision,
-                            CompanyRevision = snapshot.CompanyRevision
-                        });
+                    if (snapshot == null)
+                    {
+                        return MissingCanonicalCommission();
+                    }
+                    var profileObjectRevision = await companyService.MirrorOrderToGrantAsync(
+                        access,
+                        snapshot.Order,
+                        cancellationToken);
+                    return Results.Ok(new CompanyCommissionOwnerProjection
+                    {
+                        Order = snapshot.Order,
+                        ObjectRevision = snapshot.Envelope.RecordRevision,
+                        CompanyRevision = snapshot.CompanyRevision,
+                        ProfileObjectRevision = profileObjectRevision
+                    });
                 }
                 catch (InvalidOperationException)
                 {
@@ -267,6 +275,7 @@ public static class CompanyCommissionEndpoints
                 JsonElement body,
                 HttpRequest request,
                 TradeCompanyAuthorization authorization,
+                ProfileHostedTradeCompanyService companyService,
                 HostedCompanyCommissionService commissions,
                 SqliteCompanyCommissionCapabilityStore capabilities,
                 TimeProvider timeProvider,
@@ -365,6 +374,10 @@ public static class CompanyCommissionEndpoints
                 var canonical = mutation.Order?.CompanyCommission
                     ?? throw new InvalidOperationException(
                         "The applied command did not return its canonical commission.");
+                var profileObjectRevision = await companyService.MirrorOrderToGrantAsync(
+                    access,
+                    mutation.Order!,
+                    cancellationToken);
                 using var committedWork = new CancellationTokenSource(
                     TimeSpan.FromSeconds(15));
                 var committedCancellationToken = committedWork.Token;
@@ -395,7 +408,7 @@ public static class CompanyCommissionEndpoints
                             $"{recovery.RecoveryGrantId:D}.{issued.PlaintextToken}");
                     return Results.Ok(new TradeCommissionRecoveryResetResponse(
                         mutation,
-                        ToCommittedProjection(mutation),
+                        ToCommittedProjection(mutation, profileObjectRevision),
                         recoveryUrl));
                 }
 
@@ -411,7 +424,10 @@ public static class CompanyCommissionEndpoints
                         capabilities,
                         timeProvider,
                         committedCancellationToken);
-                    return Results.Ok(ToOwnerResponse(mutation, claimUrl));
+                    return Results.Ok(ToOwnerResponse(
+                        mutation,
+                        profileObjectRevision,
+                        claimUrl));
                 }
                 else if (command is CancelCompanyCommissionCommand or
                           RevokeCompanyCommissionPublicationCommand)
@@ -438,10 +454,13 @@ public static class CompanyCommissionEndpoints
                         capabilities,
                         timeProvider,
                         committedCancellationToken);
-                    return Results.Ok(ToOwnerResponse(mutation, claimUrl));
+                    return Results.Ok(ToOwnerResponse(
+                        mutation,
+                        profileObjectRevision,
+                        claimUrl));
                 }
 
-                return Results.Ok(ToOwnerResponse(mutation));
+                return Results.Ok(ToOwnerResponse(mutation, profileObjectRevision));
             });
 
         company.MapGet(
@@ -1204,6 +1223,7 @@ public static class CompanyCommissionEndpoints
 
     private static TradeCommissionOwnerCommandResponse ToOwnerResponse(
         CompanyCommissionMutationResult mutation,
+        CompanyRecordRevision profileObjectRevision,
         string? claimUrl = null) =>
         new(
             mutation.Status,
@@ -1211,11 +1231,14 @@ public static class CompanyCommissionEndpoints
             mutation.Activity,
             mutation.ErrorCode,
             mutation.ErrorMessage,
-            mutation.Success ? ToCommittedProjection(mutation) : null,
+            mutation.Success
+                ? ToCommittedProjection(mutation, profileObjectRevision)
+                : null,
             claimUrl);
 
     private static CompanyCommissionOwnerProjection ToCommittedProjection(
-        CompanyCommissionMutationResult mutation) =>
+        CompanyCommissionMutationResult mutation,
+        CompanyRecordRevision profileObjectRevision) =>
         new()
         {
             Order = mutation.Order ?? throw new InvalidOperationException(
@@ -1223,7 +1246,8 @@ public static class CompanyCommissionEndpoints
             ObjectRevision = mutation.ObjectRevision ?? throw new InvalidOperationException(
                 "A successful commission command returned no committed object revision."),
             CompanyRevision = mutation.CompanyRevision ?? throw new InvalidOperationException(
-                "A successful commission command returned no committed company revision.")
+                "A successful commission command returned no committed company revision."),
+            ProfileObjectRevision = profileObjectRevision
         };
 
     private sealed record ClaimPayload(
