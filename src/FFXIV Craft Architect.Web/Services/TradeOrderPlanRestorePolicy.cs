@@ -18,6 +18,13 @@ public enum TradeOrderPlanReadOutcome
     RequestSuperseded
 }
 
+public enum TradeOrderPlanStaleRevisionDisposition
+{
+    RetireSupersededRequest,
+    RetryCurrentProjection,
+    AwaitNextWorkerChange
+}
+
 public sealed record TradeOrderPlanReadResult<T>(
     TradeOrderPlanReadOutcome Outcome,
     T? Payload,
@@ -34,6 +41,8 @@ public readonly record struct TradeOrderPlanRestoreRequest(
 
 public static class TradeOrderPlanRestorePolicy
 {
+    public const int MaximumImmediateStaleRevisionRetries = 1;
+
     public static bool ShouldScheduleForWorkerChange(
         bool disposed,
         bool restoreInProgress) =>
@@ -77,6 +86,21 @@ public static class TradeOrderPlanRestorePolicy
             disposed,
             selectedPlanSavedAtUtc) &&
         currentWorkerRevision == request.WorkerRevision;
+
+    public static TradeOrderPlanStaleRevisionDisposition ResolveStaleRevision(
+        bool requestIsCurrent,
+        bool linkedPlanIsActive,
+        int immediateRetryCount)
+    {
+        if (!requestIsCurrent || !linkedPlanIsActive)
+        {
+            return TradeOrderPlanStaleRevisionDisposition.RetireSupersededRequest;
+        }
+
+        return immediateRetryCount < MaximumImmediateStaleRevisionRetries
+            ? TradeOrderPlanStaleRevisionDisposition.RetryCurrentProjection
+            : TradeOrderPlanStaleRevisionDisposition.AwaitNextWorkerChange;
+    }
 
     public static bool IsExactSavedRevision(
         TradeOrderPlanRestoreRequest request,

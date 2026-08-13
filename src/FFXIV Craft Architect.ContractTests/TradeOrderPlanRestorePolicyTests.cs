@@ -46,6 +46,48 @@ public sealed class TradeOrderPlanRestorePolicyTests
         => Assert.False(CanAdopt(workerRevision: 13));
 
     [Theory]
+    [InlineData(false, true, 0, TradeOrderPlanStaleRevisionDisposition.RetireSupersededRequest)]
+    [InlineData(true, false, 0, TradeOrderPlanStaleRevisionDisposition.RetireSupersededRequest)]
+    [InlineData(true, true, 0, TradeOrderPlanStaleRevisionDisposition.RetryCurrentProjection)]
+    [InlineData(true, true, 1, TradeOrderPlanStaleRevisionDisposition.AwaitNextWorkerChange)]
+    public void StaleWorkerProjectionIsReconciledWithoutBecomingAPlanFailure(
+        bool requestIsCurrent,
+        bool linkedPlanIsActive,
+        int immediateRetryCount,
+        TradeOrderPlanStaleRevisionDisposition expected) =>
+        Assert.Equal(
+            expected,
+            TradeOrderPlanRestorePolicy.ResolveStaleRevision(
+                requestIsCurrent,
+                linkedPlanIsActive,
+                immediateRetryCount));
+
+    [Fact]
+    public void RestorationClassifiesEveryStaleRejectionBeforeTheGenericErrorPath()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "FFXIV Craft Architect.Web",
+            "Pages",
+            "TradeOrders.Procurement.cs"));
+
+        Assert.Contains(
+            "catch (WorkerSessionCommandRejectedException ex)\n            when (string.Equals(",
+            source.ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "\"stale-revision\",\n                      StringComparison.Ordinal) &&\n                  IsCurrentPlanRestoreRequest(request)",
+            source.ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "TradeOrderPlanRestorePolicy.ResolveStaleRevision(",
+            source,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData(false, 12)]
     [InlineData(true, 13)]
     public void ExplicitLoaderRequestRejectsSelectionOrWorkerChange(bool selectionStillMatches, long workerRevision) =>
@@ -179,6 +221,18 @@ public sealed class TradeOrderPlanRestorePolicyTests
 
     private static ProfileSyncStatus Status(ProfileSyncStage stage, bool isConnected) =>
         new(isConnected, isConnected, 10, 0, 0, DateTime.UtcNow, "fixture") { Stage = stage };
+
+    private static string LocateRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null &&
+               !File.Exists(Path.Combine(directory.FullName, "FFXIV Craft Architect.sln")))
+        {
+            directory = directory.Parent;
+        }
+        return directory?.FullName ??
+            throw new DirectoryNotFoundException("Could not locate the repository root.");
+    }
 
     public enum CurrentRequestScenario
     {
