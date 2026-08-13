@@ -118,6 +118,7 @@ public sealed class TradeCommissionOperationsService(
             {
                 return;
             }
+            ClearLinkedProjection(authority.Projection, order.Id);
             _missingCanonicalOwners.Add(order.Id);
             _errors[order.Id] = exception.Message;
         }
@@ -138,9 +139,10 @@ public sealed class TradeCommissionOperationsService(
             return null;
         }
 
+        OrderCommandAuthority? authority = null;
         try
         {
-            var authority = await CaptureOrderAuthorityAsync();
+            authority = await CaptureOrderAuthorityAsync();
             var projection = await client.LoadOwnerProjectionAsync(
                 authority.Connection,
                 order.CompanyCommission.CompanyId.Value,
@@ -177,9 +179,10 @@ public sealed class TradeCommissionOperationsService(
             return null;
         }
 
+        OrderCommandAuthority? authority = null;
         try
         {
-            var authority = await CaptureOrderAuthorityAsync();
+            authority = await CaptureOrderAuthorityAsync();
             var projection = await client.LoadOwnerProjectionAsync(
                 authority.Connection,
                 companyId,
@@ -219,6 +222,16 @@ public sealed class TradeCommissionOperationsService(
             projection = current;
             _errors.Remove(commissionId);
             return projection;
+        }
+        catch (MissingCompanyCommissionOwnerException exception)
+        {
+            if (authority != null && await IsCurrentAuthorityAsync(authority))
+            {
+                ClearLinkedProjection(authority.Projection, commissionId);
+                _missingCanonicalOwners.Add(commissionId);
+            }
+            _errors[commissionId] = exception.Message;
+            return null;
         }
         catch (Exception exception)
         {
@@ -1102,8 +1115,7 @@ public sealed class TradeCommissionOperationsService(
         CompanyCommissionOwnerProjection projection,
         bool allowStale = false)
     {
-        if (HasProtectedHostedOrderState(projection.Order.Id) ||
-            GetCurrentLinkedProjection(projection.Order.Id) != null)
+        if (await ShouldApplyLinkedProjectionAsync(projection))
         {
             var linkedAdoption = await ApplyLinkedProjectionAsync(authority, projection);
             if (allowStale && linkedAdoption == HostedOrderCommittedProjectionResult.Stale)
@@ -1218,12 +1230,61 @@ public sealed class TradeCommissionOperationsService(
         }
         if (hostedOrders.IsCurrentAuthority(linked.Authority))
         {
+            var hosted = hostedOrders.GetOwnerProjection(orderId);
+            if (hosted != null && IsAtLeastAsNew(hosted, linked.Projection))
+            {
+                _linkedOwnerProjections.Remove(orderId);
+                return null;
+            }
             return linked.Projection;
         }
 
         _linkedOwnerProjections.Remove(orderId);
         return null;
     }
+
+    private async Task<bool> ShouldApplyLinkedProjectionAsync(
+        CompanyCommissionOwnerProjection projection)
+    {
+        if (HasProtectedHostedOrderState(projection.Order.Id))
+        {
+            return true;
+        }
+        if (GetCurrentLinkedProjection(projection.Order.Id) == null)
+        {
+            return false;
+        }
+
+        var durable = await tradeOperations.LoadOrderAsync(projection.Order.Id);
+        if (durable == null)
+        {
+            return false;
+        }
+
+        var candidateCommission = RequireCommission(projection);
+        var durableCommission = durable.CompanyCommission;
+        return durableCommission == null ||
+               durableCommission.CompanyId != candidateCommission.CompanyId ||
+               durableCommission.CommissionId != candidateCommission.CommissionId;
+    }
+
+    private void ClearLinkedProjection(
+        HostedOrderAuthorityScope authority,
+        Guid orderId)
+    {
+        if (_linkedOwnerProjections.TryGetValue(orderId, out var linked) &&
+            linked.Authority == authority)
+        {
+            _linkedOwnerProjections.Remove(orderId);
+        }
+    }
+
+    private static bool IsAtLeastAsNew(
+        CompanyCommissionOwnerProjection candidate,
+        CompanyCommissionOwnerProjection current) =>
+        candidate.ObjectRevision.Value > current.ObjectRevision.Value ||
+        candidate.ObjectRevision == current.ObjectRevision &&
+        candidate.CompanyRevision.Value >= current.CompanyRevision.Value;
 
     private async Task<bool> IsCurrentAuthorityAsync(OrderCommandAuthority authority)
     {
