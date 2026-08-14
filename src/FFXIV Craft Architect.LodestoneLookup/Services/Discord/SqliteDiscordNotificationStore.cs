@@ -815,7 +815,8 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
             contact.ClaimId == Guid.Empty ||
             contact.CommissionId == Guid.Empty ||
             contact.CommissionRevision <= 0 ||
-            !DiscordSnowflake.IsValid(contact.InteractionId) ||
+            string.IsNullOrWhiteSpace(contact.InteractionId) ||
+            contact.InteractionId.Length > 80 ||
             !DiscordSnowflake.IsValid(contact.Contact.DiscordUserId))
         {
             throw new InvalidOperationException(
