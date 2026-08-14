@@ -187,6 +187,78 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
+    public async Task OperatorCanConnectAndCorrectLegacyCrafterHistoryWithoutRewritingIt()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var returning = await fixture.CreateAccountAsync("Returning crafter");
+        var company = CreateCompany();
+        var legacyCrafter = new TradeCrafterProfile
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = company.Id,
+            DisplayName = "Old roster identity",
+            WorldName = "Siren",
+            LodestoneCharacterId = "49131404"
+        };
+        var foreignCrafter = new TradeCrafterProfile
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = company.Id,
+            DisplayName = "Injected foreign roster identity"
+        };
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var memberClient = fixture.CreateClient(returning.Key);
+        await PutCompanyAsync(ownerClient, company);
+        using var crafterPut = await ownerClient.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeCrafters}/{legacyCrafter.Id:D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = JsonSerializer.Serialize(legacyCrafter, ProfileSyncJson.CreateOptions()),
+                ExpectedRevision = 0
+            });
+        crafterPut.EnsureSuccessStatusCode();
+        using var foreignCrafterPut = await memberClient.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeCrafters}/{foreignCrafter.Id:D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = JsonSerializer.Serialize(foreignCrafter, ProfileSyncJson.CreateOptions()),
+                ExpectedRevision = 0
+            });
+        foreignCrafterPut.EnsureSuccessStatusCode();
+        using var requested = await memberClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-requests",
+            new MembershipRequestBody(null));
+        requested.EnsureSuccessStatusCode();
+
+        using var discovered = await ownerClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/legacy-crafter-migration");
+        var migration = await discovered.Content
+            .ReadFromJsonAsync<LegacyCrafterMigrationResponse>();
+        using var connected = await ownerClient.PutAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/legacy-crafter-bindings/{legacyCrafter.Id:D}",
+            new LegacyCrafterBindingBody(returning.ProfileId));
+        using var replayed = await ownerClient.PutAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/legacy-crafter-bindings/{legacyCrafter.Id:D}",
+            new LegacyCrafterBindingBody(returning.ProfileId));
+        using var approved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{returning.ProfileId:D}/approve",
+            null);
+        var bindings = await fixture.Memberships.LoadCrafterBindingsAsync(
+            new CompanyId(company.Id));
+        using var disconnected = await ownerClient.DeleteAsync(
+            $"/trade/v1/companies/{company.Id:D}/legacy-crafter-bindings/{legacyCrafter.Id:D}");
+
+        Assert.Equal(legacyCrafter.Id, Assert.Single(migration!.LegacyCrafters).LegacyCrafterId);
+        Assert.Equal(HttpStatusCode.OK, connected.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replayed.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, approved.StatusCode);
+        Assert.Single(bindings);
+        Assert.Equal(HttpStatusCode.NoContent, disconnected.StatusCode);
+        Assert.Empty(await fixture.Memberships.LoadCrafterBindingsAsync(new CompanyId(company.Id)));
+    }
+
+    [Fact]
     public async Task RequestApprovalGrantsOwnMembershipAndRefusesNonAdministrators()
     {
         await using var fixture = await MembershipFixture.CreateAsync();

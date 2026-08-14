@@ -117,7 +117,7 @@ public static class DiscordIdentityEndpoints
                             "signin",
                             completion.PlaintextAccessKey!)
                         : FragmentRedirect(
-                            options.ApplicationBaseUri,
+                            ApplicationReturnUri(options.ApplicationBaseUri, completion.ReturnPath),
                             "signin-error",
                             SignInErrorCode(completion.Status));
                 return Results.Redirect(location);

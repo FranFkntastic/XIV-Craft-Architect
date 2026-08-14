@@ -107,7 +107,8 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             return new DiscordOAuthStateConsumption(
                 DiscordOAuthStateStatus.Replayed,
                 profileId,
-                Purpose: purpose);
+                Purpose: purpose,
+                ReturnPath: returnPath);
         }
 
         await using (var consume = connection.CreateCommand())
@@ -127,7 +128,8 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                 return new DiscordOAuthStateConsumption(
                     DiscordOAuthStateStatus.Replayed,
                     profileId,
-                    Purpose: purpose);
+                    Purpose: purpose,
+                    ReturnPath: returnPath);
             }
         }
 

@@ -3,9 +3,11 @@ import {
     CommissionClientError,
     LodestoneExistenceClient,
     ParticipantAccessStore,
+    PortableClaimAccountStore,
     createCommandAuthorization,
     loadPortableCommissionProjection,
     readCapabilityFragment,
+    replaceClaimCapabilityFragment,
     replaceParticipantCapabilityFragment,
     resolveParticipantPreworkChoices
 } from "./commission-client.js";
@@ -32,8 +34,12 @@ const state = {
     client: null,
     lodestone: new LodestoneExistenceClient(),
     store: null,
+    accountStore: null,
     capabilities: null,
     access: null,
+    account: null,
+    accountVerificationError: null,
+    signInEnabled: false,
     projection: null,
     projectionStream: null,
     projectionRefreshWaiters: [],
@@ -200,7 +206,22 @@ async function load() {
     }
 
     state.publicId = publicId;
-    state.capabilities = readCapabilityFragment();
+    state.accountStore = new PortableClaimAccountStore(publicId);
+    const signInResult = state.accountStore.completeSignIn();
+    if (signInResult) {
+        state.capabilities = {
+            claimCapability: signInResult.claimCapability,
+            recoveryCapability: null,
+            recoveryGrantId: null,
+            bootstrapToken: null,
+            participantCapability: null
+        };
+        if (signInResult.claimCapability) {
+            replaceClaimCapabilityFragment(signInResult.claimCapability);
+        }
+    } else {
+        state.capabilities = readCapabilityFragment();
+    }
     state.store = new ParticipantAccessStore(publicId);
     try {
         state.access = state.store.load();
@@ -216,6 +237,28 @@ async function load() {
         state.access = null;
     }
     state.client = new CommissionBriefApiClient(publicId);
+    const savedAccount = signInResult?.account ?? state.accountStore.loadAccount();
+    if (savedAccount) {
+        try {
+            state.account = await verifyPortableAccount(savedAccount);
+        } catch (caught) {
+            state.account = null;
+            if (caught?.status === 401 || caught?.status === 403) {
+                state.accountStore.discardAccount();
+            } else {
+                state.accountVerificationError = caught?.message ??
+                    "Discord account verification is temporarily unavailable.";
+            }
+        }
+    }
+    if (!state.account && state.capabilities.claimCapability) {
+        try {
+            state.signInEnabled = Boolean(
+                (await state.client.loadDiscordSignInStatus()).enabled);
+        } catch {
+            state.signInEnabled = false;
+        }
+    }
     if (state.capabilities.bootstrapToken) {
         state.access = state.store.beginAuthorityExchange("bootstrap", {});
         await state.client.exchangeDiscordBootstrap(
@@ -257,7 +300,64 @@ async function load() {
     render();
     byId("briefMessage").hidden = true;
     byId("briefShell").hidden = false;
+    if (signInResult?.kind === "error") {
+        showNotice(
+            "Discord sign-in did not complete",
+            discordSignInErrorMessage(signInResult.error));
+    }
     startProjectionWatch();
+}
+
+async function verifyPortableAccount(savedAccount) {
+    const identity = await state.client.loadDiscordIdentity(savedAccount.accessKey);
+    if (!identity.enabled || !identity.linked || !identity.displayName) {
+        throw new CommissionClientError(
+            "The signed-in account does not have a verified Discord identity.",
+            "verified-discord-identity-required",
+            403);
+    }
+    return {
+        accessKey: savedAccount.accessKey,
+        displayName: identity.displayName,
+        linkedAt: identity.linkedAt ?? null
+    };
+}
+
+async function retryPortableAccountVerification() {
+    const savedAccount = state.accountStore.loadAccount();
+    if (!savedAccount) {
+        state.accountVerificationError = null;
+        render();
+        return;
+    }
+    setBusy(true);
+    try {
+        state.account = await verifyPortableAccount(savedAccount);
+        state.accountVerificationError = null;
+        render();
+        showToast("Discord account verified");
+    } catch (caught) {
+        state.accountVerificationError = caught?.message ??
+            "Discord account verification is temporarily unavailable.";
+        if (caught?.status === 401 || caught?.status === 403) {
+            state.accountStore.discardAccount();
+            state.accountVerificationError = null;
+            try {
+                state.signInEnabled = Boolean(
+                    (await state.client.loadDiscordSignInStatus()).enabled);
+            } catch {
+                state.signInEnabled = false;
+            }
+            render();
+            showNotice(
+                "Discord sign-in expired",
+                "The saved account credential was rejected. Your commission claim is intact; sign in again to verify it.");
+        } else {
+            showNotice("Discord verification unavailable", state.accountVerificationError);
+        }
+    } finally {
+        setBusy(false);
+    }
 }
 
 async function reloadProjection(successMessage = null) {
@@ -484,6 +584,38 @@ function resolveNextStep() {
                 tone: "waiting"
             };
         }
+        if (!state.account && state.accountVerificationError) {
+            return {
+                title: "Verify Discord to continue",
+                body: "Your sign-in and exact claim are saved, but Discord account verification is temporarily unavailable.",
+                tone: "waiting",
+                actions: [{
+                    label: "Try verification again",
+                    primary: true,
+                    run: retryPortableAccountVerification
+                }]
+            };
+        }
+        if (!state.account &&
+            pending?.kind === "claim" &&
+            pending.payload?.verifiedDiscordRequired) {
+            if (state.signInEnabled) {
+                return {
+                    title: "Verify Discord to retry your saved claim",
+                    body: "Your exact claim is still saved. Sign in again, then Craft Architect will retry it without asking you to recreate anything.",
+                    actions: [{
+                        label: "Continue with Discord",
+                        primary: true,
+                        run: startDiscordClaimSignIn
+                    }]
+                };
+            }
+            return {
+                title: "Discord verification is unavailable",
+                body: "Your exact claim is still saved. Discord sign-in is not available right now, so no claim was submitted or downgraded.",
+                tone: "waiting"
+            };
+        }
         if (pending?.kind === "claim") {
             return {
                 title: "A saved claim is ready to retry",
@@ -496,13 +628,29 @@ function resolveNextStep() {
                 }]
             };
         }
+        if (!state.account && state.signInEnabled) {
+            return {
+                title: "Verify Discord to claim",
+                body: "Discord sign-in proves which account is claiming. You will choose one Lodestone character separately after returning here.",
+                actions: [{
+                    label: "Continue with Discord",
+                    primary: true,
+                    run: startDiscordClaimSignIn
+                }, {
+                    label: "Claim without Discord",
+                    run: () => openClaimForm(true)
+                }]
+            };
+        }
         return {
             title: "Claim this commission",
-            body: "Verify one exact Lodestone character, provide a usable contact, and atomically accept the current terms.",
+            body: state.account
+                ? `${state.account.displayName} is verified through Discord. Choose one exact Lodestone character for commissioner confirmation.`
+                : "Verify one exact Lodestone character, provide a usable contact, and atomically accept the current terms.",
             actions: [{
-                label: "Enter crafter details",
+                label: state.account ? "Choose character" : "Enter crafter details",
                 primary: true,
-                run: openClaimForm
+                run: () => openClaimForm(!state.account)
             }]
         };
     }
@@ -611,6 +759,27 @@ function resolveNextStep() {
             run: focusProgress
         }]
     };
+}
+
+async function startDiscordClaimSignIn() {
+    const claimCapability = state.capabilities.claimCapability;
+    if (!claimCapability) {
+        throw new CommissionClientError(
+            "This browser no longer holds the claim capability.",
+            "missing-claim-authority");
+    }
+    state.accountStore.beginSignIn(claimCapability);
+    const returnPath = `${window.location.pathname}?id=${encodeURIComponent(state.publicId)}`;
+    const authorizationUrl = await state.client.startDiscordSignIn(returnPath);
+    window.location.assign(authorizationUrl);
+}
+
+function discordSignInErrorMessage(code) {
+    if (code === "expired-state") return "Discord sign-in expired. Start it again from this claim.";
+    if (code === "replayed-state") return "That Discord sign-in was already used. Start a fresh sign-in from this claim.";
+    if (code === "inactive-profile") return "This Craft Architect account is unavailable.";
+    if (code === "link-conflict") return "That Discord identity is already linked to another Craft Architect account.";
+    return "Discord did not complete the sign-in. Your claim link is still available; try again when ready.";
 }
 
 function focusProgress() {
@@ -985,6 +1154,14 @@ function renderAccess() {
                 null,
                 `${crafter.characterName} · ${crafter.homeWorld} · ${crafter.contactMethod}: ${crafter.contactValue}`));
         }
+        if (projection.claimAccountEvidence) {
+            const account = projection.claimAccountEvidence;
+            accessNote.append(
+                element(
+                    "small",
+                    null,
+                    `Discord verified: ${account.discordDisplayNameSnapshot} · User ID ${account.discordUserId}`));
+        }
         if (state.access?.participantSecret) {
             actions.append(createButton(
                 "Copy private workspace link",
@@ -1114,7 +1291,7 @@ function closeActionForm() {
     byId("nextStepForm").hidden = true;
 }
 
-function openClaimForm() {
+function openClaimForm(anonymous = false) {
     state.selectedLodestone = null;
     const form = element("form", "action-form");
     const grid = element("div", "form-grid");
@@ -1130,23 +1307,28 @@ function openClaimForm() {
         autocomplete: "off",
         placeholder: "Behemoth"
     });
-    const contactMethod = createSelect("contactMethod", [
-        ["Discord", "Discord"],
-        ["Email", "Email"],
-        ["Other", "Other usable contact"]
-    ]);
-    const contactValue = createInput("text", "contactValue", {
-        required: true,
-        maxLength: 240,
-        autocomplete: "off",
-        placeholder: "How the commissioner can reach you"
-    });
     grid.append(
         createField("In-game character", character),
-        createField("Home world", world),
-        createField("Contact method", contactMethod),
-        createField("Contact details", contactValue)
+        createField("Home world", world)
     );
+    let contactMethod = null;
+    let contactValue = null;
+    if (anonymous) {
+        contactMethod = createSelect("contactMethod", [
+            ["Discord", "Discord"],
+            ["Email", "Email"],
+            ["Other", "Other usable contact"]
+        ]);
+        contactValue = createInput("text", "contactValue", {
+            required: true,
+            maxLength: 240,
+            autocomplete: "off",
+            placeholder: "How the commissioner can reach you"
+        });
+        grid.append(
+            createField("Contact method", contactMethod),
+            createField("Contact details", contactValue));
+    }
 
     const searchActions = element("div", "inline-actions");
     const search = createButton("Find on Lodestone", async () => {
@@ -1157,12 +1339,24 @@ function openClaimForm() {
     const preview = element("div");
     const error = element("p", "form-error");
     error.hidden = true;
+    if (!anonymous && state.account) {
+        const account = element("div", "lodestone-preview");
+        account.append(
+            element("span", null, "✓"),
+            element("div", null));
+        account.lastElementChild.append(
+            element("strong", null, state.account.displayName),
+            element("span", null, "Discord account verified by sign-in"));
+        form.append(account);
+    }
     form.append(
         grid,
         element(
             "p",
             "form-help",
-            "Lodestone confirms that the selected character exists; the commissioner separately confirms that the contact belongs to that character."),
+            anonymous
+                ? "Lodestone confirms that the selected character exists; the commissioner separately confirms that the contact belongs to that character."
+                : "Discord confirms account ownership and Lodestone confirms that the character exists. The commissioner separately confirms that they belong together."),
         searchActions,
         error,
         results,
@@ -1178,8 +1372,9 @@ function openClaimForm() {
         }
         try {
             await submitClaim({
-                contactMethod: contactMethod.value,
-                contactValue: contactValue.value.trim()
+                contactMethod: contactMethod?.value ?? null,
+                contactValue: contactValue?.value.trim() ?? null,
+                verifiedDiscordRequired: !anonymous
             });
         } catch (caught) {
             showNotice("Claim unavailable", caught.message);
@@ -1264,22 +1459,27 @@ async function selectLodestoneCandidate(candidate, target, error) {
 
 async function submitClaim(contact) {
     const selected = state.selectedLodestone;
-    const contactValue = requiredUserText(contact.contactValue, "Contact details");
+    if (contact.verifiedDiscordRequired && !state.account) {
+        throw new CommissionClientError(
+            "Discord sign-in is no longer available in this browser. Sign in again before claiming.",
+            "verified-discord-identity-required");
+    }
+    const contactValue = state.account?.displayName ??
+        requiredUserText(contact.contactValue, "Contact details");
     const payload = {
         termsVersion: state.projection.public.terms.version,
         provisionalCrafter: {
             provisionalCrafterId: crypto.randomUUID(),
             characterName: selected.displayName,
             homeWorld: selected.worldName,
-            contactMethod: contact.contactMethod,
+            contactMethod: state.account ? "Discord" : contact.contactMethod,
             contactValue,
-            discordUserId: null,
-            discordDisplayNameSnapshot: null,
             lodestoneCharacterId: selected.lodestoneCharacterId,
             lodestoneProfileUrl: selected.lodestoneProfileUrl,
             submittedAtUtc: new Date().toISOString()
         },
-        existingCrafterId: null
+        existingCrafterId: null,
+        verifiedDiscordRequired: Boolean(state.account)
     };
     const access = state.store.beginAuthorityExchange("claim", payload);
     state.access = access;
@@ -1294,6 +1494,11 @@ async function retryClaim() {
     const access = state.store.load();
     if (!access?.pending || access.pending.kind !== "claim") {
         throw new CommissionClientError("No saved claim command is available.", "missing-pending-claim");
+    }
+    if (access.pending.payload.verifiedDiscordRequired && !state.account) {
+        throw new CommissionClientError(
+            "This saved claim requires the verified Discord account. Sign in again before retrying.",
+            "verified-discord-identity-required");
     }
     await sendAuthorityExchange(
         "claim",
@@ -1334,7 +1539,10 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
             state.projection,
             null,
             command === "claim"
-                ? { claimCapability: authority }
+                ? {
+                    claimCapability: authority,
+                    accountAccessKey: state.account?.accessKey ?? null
+                }
                 : { recoveryCapability: authority },
             access.pending.commandId);
         await state.client.command(
@@ -1356,11 +1564,30 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
         };
         await reloadProjection(successMessage);
     } catch (caught) {
+        const refreshableConflict = !applied &&
+            caught?.status === 409 &&
+            ["projection_conflict", "revision_conflict"].includes(caught?.code);
+        if (refreshableConflict) {
+            try {
+                const refreshed = await loadPortableCommissionProjection(
+                    state.client,
+                    state.capabilities,
+                    state.access);
+                state.projection = refreshed.projection;
+                state.capabilities.participantCapability =
+                    refreshed.participantCapability;
+                render();
+            } catch {
+                // Preserve the original conflict and exact pending command for retry.
+            }
+        }
         showNotice(
             applied ? "The command was accepted but the brief did not refresh" : "The command did not complete",
             applied
                 ? `${caught.message} The saved participant secret remains available for recovery.`
-                : `${caught.message} The saved secret and command ID are still available for an exact retry.`);
+                : refreshableConflict
+                    ? `${caught.message} Current commission state was refreshed without discarding your saved claim. Review it, then retry the same claim.`
+                    : `${caught.message} The saved secret and command ID are still available for an exact retry.`);
     } finally {
         setBusy(false);
     }

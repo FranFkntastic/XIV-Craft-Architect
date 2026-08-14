@@ -60,7 +60,9 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             "OnClick=\"InvokeSelectedOrderLifecycleActionAsync\"", "@SelectedLifecycleActionLabel",
             "class=\"trade-orders-timeline-visibility\" role=\"group\" aria-label=\"Choose timeline entry visibility\"",
             "aria-pressed=\"@(_timelineComposerVisibility == CommissionTimelineVisibility.CompanyOnly)\"",
-            "aria-pressed=\"@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared)\"");
+            "aria-pressed=\"@(_timelineComposerVisibility == CommissionTimelineVisibility.Shared)\"",
+            "operationsCommission.ActiveClaim?.AccountEvidence",
+            "OAuth verified · User ID");
         var overviewStart = source.IndexOf("<TradeOrderCenterOverview", selectedOrderStart, StringComparison.Ordinal); var headerActionsStart = source.IndexOf("<HeaderActions>", overviewStart, StringComparison.Ordinal);
         var lifecycleActionStart = source.IndexOf("OnClick=\"InvokeSelectedOrderLifecycleActionAsync\"", headerActionsStart, StringComparison.Ordinal); var requirementsStart = source.IndexOf("<RequirementsContent>", headerActionsStart, StringComparison.Ordinal);
         Assert.True(overviewStart >= 0 && headerActionsStart > overviewStart && lifecycleActionStart > headerActionsStart && requirementsStart > lifecycleActionStart);

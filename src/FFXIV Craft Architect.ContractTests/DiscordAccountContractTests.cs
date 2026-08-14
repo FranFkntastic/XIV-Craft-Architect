@@ -84,6 +84,57 @@ public sealed class DiscordAccountContractTests
     }
 
     [Fact]
+    public async Task RejectedProviderReturnsErrorToTheStoredPortableClaimPath()
+    {
+        await using var fixture = await DiscordAccountFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+        const string returnPath = "/commission.html?id=portable-claim";
+        var start = await (await client.PostAsync(
+                $"/identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}",
+                null))
+            .Content.ReadFromJsonAsync<DiscordLinkStartResponse>();
+        var state = QueryHelpers.ParseQuery(new Uri(start!.AuthorizationUrl).Query)["state"];
+
+        using var callback = await client.GetAsync(
+            $"/identity/v1/signin/discord/callback?code=rejected&state={Uri.EscapeDataString(state!)}");
+
+        Assert.Equal("/commission.html", callback.Headers.Location!.AbsolutePath);
+        Assert.Equal("?id=portable-claim", callback.Headers.Location.Query);
+        Assert.Equal(
+            "provider-rejected",
+            QueryHelpers.ParseQuery(callback.Headers.Location.Fragment.TrimStart('#'))[
+                "signin-error"]);
+    }
+
+    [Fact]
+    public async Task ReplayedSignInReturnsToTheStoredPortableClaimWithoutIssuingAnotherKey()
+    {
+        await using var fixture = await DiscordAccountFixture.CreateAsync();
+        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Discord Crafter");
+        using var client = fixture.CreateClient();
+        const string returnPath = "/commission.html?id=portable-claim";
+        var start = await (await client.PostAsync(
+                $"/identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}",
+                null))
+            .Content.ReadFromJsonAsync<DiscordLinkStartResponse>();
+        var state = QueryHelpers.ParseQuery(new Uri(start!.AuthorizationUrl).Query)["state"];
+        using var success = await client.GetAsync(
+            $"/identity/v1/signin/discord/callback?code=code&state={Uri.EscapeDataString(state!)}");
+        var keyCount = await fixture.CountRowsAsync("profile_access_keys");
+
+        using var replay = await client.GetAsync(
+            $"/identity/v1/signin/discord/callback?code=code&state={Uri.EscapeDataString(state!)}");
+
+        Assert.Equal("/commission.html", replay.Headers.Location!.AbsolutePath);
+        Assert.Equal("?id=portable-claim", replay.Headers.Location.Query);
+        Assert.Equal(
+            "replayed-state",
+            QueryHelpers.ParseQuery(replay.Headers.Location.Fragment.TrimStart('#'))[
+                "signin-error"]);
+        Assert.Equal(keyCount, await fixture.CountRowsAsync("profile_access_keys"));
+    }
+
+    [Fact]
     public async Task SignInCallbackRejectsTamperedStoredReturnPath()
     {
         await using var fixture = await DiscordAccountFixture.CreateAsync();

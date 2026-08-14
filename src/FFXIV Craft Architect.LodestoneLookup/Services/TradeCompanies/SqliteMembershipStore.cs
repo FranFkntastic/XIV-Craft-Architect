@@ -70,6 +70,34 @@ public sealed record MembershipMutationResult(
     MembershipMutationStatus Status,
     CompanyMembership? Membership = null);
 
+public enum CrafterAccountBindingEvidence
+{
+    CommittedDiscordClaim,
+    OperatorConfirmed
+}
+
+public enum CrafterAccountBindingMutationStatus
+{
+    Applied,
+    Replayed,
+    Conflict,
+    Suppressed,
+    NotFound
+}
+
+public sealed record CrafterAccountBinding(
+    CompanyId CompanyId,
+    Guid LegacyCrafterId,
+    Guid AccountProfileId,
+    CrafterAccountBindingEvidence Evidence,
+    Guid? ActorProfileId,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record CrafterAccountBindingMutationResult(
+    CrafterAccountBindingMutationStatus Status,
+    CrafterAccountBinding? Binding = null);
+
 public enum FounderBindingStatus
 {
     Bound,
@@ -98,6 +126,213 @@ public sealed class SqliteMembershipStore(
     public const int MaximumRequestNoteLength = 500;
     private readonly SemaphoreSlim schemaGate = new(1, 1);
     private bool schemaReady;
+
+    public async Task<IReadOnlyList<CrafterAccountBinding>> LoadCrafterBindingsAsync(
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        if (companyId.Value == Guid.Empty)
+        {
+            return [];
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT company_id, legacy_crafter_id, account_profile_id, evidence_kind,
+                   actor_profile_id, created_at_utc, updated_at_utc
+            FROM company_crafter_account_bindings
+            WHERE company_id = $companyId
+            ORDER BY created_at_utc, legacy_crafter_id;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        var bindings = new List<CrafterAccountBinding>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            bindings.Add(ReadCrafterBinding(reader));
+        }
+        return bindings;
+    }
+
+    public async Task<bool> IsCrafterAutoBindingSuppressedAsync(
+        CompanyId companyId,
+        Guid legacyCrafterId,
+        CancellationToken cancellationToken = default)
+    {
+        if (companyId.Value == Guid.Empty || legacyCrafterId == Guid.Empty)
+        {
+            return true;
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT 1
+            FROM company_crafter_account_binding_suppressions
+            WHERE company_id = $companyId AND legacy_crafter_id = $legacyCrafterId
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$legacyCrafterId", legacyCrafterId.ToString("D"));
+        return await command.ExecuteScalarAsync(cancellationToken) != null;
+    }
+
+    public async Task<CrafterAccountBindingMutationResult> BindCrafterAsync(
+        CompanyId companyId,
+        Guid legacyCrafterId,
+        Guid accountProfileId,
+        CrafterAccountBindingEvidence evidence,
+        Guid? actorProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        RequireIdentity(companyId, accountProfileId);
+        if (legacyCrafterId == Guid.Empty || actorProfileId == Guid.Empty)
+        {
+            throw new ArgumentException("A valid legacy crafter binding is required.");
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var existing = await LoadCrafterBindingAsync(
+            connection,
+            transaction,
+            companyId,
+            legacyCrafterId,
+            cancellationToken);
+        if (existing != null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return new CrafterAccountBindingMutationResult(
+                existing.AccountProfileId == accountProfileId
+                    ? CrafterAccountBindingMutationStatus.Replayed
+                    : CrafterAccountBindingMutationStatus.Conflict,
+                existing);
+        }
+
+        if (evidence == CrafterAccountBindingEvidence.CommittedDiscordClaim &&
+            await IsCrafterAutoBindingSuppressedAsync(
+                connection,
+                transaction,
+                companyId,
+                legacyCrafterId,
+                cancellationToken))
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return new CrafterAccountBindingMutationResult(
+                CrafterAccountBindingMutationStatus.Suppressed);
+        }
+
+        if (evidence == CrafterAccountBindingEvidence.OperatorConfirmed)
+        {
+            await DeleteCrafterBindingSuppressionAsync(
+                connection,
+                transaction,
+                companyId,
+                legacyCrafterId,
+                cancellationToken);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var binding = new CrafterAccountBinding(
+            companyId,
+            legacyCrafterId,
+            accountProfileId,
+            evidence,
+            actorProfileId,
+            now,
+            now);
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO company_crafter_account_bindings (
+                    company_id, legacy_crafter_id, account_profile_id, evidence_kind,
+                    actor_profile_id, created_at_utc, updated_at_utc)
+                VALUES (
+                    $companyId, $legacyCrafterId, $accountProfileId, $evidenceKind,
+                    $actorProfileId, $createdAtUtc, $updatedAtUtc);
+                """;
+            AddCrafterBindingParameters(command, binding);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await InsertCrafterBindingEventAsync(
+            connection,
+            transaction,
+            binding,
+            "bound",
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new CrafterAccountBindingMutationResult(
+            CrafterAccountBindingMutationStatus.Applied,
+            binding);
+    }
+
+    public async Task<CrafterAccountBindingMutationResult> UnbindCrafterAsync(
+        CompanyId companyId,
+        Guid legacyCrafterId,
+        Guid actorProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        RequireIdentity(companyId, actorProfileId);
+        if (legacyCrafterId == Guid.Empty)
+        {
+            throw new ArgumentException("A valid legacy crafter binding is required.");
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var existing = await LoadCrafterBindingAsync(
+            connection,
+            transaction,
+            companyId,
+            legacyCrafterId,
+            cancellationToken);
+        if (existing == null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return new CrafterAccountBindingMutationResult(
+                CrafterAccountBindingMutationStatus.NotFound);
+        }
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                DELETE FROM company_crafter_account_bindings
+                WHERE company_id = $companyId AND legacy_crafter_id = $legacyCrafterId;
+                """;
+            command.Parameters.AddWithValue("$companyId", companyId.ToString());
+            command.Parameters.AddWithValue("$legacyCrafterId", legacyCrafterId.ToString("D"));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await InsertCrafterBindingSuppressionAsync(
+            connection,
+            transaction,
+            companyId,
+            legacyCrafterId,
+            actorProfileId,
+            timeProvider.GetUtcNow(),
+            cancellationToken);
+        await InsertCrafterBindingEventAsync(
+            connection,
+            transaction,
+            existing with { ActorProfileId = actorProfileId, UpdatedAtUtc = timeProvider.GetUtcNow() },
+            "unbound",
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new CrafterAccountBindingMutationResult(
+            CrafterAccountBindingMutationStatus.Applied,
+            existing);
+    }
 
     public async Task<FounderBindingResult> BindFounderAsync(
         CompanyId companyId,
@@ -868,6 +1103,42 @@ public sealed class SqliteMembershipStore(
                     updated_at_utc TEXT NOT NULL,
                     PRIMARY KEY(company_id, account_profile_id, commission_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS company_crafter_account_bindings (
+                    company_id TEXT NOT NULL,
+                    legacy_crafter_id TEXT NOT NULL,
+                    account_profile_id TEXT NOT NULL,
+                    evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('committed_discord_claim', 'operator_confirmed')),
+                    actor_profile_id TEXT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(company_id, legacy_crafter_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_company_crafter_bindings_account
+                    ON company_crafter_account_bindings(company_id, account_profile_id);
+
+                CREATE TABLE IF NOT EXISTS company_crafter_account_binding_events (
+                    event_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    legacy_crafter_id TEXT NOT NULL,
+                    account_profile_id TEXT NOT NULL,
+                    action TEXT NOT NULL CHECK(action IN ('bound', 'unbound')),
+                    evidence_kind TEXT NOT NULL,
+                    actor_profile_id TEXT NULL,
+                    created_at_utc TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_company_crafter_binding_events
+                    ON company_crafter_account_binding_events(company_id, legacy_crafter_id, created_at_utc);
+
+                CREATE TABLE IF NOT EXISTS company_crafter_account_binding_suppressions (
+                    company_id TEXT NOT NULL,
+                    legacy_crafter_id TEXT NOT NULL,
+                    actor_profile_id TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(company_id, legacy_crafter_id)
+                );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
             await AddMembershipColumnIfMissingAsync(
@@ -994,6 +1265,166 @@ public sealed class SqliteMembershipStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
         return connection;
     }
+
+    private static async Task<CrafterAccountBinding?> LoadCrafterBindingAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyId companyId,
+        Guid legacyCrafterId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT company_id, legacy_crafter_id, account_profile_id, evidence_kind,
+                   actor_profile_id, created_at_utc, updated_at_utc
+            FROM company_crafter_account_bindings
+            WHERE company_id = $companyId AND legacy_crafter_id = $legacyCrafterId;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$legacyCrafterId", legacyCrafterId.ToString("D"));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? ReadCrafterBinding(reader)
+            : null;
+    }
+
+    private static async Task<bool> IsCrafterAutoBindingSuppressedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyId companyId,
+        Guid legacyCrafterId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT 1
+            FROM company_crafter_account_binding_suppressions
+            WHERE company_id = $companyId AND legacy_crafter_id = $legacyCrafterId
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$legacyCrafterId", legacyCrafterId.ToString("D"));
+        return await command.ExecuteScalarAsync(cancellationToken) != null;
+    }
+
+    private static async Task DeleteCrafterBindingSuppressionAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyId companyId,
+        Guid legacyCrafterId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            DELETE FROM company_crafter_account_binding_suppressions
+            WHERE company_id = $companyId AND legacy_crafter_id = $legacyCrafterId;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$legacyCrafterId", legacyCrafterId.ToString("D"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InsertCrafterBindingSuppressionAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyId companyId,
+        Guid legacyCrafterId,
+        Guid actorProfileId,
+        DateTimeOffset createdAtUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO company_crafter_account_binding_suppressions (
+                company_id, legacy_crafter_id, actor_profile_id, created_at_utc)
+            VALUES ($companyId, $legacyCrafterId, $actorProfileId, $createdAtUtc)
+            ON CONFLICT(company_id, legacy_crafter_id) DO UPDATE SET
+                actor_profile_id = excluded.actor_profile_id,
+                created_at_utc = excluded.created_at_utc;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$legacyCrafterId", legacyCrafterId.ToString("D"));
+        command.Parameters.AddWithValue("$actorProfileId", actorProfileId.ToString("D"));
+        command.Parameters.AddWithValue("$createdAtUtc", createdAtUtc.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static CrafterAccountBinding ReadCrafterBinding(SqliteDataReader reader) =>
+        new(
+            ParseCompanyId(reader.GetString(0)),
+            Guid.Parse(reader.GetString(1)),
+            Guid.Parse(reader.GetString(2)),
+            ParseCrafterBindingEvidence(reader.GetString(3)),
+            reader.IsDBNull(4) ? null : Guid.Parse(reader.GetString(4)),
+            DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
+            DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture));
+
+    private static void AddCrafterBindingParameters(
+        SqliteCommand command,
+        CrafterAccountBinding binding)
+    {
+        command.Parameters.AddWithValue("$companyId", binding.CompanyId.ToString());
+        command.Parameters.AddWithValue("$legacyCrafterId", binding.LegacyCrafterId.ToString("D"));
+        command.Parameters.AddWithValue("$accountProfileId", binding.AccountProfileId.ToString("D"));
+        command.Parameters.AddWithValue("$evidenceKind", ToStorage(binding.Evidence));
+        command.Parameters.AddWithValue(
+            "$actorProfileId",
+            binding.ActorProfileId.HasValue
+                ? binding.ActorProfileId.Value.ToString("D")
+                : DBNull.Value);
+        command.Parameters.AddWithValue("$createdAtUtc", binding.CreatedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$updatedAtUtc", binding.UpdatedAtUtc.ToString("O"));
+    }
+
+    private static async Task InsertCrafterBindingEventAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CrafterAccountBinding binding,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO company_crafter_account_binding_events (
+                event_id, company_id, legacy_crafter_id, account_profile_id, action,
+                evidence_kind, actor_profile_id, created_at_utc)
+            VALUES (
+                $eventId, $companyId, $legacyCrafterId, $accountProfileId, $action,
+                $evidenceKind, $actorProfileId, $createdAtUtc);
+            """;
+        command.Parameters.AddWithValue("$eventId", Guid.NewGuid().ToString("D"));
+        command.Parameters.AddWithValue("$companyId", binding.CompanyId.ToString());
+        command.Parameters.AddWithValue("$legacyCrafterId", binding.LegacyCrafterId.ToString("D"));
+        command.Parameters.AddWithValue("$accountProfileId", binding.AccountProfileId.ToString("D"));
+        command.Parameters.AddWithValue("$action", action);
+        command.Parameters.AddWithValue("$evidenceKind", ToStorage(binding.Evidence));
+        command.Parameters.AddWithValue(
+            "$actorProfileId",
+            binding.ActorProfileId.HasValue
+                ? binding.ActorProfileId.Value.ToString("D")
+                : DBNull.Value);
+        command.Parameters.AddWithValue("$createdAtUtc", binding.UpdatedAtUtc.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static string ToStorage(CrafterAccountBindingEvidence evidence) => evidence switch
+    {
+        CrafterAccountBindingEvidence.CommittedDiscordClaim => "committed_discord_claim",
+        CrafterAccountBindingEvidence.OperatorConfirmed => "operator_confirmed",
+        _ => throw new ArgumentOutOfRangeException(nameof(evidence), evidence, null)
+    };
+
+    private static CrafterAccountBindingEvidence ParseCrafterBindingEvidence(string value) => value switch
+    {
+        "committed_discord_claim" => CrafterAccountBindingEvidence.CommittedDiscordClaim,
+        "operator_confirmed" => CrafterAccountBindingEvidence.OperatorConfirmed,
+        _ => throw new InvalidOperationException($"Unknown crafter account binding evidence '{value}'.")
+    };
 
     private static CompanyMembership ReadMembership(SqliteDataReader reader) =>
         new(

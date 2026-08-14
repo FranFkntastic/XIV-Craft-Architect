@@ -1,7 +1,10 @@
 const PROTOCOL_VERSION = 1;
 const ACCESS_STORAGE_PREFIX = "craftArchitect.companyCommission.participant.v1.";
+const ACCOUNT_STORAGE_PREFIX = "craftArchitect.companyCommission.discordAccount.v1.";
+const SIGN_IN_STORAGE_PREFIX = "craftArchitect.companyCommission.discordSignIn.v1.";
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DISCORD_USER_ID_PATTERN = /^\d{17,20}$/;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{32,512}$/;
 const PROJECTION_TAG_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -108,18 +111,65 @@ export class CommissionBriefApiClient {
             command: payload
         };
 
+        const headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        };
+        if (authorization.accountAccessKey) {
+            headers["X-Profile-Key"] = authorization.accountAccessKey;
+        }
         const response = await this.fetch(
             `${this.briefPath}/commands/${encodeURIComponent(command)}`,
             {
                 method: "POST",
-                headers: {
-                    "Accept": "application/json",
-                    "Content-Type": "application/json"
-                },
+                headers,
                 redirect: "error",
                 body: JSON.stringify(body)
             });
         return adaptResponse(response);
+    }
+
+    async loadDiscordIdentity(accessKey) {
+        const key = optionalCapability(accessKey, "Account access key");
+        if (!key) {
+            throw new CommissionClientError(
+                "The signed-in account credential is invalid.",
+                "invalid-account-access");
+        }
+        return adaptResponse(await this.fetch(
+            "/api/identity/v1/discord/",
+            {
+                headers: {
+                    "Accept": "application/json",
+                    "X-Profile-Key": key
+                },
+                cache: "no-store",
+                redirect: "error"
+            }));
+    }
+
+    async loadDiscordSignInStatus() {
+        return adaptResponse(await this.fetch(
+            "/api/identity/v1/signin/discord/status",
+            {
+                headers: { "Accept": "application/json" },
+                cache: "no-store",
+                redirect: "error"
+            }));
+    }
+
+    async startDiscordSignIn(returnPath) {
+        const path = requiredText(returnPath, "Discord return path");
+        const response = await this.fetch(
+            `/api/identity/v1/signin/discord/start?returnPath=${encodeURIComponent(path)}`,
+            {
+                method: "POST",
+                headers: { "Accept": "application/json" },
+                cache: "no-store",
+                redirect: "error"
+            });
+        const result = await adaptResponse(response);
+        return requiredHttpsUrl(result.authorizationUrl, "Discord authorization URL");
     }
 
     async exchangeDiscordBootstrap(bootstrapToken, participantCredential) {
@@ -423,6 +473,122 @@ export class ParticipantAccessStore {
     }
 }
 
+export class PortableClaimAccountStore {
+    constructor(publicId, storage = window.localStorage) {
+        this.publicId = publicId;
+        this.storage = storage;
+        this.accountKey = `${ACCOUNT_STORAGE_PREFIX}${publicId}`;
+        this.signInKey = `${SIGN_IN_STORAGE_PREFIX}${publicId}`;
+    }
+
+    loadAccount() {
+        return this.#load(this.accountKey, "signed-in account", value => ({
+            version: 1,
+            publicId: this.publicId,
+            accessKey: requiredCapability(value.accessKey, "Account access key"),
+            savedAtUtc: requiredDate(value.savedAtUtc, "Account sign-in time")
+        }));
+    }
+
+    beginSignIn(claimCapability) {
+        const pending = {
+            version: 1,
+            publicId: this.publicId,
+            claimCapability: requiredCapability(claimCapability, "Claim capability"),
+            savedAtUtc: new Date().toISOString()
+        };
+        this.#save(this.signInKey, pending, "Discord sign-in return");
+        return pending;
+    }
+
+    completeSignIn(location = window.location) {
+        const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
+        const accessKey = fragment.get("signin");
+        const error = fragment.get("signin-error");
+        if (!accessKey && !error) return null;
+
+        const pending = this.#load(this.signInKey, "Discord sign-in return", value => ({
+            version: 1,
+            publicId: this.publicId,
+            claimCapability: requiredCapability(value.claimCapability, "Claim capability"),
+            savedAtUtc: requiredDate(value.savedAtUtc, "Discord sign-in start time")
+        }));
+        if (error) {
+            return {
+                kind: "error",
+                error: optionalText(error) ?? "invalid-state",
+                claimCapability: pending?.claimCapability ?? null
+            };
+        }
+        if (!pending) {
+            throw new CommissionClientError(
+                "Discord sign-in returned without the saved commission claim.",
+                "missing-signin-return");
+        }
+
+        const account = {
+            version: 1,
+            publicId: this.publicId,
+            accessKey: requiredCapability(accessKey, "Account access key"),
+            savedAtUtc: new Date().toISOString()
+        };
+        this.#save(this.accountKey, account, "signed-in account");
+        this.#remove(this.signInKey, "Discord sign-in return");
+        return {
+            kind: "signin",
+            account,
+            claimCapability: pending.claimCapability
+        };
+    }
+
+    discardAccount() {
+        this.#remove(this.accountKey, "signed-in account");
+    }
+
+    #load(key, label, adapt) {
+        let serialized;
+        try {
+            serialized = this.storage.getItem(key);
+        } catch {
+            throw new CommissionClientError(
+                `Browser storage cannot read the ${label}.`,
+                "storage-unavailable");
+        }
+        if (!serialized) return null;
+        try {
+            const value = JSON.parse(serialized);
+            if (value.version !== 1 || value.publicId !== this.publicId) {
+                throw new Error("Stored authority belongs to another commission.");
+            }
+            return adapt(value);
+        } catch {
+            throw new CommissionClientError(
+                `The saved ${label} is damaged.`,
+                "invalid-saved-access");
+        }
+    }
+
+    #save(key, value, label) {
+        try {
+            this.storage.setItem(key, JSON.stringify(value));
+        } catch {
+            throw new CommissionClientError(
+                `Browser storage could not save the ${label}.`,
+                "storage-write-failed");
+        }
+    }
+
+    #remove(key, label) {
+        try {
+            this.storage.removeItem(key);
+        } catch {
+            throw new CommissionClientError(
+                `Browser storage could not clear the ${label}.`,
+                "storage-write-failed");
+        }
+    }
+}
+
 export function readCapabilityFragment(location = window.location) {
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
     const claimCapability = optionalCapability(fragment.get("claim"), "Claim capability");
@@ -484,6 +650,18 @@ export function replaceParticipantCapabilityFragment(
     }
 
     const fragment = new URLSearchParams({ participant: secret });
+    history.replaceState(
+        null,
+        "",
+        `${location.pathname}${location.search}#${fragment.toString()}`);
+}
+
+export function replaceClaimCapabilityFragment(
+    claimCapability,
+    history = window.history,
+    location = window.location) {
+    const capability = requiredCapability(claimCapability, "Claim capability");
+    const fragment = new URLSearchParams({ claim: capability });
     history.replaceState(
         null,
         "",
@@ -564,7 +742,8 @@ export function createCommandAuthorization(projection, access, capability = {}, 
         commandId,
         participantSecret: access?.participantSecret ?? null,
         claimCapability: capability.claimCapability ?? null,
-        recoveryCapability: capability.recoveryCapability ?? null
+        recoveryCapability: capability.recoveryCapability ?? null,
+        accountAccessKey: capability.accountAccessKey ?? null
     };
 }
 
@@ -622,6 +801,9 @@ export function adaptBriefProjection(payload) {
         public: publicBrief,
         provisionalCrafter: payload.provisionalCrafter
             ? adaptProvisionalCrafter(payload.provisionalCrafter)
+            : null,
+        claimAccountEvidence: payload.claimAccountEvidence
+            ? adaptClaimAccountEvidence(payload.claimAccountEvidence)
             : null,
         participantCapabilityRevision: requiredInteger(
             payload.participantCapabilityRevision,
@@ -694,7 +876,8 @@ async function adaptResponse(response) {
         return payload;
     }
 
-    const code = optionalText(payload?.errorCode ?? payload?.code) ?? statusCode(response.status);
+    const code = optionalText(payload?.errorCode ?? payload?.error ?? payload?.code) ??
+        statusCode(response.status);
     const message = optionalText(payload?.errorMessage ?? payload?.message) ?? statusMessage(response.status);
     throw new CommissionClientError(message, code, response.status);
 }
@@ -996,6 +1179,33 @@ function optionalCapability(value, label) {
         throw new CommissionClientError(`${label} is invalid.`, "invalid-authority");
     }
     return text;
+}
+
+function adaptClaimAccountEvidence(value) {
+    const evidence = requiredObject(value, "Verified Discord claim account");
+    const discordUserId = requiredText(
+        evidence.discordUserId,
+        "Verified Discord user ID");
+    if (!DISCORD_USER_ID_PATTERN.test(discordUserId)) {
+        throw new CommissionClientError(
+            "Verified Discord user ID is invalid.",
+            "invalid-projection");
+    }
+    return {
+        profileId: requiredGuid(evidence.profileId, "Claim account profile ID"),
+        discordUserId,
+        discordDisplayNameSnapshot: requiredText(
+            evidence.discordDisplayNameSnapshot,
+            "Verified Discord display name")
+    };
+}
+
+function requiredCapability(value, label) {
+    const capability = optionalCapability(value, label);
+    if (!capability) {
+        throw new CommissionClientError(`${label} is missing.`, "invalid-authority");
+    }
+    return capability;
 }
 
 function requiredGuid(value, label) {
