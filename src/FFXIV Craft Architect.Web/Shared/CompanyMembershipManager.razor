@@ -11,10 +11,39 @@
     else
     {
         <MudTable Items="Pending" Dense="true" Hover="true">
-            <HeaderContent><MudTh>Requester</MudTh><MudTh>Note</MudTh><MudTh>Requested</MudTh><MudTh></MudTh></HeaderContent>
+            <HeaderContent><MudTh>Requester</MudTh><MudTh>Note</MudTh><MudTh>Requested</MudTh><MudTh>Existing history</MudTh><MudTh></MudTh></HeaderContent>
             <RowTemplate>
                 <MudTd><strong>@context.Member.DisplayName</strong></MudTd><MudTd>@(context.Request.RequestNote ?? "No note")</MudTd><MudTd>@context.Request.RequestedAtUtc.ToLocalTime().ToString("g")</MudTd>
-                <MudTd><MudButton Size="Size.Small" Color="Color.Primary" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "approve"))">Approve</MudButton><MudButton Size="Size.Small" Color="Color.Error" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "deny"))">Deny</MudButton></MudTd>
+                <MudTd>
+                    @if (BindingsFor(context.Member.AccountProfileId).Any())
+                    {
+                        <MudText Typo="Typo.body2">Connected: @BindingNames(context.Member.AccountProfileId)</MudText>
+                    }
+                    else if (AvailableLegacyCrafters.Any())
+                    {
+                        <MudSelect T="Guid?" Label="Legacy crafter" Dense="true" Value="@SelectedLegacyCrafter(context.Member.AccountProfileId)" ValueChanged="@(value => SelectLegacyCrafter(context.Member.AccountProfileId, value))">
+                            @foreach (var crafter in AvailableLegacyCrafters)
+                            {
+                                <MudSelectItem T="Guid?" Value="@((Guid?)crafter.LegacyCrafterId)">@CrafterLabel(crafter)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2">No legacy history</MudText>
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (SelectedLegacyCrafter(context.Member.AccountProfileId).HasValue)
+                    {
+                        <MudButton Size="Size.Small" Color="Color.Primary" OnClick="@(() => ApproveAndConnectAsync(context.Member.AccountProfileId))">Approve + connect history</MudButton>
+                    }
+                    else
+                    {
+                        <MudButton Size="Size.Small" Color="Color.Primary" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "approve"))">Approve</MudButton>
+                    }
+                    <MudButton Size="Size.Small" Color="Color.Error" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "deny"))">Deny</MudButton>
+                </MudTd>
             </RowTemplate>
             <NoRecordsContent><MudText Typo="Typo.body2">No pending requests.</MudText></NoRecordsContent>
         </MudTable>
@@ -24,9 +53,34 @@
 <MudPaper Class="pa-3 mb-3">
     <MudText Typo="Typo.h6">Company members</MudText>
     <MudTable Items="ActiveMembers" Dense="true" Hover="true">
-        <HeaderContent><MudTh>Member</MudTh><MudTh>Role</MudTh><MudTh>Standing</MudTh><MudTh>Routing</MudTh><MudTh></MudTh></HeaderContent>
+        <HeaderContent><MudTh>Member</MudTh><MudTh>Role</MudTh><MudTh>Standing</MudTh><MudTh>Routing</MudTh><MudTh>Existing history</MudTh><MudTh></MudTh></HeaderContent>
         <RowTemplate>
             <MudTd><strong>@context.DisplayName</strong></MudTd><MudTd>@context.Role</MudTd><MudTd>@context.State</MudTd><MudTd>@(context.DiscordLinked ? "Linked Discord" : "Discord not linked")</MudTd>
+            <MudTd>
+                <div class="d-flex align-center gap-1">
+                    <MudText Typo="Typo.body2">@(BindingsFor(context.AccountProfileId).Any() ? BindingNames(context.AccountProfileId) : "No connected history")</MudText>
+                    <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => ToggleHistoryManager(context.AccountProfileId))">@(_manageHistoryMemberId == context.AccountProfileId ? "Done" : "Manage")</MudButton>
+                </div>
+                @if (_manageHistoryMemberId == context.AccountProfileId)
+                {
+                    @foreach (var binding in BindingsFor(context.AccountProfileId))
+                    {
+                        <div class="d-flex align-center gap-1"><MudText Typo="Typo.body2">@BindingName(binding)</MudText><MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => DisconnectAsync(binding.LegacyCrafterId))">Disconnect</MudButton></div>
+                    }
+                    @if (AvailableLegacyCrafters.Any())
+                    {
+                        <div class="d-flex align-center gap-1">
+                            <MudSelect T="Guid?" Label="Connect legacy crafter" Dense="true" Value="@SelectedLegacyCrafter(context.AccountProfileId)" ValueChanged="@(value => SelectLegacyCrafter(context.AccountProfileId, value))">
+                                @foreach (var crafter in AvailableLegacyCrafters)
+                                {
+                                    <MudSelectItem T="Guid?" Value="@((Guid?)crafter.LegacyCrafterId)">@CrafterLabel(crafter)</MudSelectItem>
+                                }
+                            </MudSelect>
+                            <MudButton Size="Size.Small" Disabled="@(!SelectedLegacyCrafter(context.AccountProfileId).HasValue)" OnClick="@(() => ConnectAsync(context.AccountProfileId))">Connect</MudButton>
+                        </div>
+                    }
+                }
+            </MudTd>
             <MudTd>@if (CanRevoke(context)) { <MudButton Size="Size.Small" Color="Color.Error" OnClick="() => _revokeMember = context">Revoke</MudButton> }</MudTd>
         </RowTemplate>
     </MudTable>
@@ -42,23 +96,43 @@
     private string _viewerRole = string.Empty;
     private IReadOnlyList<CompanyMembership> _requests = [];
     private IReadOnlyList<CompanyMember> _members = [];
+    private LegacyCrafterMigration _migration = new([], []);
+    private readonly Dictionary<Guid, Guid?> _selectedLegacyCrafters = [];
+    private Guid? _manageHistoryMemberId;
     private CompanyMember? _revokeMember;
     private string? _revokeReason;
     private IEnumerable<PendingMember> Pending => _requests.Join(_members, request => request.AccountProfileId, member => member.AccountProfileId, (request, member) => new PendingMember(request, member));
     private IEnumerable<CompanyMember> ActiveMembers => _members.Where(member => member.State == "active");
+    private IEnumerable<LegacyCrafterCandidate> AvailableLegacyCrafters => _migration.LegacyCrafters.Where(crafter => _migration.Bindings.All(binding => binding.LegacyCrafterId != crafter.LegacyCrafterId));
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();
     private async Task LoadAsync()
     {
         _loading = true;
-        var hub = await HubClient.LoadAsync(CompanyId);
+        var hubTask = HubClient.LoadAsync(CompanyId);
+        var requestsTask = HubClient.LoadPendingMembershipsAsync(CompanyId);
+        var membersTask = HubClient.LoadCompanyMembersAsync(CompanyId);
+        var migrationTask = HubClient.LoadLegacyCrafterMigrationAsync(CompanyId);
+        await Task.WhenAll(hubTask, requestsTask, membersTask, migrationTask);
+        var hub = await hubTask;
         _viewerRole = hub?.Standing.Role ?? string.Empty;
-        _requests = await HubClient.LoadPendingMembershipsAsync(CompanyId);
-        _members = await HubClient.LoadCompanyMembersAsync(CompanyId);
+        _requests = await requestsTask;
+        _members = await membersTask;
+        _migration = await migrationTask;
         _loading = false;
     }
     private bool CanRevoke(CompanyMember member) => member.Role != "owner" || _viewerRole == "owner";
     private async Task TransitionAsync(Guid accountId, string action) { await HubClient.TransitionMembershipAsync(CompanyId, accountId, action); await LoadAsync(); Snackbar.Add($"Membership {action}d.", Severity.Success); }
+    private IEnumerable<LegacyCrafterBinding> BindingsFor(Guid accountId) => _migration.Bindings.Where(binding => binding.AccountProfileId == accountId);
+    private string BindingNames(Guid accountId) => string.Join(", ", BindingsFor(accountId).Select(BindingName));
+    private string BindingName(LegacyCrafterBinding binding) => _migration.LegacyCrafters.FirstOrDefault(crafter => crafter.LegacyCrafterId == binding.LegacyCrafterId)?.DisplayName ?? binding.LegacyCrafterId.ToString("D");
+    private static string CrafterLabel(LegacyCrafterCandidate crafter) => string.IsNullOrWhiteSpace(crafter.WorldName) ? crafter.DisplayName : $"{crafter.DisplayName} · {crafter.WorldName}";
+    private Guid? SelectedLegacyCrafter(Guid accountId) => _selectedLegacyCrafters.GetValueOrDefault(accountId);
+    private void SelectLegacyCrafter(Guid accountId, Guid? legacyCrafterId) => _selectedLegacyCrafters[accountId] = legacyCrafterId;
+    private void ToggleHistoryManager(Guid accountId) => _manageHistoryMemberId = _manageHistoryMemberId == accountId ? null : accountId;
+    private async Task ApproveAndConnectAsync(Guid accountId) { await ConnectAsync(accountId, reload: false); await HubClient.TransitionMembershipAsync(CompanyId, accountId, "approve"); await LoadAsync(); Snackbar.Add("Membership approved and existing history connected.", Severity.Success); }
+    private async Task ConnectAsync(Guid accountId, bool reload = true) { var legacyCrafterId = SelectedLegacyCrafter(accountId); if (!legacyCrafterId.HasValue) return; await HubClient.ConnectLegacyCrafterAsync(CompanyId, legacyCrafterId.Value, accountId); _selectedLegacyCrafters.Remove(accountId); if (reload) { await LoadAsync(); Snackbar.Add("Existing crafter history connected.", Severity.Success); } }
+    private async Task DisconnectAsync(Guid legacyCrafterId) { await HubClient.DisconnectLegacyCrafterAsync(CompanyId, legacyCrafterId); await LoadAsync(); Snackbar.Add("Existing crafter history disconnected.", Severity.Success); }
     private void CancelRevoke() { _revokeMember = null; _revokeReason = null; }
     private async Task RevokeAsync() { await HubClient.TransitionMembershipAsync(CompanyId, _revokeMember!.AccountProfileId, "revoke", _revokeReason!.Trim()); CancelRevoke(); await LoadAsync(); Snackbar.Add("Membership revoked.", Severity.Success); }
     private sealed record PendingMember(CompanyMembership Request, CompanyMember Member);

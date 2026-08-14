@@ -217,6 +217,62 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task LegacyCrafterHistoryAutoBindsFromCommittedDiscordClaimAndKeepsMemberAuthority()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var member = await fixture.AddActiveMemberAsync("Returning crafter");
+        var unrelated = await fixture.AddActiveMemberAsync("Unrelated crafter");
+        using var claimed = await fixture.ClaimAsync(member);
+        claimed.EnsureSuccessStatusCode();
+        var claimProjection = (await claimed.Content
+            .ReadFromJsonAsync<CompanyCommissionParticipantBrief>())!;
+        var legacyCrafterId = await fixture.ConvertClaimToLegacyCrafterAsync();
+
+        var hubLoads = await Task.WhenAll(
+            fixture.LoadCompanyHubAsync(member),
+            fixture.LoadCompanyHubAsync(member));
+        using var firstHub = hubLoads[0];
+        using var secondHub = hubLoads[1];
+        firstHub.EnsureSuccessStatusCode();
+        secondHub.EnsureSuccessStatusCode();
+        var firstProjection = await firstHub.Content.ReadFromJsonAsync<CompanyHubResponse>();
+        using var unrelatedHub = await fixture.LoadCompanyHubAsync(unrelated);
+        unrelatedHub.EnsureSuccessStatusCode();
+        var unrelatedProjection = await unrelatedHub.Content
+            .ReadFromJsonAsync<CompanyHubResponse>();
+        var bindings = await fixture.Memberships.LoadCrafterBindingsAsync(
+            new CompanyId(fixture.Company.Id));
+        using var progress = await fixture.ReportProgressAsync(
+            member,
+            claimProjection.Public.ProjectionRevision);
+        using var ownerClient = fixture.CreateClient(fixture.Owner.Key);
+        using var disconnected = await ownerClient.DeleteAsync(
+            $"/trade/v1/companies/{fixture.Company.Id:D}/legacy-crafter-bindings/{legacyCrafterId:D}");
+        disconnected.EnsureSuccessStatusCode();
+        using var afterDisconnect = await fixture.LoadCompanyHubAsync(member);
+        var disconnectedProjection = await afterDisconnect.Content
+            .ReadFromJsonAsync<CompanyHubResponse>();
+        using var reconnected = await ownerClient.PutAsJsonAsync(
+            $"/trade/v1/companies/{fixture.Company.Id:D}/legacy-crafter-bindings/{legacyCrafterId:D}",
+            new LegacyCrafterBindingBody(member.ProfileId));
+        reconnected.EnsureSuccessStatusCode();
+        using var afterReconnect = await fixture.LoadCompanyHubAsync(member);
+        var reconnectedProjection = await afterReconnect.Content
+            .ReadFromJsonAsync<CompanyHubResponse>();
+
+        Assert.Single(firstProjection!.Assignments);
+        Assert.Equal(fixture.Order.Id.ToString("D"), firstProjection.Assignments.Single().CommissionId);
+        var binding = Assert.Single(bindings);
+        Assert.Equal(legacyCrafterId, binding.LegacyCrafterId);
+        Assert.Equal(member.ProfileId, binding.AccountProfileId);
+        Assert.Equal(CrafterAccountBindingEvidence.CommittedDiscordClaim, binding.Evidence);
+        Assert.Equal(HttpStatusCode.OK, progress.StatusCode);
+        Assert.Empty(unrelatedProjection!.Assignments);
+        Assert.Empty(disconnectedProjection!.Assignments);
+        Assert.Single(reconnectedProjection!.Assignments);
+    }
+
+    [Fact]
     public async Task OtherMemberAndCompanyOwnerCannotUseClaimantsParticipantAuthority()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -780,6 +836,52 @@ public sealed class CompanyMemberCommissionContractTests
         {
             var order = await LoadCanonicalOrderAsync();
             return order.CompanyCommission!.ActiveClaim!.CrafterId!.Value;
+        }
+
+        public async Task<Guid> ConvertClaimToLegacyCrafterAsync()
+        {
+            var legacyCrafter = new TradeCrafterProfile
+            {
+                Id = Guid.NewGuid(),
+                CompanyProfileId = Company.Id,
+                DisplayName = "Returning crafter legacy record",
+                WorldName = "Siren",
+                LodestoneCharacterId = "49131404"
+            };
+            var crafterPut = await Profiles.PutObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeCrafters,
+                legacyCrafter.Id.ToString("D"),
+                JsonSerializer.Serialize(legacyCrafter, JsonOptions),
+                expectedRevision: 0,
+                ct: CancellationToken.None);
+            Assert.True(crafterPut.Success);
+
+            var envelope = await Profiles.LoadObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                CancellationToken.None);
+            var order = JsonSerializer.Deserialize<TradeOrder>(
+                envelope!.PayloadJson,
+                JsonOptions)!;
+            order.AssignedCrafterId = legacyCrafter.Id;
+            order.CompanyCommission = order.CompanyCommission! with
+            {
+                ActiveClaim = order.CompanyCommission.ActiveClaim! with
+                {
+                    CrafterId = legacyCrafter.Id
+                }
+            };
+            var orderPut = await Profiles.PutObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                JsonSerializer.Serialize(order, JsonOptions),
+                expectedRevision: envelope.Revision,
+                ct: CancellationToken.None);
+            Assert.True(orderPut.Success);
+            return legacyCrafter.Id;
         }
 
         public Task<HttpResponseMessage> LoadOwnerCommissionAsync(Account account)
