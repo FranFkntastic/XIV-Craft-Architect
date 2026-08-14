@@ -115,6 +115,66 @@ public sealed class DiscordCommissionMessageLifecycleTests
     }
 
     [Fact]
+    public async Task BrowserClaimContactsForOneDiscordAccountDoNotCollideAcrossCommissions()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-browser-claim-contact-{Guid.NewGuid():N}.db");
+        try
+        {
+            var store = new SqliteDiscordNotificationStore(
+                CreateDiscordOptions(databasePath));
+            await store.InitializeAsync();
+            var secondCompanyId = new CompanyId(Guid.NewGuid());
+            var secondCommissionId = Guid.NewGuid();
+            const string discordUserId = "100000000000000005";
+
+            await store.CaptureCommittedClaimContactAsync(
+                MemberClaimContact(CompanyId, CommissionId, ClaimId));
+            var secondClaimId = Guid.NewGuid();
+            await store.CaptureCommittedClaimContactAsync(
+                MemberClaimContact(secondCompanyId, secondCommissionId, secondClaimId));
+
+            Assert.True(await store.HasCommittedClaimContactAsync(
+                CompanyId,
+                CommissionId,
+                ClaimId,
+                discordUserId));
+            Assert.True(await store.HasCommittedClaimContactAsync(
+                secondCompanyId,
+                secondCommissionId,
+                secondClaimId,
+                discordUserId));
+
+            CommittedDiscordClaimContact MemberClaimContact(
+                CompanyId companyId,
+                Guid commissionId,
+                Guid claimId)
+            {
+                var claimEventId = Guid.NewGuid();
+                return new(
+                    companyId,
+                    commissionId,
+                    claimId,
+                    claimEventId,
+                    2,
+                    CompanyCommissionActivityKind.ClaimAccepted,
+                    CapturedAt,
+                    DiscordClaimContactCommitter.MemberClaimInteractionId(claimEventId),
+                    new DiscordOriginContact(discordUserId, "Browser claimant"));
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
     public void PreWorkReleaseReturnsCommissionToOpen()
     {
         var source = CreateAssignedOrder();

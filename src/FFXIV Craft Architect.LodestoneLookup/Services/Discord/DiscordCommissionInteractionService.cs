@@ -236,6 +236,9 @@ internal sealed class DiscordClaimContactCommitter(
     ICompanyCommissionDiscordDelivery discordDelivery,
     TimeProvider timeProvider)
 {
+    internal static string MemberClaimInteractionId(Guid claimEventId) =>
+        $"member:{claimEventId:D}";
+
     public async Task<bool> CaptureMemberAsync(
         Guid profileId,
         SqliteDiscordIdentityStore identities,
@@ -266,7 +269,7 @@ internal sealed class DiscordClaimContactCommitter(
                 activity.CommissionRevision,
                 activity.Kind,
                 activity.CreatedAtUtc,
-                identity.DiscordUserId,
+                MemberClaimInteractionId(activity.EventId),
                 new DiscordOriginContact(
                     identity.DiscordUserId,
                     identity.DisplayNameSnapshot)),
