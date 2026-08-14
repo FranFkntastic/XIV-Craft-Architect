@@ -815,8 +815,9 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
             contact.ClaimId == Guid.Empty ||
             contact.CommissionId == Guid.Empty ||
             contact.CommissionRevision <= 0 ||
-            string.IsNullOrWhiteSpace(contact.InteractionId) ||
-            contact.InteractionId.Length > 80 ||
+            !IsValidCommittedClaimInteractionId(
+                contact.InteractionId,
+                contact.ClaimEventId) ||
             !DiscordSnowflake.IsValid(contact.Contact.DiscordUserId))
         {
             throw new InvalidOperationException(
@@ -882,6 +883,15 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
             contact.CommittedAtUtc.ToUniversalTime().ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    private static bool IsValidCommittedClaimInteractionId(
+        string interactionId,
+        Guid claimEventId) =>
+        DiscordSnowflake.IsValid(interactionId) ||
+        string.Equals(
+            interactionId,
+            DiscordClaimContactCommitter.MemberClaimInteractionId(claimEventId),
+            StringComparison.Ordinal);
 
     public async Task<bool> RecordPendingClaimContactAsync(
         PendingDiscordClaimContactExpectation expectation,
