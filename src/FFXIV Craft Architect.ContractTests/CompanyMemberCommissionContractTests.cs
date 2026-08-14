@@ -135,8 +135,168 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.Equal(fixture.Order.Id, projection!.Public.CommissionId);
         Assert.True(projection.Public.IsClaimed);
         Assert.True(captured);
+        Assert.Equal(member.ProfileId, projection.ClaimAccountEvidence?.ProfileId);
+        Assert.Equal(member.DiscordUserId, projection.ClaimAccountEvidence?.DiscordUserId);
         Assert.Null(claimActorDisplayName);
         Assert.Equal("Crafter", notificationActorDisplayName);
+    }
+
+    [Fact]
+    public async Task AuthenticatedPortableClaimCommitsVerifiedDiscordAccountEvidence()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.CreateAccountAsync("Portable crafter");
+        var capability = await fixture.IssueClaimCapabilityAsync();
+
+        using var response = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant);
+        Assert.True(
+            response.StatusCode == HttpStatusCode.OK,
+            await response.Content.ReadAsStringAsync());
+        var projection = await response.Content
+            .ReadFromJsonAsync<CompanyCommissionParticipantBrief>();
+        var canonical = await fixture.LoadCanonicalOrderAsync();
+        var claim = canonical.CompanyCommission!.ActiveClaim!;
+        var captured = await fixture.Notifications.HasCommittedClaimContactAsync(
+            new CompanyId(fixture.Company.Id),
+            fixture.Order.Id,
+            claim.ClaimId,
+            claimant.DiscordUserId,
+            CancellationToken.None);
+
+        Assert.Equal(claimant.ProfileId, claim.AccountEvidence?.ProfileId);
+        Assert.Equal(claimant.DiscordUserId, claim.AccountEvidence?.DiscordUserId);
+        Assert.Equal("Portable crafter", claim.AccountEvidence?.DiscordDisplayNameSnapshot);
+        Assert.Equal(claim.AccountEvidence, projection!.ClaimAccountEvidence);
+        Assert.Equal("Discord", projection.ProvisionalCrafter?.ContactMethod);
+        Assert.Equal("Portable crafter", projection.ProvisionalCrafter?.ContactValue);
+        Assert.True(captured);
+    }
+
+    [Fact]
+    public async Task AuthenticatedPortableClaimReplaysTheSameCommandExactlyOnce()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.CreateAccountAsync("Replay crafter");
+        var capability = await fixture.IssueClaimCapabilityAsync();
+        var initial = await fixture.LoadPublicBriefAsync();
+        var commandId = Guid.NewGuid();
+        var participantCredential = new string('r', 43);
+        var provisionalCrafterId = Guid.NewGuid();
+        var submittedAtUtc = DateTime.UtcNow;
+
+        using var first = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant,
+            commandId: commandId,
+            expectedProjectionRevision: initial!.ProjectionRevision,
+            participantCredential: participantCredential,
+            provisionalCrafterId: provisionalCrafterId,
+            submittedAtUtc: submittedAtUtc);
+        using var replay = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant,
+            commandId: commandId,
+            expectedProjectionRevision: initial.ProjectionRevision,
+            participantCredential: participantCredential,
+            provisionalCrafterId: provisionalCrafterId,
+            submittedAtUtc: submittedAtUtc);
+        using var mismatchedReplay = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant,
+            commandId: commandId,
+            expectedProjectionRevision: initial.ProjectionRevision,
+            participantCredential: participantCredential,
+            provisionalCrafterId: Guid.NewGuid(),
+            submittedAtUtc: submittedAtUtc);
+        var canonical = await fixture.LoadCanonicalOrderAsync();
+        var accepted = canonical.CompanyCommission!.Activity
+            .Where(item => item.Kind == CompanyCommissionActivityKind.ClaimAccepted)
+            .ToArray();
+
+        Assert.True(first.IsSuccessStatusCode, await first.Content.ReadAsStringAsync());
+        Assert.True(replay.IsSuccessStatusCode, await replay.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.BadRequest, mismatchedReplay.StatusCode);
+        Assert.Single(accepted);
+        Assert.Equal(commandId, canonical.CompanyCommission.ActiveClaim!.ClaimId);
+        Assert.Equal(claimant.ProfileId, canonical.CompanyCommission.ActiveClaim.AccountEvidence?.ProfileId);
+    }
+
+    [Fact]
+    public async Task AuthenticatedPortableClaimRecoversFromStaleProjectionWithoutLosingAuthority()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.CreateAccountAsync("Fresh terms crafter");
+        var capability = await fixture.IssueClaimCapabilityAsync();
+        var initial = await fixture.LoadPublicBriefAsync();
+        var commandId = Guid.NewGuid();
+        var participantCredential = new string('f', 43);
+        var provisionalCrafterId = Guid.NewGuid();
+        var submittedAtUtc = DateTime.UtcNow;
+
+        using var stale = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant,
+            commandId: commandId,
+            expectedProjectionRevision: initial!.ProjectionRevision + 1,
+            participantCredential: participantCredential,
+            provisionalCrafterId: provisionalCrafterId,
+            submittedAtUtc: submittedAtUtc);
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        Assert.False((await fixture.LoadPublicBriefAsync())!.IsClaimed);
+
+        using var corrected = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant,
+            commandId: commandId,
+            expectedProjectionRevision: initial.ProjectionRevision,
+            participantCredential: participantCredential,
+            provisionalCrafterId: provisionalCrafterId,
+            submittedAtUtc: submittedAtUtc);
+        var canonical = await fixture.LoadCanonicalOrderAsync();
+
+        Assert.True(
+            corrected.IsSuccessStatusCode,
+            await corrected.Content.ReadAsStringAsync());
+        Assert.Equal(commandId, canonical.CompanyCommission!.ActiveClaim!.ClaimId);
+        Assert.Equal(claimant.DiscordUserId, canonical.CompanyCommission.ActiveClaim.AccountEvidence?.DiscordUserId);
+    }
+
+    [Fact]
+    public async Task PortableClaimWithRejectedAccountKeyDoesNotFallBackToAnonymous()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var capability = await fixture.IssueClaimCapabilityAsync();
+
+        using var response = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            accessKey: "cap_invalid_portable_claim_account_key_1234567890");
+        var publicBrief = await fixture.LoadPublicBriefAsync();
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.False(publicBrief!.IsClaimed);
+    }
+
+    [Fact]
+    public async Task CapabilityOnlyPortableClaimRemainsAnAnonymousCompatibilityPath()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var capability = await fixture.IssueClaimCapabilityAsync();
+
+        using var response = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken);
+        Assert.True(
+            response.StatusCode == HttpStatusCode.OK,
+            await response.Content.ReadAsStringAsync());
+        var projection = await response.Content
+            .ReadFromJsonAsync<CompanyCommissionParticipantBrief>();
+        var canonical = await fixture.LoadCanonicalOrderAsync();
+
+        Assert.Null(canonical.CompanyCommission!.ActiveClaim!.AccountEvidence);
+        Assert.Null(projection!.ClaimAccountEvidence);
+        Assert.Equal("Email", projection.ProvisionalCrafter?.ContactMethod);
+        Assert.Equal("portable@example.test", projection.ProvisionalCrafter?.ContactValue);
     }
 
     [Fact]
@@ -753,6 +913,62 @@ public sealed class CompanyMemberCommissionContractTests
                 null);
         }
 
+        public Task<IssuedCompanyCommissionCapability> IssueClaimCapabilityAsync() =>
+            Capabilities.IssueAsync(
+                new CompanyId(Company.Id),
+                Order.Id,
+                Order.CommissionPublication!.PublicId,
+                CompanyCommissionCapabilityKind.Claim,
+                grantId: null,
+                Order.CompanyCommission!.ActiveClaimCapabilityRevision,
+                DateTime.UtcNow,
+                CancellationToken.None);
+
+        public async Task<HttpResponseMessage> ClaimPortableAsync(
+            string claimCapability,
+            Account? account = null,
+            string? accessKey = null,
+            Guid? commandId = null,
+            long? expectedProjectionRevision = null,
+            string? participantCredential = null,
+            Guid? provisionalCrafterId = null,
+            DateTime? submittedAtUtc = null)
+        {
+            var client = application.CreateClient();
+            var projection = await LoadPublicBriefAsync();
+            var key = accessKey ?? account?.Key;
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                client.DefaultRequestHeaders.Add("X-Profile-Key", key);
+            }
+            return await client.PostAsJsonAsync(
+                $"/xivdata/commission-briefs/{Order.CommissionPublication!.PublicId}/commands/claim",
+                new PublicCompanyCommissionCommandEnvelope
+                {
+                    ProtocolVersion = CompanyCommissionProtocol.Version1,
+                    PublicBriefId = Order.CommissionPublication.PublicId,
+                    ExpectedProjectionRevision = expectedProjectionRevision ??
+                        projection!.ProjectionRevision,
+                    CommandId = commandId ?? Guid.NewGuid(),
+                    ClaimCapability = claimCapability,
+                    Command = JsonSerializer.SerializeToElement(new
+                    {
+                        termsVersion = 1,
+                        provisionalCrafter = new CompanyCommissionProvisionalCrafter(
+                            provisionalCrafterId ?? Guid.NewGuid(),
+                            "Wei Ning",
+                            "Siren",
+                            "Email",
+                            "portable@example.test",
+                            "12345678",
+                            "https://na.finalfantasyxiv.com/lodestone/character/12345678/",
+                            submittedAtUtc ?? DateTime.UtcNow),
+                        existingCrafterId = (Guid?)null,
+                        newParticipantCredential = participantCredential ?? new string('p', 43)
+                    })
+                });
+        }
+
         public Task<CompanyCommissionPublicBrief?> LoadPublicBriefAsync() =>
             Commissions.LoadPublicAsync(
                 Order.CommissionPublication!.PublicId,
@@ -1034,7 +1250,7 @@ public sealed class CompanyMemberCommissionContractTests
                 DateTime.UtcNow,
                 CancellationToken.None);
 
-        private async Task<TradeOrder> LoadCanonicalOrderAsync()
+        public async Task<TradeOrder> LoadCanonicalOrderAsync()
         {
             var access = await Companies.ResolveMembershipAccessAsync(
                 Owner.ProfileId,

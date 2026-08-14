@@ -628,9 +628,18 @@
                                                      </small>
                                                  </div>
                                                  <div>
-                                                     <span>Contact</span>
-                                                     <strong>@operationsProvisional.ContactMethod</strong>
-                                                     <small>@operationsProvisional.ContactValue</small>
+                                                     @if (operationsCommission.ActiveClaim?.AccountEvidence is { } claimAccount)
+                                                     {
+                                                         <span>Discord account</span>
+                                                         <strong>@claimAccount.DiscordDisplayNameSnapshot</strong>
+                                                         <small>@($"OAuth verified · User ID {claimAccount.DiscordUserId}")</small>
+                                                     }
+                                                     else
+                                                     {
+                                                         <span>Contact</span>
+                                                         <strong>@operationsProvisional.ContactMethod</strong>
+                                                         <small>@operationsProvisional.ContactValue</small>
+                                                     }
                                                  </div>
                                              </div>
                                              <div class="trade-orders-identity-review">

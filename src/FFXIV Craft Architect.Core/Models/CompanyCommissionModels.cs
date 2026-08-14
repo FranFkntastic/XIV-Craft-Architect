@@ -169,7 +169,13 @@ public sealed record CompanyCommissionClaim(
     int AcceptedTermsVersion,
     DateTime ClaimedAtUtc,
     Guid? CrafterId,
-    Guid? ProvisionalCrafterId);
+    Guid? ProvisionalCrafterId,
+    CompanyCommissionClaimAccountEvidence? AccountEvidence = null);
+
+public sealed record CompanyCommissionClaimAccountEvidence(
+    Guid ProfileId,
+    string DiscordUserId,
+    string DiscordDisplayNameSnapshot);
 
 public sealed record CompanyCommissionProvisionalCrafter(
     Guid ProvisionalCrafterId,
@@ -442,6 +448,7 @@ public sealed record CompanyCommissionParticipantBrief
 {
     public required CompanyCommissionPublicBrief Public { get; init; }
     public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
+    public CompanyCommissionClaimAccountEvidence? ClaimAccountEvidence { get; init; }
     public required long ParticipantCapabilityRevision { get; init; }
     public required CompanyCommissionPaymentClearance Payment { get; init; }
     public required bool CompanyMaterialsReadyForHandoff { get; init; }
