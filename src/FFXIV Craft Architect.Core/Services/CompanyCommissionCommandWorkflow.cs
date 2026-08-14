@@ -300,6 +300,10 @@ public static class CompanyCommissionCommandWorkflow
         {
             ValidateProvisionalCrafter(command.ProvisionalCrafter);
         }
+        if (command.AccountEvidence != null)
+        {
+            ValidateClaimAccountEvidence(command.AccountEvidence);
+        }
 
         var claimId = command.Context.CommandId;
         var assignedCrafterId = command.ExistingCrafterId;
@@ -323,7 +327,8 @@ public static class CompanyCommissionCommandWorkflow
                     commission.CurrentTermsVersion,
                     nowUtc,
                     assignedCrafterId,
-                    command.ProvisionalCrafter?.ProvisionalCrafterId),
+                    command.ProvisionalCrafter?.ProvisionalCrafterId,
+                    command.AccountEvidence),
                 ProvisionalCrafter = command.ProvisionalCrafter,
                 ParticipantGrant = new CompanyCommissionParticipantGrant(
                     claimId,
@@ -340,8 +345,24 @@ public static class CompanyCommissionCommandWorkflow
             {
                 claimId,
                 termsVersion = commission.CurrentTermsVersion,
-                provisional = command.ProvisionalCrafter != null
+                provisional = command.ProvisionalCrafter != null,
+                discordAccountVerified = command.AccountEvidence != null
             }));
+    }
+
+    private static void ValidateClaimAccountEvidence(
+        CompanyCommissionClaimAccountEvidence evidence)
+    {
+        Require(evidence.ProfileId != Guid.Empty, "The claim account profile is invalid.");
+        Require(
+            !string.IsNullOrWhiteSpace(evidence.DiscordUserId) &&
+            evidence.DiscordUserId.Length is >= 17 and <= 20 &&
+            evidence.DiscordUserId.All(char.IsAsciiDigit),
+            "The verified Discord identity is invalid.");
+        Require(
+            !string.IsNullOrWhiteSpace(evidence.DiscordDisplayNameSnapshot) &&
+            evidence.DiscordDisplayNameSnapshot.Length <= 128,
+            "The verified Discord display name is invalid.");
     }
 
     private static CompanyCommissionDomainTransition Release(

@@ -84,22 +84,36 @@ public sealed class DiscordIdentitySignInService(
                 DiscordOAuthStateStatus.Expired => DiscordSignInCompletionStatus.ExpiredState,
                 DiscordOAuthStateStatus.Replayed => DiscordSignInCompletionStatus.ReplayedState,
                 _ => DiscordSignInCompletionStatus.InvalidState
-            });
+            }, ReturnPath: consumed.ReturnPath);
         }
 
         if (string.IsNullOrWhiteSpace(code) || code.Length > 512)
         {
-            return new DiscordSignInCompletion(DiscordSignInCompletionStatus.ProviderRejected);
+            return new DiscordSignInCompletion(
+                DiscordSignInCompletionStatus.ProviderRejected,
+                ReturnPath: consumed.ReturnPath);
         }
 
-        var identity = await discord.ResolveIdentityAsync(
-            code,
-            consumed.PkceVerifier,
-            options.SignInCallbackUri,
-            cancellationToken);
+        DiscordOAuthIdentity? identity;
+        try
+        {
+            identity = await discord.ResolveIdentityAsync(
+                code,
+                consumed.PkceVerifier,
+                options.SignInCallbackUri,
+                cancellationToken);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new DiscordSignInCompletion(
+                DiscordSignInCompletionStatus.ProviderRejected,
+                ReturnPath: consumed.ReturnPath);
+        }
         if (identity == null)
         {
-            return new DiscordSignInCompletion(DiscordSignInCompletionStatus.ProviderRejected);
+            return new DiscordSignInCompletion(
+                DiscordSignInCompletionStatus.ProviderRejected,
+                ReturnPath: consumed.ReturnPath);
         }
 
         var now = timeProvider.GetUtcNow();
@@ -118,7 +132,9 @@ public sealed class DiscordIdentitySignInService(
                     link.ProfileId.ToString("D"),
                     cancellationToken) == null)
             {
-                return new DiscordSignInCompletion(DiscordSignInCompletionStatus.IdentityInactive);
+                return new DiscordSignInCompletion(
+                    DiscordSignInCompletionStatus.IdentityInactive,
+                    ReturnPath: consumed.ReturnPath);
             }
 
             var key = accessKeyHasher.CreateAccessKey();
@@ -176,7 +192,9 @@ public sealed class DiscordIdentitySignInService(
                     consumed.ReturnPath);
             }
 
-            return new DiscordSignInCompletion(DiscordSignInCompletionStatus.Conflict);
+            return new DiscordSignInCompletion(
+                DiscordSignInCompletionStatus.Conflict,
+                ReturnPath: consumed.ReturnPath);
         }
 
         await links.RecordSignInAuditAsync(

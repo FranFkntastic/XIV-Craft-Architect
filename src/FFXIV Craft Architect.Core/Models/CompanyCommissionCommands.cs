@@ -51,7 +51,9 @@ public sealed record ClaimCompanyCommissionCommand(
     CompanyCommissionCommandContext Context,
     int TermsVersion,
     CompanyCommissionProvisionalCrafter? ProvisionalCrafter,
-    Guid? ExistingCrafterId) : ICompanyCommissionParticipantCommand;
+    Guid? ExistingCrafterId,
+    CompanyCommissionClaimAccountEvidence? AccountEvidence = null) :
+    ICompanyCommissionParticipantCommand;
 
 public sealed record ReleaseCompanyCommissionClaimCommand(
     CompanyCommissionCommandContext Context,

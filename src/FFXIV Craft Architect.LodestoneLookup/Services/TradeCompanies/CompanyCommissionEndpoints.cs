@@ -174,6 +174,10 @@ public static class CompanyCommissionEndpoints
                         "Only an open, published commission can be claimed."));
                 }
 
+                var identity = await identities.LoadByProfileAsync(
+                    account.ProfileId,
+                    cancellationToken);
+
                 var command = new ClaimCompanyCommissionCommand(
                     new CompanyCommissionCommandContext(
                         parsedCompanyId,
@@ -184,7 +188,13 @@ public static class CompanyCommissionEndpoints
                         CompanyCommissionProtocol.Version1),
                     commission.CurrentTermsVersion,
                     null,
-                    account.ProfileId);
+                    account.ProfileId,
+                    identity == null
+                        ? null
+                        : new CompanyCommissionClaimAccountEvidence(
+                            account.ProfileId,
+                            identity.DiscordUserId,
+                            identity.DisplayNameSnapshot));
                 var mutation = await commissions.ExecuteMemberAsync(
                     access,
                     account.ProfileId,
@@ -495,6 +505,7 @@ public static class CompanyCommissionEndpoints
                  HttpRequest request,
                  SqliteCompanyCommissionCapabilityStore capabilities,
                  DiscordClaimContactCommitter claimContacts,
+                 SqliteDiscordIdentityStore identities,
                  HostedCompanyCommissionService commissions,
                  MembershipAccessResolver accessResolver,
                  ProfileHostedTradeCompanyService companyService,
@@ -545,6 +556,35 @@ public static class CompanyCommissionEndpoints
                         cancellationToken);
                 }
 
+                MembershipAccount? claimAccount = null;
+                DiscordIdentityLink? claimIdentity = null;
+                var suppliedProfileKey = request.Headers["X-Profile-Key"].ToString();
+                if (capabilityKind == CompanyCommissionCapabilityKind.Claim &&
+                    !string.IsNullOrWhiteSpace(suppliedProfileKey))
+                {
+                    claimAccount = await accessResolver.ResolveAccountAsync(
+                        request,
+                        cancellationToken);
+                    if (claimAccount == null)
+                    {
+                        return Results.Unauthorized();
+                    }
+
+                    claimIdentity = await identities.LoadByProfileAsync(
+                        claimAccount.ProfileId,
+                        cancellationToken);
+                    if (claimIdentity == null)
+                    {
+                        return Results.Json(
+                            new
+                            {
+                                error = "verified_discord_identity_required",
+                                message = "Sign in with a Discord-linked account before making a verified claim."
+                            },
+                            statusCode: StatusCodes.Status403Forbidden);
+                    }
+                }
+
                 var capability = await capabilities.ResolveForCommandAsync(
                     publicId,
                     capabilityKind.Value,
@@ -586,6 +626,25 @@ public static class CompanyCommissionEndpoints
                 {
                     return InvalidCommand(exception.Message);
                 }
+                if (command is ClaimCompanyCommissionCommand claim &&
+                    claimAccount != null &&
+                    claimIdentity != null)
+                {
+                    command = claim with
+                    {
+                        ProvisionalCrafter = claim.ProvisionalCrafter == null
+                            ? null
+                            : claim.ProvisionalCrafter with
+                            {
+                                ContactMethod = "Discord",
+                                ContactValue = claimIdentity.DisplayNameSnapshot
+                            },
+                        AccountEvidence = new CompanyCommissionClaimAccountEvidence(
+                            claimAccount.ProfileId,
+                            claimIdentity.DiscordUserId,
+                            claimIdentity.DisplayNameSnapshot)
+                    };
+                }
                 if ((command is ClaimCompanyCommissionCommand or
                          RedeemCompanyCommissionParticipantRecoveryCommand) &&
                     !IsValidParticipantCredential(newParticipantCredential))
@@ -613,10 +672,21 @@ public static class CompanyCommissionEndpoints
                 CompanyCommissionCapabilityResolution participantResolution = capability;
                 if (command is ClaimCompanyCommissionCommand)
                 {
-                    await claimContacts.CaptureAsync(
-                        capability,
-                        mutation,
-                        committedCancellationToken);
+                    if (claimAccount != null)
+                    {
+                        await claimContacts.CaptureMemberAsync(
+                            claimAccount.ProfileId,
+                            identities,
+                            mutation,
+                            committedCancellationToken);
+                    }
+                    else
+                    {
+                        await claimContacts.CaptureAsync(
+                            capability,
+                            mutation,
+                            committedCancellationToken);
+                    }
                 }
 
                 if (command is ClaimCompanyCommissionCommand or

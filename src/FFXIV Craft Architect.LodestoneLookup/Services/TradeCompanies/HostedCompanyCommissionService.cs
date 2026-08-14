@@ -470,11 +470,15 @@ public sealed class HostedCompanyCommissionService(
         var replay = ResolveReplay(snapshot, context, fingerprint);
         if (replay != null)
         {
-            await NotifyPostCommitAsync(
-                canonicalAccess,
-                snapshot,
-                replay.Activity!,
-                cancellationToken);
+            if (replay.Status == CompanyCommissionMutationStatus.Replayed &&
+                replay.Activity != null)
+            {
+                await NotifyPostCommitAsync(
+                    canonicalAccess,
+                    snapshot,
+                    replay.Activity,
+                    cancellationToken);
+            }
             return replay;
         }
         if (snapshot.Envelope.RecordRevision != context.ExpectedObjectRevision ||

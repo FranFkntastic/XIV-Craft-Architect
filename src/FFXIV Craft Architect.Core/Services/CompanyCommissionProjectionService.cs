@@ -63,6 +63,7 @@ public static class CompanyCommissionProjectionService
         {
             Public = CreatePublicBrief(order, companyDisplayName),
             ProvisionalCrafter = commission.ProvisionalCrafter,
+            ClaimAccountEvidence = commission.ActiveClaim?.AccountEvidence,
             ParticipantCapabilityRevision = commission.ParticipantGrant?.CapabilityRevision ?? 0,
             Payment = commission.Gates.Payment,
             CompanyMaterialsReadyForHandoff =
