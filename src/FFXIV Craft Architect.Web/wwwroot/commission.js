@@ -596,6 +596,26 @@ function resolveNextStep() {
                 }]
             };
         }
+        if (!state.account &&
+            pending?.kind === "claim" &&
+            pending.payload?.verifiedDiscordRequired) {
+            if (state.signInEnabled) {
+                return {
+                    title: "Verify Discord to retry your saved claim",
+                    body: "Your exact claim is still saved. Sign in again, then Craft Architect will retry it without asking you to recreate anything.",
+                    actions: [{
+                        label: "Continue with Discord",
+                        primary: true,
+                        run: startDiscordClaimSignIn
+                    }]
+                };
+            }
+            return {
+                title: "Discord verification is unavailable",
+                body: "Your exact claim is still saved. Discord sign-in is not available right now, so no claim was submitted or downgraded.",
+                tone: "waiting"
+            };
+        }
         if (pending?.kind === "claim") {
             return {
                 title: "A saved claim is ready to retry",
