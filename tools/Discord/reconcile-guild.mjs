@@ -8,6 +8,10 @@ const RequiredPermissions =
   (1n << 10n) | // View Channels
   (1n << 11n) | // Send Messages
   (1n << 14n); // Embed Links
+const LegacyWorkspaceLabel = 'Open my workspace';
+const WorkspaceLabel = 'Open workspace';
+const WorkspaceActionPrefix = 'open-workspace:ca:v1:';
+const MessagePageLimit = 10;
 
 export function requireValue(configuration, name) {
   const value = configuration[name]?.trim();
@@ -55,6 +59,77 @@ export async function discordRequest(fetchImpl, token, path, init = {}) {
     throw new Error(`Discord ${init.method ?? 'GET'} ${path} failed: ${detail}.`);
   }
   throw new Error(`Discord ${init.method ?? 'GET'} ${path} exhausted its retry budget.`);
+}
+
+export function migrateLegacyWorkspaceComponents(message, applicationId, botId) {
+  if (message?.author?.id !== botId ||
+      message.application_id && message.application_id !== applicationId ||
+      !Array.isArray(message.components)) {
+    return null;
+  }
+
+  let changed = false;
+  const components = message.components.map(row => ({
+    ...row,
+    components: Array.isArray(row.components)
+      ? row.components.map(component => {
+          if (component.type !== 2 ||
+              component.label !== LegacyWorkspaceLabel ||
+              !component.custom_id?.startsWith(WorkspaceActionPrefix)) {
+            return component;
+          }
+          changed = true;
+          return { ...component, label: WorkspaceLabel };
+        })
+      : row.components
+  }));
+  return changed ? components : null;
+}
+
+export async function reconcileLegacyWorkspaceLabels(
+  fetchImpl,
+  token,
+  channelId,
+  applicationId,
+  botId) {
+  let before = null;
+  let updated = 0;
+  for (let page = 0; page < MessagePageLimit; page += 1) {
+    const query = before ? `?limit=100&before=${before}` : '?limit=100';
+    const messages = await discordRequest(
+      fetchImpl,
+      token,
+      `/channels/${channelId}/messages${query}`);
+    if (!Array.isArray(messages)) {
+      throw new Error('Discord did not return the configured channel message history.');
+    }
+
+    for (const message of messages) {
+      const components = migrateLegacyWorkspaceComponents(
+        message,
+        applicationId,
+        botId);
+      if (!components) continue;
+
+      await discordRequest(
+        fetchImpl,
+        token,
+        `/channels/${channelId}/messages/${message.id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ components })
+        });
+      updated += 1;
+    }
+
+    if (messages.length < 100) return updated;
+    before = messages.at(-1)?.id;
+    if (!before) {
+      throw new Error('Discord channel history could not advance to the next page.');
+    }
+  }
+  throw new Error(
+    `Discord channel history exceeded the ${MessagePageLimit * 100}-message reconciliation limit.`);
 }
 
 export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
@@ -141,6 +216,13 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
     throw new Error('Discord did not retain the managed commission command.');
   }
 
+  const legacyWorkspaceLabelsUpdated = await reconcileLegacyWorkspaceLabels(
+    fetchImpl,
+    token,
+    channel.id,
+    applicationId,
+    bot.id);
+
   return {
     applicationId,
     botId: bot.id,
@@ -148,7 +230,8 @@ export async function reconcileDiscordGuild(configuration, fetchImpl = fetch) {
     guildName: guild.name,
     channelId: channel.id,
     channelName: channel.name,
-    commandId: commands[0].id
+    commandId: commands[0].id,
+    legacyWorkspaceLabelsUpdated
   };
 }
 
@@ -161,7 +244,8 @@ async function main() {
       'utf8');
   }
   console.log(
-    `Discord integration ready: ${result.guildName} / #${result.channelName} / commission.`);
+    `Discord integration ready: ${result.guildName} / #${result.channelName} / commission; ` +
+    `${result.legacyWorkspaceLabelsUpdated} legacy workspace label(s) updated.`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
