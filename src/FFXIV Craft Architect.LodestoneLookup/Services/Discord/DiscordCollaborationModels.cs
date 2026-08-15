@@ -4,7 +4,7 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
 public static class DiscordPublicationProjectionFormat
 {
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 }
 
 public sealed record DiscordCompanyInstallationBinding(
