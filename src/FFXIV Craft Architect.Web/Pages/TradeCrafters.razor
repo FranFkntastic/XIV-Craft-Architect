@@ -64,9 +64,11 @@
                         }
                         <MudButton Variant="Variant.Filled"
                                    Color="Color.Primary"
+                                   Class="trade-crafters-row-action"
+                                   aria-label="Search Lodestone"
                                    OnClick="SearchLodestoneAsync"
                                    Disabled="@(_lodestoneIsBusy || string.IsNullOrWhiteSpace(_lodestoneSearchName) || IsLodestoneSearchLocationMissing())">
-                            Search Lodestone
+                            Search
                         </MudButton>
                     </div>
                     @if (!string.IsNullOrWhiteSpace(_lodestoneError))
@@ -150,8 +152,10 @@
                                             Options="GetWorldOptions(_newCrafterDataCenter)" />
                         <MudButton Variant="Variant.Filled"
                                    Color="Color.Primary"
+                                   Class="trade-crafters-row-action"
+                                   aria-label="Create crafter"
                                    OnClick="CreateCrafterAsync">
-                            Create Crafter
+                            Create
                         </MudButton>
                     </div>
                 </section>
