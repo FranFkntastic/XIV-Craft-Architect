@@ -49,7 +49,7 @@ public static class CompanyCommissionDiscordMessage
                      crafterWorkspaceEnabled)
             {
                 buttons.Add(ActionButton(
-                    "Open my workspace",
+                    "Open workspace",
                     $"open-workspace:{actionToken}",
                     style: 1));
             }

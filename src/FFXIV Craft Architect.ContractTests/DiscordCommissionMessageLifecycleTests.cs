@@ -1086,7 +1086,7 @@ public sealed class DiscordCommissionMessageLifecycleTests
         Assert.Equal(expectsClaimButton, buttons.Contains("Claim with Discord"));
         Assert.Equal(
             expectsWorkspaceButton,
-            buttons.Contains("Open my workspace"));
+            buttons.Contains("Open workspace"));
         var customIds = payload.RootElement
             .GetProperty("components")[0]
             .GetProperty("components")

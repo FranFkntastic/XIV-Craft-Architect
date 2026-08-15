@@ -9,7 +9,7 @@ on:
       - 'src/FFXIV Craft Architect.Web/Services/HttpLodestoneCrafterLookupService.cs'
       - 'src/FFXIV Craft Architect.Web/Program.cs'
       - 'src/FFXIV Craft Architect.Web/wwwroot/appsettings.json'
-      - 'tools/Discord/reconcile-guild.mjs'
+      - 'tools/Discord/**'
       - 'tools/Deployment/**'
       - 'global.json'
       - 'Directory.Build.props'
@@ -321,6 +321,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain --untracked-files=all)"
           node --check tools/Discord/reconcile-guild.mjs
+          node --check tools/Discord/reconcile-application.mjs
+          node --test tools/Discord/tests/*.test.mjs
           PYTHONDONTWRITEBYTECODE=1 \
             python3 -m unittest discover -s tools/Deployment/tests -p 'test_*.py'
 
@@ -1185,3 +1187,11 @@ jobs:
               --write-out '%{http_code}' \
               "https://$DEPLOY_DOMAIN/api/craft/plans/not-a-plan"
           )" = "404"
+
+      - name: Reconcile and verify Discord interaction delivery
+        if: steps.features.outputs.discord_enabled == 'true'
+        id: discord-application
+        shell: bash
+        env:
+          DISCORD_INTERACTIONS_ENDPOINT_URL: https://${{ steps.target.outputs.domain }}/api/discord/interactions
+        run: node tools/Discord/reconcile-application.mjs

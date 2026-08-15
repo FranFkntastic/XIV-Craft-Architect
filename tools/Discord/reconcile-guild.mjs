@@ -9,13 +9,13 @@ const RequiredPermissions =
   (1n << 11n) | // Send Messages
   (1n << 14n); // Embed Links
 
-function requireValue(configuration, name) {
+export function requireValue(configuration, name) {
   const value = configuration[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
 }
 
-async function discordRequest(fetchImpl, token, path, init = {}) {
+export async function discordRequest(fetchImpl, token, path, init = {}) {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const response = await fetchImpl(`${DiscordApi}${path}`, {
       ...init,

@@ -690,6 +690,14 @@ public sealed class DiscordIdentityContractTests
         authority.Available = true;
 
         var staleEntry = await resolver.IssueParticipantEntryAsync(target);
+        Assert.Collection(
+            staleEntry.Actions,
+            owner => Assert.Equal(
+                DiscordInteractionActionKind.OpenOwnerOrder,
+                owner.Kind),
+            participant => Assert.Equal(
+                DiscordInteractionActionKind.OpenParticipantCommission,
+                participant.Kind));
         var staleToken = BootstrapFrom(staleEntry);
         Assert.DoesNotContain(ParticipantCredential, staleEntry.Actions[1].Uri.AbsoluteUri);
         authority.IsActiveParticipant = false;
