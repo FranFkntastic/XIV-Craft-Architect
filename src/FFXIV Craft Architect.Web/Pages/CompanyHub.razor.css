@@ -71,6 +71,7 @@
 .button:disabled { cursor: wait; opacity: .55; }
 .button.primary, .tokens .selected { color: #fff; border-color: var(--hub-accent); background: var(--hub-accent); }
 .button.quiet { background: transparent; }
+.link-copy { display: inline-flex; align-items: center; gap: 5px; }
 
 .customize {
     display: grid;
