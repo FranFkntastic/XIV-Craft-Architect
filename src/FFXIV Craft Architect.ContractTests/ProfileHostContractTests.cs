@@ -1118,7 +1118,8 @@ public sealed class ProfileHostContractTests
             .WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, configuration) =>
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["ProfileHost:DeepArchiveEnabled"] = "true"
+                    ["ProfileHost:DeepArchiveEnabled"] = "true",
+                    ["ProfileHost:DeepArchiveAfterDays"] = "30"
                 })));
 
         Assert.False(legacyApplication.Services
@@ -1131,6 +1132,7 @@ public sealed class ProfileHostContractTests
         var health = await enabledClient.GetFromJsonAsync<ProfileHostHealthResponse>(
             "/profile-host/health");
         Assert.True(health!.DeepArchiveEnabled);
+        Assert.Equal(30, health.DeepArchiveAfterDays);
     }
 
     [Fact]

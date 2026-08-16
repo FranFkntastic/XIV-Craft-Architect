@@ -15,6 +15,7 @@ public static class ProfileHostEndpoints
         {
             ProfileHostEnabled = options.Enabled,
             DeepArchiveEnabled = options.DeepArchiveEnabled,
+            DeepArchiveAfterDays = options.DeepArchiveAfterDays,
             ProtocolVersion = 1
         }));
 

@@ -296,6 +296,7 @@ public sealed class ProfileHostHealthResponse
     public string Status { get; set; } = "ready";
     public bool ProfileHostEnabled { get; set; }
     public bool DeepArchiveEnabled { get; set; }
+    public int DeepArchiveAfterDays { get; set; }
     public int ProtocolVersion { get; set; } = 1;
 }
 

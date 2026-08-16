@@ -167,6 +167,7 @@ jobs:
           TARGET_DISCORD_ENABLED: ${{ vars.CRAFT_ARCHITECT_DISCORD_ENABLED }}
           TARGET_PROFILE_HOST_ENABLED: ${{ vars.CRAFT_ARCHITECT_PROFILE_HOST_ENABLED }}
           TARGET_DEEP_ARCHIVE_ENABLED: ${{ vars.CRAFT_ARCHITECT_DEEP_ARCHIVE_ENABLED }}
+          TARGET_DEEP_ARCHIVE_AFTER_DAYS: ${{ vars.CRAFT_ARCHITECT_DEEP_ARCHIVE_AFTER_DAYS }}
           PROFILE_HOST_CANONICALIZED: ${{ steps.canonical-authority.outputs.profile_host_canonicalized }}
           DEPLOY_TARGET: ${{ steps.target.outputs.target }}
           STAGING_DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_STAGING_BOT_TOKEN }}
@@ -204,6 +205,14 @@ jobs:
               exit 1
               ;;
           esac
+          if [[ -z "$TARGET_DEEP_ARCHIVE_AFTER_DAYS" ]]; then
+            TARGET_DEEP_ARCHIVE_AFTER_DAYS="180"
+          fi
+          if ! [[ "$TARGET_DEEP_ARCHIVE_AFTER_DAYS" =~ ^[0-9]+$ ]] ||
+             (( TARGET_DEEP_ARCHIVE_AFTER_DAYS < 1 || TARGET_DEEP_ARCHIVE_AFTER_DAYS > 3650 )); then
+            echo "CRAFT_ARCHITECT_DEEP_ARCHIVE_AFTER_DAYS must be an integer from 1 through 3650." >&2
+            exit 1
+          fi
           runtime_profile_host_enabled="$TARGET_PROFILE_HOST_ENABLED"
           runtime_discord_enabled="$TARGET_DISCORD_ENABLED"
           if [[ "$DEPLOY_TARGET" == "staging" && "$runtime_discord_enabled" == "true" ]]; then
@@ -236,6 +245,7 @@ jobs:
             echo "discord_enabled=$runtime_discord_enabled"
             echo "profile_host_enabled=$runtime_profile_host_enabled"
             echo "deep_archive_enabled=$TARGET_DEEP_ARCHIVE_ENABLED"
+            echo "deep_archive_after_days=$TARGET_DEEP_ARCHIVE_AFTER_DAYS"
           } >> "$GITHUB_OUTPUT"
 
       - name: Select canonical Discord configuration
@@ -480,8 +490,9 @@ jobs:
           discord_enabled="$9"
           profile_host_enabled="${10}"
           deep_archive_enabled="${11}"
-          profile_host_canonicalized="${12}"
-          reconsolidation_requested="${13}"
+          deep_archive_after_days="${12}"
+          profile_host_canonicalized="${13}"
+          reconsolidation_requested="${14}"
 
           if [[ "$target" == "canonical" ]]; then
             test "$root" = "/srv/craftarchitect/services/lodestone"
@@ -509,6 +520,11 @@ jobs:
             true|false) ;;
             *) echo "Invalid deep archive enabled state." >&2; exit 1 ;;
           esac
+          if ! [[ "$deep_archive_after_days" =~ ^[0-9]+$ ]] ||
+             (( deep_archive_after_days < 1 || deep_archive_after_days > 3650 )); then
+            echo "Invalid deep archive age." >&2
+            exit 1
+          fi
           case "$profile_host_canonicalized" in
             true|false) ;;
             *) echo "Invalid Profile Host canonicalization state." >&2; exit 1 ;;
@@ -562,6 +578,7 @@ jobs:
               {
                 printf 'ProfileHost__Enabled=true\n'
                 printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
+                printf 'ProfileHost__DeepArchiveAfterDays=%s\n' "$deep_archive_after_days"
                 printf 'ProfileHost__DatabasePath=%s\n' \
                   /srv/craftarchitect/services/lodestone-staging/data/profile-host.db
               } > "$staging_fail_forward_candidate"
@@ -734,6 +751,7 @@ jobs:
               {
                 printf 'ProfileHost__Enabled=true\n'
                 printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
+                printf 'ProfileHost__DeepArchiveAfterDays=%s\n' "$deep_archive_after_days"
                 printf 'ProfileHost__DatabasePath=%s\n' \
                   /srv/craftarchitect/services/lodestone-staging/data/profile-host.db
               } > "$staging_fail_closed_candidate"
@@ -819,6 +837,7 @@ jobs:
           {
             printf 'ProfileHost__Enabled=%s\n' "$runtime_profile_host_enabled"
             printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
+            printf 'ProfileHost__DeepArchiveAfterDays=%s\n' "$deep_archive_after_days"
             printf 'ProfileHost__DatabasePath=%s\n' "$profile_db"
           } > "$profile_runtime_upload"
           test "$(stat -c '%a' "$profile_runtime_upload")" = "600"
@@ -830,6 +849,7 @@ jobs:
             "$root/env/discord.env"
           grep -Fxq "ProfileHost__Enabled=$runtime_profile_host_enabled" "$root/env/profile-host.env"
           grep -Fxq "ProfileHost__DeepArchiveEnabled=$deep_archive_enabled" "$root/env/profile-host.env"
+          grep -Fxq "ProfileHost__DeepArchiveAfterDays=$deep_archive_after_days" "$root/env/profile-host.env"
           grep -Fxq "ProfileHost__DatabasePath=$profile_db" "$root/env/profile-host.env"
           grep -Fxq "Discord__Enabled=$discord_enabled" "$root/env/discord.env"
           grep -Fxq "CraftAppraisal__Enabled=true" "$root/env/discord.env"
@@ -967,6 +987,7 @@ jobs:
             {
               printf 'ProfileHost__Enabled=true\n'
               printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
+              printf 'ProfileHost__DeepArchiveAfterDays=%s\n' "$deep_archive_after_days"
               printf 'ProfileHost__DatabasePath=%s\n' "$staging_db"
             } > "$staging_profile_candidate"
             chmod 600 "$staging_profile_candidate"
@@ -1063,17 +1084,21 @@ jobs:
               curl --fail --silent --show-error \
                 "http://127.0.0.1:$port/profile-host/health" \
                 | EXPECTED_ENABLED="$runtime_profile_host_enabled" \
-                  EXPECTED_DEEP_ARCHIVE="$deep_archive_enabled" python3 -c '
+                  EXPECTED_DEEP_ARCHIVE="$deep_archive_enabled" \
+                  EXPECTED_DEEP_ARCHIVE_AFTER_DAYS="$deep_archive_after_days" python3 -c '
            import json
            import os
            import sys
            health = json.load(sys.stdin)
            expected = os.environ["EXPECTED_ENABLED"] == "true"
            expected_deep_archive = os.environ["EXPECTED_DEEP_ARCHIVE"] == "true"
+           expected_deep_archive_after_days = int(os.environ["EXPECTED_DEEP_ARCHIVE_AFTER_DAYS"])
            if health.get("status") != "ready" or health.get("profileHostEnabled") is not expected:
                raise SystemExit("Staging Profile Host runtime does not match configured behavior.")
            if health.get("deepArchiveEnabled") is not expected_deep_archive:
                raise SystemExit("Staging deep archive activation does not match configured behavior.")
+           if health.get("deepArchiveAfterDays") != expected_deep_archive_after_days:
+               raise SystemExit("Staging deep archive age does not match configured behavior.")
            '
             fi
             if ! sudo cmp --silent "$caddyfile" "$caddy_candidate"; then
@@ -1159,6 +1184,7 @@ jobs:
               '${{ steps.features.outputs.discord_enabled }}' \
               '${{ steps.features.outputs.profile_host_enabled }}' \
               '${{ steps.features.outputs.deep_archive_enabled }}' \
+              '${{ steps.features.outputs.deep_archive_after_days }}' \
               '${{ steps.canonical-authority.outputs.profile_host_canonicalized }}' \
               '${{ steps.canonical-authority.outputs.reconsolidation_requested }}'"
 
