@@ -739,19 +739,9 @@ public partial class TradeOrders
 
     private bool IsOrderArchivedForAttention(TradeOrder order)
     {
-        if (CommissionOperations.GetForOrder(order.Id) is { } projection &&
-            projection.Order.CompanyCommission is { } commission)
-        {
-            return order.Status == TradeOrderStatus.Canceled ||
-                commission.IsClosed(projection.Order.Status);
-        }
-
-        if (order.CompanyCommission != null)
-        {
-            return false;
-        }
-
-        return TradeOrderStatusWorkflow.IsArchived(order.Status);
+        return TradeCommissionOperationsPresentation.IsArchivedForAttention(
+            order,
+            CommissionOperations.GetForOrder(order.Id));
     }
 
     private string GetOrderAttentionKey(TradeOrder order)
