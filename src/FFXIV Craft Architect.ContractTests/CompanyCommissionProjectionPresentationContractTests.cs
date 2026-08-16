@@ -5,6 +5,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using FFXIV_Craft_Architect.Web.Pages;
+using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class CompanyCommissionProjectionPresentationContractTests
@@ -118,6 +119,10 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             .GetMethod("BuildCenterProgress", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [order, commission])!;
         Assert.Equal("Crafting", status);
         Assert.Contains(progress, step => step.Label == "Crafting" && step.State == "Current" && step.IsCurrent);
+
+        var canceled = TradeOrderWorkflow.CopyOrder(order);
+        canceled.Status = TradeOrderStatus.Canceled;
+        Assert.True(TradeCommissionOperationsPresentation.IsArchivedForAttention(canceled, null));
     }
     private static TradeCompanyCommission CreateClearedAssignedCommission()
     {
