@@ -113,6 +113,9 @@ public partial class TradeOrders
     private DotNetObjectReference<TradeOrders>? _tradeOrdersReference;
     private bool _isDisposed;
 
+    [SupplyParameterFromQuery(Name = "company")]
+    public string? Company { get; set; }
+
     private bool IsPlanMutationTransactionRunning =>
         _isSavingSelectedOrderOutputs ||
         _isSavingSelectedOrderCraftPlan ||
@@ -450,7 +453,20 @@ public partial class TradeOrders
                     return;
                 }
             }
-            _companyProfile = await ResolveSelectedWorkspaceProfileAsync();
+            TradeCompanyProfile? requestedWorkspace = null;
+            if (!string.IsNullOrWhiteSpace(Company))
+            {
+                if (!Guid.TryParse(Company, out var requestedCompanyId))
+                {
+                    throw new InvalidOperationException("The requested company workspace identity is invalid.");
+                }
+
+                requestedWorkspace = await ResolveWorkspaceProfileAsync(requestedCompanyId);
+                await TradeOperationsPersistence.SelectWorkspaceCompanyAsync(requestedCompanyId);
+                Company = null;
+                NavigationManager.NavigateTo("trade/orders", replace: true);
+            }
+            _companyProfile = requestedWorkspace ?? await ResolveSelectedWorkspaceProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
             await SelectPendingNavigationOrderAsync();
@@ -494,14 +510,22 @@ public partial class TradeOrders
             return await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
         }
 
-        var local = profiles.FirstOrDefault(profile => profile.Id == selectedWorkspaceId.Value);
+        return await ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value, profiles);
+    }
+
+    private async Task<TradeCompanyProfile> ResolveWorkspaceProfileAsync(
+        Guid workspaceId,
+        IReadOnlyList<TradeCompanyProfile>? profiles = null)
+    {
+        profiles ??= await TradeOperationsPersistence.LoadCompanyProfilesAsync();
+        var local = profiles.FirstOrDefault(profile => profile.Id == workspaceId);
         if (local != null)
         {
             return local;
         }
 
-        var hosted = await CompanyHubs.LoadWorkspaceProfileAsync(selectedWorkspaceId.Value);
-        if (hosted.Id != selectedWorkspaceId.Value)
+        var hosted = await CompanyHubs.LoadWorkspaceProfileAsync(workspaceId);
+        if (hosted.Id != workspaceId)
         {
             throw new InvalidOperationException(
                 "The selected company workspace returned a different company identity.");
