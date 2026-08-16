@@ -56,18 +56,25 @@ public sealed class TradeOrderProfileSyncAdapter :
     {
         ct.ThrowIfCancellationRequested();
         var tombstoneConnection = await _localState.LoadConnectionSettingsAsync();
+        var clearDeepArchiveTombstoneAfterAdoption = false;
         if (tombstoneConnection.ProfileScopeId is { } tombstoneScope)
         {
             var tombstoneRevision = (await _localState.LoadOrderTombstonesAsync(tombstoneScope))
                 .GetValueOrDefault(envelope.ObjectId);
             if (tombstoneRevision > 0)
             {
-                if (envelope.Revision <= tombstoneRevision)
+                if (envelope.DeepArchived && envelope.Revision == tombstoneRevision)
+                {
+                    clearDeepArchiveTombstoneAfterAdoption = true;
+                }
+                else if (envelope.Revision <= tombstoneRevision)
                 {
                     return;
                 }
-
-                await _localState.ClearOrderTombstoneAsync(tombstoneScope, envelope.ObjectId);
+                else
+                {
+                    await _localState.ClearOrderTombstoneAsync(tombstoneScope, envelope.ObjectId);
+                }
             }
         }
 
@@ -119,40 +126,55 @@ public sealed class TradeOrderProfileSyncAdapter :
             throw new InvalidOperationException(
                 $"Hosted Trade order '{envelope.ObjectId}' belongs to a previous connection scope.");
         }
-        var adoption = await _projections.AdoptAndPersistCommittedOrderAsync(
-            authority,
-            order,
-            envelope.Revision,
-            async candidate =>
+        Func<HostedOrderProjectionSnapshot, Task> persist = async candidate =>
+        {
+            var persisted = candidate.Deleted
+                ? await _tradeOperations.DeleteOrderAsync(
+                    candidate.OrderId,
+                    connection.ConnectionScopeId)
+                : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
+            if (!persisted)
             {
-                var persisted = candidate.Deleted
-                    ? await _tradeOperations.DeleteOrderAsync(
-                        candidate.OrderId,
-                        connection.ConnectionScopeId)
-                    : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
-                if (!persisted)
-                {
-                    throw new InvalidOperationException(
-                        $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
-                }
-                if (!await IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId))
-                {
-                    throw new InvalidOperationException(
-                        $"Hosted Trade order '{envelope.ObjectId}' changed authority while browser persistence was in progress.");
-                }
-                await _localState.SaveObjectRevisionAsync(
-                    connection,
-                    ProfileSyncCollections.TradeOrders,
-                    candidate.OrderId.ToString("D"),
-                    candidate.ObjectRevision);
-            },
-            () => IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId));
+                throw new InvalidOperationException(
+                    $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
+            }
+            if (!await IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId))
+            {
+                throw new InvalidOperationException(
+                    $"Hosted Trade order '{envelope.ObjectId}' changed authority while browser persistence was in progress.");
+            }
+            await _localState.SaveObjectRevisionAsync(
+                connection,
+                ProfileSyncCollections.TradeOrders,
+                candidate.OrderId.ToString("D"),
+                candidate.ObjectRevision);
+        };
+        var adoption = envelope.DeepArchived
+            ? await _projections.AdoptAndPersistDeepArchivedOrderAsync(
+                authority,
+                order,
+                envelope.Revision,
+                persist,
+                () => IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId))
+            : await _projections.AdoptAndPersistCommittedOrderAsync(
+                authority,
+                order,
+                envelope.Revision,
+                persist,
+                () => IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId));
         if (adoption is not (
             HostedOrderCommittedProjectionResult.Adopted or
             HostedOrderCommittedProjectionResult.AlreadyCurrent))
         {
             throw new InvalidOperationException(
                 $"Hosted Trade order '{envelope.ObjectId}' could not be applied because its authority is {adoption}.");
+        }
+        if (clearDeepArchiveTombstoneAfterAdoption &&
+            tombstoneConnection.ProfileScopeId is { } adoptedTombstoneScope)
+        {
+            await _localState.ClearOrderTombstoneAsync(
+                adoptedTombstoneScope,
+                envelope.ObjectId);
         }
         if (_archiveSummaries != null && connection.ConnectionScopeId != null)
         {

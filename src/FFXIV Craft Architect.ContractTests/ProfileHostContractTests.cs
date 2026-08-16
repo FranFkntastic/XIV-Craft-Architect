@@ -1106,7 +1106,37 @@ public sealed class ProfileHostContractTests
     }
 
     [Fact]
-    public async Task RetentionSweep_PurgesBacksUpAndRestoresThroughOrdinaryPaths()
+    public async Task DeepArchive_RequiresTheExplicitNewActivationFlag()
+    {
+        using var legacyApplication = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ProfileHost:ArchiveRetentionEnabled"] = "true"
+                })));
+        using var enabledApplication = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ProfileHost:DeepArchiveEnabled"] = "true",
+                    ["ProfileHost:DeepArchiveAfterDays"] = "30"
+                })));
+
+        Assert.False(legacyApplication.Services
+            .GetRequiredService<ProfileHostOptions>()
+            .DeepArchiveEnabled);
+        Assert.True(enabledApplication.Services
+            .GetRequiredService<ProfileHostOptions>()
+            .DeepArchiveEnabled);
+        using var enabledClient = enabledApplication.CreateClient();
+        var health = await enabledClient.GetFromJsonAsync<ProfileHostHealthResponse>(
+            "/profile-host/health");
+        Assert.True(health!.DeepArchiveEnabled);
+        Assert.Equal(30, health.DeepArchiveAfterDays);
+    }
+
+    [Fact]
+    public async Task RetentionSweep_DeepArchivesSearchesAndRestoresThroughOrdinaryPaths()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
         using var client = fixture.CreateClient();
@@ -1123,29 +1153,71 @@ public sealed class ProfileHostContractTests
             CancellationToken.None))!.PayloadJson;
         fixture.BackdateOrder(
             oldArchived.Id,
-            DateTime.UtcNow.AddDays(-(fixture.Options.ArchiveRetentionDays + 30)));
+            DateTime.UtcNow.AddDays(-(fixture.Options.DeepArchiveAfterDays + 30)));
 
-        var result = await fixture.CreateRetentionService().RunSweepAsync(CancellationToken.None);
+        var result = await fixture.CreateDeepArchiveService().RunSweepAsync(CancellationToken.None);
 
         Assert.Equal(1, result.Scanned);
-        Assert.Equal(1, result.Purged);
-        Assert.Equal(0, result.BackupFailures);
-        var purged = await fixture.Store.LoadHostedObjectAsync(
+        Assert.Equal(1, result.DeepArchived);
+        Assert.Equal(0, result.Conflicts);
+        var tombstone = await fixture.Store.LoadHostedObjectAsync(
             fixture.ProfileId,
             ProfileSyncCollections.TradeOrders,
             oldArchived.Id.ToString("D"),
             CancellationToken.None);
-        Assert.True(purged!.Deleted);
-        var backupLine = Assert.Single(fixture.ReadBackupLines());
-        using var backupDocument = JsonDocument.Parse(backupLine);
-        var backupRootElement = backupDocument.RootElement;
-        Assert.Equal(
-            oldArchived.Id.ToString("D"),
-            backupRootElement.GetProperty("objectId").GetString());
-        Assert.Equal(
+        Assert.True(tombstone!.Deleted);
+        var archivePage = await fixture.Store.SearchDeepArchivedOrdersAsync(
             fixture.ProfileId,
-            backupRootElement.GetProperty("profileId").GetString());
-        Assert.Equal(oldPayload, backupRootElement.GetProperty("payloadJson").GetString());
+            "contract order",
+            0,
+            20,
+            CancellationToken.None);
+        var archivedRecord = Assert.Single(archivePage.Orders);
+        Assert.Equal(oldArchived.Id, archivedRecord.OrderId);
+        Assert.Equal(tombstone.Revision, archivedRecord.HostedRevision);
+        var archivedPayload = await fixture.Store.LoadDeepArchivedOrderAsync(
+            fixture.ProfileId,
+            oldArchived.Id.ToString("D"),
+            CancellationToken.None);
+        Assert.Equal(oldPayload, archivedPayload!.PayloadJson);
+        Assert.Equal(tombstone.Revision, archivedPayload.Revision);
+        var deepApiPage = await client.GetFromJsonAsync<TradeOrderDeepArchivePage>(
+            "/profile-host/archive/orders?query=contract%20order&offset=0&limit=20");
+        Assert.Equal(oldArchived.Id, Assert.Single(deepApiPage!.Orders).OrderId);
+        var deepApiObject = await client.GetFromJsonAsync<ProfileSyncObjectEnvelope>(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeOrders}/{oldArchived.Id:D}");
+        Assert.Equal(oldPayload, deepApiObject!.PayloadJson);
+        Assert.True(deepApiObject.DeepArchived);
+        var export = await client.GetFromJsonAsync<ProfileHostBootstrapPayload>(
+            "/profile-host/bootstrap/export");
+        var exportedDeepOrder = Assert.Single(
+            export!.Objects,
+            item => string.Equals(
+                item.ObjectId,
+                oldArchived.Id.ToString("D"),
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(oldPayload, exportedDeepOrder.PayloadJson);
+        Assert.False(exportedDeepOrder.Deleted);
+        using var unauthorizedArchiveResponse = await fixture
+            .CreateClient(withAccessKey: false)
+            .GetAsync("/profile-host/archive/orders?query=contract%20order&offset=0&limit=20");
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthorizedArchiveResponse.StatusCode);
+        using var staleRestoreResponse = await client.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeOrders}/{oldArchived.Id:D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = oldPayload,
+                ExpectedRevision = tombstone.Revision - 1
+            });
+        var staleRestore = await staleRestoreResponse.Content
+            .ReadFromJsonAsync<ProfileSyncPutResponse>();
+        Assert.True(staleRestore!.Conflict);
+        Assert.Single((await fixture.Store.SearchDeepArchivedOrdersAsync(
+            fixture.ProfileId,
+            "contract order",
+            0,
+            20,
+            CancellationToken.None)).Orders);
         Assert.False((await fixture.Store.LoadHostedObjectAsync(
             fixture.ProfileId,
             ProfileSyncCollections.TradeOrders,
@@ -1162,7 +1234,7 @@ public sealed class ProfileHostContractTests
             new ProfileSyncPutRequest
             {
                 PayloadJson = oldPayload,
-                ExpectedRevision = purged.Revision
+                ExpectedRevision = tombstone.Revision
             });
         var restored = await fixture.Store.LoadHostedObjectAsync(
             fixture.ProfileId,
@@ -1172,34 +1244,69 @@ public sealed class ProfileHostContractTests
         restoreResponse.EnsureSuccessStatusCode();
         Assert.False(restored!.Deleted);
         Assert.Equal(oldPayload, restored.PayloadJson);
+        Assert.Empty((await fixture.Store.SearchDeepArchivedOrdersAsync(
+            fixture.ProfileId,
+            "contract order",
+            0,
+            20,
+            CancellationToken.None)).Orders);
+
+        fixture.BackdateOrder(
+            oldArchived.Id,
+            DateTime.UtcNow.AddDays(-(fixture.Options.DeepArchiveAfterDays + 30)));
+        Assert.Equal(
+            1,
+            (await fixture.CreateDeepArchiveService().RunSweepAsync(CancellationToken.None)).DeepArchived);
+        var rearchivedTombstone = await fixture.Store.LoadHostedObjectAsync(
+            fixture.ProfileId,
+            ProfileSyncCollections.TradeOrders,
+            oldArchived.Id.ToString("D"),
+            CancellationToken.None);
+        using var permanentDelete = await client.DeleteAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeOrders}/{oldArchived.Id:D}?expectedRevision={rearchivedTombstone!.Revision}");
+        permanentDelete.EnsureSuccessStatusCode();
+        Assert.Empty((await fixture.Store.SearchDeepArchivedOrdersAsync(
+            fixture.ProfileId,
+            "contract order",
+            0,
+            20,
+            CancellationToken.None)).Orders);
     }
 
     [Fact]
-    public async Task RetentionSweep_SkipsDeletionWhenBackupWriteFails()
+    public async Task DeepArchiveMove_StaleCandidateLeavesLiveOrderIntact()
     {
         await using var fixture = await ProfileFixture.CreateAsync();
         using var client = fixture.CreateClient();
         var oldArchived = CreateOrder(TradeOrderStatus.Completed);
         await PutOrderAsync(client, oldArchived, 0);
-        fixture.BackdateOrder(
-            oldArchived.Id,
-            DateTime.UtcNow.AddDays(-(fixture.Options.ArchiveRetentionDays + 30)));
-        Directory.CreateDirectory(fixture.BackupRoot);
-        var blockerFile = Path.Combine(fixture.BackupRoot, "blocker");
-        await File.WriteAllTextAsync(blockerFile, "not a directory");
-        fixture.Options.ArchiveBackupDirectory = blockerFile;
+        var stale = await fixture.Store.LoadHostedObjectAsync(
+            fixture.ProfileId,
+            ProfileSyncCollections.TradeOrders,
+            oldArchived.Id.ToString("D"),
+            CancellationToken.None);
+        oldArchived.Title = "Changed after scan";
+        await PutOrderAsync(client, oldArchived, stale!.Revision);
 
-        var result = await fixture.CreateRetentionService().RunSweepAsync(CancellationToken.None);
+        var archived = await fixture.Store.MoveOrderToDeepArchiveAsync(
+            fixture.ProfileId,
+            stale,
+            CancellationToken.None);
 
-        Assert.Equal(1, result.Scanned);
-        Assert.Equal(0, result.Purged);
-        Assert.Equal(1, result.BackupFailures);
+        Assert.False(archived);
         var retained = await fixture.Store.LoadHostedObjectAsync(
             fixture.ProfileId,
             ProfileSyncCollections.TradeOrders,
             oldArchived.Id.ToString("D"),
             CancellationToken.None);
         Assert.False(retained!.Deleted);
+        Assert.Contains("Changed after scan", retained.PayloadJson, StringComparison.Ordinal);
+        Assert.Empty((await fixture.Store.SearchDeepArchivedOrdersAsync(
+            fixture.ProfileId,
+            "contract order",
+            0,
+            20,
+            CancellationToken.None)).Orders);
     }
 
     private static TradeOrder CreateOrder(TradeOrderStatus status) =>
@@ -1269,11 +1376,7 @@ public sealed class ProfileHostContractTests
         {
             var databasePath = Path.Combine(Path.GetTempPath(), $"ca-contract-{Guid.NewGuid():N}.db");
             var backupRoot = Path.Combine(Path.GetTempPath(), $"ca-contract-backups-{Guid.NewGuid():N}");
-            var options = new ProfileHostOptions
-            {
-                DatabasePath = databasePath,
-                ArchiveBackupDirectory = backupRoot
-            };
+            var options = new ProfileHostOptions { DatabasePath = databasePath };
             var store = new SqliteProfileHostStore(options);
             var hasher = new ProfileAccessKeyHasher();
             var accessKey = hasher.CreateAccessKey();
@@ -1315,14 +1418,11 @@ public sealed class ProfileHostContractTests
             return client;
         }
 
-        public ProfileHostRetentionService CreateRetentionService() =>
+        public ProfileHostDeepArchiveService CreateDeepArchiveService() =>
             new(
                 Options,
                 Store,
-                new ProfileArchiveBackupStore(
-                    Options,
-                    NullLogger<ProfileArchiveBackupStore>.Instance),
-                NullLogger<ProfileHostRetentionService>.Instance);
+                NullLogger<ProfileHostDeepArchiveService>.Instance);
 
         public void BackdateOrder(Guid orderId, DateTime updatedAtUtc)
         {

@@ -67,16 +67,20 @@ builder.Services.AddSingleton(_ => new ProfileHostOptions
         ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db"),
     ChangeStreamLease = builder.Configuration.GetValue("ProfileHost:ChangeStreamLease", TimeSpan.FromMinutes(1)),
     ChangeStreamHeartbeat = builder.Configuration.GetValue("ProfileHost:ChangeStreamHeartbeat", TimeSpan.FromSeconds(15)),
-    ArchiveRetentionEnabled = builder.Configuration.GetValue("ProfileHost:ArchiveRetentionEnabled", true),
-    ArchiveRetentionDays = Math.Clamp(
-        builder.Configuration.GetValue("ProfileHost:ArchiveRetentionDays", 180),
+    DeepArchiveEnabled = builder.Configuration.GetValue(
+        "ProfileHost:DeepArchiveEnabled",
+        false),
+    DeepArchiveAfterDays = Math.Clamp(
+        builder.Configuration.GetValue(
+            "ProfileHost:DeepArchiveAfterDays",
+            builder.Configuration.GetValue("ProfileHost:ArchiveRetentionDays", 180)),
         1,
         3650),
-    ArchiveBackupDirectory = builder.Configuration["ProfileHost:ArchiveBackupDirectory"]
-        ?? Path.Combine(AppContext.BaseDirectory, "archive-backups"),
-    RetentionSweepInterval = builder.Configuration.GetValue(
-        "ProfileHost:RetentionSweepInterval",
-        TimeSpan.FromHours(24))
+    DeepArchiveSweepInterval = builder.Configuration.GetValue(
+        "ProfileHost:DeepArchiveSweepInterval",
+        builder.Configuration.GetValue(
+            "ProfileHost:RetentionSweepInterval",
+            TimeSpan.FromHours(24)))
 });
 builder.Services.AddSingleton<ProfileAccessKeyHasher>();
 builder.Services.AddSingleton<ProfilePairingCodeService>();
@@ -100,8 +104,7 @@ builder.Services.AddSingleton<SqliteMembershipStore>();
 builder.Services.AddSingleton<ITradeCompanyFounderBinder>(services =>
     services.GetRequiredService<SqliteMembershipStore>());
 builder.Services.AddSingleton<SqliteProfileHostStore>();
-builder.Services.AddSingleton<ProfileArchiveBackupStore>();
-builder.Services.AddHostedService<ProfileHostRetentionService>();
+builder.Services.AddHostedService<ProfileHostDeepArchiveService>();
 var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
     ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db");
 var discordIdentityOptions = new DiscordIdentityOptions

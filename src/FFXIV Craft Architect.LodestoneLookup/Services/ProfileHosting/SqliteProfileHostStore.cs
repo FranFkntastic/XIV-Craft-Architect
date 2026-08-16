@@ -1455,6 +1455,255 @@ public sealed class SqliteProfileHostStore
         return objects;
     }
 
+    public async Task<bool> MoveOrderToDeepArchiveAsync(
+        string profileId,
+        ProfileSyncObjectEnvelope candidate,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        ArgumentNullException.ThrowIfNull(candidate);
+        var summary = TradeOrderArchiveSummaryCodec.TryCreate(
+            candidate.PayloadJson,
+            candidate.ObjectId);
+        if (summary == null)
+        {
+            return false;
+        }
+
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            ct);
+        var current = await LoadObjectAsync(
+            connection,
+            profileId,
+            ProfileSyncCollections.TradeOrders,
+            candidate.ObjectId,
+            ct,
+            transaction);
+        if (current is not { Deleted: false } || current.Revision != candidate.Revision)
+        {
+            await transaction.RollbackAsync(ct);
+            return false;
+        }
+
+        var currentSummary = TradeOrderArchiveSummaryCodec.TryCreate(
+            current.PayloadJson,
+            current.ObjectId);
+        if (currentSummary == null)
+        {
+            await transaction.RollbackAsync(ct);
+            return false;
+        }
+
+        var tombstoneRevision = await ReserveNextRevisionAsync(
+            connection,
+            transaction,
+            profileId,
+            ct);
+        var archivedAtUtc = DateTime.UtcNow;
+        var summaryJson = TradeOrderArchiveSummaryCodec.Serialize(currentSummary);
+        var searchText = string.Join(
+            "\n",
+            new[] { currentSummary.Title }
+                .Concat(currentSummary.Outputs.Select(output => output.Name)))
+            .ToLowerInvariant();
+
+        await using (var archive = connection.CreateCommand())
+        {
+            archive.Transaction = transaction;
+            archive.CommandText = """
+                insert into deep_archived_trade_orders (
+                    profile_id, object_id, payload_json, summary_json, search_text,
+                    source_revision, tombstone_revision, archived_at_utc)
+                values (
+                    $profileId, $objectId, $payloadJson, $summaryJson, $searchText,
+                    $sourceRevision, $tombstoneRevision, $archivedAtUtc)
+                on conflict(profile_id, object_id) do update set
+                    payload_json = excluded.payload_json,
+                    summary_json = excluded.summary_json,
+                    search_text = excluded.search_text,
+                    source_revision = excluded.source_revision,
+                    tombstone_revision = excluded.tombstone_revision,
+                    archived_at_utc = excluded.archived_at_utc;
+                """;
+            archive.Parameters.AddWithValue("$profileId", profileId);
+            archive.Parameters.AddWithValue("$objectId", candidate.ObjectId);
+            archive.Parameters.AddWithValue("$payloadJson", current.PayloadJson);
+            archive.Parameters.AddWithValue("$summaryJson", summaryJson);
+            archive.Parameters.AddWithValue("$searchText", searchText);
+            archive.Parameters.AddWithValue("$sourceRevision", current.Revision);
+            archive.Parameters.AddWithValue("$tombstoneRevision", tombstoneRevision);
+            archive.Parameters.AddWithValue("$archivedAtUtc", archivedAtUtc.ToString("O"));
+            await archive.ExecuteNonQueryAsync(ct);
+        }
+
+        await using (var tombstone = connection.CreateCommand())
+        {
+            tombstone.Transaction = transaction;
+            tombstone.CommandText = """
+                update sync_objects
+                set payload_json = '{}',
+                    revision = $revision,
+                    updated_at_utc = $updatedAtUtc,
+                    deleted = 1,
+                    deleted_at_utc = $updatedAtUtc
+                where profile_id = $profileId
+                  and collection = $collection
+                  and object_id = $objectId
+                  and revision = $expectedRevision
+                  and deleted = 0;
+                """;
+            tombstone.Parameters.AddWithValue("$profileId", profileId);
+            tombstone.Parameters.AddWithValue("$collection", ProfileSyncCollections.TradeOrders);
+            tombstone.Parameters.AddWithValue("$objectId", candidate.ObjectId);
+            tombstone.Parameters.AddWithValue("$revision", tombstoneRevision);
+            tombstone.Parameters.AddWithValue("$updatedAtUtc", archivedAtUtc.ToString("O"));
+            tombstone.Parameters.AddWithValue("$expectedRevision", current.Revision);
+            if (await tombstone.ExecuteNonQueryAsync(ct) != 1)
+            {
+                await transaction.RollbackAsync(ct);
+                return false;
+            }
+        }
+
+        await transaction.CommitAsync(ct);
+        _changeSignal?.Publish(profileId, tombstoneRevision);
+        return true;
+    }
+
+    public async Task<TradeOrderDeepArchivePage> SearchDeepArchivedOrdersAsync(
+        string profileId,
+        string query,
+        int offset,
+        int limit,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select object_id, summary_json, tombstone_revision, archived_at_utc
+            from deep_archived_trade_orders
+            where profile_id = $profileId
+              and search_text like $query escape '\'
+            order by archived_at_utc desc, object_id
+            limit $limitPlusOne offset $offset;
+            """;
+        var escapedQuery = query.Trim().ToLowerInvariant()
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$query", $"%{escapedQuery}%");
+        command.Parameters.AddWithValue("$limitPlusOne", checked(limit + 1));
+        command.Parameters.AddWithValue("$offset", offset);
+
+        var orders = new List<TradeOrderDeepArchiveRecord>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var objectId = reader.GetString(0);
+            orders.Add(new TradeOrderDeepArchiveRecord
+            {
+                OrderId = Guid.Parse(objectId),
+                Summary = TradeOrderArchiveSummaryCodec.Deserialize(reader.GetString(1), objectId),
+                HostedRevision = reader.GetInt64(2),
+                ArchivedAtUtc = DateTime.Parse(
+                    reader.GetString(3),
+                    null,
+                    DateTimeStyles.RoundtripKind)
+            });
+        }
+
+        var hasMore = orders.Count > limit;
+        if (hasMore)
+        {
+            orders.RemoveAt(orders.Count - 1);
+        }
+        return new TradeOrderDeepArchivePage
+        {
+            Offset = offset,
+            HasMore = hasMore,
+            Orders = orders
+        };
+    }
+
+    public async Task<ProfileSyncObjectEnvelope?> LoadDeepArchivedOrderAsync(
+        string profileId,
+        string objectId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(objectId);
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select payload_json, tombstone_revision, archived_at_utc
+            from deep_archived_trade_orders
+            where profile_id = $profileId and object_id = $objectId;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        command.Parameters.AddWithValue("$objectId", objectId);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+        {
+            return null;
+        }
+        return new ProfileSyncObjectEnvelope
+        {
+            Collection = ProfileSyncCollections.TradeOrders,
+            ObjectId = objectId,
+            PayloadJson = reader.GetString(0),
+            Revision = reader.GetInt64(1),
+            DeepArchived = true,
+            UpdatedAtUtc = DateTime.Parse(
+                reader.GetString(2),
+                null,
+                DateTimeStyles.RoundtripKind)
+        };
+    }
+
+    public async Task<IReadOnlyList<ProfileSyncObjectEnvelope>> LoadAllDeepArchivedOrdersAsync(
+        string profileId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select object_id, payload_json, tombstone_revision, archived_at_utc
+            from deep_archived_trade_orders
+            where profile_id = $profileId
+            order by archived_at_utc, object_id;
+            """;
+        command.Parameters.AddWithValue("$profileId", profileId);
+        var orders = new List<ProfileSyncObjectEnvelope>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            orders.Add(new ProfileSyncObjectEnvelope
+            {
+                Collection = ProfileSyncCollections.TradeOrders,
+                ObjectId = reader.GetString(0),
+                PayloadJson = reader.GetString(1),
+                Revision = reader.GetInt64(2),
+                DeepArchived = true,
+                UpdatedAtUtc = DateTime.Parse(
+                    reader.GetString(3),
+                    null,
+                    DateTimeStyles.RoundtripKind)
+            });
+        }
+        return orders;
+    }
+
     public async Task<ProfileSyncPutResponse> PutObjectAsync(
         string profileId,
         string collection,
@@ -1659,6 +1908,21 @@ public sealed class SqliteProfileHostStore
                 ErrorCode = "revision_conflict",
                 ErrorMessage = "Remote object changed before the hosted write completed."
             };
+        }
+        if (string.Equals(collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal))
+        {
+            await using var restore = connection.CreateCommand();
+            restore.Transaction = transaction;
+            restore.CommandText = """
+                delete from deep_archived_trade_orders
+                where profile_id = $profileId
+                  and object_id = $objectId
+                  and tombstone_revision = $expectedRevision;
+                """;
+            restore.Parameters.AddWithValue("$profileId", profileId);
+            restore.Parameters.AddWithValue("$objectId", objectId);
+            restore.Parameters.AddWithValue("$expectedRevision", expectedRevision);
+            await restore.ExecuteNonQueryAsync(ct);
         }
         if (_founderBinder != null && isCompany)
         {
@@ -2160,6 +2424,21 @@ public sealed class SqliteProfileHostStore
                 ErrorMessage = "Remote object changed before the hosted delete completed."
             };
         }
+        if (string.Equals(collection, ProfileSyncCollections.TradeOrders, StringComparison.Ordinal))
+        {
+            await using var deleteArchived = connection.CreateCommand();
+            deleteArchived.Transaction = transaction;
+            deleteArchived.CommandText = """
+                delete from deep_archived_trade_orders
+                where profile_id = $profileId
+                  and object_id = $objectId
+                  and tombstone_revision = $expectedRevision;
+                """;
+            deleteArchived.Parameters.AddWithValue("$profileId", profileId);
+            deleteArchived.Parameters.AddWithValue("$objectId", objectId);
+            deleteArchived.Parameters.AddWithValue("$expectedRevision", expectedRevision);
+            await deleteArchived.ExecuteNonQueryAsync(ct);
+        }
         await transaction.CommitAsync(ct);
         _changeSignal?.Publish(profileId, revision);
 
@@ -2431,6 +2710,22 @@ public sealed class SqliteProfileHostStore
                     revision integer not null,
                     foreign key(profile_id) references hosted_profiles(id)
                 );
+
+                create table if not exists deep_archived_trade_orders (
+                    profile_id text not null,
+                    object_id text not null,
+                    payload_json text not null,
+                    summary_json text not null,
+                    search_text text not null,
+                    source_revision integer not null,
+                    tombstone_revision integer not null,
+                    archived_at_utc text not null,
+                    primary key(profile_id, object_id),
+                    foreign key(profile_id) references hosted_profiles(id)
+                );
+
+                create index if not exists ix_deep_archived_trade_orders_profile_archived
+                on deep_archived_trade_orders(profile_id, archived_at_utc desc);
 
                 insert into profile_revisions (profile_id, revision)
                 select p.id, coalesce(max(o.revision), 0)

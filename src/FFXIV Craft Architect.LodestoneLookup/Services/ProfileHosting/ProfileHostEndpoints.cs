@@ -14,6 +14,8 @@ public static class ProfileHostEndpoints
         group.MapGet("/health", (ProfileHostOptions options) => Results.Ok(new ProfileHostHealthResponse
         {
             ProfileHostEnabled = options.Enabled,
+            DeepArchiveEnabled = options.DeepArchiveEnabled,
+            DeepArchiveAfterDays = options.DeepArchiveAfterDays,
             ProtocolVersion = 1
         }));
 
@@ -356,6 +358,59 @@ public static class ProfileHostEndpoints
         group.MapGet("/changes/stream", StreamChangesAsync);
 
         group.MapGet(
+            "/archive/orders",
+            async (
+                HttpRequest request,
+                ProfileHostOptions options,
+                string? query,
+                int? offset,
+                int? limit,
+                ProfileAuthenticationGate authentication,
+                SqliteProfileHostStore store,
+                ProfileAccessKeyHasher hasher,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var profile = await AuthenticateAsync(
+                    request,
+                    authentication,
+                    store,
+                    hasher,
+                    cancellationToken);
+                if (profile == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (string.IsNullOrWhiteSpace(query))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "archive_query_required",
+                        message = "Search text is required for the deep archive."
+                    });
+                }
+                if (offset is < 0 || limit is <= 0 or > 50)
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "invalid_archive_page",
+                        message = "Archive offset must be non-negative and limit must be between 1 and 50."
+                    });
+                }
+
+                return Results.Ok(await store.SearchDeepArchivedOrdersAsync(
+                    profile.ProfileId,
+                    query,
+                    offset ?? 0,
+                    limit ?? 20,
+                    cancellationToken));
+            });
+
+        group.MapGet(
             "/objects/{collection}/{objectId}",
             async (
                 string collection,
@@ -397,9 +452,25 @@ public static class ProfileHostEndpoints
                     collection,
                     objectId,
                     cancellationToken);
-                return hosted is null or { Deleted: true }
-                    ? Results.NotFound()
-                    : Results.Ok(hosted);
+                if (hosted is { Deleted: false })
+                {
+                    return Results.Ok(hosted);
+                }
+                if (string.Equals(
+                        collection,
+                        ProfileSyncCollections.TradeOrders,
+                        StringComparison.Ordinal))
+                {
+                    var archived = await store.LoadDeepArchivedOrderAsync(
+                        profile.ProfileId,
+                        objectId,
+                        cancellationToken);
+                    if (archived != null)
+                    {
+                        return Results.Ok(archived);
+                    }
+                }
+                return Results.NotFound();
             });
 
         group.MapPut(
@@ -583,9 +654,23 @@ public static class ProfileHostEndpoints
                 }
 
                 var changes = await store.LoadChangesAsync(profile.ProfileId, 0, cancellationToken);
+                var deepArchivedOrders = await store.LoadAllDeepArchivedOrdersAsync(
+                    profile.ProfileId,
+                    cancellationToken);
+                var deepArchivedOrderIds = deepArchivedOrders
+                    .Select(order => order.ObjectId)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 return Results.Ok(new ProfileHostBootstrapPayload
                 {
                     Objects = PortableObjects(changes.Objects)
+                        .Where(item =>
+                            !string.Equals(
+                                item.Collection,
+                                ProfileSyncCollections.TradeOrders,
+                                StringComparison.Ordinal) ||
+                            !deepArchivedOrderIds.Contains(item.ObjectId))
+                        .Concat(deepArchivedOrders)
+                        .ToArray()
                 });
             });
 
