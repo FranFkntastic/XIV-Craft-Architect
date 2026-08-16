@@ -243,7 +243,8 @@ public sealed class UnifiedSettingsContractTests
         Assert.Contains("@if (CanCustomize)", hub, StringComparison.Ordinal);
         Assert.Contains("Copy company link", hub, StringComparison.Ordinal);
         Assert.Contains("CopyCompanyLinkAsync", hub, StringComparison.Ordinal);
-        Assert.Contains("_hub!.Slug", hub, StringComparison.Ordinal);
+        Assert.Contains("_hub!.CompanyId", hub, StringComparison.Ordinal);
+        Assert.DoesNotContain("companies/{Uri.EscapeDataString(_hub!.Slug)}", hub, StringComparison.Ordinal);
         Assert.Contains("navigator.clipboard.writeText", hub, StringComparison.Ordinal);
     }
 

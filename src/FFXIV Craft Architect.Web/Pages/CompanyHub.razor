@@ -347,7 +347,7 @@ else
     private async Task CopyCompanyLinkAsync()
     {
         var companyUrl = Navigation.ToAbsoluteUri(
-            $"companies/{Uri.EscapeDataString(_hub!.Slug)}").AbsoluteUri;
+            $"companies/{Uri.EscapeDataString(_hub!.CompanyId)}").AbsoluteUri;
         try
         {
             await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", companyUrl);
