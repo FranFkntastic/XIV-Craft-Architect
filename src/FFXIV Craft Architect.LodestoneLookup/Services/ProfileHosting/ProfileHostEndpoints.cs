@@ -14,6 +14,7 @@ public static class ProfileHostEndpoints
         group.MapGet("/health", (ProfileHostOptions options) => Results.Ok(new ProfileHostHealthResponse
         {
             ProfileHostEnabled = options.Enabled,
+            DeepArchiveEnabled = options.DeepArchiveEnabled,
             ProtocolVersion = 1
         }));
 

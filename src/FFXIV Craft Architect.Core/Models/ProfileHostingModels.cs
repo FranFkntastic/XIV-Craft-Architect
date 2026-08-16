@@ -295,6 +295,7 @@ public sealed class ProfileHostHealthResponse
     public string Service { get; set; } = "FFXIV Craft Architect Private Backend";
     public string Status { get; set; } = "ready";
     public bool ProfileHostEnabled { get; set; }
+    public bool DeepArchiveEnabled { get; set; }
     public int ProtocolVersion { get; set; } = 1;
 }
 

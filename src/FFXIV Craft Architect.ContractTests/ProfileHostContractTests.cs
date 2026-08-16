@@ -1106,7 +1106,7 @@ public sealed class ProfileHostContractTests
     }
 
     [Fact]
-    public void DeepArchive_RequiresTheExplicitNewActivationFlag()
+    public async Task DeepArchive_RequiresTheExplicitNewActivationFlag()
     {
         using var legacyApplication = new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, configuration) =>
@@ -1127,6 +1127,10 @@ public sealed class ProfileHostContractTests
         Assert.True(enabledApplication.Services
             .GetRequiredService<ProfileHostOptions>()
             .DeepArchiveEnabled);
+        using var enabledClient = enabledApplication.CreateClient();
+        var health = await enabledClient.GetFromJsonAsync<ProfileHostHealthResponse>(
+            "/profile-host/health");
+        Assert.True(health!.DeepArchiveEnabled);
     }
 
     [Fact]

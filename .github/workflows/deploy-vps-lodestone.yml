@@ -795,6 +795,25 @@ jobs:
           sudo chmod +x "$staging_dir/FFXIV Craft Architect.LodestoneLookup"
           sudo mv "$staging_dir" "$release_dir"
 
+          current_deep_archive_enabled="false"
+          if sudo test -f "$root/env/profile-host.env" &&
+             sudo grep -Fxq 'ProfileHost__DeepArchiveEnabled=true' "$root/env/profile-host.env"; then
+            current_deep_archive_enabled="true"
+          fi
+          if [[ "$deep_archive_enabled" == "true" &&
+                "$current_deep_archive_enabled" != "true" &&
+                -f "$profile_db" ]]; then
+            activation_backup_dir="$root/data/deep-archive-activation-backups/$release"
+            sudo test ! -e "$activation_backup_dir"
+            sudo mkdir -p "$activation_backup_dir"
+            sudo chown "$USER:$USER" "$activation_backup_dir"
+            sudo chmod 700 "$activation_backup_dir"
+            backup_sqlite "$profile_db" "$activation_backup_dir/profile-host.db"
+            sudo chown "$USER:$USER" "$activation_backup_dir/profile-host.db"
+            sudo chmod 600 "$activation_backup_dir/profile-host.db"
+            echo "Validated pre-activation Profile Host backup: $activation_backup_dir/profile-host.db"
+          fi
+
           test "$(stat -c '%a' "$discord_upload")" = "600"
           umask 077
           {
@@ -1043,14 +1062,18 @@ jobs:
             if [[ "$target" == "staging" ]]; then
               curl --fail --silent --show-error \
                 "http://127.0.0.1:$port/profile-host/health" \
-                | EXPECTED_ENABLED="$runtime_profile_host_enabled" python3 -c '
+                | EXPECTED_ENABLED="$runtime_profile_host_enabled" \
+                  EXPECTED_DEEP_ARCHIVE="$deep_archive_enabled" python3 -c '
            import json
            import os
            import sys
            health = json.load(sys.stdin)
            expected = os.environ["EXPECTED_ENABLED"] == "true"
+           expected_deep_archive = os.environ["EXPECTED_DEEP_ARCHIVE"] == "true"
            if health.get("status") != "ready" or health.get("profileHostEnabled") is not expected:
                raise SystemExit("Staging Profile Host runtime does not match configured behavior.")
+           if health.get("deepArchiveEnabled") is not expected_deep_archive:
+               raise SystemExit("Staging deep archive activation does not match configured behavior.")
            '
             fi
             if ! sudo cmp --silent "$caddyfile" "$caddy_candidate"; then
