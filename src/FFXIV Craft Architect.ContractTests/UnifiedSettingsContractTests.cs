@@ -249,6 +249,22 @@ public sealed class UnifiedSettingsContractTests
     }
 
     [Fact]
+    public void CommissionersCanTraverseFromTheHubToThatCompanysCompleteOrderRail()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var hub = File.ReadAllText(Path.Combine(web, "Pages", "CompanyHub.razor"));
+        var orders = File.ReadAllText(Path.Combine(web, "Pages", "TradeOrders.razor.cs"));
+
+        Assert.Contains("@if (CanCustomize)", hub, StringComparison.Ordinal);
+        Assert.Contains("View all orders", hub, StringComparison.Ordinal);
+        Assert.Contains("/trade/orders?company=", hub, StringComparison.Ordinal);
+        Assert.Contains("_hub!.CompanyId", hub, StringComparison.Ordinal);
+        Assert.Contains("[SupplyParameterFromQuery(Name = \"company\")]", orders, StringComparison.Ordinal);
+        Assert.Contains("SelectWorkspaceCompanyAsync(requestedCompanyId)", orders, StringComparison.Ordinal);
+        Assert.Contains("ResolveSelectedWorkspaceProfileAsync", orders, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SharedCompanyAndCommissionLinksPublishSafeRichPreviewMetadata()
     {
         var webRoot = Path.Combine(

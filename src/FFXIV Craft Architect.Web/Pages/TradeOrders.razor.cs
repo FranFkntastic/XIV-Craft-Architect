@@ -113,6 +113,9 @@ public partial class TradeOrders
     private DotNetObjectReference<TradeOrders>? _tradeOrdersReference;
     private bool _isDisposed;
 
+    [SupplyParameterFromQuery(Name = "company")]
+    public string? Company { get; set; }
+
     private bool IsPlanMutationTransactionRunning =>
         _isSavingSelectedOrderOutputs ||
         _isSavingSelectedOrderCraftPlan ||
@@ -449,6 +452,15 @@ public partial class TradeOrders
                     NavigationManager.NavigateTo(authorization.AbsoluteUri, true);
                     return;
                 }
+            }
+            if (!string.IsNullOrWhiteSpace(Company))
+            {
+                if (!Guid.TryParse(Company, out var requestedCompanyId))
+                {
+                    throw new InvalidOperationException("The requested company workspace identity is invalid.");
+                }
+
+                await TradeOperationsPersistence.SelectWorkspaceCompanyAsync(requestedCompanyId);
             }
             _companyProfile = await ResolveSelectedWorkspaceProfileAsync();
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();

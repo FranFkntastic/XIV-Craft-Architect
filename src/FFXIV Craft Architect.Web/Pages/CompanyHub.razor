@@ -156,7 +156,13 @@ else
                 </section>
 
                 <section class="panel open-panel" aria-labelledby="open-work-heading">
-                    <div class="section-header"><div class="section-title"><h2 id="open-work-heading">Open commissions</h2><span>@OpenCountLabel</span></div></div>
+                    <div class="section-header">
+                        <div class="section-title"><h2 id="open-work-heading">Open commissions</h2><span>@OpenCountLabel</span></div>
+                        @if (CanCustomize)
+                        {
+                            <a class="section-link" href="@OrdersUrl">View all orders <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" /></a>
+                        }
+                    </div>
                     <div class="commission-list">
                         @foreach (var commission in _hub.OpenCommissions ?? [])
                         {
@@ -294,6 +300,7 @@ else
     private string UpdateCountLabel => $"{_hub?.Updates?.Count ?? 0} {((_hub?.Updates?.Count ?? 0) == 1 ? "post" : "posts")}";
     private string AssignmentCountLabel => $"{_hub?.Assignments?.Count ?? 0} active {((_hub?.Assignments?.Count ?? 0) == 1 ? "assignment" : "assignments")}";
     private string OpenCountLabel => $"{_hub?.OpenCommissions?.Count ?? 0} available";
+    private string OrdersUrl => $"/trade/orders?company={Uri.EscapeDataString(_hub!.CompanyId)}";
     private CompanyHubUpdate? PinnedUpdate => _hub?.Updates?.FirstOrDefault(update => update.IsPinned);
     private IReadOnlyList<CompanyHubUpdate> RecentUpdates => (_hub?.Updates ?? []).Where(update => !update.IsPinned).Take(3).ToArray();
     private IReadOnlyList<CompanyHubUpdate> ArchivedUpdates => (_hub?.Updates ?? []).Where(update => !update.IsPinned).Skip(3).ToArray();
