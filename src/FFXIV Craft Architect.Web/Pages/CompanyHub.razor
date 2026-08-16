@@ -45,6 +45,12 @@ else
                 <button class="button quiet" type="button" @onclick="OpenDetails">@RosterCountLabel</button>
                 <button class="button quiet" type="button" @onclick="OpenDetails">Company details</button>
             }
+            @if (CanCustomize)
+            {
+                <button class="button quiet link-copy" type="button" @onclick="CopyCompanyLinkAsync" title="Copy the public company page used for membership requests">
+                    <MudIcon Icon="@Icons.Material.Filled.Link" Size="Size.Small" /> Copy company link
+                </button>
+            }
             @if (CanCustomize && !_editingTheme)
             {
                 <button class="button" type="button" @onclick="BeginCustomize">Customize</button>
@@ -338,6 +344,20 @@ else
     private void ToggleUpdateComposer() => _postingUpdate = !_postingUpdate;
     private void OpenDetails() => _detailsOpen = true;
     private void CloseDetails() => _detailsOpen = false;
+    private async Task CopyCompanyLinkAsync()
+    {
+        var companyUrl = Navigation.ToAbsoluteUri(
+            $"companies/{Uri.EscapeDataString(_hub!.Slug)}").AbsoluteUri;
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", companyUrl);
+            Snackbar.Add("Company link copied.", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Company link could not be copied.", Severity.Error);
+        }
+    }
     private async Task OpenWorkspaceSettingsAsync()
     {
         var parameters = new DialogParameters

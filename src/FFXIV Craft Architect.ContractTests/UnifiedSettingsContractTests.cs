@@ -234,6 +234,40 @@ public sealed class UnifiedSettingsContractTests
         Assert.DoesNotContain("@onmouseenter=\"Mark", hub, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void CommissionersCanCopyTheCanonicalCompanyHubLink()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var hub = File.ReadAllText(Path.Combine(web, "Pages", "CompanyHub.razor"));
+
+        Assert.Contains("@if (CanCustomize)", hub, StringComparison.Ordinal);
+        Assert.Contains("Copy company link", hub, StringComparison.Ordinal);
+        Assert.Contains("CopyCompanyLinkAsync", hub, StringComparison.Ordinal);
+        Assert.Contains("_hub!.Slug", hub, StringComparison.Ordinal);
+        Assert.Contains("navigator.clipboard.writeText", hub, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedCompanyAndCommissionLinksPublishSafeRichPreviewMetadata()
+    {
+        var webRoot = Path.Combine(
+            LocateRepositoryRoot(),
+            "src",
+            "FFXIV Craft Architect.Web",
+            "wwwroot");
+        var company = File.ReadAllText(Path.Combine(webRoot, "index.html"));
+        var commission = File.ReadAllText(Path.Combine(webRoot, "commission.html"));
+
+        Assert.Contains("property=\"og:title\" content=\"FFXIV Craft Architect\"", company, StringComparison.Ordinal);
+        Assert.Contains("property=\"og:description\"", company, StringComparison.Ordinal);
+        Assert.Contains("name=\"twitter:card\" content=\"summary\"", company, StringComparison.Ordinal);
+        Assert.Contains("property=\"og:title\" content=\"Company Commission", commission, StringComparison.Ordinal);
+        Assert.Contains("property=\"og:description\"", commission, StringComparison.Ordinal);
+        Assert.Contains("name=\"twitter:card\" content=\"summary\"", commission, StringComparison.Ordinal);
+        Assert.DoesNotContain("participant", commission[..commission.IndexOf("</head>", StringComparison.Ordinal)], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("payment total", commission[..commission.IndexOf("</head>", StringComparison.Ordinal)], StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

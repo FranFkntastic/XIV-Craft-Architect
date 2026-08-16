@@ -20,5 +20,15 @@ assert.equal(config?.EngineAcceptance?.UseDeterministicEvidence, false);
 const index = await readFile(path.join(root, 'index.html'), 'utf8');
 assert.match(index, /<html/i);
 assert.match(index, /_framework\/blazor\.webassembly\.js/);
+assert.match(index, /property="og:title" content="FFXIV Craft Architect"/);
+assert.match(index, /property="og:description"/);
+assert.match(index, /name="twitter:card" content="summary"/);
 
-console.log(`Verified extracted ${slot} product configuration for ${domain} with profile authority ${profileHostDomain}; guarded engine enabled: ${enabled}.`);
+const commission = await readFile(path.join(root, 'commission.html'), 'utf8');
+const commissionHead = commission.slice(0, commission.indexOf('</head>'));
+assert.match(commissionHead, /property="og:title" content="Company Commission/);
+assert.match(commissionHead, /property="og:description"/);
+assert.match(commissionHead, /name="twitter:card" content="summary"/);
+assert.doesNotMatch(commissionHead, /participant/i);
+
+console.log(`Verified extracted ${slot} product configuration and safe public-link previews for ${domain} with profile authority ${profileHostDomain}; guarded engine enabled: ${enabled}.`);
