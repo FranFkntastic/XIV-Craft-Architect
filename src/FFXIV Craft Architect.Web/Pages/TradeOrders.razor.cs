@@ -31,6 +31,7 @@ public partial class TradeOrders
     private List<TradeCrafterProfile> _crafters = [];
     private List<TradeOrder> _orders = [];
     private List<TradeOrderArchiveSummaryRecord> _archiveSummaryRecords = [];
+    private List<TradeOrderDeepArchiveRecord> _deepArchiveMatches = [];
     private readonly Dictionary<Guid, long> _orderHostedRevisions = [];
     private readonly HashSet<Guid> _fetchingArchiveOrderIds = [];
     private List<TradePayrollWorkflowDraft> _payrollDrafts = [];
@@ -48,6 +49,11 @@ public partial class TradeOrders
     private string? _newRequestedOrderNotes;
     private string _requestedOrderSearchQuery = string.Empty;
     private string _orderSearchText = string.Empty;
+    private bool _isSearchingDeepArchive;
+    private bool _deepArchiveHasMore;
+    private string? _deepArchiveSearchError;
+    private string? _deepArchiveConnectionScopeId;
+    private CancellationTokenSource? _deepArchiveSearchCancellation;
     private bool _isSearchingRequestedOrderItems;
     private bool _isCreatingRequestedOrder;
     private bool _isOpeningSelectedOrderCraftPlan;
@@ -393,6 +399,8 @@ public partial class TradeOrders
     public async ValueTask DisposeAsync()
     {
         _isDisposed = true;
+        _deepArchiveSearchCancellation?.Cancel();
+        _deepArchiveSearchCancellation?.Dispose();
         InvalidateSelectedOrderPlanRestoration();
         InvalidateSelectedCommissionOwnerRefresh();
         HostedOrders.Changed -= OnHostedOrderProjectionChanged;

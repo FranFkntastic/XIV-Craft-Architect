@@ -68,6 +68,7 @@ public sealed class ProfileSyncObjectEnvelope
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     public bool Deleted { get; set; }
     public DateTime? DeletedAtUtc { get; set; }
+    public bool DeepArchived { get; set; }
 
     public bool IsSummary => SummaryJson != null;
 }
@@ -203,6 +204,22 @@ public sealed class ProfileSyncChangesResponse
     public long ServerRevision { get; set; }
     public bool HasMore { get; set; }
     public IReadOnlyList<ProfileSyncObjectEnvelope> Objects { get; set; } = Array.Empty<ProfileSyncObjectEnvelope>();
+}
+
+public sealed class TradeOrderDeepArchiveRecord
+{
+    public Guid OrderId { get; set; }
+    public long HostedRevision { get; set; }
+    public DateTime ArchivedAtUtc { get; set; }
+    public TradeOrderArchiveSummary Summary { get; set; } = new();
+}
+
+public sealed class TradeOrderDeepArchivePage
+{
+    public int Offset { get; set; }
+    public bool HasMore { get; set; }
+    public IReadOnlyList<TradeOrderDeepArchiveRecord> Orders { get; set; } =
+        Array.Empty<TradeOrderDeepArchiveRecord>();
 }
 
 public sealed class ProfileHostProfileResponse

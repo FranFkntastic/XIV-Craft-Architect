@@ -63,7 +63,9 @@
                                        OnClick="StartNewOrderWorkspace"
                                        aria-label="New order" />
                     </div>
-                    <MudTextField @bind-Value="_orderSearchText"
+                    <MudTextField T="string"
+                                  Value="@_orderSearchText"
+                                  ValueChanged="OnOrderSearchChangedAsync"
                                   id="order-search"
                                   Placeholder="Search orders"
                                   Variant="Variant.Outlined"
@@ -131,19 +133,35 @@
                                         @foreach (var order in FilteredArchivedOrders)
                                         {
                                               <button type="button"
-                                                      class="@GetRailOrderClass(order)"
+                                                      class="@($"{GetRailOrderClass(order)} is-archive")"
                                                       aria-current="@(_selectedOrder?.Id == order.OrderId ? "true" : null)"
                                                       disabled="@IsFetchingArchiveOrder(order.OrderId)"
                                                       @onclick="() => OpenArchiveOrderAsync(order)">
                                                  <span class="trade-orders-rail-title">@order.Title</span>
-                                                 <span class="trade-orders-rail-meta">@FormatArchiveOrderDate(order)</span>
-                                                 <span class="trade-orders-rail-meta">@FormatArchiveOrderOutputs(order)</span>
+                                                 <span class="trade-orders-rail-meta is-date">@FormatArchiveOrderDate(order)</span>
+                                                 <span class="trade-orders-rail-meta is-outputs">@FormatArchiveOrderOutputs(order)</span>
                                                  <span class="trade-orders-status-chip">@(IsFetchingArchiveOrder(order.OrderId) ? "Loading..." : FormatRailStatusChip(order.Status))</span>
                                              </button>
                                         }
                                     </div>
                                 }
                             </section>
+                        }
+                        @if (_isSearchingDeepArchive)
+                        {
+                            <div class="trade-orders-archive-search-state">Searching older orders...</div>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(_deepArchiveSearchError))
+                        {
+                            <div class="trade-orders-archive-search-state is-error">@_deepArchiveSearchError</div>
+                        }
+                        else if (_deepArchiveHasMore)
+                        {
+                            <button type="button"
+                                    class="trade-orders-archive-more"
+                                    @onclick="LoadMoreDeepArchiveAsync">
+                                More older orders
+                            </button>
                         }
                         @if (FilteredDeviceOnlyOrders.Count > 0)
                         {

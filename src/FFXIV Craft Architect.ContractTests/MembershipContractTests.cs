@@ -991,7 +991,6 @@ public sealed class MembershipContractTests
                     {
                         ["ProfileHost:Enabled"] = "true",
                         ["ProfileHost:DatabasePath"] = Path.Combine(root, "profiles.db"),
-                        ["ProfileHost:ArchiveBackupDirectory"] = Path.Combine(root, "archive"),
                         ["TradeMemberships:DatabasePath"] = Path.Combine(root, "memberships.db"),
                         ["TradeMemberships:FounderReconciliationIntervalSeconds"] =
                             founderReconciliationIntervalSeconds.ToString(),

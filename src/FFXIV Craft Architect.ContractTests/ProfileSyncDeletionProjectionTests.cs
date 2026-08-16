@@ -52,6 +52,13 @@ public sealed class ProfileSyncDeletionProjectionTests
         await adapter.ApplyRemoteObjectAsync(Envelope(order, 5), CancellationToken.None);
         Assert.Empty(await persistence.LoadOrdersAsync(companyProfileId));
 
+        var deepArchiveHydration = Envelope(order, 6);
+        deepArchiveHydration.DeepArchived = true;
+        await adapter.ApplyRemoteObjectAsync(deepArchiveHydration, CancellationToken.None);
+        Assert.Single(await persistence.LoadOrdersAsync(companyProfileId));
+        Assert.Empty(await localState.LoadOrderTombstonesAsync(profileId));
+
+        await adapter.ApplyRemoteDeletionAsync(order.Id, companyProfileId, 7, CancellationToken.None);
         await adapter.ApplyRemoteObjectAsync(Envelope(order, 8), CancellationToken.None);
         var revived = Assert.Single(await persistence.LoadOrdersAsync(companyProfileId));
         Assert.Equal(order.Id, revived.Id);

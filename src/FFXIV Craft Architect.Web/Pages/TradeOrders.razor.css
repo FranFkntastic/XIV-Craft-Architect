@@ -215,6 +215,13 @@
   text-align: left;
 }
 
+.trade-orders-rail-order.is-archive {
+  grid-template-areas:
+    "title chip"
+    "date chip"
+    "outputs chip";
+}
+
 .trade-orders-rail-order:hover,
 .trade-orders-rail-order.is-selected {
   background: #3b341f;
@@ -282,6 +289,42 @@ button.trade-orders-rail-order.is-device-only:hover {
   white-space: nowrap;
   color: #bcbcbc;
   font-size: 0.68rem;
+}
+
+.trade-orders-rail-order.is-archive .trade-orders-rail-meta.is-date {
+  grid-area: date;
+}
+
+.trade-orders-rail-order.is-archive .trade-orders-rail-meta.is-outputs {
+  grid-area: outputs;
+}
+
+.trade-orders-archive-search-state {
+  padding: 7px 8px;
+  color: #aaa;
+  font-size: 0.68rem;
+}
+
+.trade-orders-archive-search-state.is-error {
+  color: #d9aa7a;
+}
+
+.trade-orders-archive-more {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 7px 8px;
+  color: #c9ad62;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.68rem;
+  text-align: left;
+}
+
+.trade-orders-archive-more:hover,
+.trade-orders-archive-more:focus-visible {
+  background: #332e20;
+  color: #f0cc62;
 }
 
 .trade-orders-rail-order .trade-orders-status-chip {

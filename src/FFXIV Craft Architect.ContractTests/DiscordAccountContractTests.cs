@@ -364,8 +364,7 @@ public sealed class DiscordAccountContractTests
                     services.AddSingleton(new ProfileHostOptions
                     {
                         Enabled = true,
-                        DatabasePath = Path.Combine(root, "profiles.db"),
-                        ArchiveBackupDirectory = Path.Combine(root, "archive")
+                        DatabasePath = Path.Combine(root, "profiles.db")
                     });
                     services.AddSingleton(new DiscordIdentityOptions
                     {
