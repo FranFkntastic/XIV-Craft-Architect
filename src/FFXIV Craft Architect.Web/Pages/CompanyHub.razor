@@ -300,7 +300,7 @@ else
     private string UpdateCountLabel => $"{_hub?.Updates?.Count ?? 0} {((_hub?.Updates?.Count ?? 0) == 1 ? "post" : "posts")}";
     private string AssignmentCountLabel => $"{_hub?.Assignments?.Count ?? 0} active {((_hub?.Assignments?.Count ?? 0) == 1 ? "assignment" : "assignments")}";
     private string OpenCountLabel => $"{_hub?.OpenCommissions?.Count ?? 0} available";
-    private string OrdersUrl => $"/trade/orders?company={Uri.EscapeDataString(_hub!.CompanyId)}";
+    private string OrdersUrl => $"trade/orders?company={Uri.EscapeDataString(_hub!.CompanyId)}";
     private CompanyHubUpdate? PinnedUpdate => _hub?.Updates?.FirstOrDefault(update => update.IsPinned);
     private IReadOnlyList<CompanyHubUpdate> RecentUpdates => (_hub?.Updates ?? []).Where(update => !update.IsPinned).Take(3).ToArray();
     private IReadOnlyList<CompanyHubUpdate> ArchivedUpdates => (_hub?.Updates ?? []).Where(update => !update.IsPinned).Skip(3).ToArray();

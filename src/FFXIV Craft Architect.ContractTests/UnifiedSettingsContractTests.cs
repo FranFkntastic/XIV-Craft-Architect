@@ -258,7 +258,8 @@ public sealed class UnifiedSettingsContractTests
 
         Assert.Contains("@if (CanCustomize)", hub, StringComparison.Ordinal);
         Assert.Contains("View all orders", hub, StringComparison.Ordinal);
-        Assert.Contains("/trade/orders?company=", hub, StringComparison.Ordinal);
+        Assert.Contains("$\"trade/orders?company=", hub, StringComparison.Ordinal);
+        Assert.DoesNotContain("$\"/trade/orders?company=", hub, StringComparison.Ordinal);
         Assert.Contains("_hub!.CompanyId", hub, StringComparison.Ordinal);
         Assert.Contains("[SupplyParameterFromQuery(Name = \"company\")]", orders, StringComparison.Ordinal);
         Assert.Contains("requestedWorkspace = await ResolveWorkspaceProfileAsync(requestedCompanyId)", orders, StringComparison.Ordinal);
