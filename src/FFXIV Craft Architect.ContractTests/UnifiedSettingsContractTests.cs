@@ -114,8 +114,9 @@ public sealed class UnifiedSettingsContractTests
 
         Assert.Contains("ResolveSelectedWorkspaceProfileAsync", orders, StringComparison.Ordinal);
         Assert.Contains("LoadSelectedWorkspaceCompanyIdAsync", orders, StringComparison.Ordinal);
-        Assert.Contains("LoadWorkspaceProfileAsync(selectedWorkspaceId.Value)", orders, StringComparison.Ordinal);
-        Assert.Contains("profiles.FirstOrDefault(profile => profile.Id == selectedWorkspaceId.Value)", orders, StringComparison.Ordinal);
+        Assert.Contains("ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value, profiles)", orders, StringComparison.Ordinal);
+        Assert.Contains("LoadWorkspaceProfileAsync(workspaceId)", orders, StringComparison.Ordinal);
+        Assert.Contains("profiles.FirstOrDefault(profile => profile.Id == workspaceId)", orders, StringComparison.Ordinal);
         Assert.Contains("ToTransientProfile", client, StringComparison.Ordinal);
         Assert.DoesNotContain("SaveCompanyProfileAsync", client, StringComparison.Ordinal);
         Assert.Contains("selectedWorkspaceId != companyProfileId", persistence, StringComparison.Ordinal);
@@ -260,7 +261,12 @@ public sealed class UnifiedSettingsContractTests
         Assert.Contains("/trade/orders?company=", hub, StringComparison.Ordinal);
         Assert.Contains("_hub!.CompanyId", hub, StringComparison.Ordinal);
         Assert.Contains("[SupplyParameterFromQuery(Name = \"company\")]", orders, StringComparison.Ordinal);
+        Assert.Contains("requestedWorkspace = await ResolveWorkspaceProfileAsync(requestedCompanyId)", orders, StringComparison.Ordinal);
         Assert.Contains("SelectWorkspaceCompanyAsync(requestedCompanyId)", orders, StringComparison.Ordinal);
+        Assert.True(
+            orders.IndexOf("ResolveWorkspaceProfileAsync(requestedCompanyId)", StringComparison.Ordinal) <
+            orders.IndexOf("SelectWorkspaceCompanyAsync(requestedCompanyId)", StringComparison.Ordinal));
+        Assert.Contains("NavigationManager.NavigateTo(\"trade/orders\", replace: true)", orders, StringComparison.Ordinal);
         Assert.Contains("ResolveSelectedWorkspaceProfileAsync", orders, StringComparison.Ordinal);
     }
 
