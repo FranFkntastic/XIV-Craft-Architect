@@ -69,7 +69,7 @@ builder.Services.AddSingleton(_ => new ProfileHostOptions
     ChangeStreamHeartbeat = builder.Configuration.GetValue("ProfileHost:ChangeStreamHeartbeat", TimeSpan.FromSeconds(15)),
     DeepArchiveEnabled = builder.Configuration.GetValue(
         "ProfileHost:DeepArchiveEnabled",
-        builder.Configuration.GetValue("ProfileHost:ArchiveRetentionEnabled", true)),
+        false),
     DeepArchiveAfterDays = Math.Clamp(
         builder.Configuration.GetValue(
             "ProfileHost:DeepArchiveAfterDays",

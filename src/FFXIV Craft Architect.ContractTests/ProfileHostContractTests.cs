@@ -1106,6 +1106,30 @@ public sealed class ProfileHostContractTests
     }
 
     [Fact]
+    public void DeepArchive_RequiresTheExplicitNewActivationFlag()
+    {
+        using var legacyApplication = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ProfileHost:ArchiveRetentionEnabled"] = "true"
+                })));
+        using var enabledApplication = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, configuration) =>
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ProfileHost:DeepArchiveEnabled"] = "true"
+                })));
+
+        Assert.False(legacyApplication.Services
+            .GetRequiredService<ProfileHostOptions>()
+            .DeepArchiveEnabled);
+        Assert.True(enabledApplication.Services
+            .GetRequiredService<ProfileHostOptions>()
+            .DeepArchiveEnabled);
+    }
+
+    [Fact]
     public async Task RetentionSweep_DeepArchivesSearchesAndRestoresThroughOrdinaryPaths()
     {
         await using var fixture = await ProfileFixture.CreateAsync();

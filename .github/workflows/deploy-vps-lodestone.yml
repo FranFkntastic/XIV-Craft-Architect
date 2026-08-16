@@ -166,6 +166,7 @@ jobs:
         env:
           TARGET_DISCORD_ENABLED: ${{ vars.CRAFT_ARCHITECT_DISCORD_ENABLED }}
           TARGET_PROFILE_HOST_ENABLED: ${{ vars.CRAFT_ARCHITECT_PROFILE_HOST_ENABLED }}
+          TARGET_DEEP_ARCHIVE_ENABLED: ${{ vars.CRAFT_ARCHITECT_DEEP_ARCHIVE_ENABLED }}
           PROFILE_HOST_CANONICALIZED: ${{ steps.canonical-authority.outputs.profile_host_canonicalized }}
           DEPLOY_TARGET: ${{ steps.target.outputs.target }}
           STAGING_DISCORD_BOT_TOKEN: ${{ secrets.CA_DISCORD_STAGING_BOT_TOKEN }}
@@ -189,6 +190,17 @@ jobs:
             true|false) ;;
             *)
               echo "CRAFT_ARCHITECT_PROFILE_HOST_ENABLED must be the literal true or false." >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "$TARGET_DEEP_ARCHIVE_ENABLED" ]]; then
+            TARGET_DEEP_ARCHIVE_ENABLED="false"
+            echo "::notice::Deep archive is inactive because CRAFT_ARCHITECT_DEEP_ARCHIVE_ENABLED is unset."
+          fi
+          case "$TARGET_DEEP_ARCHIVE_ENABLED" in
+            true|false) ;;
+            *)
+              echo "CRAFT_ARCHITECT_DEEP_ARCHIVE_ENABLED must be the literal true or false." >&2
               exit 1
               ;;
           esac
@@ -223,6 +235,7 @@ jobs:
           {
             echo "discord_enabled=$runtime_discord_enabled"
             echo "profile_host_enabled=$runtime_profile_host_enabled"
+            echo "deep_archive_enabled=$TARGET_DEEP_ARCHIVE_ENABLED"
           } >> "$GITHUB_OUTPUT"
 
       - name: Select canonical Discord configuration
@@ -466,8 +479,9 @@ jobs:
           profile_db="$8"
           discord_enabled="$9"
           profile_host_enabled="${10}"
-          profile_host_canonicalized="${11}"
-          reconsolidation_requested="${12}"
+          deep_archive_enabled="${11}"
+          profile_host_canonicalized="${12}"
+          reconsolidation_requested="${13}"
 
           if [[ "$target" == "canonical" ]]; then
             test "$root" = "/srv/craftarchitect/services/lodestone"
@@ -490,6 +504,10 @@ jobs:
           case "$profile_host_enabled" in
             true|false) ;;
             *) echo "Invalid Profile Host enabled state." >&2; exit 1 ;;
+          esac
+          case "$deep_archive_enabled" in
+            true|false) ;;
+            *) echo "Invalid deep archive enabled state." >&2; exit 1 ;;
           esac
           case "$profile_host_canonicalized" in
             true|false) ;;
@@ -543,6 +561,7 @@ jobs:
               staging_fail_forward_candidate="$(mktemp)"
               {
                 printf 'ProfileHost__Enabled=true\n'
+                printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
                 printf 'ProfileHost__DatabasePath=%s\n' \
                   /srv/craftarchitect/services/lodestone-staging/data/profile-host.db
               } > "$staging_fail_forward_candidate"
@@ -714,6 +733,7 @@ jobs:
               staging_fail_closed_candidate="$(mktemp)"
               {
                 printf 'ProfileHost__Enabled=true\n'
+                printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
                 printf 'ProfileHost__DatabasePath=%s\n' \
                   /srv/craftarchitect/services/lodestone-staging/data/profile-host.db
               } > "$staging_fail_closed_candidate"
@@ -779,6 +799,7 @@ jobs:
           umask 077
           {
             printf 'ProfileHost__Enabled=%s\n' "$runtime_profile_host_enabled"
+            printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
             printf 'ProfileHost__DatabasePath=%s\n' "$profile_db"
           } > "$profile_runtime_upload"
           test "$(stat -c '%a' "$profile_runtime_upload")" = "600"
@@ -789,6 +810,7 @@ jobs:
             "$discord_upload" \
             "$root/env/discord.env"
           grep -Fxq "ProfileHost__Enabled=$runtime_profile_host_enabled" "$root/env/profile-host.env"
+          grep -Fxq "ProfileHost__DeepArchiveEnabled=$deep_archive_enabled" "$root/env/profile-host.env"
           grep -Fxq "ProfileHost__DatabasePath=$profile_db" "$root/env/profile-host.env"
           grep -Fxq "Discord__Enabled=$discord_enabled" "$root/env/discord.env"
           grep -Fxq "CraftAppraisal__Enabled=true" "$root/env/discord.env"
@@ -925,6 +947,7 @@ jobs:
             staging_profile_candidate="$(mktemp)"
             {
               printf 'ProfileHost__Enabled=true\n'
+              printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
               printf 'ProfileHost__DatabasePath=%s\n' "$staging_db"
             } > "$staging_profile_candidate"
             chmod 600 "$staging_profile_candidate"
@@ -1112,6 +1135,7 @@ jobs:
               '${{ steps.target.outputs.profile_db }}' \
               '${{ steps.features.outputs.discord_enabled }}' \
               '${{ steps.features.outputs.profile_host_enabled }}' \
+              '${{ steps.features.outputs.deep_archive_enabled }}' \
               '${{ steps.canonical-authority.outputs.profile_host_canonicalized }}' \
               '${{ steps.canonical-authority.outputs.reconsolidation_requested }}'"
 
