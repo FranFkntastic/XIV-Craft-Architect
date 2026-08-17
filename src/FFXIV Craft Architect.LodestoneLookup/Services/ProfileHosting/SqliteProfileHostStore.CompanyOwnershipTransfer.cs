@@ -93,13 +93,19 @@ public sealed partial class SqliteProfileHostStore
         var keys = new List<Guid>();
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
         {
-            while (await reader.ReadAsync(cancellationToken)) keys.Add(Guid.Parse(reader.GetString(0)));
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                keys.Add(Guid.Parse(reader.GetString(0)));
+            }
         }
         var receipts = new List<CompanyOwnershipTransferReceipt>(keys.Count);
         foreach (var key in keys)
         {
             var receipt = await LoadTransferReceiptAsync(connection, null, key, cancellationToken);
-            if (receipt != null) receipts.Add(receipt);
+            if (receipt != null)
+            {
+                receipts.Add(receipt);
+            }
         }
         return receipts;
     }
@@ -375,7 +381,11 @@ public sealed partial class SqliteProfileHostStore
 
     private static bool IsLinkedPlan(TransferObject item, IReadOnlySet<string> orderIds)
     {
-        if (!string.Equals(item.Collection, ProfileSyncCollections.Plans, StringComparison.Ordinal)) return false;
+        if (!string.Equals(item.Collection, ProfileSyncCollections.Plans, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         try
         {
             var linkedOrder = ProfileSyncPlanPayloadCodec.Deserialize(item.PayloadJson, item.ObjectId).LinkedOrderId;
@@ -493,7 +503,11 @@ public sealed partial class SqliteProfileHostStore
         command.CommandText = "select transfer_id,company_id,source_profile_id,target_profile_id,previous_owner_disposition,scope_fingerprint,counts_json,committed_at_utc,membership_projected_at_utc from company_ownership_transfers where idempotency_key=$key;";
         command.Parameters.AddWithValue("$key", idempotencyKey.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken)) return null;
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
         return new(
             Guid.Parse(reader.GetString(0)), idempotencyKey, CompanyId.Parse(reader.GetString(1)), Guid.Parse(reader.GetString(2)), Guid.Parse(reader.GetString(3)),
             Enum.Parse<PreviousOwnerDisposition>(reader.GetString(4), true), reader.GetString(5),

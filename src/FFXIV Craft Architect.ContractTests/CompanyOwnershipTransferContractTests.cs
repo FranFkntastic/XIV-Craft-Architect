@@ -40,15 +40,21 @@ public sealed class CompanyOwnershipTransferContractTests
             var targetOnlyCrafterId = Guid.NewGuid();
             Assert.True((await PutAsync(profiles, target.ProfileId, ProfileSyncCollections.TradeCrafters, sharedCrafterId, new TradeCrafterProfile
             {
-                Id = sharedCrafterId, CompanyProfileId = company.Id, DisplayName = "Target shadow"
+                Id = sharedCrafterId,
+                CompanyProfileId = company.Id,
+                DisplayName = "Target shadow"
             })).Success);
             Assert.True((await PutAsync(profiles, target.ProfileId, ProfileSyncCollections.TradeCrafters, targetOnlyCrafterId, new TradeCrafterProfile
             {
-                Id = targetOnlyCrafterId, CompanyProfileId = company.Id, DisplayName = "Target-only contractor"
+                Id = targetOnlyCrafterId,
+                CompanyProfileId = company.Id,
+                DisplayName = "Target-only contractor"
             })).Success);
             Assert.True((await PutAsync(profiles, source.ProfileId, ProfileSyncCollections.TradeCrafters, sharedCrafterId, new TradeCrafterProfile
             {
-                Id = sharedCrafterId, CompanyProfileId = company.Id, DisplayName = "Canonical source"
+                Id = sharedCrafterId,
+                CompanyProfileId = company.Id,
+                DisplayName = "Canonical source"
             })).Success);
 
             var orderId = Guid.NewGuid();
@@ -160,7 +166,9 @@ public sealed class CompanyOwnershipTransferContractTests
             var crafterId = Guid.NewGuid();
             Assert.True((await PutAsync(profiles, source.ProfileId, ProfileSyncCollections.TradeCrafters, crafterId, new TradeCrafterProfile
             {
-                Id = crafterId, CompanyProfileId = company.Id, DisplayName = "Late change"
+                Id = crafterId,
+                CompanyProfileId = company.Id,
+                DisplayName = "Late change"
             })).Success);
 
             var result = await transfers.TransferAsync(companyId, sourceId, targetId, PreviousOwnerDisposition.Revoked, Guid.NewGuid(), preview.ScopeFingerprint);

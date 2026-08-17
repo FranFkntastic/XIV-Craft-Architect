@@ -16,7 +16,10 @@ public sealed class CompanyOwnershipTransferService(
                 receipt,
                 CompanyOwnershipTransferStatus.Replayed,
                 cancellationToken);
-            if (result.Receipt?.MembershipProjectedAtUtc.HasValue == true) completed++;
+            if (result.Receipt?.MembershipProjectedAtUtc.HasValue == true)
+            {
+                completed++;
+            }
         }
         return completed;
     }

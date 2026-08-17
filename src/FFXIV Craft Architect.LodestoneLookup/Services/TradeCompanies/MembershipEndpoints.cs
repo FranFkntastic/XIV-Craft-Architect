@@ -263,10 +263,22 @@ public static class MembershipEndpoints
                 CompanyOwnershipTransferService transfers,
                 CancellationToken cancellationToken) =>
             {
-                if (!options.Enabled) return Results.NotFound();
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
                 var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
-                if (account == null) return Results.Unauthorized();
-                if (!CompanyId.TryParse(companyId, out var parsed)) return Results.NotFound();
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                if (!CompanyId.TryParse(companyId, out var parsed))
+                {
+                    return Results.NotFound();
+                }
+
                 return ToOwnershipTransferResult(await transfers.PreviewAsync(
                     parsed, account.ProfileId, targetProfileId, cancellationToken));
             });
@@ -282,10 +294,22 @@ public static class MembershipEndpoints
                 CompanyOwnershipTransferService transfers,
                 CancellationToken cancellationToken) =>
             {
-                if (!options.Enabled) return Results.NotFound();
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
                 var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
-                if (account == null) return Results.Unauthorized();
-                if (!CompanyId.TryParse(companyId, out var parsed)) return Results.NotFound();
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                if (!CompanyId.TryParse(companyId, out var parsed))
+                {
+                    return Results.NotFound();
+                }
+
                 if (!Enum.TryParse<PreviousOwnerDisposition>(body.PreviousOwnerDisposition, true, out var disposition))
                 {
                     return Results.BadRequest(new MembershipErrorResponse(
