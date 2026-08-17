@@ -47,6 +47,7 @@ else
             }
             @if (CanCustomize)
             {
+                <a class="button quiet" href="@CraftersUrl">Invite crafter</a>
                 <button class="button quiet link-copy" type="button" @onclick="CopyCompanyLinkAsync" title="Copy the public company page used for membership requests">
                     <MudIcon Icon="@Icons.Material.Filled.Link" Size="Size.Small" /> Copy company link
                 </button>
@@ -56,6 +57,29 @@ else
                 <button class="button" type="button" @onclick="BeginCustomize">Customize</button>
             }
         </header>
+
+        @if (!string.IsNullOrWhiteSpace(InviteToken))
+        {
+            <section class="panel join invitation" aria-live="polite">
+                @if (_invitation == null || _invitation.CompanyId != _hub.CompanyId || _invitation.State != "active")
+                {
+                    <h2>Invitation unavailable</h2><span>This invitation is expired, revoked, already used, or belongs to another company. Your current session is unchanged.</span>
+                }
+                else
+                {
+                    <h2>Join @_invitation.CompanyName</h2>
+                    <span>@(_invitation.LegacyCrafterName == null ? "This invitation adds you as a company crafter." : $"This invitation adds you as a company crafter and connects {_invitation.LegacyCrafterName}'s existing history.")</span>
+                    @if (!_signedIn)
+                    {
+                        <button class="button primary" type="button" @onclick="SignInAsync">Sign in with Discord to accept</button>
+                    }
+                    else
+                    {
+                        <button class="button primary" type="button" disabled="@_saving" @onclick="AcceptInvitationAsync">Accept company invitation</button>
+                    }
+                }
+            </section>
+        }
 
         @if (_editingTheme)
         {
@@ -230,20 +254,23 @@ else
                 {
                     <section class="panel count"><strong>@(_hub.OpenCommissionCount ?? 0) open commissions</strong><span>Terms available to members.</span></section>
                 }
-                <aside class="panel join">
-                    @if (!_signedIn)
-                    {
-                        <h2>Join @_hub.DisplayName</h2><button class="button primary" type="button" @onclick="SignInAsync">Sign in with Discord to request membership</button>
-                    }
-                    else if (_hub.Standing.State == "pending")
-                    {
-                        <strong>Membership request sent</strong><span>Pending approval · no action needed.</span>
-                    }
-                    else
-                    {
-                        <h2>Request membership</h2><textarea @bind="_membershipNote" placeholder="Optional note to company operators"></textarea><button class="button primary" type="button" disabled="@_saving" @onclick="RequestMembershipAsync">Send request</button>
-                    }
-                </aside>
+                @if (_invitation is not { State: "active" })
+                {
+                    <aside class="panel join">
+                        @if (!_signedIn)
+                        {
+                            <h2>Join @_hub.DisplayName</h2><button class="button primary" type="button" @onclick="SignInAsync">Sign in with Discord to request membership</button>
+                        }
+                        else if (_hub.Standing.State == "pending")
+                        {
+                            <strong>Membership request sent</strong><span>Pending approval · no action needed.</span>
+                        }
+                        else
+                        {
+                            <h2>Request membership</h2><textarea @bind="_membershipNote" placeholder="Optional note to company operators"></textarea><button class="button primary" type="button" disabled="@_saving" @onclick="RequestMembershipAsync">Send request</button>
+                        }
+                    </aside>
+                }
             </div>
         }
     </main>
@@ -271,6 +298,7 @@ else
     [Parameter] public string Slug { get; set; } = string.Empty;
     [SupplyParameterFromQuery(Name = "commissionId")] public string? CommissionId { get; set; }
     [SupplyParameterFromQuery(Name = "activityId")] public string? ActivityId { get; set; }
+    [SupplyParameterFromQuery(Name = "invite")] public string? InviteToken { get; set; }
 
     private CompanyHubProjection? _hub;
     private ThemeDraft _draft = new();
@@ -285,6 +313,7 @@ else
     private bool _scrollToLinkedCommission;
     private string? _appliedDeepLink;
     private CompanyHubCommission? _selectedCommission;
+    private CompanyMembershipInvitation? _invitation;
     private string? _membershipNote;
     private string _newUpdateTitle = string.Empty;
     private string _newUpdateBody = string.Empty;
@@ -301,6 +330,7 @@ else
     private string AssignmentCountLabel => $"{_hub?.Assignments?.Count ?? 0} active {((_hub?.Assignments?.Count ?? 0) == 1 ? "assignment" : "assignments")}";
     private string OpenCountLabel => $"{_hub?.OpenCommissions?.Count ?? 0} available";
     private string OrdersUrl => $"trade/orders?company={Uri.EscapeDataString(_hub!.CompanyId)}";
+    private string CraftersUrl => $"trade/crafters?company={Uri.EscapeDataString(_hub!.CompanyId)}";
     private CompanyHubUpdate? PinnedUpdate => _hub?.Updates?.FirstOrDefault(update => update.IsPinned);
     private IReadOnlyList<CompanyHubUpdate> RecentUpdates => (_hub?.Updates ?? []).Where(update => !update.IsPinned).Take(3).ToArray();
     private IReadOnlyList<CompanyHubUpdate> ArchivedUpdates => (_hub?.Updates ?? []).Where(update => !update.IsPinned).Skip(3).ToArray();
@@ -319,6 +349,9 @@ else
             _signedIn = false;
         }
         await ReloadHubAsync(Slug);
+        _invitation = string.IsNullOrWhiteSpace(InviteToken)
+            ? null
+            : await HubClient.LoadMembershipInvitationAsync(InviteToken);
         await ApplyDeepLinkAsync();
         _loading = false;
     }
@@ -467,10 +500,36 @@ else
 
     private async Task SignInAsync()
     {
+        var returnPath = $"/companies/{Uri.EscapeDataString(Slug)}";
+        if (!string.IsNullOrWhiteSpace(InviteToken))
+        {
+            returnPath += $"?invite={Uri.EscapeDataString(InviteToken)}";
+        }
         var uri = await DiscordIdentityClient.StartSignInAsync(
             ProfileHostClient.DefaultHostUrl,
-            $"/companies/{Uri.EscapeDataString(Slug)}");
+            returnPath);
         Navigation.NavigateTo(uri.AbsoluteUri, true);
+    }
+
+    private async Task AcceptInvitationAsync()
+    {
+        _saving = true;
+        try
+        {
+            await HubClient.AcceptMembershipInvitationAsync(InviteToken!);
+            await ReloadHubAsync(_hub!.CompanyId);
+            Snackbar.Add($"You joined {_hub.DisplayName}.", Severity.Success);
+            Navigation.NavigateTo($"companies/{Uri.EscapeDataString(_hub.CompanyId)}", replace: true);
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            _invitation = await HubClient.LoadMembershipInvitationAsync(InviteToken!);
+            Snackbar.Add(exception.Message, Severity.Warning);
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
     private async Task RequestMembershipAsync()

@@ -187,6 +187,122 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
+    public async Task CommissionerInvitationEnrollsDiscordAccountOnceWithoutACommission()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var recipient = await fixture.CreateAccountAsync("Invited crafter");
+        var other = await fixture.CreateAccountAsync("Other crafter");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var recipientClient = fixture.CreateClient(recipient.Key);
+        using var otherClient = fixture.CreateClient(other.Key);
+        await PutCompanyAsync(ownerClient, company);
+
+        using var issuedResponse = await ownerClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-invitations",
+            new MembershipInvitationIssueBody(null));
+        var invitation = await issuedResponse.Content.ReadFromJsonAsync<MembershipInvitationResponse>();
+        Assert.Equal(HttpStatusCode.OK, issuedResponse.StatusCode);
+        Assert.NotNull(invitation?.Token);
+
+        using var accepted = await recipientClient.PostAsync(
+            $"/trade/v1/membership-invitations/{invitation.Token}/accept",
+            null);
+        using var replayed = await recipientClient.PostAsync(
+            $"/trade/v1/membership-invitations/{invitation.Token}/accept",
+            null);
+        using var refusedOther = await otherClient.PostAsync(
+            $"/trade/v1/membership-invitations/{invitation.Token}/accept",
+            null);
+        var membership = await fixture.Memberships.LoadAsync(
+            new CompanyId(company.Id),
+            recipient.ProfileId);
+        var events = await fixture.Memberships.LoadEventsAsync(
+            new CompanyId(company.Id),
+            recipient.ProfileId);
+
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replayed.StatusCode);
+        Assert.Equal(HttpStatusCode.Gone, refusedOther.StatusCode);
+        Assert.Equal(MembershipState.Active, membership!.State);
+        Assert.Equal(MembershipRole.Crafter, membership.Role);
+        Assert.Single(events);
+    }
+
+    [Fact]
+    public async Task InvitationRefusesForeignIssuerRevocationAndExpiryWithoutSessionLoss()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var outsider = await fixture.CreateAccountAsync("Outsider");
+        var recipient = await fixture.CreateAccountAsync("Recipient");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var outsiderClient = fixture.CreateClient(outsider.Key);
+        using var recipientClient = fixture.CreateClient(recipient.Key);
+        await PutCompanyAsync(ownerClient, company);
+
+        using var foreignIssue = await outsiderClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-invitations",
+            new MembershipInvitationIssueBody(null));
+        var revoked = await fixture.Memberships.IssueInvitationAsync(
+            new CompanyId(company.Id),
+            owner.ProfileId,
+            null);
+        using var foreignRevoke = await outsiderClient.DeleteAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-invitations/{revoked.InvitationId:D}");
+        using var ownerRevoke = await ownerClient.DeleteAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-invitations/{revoked.InvitationId:D}");
+        using var revokedAccept = await recipientClient.PostAsync(
+            $"/trade/v1/membership-invitations/{revoked.Token}/accept",
+            null);
+
+        var expired = await fixture.Memberships.IssueInvitationAsync(
+            new CompanyId(company.Id),
+            owner.ProfileId,
+            null);
+        await fixture.ExpireInvitationAsync(expired.InvitationId);
+        using var expiredAccept = await recipientClient.PostAsync(
+            $"/trade/v1/membership-invitations/{expired.Token}/accept",
+            null);
+        using var sessionStillWorks = await recipientClient.GetAsync("/trade/v1/memberships");
+
+        Assert.Equal(HttpStatusCode.Forbidden, foreignIssue.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, foreignRevoke.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, ownerRevoke.StatusCode);
+        Assert.Equal(HttpStatusCode.Gone, revokedAccept.StatusCode);
+        Assert.Equal(HttpStatusCode.Gone, expiredAccept.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, sessionStillWorks.StatusCode);
+        Assert.Null(await fixture.Memberships.LoadAsync(new CompanyId(company.Id), recipient.ProfileId));
+    }
+
+    [Fact]
+    public async Task ScopedInvitationConnectsOnlyItsIntendedLegacyCrafterHistory()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var recipient = await fixture.CreateAccountAsync("Recipient");
+        var companyId = new CompanyId(Guid.NewGuid());
+        var legacyCrafterId = Guid.NewGuid();
+        var invitation = await fixture.Memberships.IssueInvitationAsync(
+            companyId,
+            owner.ProfileId,
+            legacyCrafterId);
+
+        var accepted = await fixture.Memberships.ConsumeInvitationAsync(
+            invitation.Token!,
+            recipient.ProfileId);
+        var bindings = await fixture.Memberships.LoadCrafterBindingsAsync(companyId);
+
+        Assert.Equal(MembershipInvitationConsumptionStatus.Applied, accepted.Status);
+        var binding = Assert.Single(bindings);
+        Assert.Equal(legacyCrafterId, binding.LegacyCrafterId);
+        Assert.Equal(recipient.ProfileId, binding.AccountProfileId);
+        Assert.Equal(CrafterAccountBindingEvidence.OperatorConfirmed, binding.Evidence);
+    }
+
+    [Fact]
     public async Task OperatorCanConnectAndCorrectLegacyCrafterHistoryWithoutRewritingIt()
     {
         await using var fixture = await MembershipFixture.CreateAsync();
@@ -965,6 +1081,22 @@ public sealed class MembershipContractTests
             command.Parameters.AddWithValue("$role", role.ToString().ToLowerInvariant());
             command.Parameters.AddWithValue("$companyId", companyId.ToString("D"));
             command.Parameters.AddWithValue("$profileId", profileId.ToString("D"));
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        public async Task ExpireInvitationAsync(Guid invitationId)
+        {
+            await using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(root, "memberships.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE company_membership_invitations
+                SET expires_at_utc = $expiresAt
+                WHERE invitation_id = $invitationId;
+                """;
+            command.Parameters.AddWithValue("$expiresAt", DateTimeOffset.UtcNow.AddMinutes(-1).ToString("O"));
+            command.Parameters.AddWithValue("$invitationId", invitationId.ToString("D"));
             Assert.Equal(1, await command.ExecuteNonQueryAsync());
         }
 
