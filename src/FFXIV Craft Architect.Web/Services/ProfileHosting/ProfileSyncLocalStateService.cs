@@ -13,6 +13,7 @@ public sealed class ProfileSyncLocalStateService
     private const string LegacyProfileStatePrefix = "profileHost.profile.";
     private const string LastSyncRevisionSuffix = "lastSyncRevision";
     private const string ObjectRevisionSuffix = "objectRevision.";
+    private const string OwnerReceiptSuffix = "ownerReceipt.";
     private const string HostedObjectSuffix = "hostedObject.";
     private const string PendingSavesSuffix = "pendingSaves";
     private const string PendingOrderCleanupSuffix = "pendingOrderCleanup";
@@ -211,6 +212,17 @@ public sealed class ProfileSyncLocalStateService
         string collection,
         string objectId)
     {
+        if (string.Equals(
+                collection,
+                ProfileSyncCollections.TradeOrders,
+                StringComparison.Ordinal))
+        {
+            var revisions = await LoadObjectRevisionsAsync(
+                profileId,
+                collection,
+                [objectId]);
+            return revisions.GetValueOrDefault(objectId);
+        }
         return await _indexedDb.LoadRequiredSettingAsync(
             await BuildObjectRevisionKeyAsync(profileId, collection, objectId),
             0L);
@@ -232,14 +244,26 @@ public sealed class ProfileSyncLocalStateService
 
         var authorityScope = await RequireAuthorityScopeAsync();
         var settings = await _indexedDb.LoadAllSettingsRequiredAsync();
+        var keys = ids.ToDictionary(
+            objectId => objectId,
+            objectId => BuildProfileStateKey(
+                authorityScope,
+                profileId,
+                $"{ObjectRevisionSuffix}{collection}.{Uri.EscapeDataString(objectId)}"),
+            StringComparer.Ordinal);
+        var ownerState = string.Equals(
+            collection,
+            ProfileSyncCollections.TradeOrders,
+            StringComparison.Ordinal)
+            ? await _indexedDb.LoadHostedOwnerSettingsAsync(keys.Values.ToArray())
+            : new Dictionary<string, string>(StringComparer.Ordinal);
         var revisions = new Dictionary<string, long>(ids.Length, StringComparer.Ordinal);
         foreach (var objectId in ids)
         {
-            var key = BuildProfileStateKey(
-                authorityScope,
-                profileId,
-                $"{ObjectRevisionSuffix}{collection}.{Uri.EscapeDataString(objectId)}");
-            revisions[objectId] = ReadSetting(settings, key, 0L);
+            var key = keys[objectId];
+            revisions[objectId] = Math.Max(
+                ReadSetting(ownerState, key, 0L),
+                ReadSetting(settings, key, 0L));
         }
 
         return revisions;
@@ -292,6 +316,118 @@ public sealed class ProfileSyncLocalStateService
             throw new InvalidOperationException(
                 $"Browser storage could not persist the hosted revision for '{collection}/{objectId}'.");
         }
+    }
+
+    public async Task<IReadOnlyDictionary<Guid, CompanyCommissionOwnerReceipt>>
+        LoadOwnerReceiptsAsync(
+            string profileId,
+            IEnumerable<Guid> orderIds)
+    {
+        var ids = orderIds.Where(id => id != Guid.Empty).Distinct().ToArray();
+        if (ids.Length == 0)
+        {
+            return new Dictionary<Guid, CompanyCommissionOwnerReceipt>();
+        }
+
+        var authorityScope = await RequireAuthorityScopeAsync();
+        var keys = ids.ToDictionary(
+            orderId => orderId,
+            orderId => BuildOwnerReceiptKey(authorityScope, profileId, orderId));
+        var settings = await _indexedDb.LoadHostedOwnerSettingsAsync(keys.Values.ToArray());
+        var receipts = new Dictionary<Guid, CompanyCommissionOwnerReceipt>();
+        foreach (var orderId in ids)
+        {
+            var receipt = ReadSetting<CompanyCommissionOwnerReceipt>(
+                settings,
+                keys[orderId]);
+            if (receipt?.OrderId == orderId)
+            {
+                receipts[orderId] = receipt;
+            }
+        }
+        return receipts;
+    }
+
+    public async Task<bool> PersistOwnerVerificationBatchAsync(
+        HostedProfileConnectionSettings expectedConnection,
+        IReadOnlyList<HostedOwnerVerificationPersistenceItem> items)
+    {
+        ArgumentNullException.ThrowIfNull(expectedConnection);
+        ArgumentNullException.ThrowIfNull(items);
+        var profileId = expectedConnection.ProfileScopeId
+            ?? throw new InvalidOperationException(
+                "Hosted owner verification requires a captured profile authority.");
+        var connectionScopeId = expectedConnection.ConnectionScopeId
+            ?? throw new InvalidOperationException(
+                "Hosted owner verification requires a captured connection scope.");
+        var currentConnection = await LoadConnectionSettingsAsync();
+        if (!string.Equals(
+                connectionScopeId,
+                currentConnection.ConnectionScopeId,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var authorityScope = NormalizeAuthorityScope(expectedConnection.HostUrl!);
+        var currentSettings = await _indexedDb.LoadAllSettingsRequiredAsync();
+        var expectedSettings = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var key in new[]
+                 {
+                     ProfileSyncSettingsKeys.HostUrl,
+                     ProfileSyncSettingsKeys.ConnectedProfileId
+                 })
+        {
+            if (!currentSettings.TryGetValue(key, out var value))
+            {
+                return false;
+            }
+            expectedSettings[key] = value;
+        }
+
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal);
+        var deletedSettingKeys = new List<string>();
+        var orders = new List<TradeOrder>();
+        foreach (var item in items)
+        {
+            var revisionKey = BuildProfileStateKey(
+                authorityScope,
+                profileId,
+                $"{ObjectRevisionSuffix}{ProfileSyncCollections.TradeOrders}." +
+                Uri.EscapeDataString(item.OrderId.ToString("D")));
+            expectedSettings[revisionKey] = JsonSerializer.Serialize(
+                item.ExpectedProfileObjectRevision);
+            var receiptKey = BuildOwnerReceiptKey(
+                authorityScope,
+                profileId,
+                item.OrderId);
+            if (item.Receipt != null)
+            {
+                settings[receiptKey] = JsonSerializer.Serialize(item.Receipt);
+            }
+            else if (item.ClearReceipt)
+            {
+                deletedSettingKeys.Add(receiptKey);
+            }
+
+            if (item.Order != null)
+            {
+                if (item.Order.Id != item.OrderId || item.Receipt == null)
+                {
+                    throw new InvalidOperationException(
+                        "A changed hosted owner projection omitted its exact receipt identity.");
+                }
+                orders.Add(item.Order);
+                settings[revisionKey] = JsonSerializer.Serialize(
+                    item.Receipt.ProfileObjectRevision.Value);
+            }
+        }
+
+        return await _indexedDb.ApplyHostedOwnerVerificationBatchAsync(
+            orders,
+            settings,
+            deletedSettingKeys,
+            expectedSettings);
     }
 
     public async Task SaveObjectRevisionAsync(
@@ -478,6 +614,15 @@ public sealed class ProfileSyncLocalStateService
         $"{ProfileStatePrefix}{authorityScope}.profile." +
         $"{NormalizeProfileScopeId(profileId)}.{suffix}";
 
+    private static string BuildOwnerReceiptKey(
+        string authorityScope,
+        string profileId,
+        Guid orderId) =>
+        BuildProfileStateKey(
+            authorityScope,
+            profileId,
+            $"{OwnerReceiptSuffix}{Uri.EscapeDataString(orderId.ToString("D"))}");
+
     private async Task<string> RequireAuthorityScopeAsync()
     {
         if (!string.IsNullOrWhiteSpace(_authorityScope))
@@ -544,3 +689,10 @@ public sealed class ProfileSyncLocalStateService
     }
 
 }
+
+public sealed record HostedOwnerVerificationPersistenceItem(
+    Guid OrderId,
+    long ExpectedProfileObjectRevision,
+    TradeOrder? Order,
+    CompanyCommissionOwnerReceipt? Receipt,
+    bool ClearReceipt = false);

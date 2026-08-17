@@ -10,13 +10,13 @@ const PERSONAL_DB_VERSION = 1;
 const MARKET_DB_NAME = 'FFXIVCraftArchitect.Market';
 const MARKET_DB_VERSION = 1;
 const COMPANY_DB_NAME = 'FFXIVCraftArchitect.Company';
-const COMPANY_DB_VERSION = 3;
+const COMPANY_DB_VERSION = 4;
 const ENGINE_DB_NAME = 'FFXIVCraftArchitect.Engine';
 const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 29;
+const MODULE_REVISION = 30;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -27,6 +27,7 @@ const STORE_MARKET_CACHE = 'marketCache';
 const STORE_TRADE_COMPANY_PROFILES = 'tradeCompanyProfiles';
 const STORE_TRADE_CRAFTERS = 'tradeCrafters';
 const STORE_TRADE_ORDERS = 'tradeOrders';
+const STORE_HOSTED_OWNER_STATE = 'hostedOwnerState';
 const STORE_TRADE_ORDER_ARCHIVE_SUMMARIES = 'tradeOrderArchiveSummaries';
 const STORE_TRADE_ORDER_CRAFT_SNAPSHOTS = 'tradeOrderCraftSnapshots';
 const STORE_TRADE_PAYROLL_DRAFTS = 'tradePayrollDrafts';
@@ -323,6 +324,7 @@ function specializedSchemaIncompatibility(database) {
             STORE_TRADE_COMPANY_PROFILES,
             STORE_TRADE_CRAFTERS,
             STORE_TRADE_ORDERS,
+            STORE_HOSTED_OWNER_STATE,
             STORE_TRADE_ORDER_ARCHIVE_SUMMARIES,
             STORE_TRADE_ORDER_CRAFT_SNAPSHOTS,
             STORE_TRADE_PAYROLL_DRAFTS
@@ -430,6 +432,9 @@ function createLegacyTradeStores(database) {
         store.createIndex('companyProfileId', 'companyProfileId', { unique: false });
         store.createIndex('status', 'status', { unique: false });
         store.createIndex('commissionedAtUtc', 'commissionedAtUtc', { unique: false });
+    }
+    if (!database.objectStoreNames.contains(STORE_HOSTED_OWNER_STATE)) {
+        database.createObjectStore(STORE_HOSTED_OWNER_STATE, { keyPath: 'key' });
     }
     if (!database.objectStoreNames.contains(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES)) {
         database.createObjectStore(STORE_TRADE_ORDER_ARCHIVE_SUMMARIES, { keyPath: 'id' });
@@ -1250,6 +1255,127 @@ async function saveTradeOrder(order) {
 
 async function saveTradeOrdersBatch(orders) {
     return await saveStoreRecordsBatch(STORE_TRADE_ORDERS, orders);
+}
+
+async function applyHostedOwnerVerificationBatch(
+    orders,
+    settings,
+    deletedSettingKeys,
+    expectedSettings) {
+    const expectedKeys = Object.keys(expectedSettings || {});
+    const fallbackSettings = await loadSettingsSubset(expectedKeys);
+    const database = await initCompanyDatabase();
+    requireTradeStore(database, STORE_TRADE_ORDERS);
+    requireTradeStore(database, STORE_HOSTED_OWNER_STATE);
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(
+            [STORE_TRADE_ORDERS, STORE_HOSTED_OWNER_STATE],
+            'readwrite');
+        const orderStore = transaction.objectStore(STORE_TRADE_ORDERS);
+        const ownerStateStore = transaction.objectStore(STORE_HOSTED_OWNER_STATE);
+        const expectedEntries = Object.entries(expectedSettings || {});
+        let remaining = expectedEntries.length;
+        let matches = true;
+        let writesStarted = false;
+
+        const writeWhenReady = () => {
+            if (remaining !== 0 || writesStarted) return;
+            writesStarted = true;
+            if (!matches) return;
+            for (const order of orders || []) orderStore.put(order);
+            for (const [key, value] of Object.entries(settings || {})) {
+                ownerStateStore.put({ key, value });
+            }
+            for (const key of deletedSettingKeys || []) ownerStateStore.delete(key);
+        };
+
+        if (expectedEntries.length === 0) writeWhenReady();
+        for (const [key, expectedValue] of expectedEntries) {
+            const request = ownerStateStore.get(key);
+            request.onerror = () => transaction.abort();
+            request.onsuccess = () => {
+                const actualValue = newestHostedOwnerValue(
+                    key,
+                    request.result?.value,
+                    fallbackSettings[key]);
+                if (actualValue !== expectedValue) matches = false;
+                remaining--;
+                writeWhenReady();
+            };
+        }
+
+        transaction.oncomplete = () => resolve(matches);
+        transaction.onerror = event => reject(transaction.error || event.target?.error);
+        transaction.onabort = event => reject(transaction.error || event.target?.error);
+    });
+}
+
+function newestHostedOwnerValue(key, ownerValue, fallbackValue) {
+    if (!String(key).includes('.objectRevision.tradeOrders.')) {
+        return ownerValue ?? fallbackValue;
+    }
+    const parseRevision = value => {
+        try {
+            const parsed = JSON.parse(value);
+            return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+        } catch {
+            return null;
+        }
+    };
+    const ownerRevision = parseRevision(ownerValue);
+    const fallbackRevision = parseRevision(fallbackValue);
+    if (ownerRevision === null) return fallbackValue;
+    if (fallbackRevision === null) return ownerValue;
+    return ownerRevision >= fallbackRevision ? ownerValue : fallbackValue;
+}
+
+async function loadSettingsSubset(keys) {
+    const distinctKeys = [...new Set((keys || []).filter(key => typeof key === 'string'))];
+    if (distinctKeys.length === 0) return {};
+    const database = await initDB();
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_SETTINGS], 'readonly');
+        const store = transaction.objectStore(STORE_SETTINGS);
+        const values = {};
+        let remaining = distinctKeys.length;
+        for (const key of distinctKeys) {
+            const request = store.get(key);
+            request.onerror = () => transaction.abort();
+            request.onsuccess = () => {
+                if (request.result) values[key] = request.result.value;
+                remaining--;
+                if (remaining === 0) resolve(values);
+            };
+        }
+        transaction.onerror = event => reject(transaction.error || event.target?.error);
+        transaction.onabort = event => reject(transaction.error || event.target?.error);
+    });
+}
+
+async function loadHostedOwnerSettings(keys) {
+    const distinctKeys = [...new Set((keys || []).filter(key => typeof key === 'string'))];
+    if (distinctKeys.length === 0) return {};
+    const fallback = await loadSettingsSubset(distinctKeys);
+    const database = await initCompanyDatabase();
+    requireTradeStore(database, STORE_HOSTED_OWNER_STATE);
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction([STORE_HOSTED_OWNER_STATE], 'readonly');
+        const store = transaction.objectStore(STORE_HOSTED_OWNER_STATE);
+        const values = { ...fallback };
+        let remaining = distinctKeys.length;
+        for (const key of distinctKeys) {
+            const request = store.get(key);
+            request.onerror = () => transaction.abort();
+            request.onsuccess = () => {
+                if (request.result) values[key] = request.result.value;
+                remaining--;
+                if (remaining === 0) resolve(values);
+            };
+        }
+        transaction.onerror = event => reject(transaction.error || event.target?.error);
+        transaction.onabort = event => reject(transaction.error || event.target?.error);
+    });
 }
 
 async function loadTradeOrders(companyProfileId) {
@@ -2179,6 +2305,8 @@ window.IndexedDB = {
     deleteTradeCrafter,
     saveTradeOrder,
     saveTradeOrdersBatch,
+    applyHostedOwnerVerificationBatch,
+    loadHostedOwnerSettings,
     loadTradeOrders,
     loadAllTradeOrders,
     loadTradeOrder,

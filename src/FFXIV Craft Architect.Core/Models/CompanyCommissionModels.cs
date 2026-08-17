@@ -463,3 +463,52 @@ public sealed record CompanyCommissionOwnerProjection
     public required CompanyRecordRevision CompanyRevision { get; init; }
     public CompanyRecordRevision? ProfileObjectRevision { get; init; }
 }
+
+public sealed record CompanyCommissionOwnerReceipt
+{
+    public required Guid OrderId { get; init; }
+    public required CompanyId CompanyId { get; init; }
+    public required Guid CommissionId { get; init; }
+    public required CompanyRecordRevision ProfileObjectRevision { get; init; }
+    public required CompanyRecordRevision ObjectRevision { get; init; }
+    public required CompanyRecordRevision CompanyRevision { get; init; }
+    public required DateTime VerifiedAtUtc { get; init; }
+}
+
+public sealed record CompanyCommissionOwnerComparisonItem
+{
+    public required Guid OrderId { get; init; }
+    public required Guid CommissionId { get; init; }
+    public required CompanyRecordRevision ProfileObjectRevision { get; init; }
+    public required CompanyRecordRevision ObjectRevision { get; init; }
+    public required CompanyRecordRevision CompanyRevision { get; init; }
+}
+
+public sealed record CompanyCommissionOwnerComparisonRequest
+{
+    public IReadOnlyList<CompanyCommissionOwnerComparisonItem> Items { get; init; } = [];
+}
+
+public enum CompanyCommissionOwnerComparisonStatus
+{
+    Unchanged,
+    Changed,
+    Missing
+}
+
+public sealed record CompanyCommissionOwnerComparisonResult
+{
+    public required Guid OrderId { get; init; }
+    public required Guid CommissionId { get; init; }
+    public required CompanyCommissionOwnerComparisonStatus Status { get; init; }
+    public CompanyCommissionOwnerReceipt? Receipt { get; init; }
+    public CompanyCommissionOwnerProjection? Projection { get; init; }
+}
+
+public sealed record CompanyCommissionOwnerComparisonResponse
+{
+    public required CompanyId CompanyId { get; init; }
+    public required CompanyRecordRevision CompanyRevision { get; init; }
+    public required DateTime VerifiedAtUtc { get; init; }
+    public IReadOnlyList<CompanyCommissionOwnerComparisonResult> Items { get; init; } = [];
+}

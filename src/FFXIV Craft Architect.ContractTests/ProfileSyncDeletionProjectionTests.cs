@@ -1328,6 +1328,8 @@ public sealed class ProfileSyncDeletionProjectionTests
             object? result = identifier switch
             {
                 "IndexedDB.loadAllSettings" => LoadAllSettings(),
+                "IndexedDB.loadHostedOwnerSettings" =>
+                    LoadHostedOwnerSettings((IReadOnlyList<string>)args![0]!),
                 "IndexedDB.loadSetting" => LoadSetting((string)args![0]!),
                 "IndexedDB.loadTradeCompanyProfiles" => LoadTradeCompanyProfiles(),
                 "IndexedDB.loadTradeOrders" => LoadTradeOrders((Guid)args![0]!),
@@ -1354,6 +1356,11 @@ public sealed class ProfileSyncDeletionProjectionTests
             LoadAllSettingsCount++;
             return new Dictionary<string, string>(settings, StringComparer.Ordinal);
         }
+        private Dictionary<string, string> LoadHostedOwnerSettings(
+            IReadOnlyList<string> keys) =>
+            keys
+                .Where(settings.ContainsKey)
+                .ToDictionary(key => key, key => settings[key], StringComparer.Ordinal);
         private string? LoadSetting(string key)
         {
             LoadSettingCount++;

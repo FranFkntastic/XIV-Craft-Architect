@@ -231,6 +231,9 @@ public sealed class ProfileSyncAuthorityTests
             object? result = identifier switch
             {
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(Settings, StringComparer.Ordinal),
+                "IndexedDB.loadHostedOwnerSettings" => ((IReadOnlyList<string>)args![0]!)
+                    .Where(Settings.ContainsKey)
+                    .ToDictionary(key => key, key => Settings[key], StringComparer.Ordinal),
                 "IndexedDB.loadSetting" => Settings.GetValueOrDefault((string)args![0]!),
                 "IndexedDB.saveSettingsBatch" => SaveBatch((Dictionary<string, string>)args![0]!),
                 "IndexedDB.saveSetting" => SaveSetting((string)args![0]!, (string)args[1]!),

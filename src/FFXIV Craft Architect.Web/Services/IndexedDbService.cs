@@ -241,6 +241,26 @@ public sealed class IndexedDbService
             $"save Trade order {order.Id}",
             order);
 
+    public Task<bool> ApplyHostedOwnerVerificationBatchAsync(
+        IReadOnlyList<TradeOrder> orders,
+        Dictionary<string, string> settings,
+        IReadOnlyList<string> deletedSettingKeys,
+        Dictionary<string, string> expectedSettings) =>
+        InvokeRequiredAsync<bool>(
+            "IndexedDB.applyHostedOwnerVerificationBatch",
+            "atomically persist hosted owner verification",
+            orders,
+            settings,
+            deletedSettingKeys,
+            expectedSettings);
+
+    public Task<Dictionary<string, string>> LoadHostedOwnerSettingsAsync(
+        IReadOnlyList<string> keys) =>
+        InvokeRequiredAsync<Dictionary<string, string>>(
+            "IndexedDB.loadHostedOwnerSettings",
+            "load hosted owner verification state",
+            keys);
+
     public Task<List<TradeOrder>> LoadTradeOrdersAsync(Guid companyProfileId) =>
         InvokeRequiredAsync<List<TradeOrder>>(
             "IndexedDB.loadTradeOrders",

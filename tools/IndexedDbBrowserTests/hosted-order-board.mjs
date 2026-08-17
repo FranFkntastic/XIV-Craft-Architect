@@ -12,6 +12,10 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((items, value, inde
 const webRoot = path.resolve(args['web-root'] || '');
 const output = path.resolve(args.output || path.join(here, 'hosted-order-board-result.json'));
 const screenshot = path.resolve(args.screenshot || path.join(here, 'hosted-order-board.png'));
+const benchmarkMode = args.benchmark || null;
+if (benchmarkMode && !['baseline', 'feature'].includes(benchmarkMode)) {
+  throw new Error('--benchmark must be baseline or feature');
+}
 if (!(await stat(path.join(webRoot, 'index.html')).catch(() => null))?.isFile()) {
   throw new Error('Usage: node hosted-order-board.mjs --web-root <publish/wwwroot> [--output result.json] [--screenshot board.png]');
 }
@@ -91,8 +95,23 @@ const fixture = Array.from({ length: 100 }, (_, index) => commissionFor(index, g
 const appSettings = JSON.parse(await readFile(path.join(webRoot, 'appsettings.json'), 'utf8'));
 const pendingOwnerResponses = new Set();
 const pendingOwners = [];
+const pendingOwnerBatches = [];
 const requestLog = [];
+const verificationTrace = [];
+let verificationResponseBytes = 0;
 let origin;
+
+async function readRequestBody(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+function sendJson(response, body) {
+  const serialized = JSON.stringify(body);
+  verificationResponseBytes += Buffer.byteLength(serialized);
+  response.writeHead(200, { 'content-type': 'application/json' }).end(serialized);
+}
 
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url || '/', origin || 'http://127.0.0.1');
@@ -125,8 +144,57 @@ const server = http.createServer(async (request, response) => {
     request.on('close', () => pendingOwnerResponses.delete(response));
     return;
   }
+  if (/^\/api\/trade\/v1\/companies\/[^/]+\/commissions\/owner-comparison$/.test(url.pathname)) {
+    const bodyBytes = await readRequestBody(request);
+    const body = JSON.parse(bodyBytes.toString('utf8'));
+    if (!benchmarkMode) {
+      pendingOwnerBatches.push({ response, body, bodyBytes, startedAt: performance.now() });
+      pendingOwnerResponses.add(response);
+      request.on('close', () => pendingOwnerResponses.delete(response));
+      return;
+    }
+    const startedAt = performance.now();
+    const items = (body.items || []).map(item => ({
+      orderId: item.orderId,
+      commissionId: item.commissionId,
+      status: 0,
+      receipt: {
+        orderId: item.orderId,
+        companyId,
+        commissionId: item.commissionId,
+        profileObjectRevision: 100,
+        objectRevision: 100,
+        companyRevision: 100,
+        verifiedAtUtc: fixedNow
+      },
+      projection: null
+    }));
+    verificationTrace.push({
+      kind: 'batch',
+      startedAt,
+      completedAt: performance.now(),
+      itemCount: items.length,
+      requestBytes: bodyBytes.length,
+      orderIds: items.map(item => item.orderId)
+    });
+    sendJson(response, { companyId, companyRevision: 100, verifiedAtUtc: fixedNow, items });
+    return;
+  }
   if (/^\/api\/trade\/v1\/companies\/[^/]+\/commissions\/[^/]+\/owner$/.test(url.pathname)) {
     const commissionId = url.pathname.split('/').at(-2);
+    if (benchmarkMode === 'baseline') {
+      const projection = fixture.find(item => item.commissionId === commissionId);
+      const startedAt = performance.now();
+      verificationTrace.push({
+        kind: 'singleton',
+        startedAt,
+        completedAt: performance.now(),
+        itemCount: 1,
+        requestBytes: 0
+      });
+      sendJson(response, { order: projection.order, objectRevision: 100, companyRevision: 100, profileObjectRevision: 100 });
+      return;
+    }
     pendingOwners.push({ response, commissionId });
     pendingOwnerResponses.add(response);
     request.on('close', () => pendingOwnerResponses.delete(response));
@@ -154,6 +222,11 @@ const page = await context.newPage();
 const diagnostics = [];
 const badResponses = [];
 page.on('pageerror', error => diagnostics.push(`pageerror: ${error.message}`));
+page.on('console', message => {
+  if (message.type() === 'error' || message.type() === 'warning') {
+    diagnostics.push(`console ${message.type()}: ${message.text()}`);
+  }
+});
 page.on('response', response => {
   if (response.url().startsWith(origin) && response.status() >= 400) {
     badResponses.push(`${response.status()} ${response.request().method()} ${response.url()}`);
@@ -161,6 +234,7 @@ page.on('response', response => {
 });
 
 try {
+  acceptanceFlow: {
   await page.goto(`${origin}/indexedDB.js`, { waitUntil: 'load' });
   await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.IndexedDB?.saveTradeOrdersBatch);
@@ -193,6 +267,40 @@ try {
   await page.goto(`${origin}/trade/orders`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.trade-orders-rail-order');
   await page.waitForFunction(() => document.querySelectorAll('.trade-orders-rail-order').length === 100);
+  if (benchmarkMode) {
+    const expectedRequests = benchmarkMode === 'baseline' ? 100 : 2;
+    const deadline = Date.now() + 60000;
+    while (verificationTrace.length < expectedRequests && Date.now() < deadline) {
+      await page.waitForTimeout(20);
+    }
+    await page.waitForTimeout(250);
+    const firstStartedAt = Math.min(...verificationTrace.map(item => item.startedAt));
+    const lastCompletedAt = Math.max(...verificationTrace.map(item => item.completedAt));
+    const benchmark = {
+      mode: benchmarkMode,
+      requestCount: verificationTrace.length,
+      itemCount: verificationTrace.reduce((sum, item) => sum + item.itemCount, 0),
+      requestBytes: verificationTrace.reduce((sum, item) => sum + item.requestBytes, 0),
+      responseBytes: verificationResponseBytes,
+      durationMs: lastCompletedAt - firstStartedAt,
+      trace: verificationTrace,
+      diagnostics,
+      badResponses
+    };
+    const uniqueOrderCount = new Set(
+      verificationTrace.flatMap(item => item.orderIds || [])).size;
+    benchmark.passed = benchmark.requestCount === expectedRequests &&
+      benchmark.itemCount === 100 &&
+      diagnostics.length === 0 &&
+      badResponses.length === 0 &&
+      (benchmarkMode !== 'feature' ||
+        (uniqueOrderCount === 100 && benchmark.durationMs <= 4079.271));
+    benchmark.uniqueOrderCount = uniqueOrderCount;
+    await writeFile(output, JSON.stringify(benchmark, null, 2));
+    if (!benchmark.passed) throw new Error(`Hosted owner verification benchmark failed: ${JSON.stringify(benchmark, null, 2)}`);
+    process.stdout.write(`${JSON.stringify(benchmark, null, 2)}\n`);
+    break acceptanceFlow;
+  }
   const before = await page.evaluate(() => ({
     groups: [...document.querySelectorAll('.trade-orders-rail-group')].map(section => ({
       label: section.querySelector('.trade-orders-rail-group-title span')?.textContent?.trim(),
@@ -202,7 +310,7 @@ try {
     syncGroup: [...document.querySelectorAll('.trade-orders-rail-group-title')].some(node => node.textContent.includes('Needs Attention')),
     titles: [...document.querySelectorAll('.trade-orders-rail-title')].map(node => node.textContent.trim())
   }));
-  const selectedTitle = 'Fixture 050 Commission';
+  const selectedTitle = 'Fixture 075 Commission';
   await page.getByRole('button', { name: new RegExp(selectedTitle) }).click();
   await page.waitForFunction(title => document.querySelector('.trade-orders-rail-order[aria-current="true"]')?.textContent.includes(title), selectedTitle);
   const openHeader = page.locator('.trade-orders-rail-group-title').filter({ hasText: /^\s*Open\s*/ });
@@ -226,25 +334,54 @@ try {
   const j16OwnerRequests = requestLog.filter(item => item.includes('/owner'));
   const cancelClick = page.getByRole('button', { name: 'Cancel Commission', exact: true }).click();
   await page.waitForTimeout(100);
-  const releaseOwner = pending => {
-    const projection = fixture.find(item => item.commissionId === pending.commissionId);
+  const releaseOwnerBatch = pending => {
+    const items = pending.body.items.map(item => ({
+      orderId: item.orderId,
+      commissionId: item.commissionId,
+      status: 0,
+      receipt: {
+        orderId: item.orderId,
+        companyId,
+        commissionId: item.commissionId,
+        profileObjectRevision: 100,
+        objectRevision: 100,
+        companyRevision: 100,
+        verifiedAtUtc: fixedNow
+      },
+      projection: null
+    }));
+    verificationTrace.push({
+      kind: 'batch',
+      startedAt: pending.startedAt,
+      completedAt: performance.now(),
+      itemCount: items.length,
+      requestBytes: pending.bodyBytes.length,
+      orderIds: items.map(item => item.orderId),
+      commissionIds: items.map(item => item.commissionId)
+    });
     pendingOwnerResponses.delete(pending.response);
-    pending.response.writeHead(200, { 'content-type': 'application/json' });
-    pending.response.end(JSON.stringify({ order: projection.order, objectRevision: 100, companyRevision: 100, profileObjectRevision: 100 }));
+    sendJson(pending.response, {
+      companyId,
+      companyRevision: 100,
+      verifiedAtUtc: fixedNow,
+      items
+    });
   };
-  releaseOwner(pendingOwners.shift());
+  releaseOwnerBatch(pendingOwnerBatches.shift());
   const priorityDeadline = Date.now() + 5000;
-  while (pendingOwners.length === 0 && Date.now() < priorityDeadline) await page.waitForTimeout(20);
-  const priorityOwner = pendingOwners.shift();
-  const selectedCommissionId = fixture[49].commissionId;
-  const prioritySelectedOrder = priorityOwner?.commissionId === selectedCommissionId;
-  releaseOwner(priorityOwner);
+  while (pendingOwnerBatches.length === 0 && Date.now() < priorityDeadline) await page.waitForTimeout(20);
+  const priorityOwner = pendingOwnerBatches.shift();
+  const selectedCommissionId = fixture[74].commissionId;
+  const prioritySelectedOrder = priorityOwner?.body.items[0]?.commissionId === selectedCommissionId;
+  releaseOwnerBatch(priorityOwner);
   await cancelClick;
   await page.waitForSelector('#close-order-note');
   await page.waitForTimeout(300);
   const dialogCount = await page.locator('#close-order-note').count();
   const allOwnerRequests = requestLog.filter(item => item.includes('/owner'));
-  const selectedOwnerRequestCount = allOwnerRequests.filter(item => item.includes(selectedCommissionId)).length;
+  const selectedOwnerRequestCount = verificationTrace
+    .flatMap(item => item.commissionIds || [])
+    .filter(commissionId => commissionId === selectedCommissionId).length;
   await page.getByRole('button', { name: 'Back', exact: true }).click();
   const groups = Object.fromEntries(before.groups.map(group => [group.label, group.count]));
   const assertions = {
@@ -262,10 +399,11 @@ try {
     diagnosticsClean: diagnostics.length === 0 && badResponses.length === 0
   };
   const apiRequests = requestLog.filter(item => item.includes('/api/'));
-  const result = { passed: Object.values(assertions).every(Boolean), assertions, groups, stateBeforeVerification, after, j16OwnerRequests, priorityOwner: priorityOwner?.commissionId, selectedCommissionId, selectedOwnerRequestCount, diagnostics, badResponses, apiRequests, screenshot };
+  const result = { passed: Object.values(assertions).every(Boolean), assertions, groups, stateBeforeVerification, after, j16OwnerRequests, priorityOwner: priorityOwner?.body.items[0]?.commissionId, selectedCommissionId, selectedOwnerRequestCount, diagnostics, badResponses, apiRequests, screenshot };
   await writeFile(output, JSON.stringify(result, null, 2));
   if (!result.passed) throw new Error(`Hosted order board acceptance failed: ${JSON.stringify(result, null, 2)}`);
   process.stdout.write(`${JSON.stringify({ passed: result.passed, assertions, groups, j16OwnerRequests, priorityOwner: result.priorityOwner, selectedCommissionId, selectedOwnerRequestCount, diagnostics, badResponses, screenshot }, null, 2)}\n`);
+  }
 } finally {
   for (const response of pendingOwnerResponses) response.destroy();
   await context.close();

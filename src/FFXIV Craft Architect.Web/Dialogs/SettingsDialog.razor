@@ -14,6 +14,7 @@
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService ProfileSyncLocalState
 @inject ProfileSyncService ProfileSync
+@inject HostedOrderSyncCoordinator HostedOrderSync
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
 @inject BrowserFileExportService BrowserFileExportService
@@ -640,6 +641,26 @@
                         <div class="diagnostics-row">
                             <span>Restored session</span>
                             <strong>@(WorkerProjections.Shell.MigratedFromLegacy ? "Migrated" : "Native")</strong>
+                        </div>
+                    </section>
+
+                    <section class="diagnostics-card">
+                        <div class="diagnostics-card-title">Hosted order verification</div>
+                        <div class="diagnostics-row">
+                            <span>Candidates / batches</span>
+                            <strong>@HostedOrderSync.Diagnostics.OwnerCandidateCount.ToString("N0") / @HostedOrderSync.Diagnostics.OwnerRequestCount.ToString("N0")</strong>
+                        </div>
+                        <div class="diagnostics-row">
+                            <span>Unchanged / changed / missing</span>
+                            <strong>@HostedOrderSync.Diagnostics.OwnerUnchangedCount.ToString("N0") / @HostedOrderSync.Diagnostics.OwnerChangedCount.ToString("N0") / @HostedOrderSync.Diagnostics.OwnerMissingCount.ToString("N0")</strong>
+                        </div>
+                        <div class="diagnostics-row">
+                            <span>Discarded</span>
+                            <strong>@HostedOrderSync.Diagnostics.OwnerDiscardedCount.ToString("N0")</strong>
+                        </div>
+                        <div class="diagnostics-row">
+                            <span>Transport</span>
+                            <strong>@FormatBytes(HostedOrderSync.Diagnostics.OwnerResponseBytes) in @HostedOrderSync.Diagnostics.OwnerDurationMilliseconds.ToString("N0") ms</strong>
                         </div>
                     </section>
                 </div>
