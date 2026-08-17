@@ -753,7 +753,7 @@ public partial class TradeOrders
 
         if (order.CompanyCommission != null)
         {
-            return TradeCommissionOperationsPresentation.SyncAttention;
+            return TradeCommissionOperationsPresentation.GetAttentionGroup(order);
         }
 
         return order.Status switch
