@@ -760,9 +760,6 @@ public sealed class ProfileSyncDeletionProjectionTests
             new TradeCompanyCollaborationClient(
                 new HttpClient(new StubHandler(Respond)) { BaseAddress = new Uri(Host) },
                 localState),
-            new TradeOperationsPersistenceService(
-                indexedDb,
-                new TradeCompanyProfilePackageService()),
             localState,
             profileSync,
             store);
@@ -983,12 +980,12 @@ public sealed class ProfileSyncDeletionProjectionTests
         new(CreateHostClient(UnusedHandler()), localState, new WebSettingsService(indexedDb), store, []);
     private static TradeCompanyCollaborationService CreateCollaboration(
         TradeOrder committed, long revision, ProfileSyncLocalStateService localState,
-        ProfileSyncService profileSync, TradeOperationsPersistenceService persistence,
+        ProfileSyncService profileSync,
         HostedOrderProjectionStore store, Action? beforeResponse = null) =>
         new(new TradeCompanyCollaborationClient(
                 new HttpClient(PortablePublicationHandler(committed, revision, beforeResponse ?? (() => { })))
                 { BaseAddress = new Uri(Host) }, localState),
-            persistence, localState, profileSync, store);
+            localState, profileSync, store);
     private static void SetReadyStatus(ProfileSyncService service, string profileId)
     {
         var property = typeof(ProfileSyncService).GetProperty(
@@ -1084,13 +1081,11 @@ public sealed class ProfileSyncDeletionProjectionTests
         public TradeCompanyCollaborationService CreateUnusedCollaboration(HttpMessageHandler? handler = null) =>
             new(new TradeCompanyCollaborationClient(
                     new HttpClient(handler ?? UnusedHandler()) { BaseAddress = new Uri(Host) }, LocalState),
-                new TradeOperationsPersistenceService(IndexedDb, new TradeCompanyProfilePackageService()),
                 LocalState, ProfileSync, Store);
         private TradeCompanyCollaborationService CreateCollaboration(
             TradeOrder committed, long revision, Action beforeResponse) =>
             ProfileSyncDeletionProjectionTests.CreateCollaboration(
                 committed, revision, LocalState, ProfileSync,
-                new TradeOperationsPersistenceService(IndexedDb, new TradeCompanyProfilePackageService()),
                 Store, beforeResponse);
         public void ReplaceHost() => Runtime.SaveRawSetting(
             ProfileSyncSettingsKeys.HostUrl,
@@ -1312,6 +1307,11 @@ public sealed class ProfileSyncDeletionProjectionTests
                 return DeleteTradeOrderAsync<TValue>((Guid)args![0]!);
             }
 
+            if (identifier == "IndexedDB.applyHostedTradeOrderState")
+            {
+                return ApplyHostedTradeOrderStateAsync<TValue>(args!);
+            }
+
             if (identifier == "IndexedDB.saveTradeOrderArchiveSummary")
             {
                 var record = (TradeOrderArchiveSummaryRecord)args![0]!;
@@ -1406,6 +1406,29 @@ public sealed class ProfileSyncDeletionProjectionTests
         {
             await (BeforeDeleteTradeOrderAsync?.Invoke(orderId) ?? Task.CompletedTask);
             DurableOrder = DurableOrder?.Id == orderId ? null : DurableOrder;
+            return (TValue)(object)true;
+        }
+
+        private async ValueTask<TValue> ApplyHostedTradeOrderStateAsync<TValue>(
+            object?[] args)
+        {
+            var order = args[0] as TradeOrder;
+            var orderId = Guid.Parse((string)args[1]!);
+            var revisionKey = (string)args[2]!;
+            var revisionValue = (string)args[3]!;
+            var deleteOrder = (bool)args[4]!;
+            if (deleteOrder)
+            {
+                await (BeforeDeleteTradeOrderAsync?.Invoke(orderId) ?? Task.CompletedTask);
+                DurableOrder = DurableOrder?.Id == orderId ? null : DurableOrder;
+            }
+            else
+            {
+                await (BeforeSaveTradeOrderAsync?.Invoke(order!) ?? Task.CompletedTask);
+                SaveTradeOrderCount++;
+                DurableOrder = order;
+            }
+            settings[revisionKey] = revisionValue;
             return (TValue)(object)true;
         }
     }

@@ -1257,6 +1257,47 @@ async function saveTradeOrdersBatch(orders) {
     return await saveStoreRecordsBatch(STORE_TRADE_ORDERS, orders);
 }
 
+async function applyHostedTradeOrderState(
+    order,
+    orderId,
+    revisionKey,
+    revisionValue,
+    deleteOrder) {
+    const database = await initCompanyDatabase();
+    requireTradeStore(database, STORE_TRADE_ORDERS);
+    requireTradeStore(database, STORE_HOSTED_OWNER_STATE);
+    if (!deleteOrder && (!order || order.id !== orderId)) {
+        throw new Error('Hosted Trade order state omitted its exact order identity.');
+    }
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(
+            [STORE_TRADE_ORDERS, STORE_HOSTED_OWNER_STATE],
+            'readwrite');
+        const orderStore = transaction.objectStore(STORE_TRADE_ORDERS);
+        const ownerStateStore = transaction.objectStore(STORE_HOSTED_OWNER_STATE);
+        let accepted = true;
+        const request = ownerStateStore.get(revisionKey);
+        request.onerror = () => transaction.abort();
+        request.onsuccess = () => {
+            const currentRevision = parseHostedRevision(request.result?.value);
+            const nextRevision = parseHostedRevision(revisionValue);
+            if (nextRevision === null ||
+                currentRevision !== null && currentRevision > nextRevision) {
+                accepted = false;
+                return;
+            }
+            if (currentRevision === nextRevision) return;
+            if (deleteOrder) orderStore.delete(orderId);
+            else orderStore.put(order);
+            ownerStateStore.put({ key: revisionKey, value: revisionValue });
+        };
+        transaction.oncomplete = () => resolve(accepted);
+        transaction.onerror = event => reject(transaction.error || event.target?.error);
+        transaction.onabort = event => reject(transaction.error || event.target?.error);
+    });
+}
+
 async function applyHostedOwnerVerificationBatch(
     orders,
     settings,
@@ -1315,19 +1356,20 @@ function newestHostedOwnerValue(key, ownerValue, fallbackValue) {
     if (!String(key).includes('.objectRevision.tradeOrders.')) {
         return ownerValue ?? fallbackValue;
     }
-    const parseRevision = value => {
-        try {
-            const parsed = JSON.parse(value);
-            return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
-        } catch {
-            return null;
-        }
-    };
-    const ownerRevision = parseRevision(ownerValue);
-    const fallbackRevision = parseRevision(fallbackValue);
+    const ownerRevision = parseHostedRevision(ownerValue);
+    const fallbackRevision = parseHostedRevision(fallbackValue);
     if (ownerRevision === null) return fallbackValue;
     if (fallbackRevision === null) return ownerValue;
     return ownerRevision >= fallbackRevision ? ownerValue : fallbackValue;
+}
+
+function parseHostedRevision(value) {
+    try {
+        const parsed = JSON.parse(value);
+        return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+    } catch {
+        return null;
+    }
 }
 
 async function loadSettingsSubset(keys) {
@@ -2305,6 +2347,7 @@ window.IndexedDB = {
     deleteTradeCrafter,
     saveTradeOrder,
     saveTradeOrdersBatch,
+    applyHostedTradeOrderState,
     applyHostedOwnerVerificationBatch,
     loadHostedOwnerSettings,
     loadTradeOrders,

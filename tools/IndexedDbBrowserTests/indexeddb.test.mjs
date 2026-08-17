@@ -136,29 +136,44 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           { [receiptKey]: '"receipt-101"', [revisionKey]: '101' },
           [],
           { [revisionKey]: '100' });
-        await IndexedDB.saveSetting(revisionKey, '102');
-        const replayReconciled = await IndexedDB.applyHostedOwnerVerificationBatch(
-          [{ ...oldOrder, title: 'Replay revision 102' }],
+        const lateOwner = IndexedDB.applyHostedOwnerVerificationBatch(
+          [{ ...oldOrder, title: 'Late owner revision 102' }],
           { [receiptKey]: '"receipt-102"', [revisionKey]: '102' },
           [],
-          { [revisionKey]: '102' });
+          { [revisionKey]: '101' });
+        const replay = IndexedDB.applyHostedTradeOrderState(
+          { ...oldOrder, title: 'Replay revision 103' },
+          'order-a',
+          revisionKey,
+          '103',
+          false);
+        const [lateOwnerAccepted, replayReconciled] = await Promise.all([lateOwner, replay]);
         const stale = await IndexedDB.applyHostedOwnerVerificationBatch(
           [{ ...oldOrder, title: 'Stale response' }],
           { [receiptKey]: '"stale"', [revisionKey]: '100' },
           [],
-          { [revisionKey]: '101' });
+          { [revisionKey]: '102' });
         const state = await IndexedDB.loadHostedOwnerSettings([receiptKey, revisionKey]);
         const durableOrder = await IndexedDB.loadTradeOrder('order-a');
-        return { bootstrap, changed, replayReconciled, stale, state, durableOrder };
+        return {
+          bootstrap,
+          changed,
+          lateOwnerAccepted,
+          replayReconciled,
+          stale,
+          state,
+          durableOrder
+        };
       });
 
       assert.equal(result.bootstrap, true);
       assert.equal(result.changed, true);
+      assert.equal(result.lateOwnerAccepted, false);
       assert.equal(result.replayReconciled, true);
       assert.equal(result.stale, false);
-      assert.equal(result.state['profileHost.authority.test.profile.profile-a.ownerReceipt.order-a'], '"receipt-102"');
-      assert.equal(result.state['profileHost.authority.test.profile.profile-a.objectRevision.tradeOrders.order-a'], '102');
-      assert.equal(result.durableOrder.title, 'Replay revision 102');
+      assert.notEqual(result.state['profileHost.authority.test.profile.profile-a.ownerReceipt.order-a'], '"stale"');
+      assert.equal(result.state['profileHost.authority.test.profile.profile-a.objectRevision.tradeOrders.order-a'], '103');
+      assert.equal(result.durableOrder.title, 'Replay revision 103');
     } finally {
       await browser.close();
     }

@@ -813,6 +813,29 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task OwnerComparisonKeepsUnchangedOrderCompactAfterUnrelatedCompanyRevision()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        using var loaded = await fixture.LoadOwnerCommissionAsync(fixture.Owner);
+        var projection = (await loaded.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerProjection>())!;
+        await fixture.AdvanceUnrelatedCompanyRevisionAsync();
+
+        using var response = await fixture.CompareOwnersAsync(
+            fixture.Owner,
+            [fixture.ComparisonItem(projection, includeReceipt: true)]);
+        var comparison = await response.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerComparisonResponse>();
+
+        response.EnsureSuccessStatusCode();
+        var item = Assert.Single(comparison!.Items);
+        Assert.Equal(CompanyCommissionOwnerComparisonStatus.Unchanged, item.Status);
+        Assert.Null(item.Projection);
+        Assert.True(item.Receipt!.CompanyRevision.Value > projection.CompanyRevision.Value);
+        Assert.Equal(projection.ObjectRevision, item.Receipt.ObjectRevision);
+    }
+
+    [Fact]
     public async Task OwnerComparisonReturnsChangedProjectionAndRepairsGrantMirror()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -1268,6 +1291,25 @@ public sealed class CompanyMemberCommissionContractTests
                 JsonSerializer.Serialize(order, JsonOptions),
                 envelope.Revision,
                 CancellationToken.None);
+            Assert.True(put.Success);
+        }
+
+        public async Task AdvanceUnrelatedCompanyRevisionAsync()
+        {
+            var crafter = new TradeCrafterProfile
+            {
+                Id = Guid.NewGuid(),
+                CompanyProfileId = Company.Id,
+                DisplayName = "Unrelated revision",
+                WorldName = "Siren"
+            };
+            var put = await Profiles.PutObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeCrafters,
+                crafter.Id.ToString("D"),
+                JsonSerializer.Serialize(crafter, JsonOptions),
+                expectedRevision: 0,
+                ct: CancellationToken.None);
             Assert.True(put.Success);
         }
 

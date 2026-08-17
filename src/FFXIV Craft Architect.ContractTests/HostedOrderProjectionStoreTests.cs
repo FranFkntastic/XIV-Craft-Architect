@@ -989,6 +989,11 @@ public sealed class HostedOrderProjectionStoreTests
                 return SaveOrderAsync<TValue>((TradeOrder)args![0]!);
             }
 
+            if (identifier == "IndexedDB.applyHostedTradeOrderState")
+            {
+                return ApplyHostedTradeOrderStateAsync<TValue>(args!);
+            }
+
             object? result = identifier switch
             {
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(_settings),
@@ -1018,6 +1023,24 @@ public sealed class HostedOrderProjectionStoreTests
                 DurableOrder = order;
             }
             return (TValue)(object)SaveTradeOrderResult;
+        }
+
+        private async ValueTask<TValue> ApplyHostedTradeOrderStateAsync<TValue>(
+            object?[] args)
+        {
+            var order = args[0] as TradeOrder;
+            if ((bool)args[4]!)
+            {
+                DurableOrder = null;
+                _settings[(string)args[2]!] = (string)args[3]!;
+                return (TValue)(object)true;
+            }
+            var saved = await SaveOrderAsync<bool>(order!);
+            if (saved)
+            {
+                _settings[(string)args[2]!] = (string)args[3]!;
+            }
+            return (TValue)(object)saved;
         }
     }
 

@@ -241,6 +241,21 @@ public sealed class IndexedDbService
             $"save Trade order {order.Id}",
             order);
 
+    public Task<bool> ApplyHostedTradeOrderStateAsync(
+        TradeOrder? order,
+        Guid orderId,
+        string revisionKey,
+        string revisionValue,
+        bool deleteOrder) =>
+        InvokeRequiredAsync<bool>(
+            "IndexedDB.applyHostedTradeOrderState",
+            "atomically persist hosted Trade order state",
+            order,
+            orderId.ToString("D"),
+            revisionKey,
+            revisionValue,
+            deleteOrder);
+
     public Task<bool> ApplyHostedOwnerVerificationBatchAsync(
         IReadOnlyList<TradeOrder> orders,
         Dictionary<string, string> settings,

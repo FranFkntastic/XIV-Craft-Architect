@@ -430,6 +430,43 @@ public sealed class ProfileSyncLocalStateService
             expectedSettings);
     }
 
+    public async Task PersistHostedTradeOrderStateAsync(
+        HostedProfileConnectionSettings authority,
+        TradeOrder? order,
+        Guid orderId,
+        long revision,
+        bool deleteOrder = false)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        var profileId = authority.ProfileScopeId
+            ?? throw new InvalidOperationException(
+                "Hosted Trade order persistence requires a captured profile authority.");
+        if (string.IsNullOrWhiteSpace(authority.HostUrl) ||
+            orderId == Guid.Empty ||
+            revision <= 0 ||
+            !deleteOrder && order?.Id != orderId)
+        {
+            throw new InvalidOperationException(
+                "Hosted Trade order persistence omitted its exact authority or identity basis.");
+        }
+
+        var revisionKey = BuildProfileStateKey(
+            NormalizeAuthorityScope(authority.HostUrl),
+            profileId,
+            $"{ObjectRevisionSuffix}{ProfileSyncCollections.TradeOrders}." +
+            Uri.EscapeDataString(orderId.ToString("D")));
+        if (!await _indexedDb.ApplyHostedTradeOrderStateAsync(
+                order,
+                orderId,
+                revisionKey,
+                JsonSerializer.Serialize(revision),
+                deleteOrder))
+        {
+            throw new InvalidOperationException(
+                $"Browser storage could not atomically persist hosted Trade order '{orderId:D}'.");
+        }
+    }
+
     public async Task SaveObjectRevisionAsync(
         HostedProfileConnectionSettings authority,
         string collection,

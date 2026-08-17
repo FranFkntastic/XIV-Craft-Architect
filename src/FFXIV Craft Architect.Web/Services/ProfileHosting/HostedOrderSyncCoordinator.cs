@@ -893,25 +893,17 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                 async winner =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var persisted = winner.Deleted
-                        ? await _tradeOperations.DeleteOrderAsync(winner.OrderId)
-                        : ReferenceEquals(winner.Order, current.Order) ||
-                          await _tradeOperations.ApplyCanonicalOrderAsync(winner.Order!);
-                    if (!persisted)
-                    {
-                        throw new InvalidOperationException(
-                            "The authenticated owner projection could not be persisted locally.");
-                    }
+                    await _localState.PersistHostedTradeOrderStateAsync(
+                        connection,
+                        winner.Order,
+                        winner.OrderId,
+                        winner.ObjectRevision,
+                        winner.Deleted);
                     if (!await IsCurrentAuthorityAsync(authority, connection, profileId))
                     {
                         throw new InvalidOperationException(
                             "The hosted order authority changed while owner persistence was in progress.");
                     }
-                    await _localState.SaveObjectRevisionAsync(
-                        connection,
-                        ProfileSyncCollections.TradeOrders,
-                        winner.OrderId.ToString("D"),
-                        winner.ObjectRevision);
                 },
                 () => IsCurrentAuthorityAsync(authority, connection, profileId));
             if (adoption is not (

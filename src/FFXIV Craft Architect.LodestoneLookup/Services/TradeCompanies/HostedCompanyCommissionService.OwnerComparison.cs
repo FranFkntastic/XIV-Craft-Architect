@@ -86,9 +86,7 @@ public sealed partial class HostedCompanyCommissionService
             var unchanged = mirrorMatches &&
                 item.ProfileObjectRevision == profileObjectRevision &&
                 (item.ObjectRevision == CompanyRecordRevision.None ||
-                 item.ObjectRevision == record.RecordRevision) &&
-                (item.CompanyRevision == CompanyRecordRevision.None ||
-                 item.CompanyRevision == companyRevision);
+                 item.ObjectRevision == record.RecordRevision);
             results.Add(new CompanyCommissionOwnerComparisonResult
             {
                 OrderId = order.Id,

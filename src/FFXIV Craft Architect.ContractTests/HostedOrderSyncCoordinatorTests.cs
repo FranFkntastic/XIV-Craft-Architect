@@ -1062,6 +1062,8 @@ public sealed class HostedOrderSyncCoordinatorTests
                 "IndexedDB.saveSetting" => SaveSetting((string)args![0]!, (string)args[1]!),
                 "IndexedDB.loadAllTradeOrders" => new List<TradeOrder>(),
                 "IndexedDB.saveTradeOrder" => SaveOrder((TradeOrder)args![0]!),
+                "IndexedDB.applyHostedTradeOrderState" =>
+                    ApplyHostedTradeOrderState(args!),
                 "IndexedDB.applyHostedOwnerVerificationBatch" =>
                     ApplyOwnerVerificationBatch(args!),
                 "IndexedDB.loadHostedOwnerSettings" =>
@@ -1091,6 +1093,22 @@ public sealed class HostedOrderSyncCoordinatorTests
         {
             SaveTradeOrderCount++;
             DurableOrder = order;
+            return true;
+        }
+
+        private bool ApplyHostedTradeOrderState(object?[] args)
+        {
+            var order = args[0] as TradeOrder;
+            var orderId = Guid.Parse((string)args[1]!);
+            if ((bool)args[4]!)
+            {
+                DurableOrder = DurableOrder?.Id == orderId ? null : DurableOrder;
+            }
+            else
+            {
+                SaveOrder(order!);
+            }
+            _settings[(string)args[2]!] = (string)args[3]!;
             return true;
         }
 
