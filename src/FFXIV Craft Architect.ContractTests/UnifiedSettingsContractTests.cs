@@ -69,6 +69,10 @@ public sealed class UnifiedSettingsContractTests
         Assert.DoesNotContain("Company updates", workspace, StringComparison.Ordinal);
         Assert.DoesNotContain("preferred character", workspace, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("transfer ownership", workspace, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Transfer ownership", File.ReadAllText(Path.Combine(
+            web,
+            "Shared",
+            "CompanyMembershipManager.razor")), StringComparison.Ordinal);
         Assert.Contains("<TradeCompanySwitcher", status, StringComparison.Ordinal);
         Assert.DoesNotContain("IsTradeRoute", status, StringComparison.Ordinal);
         Assert.Contains("test-readiness", File.ReadAllText(Path.Combine(

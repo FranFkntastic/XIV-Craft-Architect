@@ -126,12 +126,53 @@
                     }
                 }
             </MudTd>
-            <MudTd>@if (CanRevoke(context)) { <MudButton Size="Size.Small" Color="Color.Error" OnClick="() => _revokeMember = context">Revoke</MudButton> }</MudTd>
+            <MudTd>
+                @if (context.CanReceiveOwnership)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => BeginOwnershipTransferAsync(context))">Transfer ownership</MudButton>
+                }
+                @if (CanRevoke(context))
+                {
+                    <MudButton Size="Size.Small" Color="Color.Error" Variant="Variant.Text" OnClick="() => _revokeMember = context">Revoke</MudButton>
+                }
+            </MudTd>
         </RowTemplate>
     </MudTable>
     @if (_revokeMember != null)
     {
         <div class="d-flex align-center gap-2 mt-2"><MudTextField @bind-Value="_revokeReason" Label="Reason" Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" /><MudButton OnClick="CancelRevoke">Cancel</MudButton><MudButton Color="Color.Error" Disabled="@string.IsNullOrWhiteSpace(_revokeReason)" OnClick="RevokeAsync">Revoke @_revokeMember.DisplayName</MudButton></div>
+    }
+    @if (_transferMember != null)
+    {
+        <MudPaper Outlined="true" Class="pa-3 mt-2">
+            @if (_transferPreview == null)
+            {
+                <div class="d-flex align-center gap-2"><MudProgressCircular Indeterminate="true" Size="Size.Small" /><MudText>Reviewing the company transfer…</MudText></div>
+            }
+            else
+            {
+                <MudText Typo="Typo.subtitle1">Transfer ownership to @_transferMember.DisplayName?</MudText>
+                <MudText Typo="Typo.body2" Class="mt-1">
+                    This keeps the company ID and moves @_transferPreview.Counts.CompanyProfiles company profile, @_transferPreview.Counts.Orders orders, @_transferPreview.Counts.Crafters crafters, @_transferPreview.Counts.Publications publications, @_transferPreview.Counts.PayrollDrafts payroll drafts, @_transferPreview.Counts.LinkedPlans linked plans, and @_transferPreview.Counts.DeepArchivedOrders archived orders.
+                    @if (_transferPreview.Counts.Collisions > 0)
+                    {
+                        <span> @_transferPreview.Counts.Collisions shared records will keep the current company's canonical version.</span>
+                    }
+                    @if (_transferPreview.Counts.TargetOnlyObjects > 0)
+                    {
+                        <span> @_transferPreview.Counts.TargetOnlyObjects records found only in the new owner's account will be preserved.</span>
+                    }
+                </MudText>
+                <MudSelect T="string" Label="Your access afterward" Dense="true" Class="mt-2" @bind-Value="_previousOwnerDisposition">
+                    <MudSelectItem T="string" Value="@("operator")">Remain an Operator</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("revoked")">Leave the company</MudSelectItem>
+                </MudSelect>
+                <div class="d-flex justify-end gap-2 mt-2">
+                    <MudButton Disabled="@_transferringOwnership" OnClick="CancelOwnershipTransfer">Cancel</MudButton>
+                    <MudButton Color="Color.Error" Variant="Variant.Filled" Disabled="@_transferringOwnership" OnClick="ConfirmOwnershipTransferAsync">@(_transferringOwnership ? "Transferring…" : "Transfer ownership")</MudButton>
+                </div>
+            }
+        </MudPaper>
     }
 </MudPaper>
 
@@ -147,6 +188,11 @@
     private Guid? _manageHistoryMemberId;
     private CompanyMember? _revokeMember;
     private string? _revokeReason;
+    private CompanyMember? _transferMember;
+    private CompanyOwnershipTransferPreview? _transferPreview;
+    private string _previousOwnerDisposition = "operator";
+    private Guid _ownershipTransferKey;
+    private bool _transferringOwnership;
     private Guid? _invitationLegacyCrafterId;
     private DateTime? _invitationExpiresOn = DateTime.Today.AddDays(7);
     private CompanyMembershipInvitation? _issuedInvitation;
@@ -230,5 +276,52 @@
     private async Task DisconnectAsync(Guid legacyCrafterId) { await HubClient.DisconnectLegacyCrafterAsync(CompanyId, legacyCrafterId); await LoadAsync(); Snackbar.Add("Existing crafter history disconnected.", Severity.Success); }
     private void CancelRevoke() { _revokeMember = null; _revokeReason = null; }
     private async Task RevokeAsync() { await HubClient.TransitionMembershipAsync(CompanyId, _revokeMember!.AccountProfileId, "revoke", _revokeReason!.Trim()); CancelRevoke(); await LoadAsync(); Snackbar.Add("Membership revoked.", Severity.Success); }
+    private async Task BeginOwnershipTransferAsync(CompanyMember member)
+    {
+        _transferMember = member;
+        _transferPreview = null;
+        _previousOwnerDisposition = "operator";
+        _ownershipTransferKey = Guid.NewGuid();
+        try
+        {
+            _transferPreview = await HubClient.PreviewOwnershipTransferAsync(CompanyId, member.AccountProfileId);
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+            CancelOwnershipTransfer();
+        }
+    }
+    private void CancelOwnershipTransfer()
+    {
+        if (_transferringOwnership) return;
+        _transferMember = null;
+        _transferPreview = null;
+        _ownershipTransferKey = Guid.Empty;
+    }
+    private async Task ConfirmOwnershipTransferAsync()
+    {
+        if (_transferMember == null || _transferPreview == null) return;
+        _transferringOwnership = true;
+        try
+        {
+            await HubClient.TransferOwnershipAsync(
+                CompanyId,
+                _transferMember.AccountProfileId,
+                _previousOwnerDisposition,
+                _ownershipTransferKey,
+                _transferPreview.ScopeFingerprint);
+            Snackbar.Add($"Ownership transferred to {_transferMember.DisplayName}.", Severity.Success);
+            Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
+        finally
+        {
+            _transferringOwnership = false;
+        }
+    }
     private sealed record PendingMember(CompanyMembership Request, CompanyMember Member);
 }

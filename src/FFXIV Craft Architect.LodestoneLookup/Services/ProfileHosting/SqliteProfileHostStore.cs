@@ -2782,6 +2782,24 @@ public sealed partial class SqliteProfileHostStore
                 create index if not exists ix_deep_archived_trade_orders_profile_archived
                 on deep_archived_trade_orders(profile_id, archived_at_utc desc);
 
+                create table if not exists company_ownership_transfers (
+                    transfer_id text primary key,
+                    idempotency_key text not null unique,
+                    company_id text not null,
+                    source_profile_id text not null,
+                    target_profile_id text not null,
+                    previous_owner_disposition text not null,
+                    scope_fingerprint text not null,
+                    counts_json text not null,
+                    committed_at_utc text not null,
+                    membership_projected_at_utc text null,
+                    foreign key(source_profile_id) references hosted_profiles(id),
+                    foreign key(target_profile_id) references hosted_profiles(id)
+                );
+
+                create index if not exists ix_company_ownership_transfers_company
+                on company_ownership_transfers(company_id, committed_at_utc desc);
+
                 insert into profile_revisions (profile_id, revision)
                 select p.id, coalesce(max(o.revision), 0)
                 from hosted_profiles p

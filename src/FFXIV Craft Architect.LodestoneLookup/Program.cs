@@ -104,6 +104,8 @@ builder.Services.AddSingleton<SqliteMembershipStore>();
 builder.Services.AddSingleton<ITradeCompanyFounderBinder>(services =>
     services.GetRequiredService<SqliteMembershipStore>());
 builder.Services.AddSingleton<SqliteProfileHostStore>();
+builder.Services.AddSingleton<CompanyOwnershipTransferService>();
+builder.Services.AddHostedService<CompanyOwnershipTransferReconciler>();
 builder.Services.AddHostedService<ProfileHostDeepArchiveService>();
 var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
     ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db");

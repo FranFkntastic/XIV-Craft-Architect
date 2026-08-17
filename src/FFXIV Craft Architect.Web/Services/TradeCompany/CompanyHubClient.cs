@@ -360,6 +360,43 @@ public sealed class CompanyHubClient(
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task<CompanyOwnershipTransferPreview> PreviewOwnershipTransferAsync(
+        string companyId,
+        Guid targetProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/ownership-transfer/preview/{targetProfileId:D}",
+            null,
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<CompanyOwnershipTransferPreview>(JsonOptions, cancellationToken))!;
+    }
+
+    public async Task<CompanyOwnershipTransferReceipt> TransferOwnershipAsync(
+        string companyId,
+        Guid targetProfileId,
+        string previousOwnerDisposition,
+        Guid idempotencyKey,
+        string expectedScopeFingerprint,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/ownership-transfer",
+            new
+            {
+                TargetProfileId = targetProfileId,
+                PreviousOwnerDisposition = previousOwnerDisposition,
+                IdempotencyKey = idempotencyKey,
+                ExpectedScopeFingerprint = expectedScopeFingerprint
+            },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<CompanyOwnershipTransferReceipt>(JsonOptions, cancellationToken))!;
+    }
+
     public async Task<LegacyCrafterMigration> LoadLegacyCrafterMigrationAsync(
         string companyId,
         CancellationToken cancellationToken = default)
@@ -560,7 +597,10 @@ public sealed record MemberNotificationTestDelivery(
     int AttemptCount,
     string? MessageId,
     string? Error);
-public sealed record CompanyMember(Guid AccountProfileId, string DisplayName, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, bool DiscordLinked);
+public sealed record CompanyMember(Guid AccountProfileId, string DisplayName, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, bool DiscordLinked, bool CanReceiveOwnership);
+public sealed record CompanyOwnershipTransferCounts(int CompanyProfiles, int Orders, int Crafters, int Publications, int PayrollDrafts, int LinkedPlans, int DeepArchivedOrders, int Collisions, int TargetOnlyObjects);
+public sealed record CompanyOwnershipTransferPreview(string CompanyId, Guid SourceProfileId, Guid TargetProfileId, string TargetDisplayName, string ScopeFingerprint, CompanyOwnershipTransferCounts Counts);
+public sealed record CompanyOwnershipTransferReceipt(Guid TransferId, Guid IdempotencyKey, string CompanyId, Guid SourceProfileId, Guid TargetProfileId, string PreviousOwnerDisposition, string ScopeFingerprint, CompanyOwnershipTransferCounts Counts, DateTimeOffset CommittedAtUtc, DateTimeOffset? MembershipProjectedAtUtc);
 public sealed record LegacyCrafterMigration(
     IReadOnlyList<LegacyCrafterCandidate> LegacyCrafters,
     IReadOnlyList<LegacyCrafterBinding> Bindings);
