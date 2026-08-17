@@ -159,7 +159,9 @@ public sealed class SqliteMembershipStore(
     ILogger<SqliteMembershipStore> logger) : ITradeCompanyFounderBinder
 {
     public const int MaximumRequestNoteLength = 500;
-    public static readonly TimeSpan InvitationLifetime = TimeSpan.FromDays(7);
+    public static readonly TimeSpan DefaultInvitationLifetime = TimeSpan.FromDays(7);
+    public static readonly TimeSpan MinimumInvitationLifetime = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan MaximumInvitationLifetime = TimeSpan.FromDays(366);
     private readonly SemaphoreSlim schemaGate = new(1, 1);
     private bool schemaReady;
 
@@ -167,6 +169,7 @@ public sealed class SqliteMembershipStore(
         CompanyId companyId,
         Guid issuedByProfileId,
         Guid? legacyCrafterId,
+        DateTimeOffset? expiresAtUtc = null,
         CancellationToken cancellationToken = default)
     {
         RequireIdentity(companyId, issuedByProfileId);
@@ -174,7 +177,14 @@ public sealed class SqliteMembershipStore(
         var token = ToBase64Url(RandomNumberGenerator.GetBytes(32));
         var tokenHash = HashToken(token);
         var issuedAt = timeProvider.GetUtcNow();
-        var expiresAt = issuedAt + InvitationLifetime;
+        var expiresAt = (expiresAtUtc ?? issuedAt + DefaultInvitationLifetime).ToUniversalTime();
+        if (expiresAt < issuedAt + MinimumInvitationLifetime ||
+            expiresAt > issuedAt + MaximumInvitationLifetime)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(expiresAtUtc),
+                $"Invitation expiry must be between {MinimumInvitationLifetime.TotalMinutes:N0} minutes and {MaximumInvitationLifetime.TotalDays:N0} days from now.");
+        }
         await using var connection = await OpenAsync(cancellationToken);
         await EnsureSchemaAsync(connection, cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(

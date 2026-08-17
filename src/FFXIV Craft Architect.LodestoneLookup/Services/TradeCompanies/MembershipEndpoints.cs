@@ -9,7 +9,9 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 public sealed record MembershipRequestBody(string? RequestNote);
 public sealed record MembershipTransitionBody(string? Reason);
 public sealed record LegacyCrafterBindingBody(Guid AccountProfileId);
-public sealed record MembershipInvitationIssueBody(Guid? LegacyCrafterId);
+public sealed record MembershipInvitationIssueBody(
+    Guid? LegacyCrafterId,
+    DateTimeOffset? ExpiresAtUtc);
 public sealed record MembershipInvitationResponse(
     Guid InvitationId,
     string CompanyId,
@@ -417,11 +419,22 @@ public static class MembershipEndpoints
                         "invitation_seat_already_connected",
                         "That crafter history is already connected to a company member."));
                 }
-                var invitation = await memberships.IssueInvitationAsync(
-                    authorization.CompanyId,
-                    authorization.Account!.ProfileId,
-                    body.LegacyCrafterId,
-                    cancellationToken);
+                CompanyMembershipInvitation invitation;
+                try
+                {
+                    invitation = await memberships.IssueInvitationAsync(
+                        authorization.CompanyId,
+                        authorization.Account!.ProfileId,
+                        body.LegacyCrafterId,
+                        body.ExpiresAtUtc,
+                        cancellationToken);
+                }
+                catch (ArgumentOutOfRangeException exception)
+                {
+                    return Results.BadRequest(new MembershipErrorResponse(
+                        "invalid_invitation_expiry",
+                        exception.Message));
+                }
                 var company = await companyService.LoadPublicCompanyProfileAsync(
                     authorization.CompanyId,
                     cancellationToken);

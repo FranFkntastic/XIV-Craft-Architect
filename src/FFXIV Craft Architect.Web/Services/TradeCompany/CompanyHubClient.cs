@@ -236,12 +236,13 @@ public sealed class CompanyHubClient(
     public async Task<CompanyMembershipInvitation> IssueMembershipInvitationAsync(
         string companyId,
         Guid? legacyCrafterId,
+        DateTimeOffset expiresAtUtc,
         CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
             $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-invitations",
-            new { LegacyCrafterId = legacyCrafterId },
+            new { LegacyCrafterId = legacyCrafterId, ExpiresAtUtc = expiresAtUtc },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
         return (await response.Content.ReadFromJsonAsync<CompanyMembershipInvitation>(JsonOptions, cancellationToken))!;
