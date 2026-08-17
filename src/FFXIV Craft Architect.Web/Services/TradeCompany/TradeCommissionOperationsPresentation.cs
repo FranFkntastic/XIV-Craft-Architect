@@ -19,28 +19,29 @@ public static class TradeCommissionOperationsPresentation
     {
         ArgumentNullException.ThrowIfNull(order);
 
-        if (order.Status == TradeOrderStatus.Canceled)
+        var presentedOrder = projection?.Order ?? order;
+
+        if (presentedOrder.Status == TradeOrderStatus.Canceled)
         {
             return true;
         }
 
-        if (projection?.Order.CompanyCommission is { } commission)
+        if (presentedOrder.CompanyCommission is { } commission)
         {
-            return commission.IsClosed(projection.Order.Status);
+            return commission.IsClosed(presentedOrder.Status);
         }
 
-        if (order.CompanyCommission != null)
-        {
-            return false;
-        }
-
-        return TradeOrderStatusWorkflow.IsArchived(order.Status);
+        return TradeOrderStatusWorkflow.IsArchived(presentedOrder.Status);
     }
 
-    public static string GetAttentionGroup(CompanyCommissionOwnerProjection projection)
+    public static string GetAttentionGroup(CompanyCommissionOwnerProjection projection) =>
+        GetAttentionGroup(projection.Order);
+
+    public static string GetAttentionGroup(TradeOrder order)
     {
-        var order = projection.Order;
-        var commission = RequireCommission(projection);
+        ArgumentNullException.ThrowIfNull(order);
+
+        var commission = RequireCommission(order);
         if (order.Status == TradeOrderStatus.ResolutionRequired || commission.ManualResolution != null)
         {
             return ResolutionAttention;
@@ -169,9 +170,12 @@ public static class TradeCommissionOperationsPresentation
 
     private static TradeCompanyCommission RequireCommission(
         CompanyCommissionOwnerProjection projection) =>
-        projection.Order.CompanyCommission ??
+        RequireCommission(projection.Order);
+
+    private static TradeCompanyCommission RequireCommission(TradeOrder order) =>
+        order.CompanyCommission ??
         throw new InvalidOperationException(
-            "The authenticated owner projection does not contain a company commission.");
+            "The presented order does not contain a company commission.");
 
     private static string? ReadString(JsonElement element, string name)
     {

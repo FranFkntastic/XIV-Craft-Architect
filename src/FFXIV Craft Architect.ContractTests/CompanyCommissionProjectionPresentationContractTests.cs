@@ -124,6 +124,57 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         canceled.Status = TradeOrderStatus.Canceled;
         Assert.True(TradeCommissionOperationsPresentation.IsArchivedForAttention(canceled, null));
     }
+
+    [Fact]
+    public void DurableCompletedCommissionRemainsTruthfulWithoutOwnerProjection()
+    {
+        var completed = new TradeOrder
+        {
+            Status = TradeOrderStatus.Completed,
+            CompanyCommission = CreateClearedAssignedCommission() with
+            {
+                SettlementState = CompanyCommissionSettlementState.Satisfied
+            }
+        };
+
+        Assert.True(TradeCommissionOperationsPresentation.IsArchivedForAttention(completed, null));
+        Assert.Equal(
+            TradeCommissionOperationsPresentation.DeliveryAttention,
+            TradeCommissionOperationsPresentation.GetAttentionGroup(completed));
+
+        completed.CompanyCommission = completed.CompanyCommission with
+        {
+            SettlementState = CompanyCommissionSettlementState.NotDue
+        };
+
+        Assert.False(TradeCommissionOperationsPresentation.IsArchivedForAttention(completed, null));
+        Assert.Equal(
+            TradeCommissionOperationsPresentation.DeliveryAttention,
+            TradeCommissionOperationsPresentation.GetAttentionGroup(completed));
+    }
+
+    [Fact]
+    public void DurableCommissionClassificationMatchesOwnerProjection()
+    {
+        var order = new TradeOrder
+        {
+            Status = TradeOrderStatus.Assigned,
+            CompanyCommission = CreateClearedAssignedCommission()
+        };
+        var projection = new CompanyCommissionOwnerProjection
+        {
+            Order = order,
+            ObjectRevision = new CompanyRecordRevision(12),
+            CompanyRevision = new CompanyRecordRevision(12)
+        };
+
+        Assert.Equal(
+            TradeCommissionOperationsPresentation.GetAttentionGroup(projection),
+            TradeCommissionOperationsPresentation.GetAttentionGroup(order));
+        Assert.Equal(
+            TradeCommissionOperationsPresentation.IsArchivedForAttention(order, projection),
+            TradeCommissionOperationsPresentation.IsArchivedForAttention(order, null));
+    }
     private static TradeCompanyCommission CreateClearedAssignedCommission()
     {
         var lineId = Guid.Parse("55555555-5555-5555-5555-555555555555");
