@@ -43,10 +43,10 @@ public partial class TradeOrders
 
             var snapshot = HostedOrders.Get(_selectedOrder.Id);
             return snapshot is
-                   {
-                       Deleted: false,
-                       DisplayState: HostedOrderDisplayState.Verified
-                   } &&
+            {
+                Deleted: false,
+                DisplayState: HostedOrderDisplayState.Verified
+            } &&
                    !HostedOrderSyncCoordinator.NeedsOwnerAdoption(snapshot)
                 ? CommissionOperations.GetForOrder(_selectedOrder.Id)
                 : null;
