@@ -458,7 +458,7 @@ public sealed record CompanyHubUpdate(Guid Id, string Title, string Body, string
 public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State, bool CanWork, bool CanReportProgress, bool CanDeclareReadiness, string? WorkBlockedReason, CompanyHubCommissionAttention? UnreadCommissionerUpdate);
 public sealed record CompanyHubCommissionAttention(Guid EventId, long Revision, string Text, DateTime CreatedAtUtc);
 public sealed record CompanyHubAttentionRead(long ReadRevision);
-public sealed record CompanyHubRosterMember(string DisplayName, string Role);
+public sealed record CompanyHubRosterMember(Guid AccountProfileId, string DisplayName, string Role);
 public sealed record CompanyMembership(string CompanyId, Guid AccountProfileId, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, Guid? DecidedByProfileId, string? RequestNote, bool HasMembership);
 public sealed record CompanyMembershipInvitation(
     Guid InvitationId,

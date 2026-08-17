@@ -356,6 +356,53 @@ public sealed class CompanyHubContractTests
     }
 
     [Fact]
+    public async Task AccountRenameKeepsOneStableOwnerAcrossMembershipAndHubProjection()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("FFXIV Trade Company");
+        var company = CreateCompany();
+        using var firstSession = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(firstSession, company);
+
+        using var rename = await firstSession.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = "Frantastic"
+            });
+        rename.EnsureSuccessStatusCode();
+        var renamed = await rename.Content.ReadFromJsonAsync<ProfileHostDisplayNameUpdateResponse>();
+        var secondKey = new ProfileAccessKeyHasher().CreateAccessKey();
+        await fixture.Profiles.AddAccessKeyAsync(
+            owner.ProfileId.ToString("D"),
+            secondKey.StoredHash,
+            CancellationToken.None);
+        using var secondSession = fixture.CreateClient(secondKey.PlaintextKey);
+
+        var profile = await secondSession.GetFromJsonAsync<ProfileHostProfileResponse>(
+            "/profile-host/profile");
+        var hub = await secondSession.GetFromJsonAsync<CompanyHubResponse>(
+            $"/trade/v1/companies/{company.Id:D}/hub");
+        var members = await secondSession.GetFromJsonAsync<CompanyMemberResponse[]>(
+            $"/trade/v1/companies/{company.Id:D}/memberships");
+
+        Assert.True(renamed!.Success);
+        Assert.Equal(owner.ProfileId.ToString("D"), renamed.Profile?.ProfileId);
+        Assert.Equal(owner.ProfileId.ToString("D"), profile?.ProfileId);
+        Assert.Equal("Frantastic", profile?.DisplayName);
+        var rosterMember = Assert.Single(hub!.Roster);
+        Assert.Equal(owner.ProfileId, rosterMember.AccountProfileId);
+        Assert.Equal("Frantastic", rosterMember.DisplayName);
+        Assert.Equal("owner", rosterMember.Role);
+        var membership = Assert.Single(members!);
+        Assert.Equal(owner.ProfileId, membership.AccountProfileId);
+        Assert.Equal("Frantastic", membership.DisplayName);
+        Assert.Equal("owner", membership.Role);
+        Assert.Equal("active", membership.State);
+    }
+
+    [Fact]
     public async Task DiscordLinkedAssignmentResolvesFromGuidLinkOnlyForCurrentParticipant()
     {
         await using var fixture = await HubFixture.CreateAsync();

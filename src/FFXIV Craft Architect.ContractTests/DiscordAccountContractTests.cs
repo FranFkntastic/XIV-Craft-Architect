@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -183,6 +184,38 @@ public sealed class DiscordAccountContractTests
         var identityStatus = await statusResponse.Content.ReadFromJsonAsync<DiscordAccountIdentityStatus>();
         Assert.True(identityStatus!.Linked);
         Assert.Equal("Discord Crafter " + new string('x', 80), identityStatus.DisplayName);
+    }
+
+    [Fact]
+    public async Task AccountRenameSurvivesFreshDiscordSignInWithoutProvisioningAnotherProfile()
+    {
+        await using var fixture = await DiscordAccountFixture.CreateAsync();
+        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Discord identity");
+        using var client = fixture.CreateClient();
+        var firstKey = await CompleteSignInAsync(client, fixture.OAuth);
+        var original = await GetProfileAsync(client, firstKey);
+        using var renameRequest = new HttpRequestMessage(HttpMethod.Put, "/profile-host/profile")
+        {
+            Content = JsonContent.Create(new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = original.MetadataRevision,
+                DisplayName = "Frantastic"
+            })
+        };
+        renameRequest.Headers.Add("X-Profile-Key", firstKey);
+        using var rename = await client.SendAsync(renameRequest);
+        rename.EnsureSuccessStatusCode();
+
+        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Renamed Discord identity");
+        var secondKey = await CompleteSignInAsync(client, fixture.OAuth);
+        var signedInAgain = await GetProfileAsync(client, secondKey);
+        var link = await fixture.Links.LoadByDiscordUserAsync(DiscordUser);
+
+        Assert.Equal(original.ProfileId, signedInAgain.ProfileId);
+        Assert.Equal("Frantastic", signedInAgain.DisplayName);
+        Assert.Equal(original.ProfileId, link?.ProfileId.ToString("D"));
+        Assert.Equal(1, await fixture.CountRowsAsync("hosted_profiles"));
+        Assert.Equal(2, await fixture.CountRowsAsync("profile_access_keys"));
     }
 
     [Fact]
