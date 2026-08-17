@@ -3,6 +3,7 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 public enum ProfileHostProvisioningAction
 {
     CreateProfile,
+    ProvisionProfile,
     EnsureProfile,
     ImportActiveCredentials,
     RotateKey,
@@ -37,6 +38,13 @@ public sealed record ProfileHostProvisioningCommand(
                     string.Join(' ', args.Skip(3))),
             "ensure-profile" => throw new InvalidOperationException(
                 "Usage: profile-host ensure-profile <profile-id> <display-name>"),
+            "provision-profile" when args.Length >= 4 =>
+                new ProfileHostProvisioningCommand(
+                    ProfileHostProvisioningAction.ProvisionProfile,
+                    args[2],
+                    string.Join(' ', args.Skip(3))),
+            "provision-profile" => throw new InvalidOperationException(
+                "Usage: profile-host provision-profile <profile-id> <display-name>"),
             "import-active-credentials" when args.Length >= 5 =>
                 new ProfileHostProvisioningCommand(
                     ProfileHostProvisioningAction.ImportActiveCredentials,
