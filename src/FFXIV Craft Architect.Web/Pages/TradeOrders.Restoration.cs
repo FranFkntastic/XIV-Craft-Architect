@@ -32,9 +32,40 @@ public partial class TradeOrders
         return false;
     }
 
+    private async Task<bool> EnsureSelectedCommissionOwnerAvailableAsync()
+    {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return false;
+        }
+
+        var selected = _selectedOrder;
+        if (selected?.CompanyCommission == null ||
+            SelectedCommissionOwner != null ||
+            IsSelectedCanonicalOwnerMissing)
+        {
+            return true;
+        }
+
+        await HostedOrderSync.RefreshOwnerProjectionAsync(selected.Id);
+        if (_selectedOrder?.Id != selected.Id)
+        {
+            return false;
+        }
+
+        // Opening the lifecycle dialog is not a mutation. If priority verification
+        // failed, the entered reason remains intact and the lifecycle service makes
+        // one final authority-bound attempt before it can change canonical state.
+        return true;
+    }
+
     private bool IsIdentityOnlyOrder(TradeOrder order) =>
         order.CompanyCommission != null &&
-        !OrderRestoreState.ShowsCompleteProjection;
+        HostedOrders.Get(order.Id) is not
+        {
+            Deleted: false,
+            Order: not null
+        };
 
     private IReadOnlyList<ArchivedOrderRow> ComposeArchivedOrderRows()
     {
@@ -133,6 +164,8 @@ public partial class TradeOrders
     private async Task LoadOrderHostedRevisionsAsync()
     {
         _orderHostedRevisions.Clear();
+        _orderRevisionProfileId = null;
+        _orderRevisionConnectionScopeId = null;
         var connection = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
         if (connection.ProfileScopeId == null)
         {
@@ -150,6 +183,33 @@ public partial class TradeOrders
             {
                 _orderHostedRevisions[order.Id] = revision;
             }
+        }
+
+        _orderRevisionProfileId = connection.ProfileScopeId;
+        _orderRevisionConnectionScopeId = connection.ConnectionScopeId;
+        PublishLastKnownOrderProjections();
+    }
+
+    private void PublishLastKnownOrderProjections()
+    {
+        var authority = HostedOrders.CaptureAuthorityScope();
+        if (string.Equals(
+                authority.ProfileId,
+                _orderRevisionProfileId,
+                StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(
+                authority.ConnectionScopeId,
+                _orderRevisionConnectionScopeId,
+                StringComparison.Ordinal))
+        {
+            HostedOrders.PublishRemoteOrders(_orders
+                .Where(order =>
+                    order.CompanyCommission != null &&
+                    _orderHostedRevisions.ContainsKey(order.Id))
+                .Select(order => (
+                    order,
+                    _orderHostedRevisions[order.Id]))
+                .ToArray());
         }
     }
 
@@ -178,13 +238,11 @@ public partial class TradeOrders
 
     private IReadOnlyList<TradeOrder> ComposeVisibleOrders()
     {
-        var visible = OrderRestoreState.ShowsCompleteProjection
-            ? new Dictionary<Guid, TradeOrder>()
-            : _orders
-                .Where(order => order.CompanyCommission == null)
-                .ToDictionary(order => order.Id);
+        var visible = _orders
+            .Where(order => order.CompanyCommission == null)
+            .ToDictionary(order => order.Id);
 
-        if (OrderRestoreState.ShowsCompleteProjection && _companyProfile != null)
+        if (_companyProfile != null)
         {
             foreach (var snapshot in HostedOrders.GetAll(_companyProfile.Id))
             {
@@ -194,9 +252,9 @@ public partial class TradeOrders
                 }
             }
         }
-        else if (OrderRestoreState.Stage != HostedOrderRestoreStage.ScopeChanging)
+        if (OrderRestoreState.Stage != HostedOrderRestoreStage.ScopeChanging)
         {
-            // During a cold or unverifiable restore, persisted commission records
+            // Persisted commission records without a current-scope hosted revision
             // contribute identity only. Their terms never become page authority.
             foreach (var order in _orders.Where(order => order.CompanyCommission != null))
             {
@@ -412,9 +470,15 @@ public partial class TradeOrders
             _pendingSelectedOrderProjection = null;
             _archiveSummaryRecords = [];
             _orderHostedRevisions.Clear();
+            _orderRevisionProfileId = null;
+            _orderRevisionConnectionScopeId = null;
         }
-        else if (state.ShowsCompleteProjection &&
-                 _pendingNotificationNavigation?.ActivityId != null)
+        else
+        {
+            PublishLastKnownOrderProjections();
+        }
+        if (state.ShowsCompleteProjection &&
+            _pendingNotificationNavigation?.ActivityId != null)
         {
             await SelectPendingNavigationOrderAsync();
         }

@@ -17,11 +17,12 @@ public sealed class HostedOrderSyncCoordinatorTests
     private const string Host = "https://profiles.example/api/";
 
     [Fact]
-    public async Task SyncQueuesOneListOwnerAdoptionPassWithoutSelectionDemand()
+    public async Task SyncAndPriorityDemandDeduplicateOwnerAdoption()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateCommissionOrder();
         var runtime = new OwnerAdoptionRuntime(profileId);
+        runtime.SeedDurableOrder(order);
         var indexedDb = new IndexedDbService(runtime);
         var localState = new ProfileSyncLocalStateService(
             indexedDb,
@@ -75,16 +76,83 @@ public sealed class HostedOrderSyncCoordinatorTests
 
         await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
         Assert.Equal(1, ownerHandler.RequestCount);
+        var priority = coordinator.RefreshOwnerProjectionAsync(order.Id);
 
         ownerHandler.Release.TrySetResult();
         await GetField<Task>(coordinator, "_ownerAdoptionPass")
             .WaitAsync(TimeSpan.FromSeconds(5));
+        await priority.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(1, ownerHandler.RequestCount);
         Assert.Equal(3, dataChangeCount);
         Assert.Equal(1, metadataRefreshCount);
         Assert.Equal(1, store.GetOwnerProjection(order.Id)!.ObjectRevision.Value);
-        Assert.Equal(order.Id, runtime.DurableOrder?.Id);
+        Assert.Same(order, runtime.DurableOrder);
+        Assert.Equal(0, runtime.SaveTradeOrderCount);
+    }
+
+    [Fact]
+    public async Task SelectedPriorityDemandRunsBeforeTheRemainingBackgroundQueue()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var first = CreateCommissionOrder();
+        var second = CopyWithNewIdentity(first);
+        var selected = CopyWithNewIdentity(first);
+        var runtime = new OwnerAdoptionRuntime(profileId);
+        runtime.SeedDurableOrder(first);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            hasTrustedProjection: true,
+            lastAppliedRevision: 0,
+            DateTime.UtcNow,
+            $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(first, 1));
+        Assert.True(store.TryPublishRemoteOrder(second, 1));
+        Assert.True(store.TryPublishRemoteOrder(selected, 1));
+        var profileSync = new ProfileSyncService(
+            new ProfileHostClient(
+                new HttpClient(new EmptyChangesHandler()),
+                new ProfileHostClientOptions(Host)),
+            localState,
+            new WebSettingsService(indexedDb),
+            store,
+            []);
+        var ownerHandler = new PriorityOwnerHandler([first, second, selected]);
+        await using var coordinator = new HostedOrderSyncCoordinator(
+            runtime,
+            profileSync,
+            localState,
+            store,
+            new TradeCommissionOperationsClient(
+                new HttpClient(ownerHandler) { BaseAddress = new Uri(Host) },
+                localState),
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            new AppState(),
+            NullLogger<HostedOrderSyncCoordinator>.Instance);
+        SetField(coordinator, "_activeProfileId", profileId);
+        SetField(coordinator, "_session", new CancellationTokenSource());
+
+        await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
+        await ownerHandler.FirstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var priority = coordinator.RefreshOwnerProjectionAsync(selected.Id);
+        ownerHandler.ReleaseFirst.TrySetResult();
+
+        await priority.WaitAsync(TimeSpan.FromSeconds(5));
+        await GetField<Task>(coordinator, "_ownerAdoptionPass")
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(3, ownerHandler.OrderIds.Count);
+        Assert.Equal(selected.Id, ownerHandler.OrderIds[1]);
+        Assert.Equal(
+            new HashSet<Guid> { first.Id, second.Id },
+            ownerHandler.OrderIds.Where(orderId => orderId != selected.Id).ToHashSet());
     }
 
     [Theory]
@@ -491,6 +559,70 @@ public sealed class HostedOrderSyncCoordinatorTests
         }
     }
 
+    private sealed class PriorityOwnerHandler : HttpMessageHandler
+    {
+        private readonly IReadOnlyDictionary<Guid, CompanyCommissionOwnerProjection> _projections;
+        private readonly List<Guid> _orderIds = [];
+        private int _requestCount;
+
+        public PriorityOwnerHandler(IEnumerable<TradeOrder> orders)
+        {
+            _projections = orders.ToDictionary(
+                order => order.CompanyCommission!.CommissionId,
+                order => Projection(order, 1, 1));
+        }
+
+        public IReadOnlyList<Guid> OrderIds
+        {
+            get
+            {
+                lock (_orderIds)
+                {
+                    return _orderIds.ToArray();
+                }
+            }
+        }
+
+        public TaskCompletionSource FirstEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirst { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var segments = request.RequestUri!.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var commissionId = Guid.Parse(segments[^2]);
+            var projection = _projections[commissionId];
+            lock (_orderIds)
+            {
+                _orderIds.Add(projection.Order.Id);
+            }
+            if (Interlocked.Increment(ref _requestCount) == 1)
+            {
+                FirstEntered.TrySetResult();
+                await ReleaseFirst.Task.WaitAsync(cancellationToken);
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(projection)
+            };
+        }
+    }
+
+    private static TradeOrder CopyWithNewIdentity(TradeOrder source)
+    {
+        var copy = TradeOrderWorkflow.CopyOrder(source);
+        copy.Id = Guid.NewGuid();
+        copy.CompanyCommission = copy.CompanyCommission! with
+        {
+            CommissionId = Guid.NewGuid(),
+            Reference = $"CA-{Guid.NewGuid():N}"
+        };
+        return copy;
+    }
+
     private sealed class OwnerAdoptionRuntime(string profileId) : IJSRuntime
     {
         private readonly Dictionary<string, string> _settings = new(StringComparer.Ordinal)
@@ -502,6 +634,9 @@ public sealed class HostedOrderSyncCoordinatorTests
         };
 
         public TradeOrder? DurableOrder { get; private set; }
+        public int SaveTradeOrderCount { get; private set; }
+
+        public void SeedDurableOrder(TradeOrder order) => DurableOrder = order;
 
         public ValueTask<TValue> InvokeAsync<TValue>(
             string identifier,
@@ -544,6 +679,7 @@ public sealed class HostedOrderSyncCoordinatorTests
 
         private bool SaveOrder(TradeOrder order)
         {
+            SaveTradeOrderCount++;
             DurableOrder = order;
             return true;
         }

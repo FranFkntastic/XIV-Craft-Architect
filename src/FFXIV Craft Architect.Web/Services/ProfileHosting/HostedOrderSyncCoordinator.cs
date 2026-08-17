@@ -511,7 +511,8 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
                     cancellationToken.ThrowIfCancellationRequested();
                     var persisted = winner.Deleted
                         ? await _tradeOperations.DeleteOrderAsync(winner.OrderId)
-                        : await _tradeOperations.ApplyCanonicalOrderAsync(winner.Order!);
+                        : ReferenceEquals(winner.Order, current.Order) ||
+                          await _tradeOperations.ApplyCanonicalOrderAsync(winner.Order!);
                     if (!persisted)
                     {
                         throw new InvalidOperationException(

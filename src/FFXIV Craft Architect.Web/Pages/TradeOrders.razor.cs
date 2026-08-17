@@ -33,6 +33,8 @@ public partial class TradeOrders
     private List<TradeOrderArchiveSummaryRecord> _archiveSummaryRecords = [];
     private List<TradeOrderDeepArchiveRecord> _deepArchiveMatches = [];
     private readonly Dictionary<Guid, long> _orderHostedRevisions = [];
+    private string? _orderRevisionProfileId;
+    private string? _orderRevisionConnectionScopeId;
     private readonly HashSet<Guid> _fetchingArchiveOrderIds = [];
     private List<TradePayrollWorkflowDraft> _payrollDrafts = [];
     private TradeOrder? _pendingImport;
@@ -492,6 +494,8 @@ public partial class TradeOrders
             _orders = [];
             _archiveSummaryRecords = [];
             _orderHostedRevisions.Clear();
+            _orderRevisionProfileId = null;
+            _orderRevisionConnectionScopeId = null;
             _payrollDrafts = [];
             _selectedOrder = null;
             _selectedOrderProjectionRevision = null;
