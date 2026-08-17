@@ -1,6 +1,51 @@
 @using FFXIV_Craft_Architect.Web.Services.TradeCompany
 @inject CompanyHubClient HubClient
 @inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+
+<MudPaper Class="pa-3 mb-3">
+    <div class="d-flex align-center justify-space-between gap-2">
+        <div><MudText Typo="Typo.h6">Invite a crafter</MudText><MudText Typo="Typo.body2">Choose when the company invitation expires. No commission is required.</MudText></div>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(_issuingInvitation || !_invitationExpiresOn.HasValue)" OnClick="IssueInvitationAsync">Create invitation</MudButton>
+    </div>
+    @if (AvailableLegacyCrafters.Any())
+    {
+        <MudSelect T="Guid?" Label="Connect existing crafter history (optional)" Dense="true" Class="mt-2" @bind-Value="_invitationLegacyCrafterId" Clearable="true">
+            @foreach (var crafter in AvailableLegacyCrafters)
+            {
+                <MudSelectItem T="Guid?" Value="@((Guid?)crafter.LegacyCrafterId)">@CrafterLabel(crafter)</MudSelectItem>
+            }
+        </MudSelect>
+    }
+    <MudDatePicker Label="Invitation expires"
+                   Date="@_invitationExpiresOn"
+                   DateChanged="SetInvitationExpiry"
+                   MinDate="@DateTime.Today"
+                   MaxDate="@DateTime.Today.AddDays(365)"
+                   HelperText="Expires at the end of the selected day. Seven days is the default."
+                   Class="mt-2" />
+    @if (_issuedInvitation != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mt-2">
+            <div class="d-flex align-center justify-space-between gap-2">
+                <span>Invitation copied. It expires @_issuedInvitation.ExpiresAtUtc.ToLocalTime().ToString("g")@(_issuedInvitation.LegacyCrafterName == null ? "." : $" and will connect {_issuedInvitation.LegacyCrafterName}.")</span>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="CopyIssuedInvitationAsync">Copy again</MudButton>
+            </div>
+        </MudAlert>
+    }
+    @if (_invitations.Any(invitation => invitation.State == "active"))
+    {
+        <MudTable Items="@_invitations.Where(invitation => invitation.State == "active")" Dense="true" Hover="true" Class="mt-2">
+            <HeaderContent><MudTh>Invitation</MudTh><MudTh>Expires</MudTh><MudTh></MudTh></HeaderContent>
+            <RowTemplate>
+                <MudTd>@(context.LegacyCrafterName ?? "New company member")</MudTd>
+                <MudTd>@context.ExpiresAtUtc.ToLocalTime().ToString("g")</MudTd>
+                <MudTd><MudButton Size="Size.Small" Color="Color.Error" Variant="Variant.Text" OnClick="@(() => RevokeInvitationAsync(context.InvitationId))">Revoke</MudButton></MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+</MudPaper>
 
 <MudPaper Class="pa-3 mb-3">
     <MudText Typo="Typo.h6">Membership requests</MudText>
@@ -96,11 +141,16 @@
     private string _viewerRole = string.Empty;
     private IReadOnlyList<CompanyMembership> _requests = [];
     private IReadOnlyList<CompanyMember> _members = [];
+    private IReadOnlyList<CompanyMembershipInvitation> _invitations = [];
     private LegacyCrafterMigration _migration = new([], []);
     private readonly Dictionary<Guid, Guid?> _selectedLegacyCrafters = [];
     private Guid? _manageHistoryMemberId;
     private CompanyMember? _revokeMember;
     private string? _revokeReason;
+    private Guid? _invitationLegacyCrafterId;
+    private DateTime? _invitationExpiresOn = DateTime.Today.AddDays(7);
+    private CompanyMembershipInvitation? _issuedInvitation;
+    private bool _issuingInvitation;
     private IEnumerable<PendingMember> Pending => _requests.Join(_members, request => request.AccountProfileId, member => member.AccountProfileId, (request, member) => new PendingMember(request, member));
     private IEnumerable<CompanyMember> ActiveMembers => _members.Where(member => member.State == "active");
     private IEnumerable<LegacyCrafterCandidate> AvailableLegacyCrafters => _migration.LegacyCrafters.Where(crafter => _migration.Bindings.All(binding => binding.LegacyCrafterId != crafter.LegacyCrafterId));
@@ -113,13 +163,58 @@
         var requestsTask = HubClient.LoadPendingMembershipsAsync(CompanyId);
         var membersTask = HubClient.LoadCompanyMembersAsync(CompanyId);
         var migrationTask = HubClient.LoadLegacyCrafterMigrationAsync(CompanyId);
-        await Task.WhenAll(hubTask, requestsTask, membersTask, migrationTask);
+        var invitationsTask = HubClient.LoadMembershipInvitationsAsync(CompanyId);
+        await Task.WhenAll(hubTask, requestsTask, membersTask, migrationTask, invitationsTask);
         var hub = await hubTask;
         _viewerRole = hub?.Standing.Role ?? string.Empty;
         _requests = await requestsTask;
         _members = await membersTask;
         _migration = await migrationTask;
+        _invitations = await invitationsTask;
         _loading = false;
+    }
+    private async Task IssueInvitationAsync()
+    {
+        _issuingInvitation = true;
+        try
+        {
+            _issuedInvitation = await HubClient.IssueMembershipInvitationAsync(
+                CompanyId,
+                _invitationLegacyCrafterId,
+                InvitationExpiresAtUtc());
+            _invitationLegacyCrafterId = null;
+            await CopyIssuedInvitationAsync();
+            _invitations = await HubClient.LoadMembershipInvitationsAsync(CompanyId);
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
+        finally
+        {
+            _issuingInvitation = false;
+        }
+    }
+    private void SetInvitationExpiry(DateTime? value) =>
+        _invitationExpiresOn = value?.Date;
+    private DateTimeOffset InvitationExpiresAtUtc()
+    {
+        var selected = _invitationExpiresOn!.Value;
+        var endOfLocalDay = DateTime.SpecifyKind(selected.Date.AddDays(1).AddTicks(-1), DateTimeKind.Local);
+        return new DateTimeOffset(endOfLocalDay).ToUniversalTime();
+    }
+    private async Task CopyIssuedInvitationAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_issuedInvitation?.Token)) return;
+        var url = Navigation.ToAbsoluteUri($"companies/{Uri.EscapeDataString(CompanyId)}?invite={Uri.EscapeDataString(_issuedInvitation.Token)}").AbsoluteUri;
+        await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", url);
+        Snackbar.Add("Company invitation copied.", Severity.Success);
+    }
+    private async Task RevokeInvitationAsync(Guid invitationId)
+    {
+        await HubClient.RevokeMembershipInvitationAsync(CompanyId, invitationId);
+        _invitations = await HubClient.LoadMembershipInvitationsAsync(CompanyId);
+        Snackbar.Add("Invitation revoked.", Severity.Success);
     }
     private bool CanRevoke(CompanyMember member) => member.Role != "owner" || _viewerRole == "owner";
     private async Task TransitionAsync(Guid accountId, string action) { await HubClient.TransitionMembershipAsync(CompanyId, accountId, action); await LoadAsync(); Snackbar.Add($"Membership {action}d.", Severity.Success); }

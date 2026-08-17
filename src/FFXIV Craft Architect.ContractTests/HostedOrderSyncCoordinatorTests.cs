@@ -140,6 +140,10 @@ public sealed class HostedOrderSyncCoordinatorTests
     private static void DeletedAndNonCommissionOrdersNeverRequireAdoption()
     {
         var commissionOrder = CreateCommissionOrder();
+        var canceledCommissionOrder = TradeOrderWorkflow.CopyOrder(commissionOrder);
+        canceledCommissionOrder.Status = TradeOrderStatus.Canceled;
+        var completedCommissionOrder = TradeOrderWorkflow.CopyOrder(commissionOrder);
+        completedCommissionOrder.Status = TradeOrderStatus.Completed;
         var ordinaryOrder = new TradeOrder
         {
             Id = Guid.NewGuid(),
@@ -151,6 +155,10 @@ public sealed class HostedOrderSyncCoordinatorTests
             Snapshot(commissionOrder, 5, null) with { Deleted = true }));
         Assert.False(NeedsOwnerAdoption(
             Snapshot(ordinaryOrder, 5, null)));
+        Assert.False(NeedsOwnerAdoption(
+            Snapshot(canceledCommissionOrder, 5, null)));
+        Assert.False(NeedsOwnerAdoption(
+            Snapshot(completedCommissionOrder, 5, null)));
     }
 
     private static void MatchingProjectionAtCurrentOrNewerRevisionIsAccepted()

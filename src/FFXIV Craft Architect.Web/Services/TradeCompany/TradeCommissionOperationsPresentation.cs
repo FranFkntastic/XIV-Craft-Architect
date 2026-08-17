@@ -13,6 +13,30 @@ public static class TradeCommissionOperationsPresentation
     public const string ResolutionAttention = "resolution";
     public const string SyncAttention = "sync";
 
+    public static bool IsArchivedForAttention(
+        TradeOrder order,
+        CompanyCommissionOwnerProjection? projection)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+
+        if (order.Status == TradeOrderStatus.Canceled)
+        {
+            return true;
+        }
+
+        if (projection?.Order.CompanyCommission is { } commission)
+        {
+            return commission.IsClosed(projection.Order.Status);
+        }
+
+        if (order.CompanyCommission != null)
+        {
+            return false;
+        }
+
+        return TradeOrderStatusWorkflow.IsArchived(order.Status);
+    }
+
     public static string GetAttentionGroup(CompanyCommissionOwnerProjection projection)
     {
         var order = projection.Order;

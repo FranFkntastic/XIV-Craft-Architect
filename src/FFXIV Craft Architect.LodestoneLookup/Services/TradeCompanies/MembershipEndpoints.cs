@@ -9,6 +9,19 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 public sealed record MembershipRequestBody(string? RequestNote);
 public sealed record MembershipTransitionBody(string? Reason);
 public sealed record LegacyCrafterBindingBody(Guid AccountProfileId);
+public sealed record MembershipInvitationIssueBody(
+    Guid? LegacyCrafterId,
+    DateTimeOffset? ExpiresAtUtc);
+public sealed record MembershipInvitationResponse(
+    Guid InvitationId,
+    string CompanyId,
+    string CompanyName,
+    Guid? LegacyCrafterId,
+    string? LegacyCrafterName,
+    DateTimeOffset IssuedAtUtc,
+    DateTimeOffset ExpiresAtUtc,
+    string State,
+    string? Token);
 
 public sealed record MembershipResponse(
     string CompanyId,
@@ -360,6 +373,235 @@ public static class MembershipEndpoints
                 return result.Status == CrafterAccountBindingMutationStatus.NotFound
                     ? Results.NotFound()
                     : Results.NoContent();
+            });
+
+        companies.MapPost(
+            "/{companyId}/membership-invitations",
+            async (
+                string companyId,
+                MembershipInvitationIssueBody body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                LegacyCrafterAccountResolver crafterAccounts,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeCompanyAdministratorAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+                if (body.LegacyCrafterId.HasValue &&
+                    !await crafterAccounts.IsCompanyCrafterAsync(
+                        authorization.CompanyId,
+                        body.LegacyCrafterId.Value,
+                        cancellationToken))
+                {
+                    return Results.BadRequest(new MembershipErrorResponse(
+                        "invalid_invitation_seat",
+                        "Choose a crafter from this company or invite without existing history."));
+                }
+                if (body.LegacyCrafterId.HasValue &&
+                    (await memberships.LoadCrafterBindingsAsync(
+                        authorization.CompanyId,
+                        cancellationToken)).Any(binding =>
+                            binding.LegacyCrafterId == body.LegacyCrafterId.Value))
+                {
+                    return Results.Conflict(new MembershipErrorResponse(
+                        "invitation_seat_already_connected",
+                        "That crafter history is already connected to a company member."));
+                }
+                CompanyMembershipInvitation invitation;
+                try
+                {
+                    invitation = await memberships.IssueInvitationAsync(
+                        authorization.CompanyId,
+                        authorization.Account!.ProfileId,
+                        body.LegacyCrafterId,
+                        body.ExpiresAtUtc,
+                        cancellationToken);
+                }
+                catch (ArgumentOutOfRangeException exception)
+                {
+                    return Results.BadRequest(new MembershipErrorResponse(
+                        "invalid_invitation_expiry",
+                        exception.Message));
+                }
+                var company = await companyService.LoadPublicCompanyProfileAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                var legacyName = await ResolveLegacyCrafterNameAsync(
+                    crafterAccounts,
+                    invitation.CompanyId,
+                    invitation.LegacyCrafterId,
+                    cancellationToken);
+                return Results.Ok(ToInvitationResponse(invitation, company!.Name, legacyName));
+            });
+
+        companies.MapGet(
+            "/{companyId}/membership-invitations",
+            async (
+                string companyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                LegacyCrafterAccountResolver crafterAccounts,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeCompanyAdministratorAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+                var company = await companyService.LoadPublicCompanyProfileAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                var invitations = await memberships.LoadInvitationsAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                var response = new List<MembershipInvitationResponse>(invitations.Count);
+                foreach (var invitation in invitations)
+                {
+                    response.Add(ToInvitationResponse(
+                        invitation,
+                        company!.Name,
+                        await ResolveLegacyCrafterNameAsync(
+                            crafterAccounts,
+                            invitation.CompanyId,
+                            invitation.LegacyCrafterId,
+                            cancellationToken)));
+                }
+                return Results.Ok(response);
+            });
+
+        companies.MapDelete(
+            "/{companyId}/membership-invitations/{invitationId:guid}",
+            async (
+                string companyId,
+                Guid invitationId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeCompanyAdministratorAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+                return await memberships.RevokeInvitationAsync(
+                    authorization.CompanyId,
+                    invitationId,
+                    authorization.Account!.ProfileId,
+                    cancellationToken)
+                    ? Results.NoContent()
+                    : Results.NotFound();
+            });
+
+        app.MapGet(
+            "/trade/v1/membership-invitations/{token}",
+            async (
+                string token,
+                ProfileHostOptions options,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                LegacyCrafterAccountResolver crafterAccounts,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var invitation = await memberships.LoadInvitationAsync(token, cancellationToken);
+                if (invitation == null)
+                {
+                    return Results.NotFound();
+                }
+                var company = await companyService.LoadPublicCompanyProfileAsync(
+                    invitation.CompanyId,
+                    cancellationToken);
+                return company == null
+                    ? Results.NotFound()
+                    : Results.Ok(ToInvitationResponse(
+                        invitation,
+                        company.Name,
+                        await ResolveLegacyCrafterNameAsync(
+                            crafterAccounts,
+                            invitation.CompanyId,
+                            invitation.LegacyCrafterId,
+                            cancellationToken)));
+            });
+
+        app.MapPost(
+            "/trade/v1/membership-invitations/{token}/accept",
+            async (
+                string token,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                SqliteDiscordIdentityStore identities,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (await identities.LoadByProfileAsync(account.ProfileId, cancellationToken) == null)
+                {
+                    return Results.Json(
+                        new MembershipErrorResponse(
+                            "account_sign_in_required",
+                            "Sign in with Discord before accepting this invitation."),
+                        statusCode: StatusCodes.Status403Forbidden);
+                }
+                var result = await memberships.ConsumeInvitationAsync(
+                    token,
+                    account.ProfileId,
+                    cancellationToken);
+                return result.Status switch
+                {
+                    MembershipInvitationConsumptionStatus.Applied or
+                        MembershipInvitationConsumptionStatus.Replayed => Results.Ok(ToResponse(result.Membership!)),
+                    MembershipInvitationConsumptionStatus.BindingConflict => Results.Conflict(
+                        new MembershipErrorResponse(
+                            "invitation_history_conflict",
+                            "This crafter history was connected to another account before the invitation was accepted.")),
+                    _ => Results.Json(
+                        new MembershipErrorResponse(
+                            "invitation_unavailable",
+                            "This invitation is expired, revoked, or has already been used."),
+                        statusCode: StatusCodes.Status410Gone)
+                };
             });
 
         MapTransition(companies, "approve", static (store, companyId, accountId, actorId, _, ct) =>
@@ -854,6 +1096,36 @@ public static class MembershipEndpoints
             membership.DecidedByProfileId,
             membership.RequestNote,
             true);
+
+    private static MembershipInvitationResponse ToInvitationResponse(
+        CompanyMembershipInvitation invitation,
+        string companyName,
+        string? legacyCrafterName) =>
+        new(
+            invitation.InvitationId,
+            invitation.CompanyId.ToString(),
+            companyName,
+            invitation.LegacyCrafterId,
+            legacyCrafterName,
+            invitation.IssuedAtUtc,
+            invitation.ExpiresAtUtc,
+            invitation.State.ToString().ToLowerInvariant(),
+            invitation.Token);
+
+    private static async Task<string?> ResolveLegacyCrafterNameAsync(
+        LegacyCrafterAccountResolver crafterAccounts,
+        CompanyId companyId,
+        Guid? legacyCrafterId,
+        CancellationToken cancellationToken)
+    {
+        if (!legacyCrafterId.HasValue)
+        {
+            return null;
+        }
+        return (await crafterAccounts.LoadCandidatesAsync(companyId, cancellationToken))
+            .FirstOrDefault(candidate => candidate.LegacyCrafterId == legacyCrafterId.Value)
+            ?.DisplayName;
+    }
 
     private sealed record CompanyAuthorizationResult(
         CompanyId CompanyId,

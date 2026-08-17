@@ -69,7 +69,7 @@ public sealed class DiscordAccountContractTests
         await using var fixture = await DiscordAccountFixture.CreateAsync();
         fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Discord Crafter");
         using var client = fixture.CreateClient();
-        var returnPath = "/companies/sapphire-avenue";
+        var returnPath = "/companies/sapphire-avenue?invite=company_invitation_token";
         var start = await (await client.PostAsync(
                 $"/identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}",
                 null))
@@ -79,7 +79,8 @@ public sealed class DiscordAccountContractTests
         using var callback = await client.GetAsync(
             $"/identity/v1/signin/discord/callback?code=code&state={Uri.EscapeDataString(state!)}");
 
-        Assert.Equal(returnPath, callback.Headers.Location!.AbsolutePath);
+        Assert.Equal("/companies/sapphire-avenue", callback.Headers.Location!.AbsolutePath);
+        Assert.Equal("?invite=company_invitation_token", callback.Headers.Location.Query);
         Assert.StartsWith("#signin=", callback.Headers.Location.Fragment, StringComparison.Ordinal);
     }
 
@@ -364,8 +365,7 @@ public sealed class DiscordAccountContractTests
                     services.AddSingleton(new ProfileHostOptions
                     {
                         Enabled = true,
-                        DatabasePath = Path.Combine(root, "profiles.db"),
-                        ArchiveBackupDirectory = Path.Combine(root, "archive")
+                        DatabasePath = Path.Combine(root, "profiles.db")
                     });
                     services.AddSingleton(new DiscordIdentityOptions
                     {

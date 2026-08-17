@@ -226,6 +226,68 @@ public sealed class CompanyHubClient(
     public async Task<IReadOnlyList<CompanyMembership>> LoadPendingMembershipsAsync(string companyId, CancellationToken cancellationToken = default) =>
         await GetListAsync<CompanyMembership>($"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-requests", cancellationToken);
 
+    public async Task<IReadOnlyList<CompanyMembershipInvitation>> LoadMembershipInvitationsAsync(
+        string companyId,
+        CancellationToken cancellationToken = default) =>
+        await GetListAsync<CompanyMembershipInvitation>(
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-invitations",
+            cancellationToken);
+
+    public async Task<CompanyMembershipInvitation> IssueMembershipInvitationAsync(
+        string companyId,
+        Guid? legacyCrafterId,
+        DateTimeOffset expiresAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-invitations",
+            new { LegacyCrafterId = legacyCrafterId, ExpiresAtUtc = expiresAtUtc },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<CompanyMembershipInvitation>(JsonOptions, cancellationToken))!;
+    }
+
+    public async Task RevokeMembershipInvitationAsync(
+        string companyId,
+        Guid invitationId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Delete,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-invitations/{invitationId:D}",
+            null,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<CompanyMembershipInvitation?> LoadMembershipInvitationAsync(
+        string token,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/membership-invitations/{Uri.EscapeDataString(token)}",
+            null,
+            cancellationToken);
+        return response.StatusCode == HttpStatusCode.NotFound
+            ? null
+            : await response.EnsureSuccessStatusCode().Content.ReadFromJsonAsync<CompanyMembershipInvitation>(JsonOptions, cancellationToken);
+    }
+
+    public async Task<CompanyMembership> AcceptMembershipInvitationAsync(
+        string token,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/membership-invitations/{Uri.EscapeDataString(token)}/accept",
+            null,
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<CompanyMembership>(JsonOptions, cancellationToken))!;
+    }
+
     public async Task TransitionMembershipAsync(string companyId, Guid accountProfileId, string action, string? reason = null, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(HttpMethod.Post, $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/memberships/{accountProfileId:D}/{action}", reason == null ? null : new { Reason = reason }, cancellationToken);
@@ -398,6 +460,16 @@ public sealed record CompanyHubCommissionAttention(Guid EventId, long Revision, 
 public sealed record CompanyHubAttentionRead(long ReadRevision);
 public sealed record CompanyHubRosterMember(string DisplayName, string Role);
 public sealed record CompanyMembership(string CompanyId, Guid AccountProfileId, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, Guid? DecidedByProfileId, string? RequestNote, bool HasMembership);
+public sealed record CompanyMembershipInvitation(
+    Guid InvitationId,
+    string CompanyId,
+    string CompanyName,
+    Guid? LegacyCrafterId,
+    string? LegacyCrafterName,
+    DateTimeOffset IssuedAtUtc,
+    DateTimeOffset ExpiresAtUtc,
+    string State,
+    string? Token);
 public sealed record CompanyMembershipNotifications(
     string CompanyId,
     bool ActionRequired,

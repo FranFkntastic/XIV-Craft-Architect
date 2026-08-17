@@ -848,7 +848,6 @@ public sealed class CompanyMemberCommissionContractTests
                     {
                         ["ProfileHost:Enabled"] = "true",
                         ["ProfileHost:DatabasePath"] = Path.Combine(root, "profiles.db"),
-                        ["ProfileHost:ArchiveBackupDirectory"] = Path.Combine(root, "archive"),
                         ["TradeMemberships:DatabasePath"] = Path.Combine(root, "memberships.db"),
                         ["CommissionBriefs:Enabled"] = "true",
                         ["CommissionBriefs:DatabasePath"] = Path.Combine(root, "briefs.db"),

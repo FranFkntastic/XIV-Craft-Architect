@@ -63,6 +63,115 @@ public partial class TradeOrders
             order.Order != null && OrderMatchesSearch(order.Order);
     }
 
+    private async Task OnOrderSearchChangedAsync(string value)
+    {
+        _orderSearchText = value;
+        _deepArchiveSearchCancellation?.Cancel();
+        _deepArchiveSearchCancellation?.Dispose();
+        _deepArchiveSearchCancellation = null;
+        _deepArchiveMatches = [];
+        _deepArchiveConnectionScopeId = null;
+        _deepArchiveHasMore = false;
+        _deepArchiveSearchError = null;
+        _isSearchingDeepArchive = false;
+
+        var query = value.Trim();
+        if (query.Length < 2)
+        {
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _deepArchiveSearchCancellation = cancellation;
+        try
+        {
+            await Task.Delay(300, cancellation.Token);
+            _isSearchingDeepArchive = true;
+            await InvokeAsync(StateHasChanged);
+            await FetchDeepArchivePageAsync(query, 0, append: false, cancellation.Token);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            _deepArchiveSearchError = "Older order history is unavailable right now.";
+        }
+        finally
+        {
+            if (ReferenceEquals(_deepArchiveSearchCancellation, cancellation))
+            {
+                _isSearchingDeepArchive = false;
+                if (!_isDisposed)
+                {
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+    }
+
+    private async Task LoadMoreDeepArchiveAsync()
+    {
+        var query = _orderSearchText.Trim();
+        if (!_deepArchiveHasMore || _isSearchingDeepArchive || query.Length < 2)
+        {
+            return;
+        }
+        _isSearchingDeepArchive = true;
+        _deepArchiveSearchError = null;
+        try
+        {
+            await FetchDeepArchivePageAsync(
+                query,
+                _deepArchiveMatches.Count,
+                append: true,
+                CancellationToken.None);
+        }
+        catch
+        {
+            _deepArchiveSearchError = "Older order history is unavailable right now.";
+        }
+        finally
+        {
+            _isSearchingDeepArchive = false;
+        }
+    }
+
+    private async Task FetchDeepArchivePageAsync(
+        string query,
+        int offset,
+        bool append,
+        CancellationToken cancellationToken)
+    {
+        var connection = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+        if (!connection.IsConfigured)
+        {
+            return;
+        }
+        var page = await ProfileHostClient.SearchDeepArchivedOrdersAsync(
+            connection.HostUrl!,
+            connection.AccessKey!,
+            query,
+            offset,
+            20,
+            cancellationToken);
+        var current = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+        if (!HasSameArchiveFetchAuthority(connection, current) ||
+            !string.Equals(query, _orderSearchText.Trim(), StringComparison.Ordinal))
+        {
+            return;
+        }
+        _deepArchiveMatches = append
+            ? _deepArchiveMatches
+                .Concat(page.Orders)
+                .GroupBy(record => record.OrderId)
+                .Select(group => group.OrderByDescending(record => record.HostedRevision).First())
+                .ToList()
+            : page.Orders.ToList();
+        _deepArchiveHasMore = page.HasMore;
+        _deepArchiveConnectionScopeId = connection.ConnectionScopeId;
+    }
+
     private string GetRailOrderClass(TradeOrder order)
     {
         return _selectedOrder?.Id == order.Id
@@ -128,7 +237,7 @@ public partial class TradeOrders
         };
 
     private static string FormatArchiveOrderDate(ArchivedOrderRow order) =>
-        order.CommissionedAtUtc.ToLocalTime().ToString("yyyy-MM-dd");
+        $"{(order.DeepArchiveRecord == null ? string.Empty : "Older · ")}{order.CommissionedAtUtc.ToLocalTime():yyyy-MM-dd}";
 
     private static string FormatArchiveOrderOutputs(ArchivedOrderRow order) =>
         order.OutputNames.Count == 0
@@ -145,7 +254,8 @@ public partial class TradeOrders
             SelectOrder(row.Order);
             return;
         }
-        if (row.SummaryRecord == null || !_fetchingArchiveOrderIds.Add(row.OrderId))
+        if (row.SummaryRecord == null && row.DeepArchiveRecord == null ||
+            !_fetchingArchiveOrderIds.Add(row.OrderId))
         {
             return;
         }
@@ -158,9 +268,11 @@ public partial class TradeOrders
                 throw new InvalidOperationException(
                     "Connect to the hosted profile before opening this archived order.");
             }
+            var expectedScopeId = row.SummaryRecord?.ConnectionScopeId
+                ?? _deepArchiveConnectionScopeId;
             if (!string.Equals(
                     connection.ConnectionScopeId,
-                    row.SummaryRecord.ConnectionScopeId,
+                    expectedScopeId,
                     StringComparison.Ordinal))
             {
                 return;
@@ -622,23 +734,14 @@ public partial class TradeOrders
         DateTime CommissionedAtUtc,
         IReadOnlyList<string> OutputNames,
         TradeOrder? Order,
-        TradeOrderArchiveSummaryRecord? SummaryRecord);
+        TradeOrderArchiveSummaryRecord? SummaryRecord,
+        TradeOrderDeepArchiveRecord? DeepArchiveRecord);
 
     private bool IsOrderArchivedForAttention(TradeOrder order)
     {
-        if (CommissionOperations.GetForOrder(order.Id) is { } projection &&
-            projection.Order.CompanyCommission is { } commission)
-        {
-            return order.Status == TradeOrderStatus.Canceled ||
-                commission.IsClosed(projection.Order.Status);
-        }
-
-        if (order.CompanyCommission != null)
-        {
-            return false;
-        }
-
-        return TradeOrderStatusWorkflow.IsArchived(order.Status);
+        return TradeCommissionOperationsPresentation.IsArchivedForAttention(
+            order,
+            CommissionOperations.GetForOrder(order.Id));
     }
 
     private string GetOrderAttentionKey(TradeOrder order)

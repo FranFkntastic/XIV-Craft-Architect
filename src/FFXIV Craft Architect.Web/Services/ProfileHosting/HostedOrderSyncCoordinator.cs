@@ -600,6 +600,7 @@ public sealed class HostedOrderSyncCoordinator : IAsyncDisposable
     internal static bool NeedsOwnerAdoption(HostedOrderProjectionSnapshot snapshot) =>
         !snapshot.Deleted &&
         snapshot.Order?.CompanyCommission != null &&
+        !TradeOrderStatusWorkflow.IsArchived(snapshot.Order.Status) &&
         (snapshot.OwnerProjection == null ||
          snapshot.OwnerProjection.ObjectRevision.Value < snapshot.ObjectRevision);
 

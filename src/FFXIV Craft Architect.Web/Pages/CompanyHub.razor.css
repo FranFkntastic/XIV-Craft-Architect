@@ -71,6 +71,7 @@
 .button:disabled { cursor: wait; opacity: .55; }
 .button.primary, .tokens .selected { color: #fff; border-color: var(--hub-accent); background: var(--hub-accent); }
 .button.quiet { background: transparent; }
+.link-copy { display: inline-flex; align-items: center; gap: 5px; }
 
 .customize {
     display: grid;
@@ -112,6 +113,8 @@
 .section-title h2, .commission-detail h2 { font-size: 17px; }
 .section-title span, .detail-reference { color: #969696; font-size: 11px; }
 .section-actions { display: flex; gap: 7px; }
+.section-link { display: inline-flex; align-items: center; gap: 2px; color: #9fc6ee; font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.section-link:hover, .section-link:focus-visible { color: #d3e8ff; text-decoration: underline; }
 
 .updates-grid { display: grid; grid-template-columns: 1.3fr .7fr; min-height: 220px; }
 .featured-update { padding: 20px; border-right: 1px solid #3a3a3a; }

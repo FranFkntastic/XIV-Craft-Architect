@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Security.Cryptography;
 using FFXIV_Craft_Architect.Core.Models;
 using Microsoft.Data.Sqlite;
 
@@ -70,6 +71,40 @@ public sealed record MembershipMutationResult(
     MembershipMutationStatus Status,
     CompanyMembership? Membership = null);
 
+public enum MembershipInvitationState
+{
+    Active,
+    Expired,
+    Revoked,
+    Consumed
+}
+
+public enum MembershipInvitationConsumptionStatus
+{
+    Applied,
+    Replayed,
+    Unavailable,
+    BindingConflict
+}
+
+public sealed record CompanyMembershipInvitation(
+    Guid InvitationId,
+    CompanyId CompanyId,
+    Guid? LegacyCrafterId,
+    Guid IssuedByProfileId,
+    DateTimeOffset IssuedAtUtc,
+    DateTimeOffset ExpiresAtUtc,
+    DateTimeOffset? RevokedAtUtc,
+    Guid? RevokedByProfileId,
+    DateTimeOffset? ConsumedAtUtc,
+    Guid? ConsumedByProfileId,
+    MembershipInvitationState State,
+    string? Token = null);
+
+public sealed record MembershipInvitationConsumptionResult(
+    MembershipInvitationConsumptionStatus Status,
+    CompanyMembership? Membership = null);
+
 public enum CrafterAccountBindingEvidence
 {
     CommittedDiscordClaim,
@@ -124,8 +159,291 @@ public sealed class SqliteMembershipStore(
     ILogger<SqliteMembershipStore> logger) : ITradeCompanyFounderBinder
 {
     public const int MaximumRequestNoteLength = 500;
+    public static readonly TimeSpan DefaultInvitationLifetime = TimeSpan.FromDays(7);
+    public static readonly TimeSpan MinimumInvitationLifetime = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan MaximumInvitationLifetime = TimeSpan.FromDays(366);
     private readonly SemaphoreSlim schemaGate = new(1, 1);
     private bool schemaReady;
+
+    public async Task<CompanyMembershipInvitation> IssueInvitationAsync(
+        CompanyId companyId,
+        Guid issuedByProfileId,
+        Guid? legacyCrafterId,
+        DateTimeOffset? expiresAtUtc = null,
+        CancellationToken cancellationToken = default)
+    {
+        RequireIdentity(companyId, issuedByProfileId);
+        var invitationId = Guid.NewGuid();
+        var token = ToBase64Url(RandomNumberGenerator.GetBytes(32));
+        var tokenHash = HashToken(token);
+        var issuedAt = timeProvider.GetUtcNow();
+        var expiresAt = (expiresAtUtc ?? issuedAt + DefaultInvitationLifetime).ToUniversalTime();
+        if (expiresAt < issuedAt + MinimumInvitationLifetime ||
+            expiresAt > issuedAt + MaximumInvitationLifetime)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(expiresAtUtc),
+                $"Invitation expiry must be between {MinimumInvitationLifetime.TotalMinutes:N0} minutes and {MaximumInvitationLifetime.TotalDays:N0} days from now.");
+        }
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO company_membership_invitations (
+                    invitation_id, token_hash, company_id, legacy_crafter_id,
+                    issued_by_profile_id, issued_at_utc, expires_at_utc)
+                VALUES (
+                    $invitationId, $tokenHash, $companyId, $legacyCrafterId,
+                    $issuedBy, $issuedAt, $expiresAt);
+                """;
+            command.Parameters.AddWithValue("$invitationId", invitationId.ToString("D"));
+            command.Parameters.AddWithValue("$tokenHash", tokenHash);
+            command.Parameters.AddWithValue("$companyId", companyId.ToString());
+            command.Parameters.AddWithValue("$legacyCrafterId", legacyCrafterId?.ToString("D") ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("$issuedBy", issuedByProfileId.ToString("D"));
+            command.Parameters.AddWithValue("$issuedAt", issuedAt.ToString("O"));
+            command.Parameters.AddWithValue("$expiresAt", expiresAt.ToString("O"));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await InsertInvitationEventAsync(
+            connection,
+            transaction,
+            invitationId,
+            companyId,
+            "issued",
+            issuedByProfileId,
+            issuedAt,
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new CompanyMembershipInvitation(
+            invitationId,
+            companyId,
+            legacyCrafterId,
+            issuedByProfileId,
+            issuedAt,
+            expiresAt,
+            null,
+            null,
+            null,
+            null,
+            MembershipInvitationState.Active,
+            token);
+    }
+
+    public async Task<IReadOnlyList<CompanyMembershipInvitation>> LoadInvitationsAsync(
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT invitation_id, company_id, legacy_crafter_id, issued_by_profile_id,
+                   issued_at_utc, expires_at_utc, revoked_at_utc, revoked_by_profile_id,
+                   consumed_at_utc, consumed_by_profile_id
+            FROM company_membership_invitations
+            WHERE company_id = $companyId
+            ORDER BY issued_at_utc DESC;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        var invitations = new List<CompanyMembershipInvitation>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            invitations.Add(ReadInvitation(reader, timeProvider.GetUtcNow()));
+        }
+        return invitations;
+    }
+
+    public async Task<CompanyMembershipInvitation?> LoadInvitationAsync(
+        string token,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsValidInvitationToken(token))
+        {
+            return null;
+        }
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT invitation_id, company_id, legacy_crafter_id, issued_by_profile_id,
+                   issued_at_utc, expires_at_utc, revoked_at_utc, revoked_by_profile_id,
+                   consumed_at_utc, consumed_by_profile_id
+            FROM company_membership_invitations
+            WHERE token_hash = $tokenHash;
+            """;
+        command.Parameters.AddWithValue("$tokenHash", HashToken(token));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? ReadInvitation(reader, timeProvider.GetUtcNow())
+            : null;
+    }
+
+    public async Task<bool> RevokeInvitationAsync(
+        CompanyId companyId,
+        Guid invitationId,
+        Guid revokedByProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE company_membership_invitations
+            SET revoked_at_utc = $revokedAt, revoked_by_profile_id = $revokedBy
+            WHERE invitation_id = $invitationId AND company_id = $companyId
+              AND revoked_at_utc IS NULL AND consumed_at_utc IS NULL;
+            """;
+        command.Parameters.AddWithValue("$revokedAt", now.ToString("O"));
+        command.Parameters.AddWithValue("$revokedBy", revokedByProfileId.ToString("D"));
+        command.Parameters.AddWithValue("$invitationId", invitationId.ToString("D"));
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        var changed = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        if (changed)
+        {
+            await InsertInvitationEventAsync(
+                connection,
+                transaction,
+                invitationId,
+                companyId,
+                "revoked",
+                revokedByProfileId,
+                now,
+                cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return changed;
+    }
+
+    public async Task<MembershipInvitationConsumptionResult> ConsumeInvitationAsync(
+        string token,
+        Guid accountProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsValidInvitationToken(token) || accountProfileId == Guid.Empty)
+        {
+            return new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.Unavailable);
+        }
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var invitation = await LoadInvitationAsync(
+            connection,
+            transaction,
+            HashToken(token),
+            cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        if (invitation == null || invitation.RevokedAtUtc != null || invitation.ExpiresAtUtc <= now)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.Unavailable);
+        }
+        if (invitation.ConsumedAtUtc != null)
+        {
+            var replayed = invitation.ConsumedByProfileId == accountProfileId
+                ? await LoadAsync(connection, transaction, invitation.CompanyId, accountProfileId, cancellationToken)
+                : null;
+            await transaction.CommitAsync(cancellationToken);
+            return replayed is not { State: MembershipState.Active }
+                ? new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.Unavailable)
+                : new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.Replayed, replayed);
+        }
+
+        if (invitation.LegacyCrafterId.HasValue &&
+            await HasConflictingCrafterBindingAsync(
+                connection,
+                transaction,
+                invitation.CompanyId,
+                invitation.LegacyCrafterId.Value,
+                accountProfileId,
+                cancellationToken))
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.BindingConflict);
+        }
+
+        var existing = await LoadAsync(
+            connection,
+            transaction,
+            invitation.CompanyId,
+            accountProfileId,
+            cancellationToken);
+        var membership = existing is { State: MembershipState.Active }
+            ? existing
+            : new CompanyMembership(
+                invitation.CompanyId,
+                accountProfileId,
+                MembershipRole.Crafter,
+                MembershipState.Active,
+                now,
+                now,
+                invitation.IssuedByProfileId,
+                "Joined by company invitation");
+        if (existing is not { State: MembershipState.Active })
+        {
+            await UpsertMembershipAsync(connection, transaction, membership, cancellationToken);
+            await InsertEventAsync(
+                connection,
+                transaction,
+                existing?.State,
+                membership,
+                accountProfileId,
+                now,
+                "Accepted company invitation",
+                cancellationToken);
+        }
+        if (invitation.LegacyCrafterId.HasValue)
+        {
+            await UpsertInvitationCrafterBindingAsync(
+                connection,
+                transaction,
+                invitation,
+                accountProfileId,
+                now,
+                cancellationToken);
+        }
+        await using (var consume = connection.CreateCommand())
+        {
+            consume.Transaction = transaction;
+            consume.CommandText = """
+                UPDATE company_membership_invitations
+                SET consumed_at_utc = $consumedAt, consumed_by_profile_id = $consumedBy
+                WHERE invitation_id = $invitationId AND consumed_at_utc IS NULL;
+                """;
+            consume.Parameters.AddWithValue("$consumedAt", now.ToString("O"));
+            consume.Parameters.AddWithValue("$consumedBy", accountProfileId.ToString("D"));
+            consume.Parameters.AddWithValue("$invitationId", invitation.InvitationId.ToString("D"));
+            if (await consume.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.Unavailable);
+            }
+        }
+        await InsertInvitationEventAsync(
+            connection,
+            transaction,
+            invitation.InvitationId,
+            invitation.CompanyId,
+            "consumed",
+            accountProfileId,
+            now,
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.Applied, membership);
+    }
 
     public async Task<IReadOnlyList<CrafterAccountBinding>> LoadCrafterBindingsAsync(
         CompanyId companyId,
@@ -1038,6 +1356,152 @@ public sealed class SqliteMembershipStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    private static async Task UpsertMembershipAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyMembership membership,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO company_memberships (
+                company_id, account_profile_id, role, state, requested_at_utc,
+                decided_at_utc, decided_by_profile_id, request_note)
+            VALUES (
+                $companyId, $accountProfileId, $role, $state, $requestedAtUtc,
+                $decidedAtUtc, $decidedByProfileId, $requestNote)
+            ON CONFLICT(company_id, account_profile_id) DO UPDATE SET
+                role = excluded.role,
+                state = excluded.state,
+                requested_at_utc = excluded.requested_at_utc,
+                decided_at_utc = excluded.decided_at_utc,
+                decided_by_profile_id = excluded.decided_by_profile_id,
+                request_note = excluded.request_note;
+            """;
+        AddMembershipIdentity(command, membership.CompanyId, membership.AccountProfileId);
+        command.Parameters.AddWithValue("$role", ToStorage(membership.Role));
+        command.Parameters.AddWithValue("$state", ToStorage(membership.State));
+        command.Parameters.AddWithValue("$requestedAtUtc", membership.RequestedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$decidedAtUtc", membership.DecidedAtUtc?.ToString("O") ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$decidedByProfileId", membership.DecidedByProfileId?.ToString("D") ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$requestNote", membership.RequestNote ?? (object)DBNull.Value);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<CompanyMembershipInvitation?> LoadInvitationAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string tokenHash,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT invitation_id, company_id, legacy_crafter_id, issued_by_profile_id,
+                   issued_at_utc, expires_at_utc, revoked_at_utc, revoked_by_profile_id,
+                   consumed_at_utc, consumed_by_profile_id
+            FROM company_membership_invitations
+            WHERE token_hash = $tokenHash;
+            """;
+        command.Parameters.AddWithValue("$tokenHash", tokenHash);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? ReadInvitation(reader, DateTimeOffset.MinValue)
+            : null;
+    }
+
+    private static async Task<bool> HasConflictingCrafterBindingAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyId companyId,
+        Guid legacyCrafterId,
+        Guid accountProfileId,
+        CancellationToken cancellationToken)
+    {
+        var binding = await LoadCrafterBindingAsync(
+            connection,
+            transaction,
+            companyId,
+            legacyCrafterId,
+            cancellationToken);
+        return binding != null && binding.AccountProfileId != accountProfileId;
+    }
+
+    private static async Task UpsertInvitationCrafterBindingAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyMembershipInvitation invitation,
+        Guid accountProfileId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO company_crafter_account_bindings (
+                    company_id, legacy_crafter_id, account_profile_id, evidence_kind,
+                    actor_profile_id, created_at_utc, updated_at_utc)
+                VALUES (
+                    $companyId, $legacyCrafterId, $accountProfileId, 'operator_confirmed',
+                    $actorProfileId, $createdAtUtc, $updatedAtUtc)
+                ON CONFLICT(company_id, legacy_crafter_id) DO UPDATE SET
+                    updated_at_utc = excluded.updated_at_utc;
+                """;
+            command.Parameters.AddWithValue("$companyId", invitation.CompanyId.ToString());
+            command.Parameters.AddWithValue("$legacyCrafterId", invitation.LegacyCrafterId!.Value.ToString("D"));
+            command.Parameters.AddWithValue("$accountProfileId", accountProfileId.ToString("D"));
+            command.Parameters.AddWithValue("$actorProfileId", invitation.IssuedByProfileId.ToString("D"));
+            command.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
+            command.Parameters.AddWithValue("$updatedAtUtc", now.ToString("O"));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await using var eventCommand = connection.CreateCommand();
+        eventCommand.Transaction = transaction;
+        eventCommand.CommandText = """
+            INSERT INTO company_crafter_account_binding_events (
+                event_id, company_id, legacy_crafter_id, account_profile_id,
+                action, evidence_kind, actor_profile_id, created_at_utc)
+            VALUES (
+                $eventId, $companyId, $legacyCrafterId, $accountProfileId,
+                'bound', 'operator_confirmed', $actorProfileId, $createdAtUtc);
+            """;
+        eventCommand.Parameters.AddWithValue("$eventId", Guid.NewGuid().ToString("D"));
+        eventCommand.Parameters.AddWithValue("$companyId", invitation.CompanyId.ToString());
+        eventCommand.Parameters.AddWithValue("$legacyCrafterId", invitation.LegacyCrafterId!.Value.ToString("D"));
+        eventCommand.Parameters.AddWithValue("$accountProfileId", accountProfileId.ToString("D"));
+        eventCommand.Parameters.AddWithValue("$actorProfileId", invitation.IssuedByProfileId.ToString("D"));
+        eventCommand.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
+        await eventCommand.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InsertInvitationEventAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid invitationId,
+        CompanyId companyId,
+        string action,
+        Guid actorProfileId,
+        DateTimeOffset createdAtUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO company_membership_invitation_events (
+                event_id, invitation_id, company_id, action, actor_profile_id, created_at_utc)
+            VALUES ($eventId, $invitationId, $companyId, $action, $actorProfileId, $createdAtUtc);
+            """;
+        command.Parameters.AddWithValue("$eventId", Guid.NewGuid().ToString("D"));
+        command.Parameters.AddWithValue("$invitationId", invitationId.ToString("D"));
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$action", action);
+        command.Parameters.AddWithValue("$actorProfileId", actorProfileId.ToString("D"));
+        command.Parameters.AddWithValue("$createdAtUtc", createdAtUtc.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private async Task EnsureSchemaAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
@@ -1094,6 +1558,32 @@ public sealed class SqliteMembershipStore(
                     ON company_memberships(account_profile_id, state);
                 CREATE INDEX IF NOT EXISTS ix_membership_events_company_account
                     ON membership_events(company_id, account_profile_id, created_at_utc);
+
+                CREATE TABLE IF NOT EXISTS company_membership_invitations (
+                    invitation_id TEXT PRIMARY KEY,
+                    token_hash TEXT NOT NULL UNIQUE,
+                    company_id TEXT NOT NULL,
+                    legacy_crafter_id TEXT NULL,
+                    issued_by_profile_id TEXT NOT NULL,
+                    issued_at_utc TEXT NOT NULL,
+                    expires_at_utc TEXT NOT NULL,
+                    revoked_at_utc TEXT NULL,
+                    revoked_by_profile_id TEXT NULL,
+                    consumed_at_utc TEXT NULL,
+                    consumed_by_profile_id TEXT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_company_membership_invitations_company
+                    ON company_membership_invitations(company_id, issued_at_utc);
+
+                CREATE TABLE IF NOT EXISTS company_membership_invitation_events (
+                    event_id TEXT PRIMARY KEY,
+                    invitation_id TEXT NOT NULL,
+                    company_id TEXT NOT NULL,
+                    action TEXT NOT NULL CHECK(action IN ('issued', 'revoked', 'consumed')),
+                    actor_profile_id TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL
+                );
 
                 CREATE TABLE IF NOT EXISTS membership_commission_attention (
                     company_id TEXT NOT NULL,
@@ -1442,6 +1932,48 @@ public sealed class SqliteMembershipStore(
              ReadNotificationPreference(reader, 9, 8),
              ReadNotificationPreference(reader, 10, 8),
              ReadNotificationPreference(reader, 11, 8));
+
+    private static CompanyMembershipInvitation ReadInvitation(
+        SqliteDataReader reader,
+        DateTimeOffset now)
+    {
+        var expiresAt = DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture);
+        DateTimeOffset? revokedAt = reader.IsDBNull(6)
+            ? null
+            : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture);
+        DateTimeOffset? consumedAt = reader.IsDBNull(8)
+            ? null
+            : DateTimeOffset.Parse(reader.GetString(8), CultureInfo.InvariantCulture);
+        var state = consumedAt != null
+            ? MembershipInvitationState.Consumed
+            : revokedAt != null
+                ? MembershipInvitationState.Revoked
+                : expiresAt <= now
+                    ? MembershipInvitationState.Expired
+                    : MembershipInvitationState.Active;
+        return new CompanyMembershipInvitation(
+            Guid.Parse(reader.GetString(0)),
+            ParseCompanyId(reader.GetString(1)),
+            reader.IsDBNull(2) ? null : Guid.Parse(reader.GetString(2)),
+            Guid.Parse(reader.GetString(3)),
+            DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
+            expiresAt,
+            revokedAt,
+            reader.IsDBNull(7) ? null : Guid.Parse(reader.GetString(7)),
+            consumedAt,
+            reader.IsDBNull(9) ? null : Guid.Parse(reader.GetString(9)),
+            state);
+    }
+
+    private static string HashToken(string token) =>
+        Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
+    private static bool IsValidInvitationToken(string? token) =>
+        !string.IsNullOrWhiteSpace(token) && token.Length is >= 40 and <= 128 &&
+        token.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+
+    private static string ToBase64Url(byte[] value) =>
+        Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static bool ReadNotificationPreference(
         SqliteDataReader reader,

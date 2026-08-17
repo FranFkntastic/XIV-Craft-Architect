@@ -5,6 +5,7 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using FFXIV_Craft_Architect.Web.Pages;
+using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class CompanyCommissionProjectionPresentationContractTests
@@ -74,6 +75,10 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Omits(procurementSource, "IsRequestedOutputReferenceRow");
         Contains(ReadWebSource(repositoryRoot, "Services", "TradeProcurementRowBuilder.cs"), "output.MustBeHq == row.RequiresHq");
         Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"), "Rebuild from Requested Outputs", "isSameLinkedPlan", "if (!isSameOrder)");
+        Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"),
+            "if (query.Length < 2)",
+            "SearchDeepArchivedOrdersAsync",
+            "GroupBy(record => record.OrderId)");
         var lifecycleSource = ReadWebSource(repositoryRoot, "Services", "TradeCompany", "TradeOrderLifecycleService.cs");
         var cancelDraft = lifecycleSource.IndexOf("commissions.CancelDraftAsync(", StringComparison.Ordinal); var deleteDraft = lifecycleSource.IndexOf("canceled.ObjectRevision.Value", cancelDraft, StringComparison.Ordinal);
         Assert.True(cancelDraft >= 0 && deleteDraft > cancelDraft);
@@ -83,6 +88,15 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             ".trade-orders-timeline-filter:focus-visible",
             ".trade-orders-timeline-visibility button:focus-visible",
             "outline: 2px solid #f0cc62");
+        Contains(source,
+            "class=\"@($\"{GetRailOrderClass(order)} is-archive\")\"",
+            "trade-orders-rail-meta is-date",
+            "trade-orders-rail-meta is-outputs",
+            "ValueChanged=\"OnOrderSearchChangedAsync\"");
+        Contains(pageStyles,
+            ".trade-orders-rail-order.is-archive {\n  grid-template-areas:\n    \"title chip\"\n    \"date chip\"\n    \"outputs chip\";\n}",
+            ".trade-orders-rail-order.is-archive .trade-orders-rail-meta.is-date {\n  grid-area: date;\n}",
+            ".trade-orders-rail-order.is-archive .trade-orders-rail-meta.is-outputs {\n  grid-area: outputs;\n}");
         Contains(pageStyles,
             ".trade-orders-page {\n  box-sizing: border-box;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  height: calc(100vh - 112px);\n  max-width: none !important;\n  padding: 12px 16px;\n  overflow: hidden;\n}",
             ".trade-orders-board {\n  display: grid;\n  flex: 1 1 auto;\n  grid-template-columns: 280px minmax(640px, 1fr) 6px var(--trade-orders-ops-width, clamp(720px, 32vw, 860px));\n  gap: 0;\n  height: auto;\n  min-height: 0;\n}",
@@ -105,6 +119,10 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             .GetMethod("BuildCenterProgress", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [order, commission])!;
         Assert.Equal("Crafting", status);
         Assert.Contains(progress, step => step.Label == "Crafting" && step.State == "Current" && step.IsCurrent);
+
+        var canceled = TradeOrderWorkflow.CopyOrder(order);
+        canceled.Status = TradeOrderStatus.Canceled;
+        Assert.True(TradeCommissionOperationsPresentation.IsArchivedForAttention(canceled, null));
     }
     private static TradeCompanyCommission CreateClearedAssignedCommission()
     {

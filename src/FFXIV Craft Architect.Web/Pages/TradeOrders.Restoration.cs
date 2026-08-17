@@ -53,6 +53,7 @@ public partial class TradeOrders
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .ToArray(),
                     order,
+                    null,
                     null));
 
         foreach (var record in _archiveSummaryRecords.Where(record =>
@@ -77,6 +78,34 @@ public partial class TradeOrders
                     .Where(name => !string.IsNullOrWhiteSpace(name))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray(),
+                null,
+                record,
+                null);
+        }
+
+        foreach (var record in _deepArchiveMatches.Where(record =>
+                     _companyProfile != null &&
+                     record.Summary.CompanyProfileId == _companyProfile.Id &&
+                     TradeOrderStatusWorkflow.IsArchived(record.Summary.Status)))
+        {
+            if (VisibleOrders.Any(order =>
+                    order.Id == record.OrderId &&
+                    (!IsOrderArchivedForAttention(order) ||
+                     GetKnownHostedRevision(order) >= record.HostedRevision)))
+            {
+                continue;
+            }
+            rows[record.OrderId] = new ArchivedOrderRow(
+                record.OrderId,
+                record.Summary.Title,
+                record.Summary.Status,
+                record.Summary.CommissionedAtUtc,
+                record.Summary.Outputs
+                    .Select(output => output.Name)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                null,
                 null,
                 record);
         }
