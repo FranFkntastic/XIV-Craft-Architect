@@ -22,6 +22,7 @@ public sealed class HostedOrderSyncCoordinatorTests
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateCommissionOrder();
         var runtime = new OwnerAdoptionRuntime(profileId);
+        runtime.SeedDurableOrder(order);
         var indexedDb = new IndexedDbService(runtime);
         var localState = new ProfileSyncLocalStateService(
             indexedDb,
@@ -84,7 +85,8 @@ public sealed class HostedOrderSyncCoordinatorTests
         Assert.Equal(3, dataChangeCount);
         Assert.Equal(1, metadataRefreshCount);
         Assert.Equal(1, store.GetOwnerProjection(order.Id)!.ObjectRevision.Value);
-        Assert.Equal(order.Id, runtime.DurableOrder?.Id);
+        Assert.Same(order, runtime.DurableOrder);
+        Assert.Equal(0, runtime.SaveTradeOrderCount);
     }
 
     [Theory]
@@ -502,6 +504,9 @@ public sealed class HostedOrderSyncCoordinatorTests
         };
 
         public TradeOrder? DurableOrder { get; private set; }
+        public int SaveTradeOrderCount { get; private set; }
+
+        public void SeedDurableOrder(TradeOrder order) => DurableOrder = order;
 
         public ValueTask<TValue> InvokeAsync<TValue>(
             string identifier,
@@ -544,6 +549,7 @@ public sealed class HostedOrderSyncCoordinatorTests
 
         private bool SaveOrder(TradeOrder order)
         {
+            SaveTradeOrderCount++;
             DurableOrder = order;
             return true;
         }

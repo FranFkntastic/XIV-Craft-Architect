@@ -85,7 +85,7 @@
                         }
                         @foreach (var group in FilteredActiveOrderGroups)
                         {
-                            <section class="trade-orders-rail-group">
+                            <section class="trade-orders-rail-group" @key="group.Key">
                                 <button type="button"
                                         class="trade-orders-rail-group-title"
                                         @onclick="@(() => ToggleAttentionGroup(group.Key))"
@@ -102,6 +102,7 @@
                                         @foreach (var order in group.Orders)
                                         {
                                              <button type="button"
+                                                     @key="order.Id"
                                                      class="@GetRailOrderClass(order)"
                                                      aria-current="@(_selectedOrder?.Id == order.Id ? "true" : null)"
                                                      @onclick="() => SelectOrder(order)">
@@ -133,6 +134,7 @@
                                         @foreach (var order in FilteredArchivedOrders)
                                         {
                                               <button type="button"
+                                                      @key="order.OrderId"
                                                       class="@($"{GetRailOrderClass(order)} is-archive")"
                                                       aria-current="@(_selectedOrder?.Id == order.OrderId ? "true" : null)"
                                                       disabled="@IsFetchingArchiveOrder(order.OrderId)"
@@ -185,6 +187,7 @@
                                             @if (order.CompanyCommission == null)
                                             {
                                                 <button type="button"
+                                                        @key="order.Id"
                                                         class="@GetRailOrderClass(order) is-device-only"
                                                         aria-current="@(_selectedOrder?.Id == order.Id ? "true" : null)"
                                                         title="Saved on this device; select to retry sync or discard the draft"
@@ -197,6 +200,7 @@
                                             else
                                             {
                                                 <div class="trade-orders-rail-order is-device-only"
+                                                     @key="order.Id"
                                                      title="Stale commissioned identity; hosted terms remain hidden">
                                                     <span class="trade-orders-rail-title">@order.Title</span>
                                                     <span class="trade-orders-rail-meta">@FormatOrderRailMeta(order)</span>
