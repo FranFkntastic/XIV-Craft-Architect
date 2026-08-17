@@ -71,7 +71,10 @@ public sealed record CompanyHubCommissionResponse(
     string? WorkBlockedReason,
     CompanyHubCommissionAttentionResponse? UnreadCommissionerUpdate = null);
 
-public sealed record CompanyHubRosterMemberResponse(string DisplayName, string Role);
+public sealed record CompanyHubRosterMemberResponse(
+    Guid AccountProfileId,
+    string DisplayName,
+    string Role);
 
 public sealed record CompanyHubResponse(
     string Kind,
@@ -752,6 +755,7 @@ public sealed class CompanyHubService(
             if (profile != null)
             {
                 roster.Add(new CompanyHubRosterMemberResponse(
+                    membership.AccountProfileId,
                     ClampText(profile.DisplayName, MaximumDisplayNameLength, "Member"),
                     membership.Role.ToString().ToLowerInvariant()));
             }

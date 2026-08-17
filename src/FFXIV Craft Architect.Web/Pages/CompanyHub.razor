@@ -287,7 +287,7 @@ else
                 <span class="label">Members</span>
                 @foreach (var member in _hub.Roster ?? [])
                 {
-                    <div class="member-row"><span class="member-avatar">@MemberInitial(member.DisplayName)</span><div><strong>@member.DisplayName</strong><span>@SentenceCase(member.Role)</span></div></div>
+                    <div @key="member.AccountProfileId" class="member-row"><span class="member-avatar">@MemberInitial(member.DisplayName)</span><div><strong>@member.DisplayName</strong><span>@SentenceCase(member.Role)</span></div></div>
                 }
             </aside>
         </div>
