@@ -866,7 +866,7 @@ jobs:
               ProfileHost__DatabasePath="$profile_db" \
                 "$executable" \
                 profile-host \
-                ensure-profile \
+                provision-profile \
                 "$CRAFT_ARCHITECT_PROFILE_ID" \
                 "$CRAFT_ARCHITECT_PROFILE_DISPLAY_NAME"
               unset CRAFT_ARCHITECT_PROFILE_ACCESS_KEY

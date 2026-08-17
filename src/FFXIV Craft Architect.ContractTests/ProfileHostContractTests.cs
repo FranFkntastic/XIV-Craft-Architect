@@ -23,6 +23,19 @@ public sealed class ProfileHostIntegrationCollection
 public sealed class ProfileHostContractTests
 {
     [Fact]
+    public void ProvisionProfileCommand_ParsesDeploymentIdentity()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+
+        var command = ProfileHostProvisioningCommand.TryParse(
+            ["profile-host", "provision-profile", profileId, "Canonical", "Operator"]);
+
+        Assert.Equal(ProfileHostProvisioningAction.ProvisionProfile, command?.Action);
+        Assert.Equal(profileId, command?.ProfileId);
+        Assert.Equal("Canonical Operator", command?.DisplayName);
+    }
+
+    [Fact]
     public void Pbkdf2Verifier_MatchesFixedSha256Vector()
     {
         var hasher = new ProfileAccessKeyHasher();
@@ -243,6 +256,40 @@ public sealed class ProfileHostContractTests
                 fixture.ProfileId,
                 "Sapphire Avenue",
                 wrongKey.PlaintextKey,
+                new ProfileAccessKeyHasher(),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ProvisionProfile_PreservesExistingIdentityAndRotatedKeys()
+    {
+        await using var fixture = await ProfileFixture.CreateAsync();
+        using var client = fixture.CreateClient();
+        using var rename = await client.PutAsJsonAsync(
+            "/profile-host/profile",
+            new ProfileHostDisplayNameUpdateRequest
+            {
+                ExpectedMetadataRevision = 0,
+                DisplayName = "Canonical operator"
+            });
+        rename.EnsureSuccessStatusCode();
+        var staleBootstrapKey = new ProfileAccessKeyHasher().CreateAccessKey();
+
+        var provisioned = await fixture.Store.ProvisionProfileIfMissingAsync(
+            fixture.ProfileId,
+            "Deployment seed name",
+            staleBootstrapKey.PlaintextKey,
+            new ProfileAccessKeyHasher(),
+            CancellationToken.None);
+
+        Assert.False(provisioned.Created);
+        Assert.Equal("Canonical operator", provisioned.Profile.DisplayName);
+        Assert.Equal(1, provisioned.Profile.MetadataRevision);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.Store.EnsureProfileAsync(
+                fixture.ProfileId,
+                "Deployment seed name",
+                staleBootstrapKey.PlaintextKey,
                 new ProfileAccessKeyHasher(),
                 CancellationToken.None));
     }

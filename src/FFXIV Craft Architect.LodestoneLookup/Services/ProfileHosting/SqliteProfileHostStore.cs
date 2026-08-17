@@ -269,6 +269,61 @@ public sealed class SqliteProfileHostStore
             Created: true);
     }
 
+    public async Task<ProfileHostEnsureResult> ProvisionProfileIfMissingAsync(
+        string profileId,
+        string displayName,
+        string plaintextKey,
+        ProfileAccessKeyHasher hasher,
+        CancellationToken ct)
+    {
+        if (!Guid.TryParseExact(profileId, "D", out var parsedProfileId) ||
+            parsedProfileId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(displayName) ||
+            displayName.Length > 120 ||
+            string.IsNullOrWhiteSpace(plaintextKey) ||
+            plaintextKey.Length > 256)
+        {
+            throw new InvalidOperationException("The profile identity, display name, or access key is invalid.");
+        }
+
+        profileId = parsedProfileId.ToString("D");
+        await EnsureSchemaAsync(ct);
+        await using (var connection = await OpenAsync(ct))
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                """
+                SELECT p.display_name, p.metadata_revision, p.disabled_at_utc,
+                       coalesce(r.revision, 0)
+                FROM hosted_profiles p
+                LEFT JOIN profile_revisions r ON r.profile_id = p.id
+                WHERE p.id = $profileId;
+                """;
+            command.Parameters.AddWithValue("$profileId", profileId);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                if (!reader.IsDBNull(2))
+                {
+                    throw new InvalidOperationException(
+                        "The existing profile does not match the requested active profile identity.");
+                }
+
+                return new ProfileHostEnsureResult(
+                    new ProfileHostProfileResponse
+                    {
+                        ProfileId = profileId,
+                        DisplayName = reader.GetString(0),
+                        MetadataRevision = reader.GetInt64(1),
+                        ServerRevision = reader.GetInt64(3)
+                    },
+                    Created: false);
+            }
+        }
+
+        return await EnsureProfileAsync(profileId, displayName, plaintextKey, hasher, ct);
+    }
+
     public async Task<ProfileSyncObjectEnvelope?> LoadObjectAsync(
         string profileId,
         string collection,

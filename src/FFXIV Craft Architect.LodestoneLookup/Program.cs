@@ -442,6 +442,29 @@ static async Task RunProfileHostProvisioningCommandAsync(
                 });
                 break;
             }
+        case ProfileHostProvisioningAction.ProvisionProfile:
+            {
+                var rawProfileId = command.ProfileId ??
+                    throw new InvalidOperationException("Profile id is required.");
+                var displayName = command.DisplayName ??
+                    throw new InvalidOperationException("Display name is required.");
+                var plaintextKey = Environment.GetEnvironmentVariable(
+                    "CRAFT_ARCHITECT_PROFILE_ACCESS_KEY") ?? string.Empty;
+                var provisioned = await store.ProvisionProfileIfMissingAsync(
+                    rawProfileId,
+                    displayName,
+                    plaintextKey,
+                    hasher,
+                    cancellationToken);
+                WriteJson(new
+                {
+                    provisioned.Profile.ProfileId,
+                    provisioned.Profile.DisplayName,
+                    provisioned.Created,
+                    Provisioned = true
+                });
+                break;
+            }
         case ProfileHostProvisioningAction.ImportActiveCredentials:
             {
                 var sourceDatabasePath = command.SourceDatabasePath ??
