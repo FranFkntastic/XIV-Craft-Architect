@@ -19,6 +19,12 @@ public sealed record HostedOrderProjectionSnapshot(
     bool Deleted,
     HostedOrderDisplayState DisplayState = HostedOrderDisplayState.LastKnown);
 
+public sealed record HostedOrderOwnerBatchApplyResult(
+    int ChangedCount,
+    int VerificationCount,
+    int RejectedCount,
+    IReadOnlyList<Guid> AppliedOrderIds);
+
 public readonly record struct HostedOrderAuthorityScope(
     string? ProfileId,
     string? ConnectionScopeId,
@@ -655,6 +661,109 @@ public sealed class HostedOrderProjectionStore
             VerificationChanged?.Invoke(verificationChanged);
         }
         return result;
+    }
+
+    public HostedOrderOwnerBatchApplyResult TryAdoptCommittedOwnerBatch(
+        HostedOrderAuthorityScope authority,
+        IReadOnlyList<CompanyCommissionOwnerProjection> projections)
+    {
+        ArgumentNullException.ThrowIfNull(projections);
+        if (projections.Count == 0)
+        {
+            return new HostedOrderOwnerBatchApplyResult(0, 0, 0, []);
+        }
+
+        var changed = new List<HostedOrderProjectionSnapshot>(projections.Count);
+        var verified = new List<HostedOrderProjectionSnapshot>(projections.Count);
+        var applied = new List<Guid>(projections.Count);
+        var rejected = 0;
+        lock (_gate)
+        {
+            if (!IsCurrentAuthorityUnderLock(authority))
+            {
+                return new HostedOrderOwnerBatchApplyResult(
+                    0,
+                    0,
+                    projections.Count,
+                    []);
+            }
+
+            foreach (var projection in projections)
+            {
+                var candidate = new HostedOrderProjectionSnapshot(
+                    projection.Order.Id,
+                    projection.Order.CompanyProfileId,
+                    (projection.ProfileObjectRevision ?? projection.ObjectRevision).Value,
+                    projection.CompanyRevision.Value,
+                    projection.Order,
+                    projection,
+                    Deleted: false,
+                    HostedOrderDisplayState.Verified);
+                var current = _orders.GetValueOrDefault(candidate.OrderId);
+                try
+                {
+                    if (current != null)
+                    {
+                        ValidateIdentity(current, candidate);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    rejected++;
+                    continue;
+                }
+
+                if (current != null &&
+                    (candidate.ObjectRevision < current.ObjectRevision ||
+                     candidate.ObjectRevision == current.ObjectRevision && current.Deleted))
+                {
+                    rejected++;
+                    continue;
+                }
+                if (current != null && HasSameVersionTuple(current, candidate))
+                {
+                    applied.Add(candidate.OrderId);
+                    continue;
+                }
+                if (current is { Deleted: false, Order: not null } &&
+                    HasSamePresentedOrder(current.Order, candidate.Order!))
+                {
+                    if (HasNewerOwnerVerification(current, candidate))
+                    {
+                        var verification = candidate with { Order = current.Order };
+                        _orders[candidate.OrderId] = verification;
+                        AdvanceRestoreRevisionUnderLock(candidate.ObjectRevision);
+                        verified.Add(verification);
+                    }
+                    applied.Add(candidate.OrderId);
+                    continue;
+                }
+                if (TryAcceptUnderLock(candidate))
+                {
+                    changed.Add(candidate);
+                    applied.Add(candidate.OrderId);
+                }
+                else
+                {
+                    rejected++;
+                }
+            }
+        }
+
+        if (changed.Count > 0)
+        {
+            BatchChanged?.Invoke(changed);
+            RestoreStateChanged?.Invoke(RestoreState);
+        }
+        foreach (var verification in verified)
+        {
+            VerificationChanged?.Invoke(verification);
+        }
+        return new HostedOrderOwnerBatchApplyResult(
+            changed.Count,
+            verified.Count,
+            rejected,
+            applied);
     }
 
     public bool TryPublishTombstone(

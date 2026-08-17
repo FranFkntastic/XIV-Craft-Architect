@@ -7,7 +7,6 @@ namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
 
 public sealed class TradeCompanyCollaborationService(
     TradeCompanyCollaborationClient client,
-    TradeOperationsPersistenceService tradeOperations,
     ProfileSyncLocalStateService localState,
     ProfileSyncService profileSync,
     HostedOrderProjectionStore hostedOrders)
@@ -365,8 +364,7 @@ public sealed class TradeCompanyCollaborationService(
         await AdoptCommittedOrderAsync(
             authority,
             hostedOrder,
-            published.ProfileOrderRevision.Value,
-            "The company brief was attached by Profile Hosting, but browser storage could not apply the authoritative order.");
+            published.ProfileOrderRevision.Value);
         AdoptDictionaryAuthority(authority);
         _publications.Remove(order.Id);
         _publicationRefreshedAtUtc[order.Id] = DateTime.UtcNow;
@@ -449,8 +447,7 @@ public sealed class TradeCompanyCollaborationService(
     private async Task AdoptCommittedOrderAsync(
         OrderCommandAuthority authority,
         TradeOrder order,
-        long revision,
-        string persistenceFailure)
+        long revision)
     {
         var adoption = await hostedOrders.AdoptAndPersistCommittedOrderAsync(
             authority.Projection,
@@ -458,23 +455,17 @@ public sealed class TradeCompanyCollaborationService(
             revision,
             async candidate =>
             {
-                var persisted = candidate.Deleted
-                    ? await tradeOperations.DeleteOrderAsync(candidate.OrderId)
-                    : await tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
-                if (!persisted)
-                {
-                    throw new InvalidOperationException(persistenceFailure);
-                }
+                await localState.PersistHostedTradeOrderStateAsync(
+                    authority.Connection,
+                    candidate.Order,
+                    candidate.OrderId,
+                    candidate.ObjectRevision,
+                    candidate.Deleted);
                 if (!await IsCurrentAuthorityAsync(authority))
                 {
                     throw new InvalidOperationException(
                         "The hosted order authority changed while browser persistence was in progress.");
                 }
-                await localState.SaveObjectRevisionAsync(
-                    authority.Connection,
-                    ProfileSyncCollections.TradeOrders,
-                    candidate.OrderId.ToString("D"),
-                    candidate.ObjectRevision);
             },
             () => IsCurrentAuthorityAsync(authority));
         if (adoption is not (

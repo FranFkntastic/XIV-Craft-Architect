@@ -9,7 +9,7 @@ using Microsoft.Data.Sqlite;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
-public sealed class SqliteProfileHostStore
+public sealed partial class SqliteProfileHostStore
 {
     private const int MaximumImportedActiveAccessKeys = 64;
     private sealed record ImportedAccessKey(

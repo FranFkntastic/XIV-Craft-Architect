@@ -128,26 +128,17 @@ public sealed class TradeOrderProfileSyncAdapter :
         }
         Func<HostedOrderProjectionSnapshot, Task> persist = async candidate =>
         {
-            var persisted = candidate.Deleted
-                ? await _tradeOperations.DeleteOrderAsync(
-                    candidate.OrderId,
-                    connection.ConnectionScopeId)
-                : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
-            if (!persisted)
-            {
-                throw new InvalidOperationException(
-                    $"Browser storage could not apply hosted Trade order '{envelope.ObjectId}'.");
-            }
+            await _localState.PersistHostedTradeOrderStateAsync(
+                connection,
+                candidate.Order,
+                candidate.OrderId,
+                candidate.ObjectRevision,
+                candidate.Deleted);
             if (!await IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId))
             {
                 throw new InvalidOperationException(
                     $"Hosted Trade order '{envelope.ObjectId}' changed authority while browser persistence was in progress.");
             }
-            await _localState.SaveObjectRevisionAsync(
-                connection,
-                ProfileSyncCollections.TradeOrders,
-                candidate.OrderId.ToString("D"),
-                candidate.ObjectRevision);
         };
         var adoption = envelope.DeepArchived
             ? await _projections.AdoptAndPersistDeepArchivedOrderAsync(
@@ -211,26 +202,17 @@ public sealed class TradeOrderProfileSyncAdapter :
             async candidate =>
             {
                 ct.ThrowIfCancellationRequested();
-                var persisted = candidate.Deleted
-                    ? await _tradeOperations.DeleteOrderAsync(
-                        candidate.OrderId,
-                        connection.ConnectionScopeId)
-                    : await _tradeOperations.ApplyCanonicalOrderAsync(candidate.Order!);
-                if (!persisted)
-                {
-                    throw new InvalidOperationException(
-                        $"Browser storage could not apply hosted Trade order '{orderId:D}'.");
-                }
+                await _localState.PersistHostedTradeOrderStateAsync(
+                    connection,
+                    candidate.Order,
+                    candidate.OrderId,
+                    candidate.ObjectRevision,
+                    candidate.Deleted);
                 if (!await IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId))
                 {
                     throw new InvalidOperationException(
                         $"Hosted Trade order '{orderId:D}' changed authority while browser persistence was in progress.");
                 }
-                await _localState.SaveObjectRevisionAsync(
-                    connection,
-                    ProfileSyncCollections.TradeOrders,
-                    candidate.OrderId.ToString("D"),
-                    candidate.ObjectRevision);
             },
             () => IsCurrentAuthorityAsync(authority, connection.ConnectionScopeId));
         if (adoption is not (

@@ -791,6 +791,146 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task OwnerComparisonAcknowledgesCurrentGrantMirrorWithoutReturningTheOrder()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        using var loaded = await fixture.LoadOwnerCommissionAsync(fixture.Owner);
+        var projection = await loaded.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerProjection>();
+
+        using var response = await fixture.CompareOwnersAsync(
+            fixture.Owner,
+            [fixture.ComparisonItem(projection!, includeReceipt: false)]);
+        var comparison = await response.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerComparisonResponse>();
+
+        response.EnsureSuccessStatusCode();
+        var item = Assert.Single(comparison!.Items);
+        Assert.Equal(CompanyCommissionOwnerComparisonStatus.Unchanged, item.Status);
+        Assert.Null(item.Projection);
+        Assert.Equal(projection!.ProfileObjectRevision, item.Receipt!.ProfileObjectRevision);
+        Assert.Equal(projection.ObjectRevision, item.Receipt.ObjectRevision);
+    }
+
+    [Fact]
+    public async Task OwnerComparisonKeepsUnchangedOrderCompactAfterUnrelatedCompanyRevision()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        using var loaded = await fixture.LoadOwnerCommissionAsync(fixture.Owner);
+        var projection = (await loaded.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerProjection>())!;
+        await fixture.AdvanceUnrelatedCompanyRevisionAsync();
+
+        using var response = await fixture.CompareOwnersAsync(
+            fixture.Owner,
+            [fixture.ComparisonItem(projection, includeReceipt: true)]);
+        var comparison = await response.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerComparisonResponse>();
+
+        response.EnsureSuccessStatusCode();
+        var item = Assert.Single(comparison!.Items);
+        Assert.Equal(CompanyCommissionOwnerComparisonStatus.Unchanged, item.Status);
+        Assert.Null(item.Projection);
+        Assert.True(item.Receipt!.CompanyRevision.Value > projection.CompanyRevision.Value);
+        Assert.Equal(projection.ObjectRevision, item.Receipt.ObjectRevision);
+    }
+
+    [Fact]
+    public async Task OwnerComparisonReturnsChangedProjectionAndRepairsGrantMirror()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        using var loaded = await fixture.LoadOwnerCommissionAsync(fixture.Owner);
+        var original = (await loaded.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerProjection>())!;
+        await fixture.ChangeCanonicalOrderTitleAsync("Changed by commissioner");
+
+        using var changedResponse = await fixture.CompareOwnersAsync(
+            fixture.Owner,
+            [fixture.ComparisonItem(original, includeReceipt: true)]);
+        var changed = await changedResponse.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerComparisonResponse>();
+        var changedItem = Assert.Single(changed!.Items);
+
+        changedResponse.EnsureSuccessStatusCode();
+        Assert.Equal(CompanyCommissionOwnerComparisonStatus.Changed, changedItem.Status);
+        Assert.Equal("Changed by commissioner", changedItem.Projection!.Order.Title);
+        Assert.True(
+            changedItem.Receipt!.ObjectRevision.Value > original.ObjectRevision.Value);
+        Assert.True(
+            changedItem.Receipt.ProfileObjectRevision.Value >
+            original.ProfileObjectRevision!.Value.Value);
+
+        using var acknowledgedResponse = await fixture.CompareOwnersAsync(
+            fixture.Owner,
+            [fixture.ComparisonItem(changedItem.Projection, includeReceipt: true)]);
+        var acknowledged = await acknowledgedResponse.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerComparisonResponse>();
+
+        acknowledgedResponse.EnsureSuccessStatusCode();
+        var acknowledgedItem = Assert.Single(acknowledged!.Items);
+        Assert.Equal(CompanyCommissionOwnerComparisonStatus.Unchanged, acknowledgedItem.Status);
+        Assert.Null(acknowledgedItem.Projection);
+    }
+
+    [Fact]
+    public async Task OwnerComparisonMasksMissingAndMismatchedCommissionIdentitiesPerItem()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var missingOrderId = Guid.NewGuid();
+        var request = new CompanyCommissionOwnerComparisonItem
+        {
+            OrderId = missingOrderId,
+            CommissionId = Guid.NewGuid(),
+            ProfileObjectRevision = new(1),
+            ObjectRevision = CompanyRecordRevision.None,
+            CompanyRevision = CompanyRecordRevision.None
+        };
+        var mismatched = request with
+        {
+            OrderId = fixture.Order.Id,
+            CommissionId = Guid.NewGuid()
+        };
+
+        using var response = await fixture.CompareOwnersAsync(
+            fixture.Owner,
+            [request, mismatched]);
+        var comparison = await response.Content
+            .ReadFromJsonAsync<CompanyCommissionOwnerComparisonResponse>();
+
+        response.EnsureSuccessStatusCode();
+        Assert.All(
+            comparison!.Items,
+            item => Assert.Equal(CompanyCommissionOwnerComparisonStatus.Missing, item.Status));
+        Assert.All(comparison.Items, item => Assert.Null(item.Receipt));
+        Assert.All(comparison.Items, item => Assert.Null(item.Projection));
+    }
+
+    [Fact]
+    public async Task OwnerComparisonRejectsUnauthorizedAndOversizedBatches()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var outsider = await fixture.CreateAccountAsync("Outsider");
+        var items = Enumerable.Range(0, 51)
+            .Select(_ => new CompanyCommissionOwnerComparisonItem
+            {
+                OrderId = Guid.NewGuid(),
+                CommissionId = Guid.NewGuid(),
+                ProfileObjectRevision = new(1),
+                ObjectRevision = CompanyRecordRevision.None,
+                CompanyRevision = CompanyRecordRevision.None
+            })
+            .ToArray();
+
+        using var unauthorized = await fixture.CompareOwnersAsync(
+            outsider,
+            [items[0]]);
+        using var oversized = await fixture.CompareOwnersAsync(fixture.Owner, items);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, oversized.StatusCode);
+    }
+
+    [Fact]
     public async Task RevokedMemberCannotClaimAfterPreviouslyBeingActive()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -1104,6 +1244,73 @@ public sealed class CompanyMemberCommissionContractTests
             var client = CreateClient(account.Key);
             return client.GetAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/owner");
+        }
+
+        public Task<HttpResponseMessage> CompareOwnersAsync(
+            Account account,
+            IReadOnlyList<CompanyCommissionOwnerComparisonItem> items)
+        {
+            var client = CreateClient(account.Key);
+            return client.PostAsJsonAsync(
+                $"/trade/v1/companies/{Company.Id:D}/commissions/owner-comparison",
+                new CompanyCommissionOwnerComparisonRequest { Items = items });
+        }
+
+        public CompanyCommissionOwnerComparisonItem ComparisonItem(
+            CompanyCommissionOwnerProjection projection,
+            bool includeReceipt) =>
+            new()
+            {
+                OrderId = projection.Order.Id,
+                CommissionId = projection.Order.CompanyCommission!.CommissionId,
+                ProfileObjectRevision = projection.ProfileObjectRevision ??
+                    projection.ObjectRevision,
+                ObjectRevision = includeReceipt
+                    ? projection.ObjectRevision
+                    : CompanyRecordRevision.None,
+                CompanyRevision = includeReceipt
+                    ? projection.CompanyRevision
+                    : CompanyRecordRevision.None
+            };
+
+        public async Task ChangeCanonicalOrderTitleAsync(string title)
+        {
+            var envelope = await Profiles.LoadObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                CancellationToken.None);
+            var order = JsonSerializer.Deserialize<TradeOrder>(
+                envelope!.PayloadJson,
+                JsonOptions)!;
+            order.Title = title;
+            var put = await Profiles.PutObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                JsonSerializer.Serialize(order, JsonOptions),
+                envelope.Revision,
+                CancellationToken.None);
+            Assert.True(put.Success);
+        }
+
+        public async Task AdvanceUnrelatedCompanyRevisionAsync()
+        {
+            var crafter = new TradeCrafterProfile
+            {
+                Id = Guid.NewGuid(),
+                CompanyProfileId = Company.Id,
+                DisplayName = "Unrelated revision",
+                WorldName = "Siren"
+            };
+            var put = await Profiles.PutObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeCrafters,
+                crafter.Id.ToString("D"),
+                JsonSerializer.Serialize(crafter, JsonOptions),
+                expectedRevision: 0,
+                ct: CancellationToken.None);
+            Assert.True(put.Success);
         }
 
         public Task<HttpResponseMessage> LoadNotificationOwnerCommissionAsync(Account account)

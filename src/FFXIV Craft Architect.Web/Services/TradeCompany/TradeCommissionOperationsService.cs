@@ -1164,25 +1164,18 @@ public sealed class TradeCommissionOperationsService(
             projection,
             async winner =>
             {
-                var persisted = winner.Deleted
-                    ? await tradeOperations.DeleteOrderAsync(winner.OrderId)
-                    : await tradeOperations.ApplyCanonicalOrderAsync(winner.Order!);
+                await localState.PersistHostedTradeOrderStateAsync(
+                    authority.Connection,
+                    winner.Order,
+                    winner.OrderId,
+                    winner.ObjectRevision,
+                    winner.Deleted);
                 if (!await IsCurrentAuthorityAsync(authority))
                 {
                     await RepairDurableOrderFromCurrentProjectionAsync(winner.OrderId);
                     throw new InvalidOperationException(
                         "The hosted order authority changed while commission persistence was in progress.");
                 }
-                if (!persisted)
-                {
-                    throw new InvalidOperationException(
-                        "The owner projection was authoritative, but browser storage could not apply its Trade order.");
-                }
-                await localState.SaveObjectRevisionAsync(
-                    authority.Connection,
-                    ProfileSyncCollections.TradeOrders,
-                    winner.OrderId.ToString("D"),
-                    winner.ObjectRevision);
             },
             () => IsCurrentAuthorityAsync(authority));
         if (adoption == HostedOrderCommittedProjectionResult.ScopeChanged)

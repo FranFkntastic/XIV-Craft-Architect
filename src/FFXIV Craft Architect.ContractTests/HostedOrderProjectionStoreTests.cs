@@ -143,6 +143,49 @@ public sealed class HostedOrderProjectionStoreTests
         });
     }
 
+    [Fact]
+    public void CommittedOwnerBatchPublishesChangedRowsOnceAndPreservesUnchangedReferences()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var store = RestoringStore(
+            profileId,
+            0,
+            $"https://profiles.example/|{profileId}");
+        var companyProfileId = Guid.NewGuid();
+        var unchanged = CreateOrder(Guid.NewGuid(), companyProfileId, "Unchanged");
+        var changed = CreateOrder(Guid.NewGuid(), companyProfileId, "Last known");
+        Assert.Equal(2, store.PublishRemoteOrders([(unchanged, 1), (changed, 1)]));
+        var canonicalChanged = JsonSerializer.Deserialize<TradeOrder>(
+            JsonSerializer.Serialize(changed))!;
+        canonicalChanged.Title = "Canonical change";
+        var batchNotifications = new List<IReadOnlyList<HostedOrderProjectionSnapshot>>();
+        var verificationNotifications = 0;
+        store.BatchChanged += snapshots => batchNotifications.Add(snapshots);
+        store.VerificationChanged += _ => verificationNotifications++;
+
+        var result = store.TryAdoptCommittedOwnerBatch(
+            store.CaptureAuthorityScope(),
+            [
+                CreateOwner(unchanged, 1, 10),
+                new CompanyCommissionOwnerProjection
+                {
+                    Order = canonicalChanged,
+                    ObjectRevision = new(2),
+                    CompanyRevision = new(11),
+                    ProfileObjectRevision = new(2)
+                }
+            ]);
+
+        Assert.Equal(1, result.ChangedCount);
+        Assert.Equal(1, result.VerificationCount);
+        Assert.Equal(0, result.RejectedCount);
+        Assert.Single(batchNotifications);
+        Assert.Single(batchNotifications[0]);
+        Assert.Equal(1, verificationNotifications);
+        Assert.Same(unchanged, store.Get(unchanged.Id)?.Order);
+        Assert.Equal("Canonical change", store.Get(changed.Id)?.Order?.Title);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -946,9 +989,17 @@ public sealed class HostedOrderProjectionStoreTests
                 return SaveOrderAsync<TValue>((TradeOrder)args![0]!);
             }
 
+            if (identifier == "IndexedDB.applyHostedTradeOrderState")
+            {
+                return ApplyHostedTradeOrderStateAsync<TValue>(args!);
+            }
+
             object? result = identifier switch
             {
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(_settings),
+                "IndexedDB.loadHostedOwnerSettings" => ((IReadOnlyList<string>)args![0]!)
+                    .Where(_settings.ContainsKey)
+                    .ToDictionary(key => key, key => _settings[key], StringComparer.Ordinal),
                 "IndexedDB.loadSetting" => _settings.GetValueOrDefault((string)args![0]!),
                 "IndexedDB.loadTradeOrder" => DurableOrder,
                 "IndexedDB.deleteTradeOrder" => DeleteOrder(),
@@ -972,6 +1023,24 @@ public sealed class HostedOrderProjectionStoreTests
                 DurableOrder = order;
             }
             return (TValue)(object)SaveTradeOrderResult;
+        }
+
+        private async ValueTask<TValue> ApplyHostedTradeOrderStateAsync<TValue>(
+            object?[] args)
+        {
+            var order = args[0] as TradeOrder;
+            if ((bool)args[4]!)
+            {
+                DurableOrder = null;
+                _settings[(string)args[2]!] = (string)args[3]!;
+                return (TValue)(object)true;
+            }
+            var saved = await SaveOrderAsync<bool>(order!);
+            if (saved)
+            {
+                _settings[(string)args[2]!] = (string)args[3]!;
+            }
+            return (TValue)(object)saved;
         }
     }
 
