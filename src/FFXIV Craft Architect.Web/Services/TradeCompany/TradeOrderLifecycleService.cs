@@ -55,8 +55,12 @@ public sealed class TradeOrderLifecycleService(
 
         if (order.CompanyCommission != null)
         {
-            await commissions.RefreshAsync(order, cancellationToken);
             var owner = commissions.GetForOrder(order.Id);
+            if (owner == null)
+            {
+                await commissions.RefreshAsync(order, cancellationToken);
+                owner = commissions.GetForOrder(order.Id);
+            }
             if (owner == null)
             {
                 if (!commissions.IsCanonicalOwnerMissing(order.Id))

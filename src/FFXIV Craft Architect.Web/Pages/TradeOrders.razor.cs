@@ -315,7 +315,6 @@ public partial class TradeOrders
     {
         HostedOrders.Changed += OnHostedOrderProjectionChanged;
         HostedOrders.BatchChanged += OnHostedOrderProjectionsChanged;
-        HostedOrders.VerificationChanged += OnHostedOrderVerificationChanged;
         HostedOrders.Reset += OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged += OnHostedOrderRestoreStateChanged;
         ArchiveSummaries.Changed += OnArchiveSummariesChanged;
@@ -411,7 +410,6 @@ public partial class TradeOrders
         InvalidateSelectedCommissionOwnerRefresh();
         HostedOrders.Changed -= OnHostedOrderProjectionChanged;
         HostedOrders.BatchChanged -= OnHostedOrderProjectionsChanged;
-        HostedOrders.VerificationChanged -= OnHostedOrderVerificationChanged;
         HostedOrders.Reset -= OnHostedOrderProjectionsReset;
         HostedOrders.RestoreStateChanged -= OnHostedOrderRestoreStateChanged;
         ArchiveSummaries.Changed -= OnArchiveSummariesChanged;
@@ -564,17 +562,6 @@ public partial class TradeOrders
         }
 
         _ = InvokeAsync(() => ApplyHostedOrderProjections(snapshots));
-    }
-
-    private void OnHostedOrderVerificationChanged(
-        HostedOrderProjectionSnapshot snapshot)
-    {
-        if (_isDisposed || _selectedOrder?.Id != snapshot.OrderId)
-        {
-            return;
-        }
-
-        _ = InvokeAsync(StateHasChanged);
     }
 
     private void OnHostedOrderProjectionsReset() =>

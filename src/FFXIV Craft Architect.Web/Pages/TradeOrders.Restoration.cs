@@ -32,6 +32,33 @@ public partial class TradeOrders
         return false;
     }
 
+    private async Task<bool> EnsureSelectedCommissionOwnerAvailableAsync()
+    {
+        if (!EnsureHostedOrderMutationAvailable())
+        {
+            return false;
+        }
+
+        var selected = _selectedOrder;
+        if (selected?.CompanyCommission == null ||
+            SelectedCommissionOwner != null ||
+            IsSelectedCanonicalOwnerMissing)
+        {
+            return true;
+        }
+
+        await HostedOrderSync.RefreshOwnerProjectionAsync(selected.Id);
+        if (_selectedOrder?.Id != selected.Id)
+        {
+            return false;
+        }
+
+        // Opening the lifecycle dialog is not a mutation. If priority verification
+        // failed, the entered reason remains intact and the lifecycle service makes
+        // one final authority-bound attempt before it can change canonical state.
+        return true;
+    }
+
     private bool IsIdentityOnlyOrder(TradeOrder order) =>
         order.CompanyCommission != null &&
         HostedOrders.Get(order.Id) is not

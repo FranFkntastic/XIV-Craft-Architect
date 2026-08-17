@@ -529,14 +529,35 @@ public partial class TradeOrders
         }
     }
 
-    private Task InvokeSelectedOrderLifecycleActionAsync() =>
-        SelectedLifecycleAction switch
+    private async Task InvokeSelectedOrderLifecycleActionAsync()
+    {
+        switch (SelectedLifecycleAction)
         {
-            TradeOrderLifecycleAction.DiscardDraft => DiscardSelectedDraftAsync(),
-            TradeOrderLifecycleAction.CancelCommission =>
-                OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled),
-            _ => Task.CompletedTask
-        };
+            case TradeOrderLifecycleAction.DiscardDraft:
+                await DiscardSelectedDraftAsync();
+                return;
+            case TradeOrderLifecycleAction.CancelCommission:
+                if (_isCommissionCommandRunning)
+                {
+                    return;
+                }
+
+                _isCommissionCommandRunning = true;
+                try
+                {
+                    StateHasChanged();
+                    if (await EnsureSelectedCommissionOwnerAvailableAsync())
+                    {
+                        await OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled);
+                    }
+                }
+                finally
+                {
+                    _isCommissionCommandRunning = false;
+                }
+                return;
+        }
+    }
 
     private async Task DiscardSelectedDraftAsync()
     {

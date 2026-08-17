@@ -175,6 +175,36 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             TradeCommissionOperationsPresentation.IsArchivedForAttention(order, projection),
             TradeCommissionOperationsPresentation.IsArchivedForAttention(order, null));
     }
+
+    [Fact]
+    public void LifecycleEntryPrioritizesVerificationWithoutReplayingWorkingTerms()
+    {
+        var repositoryRoot = LocateRepositoryRoot();
+        var page = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.razor.cs");
+        var payment = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Payment.cs");
+        var restoration = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Restoration.cs");
+        var lifecycle = ReadWebSource(
+            repositoryRoot,
+            "Services",
+            "TradeCompany",
+            "TradeOrderLifecycleService.cs");
+
+        Omits(page, "HostedOrders.VerificationChanged +=", "OnHostedOrderVerificationChanged");
+        Contains(
+            payment,
+            "await EnsureSelectedCommissionOwnerAvailableAsync()",
+            "OpenCloseOrderDialogAsync(TradeOrderStatus.Canceled)");
+        Contains(
+            restoration,
+            "await HostedOrderSync.RefreshOwnerProjectionAsync(selected.Id)",
+            "Opening the lifecycle dialog is not a mutation");
+        Contains(
+            lifecycle,
+            "var owner = commissions.GetForOrder(order.Id);",
+            "if (owner == null)",
+            "await commissions.RefreshAsync(order, cancellationToken);");
+    }
+
     private static TradeCompanyCommission CreateClearedAssignedCommission()
     {
         var lineId = Guid.Parse("55555555-5555-5555-5555-555555555555");
