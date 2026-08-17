@@ -97,7 +97,8 @@ public sealed class HostedOrderSyncCoordinatorTests
         var profileId = Guid.NewGuid().ToString("D");
         var first = CreateCommissionOrder();
         var second = CopyWithNewIdentity(first);
-        var selected = CopyWithNewIdentity(first);
+        var third = CopyWithNewIdentity(first);
+        TradeOrder[] orders = [first, second, third];
         var runtime = new OwnerAdoptionRuntime(profileId);
         runtime.SeedDurableOrder(first);
         var indexedDb = new IndexedDbService(runtime);
@@ -113,7 +114,7 @@ public sealed class HostedOrderSyncCoordinatorTests
             $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
         Assert.True(store.TryPublishRemoteOrder(first, 1));
         Assert.True(store.TryPublishRemoteOrder(second, 1));
-        Assert.True(store.TryPublishRemoteOrder(selected, 1));
+        Assert.True(store.TryPublishRemoteOrder(third, 1));
         var profileSync = new ProfileSyncService(
             new ProfileHostClient(
                 new HttpClient(new EmptyChangesHandler()),
@@ -122,7 +123,7 @@ public sealed class HostedOrderSyncCoordinatorTests
             new WebSettingsService(indexedDb),
             store,
             []);
-        var ownerHandler = new PriorityOwnerHandler([first, second, selected]);
+        var ownerHandler = new PriorityOwnerHandler(orders);
         await using var coordinator = new HostedOrderSyncCoordinator(
             runtime,
             profileSync,
@@ -141,7 +142,9 @@ public sealed class HostedOrderSyncCoordinatorTests
 
         await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
         await ownerHandler.FirstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var priority = coordinator.RefreshOwnerProjectionAsync(selected.Id);
+        var firstStartedOrderId = Assert.Single(ownerHandler.OrderIds);
+        var priorityOrder = orders.First(order => order.Id != firstStartedOrderId);
+        var priority = coordinator.RefreshOwnerProjectionAsync(priorityOrder.Id);
         ownerHandler.ReleaseFirst.TrySetResult();
 
         await priority.WaitAsync(TimeSpan.FromSeconds(5));
@@ -149,10 +152,10 @@ public sealed class HostedOrderSyncCoordinatorTests
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(3, ownerHandler.OrderIds.Count);
-        Assert.Equal(selected.Id, ownerHandler.OrderIds[1]);
+        Assert.Equal(priorityOrder.Id, ownerHandler.OrderIds[1]);
         Assert.Equal(
-            new HashSet<Guid> { first.Id, second.Id },
-            ownerHandler.OrderIds.Where(orderId => orderId != selected.Id).ToHashSet());
+            orders.Select(order => order.Id).ToHashSet(),
+            ownerHandler.OrderIds.ToHashSet());
     }
 
     [Theory]
