@@ -38,7 +38,12 @@ public sealed class TradeMaterialQuoteService
         var decision = optimization.Decision;
         if (!optimization.IsComplete || decision == null)
         {
-            return Failure("No complete executable procurement route satisfies the available market evidence.");
+            return Failure(
+                $"No complete executable route fits company policy and current listing evidence " +
+                $"({policy.MaximumWorldStops} worlds, " +
+                $"{policy.MaximumDataCenterTransfers} data-center transfers, " +
+                $"{policy.MaximumConsolidationPremiumPercent:N0}% consolidation premium, " +
+                $"listings at most {policy.MaximumEvidenceAgeMinutes:N0} minutes old).");
         }
 
         var maximumCost = decision.CheapestGilCost *

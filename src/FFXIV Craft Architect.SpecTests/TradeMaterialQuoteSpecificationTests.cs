@@ -34,6 +34,7 @@ public sealed class TradeMaterialQuoteSpecificationTests
         Assert.False(result.IsComplete);
         Assert.Null(result.Quote);
         Assert.False(string.IsNullOrWhiteSpace(result.FailureReason));
+        Assert.Contains("company policy", result.FailureReason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -48,6 +49,31 @@ public sealed class TradeMaterialQuoteSpecificationTests
 
         Assert.False(result.IsComplete);
         Assert.Null(result.Quote);
+    }
+
+    [Fact]
+    public void IncompleteOptimizationNamesTheAppliedPolicyEnvelope()
+    {
+        var policy = TradeMaterialPricingPolicy.Default with
+        {
+            MaximumWorldStops = 7,
+            MaximumDataCenterTransfers = 3,
+            MaximumConsolidationPremiumPercent = 15,
+            MaximumEvidenceAgeMinutes = 90
+        };
+
+        var result = new TradeMaterialQuoteService().Build(
+            new ProcurementRouteOptimizationResult([], Decision: null, IsComplete: false),
+            [new MaterialAggregate { ItemId = 5111, Name = "Gold Ore", TotalQuantity = 14_985 }],
+            policy,
+            QuotedAt);
+
+        Assert.False(result.IsComplete);
+        Assert.Null(result.Quote);
+        Assert.Contains("7 worlds", result.FailureReason, StringComparison.Ordinal);
+        Assert.Contains("3 data-center transfers", result.FailureReason, StringComparison.Ordinal);
+        Assert.Contains("15% consolidation premium", result.FailureReason, StringComparison.Ordinal);
+        Assert.Contains("90 minutes old", result.FailureReason, StringComparison.Ordinal);
     }
 
     [Fact]
