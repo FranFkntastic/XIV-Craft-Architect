@@ -79,6 +79,16 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Omits(source, "Reprice Order");
         var procurementSource = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Procurement.cs");
         Contains(procurementSource, "IsRequestedOutputRow(row)", "trade-orders-output-chip", "Output", "GetVisibleLiveProcurementSnapshot()");
+        Contains(procurementSource,
+            "var commission = SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission;",
+            "return commission != null",
+            "CreateCanonicalTermsWorkPackage(_selectedOrder, commission.CurrentTerms)");
+        Contains(source,
+            "SelectedCanonicalCommission is { } canonicalCommission",
+            "canonicalCommission.CurrentTerms.PricingEvidence.MaterialQuote",
+            ": _selectedOrder.SourceSnapshot.MaterialQuote;");
+        Omits(source,
+            "SelectedCanonicalCommission?.CurrentTerms.PricingEvidence.MaterialQuote ??");
         Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.CompanyCommission.cs"),
             "copy.SourceSnapshot.Warnings = terms.PricingEvidence.Warnings?.ToArray() ?? [];",
             "terms.PricingEvidence.MaterialQuoteFailureReason;");
