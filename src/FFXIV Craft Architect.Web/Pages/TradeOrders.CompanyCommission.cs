@@ -221,6 +221,11 @@ public partial class TradeOrders
                     terms.Outputs.Sum(output => output.RequiredQuantity),
                     terms.Payment.CraftSynthCount)
             ];
+        copy.SourceSnapshot.MaterialQuote = terms.PricingEvidence.MaterialQuote;
+        if (terms.PricingEvidence.MaterialQuote != null)
+        {
+            copy.SourceSnapshot.CostBasis = CommissionCostBasis.ProcurementRoute;
+        }
         copy.PaymentSchedule = terms.Payment.Schedule;
         copy.CustomPaymentTerms = terms.Payment.CustomTerms;
         return copy;
@@ -1027,8 +1032,9 @@ public partial class TradeOrders
             CompanyCommissionActivityKind.CompanyMaterialsReceived => "Materials received",
             CompanyCommissionActivityKind.WorkClearanceAchieved => "Cleared to work",
             CompanyCommissionActivityKind.ProgressReported => "Progress updated",
+            CompanyCommissionActivityKind.DeliveryHandoffRecorded => "Sent for delivery review",
             CompanyCommissionActivityKind.DeliveryReadinessWithdrawn => "Delivery readiness withdrawn",
-            CompanyCommissionActivityKind.DeliveryReadinessDeclared => "Ready for delivery",
+            CompanyCommissionActivityKind.DeliveryReadinessDeclared => "Sent for delivery review",
             CompanyCommissionActivityKind.DeliveryReturnedToWork => "Returned to work",
             CompanyCommissionActivityKind.DeliveryAccepted => "Delivery accepted",
             CompanyCommissionActivityKind.SettlementRecorded => "Settlement recorded",

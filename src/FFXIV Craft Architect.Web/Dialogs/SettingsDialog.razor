@@ -376,15 +376,10 @@
 
                     <MudDivider Class="my-4" />
 
-                    <CompactSelectField Id="options-payment-contract"
-                                        Label="Default payment contract"
-                                        @bind-Value="CompanyPaymentContractValue"
-                                        Options="PaymentContractOptions"
-                                        Class="options-select my-2" />
                     <MudNumericField T="decimal"
                                      id="legacy-material-commission-percent"
-                                     @bind-Value="_companyLegacyCommissionPercent"
-                                     Label="Legacy material commission percent"
+                                     @bind-Value="_companyMaterialValueBonusPercent"
+                                     Label="Material value bonus"
                                      Variant="Variant.Outlined"
                                      Margin="Margin.Dense"
                                      HideSpinButtons="true"
@@ -403,6 +398,20 @@
                                      Adornment="Adornment.End"
                                      AdornmentText="gil"
                                      Class="my-2" />
+
+                    <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Material pricing</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                        Trade quotes one executable current-region shopping route. These limits define what this company considers reasonable procurement.
+                    </MudText>
+                    <MudNumericField T="decimal" @bind-Value="_materialMaximumPremiumPercent" Label="Maximum consolidation premium" Min="0m" Max="100m" Adornment="Adornment.End" AdornmentText="%" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="int" @bind-Value="_materialMaximumWorldStops" Label="Maximum world stops" Min="1" Max="32" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="int" @bind-Value="_materialMaximumDataCenterTransfers" Label="Maximum data-center transfers" Min="0" Max="8" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudCheckBox T="bool" @bind-Value="_materialAllowSplitPurchases" Label="Allow split purchases" Color="Color.Primary" Class="my-2" />
+                    <MudNumericField T="decimal" @bind-Value="_materialSafetyAllowancePercent" Label="Shopping allowance" Min="0m" Max="100m" Adornment="Adornment.End" AdornmentText="%" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="decimal" @bind-Value="_materialMinimumAllowanceGil" Label="Minimum shopping allowance" Min="0m" Adornment="Adornment.End" AdornmentText="gil" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="decimal" @bind-Value="_materialMaximumAllowanceGil" Label="Maximum shopping allowance" Min="0m" Adornment="Adornment.End" AdornmentText="gil" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="int" @bind-Value="_materialQuoteLifetimeMinutes" Label="Open quote lifetime" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="int" @bind-Value="_materialMaximumEvidenceAgeMinutes" Label="Maximum selected-route evidence age" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
 
                     <MudDivider Class="my-4" />
 
@@ -878,11 +887,6 @@
         new(nameof(MarketTravelPriority.DataCenterTransfersFirst), "Avoid data-center transfers first"),
         new(nameof(MarketTravelPriority.WorldVisitsFirst), "Avoid total world visits first")
     ];
-    private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
-    [
-        new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
-        new(nameof(TradePaymentContractMode.LaborStandard), "Labor standard")
-    ];
     private readonly ElementReference[] _tabElements = new ElementReference[AllSettingsSections.Count];
     private SettingsSection _activePanel = SettingsSection.MarketAndRoutes;
     private bool _canAdministerCompany;
@@ -957,17 +961,6 @@
 
     private string ProcurementTravelPriorityValue => _procurementTravelPriority.ToString();
 
-    private string CompanyPaymentContractValue
-    {
-        get => _companyPaymentContract.ToString();
-        set
-        {
-            if (Enum.TryParse<TradePaymentContractMode>(value, out var parsed))
-            {
-                _companyPaymentContract = parsed;
-            }
-        }
-    }
 
     private static CompactSelectOption ToSelectOption(string value) => new(value, value);
     private string _marketMafiosoApiUrl = string.Empty;
@@ -989,9 +982,17 @@
     private string? _companyLoadError;
     private bool _companyIsBusy;
     private CompanyDiscordNotificationRouteEditor? _companyNotificationRouteEditor;
-    private TradePaymentContractMode _companyPaymentContract = TradePaymentContractMode.LegacyCommission;
-    private decimal _companyLegacyCommissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
+    private decimal _companyMaterialValueBonusPercent = TradePaymentPolicy.DefaultMaterialValueBonusPercent;
     private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
+    private decimal _materialMaximumPremiumPercent = 5m;
+    private int _materialMaximumWorldStops = 8;
+    private int _materialMaximumDataCenterTransfers = 2;
+    private bool _materialAllowSplitPurchases = true;
+    private decimal _materialSafetyAllowancePercent = 10m;
+    private decimal _materialMinimumAllowanceGil = 10_000m;
+    private decimal _materialMaximumAllowanceGil = 250_000m;
+    private int _materialQuoteLifetimeMinutes = 30;
+    private int _materialMaximumEvidenceAgeMinutes = 120;
     private string? _persistedCompanyFingerprint;
     private string? _profileHostProfileName;
     private bool _profileHostIsBusy;
@@ -1511,10 +1512,19 @@
         _companyDescription = profile.Description;
         _companyCommissionContact = profile.CommissionContact;
         var policy = TradePaymentPolicyNormalizer.Normalize(
-            profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
-        _companyPaymentContract = policy.ActiveContract;
-        _companyLegacyCommissionPercent = policy.LegacyCommissionPercent;
+            profile.PaymentPolicy ?? TradePaymentPolicy.Default);
+        _companyMaterialValueBonusPercent = policy.MaterialValueBonusPercent;
         _companyLaborGilPerSynth = policy.LaborGilPerSynth;
+        var materialPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(profile.MaterialPricingPolicy);
+        _materialMaximumPremiumPercent = materialPolicy.MaximumConsolidationPremiumPercent;
+        _materialMaximumWorldStops = materialPolicy.MaximumWorldStops;
+        _materialMaximumDataCenterTransfers = materialPolicy.MaximumDataCenterTransfers;
+        _materialAllowSplitPurchases = materialPolicy.AllowSplitPurchases;
+        _materialSafetyAllowancePercent = materialPolicy.SafetyAllowancePercent;
+        _materialMinimumAllowanceGil = materialPolicy.MinimumSafetyAllowanceGil;
+        _materialMaximumAllowanceGil = materialPolicy.MaximumSafetyAllowanceGil;
+        _materialQuoteLifetimeMinutes = materialPolicy.QuoteLifetimeMinutes;
+        _materialMaximumEvidenceAgeMinutes = materialPolicy.MaximumEvidenceAgeMinutes;
         _persistedCompanyFingerprint = BuildCompanyFingerprint();
     }
 
@@ -1531,15 +1541,15 @@
         _companyName.Trim(),
         NormalizeOptionalText(_companyDescription) ?? string.Empty,
         NormalizeOptionalText(_companyCommissionContact) ?? string.Empty,
-        _companyPaymentContract.ToString(),
-        _companyLegacyCommissionPercent.ToString(CultureInfo.InvariantCulture),
-        _companyLaborGilPerSynth.ToString(CultureInfo.InvariantCulture));
+        _companyMaterialValueBonusPercent.ToString(CultureInfo.InvariantCulture),
+        _companyLaborGilPerSynth.ToString(CultureInfo.InvariantCulture),
+        TradeMaterialPricingPolicyNormalizer.Fingerprint(BuildCompanyMaterialPricingPolicy()));
 
     private TradePaymentPolicy? BuildCompanyPaymentPolicy()
     {
-        if (_companyLegacyCommissionPercent < 0 || _companyLegacyCommissionPercent > 100)
+        if (_companyMaterialValueBonusPercent < 0 || _companyMaterialValueBonusPercent > 100)
         {
-            Snackbar.Add("Legacy material commission percent must be between 0 and 100.", Severity.Error);
+            Snackbar.Add("Material value bonus must be between 0 and 100 percent.", Severity.Error);
             return null;
         }
 
@@ -1550,10 +1560,24 @@
         }
 
         return new TradePaymentPolicy(
-            _companyPaymentContract,
-            _companyLegacyCommissionPercent,
+            TradePaymentContractMode.LaborStandard,
+            _companyMaterialValueBonusPercent,
             _companyLaborGilPerSynth);
     }
+
+    private TradeMaterialPricingPolicy BuildCompanyMaterialPricingPolicy() =>
+        TradeMaterialPricingPolicyNormalizer.Normalize(new TradeMaterialPricingPolicy
+        {
+            MaximumConsolidationPremiumPercent = _materialMaximumPremiumPercent,
+            MaximumWorldStops = _materialMaximumWorldStops,
+            MaximumDataCenterTransfers = _materialMaximumDataCenterTransfers,
+            AllowSplitPurchases = _materialAllowSplitPurchases,
+            SafetyAllowancePercent = _materialSafetyAllowancePercent,
+            MinimumSafetyAllowanceGil = _materialMinimumAllowanceGil,
+            MaximumSafetyAllowanceGil = _materialMaximumAllowanceGil,
+            QuoteLifetimeMinutes = _materialQuoteLifetimeMinutes,
+            MaximumEvidenceAgeMinutes = _materialMaximumEvidenceAgeMinutes
+        });
 
     private async Task ExportCompanyProfileAsync()
     {
@@ -1854,6 +1878,7 @@
                 _companyProfile.Description = NormalizeOptionalText(_companyDescription);
                 _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
                 _companyProfile.PaymentPolicy = paymentPolicy;
+                _companyProfile.MaterialPricingPolicy = BuildCompanyMaterialPricingPolicy();
                 var companySaved = await SaveCompanyProfileAsync(_companyProfile);
                 if (!companySaved)
                 {

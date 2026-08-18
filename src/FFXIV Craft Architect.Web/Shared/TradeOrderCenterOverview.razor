@@ -33,7 +33,7 @@
         <section class="trade-order-overview__crafter-update" aria-labelledby="latest-crafter-update-title">
             <div>
                 <MudText Typo="Typo.subtitle2" HtmlTag="h2" id="latest-crafter-update-title">Latest crafting update</MudText>
-                <span>@update.CompletedQuantity.ToString("N0") of @update.RequiredQuantity.ToString("N0") completed · @update.ReadyQuantity.ToString("N0") ready</span>
+                <span>@update.CompletedQuantity.ToString("N0") of @update.RequiredQuantity.ToString("N0") completed</span>
             </div>
             @if (!string.IsNullOrWhiteSpace(update.Comment))
             {
@@ -46,7 +46,7 @@
     <section class="trade-order-overview__section" aria-labelledby="requested-output-title">
         <div class="trade-order-overview__section-heading">
             <MudText Typo="Typo.subtitle2" HtmlTag="h2" id="requested-output-title">Requested output</MudText>
-            <span>@Model.Outputs.Sum(output => output.ReadyQuantity).ToString("N0") of @Model.Outputs.Sum(output => output.RequiredQuantity).ToString("N0") ready</span>
+            <span>@Model.Outputs.Sum(output => output.CompletedQuantity).ToString("N0") of @Model.Outputs.Sum(output => output.RequiredQuantity).ToString("N0") completed</span>
         </div>
         <div class="trade-order-overview__outputs">
             @foreach (var output in Model.Outputs)
@@ -57,7 +57,6 @@
                         <span>@(output.MustBeHq ? "High quality" : "Normal quality") · quantity @output.RequiredQuantity.ToString("N0")</span>
                     </div>
                     <div><span>Completed</span><strong>@output.CompletedQuantity.ToString("N0")</strong></div>
-                    <div><span>Ready</span><strong>@output.ReadyQuantity.ToString("N0")</strong></div>
                 </div>
             }
         </div>

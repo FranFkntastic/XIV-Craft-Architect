@@ -76,9 +76,9 @@ public sealed class CompanyCommissionDraftSpecificationTests
         Assert.Throws<InvalidOperationException>(() => TradeCompanyCommissionMigrationService.ConvertLegacyOrder(historical, null, new(historical.CompanyProfileId), 0, DateTime.UtcNow, null));
         var companyPolicy = new TradePaymentPolicy(TradePaymentContractMode.LaborStandard, 20, 250);
         var migratedPayment = TradeCompanyCommissionMigrationService.ConvertLegacyOrder(historical, null, new(historical.CompanyProfileId), 0, DateTime.UtcNow, companyPolicy).CompanyCommission!.CurrentTerms.Payment;
-        Assert.Equal((CompanyCommissionPaymentSchedule.Custom, "Half now; half later.", "Labor standard", 300m, 250m, 550m, 1, 250m), (migratedPayment.Schedule, migratedPayment.CustomTerms, migratedPayment.ContractLabel, migratedPayment.MaterialReimbursement, migratedPayment.CraftLabor, migratedPayment.Total, migratedPayment.CraftSynthCount, migratedPayment.GilPerSynth));
-        historical.PaymentPolicyOverride = TradePaymentPolicy.LegacyDefault;
-        Assert.Equal("Legacy commission", TradeCompanyCommissionMigrationService.ConvertLegacyOrder(historical, null, new(historical.CompanyProfileId), 0, DateTime.UtcNow, companyPolicy).CompanyCommission!.CurrentTerms.Payment.ContractLabel);
+        Assert.Equal((CompanyCommissionPaymentSchedule.Custom, "Half now; half later.", "Labor + material-value bonus", 300m, 250m, 610m, 1, 250m), (migratedPayment.Schedule, migratedPayment.CustomTerms, migratedPayment.ContractLabel, migratedPayment.MaterialReimbursement, migratedPayment.CraftLabor, migratedPayment.Total, migratedPayment.CraftSynthCount, migratedPayment.GilPerSynth));
+        historical.PaymentPolicyOverride = TradePaymentPolicy.Default;
+        Assert.Equal("Labor + material-value bonus", TradeCompanyCommissionMigrationService.ConvertLegacyOrder(historical, null, new(historical.CompanyProfileId), 0, DateTime.UtcNow, companyPolicy).CompanyCommission!.CurrentTerms.Payment.ContractLabel);
     }
     [Fact]
     public void PublicationPreservesExactTermsAndRecordsOneOpeningAcrossReplay()

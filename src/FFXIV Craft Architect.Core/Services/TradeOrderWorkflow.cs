@@ -90,7 +90,7 @@ public static class TradeOrderWorkflow
     {
         ArgumentNullException.ThrowIfNull(order);
 
-        var policy = order.PaymentPolicyOverride ?? companyPolicy ?? TradePaymentPolicy.LegacyDefault;
+        var policy = order.PaymentPolicyOverride ?? companyPolicy ?? TradePaymentPolicy.Default;
         return TradePaymentPolicyNormalizer.Normalize(policy);
     }
 
@@ -178,6 +178,8 @@ public static class TradeOrderWorkflow
             .ToArray();
         copy.SourceSnapshot.Materials = [];
         copy.SourceSnapshot.CraftLabor = [];
+        copy.SourceSnapshot.MaterialQuote = null;
+        copy.SourceSnapshot.CostBasis = null;
         copy.SourceSnapshot.Warnings = AppendDistinctWarning(
             copy.SourceSnapshot.Warnings,
             "Requested outputs changed. Rebuild the linked craft plan and reprice before using payment totals.");
@@ -221,6 +223,7 @@ public static class TradeOrderWorkflow
             RootItems = (source.RootItems ?? Array.Empty<TradeOrderRootItemSnapshot>()).ToArray(),
             Materials = (source.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>()).ToArray(),
             CraftLabor = (source.CraftLabor ?? Array.Empty<TradeOrderCraftLaborSnapshot>()).ToArray(),
+            MaterialQuote = source.MaterialQuote,
             Warnings = (source.Warnings ?? Array.Empty<string>()).ToArray()
         };
     }

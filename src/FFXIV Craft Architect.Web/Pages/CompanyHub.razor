@@ -210,7 +210,7 @@ else
                 <section class="panel commission-detail" id="commission-workspace">
                     <div class="section-header"><div><span class="detail-reference">@_selectedCommission.Reference · terms v@(_selectedCommission.TermsVersion)</span><h2>@_selectedCommission.Title</h2></div><span class="standing">@AssignmentState(_selectedCommission)</span></div>
                     <div class="detail-grid">
-                        <div><span class="label">Requested output</span>@foreach (var output in _selectedCommission.Outputs) { <div><strong>@output.Name ×@output.Quantity</strong><span>@output.CompletedQuantity completed · @output.ReadyQuantity ready · @output.AcceptedQuantity accepted</span></div> }</div>
+                        <div><span class="label">Requested output</span>@foreach (var output in _selectedCommission.Outputs) { <div><strong>@output.Name ×@output.Quantity</strong>@if (_selectedCommission.CanReportProgress) { <label><span>Completed</span><input type="number" min="@output.CompletedQuantity" max="@output.Quantity" @bind="_progressDraft[output.LineId]" disabled="@_saving" /></label> } else { <span>@output.CompletedQuantity completed · @output.AcceptedQuantity accepted</span> }</div> }</div>
                         <div><span class="label">Payment</span><strong>@_selectedCommission.Payment.Total.ToString("N0") gil</strong><span>@PaymentScheduleLabel(_selectedCommission.Payment.Schedule) · @_selectedCommission.Payment.Label</span></div>
                     </div>
                     <div class="full-note"><span class="label">Crafter note</span><span>@CrafterNote(_selectedCommission)</span></div>
@@ -228,11 +228,14 @@ else
                         {
                             @if (_selectedCommission.CanReportProgress)
                             {
-                                <button class="button primary" type="button" disabled="@_saving" @onclick="ReportProgressAsync">Report outputs ready</button>
+                                <button class="button primary" type="button" disabled="@_saving" @onclick="ReportProgressAsync">Save progress</button>
                             }
-                            @if (_selectedCommission.CanDeclareReadiness)
+                            @if (IsAwaitingDelivery(_selectedCommission))
                             {
-                                <button class="button primary" type="button" disabled="@_saving" @onclick="DeclareReadinessAsync">Declare ready for delivery</button>
+                                <select @bind="_handoffMethod" disabled="@_saving"><option value="Mail">Mail</option><option value="CompanyRepresentative">Company representative</option><option value="Other">Other</option></select>
+                                <input @bind="_handoffRecipient" placeholder="Recipient (optional)" disabled="@_saving" />
+                                <input @bind="_handoffNote" placeholder="Delivery note (optional)" disabled="@_saving" />
+                                <button class="button quiet" type="button" disabled="@_saving" @onclick="RecordDeliveryHandoffAsync">Sent for review</button>
                             }
                         }
                         else
@@ -313,6 +316,7 @@ else
     private bool _scrollToLinkedCommission;
     private string? _appliedDeepLink;
     private CompanyHubCommission? _selectedCommission;
+    private readonly Dictionary<Guid, int> _progressDraft = [];
     private CompanyMembershipInvitation? _invitation;
     private string? _membershipNote;
     private string _newUpdateTitle = string.Empty;
@@ -418,6 +422,7 @@ else
     private async Task SelectCommissionAsync(CompanyHubCommission commission)
     {
         _selectedCommission = commission;
+        ResetProgressDraft(commission);
         _confirmingClaim = false;
         if (!IsAssignment(commission) || commission.UnreadCommissionerUpdate == null)
         {
@@ -444,7 +449,7 @@ else
             Snackbar.Add(exception.Message, Severity.Warning);
         }
     }
-    private void CloseCommission() { _selectedCommission = null; _confirmingClaim = false; }
+    private void CloseCommission() { _selectedCommission = null; _progressDraft.Clear(); _confirmingClaim = false; }
 
     private async Task PublishThemeAsync()
     {
@@ -578,14 +583,34 @@ else
     }
 
     private async Task ReportProgressAsync() => await RunParticipantActionAsync(
-        HubClient.ReportProgressAsync,
+        (commission, cancellationToken) => HubClient.ReportProgressAsync(
+            commission,
+            _progressDraft,
+            cancellationToken),
         "Progress reported.");
 
-    private async Task DeclareReadinessAsync() => await RunParticipantActionAsync(
-        HubClient.DeclareReadinessAsync,
-        "Delivery readiness declared.");
+    private CompanyCommissionDeliveryHandoffMethod _handoffMethod = CompanyCommissionDeliveryHandoffMethod.Mail;
+    private string? _handoffRecipient;
+    private string? _handoffNote;
 
-    private async Task RunParticipantActionAsync(
+    private async Task RecordDeliveryHandoffAsync()
+    {
+        var recorded = await RunParticipantActionAsync(
+            (commission, cancellationToken) => HubClient.RecordDeliveryHandoffAsync(
+                commission,
+                _handoffMethod,
+                _handoffRecipient,
+                _handoffNote,
+                cancellationToken),
+            "Delivery handoff recorded.");
+        if (recorded)
+        {
+            _handoffRecipient = null;
+            _handoffNote = null;
+        }
+    }
+
+    private async Task<bool> RunParticipantActionAsync(
         Func<CompanyHubCommission, CancellationToken, Task> action,
         string successMessage)
     {
@@ -596,11 +621,13 @@ else
             await action(_selectedCommission, CancellationToken.None);
             await ReloadSelectedAsync(commissionId);
             Snackbar.Add(successMessage, Severity.Success);
+            return true;
         }
         catch (CompanyHubRequestException exception)
         {
             await ReloadSelectedAsync(commissionId);
             Snackbar.Add(exception.Message, Severity.Warning);
+            return false;
         }
         finally
         {
@@ -613,6 +640,19 @@ else
         await ReloadHubAsync(_hub!.CompanyId);
         _selectedCommission = _hub!.Assignments?.FirstOrDefault(item => item.CommissionId == commissionId)
             ?? _hub.OpenCommissions?.FirstOrDefault(item => item.CommissionId == commissionId);
+        if (_selectedCommission != null)
+        {
+            ResetProgressDraft(_selectedCommission);
+        }
+    }
+
+    private void ResetProgressDraft(CompanyHubCommission commission)
+    {
+        _progressDraft.Clear();
+        foreach (var output in commission.Outputs)
+        {
+            _progressDraft[output.LineId] = output.CompletedQuantity;
+        }
     }
 
     private async Task HandleHubFailureAsync(CompanyHubRequestException exception)
@@ -659,8 +699,8 @@ else
     private static string AssignmentState(CompanyHubCommission assignment) =>
         assignment.Outputs.All(output => output.AcceptedQuantity >= output.Quantity)
             ? $"Delivered · settlement {SettlementLabel(assignment.SettlementState)}"
-            : assignment.Outputs.All(output => output.ReadyQuantity >= output.Quantity)
-                ? assignment.CanDeclareReadiness ? "Ready to declare" : "Ready for delivery"
+            : IsAwaitingDelivery(assignment)
+                ? "Awaiting delivery review"
                 : assignment.Outputs.Any(output => output.CompletedQuantity > 0)
                     ? "In progress"
                     : assignment.CanWork ? "Ready to begin" : "Waiting to begin";
@@ -668,7 +708,7 @@ else
     private static string AssignmentTone(CompanyHubCommission assignment) =>
         assignment.Outputs.All(output => output.AcceptedQuantity >= output.Quantity)
             ? "state-complete"
-            : assignment.Outputs.All(output => output.ReadyQuantity >= output.Quantity)
+            : IsAwaitingDelivery(assignment)
                 ? "state-ready"
                 : assignment.Outputs.Any(output => output.CompletedQuantity > 0)
                     ? "state-crafting"
@@ -677,6 +717,9 @@ else
     private static string AssignmentSupport(CompanyHubCommission assignment) =>
         assignment.WorkBlockedReason ??
         (assignment.CanWork ? "Pre-work requirements confirmed" : "Waiting for the company");
+
+    private static bool IsAwaitingDelivery(CompanyHubCommission assignment) =>
+        string.Equals(assignment.State, "awaitingdelivery", StringComparison.OrdinalIgnoreCase);
 
     private static string CrafterNote(CompanyHubCommission commission) =>
         string.IsNullOrWhiteSpace(commission.DeliveryInstructions)

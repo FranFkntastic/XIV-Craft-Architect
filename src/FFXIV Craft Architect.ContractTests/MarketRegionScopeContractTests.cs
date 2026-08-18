@@ -79,7 +79,8 @@ public sealed class MarketRegionScopeContractTests
         var procurement = File.ReadAllText(Path.Combine(web, "Pages", "ProcurementPlan.razor"));
         var tradeProcurement = File.ReadAllText(Path.Combine(web, "Pages", "TradeOrders.Procurement.cs"));
 
-        Assert.Contains("_viewSettings.DefaultMarketFetchScope", pricing, StringComparison.Ordinal);
+        Assert.Contains("RequiredMarketScope: MarketFetchScope.EntireRegion", pricing, StringComparison.Ordinal);
+        Assert.DoesNotContain("_viewSettings.DefaultMarketFetchScope", pricing, StringComparison.Ordinal);
         Assert.Contains("useCurrentSettingsContext: true", pricing, StringComparison.Ordinal);
         Assert.DoesNotContain("order.SourceSnapshot.MarketFetchScope ??", pricing, StringComparison.Ordinal);
         Assert.Contains("var requestedScope = marketScope;", lifecycle, StringComparison.Ordinal);

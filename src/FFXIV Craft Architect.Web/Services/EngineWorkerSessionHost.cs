@@ -1613,7 +1613,8 @@ public static partial class ManagedHost
                 Array.Empty<MaterialAggregate>(),
                 Array.Empty<WorkerAcquisitionRowProjection>(),
                 Array.Empty<TradeOrderCraftLaborSnapshot>(),
-                Array.Empty<string>());
+                Array.Empty<string>(),
+                null);
         }
 
         var recipeLayer = new WorkerRecipeLayerWorkflow(_canonicalSession);
@@ -1632,18 +1633,51 @@ public static partial class ManagedHost
             JsonSerializer.SerializeToElement(
                 new WorkerAcquisitionProjectionRequest("All"),
                 WireJsonOptions)));
-        var materialLines = ApplyOnHandReferenceValues(
-            new CommissionCostBasisResolver().BuildSelectedSourceLines(
-                activeDemand,
-                evidence.ItemAnalyses,
-                evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>()),
-            acquisition.Rows);
-
         var warnings = new List<string>();
-        if (evidence.ItemAnalyses.Count == 0)
+        TradeMaterialQuote? materialQuote = null;
+        IReadOnlyList<CommissionPayrollInputLine> materialLines = [];
+        if (evidence.ItemAnalyses.Count == 0 || evidence.ShoppingPlans is not { Count: > 0 })
         {
             warnings.Add(
-                "No market-analysis evidence is loaded. Payment uses plan prices where available and may be incomplete.");
+                "No current market evidence is loaded, so Trade cannot produce an executable material quote.");
+        }
+        else if (session.ActiveContext.MarketFetchScope != MarketFetchScope.EntireRegion)
+        {
+            warnings.Add(
+                "Trade material quotes require current-region market evidence; reprice the order to refresh that scope.");
+        }
+        else
+        {
+            var policy = TradeMaterialPricingPolicyNormalizer.Normalize(request.MaterialPricingPolicy);
+            var config = new MarketAnalysisConfig
+            {
+                MaxWorldsPerItem = policy.MaximumWorldStops,
+                EnableSplitWorld = policy.AllowSplitPurchases,
+                TravelTolerance = 11,
+                StartFromHomeDataCenter = true,
+                HomeDataCenter = session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
+                TravelPriority = MarketTravelPriority.DataCenterTransfersFirst
+            };
+            var optimization = await new MarketShoppingService(SessionMarketCache)
+                .OptimizeProcurementRouteWithDecisionAsync(
+                    evidence.ShoppingPlans,
+                    config,
+                    includeSplitPurchases: policy.AllowSplitPurchases,
+                    executionOptions: MarketAnalysisExecutionOptions.Synchronous);
+            var quoteResult = new TradeMaterialQuoteService().Build(
+                optimization,
+                activeItems,
+                policy,
+                DateTime.UtcNow);
+            if (quoteResult.IsComplete)
+            {
+                materialQuote = quoteResult.Quote;
+                materialLines = ApplyOnHandReferenceValues(quoteResult.MaterialLines, acquisition.Rows);
+            }
+            else
+            {
+                warnings.Add(quoteResult.FailureReason ?? "Trade material quote is incomplete.");
+            }
         }
         warnings.AddRange(materialLines.SelectMany(line => line.Warnings));
 
@@ -1722,7 +1756,8 @@ public static partial class ManagedHost
                 .Where(warning => !string.IsNullOrWhiteSpace(warning))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
-                .ToArray());
+                .ToArray(),
+            materialQuote);
     }
 
     private static IReadOnlyList<string> ResolveTradeRequestedDataCenters(

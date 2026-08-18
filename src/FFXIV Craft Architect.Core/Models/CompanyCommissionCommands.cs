@@ -136,6 +136,12 @@ public sealed record DeclareCompanyCommissionReadinessCommand(
     CompanyCommissionCommandContext Context,
     string? Comment = null) : ICompanyCommissionParticipantCommand;
 
+public sealed record RecordCompanyCommissionDeliveryHandoffCommand(
+    CompanyCommissionCommandContext Context,
+    CompanyCommissionDeliveryHandoffMethod Method,
+    string? Recipient = null,
+    string? Note = null) : ICompanyCommissionParticipantCommand;
+
 public sealed record WithdrawCompanyCommissionReadinessCommand(
     CompanyCommissionCommandContext Context,
     string Reason) : ICompanyCommissionParticipantCommand;

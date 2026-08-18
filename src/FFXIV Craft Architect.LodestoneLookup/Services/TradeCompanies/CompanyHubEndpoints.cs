@@ -33,7 +33,6 @@ public sealed record CompanyHubOutputResponse(
     string Name,
     int Quantity,
     int CompletedQuantity,
-    int ReadyQuantity,
     int AcceptedQuantity);
 
 public sealed record CompanyHubPaymentResponse(string Schedule, string Label, decimal Total);
@@ -67,7 +66,6 @@ public sealed record CompanyHubCommissionResponse(
     string State,
     bool CanWork,
     bool CanReportProgress,
-    bool CanDeclareReadiness,
     string? WorkBlockedReason,
     CompanyHubCommissionAttentionResponse? UnreadCommissionerUpdate = null);
 
@@ -838,10 +836,9 @@ public sealed class CompanyHubService(
         var canWork = commission.ActiveClaim != null &&
             commission.ClearedToWork &&
             commission.ParticipantAcknowledgedTermsVersion == commission.CurrentTermsVersion;
-        var allOutputsReady = terms.Outputs.All(output =>
+        var allOutputsComplete = terms.Outputs.All(output =>
             progressByLine.TryGetValue(output.LineId, out var progress) &&
-            progress.CompletedQuantity >= output.RequiredQuantity &&
-            progress.ReadyQuantity >= output.RequiredQuantity);
+            progress.CompletedQuantity >= output.RequiredQuantity);
         return new CompanyHubCommissionResponse(
             order.Id.ToString("D"),
             ClampText(order.Title, 240, "Untitled commission"),
@@ -861,7 +858,6 @@ public sealed class CompanyHubService(
                     ClampText(output.Name, 240, "Unknown item"),
                     Math.Max(0, output.RequiredQuantity),
                     Math.Max(0, progress?.CompletedQuantity ?? 0),
-                    Math.Max(0, progress?.ReadyQuantity ?? 0),
                     Math.Max(0, progress?.AcceptedQuantity ?? 0));
             }).ToArray(),
             new CompanyHubPaymentResponse(
@@ -871,8 +867,7 @@ public sealed class CompanyHubService(
             commission.SettlementState.ToString().ToLowerInvariant(),
             order.Status.ToString().ToLowerInvariant(),
             canWork,
-            canWork && !commission.DeliveryReadiness.IsReady && !allOutputsReady,
-            canWork && !commission.DeliveryReadiness.IsReady && allOutputsReady,
+            canWork && (!allOutputsComplete || order.Status == TradeOrderStatus.InProgress),
             WorkBlockedReason(commission),
             null);
     }

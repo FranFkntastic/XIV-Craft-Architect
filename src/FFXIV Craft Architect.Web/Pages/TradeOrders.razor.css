@@ -469,11 +469,11 @@ button.trade-orders-rail-order.is-device-only:hover {
 
 .trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-header,
 .trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-row {
-  grid-template-columns: minmax(160px, 1fr) 72px 44px 82px 72px;
+  grid-template-columns: minmax(160px, 1fr) 72px 44px 82px;
 }
 
-.trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-header span:nth-last-child(-n + 2),
-.trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-row span:nth-last-child(-n + 2) {
+.trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-header span:last-child,
+.trade-orders-breakdown-table.has-commission-progress .trade-orders-breakdown-row span:last-child {
   text-align: right;
 }
 

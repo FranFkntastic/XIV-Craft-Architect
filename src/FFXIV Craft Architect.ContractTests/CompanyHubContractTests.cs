@@ -341,7 +341,7 @@ public sealed class CompanyHubContractTests
         Assert.Equal("notdue", commission.GetProperty("settlementState").GetString());
         var output = Assert.Single(commission.GetProperty("outputs").EnumerateArray());
         Assert.Equal(80, output.GetProperty("completedQuantity").GetInt32());
-        Assert.Equal(60, output.GetProperty("readyQuantity").GetInt32());
+        Assert.False(output.TryGetProperty("readyQuantity", out _));
         Assert.Equal(40, output.GetProperty("acceptedQuantity").GetInt32());
         Assert.False(commission.GetProperty("canWork").GetBoolean());
         Assert.False(commission.GetProperty("canReportProgress").GetBoolean());
@@ -349,7 +349,7 @@ public sealed class CompanyHubContractTests
         var assignment = Assert.Single(memberJson.RootElement.GetProperty("assignments").EnumerateArray());
         Assert.True(assignment.GetProperty("canWork").GetBoolean());
         Assert.True(assignment.GetProperty("canReportProgress").GetBoolean());
-        Assert.False(assignment.GetProperty("canDeclareReadiness").GetBoolean());
+        Assert.False(assignment.TryGetProperty("canDeclareReadiness", out _));
         Assert.Equal(JsonValueKind.Null, assignment.GetProperty("workBlockedReason").ValueKind);
         Assert.Equal("hub", ownerJson.RootElement.GetProperty("kind").GetString());
         Assert.Equal(1, ownerJson.RootElement.GetProperty("pendingMembershipRequestCount").GetInt32());

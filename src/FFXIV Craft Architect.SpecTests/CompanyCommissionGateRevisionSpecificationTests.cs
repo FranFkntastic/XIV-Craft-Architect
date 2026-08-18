@@ -281,6 +281,365 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
     private static TradeOrder CompleteBothGates(TradeOrder order) =>
         CompleteMaterials(CompletePayment(order));
 
+    [Fact]
+    public void FinalProgressAtomicallyBecomesAwaitingDeliveryAndNormalizesLegacyReadyQuantity()
+    {
+        var order = CompleteBothGates(CreateClaimedOrder());
+        var output = Assert.Single(order.CompanyCommission!.OutputProgress);
+
+        order = Apply(
+            order,
+            new ReportCompanyCommissionProgressCommand(
+                Context(order),
+                [new CompanyCommissionProgressQuantity(
+                    output.LineId,
+                    output.ItemId,
+                    output.RequiredQuantity,
+                    ReadyQuantity: 0)],
+                "Craft complete."),
+            Crafter,
+            6);
+
+        Assert.Equal(TradeOrderStatus.AwaitingDelivery, order.Status);
+        var progress = Assert.Single(order.CompanyCommission!.OutputProgress);
+        Assert.Equal(progress.RequiredQuantity, progress.CompletedQuantity);
+        Assert.Equal(progress.CompletedQuantity, progress.ReadyQuantity);
+        Assert.True(order.CompanyCommission.DeliveryReadiness.IsReady);
+    }
+
+    [Fact]
+    public void OptionalHandoffAddsReviewContextWithoutGatingCommissionerAcceptance()
+    {
+        var order = CompleteBothGates(CreateClaimedOrder());
+        var output = Assert.Single(order.CompanyCommission!.OutputProgress);
+        order = Apply(
+            order,
+            new ReportCompanyCommissionProgressCommand(
+                Context(order),
+                [new CompanyCommissionProgressQuantity(
+                    output.LineId,
+                    output.ItemId,
+                    output.RequiredQuantity,
+                    output.RequiredQuantity)]),
+            Crafter,
+            6);
+        order = Apply(
+            order,
+            new RecordCompanyCommissionDeliveryHandoffCommand(
+                Context(order),
+                CompanyCommissionDeliveryHandoffMethod.Mail,
+                Recipient: "Company chest reviewer",
+                Note: "Mailed for review."),
+            Crafter,
+            7);
+
+        var handoff = Assert.Single(order.CompanyCommission!.DeliveryHandoffs);
+        Assert.Equal(order.CompanyCommission.CurrentTermsVersion, handoff.TermsVersion);
+        order = Apply(
+            order,
+            new AcceptCompanyCommissionDeliveryCommand(Context(order)),
+            Commissioner,
+            8);
+
+        Assert.Equal(TradeOrderStatus.Completed, order.Status);
+        Assert.Equal(output.RequiredQuantity, Assert.Single(order.CompanyCommission!.OutputProgress).AcceptedQuantity);
+    }
+
+    [Fact]
+    public void CommissionerCanAcceptCompletedDeliveryWithoutCrafterHandoff()
+    {
+        var order = CompleteBothGates(CreateClaimedOrder());
+        var output = Assert.Single(order.CompanyCommission!.OutputProgress);
+        order = Apply(
+            order,
+            new ReportCompanyCommissionProgressCommand(
+                Context(order),
+                [new CompanyCommissionProgressQuantity(
+                    output.LineId,
+                    output.ItemId,
+                    output.RequiredQuantity,
+                    ReadyQuantity: 0)]),
+            Crafter,
+            6);
+
+        order = Apply(
+            order,
+            new AcceptCompanyCommissionDeliveryCommand(Context(order)),
+            Commissioner,
+            7);
+
+        Assert.Equal(TradeOrderStatus.Completed, order.Status);
+        Assert.Empty(order.CompanyCommission!.DeliveryHandoffs);
+    }
+
+    [Fact]
+    public void ReturnedCompletedDeliveryResubmitsWithoutRecraftingOrReadyCeremony()
+    {
+        var order = CompleteBothGates(CreateClaimedOrder());
+        var output = Assert.Single(order.CompanyCommission!.OutputProgress);
+        var completed = new CompanyCommissionProgressQuantity(
+            output.LineId,
+            output.ItemId,
+            output.RequiredQuantity,
+            ReadyQuantity: 0);
+        order = Apply(
+            order,
+            new ReportCompanyCommissionProgressCommand(Context(order), [completed]),
+            Crafter,
+            6);
+        order = Apply(
+            order,
+            new ReturnCompanyCommissionToWorkCommand(
+                Context(order),
+                "Please place the finished craft in the company chest."),
+            Commissioner,
+            7);
+
+        Assert.Equal(TradeOrderStatus.InProgress, order.Status);
+        Assert.Equal(output.RequiredQuantity, Assert.Single(order.CompanyCommission!.OutputProgress).CompletedQuantity);
+
+        var resubmission = CompanyCommissionCommandWorkflow.Apply(
+            order,
+            new ReportCompanyCommissionProgressCommand(Context(order), [completed], "Placed in the chest."),
+            Crafter,
+            StartedAt.AddMinutes(8));
+        order = resubmission.UpdatedOrder;
+
+        Assert.Equal(TradeOrderStatus.AwaitingDelivery, order.Status);
+        Assert.Equal("Placed in the chest.", resubmission.Comment);
+    }
+
+    [Fact]
+    public void FinalPreworkGateAtomicallyLocksTheCurrentMaterialQuote()
+    {
+        var order = WithMaterialQuote(CreateClaimedOrder(), StartedAt.AddMinutes(30));
+
+        order = CompleteBothGates(order);
+
+        Assert.Equal(
+            StartedAt.AddMinutes(4),
+            order.CompanyCommission!.CurrentTerms.PricingEvidence.MaterialQuote!.LockedAtUtc);
+    }
+
+    [Fact]
+    public void ExpiredQuoteRefusesTheFinalPreworkGateWithoutLosingTheClaim()
+    {
+        var order = WithMaterialQuote(CreateClaimedOrder(), StartedAt.AddMinutes(3));
+        order = CompletePayment(order);
+        order = MarkMaterials(order);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            AcknowledgeMaterials(order, minute: 4));
+
+        Assert.Contains("expired", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(order.CompanyCommission!.ActiveClaim);
+        Assert.False(order.CompanyCommission.ClearedToWork);
+    }
+
+    [Fact]
+    public void LegacyScalarCrafterMaterialsRequireRouteRepricingBeforeFinalClearance()
+    {
+        var order = CreateClaimedOrder();
+        var commission = order.CompanyCommission!;
+        var crafterMaterial = Assert.Single(commission.CurrentTerms.Materials) with
+        {
+            Responsibility = CommissionMaterialResponsibility.Crafter
+        };
+        var terms = commission.CurrentTerms with { Materials = [crafterMaterial] };
+        order.CompanyCommission = commission with
+        {
+            TermsVersions = [terms],
+            Gates = commission.Gates with
+            {
+                CompanyMaterials = new CompanyCommissionMaterialClearance(
+                    CompanyCommissionClearanceState.NotRequired,
+                    [])
+            }
+        };
+        order = RecordPayment(order);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ConfirmPayment(order));
+
+        Assert.Contains("refreshed", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(order.CompanyCommission!.ActiveClaim);
+        Assert.False(order.CompanyCommission.ClearedToWork);
+    }
+
+    [Fact]
+    public void NoGateClaimAtomicallyLocksTheCurrentRouteQuote()
+    {
+        var order = WithMaterialQuote(CreateClaimedOrder(), StartedAt.AddMinutes(30));
+        var commission = order.CompanyCommission!;
+        var crafterMaterial = Assert.Single(commission.CurrentTerms.Materials) with
+        {
+            Responsibility = CommissionMaterialResponsibility.Crafter
+        };
+        var terms = commission.CurrentTerms with
+        {
+            Materials = [crafterMaterial],
+            Payment = commission.CurrentTerms.Payment with
+            {
+                Schedule = CompanyCommissionPaymentSchedule.OnDelivery
+            }
+        };
+        order.Status = TradeOrderStatus.ReadyToAssign;
+        order.AssignedCrafterId = null;
+        order.CompanyCommission = commission with
+        {
+            TermsVersions = [terms],
+            ActiveClaim = null,
+            ParticipantGrant = null,
+            ParticipantAcknowledgedTermsVersion = null
+        };
+        var crafterId = Guid.Parse("88888888-8888-8888-8888-888888888888");
+
+        order = Apply(
+            order,
+            new ClaimCompanyCommissionCommand(
+                Context(order),
+                1,
+                ProvisionalCrafter: null,
+                ExistingCrafterId: crafterId),
+            Crafter,
+            2);
+
+        Assert.True(order.CompanyCommission!.ClearedToWork);
+        Assert.Equal(
+            StartedAt.AddMinutes(2),
+            order.CompanyCommission.CurrentTerms.PricingEvidence.MaterialQuote!.LockedAtUtc);
+    }
+
+    [Fact]
+    public void SchemaOneCompletedProgressMigratesToOneDerivedDeliveryState()
+    {
+        var order = CreateClaimedOrder();
+        var commission = order.CompanyCommission!;
+        var output = Assert.Single(commission.OutputProgress);
+        order.Status = TradeOrderStatus.InProgress;
+        order.CompanyCommission = commission with
+        {
+            SchemaVersion = 1,
+            OutputProgress =
+            [
+                output with
+                {
+                    CompletedQuantity = output.RequiredQuantity,
+                    ReadyQuantity = 0
+                }
+            ]
+        };
+
+        var migrated = TradeCompanyCommissionMigrationService.ConvertLegacyOrder(
+            order,
+            publishedBrief: null,
+            canonicalCompanyId: new CompanyId(order.CompanyProfileId),
+            initialCommissionRevision: 0,
+            migratedAtUtc: StartedAt.AddMinutes(10),
+            companyPaymentPolicy: null);
+
+        Assert.Equal(TradeCompanyCommission.CurrentSchemaVersion, migrated.CompanyCommission!.SchemaVersion);
+        Assert.Equal(TradeOrderStatus.AwaitingDelivery, migrated.Status);
+        var progress = Assert.Single(migrated.CompanyCommission.OutputProgress);
+        Assert.Equal(progress.CompletedQuantity, progress.ReadyQuantity);
+        Assert.True(migrated.CompanyCommission.DeliveryReadiness.IsReady);
+    }
+
+    [Fact]
+    public void CompletedCommissionRejectsReplayedProgress()
+    {
+        var order = CompleteBothGates(CreateClaimedOrder());
+        var output = Assert.Single(order.CompanyCommission!.OutputProgress);
+        var completed = new CompanyCommissionProgressQuantity(
+            output.LineId,
+            output.ItemId,
+            output.RequiredQuantity,
+            output.RequiredQuantity);
+        order = Apply(
+            order,
+            new ReportCompanyCommissionProgressCommand(Context(order), [completed]),
+            Crafter,
+            6);
+        order = Apply(
+            order,
+            new AcceptCompanyCommissionDeliveryCommand(Context(order)),
+            Commissioner,
+            7);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            CompanyCommissionCommandWorkflow.Apply(
+                order,
+                new ReportCompanyCommissionProgressCommand(Context(order), [completed]),
+                Crafter,
+                StartedAt.AddMinutes(8)));
+
+        Assert.Contains("Completed or canceled", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DeliveryHandoffRejectsUnknownMethod()
+    {
+        var order = CompleteBothGates(CreateClaimedOrder());
+        var output = Assert.Single(order.CompanyCommission!.OutputProgress);
+        order = Apply(
+            order,
+            new ReportCompanyCommissionProgressCommand(
+                Context(order),
+                [new CompanyCommissionProgressQuantity(
+                    output.LineId,
+                    output.ItemId,
+                    output.RequiredQuantity,
+                    output.RequiredQuantity)]),
+            Crafter,
+            6);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            CompanyCommissionCommandWorkflow.Apply(
+                order,
+                new RecordCompanyCommissionDeliveryHandoffCommand(
+                    Context(order),
+                    (CompanyCommissionDeliveryHandoffMethod)999),
+                Crafter,
+                StartedAt.AddMinutes(7)));
+    }
+
+    [Fact]
+    public void TermsRevisionRejectsQuoteThatDoesNotCoverCrafterMaterials()
+    {
+        var order = WithMaterialQuote(CreateClaimedOrder(), StartedAt.AddMinutes(30));
+        var current = order.CompanyCommission!.CurrentTerms;
+        var payment = current.Payment with
+        {
+            MaterialReimbursement = 330,
+            Total = current.Payment.Total - current.Payment.MaterialReimbursement + 330
+        };
+        var malformed = current with
+        {
+            Version = 2,
+            Materials = current.Materials
+                .Select(item => item with
+                {
+                    Responsibility = CommissionMaterialResponsibility.Crafter
+                })
+                .ToArray(),
+            Payment = payment,
+            PricingEvidence = current.PricingEvidence with
+            {
+                MaterialQuote = current.PricingEvidence.MaterialQuote! with { Lines = [] }
+            }
+        };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            CompanyCommissionCommandWorkflow.Apply(
+                order,
+                new AmendCompanyCommissionTermsCommand(
+                    Context(order),
+                    malformed,
+                    "Refresh material quote."),
+                Commissioner,
+                StartedAt.AddMinutes(10)));
+    }
+
     private static TradeOrder PreparePartialGateEvidence(TradeOrder order) => MarkMaterials(RecordPayment(order), minute: 2);
 
     private static TradeOrder CompletePayment(TradeOrder order) => ConfirmPayment(RecordPayment(order));
@@ -368,6 +727,55 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
                 SettlementState = CompanyCommissionSettlementState.NotDue
             }
         };
+    }
+
+    private static TradeOrder WithMaterialQuote(TradeOrder order, DateTime expiresAtUtc)
+    {
+        var commission = order.CompanyCommission!;
+        var terms = commission.CurrentTerms with
+        {
+            Payment = commission.CurrentTerms.Payment with
+            {
+                MaterialReimbursement = 330,
+                Total = commission.CurrentTerms.Payment.Total -
+                    commission.CurrentTerms.Payment.MaterialReimbursement + 330
+            },
+            PricingEvidence = commission.CurrentTerms.PricingEvidence with
+            {
+                CostBasis = CommissionCostBasis.ProcurementRoute.ToString(),
+                MaterialQuote = new TradeMaterialQuote
+                {
+                    CompanyProfileId = order.CompanyProfileId,
+                    SourcePlanId = order.CraftPlanId ?? "gate-plan",
+                    PlanSessionVersion = Math.Max(1, order.SourceSnapshot.PlanSessionVersion),
+                    MarketAnalysisVersion = Math.Max(1, order.SourceSnapshot.MarketAnalysisVersion),
+                    RouteSelectionKey = "gate-route",
+                    PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(
+                        TradeMaterialPricingPolicy.Default),
+                    AppliedPolicy = TradeMaterialPricingPolicy.Default,
+                    QuotedAtUtc = StartedAt,
+                    ExpiresAtUtc = expiresAtUtc,
+                    RouteCashRequired = 300,
+                    SafetyAllowance = 30,
+                    MaterialReimbursement = 330,
+                    WorldStops = 1,
+                    DataCenterTransfers = 0,
+                    Lines =
+                    [
+                        new TradeMaterialQuoteLine(
+                            20,
+                            "Test material",
+                            3,
+                            RequiresHq: false,
+                            CashRequired: 300,
+                            Worlds: ["Siren (Aether)"],
+                            OldestEvidenceAtUtc: StartedAt)
+                    ]
+                }
+            }
+        };
+        order.CompanyCommission = commission with { TermsVersions = [terms] };
+        return order;
     }
 
     private static CompanyCommissionCommandContext Context(TradeOrder order) =>

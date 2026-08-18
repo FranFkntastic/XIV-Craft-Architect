@@ -33,7 +33,7 @@ public static class CompanyCommissionCommandWorkflow
                 "This commission requires company resolution before ordinary work can continue.");
         }
 
-        return command switch
+        var transition = command switch
         {
             UpdateCompanyCommissionDraftCommand update =>
                 UpdateDraft(source, commission, update, nowUtc, actor),
@@ -69,6 +69,8 @@ public static class CompanyCommissionCommandWorkflow
                 AcknowledgeMaterials(source, commission, received, nowUtc, actor),
             ReportCompanyCommissionProgressCommand progress =>
                 ReportProgress(source, commission, progress, nowUtc, actor),
+            RecordCompanyCommissionDeliveryHandoffCommand handoff =>
+                RecordDeliveryHandoff(source, commission, handoff, nowUtc, actor),
             AddCompanyCommissionCommentCommand comment =>
                 AddComment(source, commission, comment),
             AddCompanyCommissionPrivateNoteCommand note =>
@@ -103,6 +105,17 @@ public static class CompanyCommissionCommandWorkflow
             _ => throw new InvalidOperationException(
                 $"Unsupported company commission command '{command.GetType().Name}'.")
         };
+        var nextCommission = transition.UpdatedOrder.CompanyCommission;
+        if (nextCommission != null &&
+            !commission.ClearedToWork &&
+            nextCommission.ClearedToWork)
+        {
+            RequireCurrentMaterialQuote(nextCommission, nowUtc);
+            var updated = Copy(transition.UpdatedOrder);
+            updated.CompanyCommission = LockMaterialQuoteIfCleared(nextCommission, nowUtc);
+            transition = transition with { UpdatedOrder = updated };
+        }
+        return transition;
     }
 
     private static CompanyCommissionDomainTransition UpdateDraft(
@@ -125,7 +138,7 @@ public static class CompanyCommissionCommandWorkflow
             throw new InvalidOperationException(
                 "Draft edits require a canonical work package with at least one output.");
         }
-        ValidateTerms(command.Terms);
+        ValidateTerms(command.Terms, commission.CompanyId, command.WorkPackage);
         Require(
             command.Terms.Version == commission.CurrentTermsVersion,
             "Draft edits must replace the current unclaimed terms version.");
@@ -187,8 +200,11 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             !TradeOrderStatusWorkflow.IsArchived(source.Status),
             "Closed commission terms cannot be revised.");
+        Require(
+            commission.CurrentTerms.PricingEvidence.MaterialQuote?.IsLocked != true,
+            "Terms cannot be repriced after work clearance locks the material quote.");
         RequireReason(command.Reason);
-        ValidateTerms(command.Terms);
+        ValidateTerms(command.Terms, commission.CompanyId, command.WorkPackage);
         Require(
             command.Terms.Version == checked(commission.CurrentTermsVersion + 1),
             "A terms revision must advance the canonical version exactly once.");
@@ -289,6 +305,7 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             command.TermsVersion == commission.CurrentTermsVersion,
             "The claim terms version is stale.");
+        RequireCurrentMaterialQuote(commission, nowUtc);
         Require(
             command.ExistingCrafterId.HasValue ^ command.ProvisionalCrafter != null,
             "A claim requires exactly one existing or provisional crafter identity.");
@@ -318,27 +335,29 @@ public static class CompanyCommissionCommandWorkflow
         var updated = Copy(source);
         updated.Status = TradeOrderStatus.Assigned;
         updated.AssignedCrafterId = assignedCrafterId;
+        var claimed = commission with
+        {
+            ActiveClaim = new CompanyCommissionClaim(
+                claimId,
+                commission.CurrentTermsVersion,
+                nowUtc,
+                assignedCrafterId,
+                command.ProvisionalCrafter?.ProvisionalCrafterId,
+                command.AccountEvidence),
+            ProvisionalCrafter = command.ProvisionalCrafter,
+            ParticipantGrant = new CompanyCommissionParticipantGrant(
+                claimId,
+                claimId,
+                commission.CurrentTermsVersion,
+                1,
+                nowUtc),
+            ParticipantAcknowledgedTermsVersion = commission.CurrentTermsVersion,
+            Gates = gates
+        };
+        claimed = LockMaterialQuoteIfCleared(claimed, nowUtc);
         return Transition(
             updated,
-            commission with
-            {
-                ActiveClaim = new CompanyCommissionClaim(
-                    claimId,
-                    commission.CurrentTermsVersion,
-                    nowUtc,
-                    assignedCrafterId,
-                    command.ProvisionalCrafter?.ProvisionalCrafterId,
-                    command.AccountEvidence),
-                ProvisionalCrafter = command.ProvisionalCrafter,
-                ParticipantGrant = new CompanyCommissionParticipantGrant(
-                    claimId,
-                    claimId,
-                    commission.CurrentTermsVersion,
-                    1,
-                    nowUtc),
-                ParticipantAcknowledgedTermsVersion = commission.CurrentTermsVersion,
-                Gates = gates
-            },
+            claimed,
             CompanyCommissionActivityKind.ClaimAccepted,
             "Accepted the first valid claim.",
             JsonSerializer.Serialize(new
@@ -884,7 +903,7 @@ public static class CompanyCommissionCommandWorkflow
         DateTime nowUtc,
         CompanyCommissionActor actor)
     {
-        RequireCanWork(commission);
+        RequireCanWork(source, commission, nowUtc);
         var reported = command.Outputs.ToDictionary(item => item.LineId);
         Require(
             reported.Count == command.Outputs.Count &&
@@ -900,14 +919,12 @@ public static class CompanyCommissionCommandWorkflow
             }
             Require(
                 value.CompletedQuantity >= current.CompletedQuantity &&
-                value.CompletedQuantity <= current.RequiredQuantity &&
-                value.ReadyQuantity >= current.ReadyQuantity &&
-                value.ReadyQuantity <= value.CompletedQuantity,
+                value.CompletedQuantity <= current.RequiredQuantity,
                 "Progress quantities must be monotonic and within the required quantity.");
             return current with
             {
                 CompletedQuantity = value.CompletedQuantity,
-                ReadyQuantity = value.ReadyQuantity,
+                ReadyQuantity = value.CompletedQuantity,
                 UpdatedAtUtc = nowUtc,
                 UpdatedBy = actor
             };
@@ -918,12 +935,67 @@ public static class CompanyCommissionCommandWorkflow
             updated.Status = TradeOrderStatus.InProgress;
         }
 
+        var allComplete = next.All(item => item.CompletedQuantity == item.RequiredQuantity);
+        if (allComplete)
+        {
+            updated.Status = TradeOrderStatus.AwaitingDelivery;
+        }
+
         return Transition(
             updated,
-            commission with { OutputProgress = next },
+            LockMaterialQuoteIfCleared(commission, nowUtc) with
+            {
+                OutputProgress = next,
+                DeliveryReadiness = allComplete
+                    ? new CompanyCommissionDeliveryReadiness(true, DeclaredAtUtc: nowUtc)
+                    : commission.DeliveryReadiness
+            },
             CompanyCommissionActivityKind.ProgressReported,
             command.Comment,
-            JsonSerializer.Serialize(command.Outputs));
+            JsonSerializer.Serialize(next.Select(item =>
+                new CompanyCommissionProgressQuantity(
+                    item.LineId,
+                    item.ItemId,
+                    item.CompletedQuantity,
+                    item.CompletedQuantity))));
+    }
+
+    private static CompanyCommissionDomainTransition RecordDeliveryHandoff(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        RecordCompanyCommissionDeliveryHandoffCommand command,
+        DateTime nowUtc,
+        CompanyCommissionActor actor)
+    {
+        RequireClaim(commission);
+        Require(
+            source.Status == TradeOrderStatus.AwaitingDelivery &&
+            commission.OutputProgress.All(item => item.CompletedQuantity == item.RequiredQuantity),
+            "Complete the commission before recording a delivery handoff.");
+        var recipient = string.IsNullOrWhiteSpace(command.Recipient) ? null : command.Recipient.Trim();
+        var note = string.IsNullOrWhiteSpace(command.Note) ? null : command.Note.Trim();
+        Require(
+            Enum.IsDefined(command.Method),
+            "Choose Mail, Company representative, or Other as the delivery method.");
+        Require(
+            command.Method != CompanyCommissionDeliveryHandoffMethod.Other || note != null,
+            "Other delivery methods require an explanatory note.");
+        Require(recipient == null || recipient.Length <= 200, "Delivery recipient cannot exceed 200 characters.");
+        Require(note == null || note.Length <= 1000, "Delivery note cannot exceed 1,000 characters.");
+        var handoff = new CompanyCommissionDeliveryHandoff(
+            command.Context.CommandId,
+            command.Method,
+            nowUtc,
+            actor,
+            commission.CurrentTermsVersion,
+            recipient,
+            note);
+        return Transition(
+            source,
+            commission with { DeliveryHandoffs = [.. commission.DeliveryHandoffs, handoff] },
+            CompanyCommissionActivityKind.DeliveryHandoffRecorded,
+            note,
+            JsonSerializer.Serialize(handoff));
     }
 
     private static CompanyCommissionDomainTransition AddComment(
@@ -961,12 +1033,10 @@ public static class CompanyCommissionCommandWorkflow
         DeclareCompanyCommissionReadinessCommand command,
         DateTime nowUtc)
     {
-        RequireCanWork(commission);
+        RequireCanWork(source, commission, nowUtc);
         Require(
-            commission.OutputProgress.All(item =>
-                item.CompletedQuantity == item.RequiredQuantity &&
-                item.ReadyQuantity == item.RequiredQuantity),
-            "Every output must be completely ready before delivery can be declared.");
+            commission.OutputProgress.All(item => item.CompletedQuantity == item.RequiredQuantity),
+            "Every output must be complete before delivery can be declared.");
         var updated = Copy(source);
         updated.Status = TradeOrderStatus.AwaitingDelivery;
         return Transition(
@@ -1019,8 +1089,8 @@ public static class CompanyCommissionCommandWorkflow
     {
         Require(
             source.Status == TradeOrderStatus.AwaitingDelivery &&
-            commission.DeliveryReadiness.IsReady,
-            "The commission is not ready for delivery acceptance.");
+            commission.OutputProgress.All(item => item.CompletedQuantity == item.RequiredQuantity),
+            "The commission is not complete for delivery acceptance.");
         var updated = Copy(source);
         updated.Status = TradeOrderStatus.Completed;
         var progress = commission.OutputProgress.Select(item => item with
@@ -1496,13 +1566,73 @@ public static class CompanyCommissionCommandWorkflow
             "The draft source snapshot outputs do not match the canonical terms.");
     }
 
-    private static void RequireCanWork(TradeCompanyCommission commission)
+    private static void RequireCanWork(
+        TradeOrder source,
+        TradeCompanyCommission commission,
+        DateTime nowUtc)
     {
+        Require(
+            !TradeOrderStatusWorkflow.IsArchived(source.Status),
+            "Completed or canceled commissions cannot accept participant work updates.");
         RequireClaim(commission);
         Require(commission.ClearedToWork, "Every applicable pre-work gate must be satisfied.");
+        RequireCurrentMaterialQuote(commission, nowUtc);
         Require(
             commission.ParticipantAcknowledgedTermsVersion == commission.CurrentTermsVersion,
             "The participant must acknowledge the current terms before work can continue.");
+    }
+
+    private static void RequireCurrentMaterialQuote(
+        TradeCompanyCommission commission,
+        DateTime nowUtc)
+    {
+        var terms = commission.CurrentTerms;
+        if (!terms.Materials.Any(item =>
+                item.Responsibility == CommissionMaterialResponsibility.Crafter &&
+                item.Quantity > 0))
+        {
+            return;
+        }
+
+        var quote = terms.PricingEvidence.MaterialQuote;
+        if (quote == null)
+        {
+            throw new InvalidOperationException(
+                "The material quote must be refreshed before work can begin.");
+        }
+        ValidateTerms(terms, commission.CompanyId, workPackage: null);
+        Require(!quote.IsExpired(nowUtc), "The material quote expired and must be refreshed before work can begin.");
+    }
+
+    private static TradeCompanyCommission LockMaterialQuoteIfCleared(
+        TradeCompanyCommission commission,
+        DateTime nowUtc)
+    {
+        if (!commission.ClearedToWork)
+        {
+            return commission;
+        }
+
+        var current = commission.CurrentTerms;
+        var quote = current.PricingEvidence.MaterialQuote;
+        if (quote == null || quote.IsLocked)
+        {
+            return commission;
+        }
+        Require(!quote.IsExpired(nowUtc), "The material quote expired and must be refreshed before work can begin.");
+        var lockedTerms = current with
+        {
+            PricingEvidence = current.PricingEvidence with
+            {
+                MaterialQuote = quote with { LockedAtUtc = nowUtc }
+            }
+        };
+        return commission with
+        {
+            TermsVersions = commission.TermsVersions
+                .Select(terms => terms.Version == lockedTerms.Version ? lockedTerms : terms)
+                .ToArray()
+        };
     }
 
     private static void RequireExactMaterials(
@@ -1519,9 +1649,65 @@ public static class CompanyCommissionCommandWorkflow
             "The complete promised commissioner-material bundle must match exactly.");
     }
 
-    private static void ValidateTerms(CompanyCommissionTermsVersion terms)
+    internal static void ValidateTerms(
+        CompanyCommissionTermsVersion terms,
+        CompanyId companyId,
+        CompanyCommissionDraftWorkPackage? workPackage)
     {
         Require(terms.Version > 0, "Terms versions must be positive.");
+        var crafterMaterials = terms.Materials
+            .Where(item =>
+                item.Responsibility == CommissionMaterialResponsibility.Crafter &&
+                item.Quantity > 0)
+            .ToArray();
+        if (crafterMaterials.Length > 0)
+        {
+            Require(
+                string.Equals(
+                    terms.PricingEvidence.CostBasis,
+                    CommissionCostBasis.ProcurementRoute.ToString(),
+                    StringComparison.Ordinal),
+                "Crafter-supplied materials require procurement-route pricing evidence.");
+            var quote = terms.PricingEvidence.MaterialQuote;
+            var expectedCoverage = crafterMaterials
+                .GroupBy(item => (item.ItemId, item.RequiresHq))
+                .Select(group => (group.Key.ItemId, group.Key.RequiresHq, Quantity: group.Sum(item => item.Quantity)))
+                .OrderBy(item => item.ItemId)
+                .ThenBy(item => item.RequiresHq)
+                .ToArray();
+            var actualCoverage = quote?.Lines
+                .Select(line => (line.ItemId, line.RequiresHq, Quantity: line.RequiredQuantity))
+                .OrderBy(item => item.ItemId)
+                .ThenBy(item => item.RequiresHq)
+                .ToArray() ?? [];
+            Require(
+                quote is
+                {
+                    SchemaVersion: TradeMaterialQuote.CurrentSchemaVersion,
+                    RouteCashRequired: >= 0,
+                    SafetyAllowance: >= 0,
+                    MaterialReimbursement: >= 0,
+                    PlanSessionVersion: > 0,
+                    MarketAnalysisVersion: > 0
+                } &&
+                quote.CompanyProfileId == companyId.Value &&
+                !string.IsNullOrWhiteSpace(quote.SourcePlanId) &&
+                !string.IsNullOrWhiteSpace(quote.RouteSelectionKey) &&
+                string.Equals(
+                    quote.PolicyFingerprint,
+                    TradeMaterialPricingPolicyNormalizer.Fingerprint(quote.AppliedPolicy),
+                    StringComparison.Ordinal) &&
+                quote.MaterialReimbursement == quote.RouteCashRequired + quote.SafetyAllowance &&
+                quote.Lines.All(line => line.RequiredQuantity > 0 && line.CashRequired >= 0) &&
+                quote.Lines.Sum(line => line.CashRequired) == quote.RouteCashRequired &&
+                expectedCoverage.SequenceEqual(actualCoverage) &&
+                terms.Payment.MaterialReimbursement == quote.MaterialReimbursement &&
+                (workPackage == null ||
+                 string.Equals(quote.SourcePlanId, workPackage.CraftPlanId, StringComparison.Ordinal) &&
+                 quote.PlanSessionVersion == workPackage.SourceSnapshot.PlanSessionVersion &&
+                 quote.MarketAnalysisVersion == workPackage.SourceSnapshot.MarketAnalysisVersion),
+                "Procurement-route terms require a complete reconciled material quote.");
+        }
         Require(terms.Outputs.Count > 0, "At least one requested output is required.");
         Require(
             terms.Outputs.All(item =>

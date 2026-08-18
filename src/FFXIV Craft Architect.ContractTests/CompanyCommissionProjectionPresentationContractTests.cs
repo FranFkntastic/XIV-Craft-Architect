@@ -16,13 +16,14 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
     {
         AssertPublication(
             TradeOrderStatus.Assigned,
-            ["CRAFTING", "3 crafted, 2 ready"],
+            ["CRAFTING", "3 completed"],
             "READY TO WORK",
-            "IN PROGRESS");
+            "IN PROGRESS",
+            "ready");
         AssertPublication(
             TradeOrderStatus.AwaitingDelivery,
-            ["READY FOR DELIVERY"],
-            "AWAITING DELIVERY");
+            ["AWAITING DELIVERY REVIEW"],
+            "READY FOR DELIVERY");
     }
     [Fact]
     public void OrderCenterAndDraftMigrationKeepAuthorityBoundariesExplicit()
@@ -38,6 +39,12 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         modern.Status = TradeOrderStatus.Assigned;
         modern.AssignedCrafterId = Guid.NewGuid();
         modern.CompanyCommission = CreateClearedAssignedCommission() with { ActiveClaim = null };
+        Assert.True(CompanyCommissionSchemaMigrationHostedService.RequiresMigration(modern));
+        modern.CompanyCommission = modern.CompanyCommission with
+        {
+            SchemaVersion = TradeCompanyCommission.CurrentSchemaVersion - 1,
+            ActiveClaim = new CompanyCommissionClaim(Guid.NewGuid(), 1, CapturedAt, modern.AssignedCrafterId, null)
+        };
         Assert.True(CompanyCommissionSchemaMigrationHostedService.RequiresMigration(modern));
         var source = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.razor");
         var pageStyles = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.razor.css").ReplaceLineEndings("\n");

@@ -14,7 +14,8 @@ public sealed record PlanDerivationRequest(
     bool ForceRefreshMarketData = false,
     IReadOnlyCollection<int>? MarketItemIdsToRefresh = null,
     bool SkipMarketRefresh = false,
-    bool UseCurrentSettingsContext = false);
+    bool UseCurrentSettingsContext = false,
+    MarketFetchScope? RequiredMarketScope = null);
 
 public sealed record PlanDerivationResult(
     bool MarketPublished,
@@ -194,20 +195,23 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
         var fetchedCount = 0;
         var marketChanged = false;
         var market = await _worker.GetMarketProjectionAsync(cancellationToken);
-        var marketScope = request.UseCurrentSettingsContext
-            ? _settings.DefaultMarketFetchScope
-            : market?.Scope ?? _settings.DefaultMarketFetchScope;
+        var marketScope = request.RequiredMarketScope ??
+            (request.UseCurrentSettingsContext
+                ? _settings.DefaultMarketFetchScope
+                : market?.Scope ?? _settings.DefaultMarketFetchScope);
         var selectedDataCenter = request.UseCurrentSettingsContext
             ? _settings.SelectedDataCenter
             : market?.SelectedDataCenter ?? _settings.SelectedDataCenter;
         var selectedRegion = request.UseCurrentSettingsContext
             ? _settings.SelectedRegion
             : market?.SelectedRegion ?? _settings.SelectedRegion;
-        var selectedRegions = request.UseCurrentSettingsContext
-            ? _settings.AnalysisRegions
-            : MarketFetchScopeResolver.ResolveRegionsForDataCenters(
-                market?.RequestedDataCenters ?? Array.Empty<string>(),
-                selectedRegion);
+        var selectedRegions = request.RequiredMarketScope == MarketFetchScope.EntireRegion
+            ? MarketFetchScopeResolver.NormalizeSelectedRegions(selectedRegion, null)
+            : request.UseCurrentSettingsContext
+                ? _settings.AnalysisRegions
+                : MarketFetchScopeResolver.ResolveRegionsForDataCenters(
+                    market?.RequestedDataCenters ?? Array.Empty<string>(),
+                    selectedRegion);
         var requestedDataCenters = MarketFetchScopeResolver.GetDataCenters(
             marketScope,
             selectedDataCenter,

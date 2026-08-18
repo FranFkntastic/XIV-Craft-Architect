@@ -281,6 +281,8 @@ public partial class TradeOrders
                 "The one active claim slot was reserved.",
             CompanyCommissionActivityKind.TermsAmended =>
                 "The commissioner created a new immutable terms version.",
+            CompanyCommissionActivityKind.DeliveryHandoffRecorded =>
+                "The crafter recorded where the completed project was sent for commissioner review.",
             CompanyCommissionActivityKind.PaymentSentRecorded =>
                 "The commissioner marked the current-terms payment sent.",
             CompanyCommissionActivityKind.PaymentReceivedConfirmed =>

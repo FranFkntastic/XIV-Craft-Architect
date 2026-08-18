@@ -205,20 +205,38 @@ public sealed class CompanyHubClient(
             cancellationToken))!.ReadRevision;
     }
 
-    public async Task ReportProgressAsync(CompanyHubCommission commission, CancellationToken cancellationToken = default)
+    public async Task ReportProgressAsync(
+        CompanyHubCommission commission,
+        IReadOnlyDictionary<Guid, int> completedQuantities,
+        CancellationToken cancellationToken = default)
     {
         var outputs = commission.Outputs.Select(output => new
         {
             output.LineId,
             output.ItemId,
-            CompletedQuantity = output.Quantity,
-            ReadyQuantity = output.Quantity
+            CompletedQuantity = Math.Clamp(
+                completedQuantities.GetValueOrDefault(output.LineId, output.CompletedQuantity),
+                output.CompletedQuantity,
+                output.Quantity),
+            ReadyQuantity = Math.Clamp(
+                completedQuantities.GetValueOrDefault(output.LineId, output.CompletedQuantity),
+                output.CompletedQuantity,
+                output.Quantity)
         });
         await SendParticipantCommandAsync(commission, "report-progress", new { Outputs = outputs, Comment = (string?)null }, cancellationToken);
     }
 
-    public async Task DeclareReadinessAsync(CompanyHubCommission commission, CancellationToken cancellationToken = default) =>
-        await SendParticipantCommandAsync(commission, "declare-readiness", new { Comment = (string?)null }, cancellationToken);
+    public async Task RecordDeliveryHandoffAsync(
+        CompanyHubCommission commission,
+        CompanyCommissionDeliveryHandoffMethod method,
+        string? recipient,
+        string? note,
+        CancellationToken cancellationToken = default) =>
+        await SendParticipantCommandAsync(
+            commission,
+            "record-delivery-handoff",
+            new { Method = method, Recipient = recipient, Note = note },
+            cancellationToken);
 
     public async Task<IReadOnlyList<CompanyMember>> LoadCompanyMembersAsync(string companyId, CancellationToken cancellationToken = default) =>
         await GetListAsync<CompanyMember>($"trade/v1/companies/{Uri.EscapeDataString(companyId)}/memberships", cancellationToken);
@@ -452,10 +470,10 @@ public sealed record CompanyHubTheme(
     string? About,
     bool ShowOpenCommissionCount);
 public sealed record CompanyHubStanding(string State, string? Role);
-public sealed record CompanyHubOutput(Guid LineId, int ItemId, string Name, int Quantity, int CompletedQuantity, int ReadyQuantity, int AcceptedQuantity);
+public sealed record CompanyHubOutput(Guid LineId, int ItemId, string Name, int Quantity, int CompletedQuantity, int AcceptedQuantity);
 public sealed record CompanyHubPayment(string Schedule, string Label, decimal Total);
 public sealed record CompanyHubUpdate(Guid Id, string Title, string Body, string AuthorDisplayName, DateTime PublishedAtUtc, DateTime? EditedAtUtc, bool IsPinned);
-public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State, bool CanWork, bool CanReportProgress, bool CanDeclareReadiness, string? WorkBlockedReason, CompanyHubCommissionAttention? UnreadCommissionerUpdate);
+public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State, bool CanWork, bool CanReportProgress, string? WorkBlockedReason, CompanyHubCommissionAttention? UnreadCommissionerUpdate);
 public sealed record CompanyHubCommissionAttention(Guid EventId, long Revision, string Text, DateTime CreatedAtUtc);
 public sealed record CompanyHubAttentionRead(long ReadRevision);
 public sealed record CompanyHubRosterMember(Guid AccountProfileId, string DisplayName, string Role);

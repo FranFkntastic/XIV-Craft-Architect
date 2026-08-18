@@ -16,7 +16,8 @@ public sealed record TradeOrderPaymentProvenance(
     string? SelectedDataCenter,
     string? SelectedRegion,
     IReadOnlyList<string> RequestedDataCenters,
-    DateTime PricingSnapshotAtUtc);
+    DateTime PricingSnapshotAtUtc,
+    TradeMaterialQuote? MaterialQuote = null);
 
 public sealed record TradeOrderPaymentCopyContext(
     string OrderTitle,
@@ -39,6 +40,7 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(active.MaterialReimbursementTotal)}");
         if (active.Contract == TradePaymentContractMode.LaborStandard)
         {
+            builder.AppendLine($"Material value bonus ({active.CommissionPercent:N0}%): {FormatGil(active.CommissionAmount)}");
             builder.AppendLine($"Craft labor: {active.CraftSynthCount:N0} synths x {active.GilPerSynth:N2} gil = {FormatGil(active.CraftLaborTotal)}");
         }
         else
@@ -63,20 +65,12 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine($"Active basis: {FormatPaymentContract(summary.Active.Contract)}");
         builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(summary.MaterialReimbursementTotal)}");
-        if (summary.OnHandMaterialValueTotal > 0)
-        {
-            builder.AppendLine($"On-hand material value (bonus basis only): {FormatGil(summary.OnHandMaterialValueTotal)}");
-        }
-        builder.AppendLine($"Provided material value: {FormatGil(summary.ProvidedMaterialTotal)}");
-        builder.AppendLine($"Legacy comparison: {FormatPaymentBreakdown(summary.Legacy)}");
-        builder.AppendLine($"Labor-standard comparison: {FormatPaymentBreakdown(summary.LaborStandard)}");
         if (summary.LaborStandard.IsAvailable)
         {
+            builder.AppendLine($"Material value bonus ({summary.Active.CommissionPercent:N0}%): {FormatGil(summary.Active.CommissionAmount)}");
             builder.AppendLine($"Craft labor: {summary.LaborStandard.CraftSynthCount:N0} synths x {summary.LaborStandard.GilPerSynth:N2} gil = {FormatGil(summary.LaborStandard.CraftLaborTotal)}");
-            builder.AppendLine($"Difference vs legacy: {FormatPaymentDifference(summary.LaborStandard, summary.Legacy)}");
         }
 
-        builder.AppendLine($"Total estimated procurement: {FormatGil(summary.EstimatedProcurementTotal)}");
         AppendAllWarnings(builder, summary);
         return builder.ToString();
     }
@@ -91,31 +85,11 @@ public static class TradeOrderPaymentCopyFormatter
         return "Needs reprice";
     }
 
-    public static string FormatPaymentDifference(
-        TradePaymentContractBreakdown laborStandard,
-        TradePaymentContractBreakdown legacy)
-    {
-        if (!laborStandard.IsAvailable)
-        {
-            return "Needs reprice";
-        }
-
-        var value = laborStandard.Total - legacy.Total;
-        if (value == 0)
-        {
-            return "0 gil";
-        }
-
-        return value > 0
-            ? $"+{value:N0} gil"
-            : $"{value:N0} gil";
-    }
-
     public static string FormatPaymentContract(TradePaymentContractMode mode)
     {
         return mode == TradePaymentContractMode.LaborStandard
-            ? "labor standard"
-            : "legacy";
+            ? "labor + material-value bonus"
+            : "agreed historical terms";
     }
 
     private static StringBuilder CreateHeader(string title, TradeOrderPaymentCopyContext context)
@@ -128,6 +102,14 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine($"Material cost basis: {FormatCostBasis(context.Provenance.CostBasis)}");
         builder.AppendLine($"Evidence scope: {FormatEvidenceScope(context.Provenance)}");
         builder.AppendLine($"Evidence snapshot: {FormatTimestamp(context.Provenance.PricingSnapshotAtUtc)}");
+        if (context.Provenance.MaterialQuote is { } quote)
+        {
+            var quoteState = quote.IsLocked
+                ? $"locked {FormatTimestamp(quote.LockedAtUtc!.Value)}"
+                : $"expires {FormatTimestamp(quote.ExpiresAtUtc)}";
+            builder.AppendLine(
+                $"Route quote: {quote.WorldStops:N0} worlds; {quote.DataCenterTransfers:N0} data-center transfers; {quoteState}; policy {quote.PolicyFingerprint}");
+        }
         builder.AppendLine();
         builder.AppendLine("Outputs:");
         foreach (var item in context.Outputs.OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase))
@@ -166,6 +148,7 @@ public static class TradeOrderPaymentCopyFormatter
         {
             CommissionCostBasis.MarketRecommendation => "Market recommendation",
             CommissionCostBasis.SelectedAcquisitionSources => "Selected acquisition sources",
+            CommissionCostBasis.ProcurementRoute => "Procurement route",
             _ => "Not recorded (legacy order snapshot)"
         };
     }

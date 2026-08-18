@@ -37,6 +37,8 @@ public sealed class TradeCompanyProfilePackageService
         importedProfile.Description = sourceProfile.Description;
         importedProfile.CommissionContact = sourceProfile.CommissionContact;
         importedProfile.PaymentPolicy = NormalizePaymentPolicy(sourceProfile.PaymentPolicy);
+        importedProfile.MaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
+            sourceProfile.MaterialPricingPolicy);
 
         var importedCrafters = package.Crafters
             .Select(crafter => ImportCrafter(crafter, importedProfile.Id, importedAtUtc))
@@ -83,6 +85,8 @@ public sealed class TradeCompanyProfilePackageService
             RemoteId = profile.RemoteId,
             SyncState = profile.SyncState,
             PaymentPolicy = NormalizePaymentPolicy(profile.PaymentPolicy),
+            MaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
+                profile.MaterialPricingPolicy),
             CreatedAtUtc = profile.CreatedAtUtc,
             UpdatedAtUtc = profile.UpdatedAtUtc
         };
@@ -91,7 +95,7 @@ public sealed class TradeCompanyProfilePackageService
     private static TradePaymentPolicy NormalizePaymentPolicy(TradePaymentPolicy? policy)
     {
         return TradePaymentPolicyNormalizer.Normalize(
-            policy ?? TradePaymentPolicy.LegacyDefault);
+            policy ?? TradePaymentPolicy.Default);
     }
 
     private static TradeCrafterProfile CopyCrafter(TradeCrafterProfile crafter)

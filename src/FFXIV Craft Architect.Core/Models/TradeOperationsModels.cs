@@ -31,7 +31,7 @@ public sealed class TradeCompanyDiscordInstallationBinding
 
 public sealed class TradeCompanyProfile
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public Guid Id { get; set; } = Guid.NewGuid();
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -43,7 +43,8 @@ public sealed class TradeCompanyProfile
     public TradeCompanyDiscordInstallationBinding? DiscordInstallation { get; set; }
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
-    public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.LegacyDefault;
+    public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.Default;
+    public TradeMaterialPricingPolicy MaterialPricingPolicy { get; set; } = TradeMaterialPricingPolicy.Default;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
@@ -57,7 +58,8 @@ public sealed class TradeCompanyProfile
             CreatedAtUtc = createdAtUtc,
             UpdatedAtUtc = createdAtUtc,
             SyncState = TradeSyncState.LocalOnly,
-            PaymentPolicy = TradePaymentPolicy.LegacyDefault
+            PaymentPolicy = TradePaymentPolicy.Default,
+            MaterialPricingPolicy = TradeMaterialPricingPolicy.Default
         };
     }
 }
@@ -307,7 +309,63 @@ public sealed class TradeOrderSourceSnapshot
     public IReadOnlyList<TradeOrderRootItemSnapshot> RootItems { get; set; } = Array.Empty<TradeOrderRootItemSnapshot>();
     public IReadOnlyList<TradeOrderMaterialSnapshot> Materials { get; set; } = Array.Empty<TradeOrderMaterialSnapshot>();
     public IReadOnlyList<TradeOrderCraftLaborSnapshot> CraftLabor { get; set; } = Array.Empty<TradeOrderCraftLaborSnapshot>();
+    public TradeMaterialQuote? MaterialQuote { get; set; }
     public IReadOnlyList<string> Warnings { get; set; } = Array.Empty<string>();
+}
+
+public sealed record TradeMaterialPricingPolicy
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+    public decimal MaximumConsolidationPremiumPercent { get; init; } = 5m;
+    public int MaximumWorldStops { get; init; } = 8;
+    public int MaximumDataCenterTransfers { get; init; } = 2;
+    public bool AllowSplitPurchases { get; init; } = true;
+    public decimal SafetyAllowancePercent { get; init; } = 10m;
+    public decimal MinimumSafetyAllowanceGil { get; init; } = 10_000m;
+    public decimal MaximumSafetyAllowanceGil { get; init; } = 250_000m;
+    public int QuoteLifetimeMinutes { get; init; } = 30;
+    public int MaximumEvidenceAgeMinutes { get; init; } = 120;
+
+    public static TradeMaterialPricingPolicy Default { get; } = new();
+}
+
+public sealed record TradeMaterialQuoteLine(
+    int ItemId,
+    string Name,
+    int RequiredQuantity,
+    bool RequiresHq,
+    decimal CashRequired,
+    IReadOnlyList<string> Worlds,
+    DateTime? OldestEvidenceAtUtc);
+
+public sealed record TradeMaterialQuote
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+    public Guid CompanyProfileId { get; init; }
+    public string? SourcePlanId { get; init; }
+    public long PlanSessionVersion { get; init; }
+    public long MarketAnalysisVersion { get; init; }
+    public string RouteSelectionKey { get; init; } = string.Empty;
+    public required string PolicyFingerprint { get; init; }
+    public required TradeMaterialPricingPolicy AppliedPolicy { get; init; }
+    public required DateTime QuotedAtUtc { get; init; }
+    public required DateTime ExpiresAtUtc { get; init; }
+    public DateTime? LockedAtUtc { get; init; }
+    public required decimal RouteCashRequired { get; init; }
+    public required decimal SafetyAllowance { get; init; }
+    public required decimal MaterialReimbursement { get; init; }
+    public required int WorldStops { get; init; }
+    public required int DataCenterTransfers { get; init; }
+    public IReadOnlyList<TradeMaterialQuoteLine> Lines { get; init; } = [];
+
+    [JsonIgnore]
+    public bool IsLocked => LockedAtUtc.HasValue;
+
+    public bool IsExpired(DateTime nowUtc) => !IsLocked && nowUtc >= ExpiresAtUtc;
 }
 
 public sealed record TradeOrderRootItemSnapshot(

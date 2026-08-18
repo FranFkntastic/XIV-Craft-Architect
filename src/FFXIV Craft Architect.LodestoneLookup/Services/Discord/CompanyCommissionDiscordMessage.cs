@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
@@ -253,7 +254,7 @@ public static class CompanyCommissionDiscordMessage
         }
         if (commission.Status == TradeOrderStatus.AwaitingDelivery)
         {
-            return "READY FOR DELIVERY";
+            return "AWAITING DELIVERY REVIEW";
         }
         if (commission.Status == TradeOrderStatus.InProgress)
         {
@@ -302,8 +303,8 @@ public static class CompanyCommissionDiscordMessage
             {
                 var quality = output.MustBeHq ? " HQ" : string.Empty;
                 var progress = progressByLine.GetValueOrDefault(output.LineId);
-                var progressSummary = progress is { CompletedQuantity: > 0 } or { ReadyQuantity: > 0 }
-                    ? $" - {progress.CompletedQuantity:N0} crafted, {progress.ReadyQuantity:N0} ready"
+                var progressSummary = progress is { CompletedQuantity: > 0 }
+                    ? $" - {progress.CompletedQuantity:N0} completed"
                     : string.Empty;
                 return $"- **{EscapeMarkdown(output.Name)}** x{output.RequiredQuantity:N0}{quality}{progressSummary}";
             })
@@ -333,9 +334,12 @@ public static class CompanyCommissionDiscordMessage
             : payment.CraftLabor > 0
                 ? $"\nLabor: {FormatGil(payment.CraftLabor)}"
                 : string.Empty;
+        var materialBonus = payment.MaterialAdjustment > 0
+            ? $"\nMaterial value bonus: {FormatGil(payment.MaterialAdjustment)}"
+            : string.Empty;
 
-        return $"**{FormatGil(payment.Total)} total**\n{timing} | {payment.ContractLabel}" +
-            $"\nMaterials: {FormatGil(payment.MaterialReimbursement)}{labor}";
+        return $"**{FormatGil(payment.Total)} total**\n{timing} | {CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(payment.ContractLabel)}" +
+            $"\nMaterials: {FormatGil(payment.MaterialReimbursement)}{materialBonus}{labor}";
     }
 
     private static string MaterialsSummary(

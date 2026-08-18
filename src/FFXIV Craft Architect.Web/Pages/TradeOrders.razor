@@ -430,9 +430,8 @@
                                             var paymentSummary = GetSelectedOrderPaymentSummary();
                                             var displayedPaymentTotal = SelectedCanonicalCommission?.CurrentTerms.Payment.Total ??
                                                 paymentSummary.TotalPayment;
-                                            var displayedProcurementTotal = SelectedCanonicalCommission?.CurrentTerms.Materials
-                                                .Sum(material => material.TotalCost) ??
-                                                paymentSummary.EstimatedProcurementTotal;
+                                            var materialQuote = SelectedCanonicalCommission?.CurrentTerms.PricingEvidence.MaterialQuote ??
+                                                _selectedOrder.SourceSnapshot.MaterialQuote;
                                         }
                                @if (SelectedCommissionOwner is { } operationsOwner &&
                                     operationsOwner.Order.CompanyCommission is { } operationsCommission)
@@ -761,19 +760,33 @@
                                          </section>
                                      }
 
-                                     @if (operationsOwner.Order.Status == TradeOrderStatus.AwaitingDelivery &&
-                                          operationsCommission.DeliveryReadiness.IsReady)
+                                     @if (operationsOwner.Order.Status == TradeOrderStatus.AwaitingDelivery)
                                      {
                                          <section class="trade-orders-operation-card is-attention">
                                              <div class="trade-orders-operation-card-heading">
                                                  <div>
-                                                     <MudText Typo="Typo.subtitle2">Delivery Ready</MudText>
+                                                     <MudText Typo="Typo.subtitle2">Delivery review</MudText>
                                                      <MudText Typo="Typo.caption" Color="Color.Secondary">
-                                                         The crafter declared every requested output ready.
+                                                         Every requested output is complete.
                                                      </MudText>
                                                  </div>
                                                  <span class="trade-orders-publication-chip is-attention">Review</span>
                                              </div>
+                                             @if (operationsCommission.DeliveryHandoffs.LastOrDefault() is { } handoff)
+                                             {
+                                                 <div class="trade-orders-payment-clearance is-complete">
+                                                     <strong>Sent for review by @handoff.RecordedBy.DisplayName</strong>
+                                                     <span>@FormatDeliveryHandoffMethod(handoff.Method) · @handoff.RecordedAtUtc.ToLocalTime().ToString("g") · terms v@(handoff.TermsVersion)</span>
+                                                     @if (!string.IsNullOrWhiteSpace(handoff.Recipient))
+                                                     {
+                                                         <span>Recipient: @handoff.Recipient</span>
+                                                     }
+                                                     @if (!string.IsNullOrWhiteSpace(handoff.Note))
+                                                     {
+                                                         <span>@handoff.Note</span>
+                                                     }
+                                                 </div>
+                                             }
                                              <MudTextField @bind-Value="_commissionReturnReason"
                                                            id="commission-return-to-work-reason"
                                                            Label="Return-to-work reason"
@@ -987,16 +1000,6 @@
                                                        OnClick='@(() => CopyGilAmountAsync(displayedPaymentTotal, "Payment amount copied"))'
                                                        aria-label="Copy payment amount" />
                                     </div>
-                                    <div class="trade-orders-payment-metric">
-                                        <span>Total estimated procurement</span>
-                                        <strong>@FormatGil(displayedProcurementTotal)</strong>
-                                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
-                                                       Color="Color.Primary"
-                                                       Size="Size.Small"
-                                                       Disabled="@(displayedProcurementTotal <= 0)"
-                                                       OnClick='@(() => CopyGilAmountAsync(displayedProcurementTotal, "Procurement estimate copied"))'
-                                                       aria-label="Copy procurement amount" />
-                                    </div>
                                 </div>
                                 @if (paymentSummary.Materials.Count > 0 && paymentSummary.EstimatedProcurementTotal <= 0)
                                 {
@@ -1007,7 +1010,7 @@
                                     <div class="trade-orders-payment-table">
                                         <div class="trade-orders-payment-table-title">
                                             <span>Payment Breakdown</span>
-                                            <span>Current route</span>
+                                            <span>@FormatMaterialQuoteProvenance(materialQuote)</span>
                                         </div>
                                         <div class="trade-orders-payment-breakdown-header">
                                             <span>Line</span>
@@ -1015,33 +1018,17 @@
                                             <span>Amount</span>
                                         </div>
                                         <div class="trade-orders-payment-breakdown-row">
-                                            <span>Crafter-procured materials</span>
-                                            <span>Payable materials</span>
+                                            <span>Material reimbursement</span>
+                                            <span>Executable route cash + shopping allowance</span>
                                             <strong>@FormatGil(paymentSummary.MaterialReimbursementTotal)</strong>
                                         </div>
-                                        @if (paymentSummary.OnHandMaterialValueTotal > 0)
-                                        {
-                                            <div class="trade-orders-payment-breakdown-row">
-                                                <span>On-hand material value</span>
-                                                <span>Bonus basis only; not reimbursed</span>
-                                                <strong>@FormatGil(paymentSummary.OnHandMaterialValueTotal)</strong>
-                                            </div>
-                                        }
-                                        <div class="trade-orders-payment-breakdown-row">
-                                            <span>Company-provided materials</span>
-                                            <span>Estimate only</span>
-                                            <strong>@FormatGilAllowZero(paymentSummary.ProvidedMaterialTotal)</strong>
-                                        </div>
-                                        @if (paymentSummary.Active.Contract == TradePaymentContractMode.LegacyCommission)
-                                        {
-                                            <div class="trade-orders-payment-breakdown-row">
-                                                <span>Legacy material commission</span>
-                                                <span>@paymentSummary.CommissionPercent.ToString("N0")% of procurement</span>
-                                                <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
-                                            </div>
-                                        }
                                         @if (paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
                                         {
+                                            <div class="trade-orders-payment-breakdown-row">
+                                                <span>Material value bonus</span>
+                                                <span>@paymentSummary.Active.CommissionPercent.ToString("N0")% of material value</span>
+                                                <strong>@FormatGilAllowZero(paymentSummary.Active.CommissionAmount)</strong>
+                                            </div>
                                             <div class="trade-orders-payment-breakdown-row">
                                                 <span>Craft labor</span>
                                                 <span>@FormatCraftLaborBasis(paymentSummary.LaborStandard)</span>
@@ -1052,30 +1039,6 @@
                                             <span>Total payment</span>
                                             <span>@FormatPaymentContract(paymentSummary.Active.Contract)</span>
                                             <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
-                                        </div>
-                                    </div>
-                                    <div class="trade-orders-payment-table">
-                                        <div class="trade-orders-payment-table-title">
-                                            <span>Policy Comparison</span>
-                                            <span>Same current route</span>
-                                        </div>
-                                        <div class="trade-orders-policy-comparison-header">
-                                            <span>Contract</span>
-                                            <span>Includes</span>
-                                            <span>Payment</span>
-                                            <span>Delta</span>
-                                        </div>
-                                        <div class="trade-orders-policy-comparison-row">
-                                            <span>Legacy commission</span>
-                                            <span>Materials + @paymentSummary.Legacy.CommissionPercent.ToString("N0")% legacy commission</span>
-                                            <strong>@FormatPaymentBreakdown(paymentSummary.Legacy)</strong>
-                                            <span>Baseline</span>
-                                        </div>
-                                        <div class="trade-orders-policy-comparison-row">
-                                            <span>Labor standard</span>
-                                            <span>Materials + synth labor</span>
-                                            <strong>@FormatPaymentBreakdown(paymentSummary.LaborStandard)</strong>
-                                            <span>@FormatPaymentDifference(paymentSummary.LaborStandard, paymentSummary.Legacy)</span>
                                         </div>
                                     </div>
                                     <div class="trade-orders-payment-heading">
@@ -1389,7 +1352,6 @@
                                             @if (SelectedCommissionOwner != null)
                                             {
                                                 <span>Completed</span>
-                                                <span>Ready</span>
                                             }
                                         </div>
                                         @if (SelectedCanonicalCommission is { } outputCommission)
@@ -1402,7 +1364,6 @@
                                                     <span>@TradeDisplayFormatter.FormatQuantity(output.RequiredQuantity)</span>
                                                     <span>@FormatHq(output.MustBeHq)</span>
                                                     <span>@((progress?.CompletedQuantity ?? 0).ToString("N0"))</span>
-                                                    <span>@((progress?.ReadyQuantity ?? 0).ToString("N0"))</span>
                                                 </div>
                                             }
                                         }
@@ -1589,12 +1550,6 @@
                                         <strong>@FormatGil(displayedPlanPayment)</strong>
                                         <small>@GetSelectedOrderPaymentPolicyLabel()</small>
                                     </div>
-                                    <CompactSelectField Id="selected-order-payment-contract"
-                                                        Label="Payment basis"
-                                                        Value="@SelectedOrderPaymentContract.ToString()"
-                                                        ValueChanged="SetSelectedOrderPaymentContractValueAsync"
-                                                        Options="PaymentContractOptions"
-                                                        Disabled="@(!planPaymentIsEditable || IsPlanMutationTransactionRunning)" />
                                     <CompactSelectField Id="selected-order-payment-schedule"
                                                         Label="Payment timing"
                                                         Value="@SelectedOrderPaymentSchedule.ToString()"

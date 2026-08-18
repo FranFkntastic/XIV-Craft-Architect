@@ -1015,7 +1015,7 @@ function adaptPublicGates(value) {
 function adaptPublicProgress(value) {
     const requiredQuantity = requiredInteger(value.requiredQuantity, "Required quantity", 1);
     const completedQuantity = requiredInteger(value.completedQuantity, "Completed quantity", 0);
-    const readyQuantity = requiredInteger(value.readyQuantity, "Ready quantity", 0);
+    const readyQuantity = requiredInteger(value.readyQuantity, "Compatibility delivery quantity", 0);
     const acceptedQuantity = requiredInteger(value.acceptedQuantity, "Accepted quantity", 0);
     if (completedQuantity > requiredQuantity ||
         readyQuantity > completedQuantity ||

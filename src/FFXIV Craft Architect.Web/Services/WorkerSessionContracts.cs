@@ -147,7 +147,9 @@ public sealed record WorkerSessionOperationProjection(
     bool IsActive,
     string StatusMessage);
 
-public sealed record WorkerTradeProjectionRequest(bool IncludeCraftLabor = false);
+public sealed record WorkerTradeProjectionRequest(
+    bool IncludeCraftLabor = false,
+    TradeMaterialPricingPolicy? MaterialPricingPolicy = null);
 
 public sealed record WorkerTradeProjection(
     long Revision,
@@ -167,7 +169,8 @@ public sealed record WorkerTradeProjection(
     IReadOnlyList<MaterialAggregate> ActiveProcurementItems,
     IReadOnlyList<WorkerAcquisitionRowProjection> AcquisitionRows,
     IReadOnlyList<TradeOrderCraftLaborSnapshot> CraftLabor,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    TradeMaterialQuote? MaterialQuote = null);
 
 public sealed record WorkerSessionMutationProjection(
     WorkerSessionShellProjection Shell,

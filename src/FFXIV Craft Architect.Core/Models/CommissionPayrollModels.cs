@@ -5,7 +5,8 @@ namespace FFXIV_Craft_Architect.Core.Models;
 public enum CommissionCostBasis
 {
     MarketRecommendation,
-    SelectedAcquisitionSources
+    SelectedAcquisitionSources,
+    ProcurementRoute
 }
 
 public enum CommissionMaterialResponsibility
@@ -70,18 +71,23 @@ public sealed record LegacyTradeLaborStandard
 
 public sealed record TradePaymentPolicy(
     TradePaymentContractMode ActiveContract,
-    decimal LegacyCommissionPercent,
+    decimal MaterialValueBonusPercent,
     decimal LaborGilPerSynth)
 {
+    public const decimal DefaultMaterialValueBonusPercent = 10m;
     public const decimal DefaultLaborGilPerSynth = 200m;
+
+    [JsonPropertyName("LegacyCommissionPercent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? LegacyCommissionPercent { get; init; }
 
     [JsonPropertyName("LaborStandard")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public LegacyTradeLaborStandard? LegacyLaborStandard { get; init; }
 
-    public static TradePaymentPolicy LegacyDefault { get; } = new(
-        TradePaymentContractMode.LegacyCommission,
-        CommissionPayoutPolicy.Default.CommissionPercent,
+    public static TradePaymentPolicy Default { get; } = new(
+        TradePaymentContractMode.LaborStandard,
+        DefaultMaterialValueBonusPercent,
         DefaultLaborGilPerSynth);
 }
 
@@ -110,7 +116,8 @@ public sealed record TradePaymentCalculationRequest(
     IReadOnlyList<TradePaymentMaterialInput> Materials,
     IReadOnlyList<TradeCraftLaborInput> CraftLabor,
     TradePaymentPolicy Policy,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    decimal MaterialSafetyAllowance = 0m);
 
 public sealed record TradeCraftLaborLine(
     string NodeId,

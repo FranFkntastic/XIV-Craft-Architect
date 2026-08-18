@@ -410,8 +410,10 @@ public sealed class WorkerSessionContractTests
             expectedRevision: 4, new WorkerTradeProjectionRequest(IncludeCraftLabor: false));
         var routeTradeProjection =
             routeTrade.Projection.Deserialize<WorkerTradeProjection>(WireOptions);
-        var tradeChild = Assert.Single(routeTradeProjection?.MaterialLines ?? [], line => line.ItemId == 43);
-        Assert.Equal((10m, "Acquisition evaluation"), (tradeChild.UnitCost, tradeChild.EvidenceSource));
+        Assert.Empty(routeTradeProjection?.MaterialLines ?? []);
+        Assert.Contains(
+            routeTradeProjection?.Warnings ?? [],
+            warning => warning.Contains("current-region", StringComparison.OrdinalIgnoreCase));
 
         var selectedTolerance = await SendAsync(
             WorkerSessionCommandKinds.ProcurementToleranceMutation,

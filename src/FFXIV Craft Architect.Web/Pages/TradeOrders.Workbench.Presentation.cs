@@ -7,12 +7,10 @@ public sealed record TradeOrderCenterOutputPresentation(
     string Name,
     int RequiredQuantity,
     bool MustBeHq,
-    int CompletedQuantity,
-    int ReadyQuantity);
+    int CompletedQuantity);
 
 public sealed record TradeOrderCenterCrafterUpdatePresentation(
     int CompletedQuantity,
-    int ReadyQuantity,
     int RequiredQuantity,
     DateTime ReportedAtUtc,
     string ReportedBy,
@@ -72,8 +70,7 @@ public partial class TradeOrders
                     output.Name,
                     output.RequiredQuantity,
                     output.MustBeHq,
-                    progress?.CompletedQuantity ?? 0,
-                    progress?.ReadyQuantity ?? 0);
+                    progress?.CompletedQuantity ?? 0);
             })
             .ToArray();
 
@@ -117,7 +114,6 @@ public partial class TradeOrders
 
         return new TradeOrderCenterCrafterUpdatePresentation(
             commission.OutputProgress.Sum(item => item.CompletedQuantity),
-            commission.OutputProgress.Sum(item => item.ReadyQuantity),
             commission.OutputProgress.Sum(item => item.RequiredQuantity),
             latestReport.CreatedAtUtc,
             latestReport.Actor.DisplayName ?? FormatCommissionActor(latestReport.Actor.Kind),
@@ -184,7 +180,7 @@ public partial class TradeOrders
         }
         if (order.Status == TradeOrderStatus.AwaitingDelivery)
         {
-            return "Ready for delivery";
+            return "Awaiting delivery review";
         }
         if (order.Status == TradeOrderStatus.InProgress)
         {
