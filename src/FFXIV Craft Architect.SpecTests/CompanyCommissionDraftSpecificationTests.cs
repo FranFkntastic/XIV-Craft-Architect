@@ -95,6 +95,10 @@ public sealed class CompanyCommissionDraftSpecificationTests
         var policyFailureBrief = BuildBrief(policyFailureOrder);
         policyFailureBrief.CrafterMaterials = policyFailureBrief.CompanyMaterials;
         policyFailureBrief.CompanyMaterials = [];
+        policyFailureBrief.Evidence = policyFailureBrief.Evidence with
+        {
+            CostBasis = CommissionCostBasis.ProcurementRoute.ToString()
+        };
         var policyFailureTerms = TradeCompanyCommissionMigrationService.CreateDraftTerms(
             policyFailureOrder,
             policyFailureBrief,
@@ -109,6 +113,49 @@ public sealed class CompanyCommissionDraftSpecificationTests
         Assert.Equal(
             policyFailureOrder.SourceSnapshot.MaterialQuoteFailureReason,
             policyFailureTerms.PricingEvidence.MaterialQuoteFailureReason);
+        var policyFailureTransition = CompanyCommissionCommandWorkflow.Apply(
+            policyFailureOrder,
+            new UpdateCompanyCommissionDraftCommand(
+                Context(policyFailureOrder),
+                policyFailureTerms,
+                new CompanyCommissionDraftWorkPackage(
+                    [new TradeRequestedOrderOutput(10, "Test output", 1, false, 0)],
+                    policyFailureOrder.SourceSnapshot,
+                    policyFailureOrder.CraftPlanId,
+                    policyFailureOrder.CraftPlanName,
+                    policyFailureOrder.CraftPlanSavedAtUtc,
+                    policyFailureOrder.CraftPlanLinkKind)),
+            new CompanyCommissionActor(
+                "commissioner",
+                CompanyCommissionActorKind.Commissioner,
+                "Commissioner"),
+            new DateTime(2026, 8, 1, 12, 21, 0, DateTimeKind.Utc));
+        Assert.Null(policyFailureTransition.UpdatedOrder.SourceSnapshot.MaterialQuote);
+        Assert.Equal(
+            policyFailureOrder.SourceSnapshot.MaterialQuoteFailureReason,
+            policyFailureTransition.UpdatedOrder.SourceSnapshot.MaterialQuoteFailureReason);
+        var unavailablePublished = TradeOrderWorkflow.CopyOrder(
+            policyFailureTransition.UpdatedOrder);
+        unavailablePublished.CompanyCommission = unavailablePublished.CompanyCommission! with
+        {
+            PublicMetadata = unavailablePublished.CompanyCommission.PublicMetadata with
+            {
+                ViewState = CompanyCommissionPublicViewState.Published
+            }
+        };
+        Assert.Throws<InvalidOperationException>(() =>
+            CompanyCommissionCommandWorkflow.Apply(
+                unavailablePublished,
+                new ClaimCompanyCommissionCommand(
+                    Context(unavailablePublished),
+                    unavailablePublished.CompanyCommission.CurrentTermsVersion,
+                    ProvisionalCrafter: null,
+                    ExistingCrafterId: Guid.Parse("55555555-5555-5555-5555-555555555555")),
+                new CompanyCommissionActor(
+                    "crafter",
+                    CompanyCommissionActorKind.Crafter,
+                    "Crafter"),
+                new DateTime(2026, 8, 1, 12, 22, 0, DateTimeKind.Utc)));
         Assert.Contains(
             policyFailureOrder.SourceSnapshot.MaterialQuoteFailureReason,
             TradeCommissionPaymentSummary.FromOrder(
