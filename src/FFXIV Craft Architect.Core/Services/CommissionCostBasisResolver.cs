@@ -139,7 +139,9 @@ public sealed class CommissionCostBasisResolver
             unitCostExplanation = $"{item.Name} unit cost uses the selected source plan price: {unitCost:N0}g.";
         }
 
-        if (analysis != null)
+        var usesMarketEvidence = item.Source is
+            AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq;
+        if (usesMarketEvidence && analysis != null)
         {
             if (!analysis.HasCompleteScopeData)
             {
@@ -151,12 +153,12 @@ public sealed class CommissionCostBasisResolver
                 warnings.Add($"{item.Name}: {analysis.Warning}");
             }
         }
-        else if (selectedCost == null)
+        else if (usesMarketEvidence && selectedCost == null)
         {
             warnings.Add($"No market-analysis evidence was available for {item.Name}.");
         }
 
-        if (shoppingPlan != null)
+        if (usesMarketEvidence && shoppingPlan != null)
         {
             var contexts = GetRecommendationDataAgeContexts(shoppingPlan).ToArray();
             var staleContexts = contexts

@@ -254,6 +254,33 @@ public sealed class TradePaymentSpecificationTests
         Assert.Equal(390m, payroll.TotalPay);
     }
 
+    [Fact]
+    public void SelectedVendorSourceDoesNotInheritStaleMarketWarnings()
+    {
+        var staleWorld = SpecificationFixtures.World("Aether", "Golem", 100, 500);
+        staleWorld.MarketDataQualityBucket = MarketDataQualityBucket.Ancient;
+        staleWorld.MarketDataAge = TimeSpan.FromHours(37);
+        staleWorld.MarketUploadedAtUtc = DateTime.UtcNow.AddHours(-37);
+        var stalePlan = SpecificationFixtures.Evidence(20, "Copper Ore", 10, staleWorld);
+        stalePlan.RecommendedWorld = staleWorld;
+
+        var line = Assert.Single(new CommissionCostBasisResolver().BuildSelectedSourceLines(
+            [SelectedDemand(
+                20,
+                "Copper Ore",
+                10,
+                AcquisitionSource.VendorBuy,
+                unitPrice: 500m,
+                vendorUnitPrice: 2m)],
+            [Analysis(20, "Copper Ore", 500m)],
+            [stalePlan]));
+
+        Assert.Equal(2m, line.UnitCost);
+        Assert.Equal("Vendor price", line.EvidenceSource);
+        Assert.Empty(line.Warnings);
+        Assert.DoesNotContain("upload age", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData(-1, 100, 20)]
     [InlineData(1, -100, 20)]

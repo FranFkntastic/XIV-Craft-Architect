@@ -621,6 +621,9 @@ public partial class TradeOrders
                 }
             }
 
+            ClearLiveProcurementSnapshot();
+            await EnsureLiveProcurementSnapshotAsync();
+
             Snackbar.Add(
                 pricingResult.Message,
                 ToSnackbarSeverity(pricingResult.MessageLevel));
