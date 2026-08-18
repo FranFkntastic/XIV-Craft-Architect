@@ -107,8 +107,9 @@ public static class CompanyCommissionCommandWorkflow
         };
         var nextCommission = transition.UpdatedOrder.CompanyCommission;
         if (nextCommission != null &&
-            !commission.ClearedToWork &&
-            nextCommission.ClearedToWork)
+            nextCommission.ActiveClaim != null &&
+            nextCommission.ClearedToWork &&
+            (commission.ActiveClaim == null || !commission.ClearedToWork))
         {
             RequireCurrentMaterialQuote(nextCommission, nowUtc);
             var updated = Copy(transition.UpdatedOrder);
@@ -138,7 +139,11 @@ public static class CompanyCommissionCommandWorkflow
             throw new InvalidOperationException(
                 "Draft edits require a canonical work package with at least one output.");
         }
-        ValidateTerms(command.Terms, commission.CompanyId, command.WorkPackage);
+        ValidateTerms(
+            command.Terms,
+            commission.CompanyId,
+            command.WorkPackage,
+            allowUnavailableMaterialQuote: true);
         Require(
             command.Terms.Version == commission.CurrentTermsVersion,
             "Draft edits must replace the current unclaimed terms version.");
@@ -1654,7 +1659,8 @@ public static class CompanyCommissionCommandWorkflow
     internal static void ValidateTerms(
         CompanyCommissionTermsVersion terms,
         CompanyId companyId,
-        CompanyCommissionDraftWorkPackage? workPackage)
+        CompanyCommissionDraftWorkPackage? workPackage,
+        bool allowUnavailableMaterialQuote = false)
     {
         Require(terms.Version > 0, "Terms versions must be positive.");
         var crafterMaterials = terms.Materials
@@ -1671,44 +1677,57 @@ public static class CompanyCommissionCommandWorkflow
                     StringComparison.Ordinal),
                 "Crafter-supplied materials require procurement-route pricing evidence.");
             var quote = terms.PricingEvidence.MaterialQuote;
-            var expectedCoverage = crafterMaterials
-                .GroupBy(item => (item.ItemId, item.RequiresHq))
-                .Select(group => (group.Key.ItemId, group.Key.RequiresHq, Quantity: group.Sum(item => item.Quantity)))
-                .OrderBy(item => item.ItemId)
-                .ThenBy(item => item.RequiresHq)
-                .ToArray();
-            var actualCoverage = quote?.Lines
-                .Select(line => (line.ItemId, line.RequiresHq, Quantity: line.RequiredQuantity))
-                .OrderBy(item => item.ItemId)
-                .ThenBy(item => item.RequiresHq)
-                .ToArray() ?? [];
-            Require(
-                quote is
-                {
-                    SchemaVersion: TradeMaterialQuote.CurrentSchemaVersion,
-                    RouteCashRequired: >= 0,
-                    SafetyAllowance: >= 0,
-                    MaterialReimbursement: >= 0,
-                    PlanSessionVersion: > 0,
-                    MarketAnalysisVersion: > 0
-                } &&
-                quote.CompanyProfileId == companyId.Value &&
-                !string.IsNullOrWhiteSpace(quote.SourcePlanId) &&
-                !string.IsNullOrWhiteSpace(quote.RouteSelectionKey) &&
-                string.Equals(
-                    quote.PolicyFingerprint,
-                    TradeMaterialPricingPolicyNormalizer.Fingerprint(quote.AppliedPolicy),
-                    StringComparison.Ordinal) &&
-                quote.MaterialReimbursement == quote.RouteCashRequired + quote.SafetyAllowance &&
-                quote.Lines.All(line => line.RequiredQuantity > 0 && line.CashRequired >= 0) &&
-                quote.Lines.Sum(line => line.CashRequired) == quote.RouteCashRequired &&
-                expectedCoverage.SequenceEqual(actualCoverage) &&
-                terms.Payment.MaterialReimbursement == quote.MaterialReimbursement &&
-                (workPackage == null ||
-                 string.Equals(quote.SourcePlanId, workPackage.CraftPlanId, StringComparison.Ordinal) &&
-                 quote.PlanSessionVersion == workPackage.SourceSnapshot.PlanSessionVersion &&
-                 quote.MarketAnalysisVersion == workPackage.SourceSnapshot.MarketAnalysisVersion),
-                "Procurement-route terms require a complete reconciled material quote.");
+            if (quote == null && allowUnavailableMaterialQuote)
+            {
+                Require(
+                    !string.IsNullOrWhiteSpace(
+                        terms.PricingEvidence.MaterialQuoteFailureReason),
+                    "An unavailable draft material quote requires a canonical failure reason.");
+                Require(
+                    terms.Payment.MaterialReimbursement == 0,
+                    "An unavailable draft material quote cannot reimburse materials.");
+            }
+            else
+            {
+                var expectedCoverage = crafterMaterials
+                    .GroupBy(item => (item.ItemId, item.RequiresHq))
+                    .Select(group => (group.Key.ItemId, group.Key.RequiresHq, Quantity: group.Sum(item => item.Quantity)))
+                    .OrderBy(item => item.ItemId)
+                    .ThenBy(item => item.RequiresHq)
+                    .ToArray();
+                var actualCoverage = quote?.Lines
+                    .Select(line => (line.ItemId, line.RequiresHq, Quantity: line.RequiredQuantity))
+                    .OrderBy(item => item.ItemId)
+                    .ThenBy(item => item.RequiresHq)
+                    .ToArray() ?? [];
+                Require(
+                    quote is
+                    {
+                        SchemaVersion: TradeMaterialQuote.CurrentSchemaVersion,
+                        RouteCashRequired: >= 0,
+                        SafetyAllowance: >= 0,
+                        MaterialReimbursement: >= 0,
+                        PlanSessionVersion: > 0,
+                        MarketAnalysisVersion: > 0
+                    } &&
+                    quote.CompanyProfileId == companyId.Value &&
+                    !string.IsNullOrWhiteSpace(quote.SourcePlanId) &&
+                    !string.IsNullOrWhiteSpace(quote.RouteSelectionKey) &&
+                    string.Equals(
+                        quote.PolicyFingerprint,
+                        TradeMaterialPricingPolicyNormalizer.Fingerprint(quote.AppliedPolicy),
+                        StringComparison.Ordinal) &&
+                    quote.MaterialReimbursement == quote.RouteCashRequired + quote.SafetyAllowance &&
+                    quote.Lines.All(line => line.RequiredQuantity > 0 && line.CashRequired >= 0) &&
+                    quote.Lines.Sum(line => line.CashRequired) == quote.RouteCashRequired &&
+                    expectedCoverage.SequenceEqual(actualCoverage) &&
+                    terms.Payment.MaterialReimbursement == quote.MaterialReimbursement &&
+                    (workPackage == null ||
+                     string.Equals(quote.SourcePlanId, workPackage.CraftPlanId, StringComparison.Ordinal) &&
+                     quote.PlanSessionVersion == workPackage.SourceSnapshot.PlanSessionVersion &&
+                     quote.MarketAnalysisVersion == workPackage.SourceSnapshot.MarketAnalysisVersion),
+                    "Procurement-route terms require a complete reconciled material quote.");
+            }
         }
         Require(terms.Outputs.Count > 0, "At least one requested output is required.");
         Require(
