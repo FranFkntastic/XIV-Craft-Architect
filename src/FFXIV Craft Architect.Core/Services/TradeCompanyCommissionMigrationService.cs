@@ -491,7 +491,8 @@ public static class TradeCompanyCommissionMigrationService
             : TradeCommissionPaymentSummary.FromOrder(
                 order,
                 draft: null,
-                authoringPolicy).Active;
+                authoringPolicy,
+                requireMaterialRouteQuote: false).Active;
         var evidence = brief?.Evidence;
 
         return new CompanyCommissionTermsVersion

@@ -14,11 +14,17 @@ public sealed class TradePaymentCalculator
         var laborInputs = request.CraftLabor ?? [];
         ValidateInputs(materials, laborInputs, policy);
         var estimatedProcurementTotal = RoundGil(materials.Sum(material => material.UnitCost * material.Quantity));
-        var routeCashReimbursement = RoundGil(materials
-            .Where(material =>
-                material.Responsibility == CommissionMaterialResponsibility.Crafter &&
-                !material.IsOnHand)
-            .Sum(material => material.UnitCost * material.Quantity));
+        var materialQuoteAvailable = !request.RequireMaterialRouteQuote ||
+            request.MaterialRouteCashRequired.HasValue;
+        var routeCashReimbursement = request.MaterialRouteCashRequired.HasValue
+            ? RoundGil(Math.Max(0m, request.MaterialRouteCashRequired.Value))
+            : request.RequireMaterialRouteQuote
+                ? 0m
+                : RoundGil(materials
+                    .Where(material =>
+                        material.Responsibility == CommissionMaterialResponsibility.Crafter &&
+                        !material.IsOnHand)
+                    .Sum(material => material.UnitCost * material.Quantity));
         var materialReimbursementTotal = routeCashReimbursement > 0
             ? routeCashReimbursement + RoundGil(Math.Max(0m, request.MaterialSafetyAllowance))
             : 0m;
@@ -34,18 +40,23 @@ public sealed class TradePaymentCalculator
         var legacy = BuildLegacy(
             policy,
             materialReimbursementTotal,
-            estimatedProcurementTotal);
+            estimatedProcurementTotal,
+            materialQuoteAvailable);
         var labor = BuildLaborStandard(
             policy,
             laborInputs,
             materialReimbursementTotal,
-            estimatedProcurementTotal);
+            estimatedProcurementTotal,
+            materialQuoteAvailable);
         var active = policy.ActiveContract == TradePaymentContractMode.LaborStandard
             ? labor
             : legacy;
         var includeLaborWarnings = policy.ActiveContract == TradePaymentContractMode.LaborStandard;
         var warnings = (request.Warnings ?? [])
             .Concat(materials.SelectMany(material => material.Warnings ?? []))
+            .Concat(materialQuoteAvailable
+                ? []
+                : ["Executable material quote is unavailable. Refresh current market evidence before using payment totals."])
             .Concat(legacy.Warnings)
             .Concat(includeLaborWarnings ? labor.Warnings : [])
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
@@ -96,8 +107,16 @@ public sealed class TradePaymentCalculator
     private static TradePaymentContractBreakdown BuildLegacy(
         TradePaymentPolicy policy,
         decimal materialReimbursementTotal,
-        decimal estimatedProcurementTotal)
+        decimal estimatedProcurementTotal,
+        bool materialQuoteAvailable)
     {
+        if (!materialQuoteAvailable)
+        {
+            return UnavailableContract(
+                TradePaymentContractMode.LegacyCommission,
+                "Executable material quote is unavailable.");
+        }
+
         var percent = policy.LegacyCommissionPercent ?? policy.MaterialValueBonusPercent;
         var commission = RoundGil(estimatedProcurementTotal * percent / 100m);
 
@@ -119,8 +138,16 @@ public sealed class TradePaymentCalculator
         TradePaymentPolicy policy,
         IReadOnlyList<TradeCraftLaborInput> laborInputs,
         decimal materialReimbursementTotal,
-        decimal estimatedProcurementTotal)
+        decimal estimatedProcurementTotal,
+        bool materialQuoteAvailable)
     {
+        if (!materialQuoteAvailable)
+        {
+            return UnavailableContract(
+                TradePaymentContractMode.LaborStandard,
+                "Executable material quote is unavailable.");
+        }
+
         var activeInputs = laborInputs.Where(input => input.CraftCount > 0).ToArray();
         if (activeInputs.Length == 0)
         {
@@ -174,6 +201,24 @@ public sealed class TradePaymentCalculator
             TradePaymentContractMode.LaborStandard,
             IsAvailable: false,
             materialReimbursementTotal,
+            CommissionPercent: 0m,
+            CommissionAmount: 0m,
+            CraftLaborTotal: 0m,
+            CraftSynthCount: 0,
+            GilPerSynth: 0m,
+            Total: 0m,
+            CraftLaborLines: [],
+            Warnings: [warning]);
+    }
+
+    private static TradePaymentContractBreakdown UnavailableContract(
+        TradePaymentContractMode contract,
+        string warning)
+    {
+        return new TradePaymentContractBreakdown(
+            contract,
+            IsAvailable: false,
+            MaterialReimbursementTotal: 0m,
             CommissionPercent: 0m,
             CommissionAmount: 0m,
             CraftLaborTotal: 0m,
