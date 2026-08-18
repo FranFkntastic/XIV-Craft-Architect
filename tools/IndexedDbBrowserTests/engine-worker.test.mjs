@@ -129,7 +129,9 @@ test('participant progress waits for current terms and remains keyboard labeled'
     'commission.js'), 'utf8');
   assert.match(source, /requiresTermsAcknowledgement\(projection\)\) return "TERMS REVIEW REQUIRED"/);
   assert.match(source, /brief\.clearedToWork\s*&&\s*!requiresTermsAcknowledgement\(projection\)/);
-  assert.match(source, /\["report-progress", "declare-readiness", "withdraw-readiness"\]\.includes\(command\)/);
+  assert.match(source, /command === "report-progress"/);
+  assert.doesNotMatch(source, /label: "Return to crafting"/);
+  assert.doesNotMatch(source, /function openWithdrawReadinessForm/);
   assert.match(source, /label\.htmlFor = inputId;\s*input\.id = inputId;/);
   assert.match(source, /form\.querySelector\("input:not\(\[disabled\]\)"\)\?\.focus/);
 });

@@ -1861,7 +1861,7 @@ async function runParticipantCommand(command, payload, successMessage) {
             "This browser lacks active participant authority, or the commission is no longer open to ordinary participant changes.");
         return;
     }
-    if (["report-progress", "withdraw-readiness"].includes(command) &&
+    if (command === "report-progress" &&
         requiresTermsAcknowledgement(state.projection)) {
         showNotice(
             "Accept the current terms first",
