@@ -31,17 +31,39 @@ public sealed class CompanyHubClient(
         Guid companyId,
         CancellationToken cancellationToken = default)
     {
+        return await TryLoadWorkspaceProfileAsync(companyId, cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The selected hosted company workspace is unavailable.");
+    }
+
+    public async Task<TradeCompanyWorkspaceProfile?> TryLoadWorkspaceProfileAsync(
+        Guid companyId,
+        CancellationToken cancellationToken = default)
+    {
         using var response = await SendAsync(
             HttpMethod.Get,
             $"trade/v1/companies/{companyId:D}/workspace-profile",
             null,
             cancellationToken);
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Unauthorized)
+        {
+            return null;
+        }
         await EnsureHubSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(
+        var profile = await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(
             JsonOptions,
             cancellationToken)
             ?? throw new InvalidOperationException(
                 "The selected company workspace returned an empty profile.");
+        if (profile.SchemaVersion != 1 ||
+            profile.Revision <= 0 ||
+            profile.PaymentPolicy == null ||
+            profile.MaterialPricingPolicy == null)
+        {
+            throw new InvalidOperationException(
+                "The selected company workspace returned an incompatible pricing policy projection.");
+        }
+        return profile;
     }
 
     public async Task<long> UpdateWorkspaceProfileAsync(
@@ -468,12 +490,13 @@ public sealed record CompanyHubProjection(
     int? PendingMembershipRequestCount);
 
 public sealed record TradeCompanyWorkspaceProfile(
+    int SchemaVersion,
     Guid Id,
     string Name,
     string? Description,
     string? CommissionContact,
-    TradePaymentPolicy PaymentPolicy,
-    TradeMaterialPricingPolicy MaterialPricingPolicy,
+    TradePaymentPolicy? PaymentPolicy,
+    TradeMaterialPricingPolicy? MaterialPricingPolicy,
     long Revision,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc)
@@ -484,8 +507,8 @@ public sealed record TradeCompanyWorkspaceProfile(
         Name = Name,
         Description = Description,
         CommissionContact = CommissionContact,
-        PaymentPolicy = PaymentPolicy,
-        MaterialPricingPolicy = MaterialPricingPolicy,
+        PaymentPolicy = PaymentPolicy!,
+        MaterialPricingPolicy = MaterialPricingPolicy!,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,
         CreatedAtUtc = CreatedAtUtc,

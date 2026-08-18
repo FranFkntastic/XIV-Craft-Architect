@@ -59,6 +59,7 @@ public sealed class CompanyHubContractTests
             TradeCompanyWorkspaceProfileResponse>();
 
         Assert.Equal(HttpStatusCode.OK, operatorResponse.StatusCode);
+        Assert.Equal(1, profile?.SchemaVersion);
         Assert.Equal(company.Id, profile?.Id);
         Assert.Equal(company.Name, profile?.Name);
         Assert.Equal(company.Description, profile?.Description);

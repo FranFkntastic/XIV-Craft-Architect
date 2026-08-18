@@ -28,6 +28,7 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.CompanyHubClient CompanyHubClient
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceProfileResolver WorkspaceProfiles
 
 <MudDialog Class="settings-dialog"
            Style="width: min(1120px, calc(100vw - 32px)); max-width: 1120px;"
@@ -1484,19 +1485,22 @@
             await ProfileSync.SyncNowAsync();
             _companyProfileIsHosted = false;
             _companyProfileRevision = null;
-            var profiles = await TradeOperationsPersistence.LoadCompanyProfilesAsync();
             var requestedWorkspaceId = Guid.TryParse(InitialWorkspaceCompanyId, out var parsedWorkspaceId)
                 ? parsedWorkspaceId
                 : await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
-            _companyProfile = requestedWorkspaceId.HasValue
-                ? profiles.FirstOrDefault(profile => profile.Id == requestedWorkspaceId.Value)
-                : await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
-            if (_companyProfile == null && requestedWorkspaceId.HasValue)
+            if (requestedWorkspaceId.HasValue)
             {
-                var hosted = await CompanyHubClient.LoadWorkspaceProfileAsync(requestedWorkspaceId.Value);
-                _companyProfile = hosted.ToTransientProfile();
-                _companyProfileIsHosted = true;
-                _companyProfileRevision = hosted.Revision;
+                var resolved = await WorkspaceProfiles.ResolveAsync(requestedWorkspaceId.Value);
+                _companyProfile = resolved.Profile;
+                _companyProfileIsHosted = resolved.IsHosted;
+                _companyProfileRevision = resolved.HostedRevision;
+            }
+            else
+            {
+                _companyProfile = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
+            }
+            if (_companyProfileIsHosted && requestedWorkspaceId.HasValue)
+            {
                 _companyCrafterCount = (await CompanyHubClient.LoadCompanyMembersAsync(
                     requestedWorkspaceId.Value.ToString("D"))).Count;
             }

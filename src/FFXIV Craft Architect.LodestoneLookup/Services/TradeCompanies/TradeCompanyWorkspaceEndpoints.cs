@@ -4,6 +4,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 public sealed record TradeCompanyWorkspaceProfileResponse(
+    int SchemaVersion,
     Guid Id,
     string Name,
     string? Description,
@@ -68,6 +69,7 @@ public static class TradeCompanyWorkspaceEndpoints
                 return snapshot == null
                     ? Results.NotFound()
                     : Results.Ok(new TradeCompanyWorkspaceProfileResponse(
+                        1,
                         snapshot.Profile.Id,
                         snapshot.Profile.Name,
                         snapshot.Profile.Description,
