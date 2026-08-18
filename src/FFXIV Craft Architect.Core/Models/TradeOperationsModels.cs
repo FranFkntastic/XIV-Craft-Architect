@@ -310,6 +310,7 @@ public sealed class TradeOrderSourceSnapshot
     public IReadOnlyList<TradeOrderMaterialSnapshot> Materials { get; set; } = Array.Empty<TradeOrderMaterialSnapshot>();
     public IReadOnlyList<TradeOrderCraftLaborSnapshot> CraftLabor { get; set; } = Array.Empty<TradeOrderCraftLaborSnapshot>();
     public TradeMaterialQuote? MaterialQuote { get; set; }
+    public string? MaterialQuoteFailureReason { get; set; }
     public IReadOnlyList<string> Warnings { get; set; } = Array.Empty<string>();
 }
 

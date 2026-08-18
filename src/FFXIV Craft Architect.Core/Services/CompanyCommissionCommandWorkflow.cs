@@ -151,6 +151,7 @@ public static class CompanyCommissionCommandWorkflow
         var updated = Copy(source);
         updated.SourceSnapshot = TradeOrderWorkflow.CopySourceSnapshot(
             workPackage.SourceSnapshot);
+        ApplyCanonicalPricingEvidence(updated.SourceSnapshot, terms.PricingEvidence);
         updated.CraftPlanId = workPackage.CraftPlanId;
         updated.CraftPlanName = workPackage.CraftPlanName;
         updated.CraftPlanSavedAtUtc = workPackage.CraftPlanSavedAtUtc;
@@ -228,6 +229,7 @@ public static class CompanyCommissionCommandWorkflow
             RequireDraftWorkPackageMatchesTerms(workPackage, terms);
             updated.SourceSnapshot = TradeOrderWorkflow.CopySourceSnapshot(
                 workPackage.SourceSnapshot);
+            ApplyCanonicalPricingEvidence(updated.SourceSnapshot, terms.PricingEvidence);
             updated.CraftPlanId = workPackage.CraftPlanId;
             updated.CraftPlanName = workPackage.CraftPlanName;
             updated.CraftPlanSavedAtUtc = workPackage.CraftPlanSavedAtUtc;
@@ -1777,6 +1779,24 @@ public static class CompanyCommissionCommandWorkflow
 
     private static TradeOrder Copy(TradeOrder source) =>
         TradeOrderWorkflow.CopyOrder(source);
+
+    private static void ApplyCanonicalPricingEvidence(
+        TradeOrderSourceSnapshot snapshot,
+        CompanyCommissionPricingEvidence evidence)
+    {
+        snapshot.MaterialQuote = evidence.MaterialQuote;
+        snapshot.MaterialQuoteFailureReason = evidence.MaterialQuote == null
+            ? evidence.MaterialQuoteFailureReason
+            : null;
+        snapshot.Warnings = (evidence.Warnings ?? [])
+            .Where(warning => evidence.MaterialQuote == null ||
+                string.IsNullOrWhiteSpace(evidence.MaterialQuoteFailureReason) ||
+                !string.Equals(
+                    warning,
+                    evidence.MaterialQuoteFailureReason,
+                    StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+    }
 
     private static CompanyCommissionDomainTransition Transition(
         TradeOrder source,

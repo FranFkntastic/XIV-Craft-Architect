@@ -170,7 +170,8 @@ public sealed record WorkerTradeProjection(
     IReadOnlyList<WorkerAcquisitionRowProjection> AcquisitionRows,
     IReadOnlyList<TradeOrderCraftLaborSnapshot> CraftLabor,
     IReadOnlyList<string> Warnings,
-    TradeMaterialQuote? MaterialQuote = null);
+    TradeMaterialQuote? MaterialQuote = null,
+    string? MaterialQuoteFailureReason = null);
 
 public sealed record WorkerSessionMutationProjection(
     WorkerSessionShellProjection Shell,

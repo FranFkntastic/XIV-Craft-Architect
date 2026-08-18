@@ -1646,26 +1646,31 @@ public static partial class ManagedHost
             source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq);
         var warnings = new List<string>();
         TradeMaterialQuote? materialQuote = null;
+        string? materialQuoteFailureReason = null;
         IReadOnlyList<CommissionPayrollInputLine> materialLines = [];
         if (conflictingSelections.Length > 0)
         {
             foreach (var conflict in conflictingSelections)
             {
-                warnings.Add(
-                    $"Trade cannot quote {conflict.First().ItemName}: active demand mixes multiple acquisition sources for the same quality.");
+                var warning =
+                    $"Trade cannot quote {conflict.First().ItemName}: active demand mixes multiple acquisition sources for the same quality.";
+                warnings.Add(warning);
+                materialQuoteFailureReason ??= warning;
             }
         }
         else if (requiresMarketEvidence &&
                  (evidence.ItemAnalyses.Count == 0 || evidence.ShoppingPlans is not { Count: > 0 }))
         {
-            warnings.Add(
-                "No current market evidence is loaded, so Trade cannot produce an executable material quote.");
+            materialQuoteFailureReason =
+                "No current market evidence is loaded, so Trade cannot produce an executable material quote.";
+            warnings.Add(materialQuoteFailureReason);
         }
         else if (requiresMarketEvidence &&
                  session.ActiveContext.MarketFetchScope != MarketFetchScope.EntireRegion)
         {
-            warnings.Add(
-                "Trade material quotes require current-region market evidence; reprice the order to refresh that scope.");
+            materialQuoteFailureReason =
+                "Trade material quotes require current-region market evidence; reprice the order to refresh that scope.";
+            warnings.Add(materialQuoteFailureReason);
         }
         else
         {
@@ -1705,7 +1710,9 @@ public static partial class ManagedHost
             }
             else
             {
-                warnings.Add(quoteResult.FailureReason ?? "Trade material quote is incomplete.");
+                materialQuoteFailureReason =
+                    quoteResult.FailureReason ?? "Trade material quote is incomplete.";
+                warnings.Add(materialQuoteFailureReason);
             }
         }
         warnings.AddRange(materialLines.SelectMany(line => line.Warnings));
@@ -1786,7 +1793,8 @@ public static partial class ManagedHost
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
-            materialQuote);
+            materialQuote,
+            materialQuoteFailureReason);
     }
 
     private static IReadOnlyList<string> ResolveTradeRequestedDataCenters(

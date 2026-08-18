@@ -222,6 +222,8 @@ public partial class TradeOrders
                     terms.Payment.CraftSynthCount)
             ];
         copy.SourceSnapshot.MaterialQuote = terms.PricingEvidence.MaterialQuote;
+        copy.SourceSnapshot.MaterialQuoteFailureReason =
+            terms.PricingEvidence.MaterialQuoteFailureReason;
         copy.SourceSnapshot.Warnings = terms.PricingEvidence.Warnings?.ToArray() ?? [];
         if (terms.PricingEvidence.MaterialQuote != null)
         {

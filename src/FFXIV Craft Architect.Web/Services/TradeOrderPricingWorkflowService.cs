@@ -477,6 +477,8 @@ public sealed class TradeOrderPricingWorkflowService
                 PlanSessionVersion = source.PlanSessionVersion,
                 MarketAnalysisVersion = source.MarketAnalysisVersion
             };
+        order.SourceSnapshot.MaterialQuoteFailureReason =
+            source.MaterialQuote is null ? source.MaterialQuoteFailureReason : null;
         order.SourceSnapshot.Warnings = warnings
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
             .Distinct(StringComparer.OrdinalIgnoreCase)

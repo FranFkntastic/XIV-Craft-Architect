@@ -143,7 +143,19 @@ public sealed record TradeCommissionPaymentSummary(
             paymentMaterials,
             laborInputs,
             policy,
-            sourceSnapshot.Warnings ?? Array.Empty<string>(),
+            (sourceSnapshot.Warnings ?? Array.Empty<string>())
+                .Where(warning => sourceSnapshot.MaterialQuote == null ||
+                    string.IsNullOrWhiteSpace(sourceSnapshot.MaterialQuoteFailureReason) ||
+                    !string.Equals(
+                        warning,
+                        sourceSnapshot.MaterialQuoteFailureReason,
+                        StringComparison.OrdinalIgnoreCase))
+                .Concat(sourceSnapshot.MaterialQuote != null ||
+                        string.IsNullOrWhiteSpace(sourceSnapshot.MaterialQuoteFailureReason)
+                    ? []
+                    : [sourceSnapshot.MaterialQuoteFailureReason])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
             appliedAllowance,
             quote is null ? null : quotedCrafterCash,
             RequireMaterialRouteQuote: requireMaterialRouteQuote && requiresMaterialQuote));
