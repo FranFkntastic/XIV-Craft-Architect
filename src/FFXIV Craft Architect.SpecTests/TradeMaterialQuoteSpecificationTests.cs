@@ -71,6 +71,41 @@ public sealed class TradeMaterialQuoteSpecificationTests
         Assert.Equal(policy, quote.AppliedPolicy);
     }
 
+    [Fact]
+    public void QuoteSkipsAStalePreferredFrontierRouteWhenAFreshReasonableRouteExists()
+    {
+        var stalePlan = Plan("Stale", 1_000_000, evidenceAgeMinutes: 121);
+        var freshPlan = Plan("Fresh", 1_020_000, evidenceAgeMinutes: 30);
+        var stale = Selection("stale", stalePlan, 1_000_000, worldStops: 1);
+        var fresh = Selection("fresh", freshPlan, 1_020_000, worldStops: 2);
+        var decision = new MarketRouteDecision(
+            9,
+            0.05m,
+            1_000_000,
+            1_000_000,
+            0,
+            1,
+            1,
+            0,
+            0,
+            true,
+            "Aether")
+        {
+            ToleranceSelections = [stale, fresh],
+            IncludeSplitPurchases = true
+        };
+
+        var result = new TradeMaterialQuoteService().Build(
+            new ProcurementRouteOptimizationResult([stalePlan], decision),
+            [new MaterialAggregate { ItemId = 5111, Name = "Gold Ore", TotalQuantity = 14_985 }],
+            TradeMaterialPricingPolicy.Default,
+            QuotedAt);
+
+        var quote = Assert.IsType<TradeMaterialQuote>(result.Quote);
+        Assert.Equal("fresh", quote.RouteSelectionKey);
+        Assert.Equal(1_020_000m, quote.RouteCashRequired);
+    }
+
     private static TradeMaterialQuoteResult BuildQuote(
         long cash,
         int worldStops,
@@ -134,4 +169,41 @@ public sealed class TradeMaterialQuoteSpecificationTests
             policy ?? TradeMaterialPricingPolicy.Default,
             QuotedAt);
     }
+
+    private static DetailedShoppingPlan Plan(string worldName, long cash, int evidenceAgeMinutes)
+    {
+        var world = new WorldShoppingSummary
+        {
+            DataCenter = "Aether",
+            WorldName = worldName,
+            TotalCost = cash,
+            TotalQuantityPurchased = 15_000,
+            HasSufficientStock = true,
+            MarketUploadedAtUtc = QuotedAt.AddMinutes(-evidenceAgeMinutes)
+        };
+        return new DetailedShoppingPlan
+        {
+            ItemId = 5111,
+            Name = "Gold Ore",
+            QuantityNeeded = 14_985,
+            WorldOptions = [world],
+            RecommendedWorld = world
+        };
+    }
+
+    private static MarketRouteToleranceSelection Selection(
+        string key,
+        DetailedShoppingPlan plan,
+        long cash,
+        int worldStops) => new(
+            9,
+            9,
+            key,
+            cash,
+            0,
+            worldStops,
+            0,
+            0,
+            [plan],
+            []);
 }
