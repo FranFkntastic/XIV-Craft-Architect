@@ -329,16 +329,21 @@
                                 </MudText>
                                 <MudText Typo="Typo.subtitle2">@_companyName</MudText>
                             </div>
-                            <MudButton Variant="Variant.Text"
-                                       Color="Color.Secondary"
-                                       Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.CloudSync"
-                                       OnClick="@(() => SelectTab(SettingsSection.AccessAndDevices))">
-                                Browser sync
-                            </MudButton>
+                            @if (!_companyProfileIsHosted)
+                            {
+                                <MudButton Variant="Variant.Text"
+                                           Color="Color.Secondary"
+                                           Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.CloudSync"
+                                           OnClick="@(() => SelectTab(SettingsSection.AccessAndDevices))">
+                                    Browser sync
+                                </MudButton>
+                            }
                         </div>
                         <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
-                            Company settings, crafters, orders, and payroll history travel with the connected browser profile.
+                            @(_companyProfileIsHosted
+                                ? "Company policy is shared from the selected hosted Trade workspace."
+                                : "Company settings, crafters, orders, and payroll history travel with the connected browser profile.")
                         </MudText>
                     </MudPaper>
 
@@ -413,37 +418,40 @@
                     <MudNumericField T="int" @bind-Value="_materialQuoteLifetimeMinutes" Label="Open quote lifetime" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudNumericField T="int" @bind-Value="_materialMaximumEvidenceAgeMinutes" Label="Maximum selected-route evidence age" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
 
-                    <MudDivider Class="my-4" />
+                    @if (!_companyProfileIsHosted)
+                    {
+                        <MudDivider Class="my-4" />
 
-                    <MudText Typo="Typo.subtitle2" Class="mb-2">Manual company backup</MudText>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
-                        Export the active company settings and crafter roster for recovery or an offline handoff. Orders and payroll history are carried by browser-profile sync instead of being duplicated in this file.
-                    </MudText>
-                    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                        <MudButton Variant="Variant.Outlined"
-                                   Color="Color.Secondary"
-                                   StartIcon="@Icons.Material.Filled.Download"
-                                   OnClick="ExportCompanyProfileAsync"
-                                   Disabled="_companyIsBusy">
-                            Export Company
-                        </MudButton>
-                        <InputFile id="tradeCompanyPackageInput"
-                                   OnChange="ImportCompanyProfileAsync"
-                                   accept=".tradeprofile,.json"
-                                   style="display: none;" />
-                        <label for="tradeCompanyPackageInput" style="display: inline-block; cursor: pointer;">
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">Manual company backup</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
+                            Export the active company settings and crafter roster for recovery or an offline handoff. Orders and payroll history are carried by browser-profile sync instead of being duplicated in this file.
+                        </MudText>
+                        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
                             <MudButton Variant="Variant.Outlined"
                                        Color="Color.Secondary"
-                                       StartIcon="@Icons.Material.Filled.UploadFile"
-                                       Disabled="_companyIsBusy"
-                                       Style="pointer-events: none;">
-                                Import Company
+                                       StartIcon="@Icons.Material.Filled.Download"
+                                       OnClick="ExportCompanyProfileAsync"
+                                       Disabled="_companyIsBusy">
+                                Export Company
                             </MudButton>
-                        </label>
-                    </div>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
-                        Active roster: @_companyCrafterCount.ToString("N0") crafters
-                    </MudText>
+                            <InputFile id="tradeCompanyPackageInput"
+                                       OnChange="ImportCompanyProfileAsync"
+                                       accept=".tradeprofile,.json"
+                                       style="display: none;" />
+                            <label for="tradeCompanyPackageInput" style="display: inline-block; cursor: pointer;">
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Secondary"
+                                           StartIcon="@Icons.Material.Filled.UploadFile"
+                                           Disabled="_companyIsBusy"
+                                           Style="pointer-events: none;">
+                                    Import Company
+                                </MudButton>
+                            </label>
+                        </div>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
+                            Active roster: @_companyCrafterCount.ToString("N0") crafters
+                        </MudText>
+                    }
                     @if (_companyIsBusy)
                     {
                         <MudProgressLinear Indeterminate="true" Class="mt-4" />
@@ -981,6 +989,8 @@
     private int _companyCrafterCount;
     private string? _companyLoadError;
     private bool _companyIsBusy;
+    private bool _companyProfileIsHosted;
+    private long? _companyProfileRevision;
     private CompanyDiscordNotificationRouteEditor? _companyNotificationRouteEditor;
     private decimal _companyMaterialValueBonusPercent = TradePaymentPolicy.DefaultMaterialValueBonusPercent;
     private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
@@ -1073,6 +1083,7 @@
 
     private async Task OnWorkspaceCompanyChangedAsync(string companyId)
     {
+        InitialWorkspaceCompanyId = companyId;
         await LoadCompanyProfileAsync();
         await RefreshCompanyAdministrationAccessAsync();
         if (_companyProfile == null ||
@@ -1471,14 +1482,34 @@
         try
         {
             await ProfileSync.SyncNowAsync();
-            _companyProfile = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
+            _companyProfileIsHosted = false;
+            _companyProfileRevision = null;
+            var profiles = await TradeOperationsPersistence.LoadCompanyProfilesAsync();
+            var requestedWorkspaceId = Guid.TryParse(InitialWorkspaceCompanyId, out var parsedWorkspaceId)
+                ? parsedWorkspaceId
+                : await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
+            _companyProfile = requestedWorkspaceId.HasValue
+                ? profiles.FirstOrDefault(profile => profile.Id == requestedWorkspaceId.Value)
+                : await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
+            if (_companyProfile == null && requestedWorkspaceId.HasValue)
+            {
+                var hosted = await CompanyHubClient.LoadWorkspaceProfileAsync(requestedWorkspaceId.Value);
+                _companyProfile = hosted.ToTransientProfile();
+                _companyProfileIsHosted = true;
+                _companyProfileRevision = hosted.Revision;
+                _companyCrafterCount = (await CompanyHubClient.LoadCompanyMembersAsync(
+                    requestedWorkspaceId.Value.ToString("D"))).Count;
+            }
             if (_companyProfile == null)
             {
                 _companyCrafterCount = 0;
                 return;
             }
-            var crafters = await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id);
-            _companyCrafterCount = crafters.Count;
+            if (!_companyProfileIsHosted)
+            {
+                var crafters = await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id);
+                _companyCrafterCount = crafters.Count;
+            }
             ApplyCompanyProfileFields(_companyProfile);
         }
         catch (Exception ex)
@@ -1495,6 +1526,18 @@
 
     private async Task<bool> SaveCompanyProfileAsync(TradeCompanyProfile profile)
     {
+        if (_companyProfileIsHosted)
+        {
+            if (!_companyProfileRevision.HasValue)
+            {
+                throw new InvalidOperationException("The hosted company policy revision is unavailable.");
+            }
+            _companyProfileRevision = await CompanyHubClient.UpdateWorkspaceProfileAsync(
+                profile,
+                _companyProfileRevision.Value);
+            return true;
+        }
+
         if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(profile))
         {
             return false;

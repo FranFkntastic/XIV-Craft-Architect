@@ -23,6 +23,7 @@ public sealed class CompanyHubContractTests
         var crafter = await fixture.CreateAccountAsync("Crafter");
         var company = CreateCompany();
         company.CommissionContact = "riviene-cahernaut";
+        company.Description = "Hosted company policy fixture.";
         company.PaymentPolicy = new TradePaymentPolicy(
             TradePaymentContractMode.LaborStandard,
             0.17m,
@@ -60,9 +61,41 @@ public sealed class CompanyHubContractTests
         Assert.Equal(HttpStatusCode.OK, operatorResponse.StatusCode);
         Assert.Equal(company.Id, profile?.Id);
         Assert.Equal(company.Name, profile?.Name);
+        Assert.Equal(company.Description, profile?.Description);
         Assert.Equal(company.CommissionContact, profile?.CommissionContact);
         Assert.Equal(company.PaymentPolicy, profile?.PaymentPolicy);
+        Assert.Equal(company.MaterialPricingPolicy, profile?.MaterialPricingPolicy);
+        Assert.True(profile?.Revision > 0);
         Assert.Equal(HttpStatusCode.Unauthorized, crafterResponse.StatusCode);
+
+        var changedPolicy = TradeMaterialPricingPolicy.Default with
+        {
+            MaximumConsolidationPremiumPercent = 15m,
+            MaximumDataCenterTransfers = 3,
+            SafetyAllowancePercent = 12m
+        };
+        var update = new TradeCompanyWorkspaceProfileUpdateRequest(
+            profile!.Revision,
+            company.Name,
+            company.Description,
+            company.CommissionContact,
+            company.PaymentPolicy,
+            changedPolicy);
+        using var updated = await operatorClient.PutAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/workspace-profile",
+            update);
+        using var stale = await operatorClient.PutAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/workspace-profile",
+            update);
+        using var reloadedResponse = await operatorClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/workspace-profile");
+        var reloaded = await reloadedResponse.Content.ReadFromJsonAsync<
+            TradeCompanyWorkspaceProfileResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        Assert.Equal(changedPolicy, reloaded?.MaterialPricingPolicy);
+        Assert.True(reloaded?.Revision > profile.Revision);
     }
 
     [Fact]

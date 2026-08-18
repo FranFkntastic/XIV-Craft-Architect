@@ -21,6 +21,7 @@
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
 @inject NativePlanImportClassifier NativePlanImportClassifier
+@inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject ILogger<MainLayout> Logger
 @implements IDisposable
 
@@ -974,9 +975,11 @@
     
     private async Task OpenSettingsAsync(SettingsSection section)
     {
+        var selectedWorkspaceId = await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
         var parameters = new DialogParameters
         {
-            [nameof(SettingsDialog.InitialSection)] = section
+            [nameof(SettingsDialog.InitialSection)] = section,
+            [nameof(SettingsDialog.InitialWorkspaceCompanyId)] = selectedWorkspaceId?.ToString("D")
         };
         var options = new DialogOptions { CloseOnEscapeKey = false, MaxWidth = MaxWidth.ExtraLarge, FullWidth = true };
         var dialog = DialogService.Show<SettingsDialog>("Settings", parameters, options);

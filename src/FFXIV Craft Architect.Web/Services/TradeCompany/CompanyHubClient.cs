@@ -44,6 +44,32 @@ public sealed class CompanyHubClient(
                 "The selected company workspace returned an empty profile.");
     }
 
+    public async Task<long> UpdateWorkspaceProfileAsync(
+        TradeCompanyProfile profile,
+        long expectedRevision,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Put,
+            $"trade/v1/companies/{profile.Id:D}/workspace-profile",
+            new
+            {
+                ExpectedRevision = expectedRevision,
+                profile.Name,
+                profile.Description,
+                profile.CommissionContact,
+                profile.PaymentPolicy,
+                profile.MaterialPricingPolicy
+            },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfileUpdate>(
+            JsonOptions,
+            cancellationToken);
+        return result?.Revision
+            ?? throw new InvalidOperationException("The company workspace update returned an empty response.");
+    }
+
     public async Task RequestMembershipAsync(string companyId, string? note, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(
@@ -444,8 +470,11 @@ public sealed record CompanyHubProjection(
 public sealed record TradeCompanyWorkspaceProfile(
     Guid Id,
     string Name,
+    string? Description,
     string? CommissionContact,
     TradePaymentPolicy PaymentPolicy,
+    TradeMaterialPricingPolicy MaterialPricingPolicy,
+    long Revision,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc)
 {
@@ -453,14 +482,18 @@ public sealed record TradeCompanyWorkspaceProfile(
     {
         Id = Id,
         Name = Name,
+        Description = Description,
         CommissionContact = CommissionContact,
         PaymentPolicy = PaymentPolicy,
+        MaterialPricingPolicy = MaterialPricingPolicy,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,
         CreatedAtUtc = CreatedAtUtc,
         UpdatedAtUtc = UpdatedAtUtc
     };
 }
+
+public sealed record TradeCompanyWorkspaceProfileUpdate(long Revision);
 
 public sealed record CompanyHubTheme(
     string Accent,
