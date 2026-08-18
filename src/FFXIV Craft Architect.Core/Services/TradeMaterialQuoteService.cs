@@ -12,6 +12,19 @@ public sealed record TradeMaterialQuoteResult(
 
 public sealed class TradeMaterialQuoteService
 {
+    public IReadOnlyList<DetailedShoppingPlan> PrepareOptimizationInput(
+        IReadOnlyList<DetailedShoppingPlan> plans,
+        TradeMaterialPricingPolicy? requestedPolicy,
+        DateTime quotedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(plans);
+
+        var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
+        return plans
+            .Select(plan => FilterToFreshEvidence(plan, policy, quotedAtUtc))
+            .ToArray();
+    }
+
     public TradeMaterialQuoteResult Build(
         ProcurementRouteOptimizationResult optimization,
         IReadOnlyList<MaterialAggregate> demand,
@@ -218,7 +231,112 @@ public sealed class TradeMaterialQuoteService
             return false;
         }
         oldestEvidence = timestamps.Min();
-        return cash >= 0 && quotedAtUtc - oldestEvidence.Value <= TimeSpan.FromMinutes(policy.MaximumEvidenceAgeMinutes);
+        return cash >= 0 && IsFresh(oldestEvidence.Value, quotedAtUtc, policy);
+    }
+
+    private static DetailedShoppingPlan FilterToFreshEvidence(
+        DetailedShoppingPlan plan,
+        TradeMaterialPricingPolicy policy,
+        DateTime quotedAtUtc)
+    {
+        if (string.Equals(
+                plan.RecommendedWorld?.WorldName,
+                MarketShoppingConstants.VendorWorldName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return plan;
+        }
+
+        var worldOptions = plan.WorldOptions
+            .Where(world => world.MarketUploadedAtUtc is { } uploadedAt &&
+                            IsFresh(uploadedAt, quotedAtUtc, policy))
+            .ToList();
+        var freshWorlds = worldOptions
+            .Select(world => (DataCenter: world.DataCenter, WorldName: world.WorldName))
+            .ToHashSet(WorldKeyComparer.Instance);
+        var recommendedWorld = plan.RecommendedWorld is { } recommended &&
+                               freshWorlds.Contains((recommended.DataCenter, recommended.WorldName))
+            ? recommended
+            : null;
+        var recommendedSplit = plan.RecommendedSplit is { Count: > 0 } split &&
+                               split.All(part => freshWorlds.Contains((part.DataCenter, part.WorldName)))
+            ? split.ToList()
+            : null;
+
+        return new DetailedShoppingPlan
+        {
+            ItemId = plan.ItemId,
+            Name = plan.Name,
+            IconId = plan.IconId,
+            QuantityNeeded = plan.QuantityNeeded,
+            HqQuantityNeeded = plan.HqQuantityNeeded,
+            DCAveragePrice = plan.DCAveragePrice,
+            WorldOptions = worldOptions,
+            RecommendedWorld = recommendedWorld,
+            RecommendedSplit = recommendedSplit,
+            CoverageSet = FilterCoverageSet(plan.CoverageSet, freshWorlds),
+            Error = plan.Error,
+            MarketDataWarning = plan.MarketDataWarning,
+            HQAveragePrice = plan.HQAveragePrice,
+            Vendors = plan.Vendors.ToList()
+        };
+    }
+
+    private static MarketCoverageSet? FilterCoverageSet(
+        MarketCoverageSet? source,
+        IReadOnlySet<(string DataCenter, string WorldName)> freshWorlds)
+    {
+        if (source is null)
+        {
+            return null;
+        }
+
+        var candidates = source.AllCandidates
+            .Where(candidate =>
+                candidate.Worlds.Count > 0 &&
+                candidate.Worlds.All(world => freshWorlds.Contains((world.DataCenter, world.WorldName))) &&
+                candidate.Listings.All(listing => freshWorlds.Contains((listing.DataCenter, listing.WorldName))))
+            .ToArray();
+        MarketCoverageOption? Keep(MarketCoverageOption? candidate) =>
+            candidate is not null &&
+            candidates.Any(allowed => string.Equals(
+                allowed.CandidateId,
+                candidate.CandidateId,
+                StringComparison.Ordinal))
+                ? candidate
+                : null;
+
+        return new MarketCoverageSet(
+            source.ItemId,
+            source.ItemName,
+            source.QuantityNeeded,
+            Keep(source.SingleWorld),
+            Keep(source.CompactSplit),
+            Keep(source.WideSplit),
+            Keep(source.CheapestObserved),
+            candidates);
+    }
+
+    private static bool IsFresh(
+        DateTime uploadedAtUtc,
+        DateTime quotedAtUtc,
+        TradeMaterialPricingPolicy policy) =>
+        quotedAtUtc - uploadedAtUtc <= TimeSpan.FromMinutes(policy.MaximumEvidenceAgeMinutes);
+
+    private sealed class WorldKeyComparer : IEqualityComparer<(string DataCenter, string WorldName)>
+    {
+        public static WorldKeyComparer Instance { get; } = new();
+
+        public bool Equals(
+            (string DataCenter, string WorldName) left,
+            (string DataCenter, string WorldName) right) =>
+            string.Equals(left.DataCenter, right.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(left.WorldName, right.WorldName, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string DataCenter, string WorldName) value) =>
+            HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(value.DataCenter),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(value.WorldName));
     }
 
     private static TradeMaterialQuoteResult Failure(string reason) =>

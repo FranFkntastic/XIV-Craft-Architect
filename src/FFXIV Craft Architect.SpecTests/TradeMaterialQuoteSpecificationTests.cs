@@ -106,6 +106,41 @@ public sealed class TradeMaterialQuoteSpecificationTests
         Assert.Equal(1_020_000m, quote.RouteCashRequired);
     }
 
+    [Fact]
+    public async Task CompanyFreshnessPolicyRemovesStaleWorldsBeforeRouteOptimization()
+    {
+        var stale = SpecificationFixtures.World("Aether", "Stale", 14_985, 100);
+        stale.MarketUploadedAtUtc = QuotedAt.AddMinutes(-121);
+        var fresh = SpecificationFixtures.World("Dynamis", "Fresh", 14_985, 102);
+        fresh.MarketUploadedAtUtc = QuotedAt.AddMinutes(-30);
+        var evidence = SpecificationFixtures.Evidence(5111, "Gold Ore", 14_985, stale, fresh);
+        evidence.RecommendedWorld = stale;
+
+        var quoteService = new TradeMaterialQuoteService();
+        var input = quoteService.PrepareOptimizationInput(
+            [evidence],
+            TradeMaterialPricingPolicy.Default,
+            QuotedAt);
+        var filtered = Assert.Single(input);
+
+        Assert.Equal("Fresh", Assert.Single(filtered.WorldOptions).WorldName);
+        Assert.Null(filtered.RecommendedWorld);
+
+        var optimization = await new MarketShoppingService(null!)
+            .OptimizeProcurementRouteWithDecisionAsync(
+                input,
+                SpecificationFixtures.Config(tolerance: 11, enableSplitWorld: true));
+        var result = quoteService.Build(
+            optimization,
+            [new MaterialAggregate { ItemId = 5111, Name = "Gold Ore", TotalQuantity = 14_985 }],
+            TradeMaterialPricingPolicy.Default,
+            QuotedAt);
+
+        var quote = Assert.IsType<TradeMaterialQuote>(result.Quote);
+        Assert.Equal(1_528_470m, quote.RouteCashRequired);
+        Assert.Contains("Fresh", Assert.Single(quote.Lines).Worlds.Single());
+    }
+
     private static TradeMaterialQuoteResult BuildQuote(
         long cash,
         int worldStops,

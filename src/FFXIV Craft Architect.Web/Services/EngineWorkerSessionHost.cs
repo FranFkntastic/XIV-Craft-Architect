@@ -1658,17 +1658,23 @@ public static partial class ManagedHost
                 HomeDataCenter = session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
                 TravelPriority = MarketTravelPriority.DataCenterTransfersFirst
             };
+            var quoteService = new TradeMaterialQuoteService();
+            var quotedAtUtc = DateTime.UtcNow;
+            var optimizationInput = quoteService.PrepareOptimizationInput(
+                evidence.ShoppingPlans,
+                policy,
+                quotedAtUtc);
             var optimization = await new MarketShoppingService(SessionMarketCache)
                 .OptimizeProcurementRouteWithDecisionAsync(
-                    evidence.ShoppingPlans,
+                    optimizationInput,
                     config,
                     includeSplitPurchases: policy.AllowSplitPurchases,
                     executionOptions: MarketAnalysisExecutionOptions.Synchronous);
-            var quoteResult = new TradeMaterialQuoteService().Build(
+            var quoteResult = quoteService.Build(
                 optimization,
                 activeItems,
                 policy,
-                DateTime.UtcNow);
+                quotedAtUtc);
             if (quoteResult.IsComplete)
             {
                 materialQuote = quoteResult.Quote;
