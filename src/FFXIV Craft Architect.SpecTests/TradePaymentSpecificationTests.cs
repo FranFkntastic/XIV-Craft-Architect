@@ -36,6 +36,73 @@ public sealed class TradePaymentSpecificationTests
     }
 
     [Fact]
+    public void RequiredExecutableQuoteFailsClosedWhenRouteCashIsMissing()
+    {
+        var summary = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
+            Materials: [Material(1, "Crafter ore", 2, 100m, CommissionMaterialResponsibility.Crafter)],
+            CraftLabor: [new TradeCraftLaborInput("root", 10, "Craft", 1, 1, [])],
+            Policy: LaborPolicy(materialValueBonusPercent: 20m),
+            Warnings: [],
+            RequireMaterialRouteQuote: true));
+
+        Assert.Equal(200m, summary.EstimatedProcurementTotal);
+        Assert.Equal(0m, summary.MaterialReimbursementTotal);
+        Assert.False(summary.Active.IsAvailable);
+        Assert.Equal(0m, summary.TotalPayment);
+        Assert.Contains(summary.Warnings, warning => warning.Contains("quote is unavailable", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void OrderPaymentUsesWholeListingRouteCashAndAllowance()
+    {
+        var quotedAt = new DateTime(2026, 8, 18, 12, 0, 0, DateTimeKind.Utc);
+        var order = new TradeOrder
+        {
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(
+                        1,
+                        "Crafter ore",
+                        2,
+                        false,
+                        100m,
+                        200m,
+                        "Market analysis",
+                        "Material value evidence",
+                        quotedAt,
+                        [])
+                ],
+                CraftLabor = [new TradeOrderCraftLaborSnapshot("root", 10, "Craft", 1, 1, Warnings: [])],
+                MaterialQuote = new TradeMaterialQuote
+                {
+                    PolicyFingerprint = "policy",
+                    AppliedPolicy = TradeMaterialPricingPolicy.Default,
+                    QuotedAtUtc = quotedAt,
+                    ExpiresAtUtc = quotedAt.AddMinutes(30),
+                    RouteCashRequired = 250m,
+                    SafetyAllowance = 25m,
+                    MaterialReimbursement = 275m,
+                    WorldStops = 1,
+                    DataCenterTransfers = 0,
+                    Lines = [new TradeMaterialQuoteLine(1, "Crafter ore", 2, false, 250m, ["Siren"], quotedAt)]
+                }
+            }
+        };
+
+        var summary = TradeCommissionPaymentSummary.FromOrder(
+            order,
+            draft: null,
+            LaborPolicy(materialValueBonusPercent: 20m));
+
+        Assert.Equal(200m, summary.EstimatedProcurementTotal);
+        Assert.Equal(275m, summary.MaterialReimbursementTotal);
+        Assert.Equal(40m, summary.Active.CommissionAmount);
+        Assert.Equal(515m, summary.TotalPayment);
+    }
+
+    [Fact]
     public void OnHandMaterialsContributeValueWithoutReimbursement()
     {
         var onHand = Material(
@@ -328,7 +395,30 @@ public sealed class TradePaymentSpecificationTests
                 CraftLabor =
                 [
                     new TradeOrderCraftLaborSnapshot("root", 1, "Craft", 1, 1, Warnings: [])
-                ]
+                ],
+                MaterialQuote = new TradeMaterialQuote
+                {
+                    PolicyFingerprint = "fixture",
+                    AppliedPolicy = TradeMaterialPricingPolicy.Default,
+                    QuotedAtUtc = new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc),
+                    ExpiresAtUtc = new DateTime(2026, 7, 20, 12, 30, 0, DateTimeKind.Utc),
+                    RouteCashRequired = 200m,
+                    SafetyAllowance = 20m,
+                    MaterialReimbursement = 220m,
+                    WorldStops = 1,
+                    DataCenterTransfers = 0,
+                    Lines =
+                    [
+                        new TradeMaterialQuoteLine(
+                            1,
+                            "Crafter ore",
+                            2,
+                            false,
+                            200m,
+                            ["Siren"],
+                            new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc))
+                    ]
+                }
             }
         };
         var payment = TradeCommissionPaymentSummary.FromOrder(

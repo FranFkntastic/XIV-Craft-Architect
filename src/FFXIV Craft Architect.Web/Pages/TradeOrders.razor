@@ -1510,6 +1510,7 @@
                     else
                     {
                         var paymentSummary = GetSelectedOrderPaymentSummary();
+                        var currentMaterialQuote = GetSelectedOrderPricingWorkPackage().SourceSnapshot.MaterialQuote;
                          <MudTabs Elevation="0"
                                   Rounded="true"
                                   ApplyEffectsToContainer="true"
@@ -1640,7 +1641,7 @@
                                     <section class="trade-orders-procurement-summary">
                                         <div class="trade-orders-procurement-total">
                                             <span>Crafter reimbursable</span>
-                                            <strong>@FormatGilAllowZero(GetProcurementReimbursementTotal(procurementRows))</strong>
+                                            <strong>@(currentMaterialQuote is null ? "Unavailable" : FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal))</strong>
                                         </div>
                                         <div class="trade-orders-procurement-health">
                                             <span>Company handoff</span>
@@ -1740,7 +1741,7 @@
                                         <span>@FormatProcurementFooter(procurementRows)</span>
                                         <div>
                                             <small>@FormatGilAllowZero(GetProcurementMaterialValueTotal(procurementRows)) material value</small>
-                                            <strong>@FormatGilAllowZero(GetProcurementReimbursementTotal(procurementRows)) reimbursable</strong>
+                                            <strong>@(currentMaterialQuote is null ? "Quote unavailable" : $"{FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal)} reimbursable")</strong>
                                         </div>
                                     </div>
                                     @if (paymentSummary.Warnings.Count > 0)

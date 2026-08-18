@@ -122,6 +122,9 @@ public sealed record TradeCommissionPaymentSummary(
                 labor.Warnings ?? Array.Empty<string>()))
             .ToArray();
         var quote = sourceSnapshot.MaterialQuote;
+        var requiresMaterialQuote = materials.Any(material =>
+            material.Responsibility == CommissionMaterialResponsibility.Crafter &&
+            !material.IsOnHand);
         var quotedCrafterCash = quote?.Lines
             .Where(line => materials.Any(material =>
                 material.ItemId == line.ItemId &&
@@ -140,7 +143,9 @@ public sealed record TradeCommissionPaymentSummary(
             laborInputs,
             policy,
             sourceSnapshot.Warnings ?? Array.Empty<string>(),
-            appliedAllowance));
+            appliedAllowance,
+            quote is null ? null : quotedCrafterCash,
+            RequireMaterialRouteQuote: requiresMaterialQuote));
 
         return new TradeCommissionPaymentSummary(
             materials,
