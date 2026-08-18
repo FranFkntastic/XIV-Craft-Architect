@@ -30,7 +30,7 @@ public sealed class TradeMaterialQuoteService
 
         var maximumCost = decision.CheapestGilCost *
             (1m + policy.MaximumConsolidationPremiumPercent / 100m);
-        var selection = decision.ToleranceSelections
+        var selections = decision.ToleranceSelections
             .Where(candidate => candidate.GilCost <= maximumCost)
             .Where(candidate => candidate.WorldStops <= policy.MaximumWorldStops)
             .Where(candidate => candidate.DataCenterTransfers <= policy.MaximumDataCenterTransfers)
@@ -38,8 +38,8 @@ public sealed class TradeMaterialQuoteService
             .ThenBy(candidate => candidate.WorldStops)
             .ThenBy(candidate => candidate.GilCost)
             .ThenBy(candidate => candidate.SelectionKey, StringComparer.Ordinal)
-            .FirstOrDefault();
-        if (selection == null)
+            .ToArray();
+        if (selections.Length == 0)
         {
             return Failure(
                 $"No complete route fits company policy ({policy.MaximumWorldStops} worlds, " +
@@ -51,6 +51,29 @@ public sealed class TradeMaterialQuoteService
             .Where(row => row.TotalQuantity > 0)
             .GroupBy(row => (row.ItemId, row.RequiresHq))
             .ToDictionary(group => group.Key, group => group.Sum(row => row.TotalQuantity));
+        foreach (var selection in selections)
+        {
+            var result = TryBuildSelection(
+                selection,
+                demandByItem,
+                policy,
+                quotedAtUtc);
+            if (result.IsComplete)
+            {
+                return result;
+            }
+        }
+
+        return Failure(
+            "No complete route within company policy uses sufficiently fresh listing evidence.");
+    }
+
+    private static TradeMaterialQuoteResult TryBuildSelection(
+        MarketRouteToleranceSelection selection,
+        IReadOnlyDictionary<(int ItemId, bool RequiresHq), int> demandByItem,
+        TradeMaterialPricingPolicy policy,
+        DateTime quotedAtUtc)
+    {
         var lines = new List<TradeMaterialQuoteLine>();
         var payrollLines = new List<CommissionPayrollInputLine>();
         foreach (var plan in selection.ShoppingPlans)
