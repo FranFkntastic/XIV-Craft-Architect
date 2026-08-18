@@ -131,8 +131,9 @@ public sealed class UnifiedSettingsContractTests
 
         Assert.Contains("ResolveSelectedWorkspaceProfileAsync", orders, StringComparison.Ordinal);
         Assert.Contains("LoadSelectedWorkspaceCompanyIdAsync", orders, StringComparison.Ordinal);
-        Assert.Contains("ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value, profiles)", orders, StringComparison.Ordinal);
+        Assert.Contains("ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value)", orders, StringComparison.Ordinal);
         Assert.Contains("WorkspaceProfiles.ResolveAsync(workspaceId)", orders, StringComparison.Ordinal);
+        Assert.DoesNotContain("ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value, profiles)", orders, StringComparison.Ordinal);
         Assert.Contains("ToTransientProfile", client, StringComparison.Ordinal);
         Assert.DoesNotContain("SaveCompanyProfileAsync", client, StringComparison.Ordinal);
         Assert.Contains("selectedWorkspaceId != companyProfileId", persistence, StringComparison.Ordinal);
