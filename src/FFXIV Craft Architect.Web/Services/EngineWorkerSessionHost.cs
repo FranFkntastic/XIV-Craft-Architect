@@ -1622,9 +1622,6 @@ public static partial class ManagedHost
         var activeDemand = demand.ActiveProcurementDemand
             .Where(row => row.Quantity > 0)
             .ToArray();
-        var activeItems = demand.ToActiveProcurementMaterialAggregates()
-            .Where(item => item.TotalQuantity > 0)
-            .ToArray();
         var evidence = session.BorrowMarketEvidence();
         var acquisition = CaptureAcquisitionProjection(new WorkerSessionCommandEnvelope(
             WorkerSessionProtocol.ContractVersion,
@@ -1633,15 +1630,39 @@ public static partial class ManagedHost
             JsonSerializer.SerializeToElement(
                 new WorkerAcquisitionProjectionRequest("All"),
                 WireJsonOptions)));
+        var selectedDemandGroups = activeDemand
+            .GroupBy(row => (row.ItemId, row.MustBeHq))
+            .ToArray();
+        var conflictingSelections = selectedDemandGroups
+            .Where(group => group.Select(row => row.Source).Distinct().Count() != 1)
+            .ToArray();
+        var selectedSources = selectedDemandGroups
+            .Where(group => group.Select(row => row.Source).Distinct().Count() == 1)
+            .ToDictionary(group => group.Key, group => group.First().Source);
+        var activeItems = demand.ToSelectedProcurementMaterialAggregates()
+            .Where(item => item.TotalQuantity > 0)
+            .ToArray();
+        var requiresMarketEvidence = selectedSources.Values.Any(source =>
+            source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq);
         var warnings = new List<string>();
         TradeMaterialQuote? materialQuote = null;
         IReadOnlyList<CommissionPayrollInputLine> materialLines = [];
-        if (evidence.ItemAnalyses.Count == 0 || evidence.ShoppingPlans is not { Count: > 0 })
+        if (conflictingSelections.Length > 0)
+        {
+            foreach (var conflict in conflictingSelections)
+            {
+                warnings.Add(
+                    $"Trade cannot quote {conflict.First().ItemName}: active demand mixes multiple acquisition sources for the same quality.");
+            }
+        }
+        else if (requiresMarketEvidence &&
+                 (evidence.ItemAnalyses.Count == 0 || evidence.ShoppingPlans is not { Count: > 0 }))
         {
             warnings.Add(
                 "No current market evidence is loaded, so Trade cannot produce an executable material quote.");
         }
-        else if (session.ActiveContext.MarketFetchScope != MarketFetchScope.EntireRegion)
+        else if (requiresMarketEvidence &&
+                 session.ActiveContext.MarketFetchScope != MarketFetchScope.EntireRegion)
         {
             warnings.Add(
                 "Trade material quotes require current-region market evidence; reprice the order to refresh that scope.");
@@ -1661,7 +1682,9 @@ public static partial class ManagedHost
             var quoteService = new TradeMaterialQuoteService();
             var quotedAtUtc = DateTime.UtcNow;
             var optimizationInput = quoteService.PrepareOptimizationInput(
-                evidence.ShoppingPlans,
+                evidence.ShoppingPlans ?? [],
+                activeItems,
+                selectedSources,
                 policy,
                 quotedAtUtc);
             var optimization = await new MarketShoppingService(SessionMarketCache)
