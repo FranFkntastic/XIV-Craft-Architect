@@ -180,5 +180,6 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
     internal static bool RequiresMigration(TradeOrder order) =>
         order.CompanyCommission == null
             ? order.AuthoringSchemaVersion < TradeOrder.CurrentAuthoringSchemaVersion
-            : TradeCompanyCommissionMigrationService.RequiresAssignedClaimRepair(order);
+            : order.CompanyCommission.SchemaVersion != TradeCompanyCommission.CurrentSchemaVersion ||
+              TradeCompanyCommissionMigrationService.RequiresAssignedClaimRepair(order);
 }

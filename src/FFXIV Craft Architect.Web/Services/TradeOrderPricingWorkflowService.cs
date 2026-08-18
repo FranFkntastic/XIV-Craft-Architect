@@ -4,7 +4,8 @@ using FFXIV_Craft_Architect.Core.Services;
 namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed record TradeOrderPricingWorkflowOptions(
-    bool ForceRefreshMarketData);
+    bool ForceRefreshMarketData,
+    TradeMaterialPricingPolicy? MaterialPricingPolicy = null);
 
 public sealed record TradeOrderPricingWorkflowResult(
     TradeOrderPricingWorkflowStatus Status,
@@ -115,7 +116,7 @@ public sealed class TradeOrderPricingWorkflowService
                     projectItems,
                     _viewSettings.SelectedDataCenter,
                     _viewSettings.SelectedRegion,
-                    _viewSettings.DefaultMarketFetchScope),
+                    MarketFetchScope.EntireRegion),
                 PlanDerivationDispatch.Deferred,
                 operation.Token,
                 workerOperation.OperationId);
@@ -153,7 +154,8 @@ public sealed class TradeOrderPricingWorkflowService
                 operation,
                 workerOperation,
                 savedAt,
-                useCurrentSettingsContext: true);
+                useCurrentSettingsContext: true,
+                materialPricingPolicy: options.MaterialPricingPolicy);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
@@ -251,6 +253,7 @@ public sealed class TradeOrderPricingWorkflowService
                 workerOperation,
                 DateTime.UtcNow,
                 useCurrentSettingsContext: true,
+                materialPricingPolicy: options.MaterialPricingPolicy,
                 initialWarnings: string.IsNullOrWhiteSpace(_projections.Shell.RestoreWarning)
                     ? []
                     : [_projections.Shell.RestoreWarning]);
@@ -291,6 +294,7 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrder order,
         WorkerAcquisitionMutation mutation,
         IReadOnlyCollection<int>? marketItemIdsToRefresh,
+        TradeMaterialPricingPolicy? materialPricingPolicy = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(order);
@@ -339,7 +343,8 @@ public sealed class TradeOrderPricingWorkflowService
                 operation,
                 workerOperation,
                 DateTime.UtcNow,
-                useCurrentSettingsContext: false);
+                useCurrentSettingsContext: false,
+                materialPricingPolicy: materialPricingPolicy);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
@@ -399,6 +404,7 @@ public sealed class TradeOrderPricingWorkflowService
         WorkerSessionOperationLease workerOperation,
         DateTime refreshedAt,
         bool useCurrentSettingsContext,
+        TradeMaterialPricingPolicy? materialPricingPolicy = null,
         IReadOnlyList<string>? initialWarnings = null)
     {
         var source = await _worker.GetTradeProjectionAsync(
@@ -416,7 +422,8 @@ public sealed class TradeOrderPricingWorkflowService
                 refresh.ForceRefresh,
                 refresh.ItemIds,
                 refresh.SkipRefresh,
-                UseCurrentSettingsContext: useCurrentSettingsContext),
+                UseCurrentSettingsContext: useCurrentSettingsContext,
+                RequiredMarketScope: MarketFetchScope.EntireRegion),
             operation.Token,
             (message, progress) => operation.ReportStatus(
                 message,
@@ -432,6 +439,7 @@ public sealed class TradeOrderPricingWorkflowService
         operation.ReportStatus("Calculating the order payment...", progress: 90);
         source = await _worker.GetTradeProjectionAsync(
             includeCraftLabor: true,
+            materialPricingPolicy: materialPricingPolicy,
             cancellationToken: operation.Token)
             ?? throw new InvalidOperationException(
                 "The Worker did not publish Trade pricing evidence.");
@@ -451,7 +459,7 @@ public sealed class TradeOrderPricingWorkflowService
         order.SourceSnapshot.SourcePlanId = order.CraftPlanId;
         order.SourceSnapshot.SourcePlanName =
             order.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(order);
-        order.SourceSnapshot.CostBasis = CommissionCostBasis.SelectedAcquisitionSources;
+        order.SourceSnapshot.CostBasis = CommissionCostBasis.ProcurementRoute;
         order.SourceSnapshot.MarketFetchScope = source.MarketFetchScope;
         order.SourceSnapshot.Region = source.SelectedRegion;
         order.SourceSnapshot.DataCenter = source.SelectedDataCenter;
@@ -460,6 +468,15 @@ public sealed class TradeOrderPricingWorkflowService
         order.SourceSnapshot.MarketAnalysisVersion = source.MarketAnalysisVersion;
         order.SourceSnapshot.Materials = materials;
         order.SourceSnapshot.CraftLabor = source.CraftLabor;
+        order.SourceSnapshot.MaterialQuote = source.MaterialQuote is null
+            ? null
+            : source.MaterialQuote with
+            {
+                CompanyProfileId = order.CompanyProfileId,
+                SourcePlanId = source.PlanId,
+                PlanSessionVersion = source.PlanSessionVersion,
+                MarketAnalysisVersion = source.MarketAnalysisVersion
+            };
         order.SourceSnapshot.Warnings = warnings
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -506,7 +523,8 @@ public sealed class TradeOrderPricingWorkflowService
                 operationId: workerOperation.OperationId);
         }
 
-        var complete = pricedCount == source.ActiveProcurementItems.Count &&
+        var complete = source.MaterialQuote != null &&
+            pricedCount == source.ActiveProcurementItems.Count &&
             derivation.MarketPublished &&
             derivation.ProcurementPublished;
         var message = complete

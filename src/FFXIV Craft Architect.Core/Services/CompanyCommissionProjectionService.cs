@@ -45,6 +45,7 @@ public static class CompanyCommissionProjectionService
                 commission.DeliveryReadiness.IsReady,
                 commission.DeliveryReadiness.DeclaredAtUtc,
                 commission.DeliveryReadiness.WithdrawnAtUtc),
+            LatestDeliveryHandoff = commission.DeliveryHandoffs.LastOrDefault(),
             SettlementState = commission.SettlementState,
             Closed = commission.IsClosed(order.Status),
             ProjectionRevision = commission.Activity.LastOrDefault()?.CommissionRevision ?? 0

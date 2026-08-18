@@ -67,17 +67,33 @@ public partial class TradeOrders
         return TradeOrderPaymentCopyFormatter.FormatPaymentBreakdown(breakdown);
     }
 
-    private static string FormatPaymentDifference(
-        TradePaymentContractBreakdown laborStandard,
-        TradePaymentContractBreakdown legacy)
-    {
-        return TradeOrderPaymentCopyFormatter.FormatPaymentDifference(laborStandard, legacy);
-    }
-
     private static string FormatCraftLaborBasis(TradePaymentContractBreakdown breakdown)
     {
         return TradeOrderPaymentDisplayFormatter.FormatCraftLaborBasis(breakdown);
     }
+
+    private static string FormatMaterialQuoteProvenance(TradeMaterialQuote? quote)
+    {
+        if (quote == null)
+        {
+            return "Route quote unavailable";
+        }
+
+        var state = quote.IsLocked
+            ? $"locked {quote.LockedAtUtc!.Value.ToLocalTime():g}"
+            : quote.IsExpired(DateTime.UtcNow)
+                ? $"expired {quote.ExpiresAtUtc.ToLocalTime():g}"
+                : $"valid until {quote.ExpiresAtUtc.ToLocalTime():g}";
+        return $"{quote.WorldStops:N0} worlds · {quote.DataCenterTransfers:N0} transfers · {state} · policy {quote.PolicyFingerprint}";
+    }
+
+    private static string FormatDeliveryHandoffMethod(CompanyCommissionDeliveryHandoffMethod method) =>
+        method switch
+        {
+            CompanyCommissionDeliveryHandoffMethod.Mail => "Mail",
+            CompanyCommissionDeliveryHandoffMethod.CompanyRepresentative => "Company representative",
+            _ => "Other handoff"
+        };
 
     private static string FormatMaterialPaymentImpact(TradeCommissionPaymentMaterial material)
     {
@@ -120,7 +136,8 @@ public partial class TradeOrders
                 order.SourceSnapshot.DataCenter,
                 order.SourceSnapshot.Region,
                 order.SourceSnapshot.RequestedDataCenters,
-                order.SourceSnapshot.ImportedAtUtc),
+                order.SourceSnapshot.ImportedAtUtc,
+                order.SourceSnapshot.MaterialQuote),
             summary);
     }
 
@@ -145,7 +162,8 @@ public partial class TradeOrders
     private readonly record struct LiveProcurementKey(
         Guid OrderId,
         string PlanId,
-        long Revision);
+        long Revision,
+        string MaterialPolicyFingerprint);
 
     private enum TradeOrderProcurementColumn
     {

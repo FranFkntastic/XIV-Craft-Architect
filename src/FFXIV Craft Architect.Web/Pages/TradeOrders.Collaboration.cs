@@ -977,6 +977,7 @@ public partial class TradeOrders
         {
             CommissionCostBasis.MarketRecommendation => "Market recommendation",
             CommissionCostBasis.SelectedAcquisitionSources => "Selected acquisition sources",
+            CommissionCostBasis.ProcurementRoute => "Procurement route",
             _ => "Selected acquisition sources"
         };
 
@@ -990,8 +991,8 @@ public partial class TradeOrders
 
     private static string FormatCommissionPaymentContract(TradePaymentContractMode contract) =>
         contract == TradePaymentContractMode.LaborStandard
-            ? "Labor standard"
-            : "Legacy commission";
+            ? "Labor + material-value bonus"
+            : "Agreed payment terms";
 
     private static string FormatCommissionLocation(TradeOrderSourceSnapshot source)
     {

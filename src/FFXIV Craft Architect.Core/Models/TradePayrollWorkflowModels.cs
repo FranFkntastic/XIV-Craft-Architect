@@ -13,7 +13,7 @@ public sealed class TradePayrollWorkflowDraft
     public Guid? AssignedCrafterId { get; set; }
     public string? AssignedCrafterDisplayName { get; set; }
     public decimal CommissionPercent { get; set; } = CommissionPayoutPolicy.Default.CommissionPercent;
-    public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LegacyCommission;
+    public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LaborStandard;
     public decimal LaborGilPerSynth { get; set; } = TradePaymentPolicy.DefaultLaborGilPerSynth;
     public IReadOnlyList<TradePayrollResponsibilityLine> Responsibilities { get; set; } = Array.Empty<TradePayrollResponsibilityLine>();
     public string? RemoteId { get; set; }
@@ -93,8 +93,8 @@ public sealed record TradeCommissionPaymentSummary(
         var policy = effectivePolicy != null
             ? TradePaymentPolicyNormalizer.Normalize(effectivePolicy)
             : TradePaymentPolicyNormalizer.Normalize(new TradePaymentPolicy(
-                draft?.ActivePaymentContract ?? TradePaymentContractMode.LegacyCommission,
-                draft?.CommissionPercent ?? CommissionPayoutPolicy.Default.CommissionPercent,
+                draft?.ActivePaymentContract ?? TradePaymentContractMode.LaborStandard,
+                draft?.CommissionPercent ?? TradePaymentPolicy.DefaultMaterialValueBonusPercent,
                 draft?.LaborGilPerSynth > 0
                     ? draft.LaborGilPerSynth
                     : TradePaymentPolicy.DefaultLaborGilPerSynth));
@@ -121,11 +121,26 @@ public sealed record TradeCommissionPaymentSummary(
                 labor.CraftCount,
                 labor.Warnings ?? Array.Empty<string>()))
             .ToArray();
+        var quote = sourceSnapshot.MaterialQuote;
+        var quotedCrafterCash = quote?.Lines
+            .Where(line => materials.Any(material =>
+                material.ItemId == line.ItemId &&
+                material.RequiresHq == line.RequiresHq &&
+                material.Responsibility == CommissionMaterialResponsibility.Crafter &&
+                !material.IsOnHand))
+            .Sum(line => line.CashRequired) ?? 0m;
+        var appliedAllowance = quote is { RouteCashRequired: > 0 }
+            ? Math.Round(
+                quote.SafetyAllowance * quotedCrafterCash / quote.RouteCashRequired,
+                0,
+                MidpointRounding.AwayFromZero)
+            : 0m;
         var comparison = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             paymentMaterials,
             laborInputs,
             policy,
-            sourceSnapshot.Warnings ?? Array.Empty<string>()));
+            sourceSnapshot.Warnings ?? Array.Empty<string>(),
+            appliedAllowance));
 
         return new TradeCommissionPaymentSummary(
             materials,

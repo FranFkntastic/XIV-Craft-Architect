@@ -836,7 +836,7 @@ public static class CompanyCommissionEndpoints
                 cancellationToken) &&
             commission.ParticipantGrant is { RevokedAtUtc: null } participant &&
             participant.ClaimId == activeClaim.ClaimId &&
-            snapshot.Order.Status != TradeOrderStatus.Canceled &&
+            !TradeOrderStatusWorkflow.IsArchived(snapshot.Order.Status) &&
             commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published;
         if (!participantIsLive)
         {
@@ -1103,6 +1103,17 @@ public static class CompanyCommissionEndpoints
                             payload.Comment),
                         null);
                 }
+            case "record-delivery-handoff":
+                {
+                    var payload = Deserialize<DeliveryHandoffPayload>(body);
+                    return (
+                        new RecordCompanyCommissionDeliveryHandoffCommand(
+                            context,
+                            payload.Method,
+                            payload.Recipient,
+                            payload.Note),
+                        null);
+                }
             case "add-comment":
                 return (
                     new AddCompanyCommissionCommentCommand(
@@ -1142,6 +1153,7 @@ public static class CompanyCommissionEndpoints
             "retract-settlement" or
             "acknowledge-company-materials" or
             "report-progress" or
+            "record-delivery-handoff" or
             "add-comment" or
             "declare-readiness" or
             "withdraw-readiness" =>
@@ -1392,6 +1404,11 @@ public static class CompanyCommissionEndpoints
     private sealed record ProgressPayload(
         IReadOnlyList<CompanyCommissionProgressQuantity> Outputs,
         string? Comment);
+
+    private sealed record DeliveryHandoffPayload(
+        CompanyCommissionDeliveryHandoffMethod Method,
+        string? Recipient,
+        string? Note);
 
     private sealed record CommentPayload(string Comment);
 

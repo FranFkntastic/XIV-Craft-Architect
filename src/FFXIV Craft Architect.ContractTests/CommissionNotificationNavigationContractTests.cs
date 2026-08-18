@@ -66,6 +66,7 @@ public sealed class CommissionNotificationNavigationContractTests
     [InlineData(CompanyCommissionActivityKind.ProgressReported, "View progress")]
     [InlineData(CompanyCommissionActivityKind.CommentAdded, "View comment")]
     [InlineData(CompanyCommissionActivityKind.DeliveryReadinessDeclared, "Review delivery")]
+    [InlineData(CompanyCommissionActivityKind.DeliveryHandoffRecorded, "Review delivery")]
     public void EventSpecificActionsMatchTheOperatorDecision(
         CompanyCommissionActivityKind eventKind,
         string expectedLabel)
@@ -131,8 +132,8 @@ public sealed class CommissionNotificationNavigationContractTests
 
         Assert.Equal(
             "The crafter reported production progress: " +
-            "Iron Nails: 1 of 1 completed, 1 ready; " +
-            "Bronze Rivets: 3 of 4 completed, 2 ready. " +
+            "Iron Nails: 1 of 1 completed; " +
+            "Bronze Rivets: 3 of 4 completed. " +
             "Comment: First batch is staged. Work remains in progress.",
             summary);
         Assert.Equal(
@@ -140,6 +141,30 @@ public sealed class CommissionNotificationNavigationContractTests
             DiscordCompanyCommissionPostCommitSink.ResolveActionLabel(
                 activity.Kind,
                 brief));
+    }
+
+    [Fact]
+    public void DeliveryHandoffNotificationCarriesMethodRecipientAndNoteToCommissionerReview()
+    {
+        var activity = CreateActivity(
+            CompanyCommissionActivityKind.DeliveryHandoffRecorded,
+            CompanyCommissionActorKind.Crafter) with
+        {
+            PayloadJson = JsonSerializer.Serialize(new CompanyCommissionDeliveryHandoff(
+                Guid.NewGuid(),
+                CompanyCommissionDeliveryHandoffMethod.Mail,
+                DateTime.UtcNow,
+                new("crafter", CompanyCommissionActorKind.Crafter, "Contract Crafter"),
+                TermsVersion: 1,
+                Recipient: "Company chest reviewer",
+                Note: "Mailed for review."))
+        };
+
+        var summary = DiscordCompanyCommissionPostCommitSink.BuildSummary(activity, CreateBrief());
+
+        Assert.Contains("by mail", summary, StringComparison.Ordinal);
+        Assert.Contains("Company chest reviewer", summary, StringComparison.Ordinal);
+        Assert.Contains("Mailed for review.", summary, StringComparison.Ordinal);
     }
 
     [Fact]

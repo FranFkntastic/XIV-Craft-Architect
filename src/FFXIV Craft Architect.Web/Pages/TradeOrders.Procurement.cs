@@ -505,6 +505,7 @@ public partial class TradeOrders
         try
         {
             var snapshot = await WorkerSession.GetTradeProjectionAsync(
+                materialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
                 cancellationToken: cancellationToken);
             if (requestId != _liveProcurementRefreshRequestId)
             {
@@ -563,7 +564,9 @@ public partial class TradeOrders
         return new LiveProcurementKey(
             _selectedOrder.Id,
             WorkerProjections.Shell.PlanId ?? string.Empty,
-            WorkerProjections.Shell.Revision);
+            WorkerProjections.Shell.Revision,
+            TradeMaterialPricingPolicyNormalizer.Fingerprint(
+                _companyProfile?.MaterialPricingPolicy));
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetOrderedProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)
@@ -1161,7 +1164,8 @@ public partial class TradeOrders
             return false;
         }
 
-        var live = await WorkerSession.GetTradeProjectionAsync();
+        var live = await WorkerSession.GetTradeProjectionAsync(
+            materialPricingPolicy: _companyProfile?.MaterialPricingPolicy);
         if (live == null || !live.HasPlan)
         {
             Snackbar.Add("Linked craft plan could not be loaded.", Severity.Warning);
@@ -1210,7 +1214,8 @@ public partial class TradeOrders
                 new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null),
                 source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq
                     ? [row.ItemId]
-                    : null);
+                    : null,
+                _companyProfile?.MaterialPricingPolicy);
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (pricingResult.ActivePlanFence is { } failedFence)

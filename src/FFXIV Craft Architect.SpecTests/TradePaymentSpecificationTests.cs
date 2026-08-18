@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
@@ -6,7 +8,7 @@ namespace FFXIV_Craft_Architect.SpecTests;
 public sealed class TradePaymentSpecificationTests
 {
     [Fact]
-    public void LegacyCommissionReimbursesCrafterButCommissionsAllMaterials()
+    public void LaborPaymentReimbursesCrafterAndBonusesAllMaterialValue()
     {
         var summary = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             Materials:
@@ -14,15 +16,23 @@ public sealed class TradePaymentSpecificationTests
                 Material(1, "Crafter ore", 2, 100m, CommissionMaterialResponsibility.Crafter),
                 Material(2, "Provided cloth", 3, 50m, CommissionMaterialResponsibility.Provided)
             ],
-            CraftLabor: [],
-            Policy: new TradePaymentPolicy(TradePaymentContractMode.LegacyCommission, 20m, TradePaymentPolicy.DefaultLaborGilPerSynth),
+            CraftLabor: [new TradeCraftLaborInput("root", 10, "Craft", 1, 1, [])],
+            Policy: LaborPolicy(materialValueBonusPercent: 20m),
             Warnings: []));
 
         Assert.Equal(350m, summary.EstimatedProcurementTotal);
         Assert.Equal(200m, summary.MaterialReimbursementTotal);
         Assert.Equal(150m, summary.ProvidedMaterialTotal);
-        Assert.Equal(70m, summary.Legacy.CommissionAmount);
-        Assert.Equal(270m, summary.TotalPayment);
+        Assert.Equal(70m, summary.Active.CommissionAmount);
+        Assert.Equal(200m, summary.Active.CraftLaborTotal);
+        Assert.Equal(470m, summary.TotalPayment);
+
+        var persistedPolicy = JsonSerializer.Deserialize<TradePaymentPolicy>(
+            "{\"ActiveContract\":0,\"LegacyCommissionPercent\":20,\"LaborGilPerSynth\":200}")!;
+        var normalized = TradePaymentPolicyNormalizer.Normalize(persistedPolicy);
+        Assert.Equal(TradePaymentContractMode.LaborStandard, normalized.ActiveContract);
+        Assert.Equal(20m, normalized.MaterialValueBonusPercent);
+        Assert.Null(normalized.LegacyCommissionPercent);
     }
 
     [Fact]
@@ -39,19 +49,16 @@ public sealed class TradePaymentSpecificationTests
         };
         var summary = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             Materials: [onHand],
-            CraftLabor: [],
-            Policy: new TradePaymentPolicy(
-                TradePaymentContractMode.LegacyCommission,
-                20m,
-                TradePaymentPolicy.DefaultLaborGilPerSynth),
+            CraftLabor: [new TradeCraftLaborInput("root", 10, "Craft", 1, 1, [])],
+            Policy: LaborPolicy(materialValueBonusPercent: 20m),
             Warnings: []));
 
         Assert.Equal(1_000m, summary.EstimatedProcurementTotal);
         Assert.Equal(1_000m, summary.OnHandMaterialValueTotal);
         Assert.Equal(0m, summary.MaterialReimbursementTotal);
         Assert.Equal(0m, summary.ProvidedMaterialTotal);
-        Assert.Equal(200m, summary.Legacy.CommissionAmount);
-        Assert.Equal(200m, summary.TotalPayment);
+        Assert.Equal(200m, summary.Active.CommissionAmount);
+        Assert.Equal(400m, summary.TotalPayment);
     }
 
     [Fact]
@@ -59,13 +66,13 @@ public sealed class TradePaymentSpecificationTests
     {
         var summary = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             Materials: [Material(1, "Fractional", 1, 2.5m, CommissionMaterialResponsibility.Crafter)],
-            CraftLabor: [],
-            Policy: new TradePaymentPolicy(TradePaymentContractMode.LegacyCommission, 50m, TradePaymentPolicy.DefaultLaborGilPerSynth),
+            CraftLabor: [new TradeCraftLaborInput("root", 10, "Craft", 1, 1, [])],
+            Policy: LaborPolicy(materialValueBonusPercent: 50m),
             Warnings: []));
 
         Assert.Equal(3m, summary.EstimatedProcurementTotal);
-        Assert.Equal(2m, summary.Legacy.CommissionAmount);
-        Assert.Equal(5m, summary.TotalPayment);
+        Assert.Equal(2m, summary.Active.CommissionAmount);
+        Assert.Equal(205m, summary.TotalPayment);
     }
 
     [Fact]
@@ -84,11 +91,12 @@ public sealed class TradePaymentSpecificationTests
         Assert.Equal(200m, summary.LaborStandard.GilPerSynth);
         Assert.Equal(5, summary.LaborStandard.CraftSynthCount);
         Assert.Equal(1_000m, summary.LaborStandard.CraftLaborTotal);
-        Assert.Equal(2_000m, summary.TotalPayment);
+        Assert.Equal(100m, summary.LaborStandard.CommissionAmount);
+        Assert.Equal(2_100m, summary.TotalPayment);
     }
 
     [Fact]
-    public void LaborStandardDoesNotChargeMaterialCommission()
+    public void LaborStandardPaysMaterialValueBonusEvenWhenCompanyProvidesMaterials()
     {
         var summary = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             Materials: [Material(1, "Provided ore", 10, 100m, CommissionMaterialResponsibility.Provided)],
@@ -97,9 +105,9 @@ public sealed class TradePaymentSpecificationTests
             Warnings: []));
 
         Assert.Equal(0m, summary.MaterialReimbursementTotal);
-        Assert.Equal(0m, summary.LaborStandard.CommissionAmount);
+        Assert.Equal(100m, summary.LaborStandard.CommissionAmount);
         Assert.Equal(200m, summary.LaborStandard.CraftLaborTotal);
-        Assert.Equal(200m, summary.TotalPayment);
+        Assert.Equal(300m, summary.TotalPayment);
     }
 
     [Fact]
@@ -200,31 +208,31 @@ public sealed class TradePaymentSpecificationTests
     [InlineData(200, 101)]
     public void TradePaymentRejectsOutOfRangePolicyMoney(
         int gilPerSynth,
-        int legacyCommissionPercent)
+        int materialValueBonusPercent)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new TradePaymentCalculator().Calculate(
             new TradePaymentCalculationRequest(
                 Materials: [Material(1, "Ore", 1, 100m, CommissionMaterialResponsibility.Crafter)],
                 CraftLabor: [new TradeCraftLaborInput("craft", 2, "Craft", 1, 1, [])],
-                Policy: LaborPolicy(gilPerSynth, legacyCommissionPercent),
+                Policy: LaborPolicy(gilPerSynth, materialValueBonusPercent),
                 Warnings: [])));
     }
 
     [Fact]
-    public void ZeroCommissionPoliciesRemainZero()
+    public void ZeroMaterialBonusPoliciesRemainZero()
     {
         var payroll = new CommissionPayrollService().Calculate(
             [PayrollMaterial(1, 100)],
             new CommissionPayoutPolicy(0));
         var payment = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             Materials: [Material(1, "Ore", 1, 100m, CommissionMaterialResponsibility.Crafter)],
-            CraftLabor: [],
-            Policy: new TradePaymentPolicy(TradePaymentContractMode.LegacyCommission, 0, TradePaymentPolicy.DefaultLaborGilPerSynth),
+            CraftLabor: [new TradeCraftLaborInput("root", 10, "Craft", 1, 1, [])],
+            Policy: LaborPolicy(materialValueBonusPercent: 0),
             Warnings: []));
 
         Assert.Equal(0m, payroll.CommissionAmount);
-        Assert.Equal(0m, payment.Legacy.CommissionPercent);
-        Assert.Equal(100m, payment.TotalPayment);
+        Assert.Equal(0m, payment.Active.CommissionPercent);
+        Assert.Equal(300m, payment.TotalPayment);
     }
 
     [Fact]
@@ -316,13 +324,17 @@ public sealed class TradePaymentSpecificationTests
                         "Controlled input",
                         new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc),
                         [])
+                ],
+                CraftLabor =
+                [
+                    new TradeOrderCraftLaborSnapshot("root", 1, "Craft", 1, 1, Warnings: [])
                 ]
             }
         };
         var payment = TradeCommissionPaymentSummary.FromOrder(
             order,
             draft: null,
-            new TradePaymentPolicy(TradePaymentContractMode.LegacyCommission, 20m, TradePaymentPolicy.DefaultLaborGilPerSynth));
+            LaborPolicy(materialValueBonusPercent: 20m));
         var context = new TradeOrderPaymentCopyContext(
             "Commission",
             "Crafter",
@@ -352,8 +364,11 @@ public sealed class TradePaymentSpecificationTests
 
         Assert.DoesNotContain("Crafter procures:", receipt);
         Assert.DoesNotContain("Legacy comparison", receipt);
+        Assert.Contains("Material value bonus (20%)", receipt);
         Assert.Contains("Crafter ore x2: 200 gil", summary);
-        Assert.Contains("Legacy comparison", summary);
+        Assert.DoesNotContain("Legacy comparison", summary);
+        Assert.Contains("Material value bonus (20%)", summary);
+        Assert.Equal("Agreed payment terms", CompanyCommissionPaymentDisplayFormatter.FormatContractLabel("Legacy commission"));
     }
 
     private static TradePaymentMaterialInput Material(
@@ -423,9 +438,9 @@ public sealed class TradePaymentSpecificationTests
 
     private static TradePaymentPolicy LaborPolicy(
         decimal gilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth,
-        decimal legacyCommissionPercent = 20m) => new(
+        decimal materialValueBonusPercent = TradePaymentPolicy.DefaultMaterialValueBonusPercent) => new(
         TradePaymentContractMode.LaborStandard,
-        legacyCommissionPercent,
+        materialValueBonusPercent,
         gilPerSynth);
 
     private static MarketItemAnalysis Analysis(int itemId, string name, decimal competitiveAverage) => new()

@@ -70,7 +70,7 @@ const activityLabels = {
     WorkClearanceAchieved: "Work cleared",
     ProgressReported: "Progress reported",
     CommentAdded: "Operational update",
-    DeliveryReadinessDeclared: "Ready for delivery",
+    DeliveryReadinessDeclared: "Sent for delivery review",
     DeliveryReadinessWithdrawn: "Readiness withdrawn",
     DeliveryReturnedToWork: "Returned to work",
     DeliveryAccepted: "Delivery accepted",
@@ -471,7 +471,7 @@ function formatStatus(projection) {
     if (brief.closed) return "COMPLETED";
     if (brief.status === "Completed") return "DELIVERY ACCEPTED";
     if (requiresTermsAcknowledgement(projection)) return "TERMS REVIEW REQUIRED";
-    if (brief.status === "AwaitingDelivery") return "READY FOR DELIVERY";
+    if (brief.status === "AwaitingDelivery") return "AWAITING DELIVERY REVIEW";
     if (brief.status === "InProgress") return "CRAFTING";
     if (!brief.isClaimed) return "OPEN - ONE CLAIM SLOT";
     if (brief.gates.identity === "Pending") return "CLAIMED - IDENTITY REVIEW";
@@ -732,27 +732,19 @@ function resolveNextStep() {
     if (brief.deliveryReadiness.isReady) {
         return {
             title: "Complete delivery is ready",
-            body: "The commissioner can now accept delivery. If something changed, withdraw readiness with a reason and continue reporting progress.",
-            actions: [{
-                label: "Withdraw readiness",
-                run: openWithdrawReadinessForm
-            }]
-        };
-    }
-    if (isCompleteAndReady(brief)) {
-        return {
-            title: "Everything is ready for delivery",
-            body: "All requested outputs have complete and ready quantities. Declare the complete commission ready for commissioner acceptance.",
-            actions: [{
-                label: "Mark ready for delivery",
-                primary: true,
-                run: declareReadiness
-            }]
+            body: "The commissioner can now review and accept the completed delivery.",
+            actions: [
+                {
+                    label: "Sent for review",
+                    primary: true,
+                    run: openDeliveryHandoffForm
+                }
+            ]
         };
     }
     return {
         title: "Report item-level progress",
-        body: "Work is cleared. Record completed and ready quantities directly against each requested output.",
+        body: "Work is cleared. Record completed quantities directly against each requested output.",
         actions: [{
             label: "Focus progress",
             primary: true,
@@ -850,19 +842,7 @@ function canReleaseBeforeWork(projection) {
         !areCompanyMaterialsReady(projection) &&
         brief.outputProgress.every(progress =>
             progress.completedQuantity === 0 &&
-            progress.readyQuantity === 0 &&
             progress.acceptedQuantity === 0);
-}
-
-function isCompleteAndReady(brief) {
-    if (brief.terms.outputs.length === 0) return false;
-    const progressByLine = new Map(brief.outputProgress.map(item => [item.lineId, item]));
-    return brief.terms.outputs.every(output => {
-        const progress = progressByLine.get(output.lineId);
-        return progress &&
-            progress.completedQuantity >= output.requiredQuantity &&
-            progress.readyQuantity >= output.requiredQuantity;
-    });
 }
 
 function renderGates() {
@@ -964,12 +944,7 @@ function renderOutputs() {
             output,
             progress?.completedQuantity ?? null,
             canEdit);
-        const ready = renderProgressQuantity(
-            "ready",
-            output,
-            progress?.readyQuantity ?? null,
-            canEdit);
-        row.append(identity, required, completed, ready);
+        row.append(identity, required, completed);
         target.append(row);
     }
 
@@ -977,7 +952,7 @@ function renderOutputs() {
 }
 
 function renderProgressQuantity(kind, output, value, canEdit) {
-    const wrapper = element("div", kind === "completed" ? "output-completed" : "output-ready");
+    const wrapper = element("div", "output-completed");
     if (!canEdit) {
         wrapper.textContent = value == null ? "—" : formatNumber(value);
         return wrapper;
@@ -985,7 +960,7 @@ function renderProgressQuantity(kind, output, value, canEdit) {
     const label = element(
         "label",
         "sr-only",
-        `${kind === "completed" ? "Completed" : "Ready"} ${output.name}`);
+        `Completed ${output.name}`);
     const inputId = `progress-${kind}-${output.lineId}`;
     const input = createInput("number", `${kind}-${output.lineId}`, {
         min: 0,
@@ -1746,13 +1721,50 @@ function openReleaseForm() {
         directRelease ? "Claim released." : "Withdrawal recorded for company resolution.");
 }
 
-function openWithdrawReadinessForm() {
-    openReasonForm(
-        "Withdraw delivery readiness",
-        "Progress remains intact; explain what needs more work.",
-        "Withdraw readiness",
-        "withdraw-readiness",
-        "Delivery readiness withdrawn.");
+function openDeliveryHandoffForm() {
+    const form = element("form", "action-form");
+    const method = element("select");
+    for (const [value, label] of [
+        ["Mail", "Mail"],
+        ["CompanyRepresentative", "Company representative"],
+        ["Other", "Other"]
+    ]) {
+        const option = element("option", null, label);
+        option.value = value;
+        method.append(option);
+    }
+    const recipient = createInput("text", "handoff-recipient", {
+        maxLength: 200,
+        placeholder: "Recipient or representative (optional)"
+    });
+    const note = createTextarea("handoff-note", {
+        maxLength: 1000,
+        placeholder: "Delivery note (required for Other)"
+    });
+    form.append(
+        element("strong", null, "Sent for review"),
+        element("p", "form-help", "Record where the completed project went. This gives the commissioner review context; it does not accept delivery."),
+        createField("Method", method),
+        createField("Recipient", recipient),
+        createField("Note", note));
+    addFormFooter(form, "Record handoff");
+    form.addEventListener("submit", async event => {
+        event.preventDefault();
+        const normalizedNote = note.value.trim();
+        if (method.value === "Other" && !normalizedNote) {
+            showNotice("Delivery note required", "Describe the other delivery method before recording the handoff.");
+            return;
+        }
+        await runParticipantCommand(
+            "record-delivery-handoff",
+            {
+                method: method.value,
+                recipient: recipient.value.trim() || null,
+                note: normalizedNote || null
+            },
+            "Delivery handoff recorded for commissioner review.");
+    });
+    showActionForm(form);
 }
 
 function openReasonForm(title, help, submitLabel, command, successMessage) {
@@ -1811,23 +1823,19 @@ async function submitProgress(event) {
     const outputs = [];
     for (const output of brief.terms.outputs) {
         const completed = Number(document.querySelector(`[name="completed-${output.lineId}"]`)?.value);
-        const ready = Number(document.querySelector(`[name="ready-${output.lineId}"]`)?.value);
         if (!Number.isSafeInteger(completed) ||
-            !Number.isSafeInteger(ready) ||
             completed < 0 ||
-            completed > output.requiredQuantity ||
-            ready < 0 ||
-            ready > completed) {
+            completed > output.requiredQuantity) {
             showNotice(
                 "Progress is invalid",
-                `${output.name}: completed must be between 0 and ${output.requiredQuantity}, and ready cannot exceed completed.`);
+                `${output.name}: completed must be between 0 and ${output.requiredQuantity}.`);
             return;
         }
         outputs.push({
             lineId: output.lineId,
             itemId: output.itemId,
             completedQuantity: completed,
-            readyQuantity: ready
+            readyQuantity: completed
         });
     }
     await runParticipantCommand(
@@ -1845,13 +1853,6 @@ async function submitComment(event) {
     input.value = "";
 }
 
-async function declareReadiness() {
-    await runParticipantCommand(
-        "declare-readiness",
-        { comment: null },
-        "Complete delivery marked ready.");
-}
-
 async function runParticipantCommand(command, payload, successMessage) {
     if (!canUseActiveParticipantMutations(state.projection) ||
         !state.access?.participantSecret) {
@@ -1860,7 +1861,7 @@ async function runParticipantCommand(command, payload, successMessage) {
             "This browser lacks active participant authority, or the commission is no longer open to ordinary participant changes.");
         return;
     }
-    if (["report-progress", "declare-readiness", "withdraw-readiness"].includes(command) &&
+    if (command === "report-progress" &&
         requiresTermsAcknowledgement(state.projection)) {
         showNotice(
             "Accept the current terms first",

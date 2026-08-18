@@ -83,7 +83,8 @@ public partial class TradeOrders
             var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
                 orderToSave,
                 new TradeOrderPricingWorkflowOptions(
-                    ForceRefreshMarketData: false));
+                    ForceRefreshMarketData: false,
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (rollbackPlan != null)
@@ -343,7 +344,8 @@ public partial class TradeOrders
             var result = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
                 _selectedOrder,
                 new TradeOrderPricingWorkflowOptions(
-                    ForceRefreshMarketData: false));
+                    ForceRefreshMarketData: false,
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
             if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
             {
                 Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
@@ -567,7 +569,8 @@ public partial class TradeOrders
             pricingResult = await TradeOrderPricingWorkflow.RepriceAsync(
                 _selectedOrder,
                 new TradeOrderPricingWorkflowOptions(
-                    ForceRefreshMarketData: true));
+                    ForceRefreshMarketData: true,
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (rollbackPlan != null && pricingResult.ActivePlanFence is { } failedFence)

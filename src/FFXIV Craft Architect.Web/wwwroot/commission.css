@@ -348,7 +348,7 @@ h2 {
 
 .output-grid {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) 70px 88px 88px;
+  grid-template-columns: minmax(160px, 1fr) 70px 88px;
   gap: 10px;
   align-items: center;
   padding: 8px 10px;
@@ -799,10 +799,10 @@ textarea {
   }
 
   .output-grid {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      "identity required required"
-      "identity completed ready";
+      "identity required"
+      "identity completed";
     padding: 10px;
   }
 
@@ -816,10 +816,6 @@ textarea {
 
   .output-completed {
     grid-area: completed;
-  }
-
-  .output-ready {
-    grid-area: ready;
   }
 
   .quantity-input {

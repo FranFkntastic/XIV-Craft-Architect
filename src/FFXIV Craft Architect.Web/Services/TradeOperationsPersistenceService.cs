@@ -287,10 +287,25 @@ public sealed class TradeOperationsPersistenceService
     {
         var changed = false;
         var normalizedPaymentPolicy = TradePaymentPolicyNormalizer.Normalize(
-            profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
+            profile.PaymentPolicy ?? TradePaymentPolicy.Default);
+        if (profile.SchemaVersion < TradeCompanyProfile.CurrentSchemaVersion)
+        {
+            normalizedPaymentPolicy = normalizedPaymentPolicy with
+            {
+                ActiveContract = TradePaymentContractMode.LaborStandard
+            };
+        }
         if (profile.PaymentPolicy != normalizedPaymentPolicy)
         {
             profile.PaymentPolicy = normalizedPaymentPolicy;
+            changed = true;
+        }
+
+        var normalizedMaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
+            profile.MaterialPricingPolicy);
+        if (profile.MaterialPricingPolicy != normalizedMaterialPricingPolicy)
+        {
+            profile.MaterialPricingPolicy = normalizedMaterialPricingPolicy;
             changed = true;
         }
 

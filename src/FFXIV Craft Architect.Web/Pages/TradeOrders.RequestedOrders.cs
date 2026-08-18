@@ -255,7 +255,8 @@ public partial class TradeOrders
             var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
                 draftResult.Order,
                 new TradeOrderPricingWorkflowOptions(
-                    ForceRefreshMarketData: false));
+                    ForceRefreshMarketData: false,
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
@@ -322,7 +323,8 @@ public partial class TradeOrders
         var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
             orderToSave,
             new TradeOrderPricingWorkflowOptions(
-                ForceRefreshMarketData: false));
+                ForceRefreshMarketData: false,
+                MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
         if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
         {
             Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));

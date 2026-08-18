@@ -76,7 +76,9 @@ public sealed class TradeOrderDraftFactory
                 SourceKind = TradeOrderSourceKind.ActiveCraftPlan,
                 SourcePlanId = source.PlanId,
                 SourcePlanName = source.PlanName,
-                CostBasis = CommissionCostBasis.SelectedAcquisitionSources,
+                CostBasis = source.MaterialQuote == null
+                    ? CommissionCostBasis.SelectedAcquisitionSources
+                    : CommissionCostBasis.ProcurementRoute,
                 MarketFetchScope = source.MarketFetchScope,
                 Region = source.SelectedRegion,
                 DataCenter = source.SelectedDataCenter,
@@ -86,6 +88,7 @@ public sealed class TradeOrderDraftFactory
                 ImportedAtUtc = request.CreatedAtUtc,
                 RootItems = rootItems,
                 Materials = materials,
+                MaterialQuote = source.MaterialQuote,
                 Warnings = warnings
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
