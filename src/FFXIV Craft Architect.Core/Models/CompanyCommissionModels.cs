@@ -150,7 +150,8 @@ public sealed record CompanyCommissionPricingEvidence(
     string MarketScope,
     string Location,
     DateTime CapturedAtUtc,
-    TradeMaterialQuote? MaterialQuote = null);
+    TradeMaterialQuote? MaterialQuote = null,
+    IReadOnlyList<string>? Warnings = null);
 
 public sealed record CompanyCommissionTermsVersion
 {

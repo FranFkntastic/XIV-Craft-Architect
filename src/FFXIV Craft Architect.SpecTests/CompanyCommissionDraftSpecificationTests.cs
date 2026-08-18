@@ -62,11 +62,13 @@ public sealed class CompanyCommissionDraftSpecificationTests
         };
         Assert.Throws<InvalidOperationException>(() => CompanyCommissionCommandWorkflow.Apply(published, command, actor, DateTime.UtcNow));
         var timingOrder = CreateDraftOrder();
+        timingOrder.SourceSnapshot.Warnings = ["No complete route fits the current company policy."];
         var current = timingOrder.CompanyCommission!.CurrentTerms; var brief = BuildBrief(timingOrder);
         brief.Payment = brief.Payment with { Schedule = CompanyCommissionPaymentSchedule.Custom, CustomTerms = "Half at handoff; half on delivery." };
         var updated = TradeCompanyCommissionMigrationService.CreateDraftTerms(timingOrder, brief, current, new DateTime(2026, 8, 1, 12, 15, 0, DateTimeKind.Utc));
         Assert.Equal((current.Outputs[0].LineId, current.Materials[0].LineId), (updated.Outputs[0].LineId, updated.Materials[0].LineId));
         Assert.Equal((CompanyCommissionPaymentSchedule.Custom, "Half at handoff; half on delivery."), (updated.Payment.Schedule, updated.Payment.CustomTerms));
+        Assert.Equal(timingOrder.SourceSnapshot.Warnings, updated.PricingEvidence.Warnings);
         var historical = CreateDraftOrder();
         historical.CompanyCommission = null;
         historical.PaymentPolicyOverride = null;
