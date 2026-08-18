@@ -77,6 +77,147 @@ public sealed class TradeMaterialQuoteSpecificationTests
     }
 
     [Fact]
+    public async Task SelectedVendorSourceReplacesIrrelevantStaleMarketRoute()
+    {
+        var staleMarket = Plan("Golem", 99_900, evidenceAgeMinutes: 2_220);
+        staleMarket.ItemId = 20;
+        staleMarket.Name = "Copper Ore";
+        staleMarket.QuantityNeeded = 4_995;
+        var demand = new MaterialAggregate
+        {
+            ItemId = 20,
+            Name = "Copper Ore",
+            TotalQuantity = 4_995,
+            UnitPrice = 2
+        };
+
+        var prepared = new TradeMaterialQuoteService().PrepareOptimizationInput(
+            [staleMarket],
+            [demand],
+            new Dictionary<(int ItemId, bool RequiresHq), AcquisitionSource>
+            {
+                [(20, false)] = AcquisitionSource.VendorBuy
+            },
+            TradeMaterialPricingPolicy.Default,
+            QuotedAt);
+
+        var vendorPlan = Assert.Single(prepared);
+        Assert.Equal(MarketShoppingConstants.VendorWorldName, vendorPlan.RecommendedWorld?.WorldName);
+        Assert.Equal(9_990, vendorPlan.RecommendedWorld?.TotalCost);
+        Assert.Null(vendorPlan.RecommendedWorld?.MarketUploadedAtUtc);
+        Assert.Null(vendorPlan.RecommendedSplit);
+        Assert.Empty(vendorPlan.WorldOptions);
+        Assert.Null(vendorPlan.CoverageSet);
+        Assert.Null(vendorPlan.MarketDataWarning);
+
+        var optimization = await new MarketShoppingService(null!)
+            .OptimizeProcurementRouteWithDecisionAsync(
+                prepared,
+                SpecificationFixtures.Config(tolerance: 11, enableSplitWorld: true));
+        var result = new TradeMaterialQuoteService().Build(
+            optimization,
+            [demand],
+            TradeMaterialPricingPolicy.Default,
+            QuotedAt);
+
+        var quote = Assert.IsType<TradeMaterialQuote>(result.Quote);
+        Assert.Equal(9_990, quote.RouteCashRequired);
+        Assert.Equal(MarketShoppingConstants.VendorWorldName, Assert.Single(quote.Lines).Worlds.Single());
+    }
+
+    [Fact]
+    public async Task SelectedHqMarketSourcePreservesQualityWhenEvidencePlanOmitsHqDemand()
+    {
+        var market = Plan("Siren", 1_498_500, evidenceAgeMinutes: 30);
+        market.QuantityNeeded = 0;
+        market.HqQuantityNeeded = 0;
+        market.WorldOptions[0].Listings =
+        [
+            new ShoppingListingEntry
+            {
+                Quantity = 14_985,
+                PricePerUnit = 100,
+                IsHq = true,
+                NeededFromStack = 14_985
+            }
+        ];
+        var demand = new MaterialAggregate
+        {
+            ItemId = 5111,
+            Name = "Gold Ore",
+            TotalQuantity = 14_985,
+            RequiresHq = true
+        };
+
+        var prepared = new TradeMaterialQuoteService().PrepareOptimizationInput(
+            [market],
+            [demand],
+            new Dictionary<(int ItemId, bool RequiresHq), AcquisitionSource>
+            {
+                [(5111, true)] = AcquisitionSource.MarketBuyHq
+            },
+            TradeMaterialPricingPolicy.Default,
+            QuotedAt);
+
+        var hqPlan = Assert.Single(prepared);
+        Assert.Equal(14_985, hqPlan.QuantityNeeded);
+        Assert.Equal(14_985, hqPlan.HqQuantityNeeded);
+
+        var optimization = await new MarketShoppingService(null!)
+            .OptimizeProcurementRouteWithDecisionAsync(
+                prepared,
+                SpecificationFixtures.Config(tolerance: 11, enableSplitWorld: true));
+        var result = new TradeMaterialQuoteService().Build(
+            optimization,
+            [demand],
+            TradeMaterialPricingPolicy.Default,
+            QuotedAt);
+
+        Assert.True(Assert.Single(Assert.IsType<TradeMaterialQuote>(result.Quote).Lines).RequiresHq);
+    }
+
+    [Fact]
+    public void SelectedProcurementDemandDoesNotCollapseQualityOrSource()
+    {
+        var nqVendor = DemandRow(
+            nodeId: "nq",
+            quantity: 10,
+            mustBeHq: false,
+            source: AcquisitionSource.VendorBuy,
+            unitPrice: 500,
+            vendorUnitPrice: 2);
+        var hqMarket = DemandRow(
+            nodeId: "hq",
+            quantity: 5,
+            mustBeHq: true,
+            source: AcquisitionSource.MarketBuyHq,
+            unitPrice: 100,
+            hqUnitPrice: 250);
+        var projection = new RecipeDemandProjection(
+            [nqVendor, hqMarket],
+            [],
+            [nqVendor, hqMarket],
+            []);
+
+        var selected = projection.ToSelectedProcurementMaterialAggregates();
+
+        Assert.Collection(
+            selected,
+            nq =>
+            {
+                Assert.False(nq.RequiresHq);
+                Assert.Equal(10, nq.TotalQuantity);
+                Assert.Equal(2, nq.UnitPrice);
+            },
+            hq =>
+            {
+                Assert.True(hq.RequiresHq);
+                Assert.Equal(5, hq.TotalQuantity);
+                Assert.Equal(250, hq.UnitPrice);
+            });
+    }
+
+    [Fact]
     public void CompanyPolicyControlsAllowanceLifetimeAndReasonableRouteBounds()
     {
         var policy = TradeMaterialPricingPolicy.Default with
@@ -251,6 +392,40 @@ public sealed class TradeMaterialQuoteSpecificationTests
             RecommendedWorld = world
         };
     }
+
+    private static RecipeDemandRow DemandRow(
+        string nodeId,
+        int quantity,
+        bool mustBeHq,
+        AcquisitionSource source,
+        decimal unitPrice,
+        decimal hqUnitPrice = 0,
+        decimal vendorUnitPrice = 0) => new(
+            viewKind: RecipeDemandViewKind.ActiveProcurement,
+            nodeId: nodeId,
+            itemId: 20,
+            itemName: "Copper Ore",
+            iconId: 1,
+            quantity: quantity,
+            quantityBasis: RecipeDemandQuantityBasis.PlanNodeQuantity,
+            mustBeHq: mustBeHq,
+            source: source,
+            sourceReason: AcquisitionSourceReason.UserSelected,
+            hasChildren: false,
+            canBuyFromMarket: true,
+            canBuyFromVendor: true,
+            unitPrice: unitPrice,
+            parentNodeId: null,
+            parentItemName: null,
+            parentOperationNodeId: null,
+            parentRecipeId: null,
+            operationNodeId: null,
+            recipeId: null,
+            suppressedByNodeId: null,
+            suppressedByItemId: null,
+            suppressedByItemName: null,
+            hqUnitPrice: hqUnitPrice,
+            vendorUnitPrice: vendorUnitPrice);
 
     private static MarketRouteToleranceSelection Selection(
         string key,

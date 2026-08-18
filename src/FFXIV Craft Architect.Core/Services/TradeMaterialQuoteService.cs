@@ -25,6 +25,37 @@ public sealed class TradeMaterialQuoteService
             .ToArray();
     }
 
+    public IReadOnlyList<DetailedShoppingPlan> PrepareOptimizationInput(
+        IReadOnlyList<DetailedShoppingPlan> plans,
+        IReadOnlyList<MaterialAggregate> demand,
+        IReadOnlyDictionary<(int ItemId, bool RequiresHq), AcquisitionSource> selectedSources,
+        TradeMaterialPricingPolicy? requestedPolicy,
+        DateTime quotedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(plans);
+        ArgumentNullException.ThrowIfNull(demand);
+        ArgumentNullException.ThrowIfNull(selectedSources);
+
+        var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
+        return demand.Select(item =>
+            {
+                var key = (item.ItemId, item.RequiresHq);
+                var source = selectedSources.GetValueOrDefault(key, AcquisitionSource.UnknownSource);
+                var plan = plans.FirstOrDefault(candidate => candidate.ItemId == item.ItemId);
+                return source switch
+                {
+                    AcquisitionSource.VendorBuy => BuildVendorPlan(item),
+                    AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq when plan != null =>
+                        FilterToFreshEvidence(
+                            CloneForDemand(plan, item),
+                            policy,
+                            quotedAtUtc),
+                    _ => BuildUnsupportedPlan(item, source)
+                };
+            })
+            .ToArray();
+    }
+
     public TradeMaterialQuoteResult Build(
         ProcurementRouteOptimizationResult optimization,
         IReadOnlyList<MaterialAggregate> demand,
@@ -286,6 +317,83 @@ public sealed class TradeMaterialQuoteService
             Vendors = plan.Vendors.ToList()
         };
     }
+
+    private static DetailedShoppingPlan BuildVendorPlan(
+        MaterialAggregate demand)
+    {
+        var cash = (long)Math.Round(
+            demand.TotalQuantity * demand.UnitPrice,
+            0,
+            MidpointRounding.AwayFromZero);
+        var vendor = new WorldShoppingSummary
+        {
+            WorldName = MarketShoppingConstants.VendorWorldName,
+            WorldId = 0,
+            TotalCost = cash,
+            AveragePricePerUnit = demand.UnitPrice,
+            ListingsUsed = 1,
+            TotalQuantityPurchased = demand.TotalQuantity,
+            HasSufficientStock = true,
+            Classification = WorldClassification.Standard,
+            Listings =
+            [
+                new ShoppingListingEntry
+                {
+                    Quantity = demand.TotalQuantity,
+                    PricePerUnit = (long)demand.UnitPrice,
+                    RetainerName = MarketShoppingConstants.VendorWorldName,
+                    IsUnderAverage = true,
+                    NeededFromStack = demand.TotalQuantity
+                }
+            ]
+        };
+        return new DetailedShoppingPlan
+        {
+            ItemId = demand.ItemId,
+            Name = demand.Name,
+            IconId = demand.IconId,
+            QuantityNeeded = demand.RequiresHq ? 0 : demand.TotalQuantity,
+            HqQuantityNeeded = demand.RequiresHq ? demand.TotalQuantity : 0,
+            DCAveragePrice = demand.UnitPrice,
+            WorldOptions = [],
+            RecommendedWorld = vendor,
+            RecommendedSplit = null
+        };
+    }
+
+    private static DetailedShoppingPlan CloneForDemand(
+        DetailedShoppingPlan source,
+        MaterialAggregate demand) =>
+        new()
+        {
+            ItemId = source.ItemId,
+            Name = source.Name,
+            IconId = source.IconId,
+            QuantityNeeded = demand.TotalQuantity,
+            HqQuantityNeeded = demand.RequiresHq ? demand.TotalQuantity : 0,
+            DCAveragePrice = source.DCAveragePrice,
+            WorldOptions = source.WorldOptions.ToList(),
+            RecommendedWorld = source.RecommendedWorld,
+            CoverageSet = source.CoverageSet,
+            Error = source.Error,
+            MarketDataWarning = source.MarketDataWarning,
+            HQAveragePrice = source.HQAveragePrice,
+            Vendors = source.Vendors.ToList(),
+            RecommendedSplit = source.RecommendedSplit?.ToList()
+        };
+
+    private static DetailedShoppingPlan BuildUnsupportedPlan(
+        MaterialAggregate demand,
+        AcquisitionSource source) =>
+        new()
+        {
+            ItemId = demand.ItemId,
+            Name = demand.Name,
+            IconId = demand.IconId,
+            QuantityNeeded = demand.RequiresHq ? 0 : demand.TotalQuantity,
+            HqQuantityNeeded = demand.RequiresHq ? demand.TotalQuantity : 0,
+            Error = $"Selected acquisition source {source} cannot be quoted as purchase cash."
+        };
 
     private static MarketCoverageSet? FilterCoverageSet(
         MarketCoverageSet? source,
