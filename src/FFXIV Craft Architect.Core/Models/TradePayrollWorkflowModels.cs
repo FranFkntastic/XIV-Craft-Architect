@@ -58,7 +58,8 @@ public sealed record TradeCommissionPaymentSummary(
     public static TradeCommissionPaymentSummary FromOrder(
         TradeOrder order,
         TradePayrollWorkflowDraft? draft,
-        TradePaymentPolicy? effectivePolicy = null)
+        TradePaymentPolicy? effectivePolicy = null,
+        bool requireMaterialRouteQuote = true)
     {
         ArgumentNullException.ThrowIfNull(order);
 
@@ -145,7 +146,7 @@ public sealed record TradeCommissionPaymentSummary(
             sourceSnapshot.Warnings ?? Array.Empty<string>(),
             appliedAllowance,
             quote is null ? null : quotedCrafterCash,
-            RequireMaterialRouteQuote: requiresMaterialQuote));
+            RequireMaterialRouteQuote: requireMaterialRouteQuote && requiresMaterialQuote));
 
         return new TradeCommissionPaymentSummary(
             materials,
