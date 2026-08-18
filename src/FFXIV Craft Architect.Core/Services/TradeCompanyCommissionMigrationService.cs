@@ -518,7 +518,8 @@ public static class TradeCompanyCommissionMigrationService
                 evidence?.MarketScope ?? order.SourceSnapshot.MarketFetchScope?.ToString() ?? "Unspecified",
                 evidence?.Location ?? ResolveLocation(order.SourceSnapshot),
                 evidence?.CapturedAtUtc ?? order.SourceSnapshot.ImportedAtUtc,
-                order.SourceSnapshot.MaterialQuote),
+                order.SourceSnapshot.MaterialQuote,
+                order.SourceSnapshot.Warnings),
             ContactInstructions = brief?.Contact ?? string.Empty,
             ChangeSummary = "Converted from the canonical hosted Trade order."
         };
