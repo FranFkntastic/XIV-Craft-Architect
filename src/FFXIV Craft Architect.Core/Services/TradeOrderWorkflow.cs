@@ -179,6 +179,7 @@ public static class TradeOrderWorkflow
         copy.SourceSnapshot.Materials = [];
         copy.SourceSnapshot.CraftLabor = [];
         copy.SourceSnapshot.MaterialQuote = null;
+        copy.SourceSnapshot.MaterialQuoteFailureReason = null;
         copy.SourceSnapshot.CostBasis = null;
         copy.SourceSnapshot.Warnings = AppendDistinctWarning(
             copy.SourceSnapshot.Warnings,
@@ -224,6 +225,7 @@ public static class TradeOrderWorkflow
             Materials = (source.Materials ?? Array.Empty<TradeOrderMaterialSnapshot>()).ToArray(),
             CraftLabor = (source.CraftLabor ?? Array.Empty<TradeOrderCraftLaborSnapshot>()).ToArray(),
             MaterialQuote = source.MaterialQuote,
+            MaterialQuoteFailureReason = source.MaterialQuoteFailureReason,
             Warnings = (source.Warnings ?? Array.Empty<string>()).ToArray()
         };
     }

@@ -78,10 +78,15 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Assert.Equal(1, source.Split("\"Refresh Prices\"", StringSplitOptions.None).Length - 1);
         Omits(source, "Reprice Order");
         var procurementSource = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Procurement.cs");
-        Contains(procurementSource, "IsRequestedOutputRow(row)", "trade-orders-output-chip", "Output", "GetVisibleLiveProcurementSnapshot()",
-            "GetCurrentLiveProcurementSnapshot()?.Warnings");
+        Contains(procurementSource, "IsRequestedOutputRow(row)", "trade-orders-output-chip", "Output", "GetVisibleLiveProcurementSnapshot()");
         Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.CompanyCommission.cs"),
-            "copy.SourceSnapshot.Warnings = terms.PricingEvidence.Warnings?.ToArray() ?? [];");
+            "copy.SourceSnapshot.Warnings = terms.PricingEvidence.Warnings?.ToArray() ?? [];",
+            "terms.PricingEvidence.MaterialQuoteFailureReason;");
+        Omits(procurementSource, "GetCurrentLiveProcurementSnapshot()?.Warnings");
+        Contains(
+            ReadWebSource(repositoryRoot, "Pages", "TradeOrders.CraftPlan.cs"),
+            "pricingResult.UpdatedOrder.SourceSnapshot.MaterialQuoteFailureReason",
+            "Order pricing could not be saved.");
         Omits(procurementSource, "IsRequestedOutputReferenceRow");
         Contains(ReadWebSource(repositoryRoot, "Services", "TradeProcurementRowBuilder.cs"), "output.MustBeHq == row.RequiresHq");
         Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"), "Rebuild from Requested Outputs", "isSameLinkedPlan", "if (!isSameOrder)");

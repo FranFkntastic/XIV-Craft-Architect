@@ -12,6 +12,17 @@ public sealed record TradeMaterialQuoteResult(
 
 public sealed class TradeMaterialQuoteService
 {
+    public static string DescribeNoExecutableRoute(
+        TradeMaterialPricingPolicy? requestedPolicy)
+    {
+        var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
+        return $"No complete executable route fits company policy and current listing evidence " +
+               $"({policy.MaximumWorldStops} worlds, " +
+               $"{policy.MaximumDataCenterTransfers} data-center transfers, " +
+               $"{policy.MaximumConsolidationPremiumPercent:N0}% consolidation premium, " +
+               $"listings at most {policy.MaximumEvidenceAgeMinutes:N0} minutes old).";
+    }
+
     public IReadOnlyList<DetailedShoppingPlan> PrepareOptimizationInput(
         IReadOnlyList<DetailedShoppingPlan> plans,
         TradeMaterialPricingPolicy? requestedPolicy,
@@ -69,12 +80,7 @@ public sealed class TradeMaterialQuoteService
         var decision = optimization.Decision;
         if (!optimization.IsComplete || decision == null)
         {
-            return Failure(
-                $"No complete executable route fits company policy and current listing evidence " +
-                $"({policy.MaximumWorldStops} worlds, " +
-                $"{policy.MaximumDataCenterTransfers} data-center transfers, " +
-                $"{policy.MaximumConsolidationPremiumPercent:N0}% consolidation premium, " +
-                $"listings at most {policy.MaximumEvidenceAgeMinutes:N0} minutes old).");
+            return Failure(DescribeNoExecutableRoute(policy));
         }
 
         var maximumCost = decision.CheapestGilCost *
@@ -90,10 +96,7 @@ public sealed class TradeMaterialQuoteService
             .ToArray();
         if (selections.Length == 0)
         {
-            return Failure(
-                $"No complete route fits company policy ({policy.MaximumWorldStops} worlds, " +
-                $"{policy.MaximumDataCenterTransfers} data-center transfers, " +
-                $"{policy.MaximumConsolidationPremiumPercent:N0}% consolidation premium).");
+            return Failure(DescribeNoExecutableRoute(policy));
         }
 
         var demandByItem = demand

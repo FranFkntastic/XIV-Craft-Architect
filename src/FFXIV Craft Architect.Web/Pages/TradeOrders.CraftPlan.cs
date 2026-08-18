@@ -607,7 +607,13 @@ public partial class TradeOrders
                         rollbackPlan,
                         failedSaveFence);
                 }
-                Snackbar.Add("Order pricing updated, but failed to save it to the order.", Severity.Error);
+                var quoteFailureReason =
+                    pricingResult.UpdatedOrder.SourceSnapshot.MaterialQuoteFailureReason;
+                Snackbar.Add(
+                    string.IsNullOrWhiteSpace(quoteFailureReason)
+                        ? "Order pricing updated, but failed to save it to the order."
+                        : $"Order pricing could not be saved. {quoteFailureReason}",
+                    Severity.Error);
                 return;
             }
 

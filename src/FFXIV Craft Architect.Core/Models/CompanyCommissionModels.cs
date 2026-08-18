@@ -151,7 +151,8 @@ public sealed record CompanyCommissionPricingEvidence(
     string Location,
     DateTime CapturedAtUtc,
     TradeMaterialQuote? MaterialQuote = null,
-    IReadOnlyList<string>? Warnings = null);
+    IReadOnlyList<string>? Warnings = null,
+    string? MaterialQuoteFailureReason = null);
 
 public sealed record CompanyCommissionTermsVersion
 {

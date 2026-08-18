@@ -494,6 +494,30 @@ public static class TradeCompanyCommissionMigrationService
                 authoringPolicy,
                 requireMaterialRouteQuote: false).Active;
         var evidence = brief?.Evidence;
+        var snapshotFailureReason = order.SourceSnapshot.MaterialQuoteFailureReason;
+        var materialQuoteFailureReason = order.SourceSnapshot.MaterialQuote == null
+            ? snapshotFailureReason
+            : null;
+        var pricingWarnings = (order.SourceSnapshot.Warnings ?? [])
+            .Where(warning => !string.IsNullOrWhiteSpace(warning))
+            .Where(warning => order.SourceSnapshot.MaterialQuote == null ||
+                string.IsNullOrWhiteSpace(snapshotFailureReason) ||
+                !string.Equals(
+                    warning,
+                    snapshotFailureReason,
+                    StringComparison.OrdinalIgnoreCase))
+            .Where(warning => !IsIrrelevantMarketWarningForSelectedSource(
+                warning,
+                order.SourceSnapshot.Materials))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (!string.IsNullOrWhiteSpace(materialQuoteFailureReason) &&
+            !pricingWarnings.Contains(
+                materialQuoteFailureReason,
+                StringComparer.OrdinalIgnoreCase))
+        {
+            pricingWarnings.Add(materialQuoteFailureReason);
+        }
 
         return new CompanyCommissionTermsVersion
         {
@@ -519,11 +543,32 @@ public static class TradeCompanyCommissionMigrationService
                 evidence?.Location ?? ResolveLocation(order.SourceSnapshot),
                 evidence?.CapturedAtUtc ?? order.SourceSnapshot.ImportedAtUtc,
                 order.SourceSnapshot.MaterialQuote,
-                order.SourceSnapshot.Warnings),
+                pricingWarnings,
+                materialQuoteFailureReason),
             ContactInstructions = brief?.Contact ?? string.Empty,
             ChangeSummary = "Converted from the canonical hosted Trade order."
         };
 
+    }
+
+    private static bool IsIrrelevantMarketWarningForSelectedSource(
+        string warning,
+        IReadOnlyList<TradeOrderMaterialSnapshot> materials)
+    {
+        var describesMarketEvidence =
+            warning.Contains("market data", StringComparison.OrdinalIgnoreCase) ||
+            warning.Contains("market evidence", StringComparison.OrdinalIgnoreCase) ||
+            warning.Contains("market-analysis", StringComparison.OrdinalIgnoreCase);
+        return describesMarketEvidence && materials.Any(material =>
+            warning.Contains(material.Name, StringComparison.OrdinalIgnoreCase) &&
+            (string.Equals(
+                 material.EvidenceSource,
+                 "Vendor price",
+                 StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(
+                 material.EvidenceSource,
+                 TradeOrderWorkflow.OnHandEvidenceSource,
+                 StringComparison.OrdinalIgnoreCase)));
     }
 
     private static CompanyCommissionTermsVersion PreserveCurrentLineIdentity(

@@ -48,20 +48,7 @@ public partial class TradeOrders
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
             GetOrderEffectivePaymentPolicy(workPackage));
-        var liveWarnings = workPackage.SourceSnapshot.MaterialQuote == null
-            ? GetCurrentLiveProcurementSnapshot()?.Warnings ?? []
-            : [];
-        return liveWarnings.Count == 0
-            ? summary
-            : summary with
-            {
-                Warnings = summary.Warnings
-                    .Concat(liveWarnings)
-                    .Where(warning => !string.IsNullOrWhiteSpace(warning))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
-                    .ToArray()
-            };
+        return summary;
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()

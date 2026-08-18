@@ -33,10 +33,16 @@ public sealed class CompanyCommissionDraftSpecificationTests
                 {
                     RequiredQuantity = 2
                 }
-            ]
+            ],
+            PricingEvidence = order.CompanyCommission.CurrentTerms.PricingEvidence with
+            {
+                Warnings = ["Canonical quote failure."],
+                MaterialQuoteFailureReason = "Canonical quote failure."
+            }
         };
         var snapshot = TradeOrderWorkflow.CopySourceSnapshot(order.SourceSnapshot);
         snapshot.RootItems = [new TradeOrderRootItemSnapshot(10, "Test output", 2, false, 0)];
+        snapshot.Warnings = ["Planner-only warning."];
         var command = new UpdateCompanyCommissionDraftCommand(
             Context(order),
             terms,
@@ -50,6 +56,10 @@ public sealed class CompanyCommissionDraftSpecificationTests
         var transition = CompanyCommissionCommandWorkflow.Apply(order, command, actor, new DateTime(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc));
         Assert.Equal(2, transition.UpdatedOrder.CompanyCommission!.CurrentTerms.Outputs[0].RequiredQuantity);
         Assert.Equal(2, transition.UpdatedOrder.SourceSnapshot.RootItems[0].Quantity);
+        Assert.Equal(["Canonical quote failure."], transition.UpdatedOrder.SourceSnapshot.Warnings);
+        Assert.Equal(
+            "Canonical quote failure.",
+            transition.UpdatedOrder.SourceSnapshot.MaterialQuoteFailureReason);
         Assert.Equal(2, transition.UpdatedOrder.CompanyCommission.OutputProgress[0].RequiredQuantity);
         Assert.Null(transition.UpdatedOrder.CraftPlanId);
         var published = TradeOrderWorkflow.CopyOrder(transition.UpdatedOrder);
@@ -69,6 +79,42 @@ public sealed class CompanyCommissionDraftSpecificationTests
         Assert.Equal((current.Outputs[0].LineId, current.Materials[0].LineId), (updated.Outputs[0].LineId, updated.Materials[0].LineId));
         Assert.Equal((CompanyCommissionPaymentSchedule.Custom, "Half at handoff; half on delivery."), (updated.Payment.Schedule, updated.Payment.CustomTerms));
         Assert.Equal(timingOrder.SourceSnapshot.Warnings, updated.PricingEvidence.Warnings);
+        var policyFailureOrder = CreateDraftOrder();
+        policyFailureOrder.SourceSnapshot.MaterialQuote = null;
+        policyFailureOrder.SourceSnapshot.MaterialQuoteFailureReason =
+            "No complete executable route fits company policy and current listing evidence (8 worlds, 3 data-center transfers, 15% consolidation premium, listings at most 120 minutes old).";
+        policyFailureOrder.SourceSnapshot.Materials =
+        [
+            policyFailureOrder.SourceSnapshot.Materials[0] with
+            {
+                EvidenceSource = "Vendor price"
+            }
+        ];
+        policyFailureOrder.SourceSnapshot.Warnings =
+            ["Test material uses very old market data from Brynhildr uploaded 20h ago."];
+        var policyFailureBrief = BuildBrief(policyFailureOrder);
+        policyFailureBrief.CrafterMaterials = policyFailureBrief.CompanyMaterials;
+        policyFailureBrief.CompanyMaterials = [];
+        var policyFailureTerms = TradeCompanyCommissionMigrationService.CreateDraftTerms(
+            policyFailureOrder,
+            policyFailureBrief,
+            policyFailureOrder.CompanyCommission!.CurrentTerms,
+            new DateTime(2026, 8, 1, 12, 20, 0, DateTimeKind.Utc));
+        Assert.Contains(
+            "No complete executable route fits company policy and current listing evidence (8 worlds, 3 data-center transfers, 15% consolidation premium, listings at most 120 minutes old).",
+            policyFailureTerms.PricingEvidence.Warnings!);
+        Assert.DoesNotContain(
+            policyFailureTerms.PricingEvidence.Warnings!,
+            warning => warning.Contains("very old market data", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(
+            policyFailureOrder.SourceSnapshot.MaterialQuoteFailureReason,
+            policyFailureTerms.PricingEvidence.MaterialQuoteFailureReason);
+        Assert.Contains(
+            policyFailureOrder.SourceSnapshot.MaterialQuoteFailureReason,
+            TradeCommissionPaymentSummary.FromOrder(
+                policyFailureOrder,
+                draft: null,
+                TradePaymentPolicy.Default).Warnings);
         var historical = CreateDraftOrder();
         historical.CompanyCommission = null;
         historical.PaymentPolicyOverride = null;

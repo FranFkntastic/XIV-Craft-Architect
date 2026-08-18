@@ -54,9 +54,6 @@ public sealed class TradePaymentCalculator
         var includeLaborWarnings = policy.ActiveContract == TradePaymentContractMode.LaborStandard;
         var warnings = (request.Warnings ?? [])
             .Concat(materials.SelectMany(material => material.Warnings ?? []))
-            .Concat(materialQuoteAvailable
-                ? []
-                : ["Executable material quote is unavailable. Refresh current market evidence before using payment totals."])
             .Concat(legacy.Warnings)
             .Concat(includeLaborWarnings ? labor.Warnings : [])
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
