@@ -84,6 +84,7 @@ builder.Services.AddScoped<TradeOrderLifecycleService>();
 builder.Services.AddScoped<TradeCrafterProfileImportMapper>();
 builder.Services.AddScoped<TradeCompanyProfilePackageService>();
 builder.Services.AddScoped<TradeOperationsPersistenceService>();
+builder.Services.AddScoped<TradeWorkspaceProfileResolver>();
 builder.Services.AddScoped<TradeCompanyCollaborationClient>();
 builder.Services.AddScoped<CompanyHubClient>();
 builder.Services.AddScoped<TradeCompanyCollaborationService>();

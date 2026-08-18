@@ -31,17 +31,65 @@ public sealed class CompanyHubClient(
         Guid companyId,
         CancellationToken cancellationToken = default)
     {
+        return await TryLoadWorkspaceProfileAsync(companyId, cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The selected hosted company workspace is unavailable.");
+    }
+
+    public async Task<TradeCompanyWorkspaceProfile?> TryLoadWorkspaceProfileAsync(
+        Guid companyId,
+        CancellationToken cancellationToken = default)
+    {
         using var response = await SendAsync(
             HttpMethod.Get,
             $"trade/v1/companies/{companyId:D}/workspace-profile",
             null,
             cancellationToken);
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Unauthorized)
+        {
+            return null;
+        }
         await EnsureHubSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(
+        var profile = await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(
             JsonOptions,
             cancellationToken)
             ?? throw new InvalidOperationException(
                 "The selected company workspace returned an empty profile.");
+        if (profile.SchemaVersion != 1 ||
+            profile.Revision <= 0 ||
+            profile.PaymentPolicy == null ||
+            profile.MaterialPricingPolicy == null)
+        {
+            throw new InvalidOperationException(
+                "The selected company workspace returned an incompatible pricing policy projection.");
+        }
+        return profile;
+    }
+
+    public async Task<long> UpdateWorkspaceProfileAsync(
+        TradeCompanyProfile profile,
+        long expectedRevision,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Put,
+            $"trade/v1/companies/{profile.Id:D}/workspace-profile",
+            new
+            {
+                ExpectedRevision = expectedRevision,
+                profile.Name,
+                profile.Description,
+                profile.CommissionContact,
+                profile.PaymentPolicy,
+                profile.MaterialPricingPolicy
+            },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfileUpdate>(
+            JsonOptions,
+            cancellationToken);
+        return result?.Revision
+            ?? throw new InvalidOperationException("The company workspace update returned an empty response.");
     }
 
     public async Task RequestMembershipAsync(string companyId, string? note, CancellationToken cancellationToken = default)
@@ -442,10 +490,14 @@ public sealed record CompanyHubProjection(
     int? PendingMembershipRequestCount);
 
 public sealed record TradeCompanyWorkspaceProfile(
+    int SchemaVersion,
     Guid Id,
     string Name,
+    string? Description,
     string? CommissionContact,
-    TradePaymentPolicy PaymentPolicy,
+    TradePaymentPolicy? PaymentPolicy,
+    TradeMaterialPricingPolicy? MaterialPricingPolicy,
+    long Revision,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc)
 {
@@ -453,14 +505,18 @@ public sealed record TradeCompanyWorkspaceProfile(
     {
         Id = Id,
         Name = Name,
+        Description = Description,
         CommissionContact = CommissionContact,
-        PaymentPolicy = PaymentPolicy,
+        PaymentPolicy = PaymentPolicy!,
+        MaterialPricingPolicy = MaterialPricingPolicy!,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,
         CreatedAtUtc = CreatedAtUtc,
         UpdatedAtUtc = UpdatedAtUtc
     };
 }
+
+public sealed record TradeCompanyWorkspaceProfileUpdate(long Revision);
 
 public sealed record CompanyHubTheme(
     string Accent,

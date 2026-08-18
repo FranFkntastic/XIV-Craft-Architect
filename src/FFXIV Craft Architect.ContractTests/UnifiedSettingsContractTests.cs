@@ -88,6 +88,23 @@ public sealed class UnifiedSettingsContractTests
         Assert.Contains("hub.Standing.Role is \"owner\" or \"operator\"", settings, StringComparison.Ordinal);
         Assert.Contains("InitialCompanyId=\"@InitialWorkspaceCompanyId\"", settings, StringComparison.Ordinal);
         Assert.DoesNotContain("InitialCompanyId=\"@(_companyProfile", settings, StringComparison.Ordinal);
+        Assert.Contains("WorkspaceProfiles.ResolveAsync(requestedWorkspaceId.Value)", settings, StringComparison.Ordinal);
+        Assert.Contains("UpdateWorkspaceProfileAsync", settings, StringComparison.Ordinal);
+        Assert.Contains("_companyProfileRevision", settings, StringComparison.Ordinal);
+        var mainLayout = File.ReadAllText(Path.Combine(web, "Shared", "MainLayout.razor"));
+        Assert.Contains("LoadSelectedWorkspaceCompanyIdAsync", mainLayout, StringComparison.Ordinal);
+        Assert.Contains("SettingsDialog.InitialWorkspaceCompanyId", mainLayout, StringComparison.Ordinal);
+        var receiver = File.ReadAllText(Path.Combine(web, "Pages", "WorkspaceSettingsReceiver.razor"));
+        Assert.Contains("LoadSelectedWorkspaceCompanyIdAsync", receiver, StringComparison.Ordinal);
+        Assert.Contains("SettingsDialog.InitialWorkspaceCompanyId", receiver, StringComparison.Ordinal);
+        var resolver = File.ReadAllText(Path.Combine(
+            web,
+            "Services",
+            "TradeCompany",
+            "TradeWorkspaceProfileResolver.cs"));
+        Assert.True(
+            resolver.IndexOf("TryLoadWorkspaceProfileAsync", StringComparison.Ordinal) <
+            resolver.IndexOf("LoadCompanyProfilesAsync", StringComparison.Ordinal));
         var switcher = File.ReadAllText(Path.Combine(web, "Shared", "TradeCompanySwitcher.razor"));
         Assert.Contains("LoadMembershipsAsync", switcher, StringComparison.Ordinal);
         Assert.Contains("SelectWorkspaceCompanyAsync", switcher, StringComparison.Ordinal);
@@ -114,9 +131,9 @@ public sealed class UnifiedSettingsContractTests
 
         Assert.Contains("ResolveSelectedWorkspaceProfileAsync", orders, StringComparison.Ordinal);
         Assert.Contains("LoadSelectedWorkspaceCompanyIdAsync", orders, StringComparison.Ordinal);
-        Assert.Contains("ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value, profiles)", orders, StringComparison.Ordinal);
-        Assert.Contains("LoadWorkspaceProfileAsync(workspaceId)", orders, StringComparison.Ordinal);
-        Assert.Contains("profiles.FirstOrDefault(profile => profile.Id == workspaceId)", orders, StringComparison.Ordinal);
+        Assert.Contains("ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value)", orders, StringComparison.Ordinal);
+        Assert.Contains("WorkspaceProfiles.ResolveAsync(workspaceId)", orders, StringComparison.Ordinal);
+        Assert.DoesNotContain("ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value, profiles)", orders, StringComparison.Ordinal);
         Assert.Contains("ToTransientProfile", client, StringComparison.Ordinal);
         Assert.DoesNotContain("SaveCompanyProfileAsync", client, StringComparison.Ordinal);
         Assert.Contains("selectedWorkspaceId != companyProfileId", persistence, StringComparison.Ordinal);

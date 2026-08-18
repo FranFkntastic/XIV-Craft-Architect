@@ -496,7 +496,6 @@ public partial class TradeOrders
 
     private async Task<TradeCompanyProfile> ResolveSelectedWorkspaceProfileAsync()
     {
-        var profiles = await TradeOperationsPersistence.LoadCompanyProfilesAsync();
         var selectedWorkspaceId =
             await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
         if (!selectedWorkspaceId.HasValue)
@@ -504,27 +503,18 @@ public partial class TradeOrders
             return await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
         }
 
-        return await ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value, profiles);
+        return await ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value);
     }
 
-    private async Task<TradeCompanyProfile> ResolveWorkspaceProfileAsync(
-        Guid workspaceId,
-        IReadOnlyList<TradeCompanyProfile>? profiles = null)
+    private async Task<TradeCompanyProfile> ResolveWorkspaceProfileAsync(Guid workspaceId)
     {
-        profiles ??= await TradeOperationsPersistence.LoadCompanyProfilesAsync();
-        var local = profiles.FirstOrDefault(profile => profile.Id == workspaceId);
-        if (local != null)
-        {
-            return local;
-        }
-
-        var hosted = await CompanyHubs.LoadWorkspaceProfileAsync(workspaceId);
-        if (hosted.Id != workspaceId)
+        var resolved = await WorkspaceProfiles.ResolveAsync(workspaceId);
+        if (resolved.Profile.Id != workspaceId)
         {
             throw new InvalidOperationException(
                 "The selected company workspace returned a different company identity.");
         }
-        return hosted.ToTransientProfile();
+        return resolved.Profile;
     }
 
     private void OnHostedOrderProjectionChanged(HostedOrderProjectionSnapshot snapshot)
