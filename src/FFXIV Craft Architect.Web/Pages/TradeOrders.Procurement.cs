@@ -44,10 +44,24 @@ public partial class TradeOrders
         }
 
         var workPackage = GetSelectedOrderPricingWorkPackage();
-        return TradeCommissionPaymentSummary.FromOrder(
+        var summary = TradeCommissionPaymentSummary.FromOrder(
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
             GetOrderEffectivePaymentPolicy(workPackage));
+        var liveWarnings = workPackage.SourceSnapshot.MaterialQuote == null
+            ? GetCurrentLiveProcurementSnapshot()?.Warnings ?? []
+            : [];
+        return liveWarnings.Count == 0
+            ? summary
+            : summary with
+            {
+                Warnings = summary.Warnings
+                    .Concat(liveWarnings)
+                    .Where(warning => !string.IsNullOrWhiteSpace(warning))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+            };
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()

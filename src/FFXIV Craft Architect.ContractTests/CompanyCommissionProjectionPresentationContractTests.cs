@@ -78,7 +78,8 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Assert.Equal(1, source.Split("\"Refresh Prices\"", StringSplitOptions.None).Length - 1);
         Omits(source, "Reprice Order");
         var procurementSource = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Procurement.cs");
-        Contains(procurementSource, "IsRequestedOutputRow(row)", "trade-orders-output-chip", "Output", "GetVisibleLiveProcurementSnapshot()");
+        Contains(procurementSource, "IsRequestedOutputRow(row)", "trade-orders-output-chip", "Output", "GetVisibleLiveProcurementSnapshot()",
+            "GetCurrentLiveProcurementSnapshot()?.Warnings");
         Omits(procurementSource, "IsRequestedOutputReferenceRow");
         Contains(ReadWebSource(repositoryRoot, "Services", "TradeProcurementRowBuilder.cs"), "output.MustBeHq == row.RequiresHq");
         Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"), "Rebuild from Requested Outputs", "isSameLinkedPlan", "if (!isSameOrder)");
