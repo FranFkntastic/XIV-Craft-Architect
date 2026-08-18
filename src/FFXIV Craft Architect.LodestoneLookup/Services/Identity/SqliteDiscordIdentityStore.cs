@@ -602,8 +602,16 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             ForeignKeys = true
         }.ToString());
         await connection.OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
-        return connection;
+        try
+        {
+            await EnsureSchemaAsync(connection, cancellationToken);
+            return connection;
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
     }
 
     private async Task EnsureSchemaAsync(
@@ -623,8 +631,12 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                 return;
             }
 
+            await using var transaction = connection.BeginTransaction(
+                IsolationLevel.Serializable,
+                deferred: false);
             await using (var version = connection.CreateCommand())
             {
+                version.Transaction = transaction;
                 version.CommandText = "PRAGMA user_version;";
                 var schemaVersion = Convert.ToInt32(
                     await version.ExecuteScalarAsync(cancellationToken));
@@ -633,6 +645,7 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                     var hasV1Tables = false;
                     await using (var probe = connection.CreateCommand())
                     {
+                        probe.Transaction = transaction;
                         probe.CommandText = """
                             SELECT COUNT(*) FROM sqlite_master
                             WHERE type = 'table' AND name IN (
@@ -645,8 +658,8 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                     if (hasV1Tables)
                     {
                         await using var recreate = connection.CreateCommand();
+                        recreate.Transaction = transaction;
                         recreate.CommandText = """
-                            BEGIN IMMEDIATE;
                             CREATE TABLE IF NOT EXISTS discord_oauth_states_v2 (
                                 state_hash TEXT PRIMARY KEY,
                                 purpose TEXT NOT NULL CHECK (purpose IN ('link', 'signin')),
@@ -675,18 +688,19 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
                                 FROM discord_identity_audit;
                             DROP TABLE discord_identity_audit;
                             ALTER TABLE discord_identity_audit_v2 RENAME TO discord_identity_audit;
-                            COMMIT;
                             """;
                         await recreate.ExecuteNonQueryAsync(cancellationToken);
                     }
 
                     await using var mark = connection.CreateCommand();
+                    mark.Transaction = transaction;
                     mark.CommandText = "PRAGMA user_version = 2;";
                     await mark.ExecuteNonQueryAsync(cancellationToken);
                 }
             }
 
             await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
             command.CommandText = """
                 CREATE TABLE IF NOT EXISTS discord_identity_links (
                     link_id TEXT PRIMARY KEY,
@@ -743,13 +757,25 @@ public sealed class SqliteDiscordIdentityStore(DiscordIdentityOptions options)
             await command.ExecuteNonQueryAsync(cancellationToken);
 
             await using var returnPathMigration = connection.CreateCommand();
+            returnPathMigration.Transaction = transaction;
             returnPathMigration.CommandText = "PRAGMA user_version;";
             var currentVersion = Convert.ToInt32(await returnPathMigration.ExecuteScalarAsync(cancellationToken));
             if (currentVersion < 3)
             {
-                returnPathMigration.CommandText = "ALTER TABLE discord_oauth_states ADD COLUMN return_path TEXT NULL; PRAGMA user_version = 3;";
+                returnPathMigration.CommandText = """
+                    SELECT COUNT(*)
+                    FROM pragma_table_info('discord_oauth_states')
+                    WHERE name = 'return_path';
+                    """;
+                var hasReturnPath = Convert.ToInt32(
+                    await returnPathMigration.ExecuteScalarAsync(cancellationToken)) == 1;
+                returnPathMigration.CommandText = hasReturnPath
+                    ? "PRAGMA user_version = 3;"
+                    : "ALTER TABLE discord_oauth_states ADD COLUMN return_path TEXT NULL; PRAGMA user_version = 3;";
                 await returnPathMigration.ExecuteNonQueryAsync(cancellationToken);
             }
+
+            await transaction.CommitAsync(cancellationToken);
             _schemaReady = true;
         }
         finally

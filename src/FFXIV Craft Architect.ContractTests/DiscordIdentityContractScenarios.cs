@@ -38,6 +38,70 @@ public sealed class DiscordIdentityContractTests
     }
 
     [Fact]
+    public async Task DiscordIdentitySchemaMigrationIsSafeAcrossConcurrentStoreInstances()
+    {
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            $"craft-architect-discord-schema-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "discord-identity.db");
+        try
+        {
+            await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                $"Data Source={databasePath}"))
+            {
+                await connection.OpenAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TABLE discord_oauth_states (
+                        state_hash TEXT PRIMARY KEY,
+                        purpose TEXT NOT NULL CHECK (purpose IN ('link', 'signin')),
+                        profile_id TEXT NULL,
+                        pkce_verifier TEXT NOT NULL,
+                        created_at_utc TEXT NOT NULL,
+                        expires_at_utc TEXT NOT NULL,
+                        consumed_at_utc TEXT NULL,
+                        return_path TEXT NULL
+                    );
+                    PRAGMA user_version = 2;
+                    """;
+                await command.ExecuteNonQueryAsync();
+            }
+
+            var stores = Enumerable.Range(0, 32)
+                .Select(_ => new SqliteDiscordIdentityStore(CreateOptions(root)))
+                .ToArray();
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var migrations = stores.Select(async store =>
+            {
+                await start.Task;
+                Assert.Null(await store.LoadByDiscordUserAsync(DiscordUser));
+            }).ToArray();
+
+            start.SetResult();
+            await Task.WhenAll(migrations);
+
+            await using var verification = new Microsoft.Data.Sqlite.SqliteConnection(
+                $"Data Source={databasePath}");
+            await verification.OpenAsync();
+            await using var version = verification.CreateCommand();
+            version.CommandText = "PRAGMA user_version;";
+            Assert.Equal(3, Convert.ToInt32(await version.ExecuteScalarAsync()));
+            version.CommandText = """
+                SELECT COUNT(*)
+                FROM pragma_table_info('discord_oauth_states')
+                WHERE name = 'return_path';
+                """;
+            Assert.Equal(1, Convert.ToInt32(await version.ExecuteScalarAsync()));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task DiscordComponentsBindClaimsToCommittedContactsAndCanonicalAuthority()
     {
         var root = Path.Combine(
