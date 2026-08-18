@@ -32,10 +32,26 @@ public partial class TradeOrders
     private bool _commissionTermsRevisionDirty;
     private bool _commissionTermsRevisionPaymentDirty;
 
-    private CompanyCommissionOwnerProjection? SelectedCommissionOwner =>
-        _selectedOrder == null
-            ? null
-            : CommissionOperations.GetForOrder(_selectedOrder.Id);
+    private CompanyCommissionOwnerProjection? SelectedCommissionOwner
+    {
+        get
+        {
+            if (_selectedOrder == null)
+            {
+                return null;
+            }
+
+            var snapshot = HostedOrders.Get(_selectedOrder.Id);
+            return snapshot is
+            {
+                Deleted: false,
+                DisplayState: HostedOrderDisplayState.Verified
+            } &&
+                   !HostedOrderSyncCoordinator.NeedsOwnerAdoption(snapshot)
+                ? CommissionOperations.GetForOrder(_selectedOrder.Id)
+                : null;
+        }
+    }
 
     private string? SelectedCommissionOperationsError =>
         _selectedOrder == null

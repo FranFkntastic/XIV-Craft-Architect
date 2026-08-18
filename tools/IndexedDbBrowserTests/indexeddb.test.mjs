@@ -19,13 +19,13 @@ before(async () => {
       response.end('<!doctype html>');
       return;
     }
-    if (request.url === '/indexedDB.js?v=29') {
+    if (request.url === '/indexedDB.js?v=30') {
       response.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' });
       response.end(script);
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' });
-    response.end('<!doctype html><script src="/indexedDB.js?v=29"></script>');
+    response.end('<!doctype html><script src="/indexedDB.js?v=30"></script>');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -104,6 +104,153 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     }
   });
 
+  test(`${name}: hosted owner proof commits atomically beside its order`, { timeout: 30_000 }, async () => {
+    const browser = await browserType.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.goto(origin, { waitUntil: 'load' });
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 30);
+
+      const result = await page.evaluate(async () => {
+        const hostKey = 'profileHost.hostUrl';
+        const profileKey = 'profileHost.connectedProfileId';
+        const revisionKey = 'profileHost.authority.test.profile.profile-a.objectRevision.tradeOrders.order-a';
+        const receiptKey = 'profileHost.authority.test.profile.profile-a.ownerReceipt.order-a';
+        const oldOrder = { id: 'order-a', companyProfileId: 'company-a', title: 'Last known' };
+        await IndexedDB.saveTradeOrder(oldOrder);
+        await IndexedDB.saveSetting(hostKey, '"https://host.example/api/"');
+        await IndexedDB.saveSetting(profileKey, '"profile-a"');
+        await IndexedDB.saveSetting(revisionKey, '100');
+
+        const bootstrap = await IndexedDB.applyHostedOwnerVerificationBatch(
+          [],
+          { [receiptKey]: '"receipt-100"', [revisionKey]: '100' },
+          [],
+          {
+            [hostKey]: '"https://host.example/api/"',
+            [profileKey]: '"profile-a"',
+            [revisionKey]: '100'
+          });
+        const changed = await IndexedDB.applyHostedOwnerVerificationBatch(
+          [{ ...oldOrder, title: 'Canonical change' }],
+          { [receiptKey]: '"receipt-101"', [revisionKey]: '101' },
+          [],
+          { [revisionKey]: '100' });
+        const lateOwner = IndexedDB.applyHostedOwnerVerificationBatch(
+          [{ ...oldOrder, title: 'Late owner revision 102' }],
+          { [receiptKey]: '"receipt-102"', [revisionKey]: '102' },
+          [],
+          { [revisionKey]: '101' });
+        const replay = IndexedDB.applyHostedTradeOrderState(
+          { ...oldOrder, title: 'Replay revision 103' },
+          'order-a',
+          revisionKey,
+          '103',
+          false);
+        const [lateOwnerAccepted, replayReconciled] = await Promise.all([lateOwner, replay]);
+        const stale = await IndexedDB.applyHostedOwnerVerificationBatch(
+          [{ ...oldOrder, title: 'Stale response' }],
+          { [receiptKey]: '"stale"', [revisionKey]: '100' },
+          [],
+          { [revisionKey]: '102' });
+        const state = await IndexedDB.loadHostedOwnerSettings([receiptKey, revisionKey]);
+        const durableOrder = await IndexedDB.loadTradeOrder('order-a');
+        return {
+          bootstrap,
+          changed,
+          lateOwnerAccepted,
+          replayReconciled,
+          stale,
+          state,
+          durableOrder
+        };
+      });
+
+      assert.equal(result.bootstrap, true);
+      assert.equal(result.changed, true);
+      assert.equal(result.lateOwnerAccepted, false);
+      assert.equal(result.replayReconciled, true);
+      assert.equal(result.stale, false);
+      assert.notEqual(result.state['profileHost.authority.test.profile.profile-a.ownerReceipt.order-a'], '"stale"');
+      assert.equal(result.state['profileHost.authority.test.profile.profile-a.objectRevision.tradeOrders.order-a'], '103');
+      assert.equal(result.durableOrder.title, 'Replay revision 103');
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`${name}: company schema v3 upgrades owner state without losing orders`, { timeout: 30_000 }, async () => {
+    const browser = await browserType.launch({ headless: true });
+    try {
+      const context = await browser.newContext();
+      const setup = await context.newPage();
+      await setup.goto(`${origin}/empty`, { waitUntil: 'load' });
+      await setup.evaluate(async () => {
+        await new Promise((resolve, reject) => {
+          const deletion = indexedDB.deleteDatabase('FFXIVCraftArchitect.Company');
+          deletion.onsuccess = resolve;
+          deletion.onerror = () => reject(deletion.error);
+        });
+        await new Promise((resolve, reject) => {
+          const request = indexedDB.open('FFXIVCraftArchitect.Company', 3);
+          request.onupgradeneeded = () => {
+            const database = request.result;
+            database.createObjectStore('storageMetadata', { keyPath: 'id' });
+            const companies = database.createObjectStore('tradeCompanyProfiles', { keyPath: 'id' });
+            companies.createIndex('updatedAtUtc', 'updatedAtUtc');
+            const crafters = database.createObjectStore('tradeCrafters', { keyPath: 'id' });
+            crafters.createIndex('companyProfileId', 'companyProfileId');
+            crafters.createIndex('displayName', 'displayName');
+            const orders = database.createObjectStore('tradeOrders', { keyPath: 'id' });
+            orders.createIndex('companyProfileId', 'companyProfileId');
+            orders.createIndex('status', 'status');
+            orders.createIndex('commissionedAtUtc', 'commissionedAtUtc');
+            orders.put({ id: 'retained-order', companyProfileId: 'company-a', title: 'Retained' });
+            database.createObjectStore('tradeOrderArchiveSummaries', { keyPath: 'id' });
+            const snapshots = database.createObjectStore('tradeOrderCraftSnapshots', { keyPath: 'id' });
+            snapshots.createIndex('companyProfileId', 'companyProfileId');
+            snapshots.createIndex('orderId', 'orderId');
+            snapshots.createIndex('updatedAtUtc', 'updatedAtUtc');
+            const payroll = database.createObjectStore('tradePayrollDrafts', { keyPath: 'id' });
+            payroll.createIndex('companyProfileId', 'companyProfileId');
+            payroll.createIndex('orderId', 'orderId');
+            payroll.createIndex('planSessionVersion', 'planSessionVersion');
+            payroll.createIndex('updatedAtUtc', 'updatedAtUtc');
+          };
+          request.onsuccess = () => {
+            request.result.close();
+            resolve();
+          };
+          request.onerror = () => reject(request.error);
+        });
+      });
+      await setup.close();
+
+      const page = await context.newPage();
+      await page.goto(origin, { waitUntil: 'load' });
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 30);
+      const result = await page.evaluate(async () => {
+        const diagnostics = await IndexedDB.getSpecializedStorageDiagnostics();
+        const retained = await IndexedDB.loadTradeOrder('retained-order');
+        const request = indexedDB.open('FFXIVCraftArchitect.Company');
+        const database = await new Promise((resolve, reject) => {
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        const hasOwnerState = database.objectStoreNames.contains('hostedOwnerState');
+        database.close();
+        return { diagnostics, retained, hasOwnerState };
+      });
+
+      assert.equal(result.diagnostics.versions.company, 4);
+      assert.equal(result.hasOwnerState, true);
+      assert.equal(result.retained.title, 'Retained');
+      await context.close();
+    } finally {
+      await browser.close();
+    }
+  });
+
   test(`${name}: repair creates complete Worker session schema`, { timeout: 30_000 }, async () => {
     const browser = await browserType.launch({ headless: true });
     try {
@@ -129,7 +276,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
 
       const page = await context.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 30);
       const repaired = await page.evaluate(async () => {
         await IndexedDB.getTradeStoreDiagnostics();
         const request = indexedDB.open('FFXIVCraftArchitect');
@@ -168,11 +315,11 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
       });
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 30);
 
       const result = await page.evaluate(async () => {
         await window.IndexedDB.clearMarketCache();
-        const open = indexedDB.open('FFXIVCraftArchitect');
+        const open = indexedDB.open('FFXIVCraftArchitect.Market');
         const database = await new Promise((resolve, reject) => {
           open.onsuccess = () => resolve(open.result);
           open.onerror = () => reject(open.error);
@@ -229,7 +376,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 30);
 
       const patched = await page.evaluate(async () => {
         await IndexedDB.savePlan({
@@ -262,11 +409,11 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 30);
 
       const migrated = await page.evaluate(async () => {
         await IndexedDB.loadPlan('initialize-schema');
-        const open = indexedDB.open('FFXIVCraftArchitect');
+        const open = indexedDB.open('FFXIVCraftArchitect.Personal');
         const database = await new Promise((resolve, reject) => {
           open.onsuccess = () => resolve(open.result);
           open.onerror = () => reject(open.error);
@@ -294,7 +441,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           procurementRouteJson: '{"route":"migrated"}'
         });
         const after = await IndexedDB.loadPlan('legacy-plan');
-        const reopened = indexedDB.open('FFXIVCraftArchitect');
+        const reopened = indexedDB.open('FFXIVCraftArchitect.Personal');
         const migratedDatabase = await new Promise((resolve, reject) => {
           reopened.onsuccess = () => resolve(reopened.result);
           reopened.onerror = () => reject(reopened.error);
@@ -336,7 +483,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
     try {
       const page = await browser.newPage();
       await page.goto(origin, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 29);
+      await page.waitForFunction(() => window.IndexedDB?.moduleRevision === 30);
 
       const patched = await page.evaluate(async () => {
         const marketIntelligenceJson = JSON.stringify({ evidence: 'x'.repeat(1024 * 1024) });
@@ -348,7 +495,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           marketIntelligenceJson,
           procurementRouteJson: null
         });
-        const openBefore = indexedDB.open('FFXIVCraftArchitect');
+        const openBefore = indexedDB.open('FFXIVCraftArchitect.Personal');
         const databaseBefore = await new Promise((resolve, reject) => {
           openBefore.onsuccess = () => resolve(openBefore.result);
           openBefore.onerror = () => reject(openBefore.error);
@@ -364,7 +511,7 @@ for (const [name, browserType] of [['chromium', chromium], ['firefox', firefox]]
           procurementRouteJson: '{"route":"current"}'
         });
         const plan = await IndexedDB.loadPlan('autosave');
-        const openAfter = indexedDB.open('FFXIVCraftArchitect');
+        const openAfter = indexedDB.open('FFXIVCraftArchitect.Personal');
         const databaseAfter = await new Promise((resolve, reject) => {
           openAfter.onsuccess = () => resolve(openAfter.result);
           openAfter.onerror = () => reject(openAfter.error);

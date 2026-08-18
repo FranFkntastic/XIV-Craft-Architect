@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
@@ -11,6 +12,43 @@ public sealed class TradeCommissionOperationsClient(
 {
     private const string AccessKeyHeader = "X-Profile-Key";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public async Task<CompanyCommissionOwnerComparisonTransportResult>
+        CompareOwnerProjectionsAsync(
+            HostedProfileConnectionSettings connection,
+            CompanyId companyId,
+            CompanyCommissionOwnerComparisonRequest request,
+            CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(request);
+        var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request, JsonOptions).Length;
+        var stopwatch = Stopwatch.StartNew();
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{companyId}/commissions/owner-comparison",
+            request,
+            typeof(CompanyCommissionOwnerComparisonRequest),
+            cancellationToken,
+            connection);
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            throw new TradeCompanyAuthorizationException(companyId.Value);
+        }
+        await EnsureSuccessAsync(response, cancellationToken);
+        var responseBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var comparison = JsonSerializer.Deserialize<CompanyCommissionOwnerComparisonResponse>(
+            responseBytes,
+            JsonOptions)
+            ?? throw new InvalidOperationException(
+                "The authenticated owner comparison endpoint returned an empty response.");
+        stopwatch.Stop();
+        return new CompanyCommissionOwnerComparisonTransportResult(
+            comparison,
+            requestBytes,
+            responseBytes.Length,
+            stopwatch.Elapsed);
+    }
 
     public async Task<CompanyCommissionOwnerProjection> LoadOwnerProjectionAsync(
         Guid companyId,
@@ -313,6 +351,12 @@ public sealed record TradeCommissionOwnerMutationResponse(
     CompanyCommissionMutationResult Mutation,
     CompanyCommissionOwnerProjection? Projection,
     string? ClaimUrl);
+
+public sealed record CompanyCommissionOwnerComparisonTransportResult(
+    CompanyCommissionOwnerComparisonResponse Response,
+    int RequestBytes,
+    int ResponseBytes,
+    TimeSpan Duration);
 
 internal sealed record TradeCommissionOwnerMutationBody(
     CompanyCommissionMutationStatus Status,

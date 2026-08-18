@@ -109,6 +109,40 @@ public static class CompanyCommissionEndpoints
             "/trade/v1/companies/{companyId}/commissions");
 
         company.MapPost(
+            "/owner-comparison",
+            async (
+                string companyId,
+                CompanyCommissionOwnerComparisonRequest body,
+                HttpRequest request,
+                TradeCompanyAuthorization authorization,
+                HostedCompanyCommissionService commissions,
+                CancellationToken cancellationToken) =>
+            {
+                var access = await authorization.ResolveAsync(
+                    request,
+                    companyId,
+                    cancellationToken);
+                if (access == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                try
+                {
+                    return Results.Ok(await commissions.CompareOwnersAsync(
+                        access,
+                        body,
+                        cancellationToken));
+                }
+                catch (ArgumentException exception)
+                {
+                    return Results.BadRequest(new MembershipErrorResponse(
+                        "invalid_owner_comparison",
+                        exception.Message));
+                }
+            });
+
+        company.MapPost(
             "/{commissionId:guid}/claim",
             async (
                 string companyId,

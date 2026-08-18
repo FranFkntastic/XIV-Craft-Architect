@@ -89,6 +89,143 @@ public sealed class HostedOrderProjectionStoreTests
         });
     }
 
+    [Fact]
+    public void HundredUnchangedOwnerVerificationsPreserveLastKnownRows()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var store = RestoringStore(
+            profileId,
+            0,
+            $"https://profiles.example/|{profileId}");
+        var companyProfileId = Guid.NewGuid();
+        var orders = Enumerable.Range(1, 100)
+            .Select(index => CreateOrder(
+                Guid.NewGuid(),
+                companyProfileId,
+                $"Commission {index}"))
+            .ToArray();
+
+        Assert.Equal(
+            100,
+            store.PublishRemoteOrders(orders
+                .Select((order, index) => (order, (long)index + 1))
+                .ToArray()));
+        Assert.All(
+            store.GetAll(companyProfileId),
+            snapshot => Assert.Equal(
+                HostedOrderDisplayState.LastKnown,
+                snapshot.DisplayState));
+
+        var rowChanges = 0;
+        var verificationChanges = 0;
+        store.Changed += _ => rowChanges++;
+        store.VerificationChanged += _ => verificationChanges++;
+
+        foreach (var (order, index) in orders.Select((order, index) => (order, index)))
+        {
+            var verifiedCopy = JsonSerializer.Deserialize<TradeOrder>(
+                JsonSerializer.Serialize(order))!;
+            Assert.True(store.TryPublishOwner(CreateOwner(
+                verifiedCopy,
+                index + 1,
+                index + 101)));
+        }
+
+        Assert.Equal(0, rowChanges);
+        Assert.Equal(100, verificationChanges);
+        Assert.All(orders, order =>
+        {
+            var snapshot = Assert.IsType<HostedOrderProjectionSnapshot>(
+                store.Get(order.Id));
+            Assert.Same(order, snapshot.Order);
+            Assert.Equal(HostedOrderDisplayState.Verified, snapshot.DisplayState);
+            Assert.NotNull(snapshot.OwnerProjection);
+        });
+    }
+
+    [Fact]
+    public void CommittedOwnerBatchPublishesChangedRowsOnceAndPreservesUnchangedReferences()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var store = RestoringStore(
+            profileId,
+            0,
+            $"https://profiles.example/|{profileId}");
+        var companyProfileId = Guid.NewGuid();
+        var unchanged = CreateOrder(Guid.NewGuid(), companyProfileId, "Unchanged");
+        var changed = CreateOrder(Guid.NewGuid(), companyProfileId, "Last known");
+        Assert.Equal(2, store.PublishRemoteOrders([(unchanged, 1), (changed, 1)]));
+        var canonicalChanged = JsonSerializer.Deserialize<TradeOrder>(
+            JsonSerializer.Serialize(changed))!;
+        canonicalChanged.Title = "Canonical change";
+        var batchNotifications = new List<IReadOnlyList<HostedOrderProjectionSnapshot>>();
+        var verificationNotifications = 0;
+        store.BatchChanged += snapshots => batchNotifications.Add(snapshots);
+        store.VerificationChanged += _ => verificationNotifications++;
+
+        var result = store.TryAdoptCommittedOwnerBatch(
+            store.CaptureAuthorityScope(),
+            [
+                CreateOwner(unchanged, 1, 10),
+                new CompanyCommissionOwnerProjection
+                {
+                    Order = canonicalChanged,
+                    ObjectRevision = new(2),
+                    CompanyRevision = new(11),
+                    ProfileObjectRevision = new(2)
+                }
+            ]);
+
+        Assert.Equal(1, result.ChangedCount);
+        Assert.Equal(1, result.VerificationCount);
+        Assert.Equal(0, result.RejectedCount);
+        Assert.Single(batchNotifications);
+        Assert.Single(batchNotifications[0]);
+        Assert.Equal(1, verificationNotifications);
+        Assert.Same(unchanged, store.Get(unchanged.Id)?.Order);
+        Assert.Equal("Canonical change", store.Get(changed.Id)?.Order?.Title);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ClearingOwnerProofPreservesPresentedRow(bool guarded)
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var store = RestoringStore(
+            profileId,
+            0,
+            $"https://profiles.example/|{profileId}");
+        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Stable row");
+        Assert.True(store.TryPublishRemoteOrder(order, objectRevision: 4));
+        Assert.True(store.TryPublishOwner(CreateOwner(order, 4, 9)));
+        var expected = store.Get(order.Id);
+
+        var rowChanges = 0;
+        var verificationChanges = 0;
+        store.Changed += _ => rowChanges++;
+        store.VerificationChanged += _ => verificationChanges++;
+
+        if (guarded)
+        {
+            Assert.True(store.TryClearOwner(
+                store.CaptureAuthorityScope(),
+                order.Id,
+                expected));
+        }
+        else
+        {
+            store.ClearOwner(order.Id);
+        }
+
+        var snapshot = Assert.IsType<HostedOrderProjectionSnapshot>(store.Get(order.Id));
+        Assert.Equal(0, rowChanges);
+        Assert.Equal(1, verificationChanges);
+        Assert.Same(order, snapshot.Order);
+        Assert.Null(snapshot.OwnerProjection);
+        Assert.Equal(HostedOrderDisplayState.LastKnown, snapshot.DisplayState);
+    }
+
     private static Task Run(Action scenario) { scenario(); return Task.CompletedTask; }
 
     private static void ConnectionReplacementInvalidatesAuthority(bool pathCase)
@@ -157,7 +294,11 @@ public sealed class HostedOrderProjectionStoreTests
         Assert.True(race.Store.TryPublishTombstone(race.Order.Id, tombstoneRevision, race.Order.CompanyProfileId));
         race.ReleaseFirstWrite.SetResult();
 
-        Assert.Equal(HostedOrderCommittedProjectionResult.Adopted, await persistence);
+        Assert.Equal(
+            ownerCandidate
+                ? HostedOrderCommittedProjectionResult.AlreadyCurrent
+                : HostedOrderCommittedProjectionResult.Adopted,
+            await persistence);
         Assert.Equal([false, true], race.Persisted.Select(candidate => candidate.Deleted));
         Assert.True(race.Store.Get(race.Order.Id)?.Deleted);
         Assert.Equal(tombstoneRevision, race.Store.RestoreState.LastAppliedRevision);
@@ -559,13 +700,20 @@ public sealed class HostedOrderProjectionStoreTests
         var store = new HostedOrderProjectionStore();
         var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Canonical");
         var notifications = 0;
+        var verificationNotifications = 0;
         store.Changed += _ => notifications++;
+        store.VerificationChanged += _ => verificationNotifications++;
 
         Assert.True(store.TryPublishRemoteOrder(order, objectRevision: 4));
         Assert.True(store.TryPublishOwner(CreateOwner(order, 4, 9)));
 
         Assert.NotNull(store.GetOwnerProjection(order.Id));
-        Assert.Equal(2, notifications);
+        Assert.Equal(1, notifications);
+        Assert.Equal(1, verificationNotifications);
+        Assert.Same(order, store.Get(order.Id)?.Order);
+        Assert.Equal(
+            HostedOrderDisplayState.Verified,
+            store.Get(order.Id)?.DisplayState);
     }
 
     private static void SameProfileReconnectRetainsReadyProjection()
@@ -841,9 +989,17 @@ public sealed class HostedOrderProjectionStoreTests
                 return SaveOrderAsync<TValue>((TradeOrder)args![0]!);
             }
 
+            if (identifier == "IndexedDB.applyHostedTradeOrderState")
+            {
+                return ApplyHostedTradeOrderStateAsync<TValue>(args!);
+            }
+
             object? result = identifier switch
             {
                 "IndexedDB.loadAllSettings" => new Dictionary<string, string>(_settings),
+                "IndexedDB.loadHostedOwnerSettings" => ((IReadOnlyList<string>)args![0]!)
+                    .Where(_settings.ContainsKey)
+                    .ToDictionary(key => key, key => _settings[key], StringComparer.Ordinal),
                 "IndexedDB.loadSetting" => _settings.GetValueOrDefault((string)args![0]!),
                 "IndexedDB.loadTradeOrder" => DurableOrder,
                 "IndexedDB.deleteTradeOrder" => DeleteOrder(),
@@ -867,6 +1023,24 @@ public sealed class HostedOrderProjectionStoreTests
                 DurableOrder = order;
             }
             return (TValue)(object)SaveTradeOrderResult;
+        }
+
+        private async ValueTask<TValue> ApplyHostedTradeOrderStateAsync<TValue>(
+            object?[] args)
+        {
+            var order = args[0] as TradeOrder;
+            if ((bool)args[4]!)
+            {
+                DurableOrder = null;
+                _settings[(string)args[2]!] = (string)args[3]!;
+                return (TValue)(object)true;
+            }
+            var saved = await SaveOrderAsync<bool>(order!);
+            if (saved)
+            {
+                _settings[(string)args[2]!] = (string)args[3]!;
+            }
+            return (TValue)(object)saved;
         }
     }
 

@@ -17,15 +17,17 @@ public sealed class HostedOrderSyncCoordinatorTests
     private const string Host = "https://profiles.example/api/";
 
     [Fact]
-    public async Task SyncQueuesOneListOwnerAdoptionPassWithoutSelectionDemand()
+    public async Task SyncAndPriorityDemandDeduplicateOwnerAdoption()
     {
         var profileId = Guid.NewGuid().ToString("D");
         var order = CreateCommissionOrder();
         var runtime = new OwnerAdoptionRuntime(profileId);
+        runtime.SeedDurableOrder(order);
         var indexedDb = new IndexedDbService(runtime);
         var localState = new ProfileSyncLocalStateService(
             indexedDb,
             new ProfileHostClientOptions(Host));
+        await SeedOrderRevisionAsync(localState, order);
         var store = new HostedOrderProjectionStore();
         store.BeginProfileRestore(
             profileId,
@@ -42,7 +44,7 @@ public sealed class HostedOrderSyncCoordinatorTests
             new WebSettingsService(indexedDb),
             store,
             []);
-        var ownerHandler = new BlockingOwnerHandler(Projection(order, 1, 1));
+        var ownerHandler = new BlockingOwnerHandler(order);
         var appState = new AppState();
         var dataChangeCount = 0;
         appState.OnStateChanged += change =>
@@ -75,16 +77,288 @@ public sealed class HostedOrderSyncCoordinatorTests
 
         await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
         Assert.Equal(1, ownerHandler.RequestCount);
+        var priority = coordinator.RefreshOwnerProjectionAsync(order.Id);
 
         ownerHandler.Release.TrySetResult();
-        await GetField<Task>(coordinator, "_ownerAdoptionPass")
-            .WaitAsync(TimeSpan.FromSeconds(5));
+        if (GetField<Task?>(coordinator, "_ownerAdoptionPass") is { } ownerPass)
+        {
+            await ownerPass.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        await priority.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(1, ownerHandler.RequestCount);
-        Assert.Equal(3, dataChangeCount);
+        Assert.Equal(2, dataChangeCount);
         Assert.Equal(1, metadataRefreshCount);
         Assert.Equal(1, store.GetOwnerProjection(order.Id)!.ObjectRevision.Value);
-        Assert.Equal(order.Id, runtime.DurableOrder?.Id);
+        Assert.Same(order, runtime.DurableOrder);
+        Assert.Equal(0, runtime.SaveTradeOrderCount);
+    }
+
+    [Fact]
+    public async Task SelectedPriorityDemandRunsBeforeTheRemainingBackgroundQueue()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var first = CreateCommissionOrder();
+        var orders = Enumerable.Range(0, 74)
+            .Select(_ => CopyWithNewIdentity(first))
+            .Prepend(first)
+            .ToArray();
+        var runtime = new OwnerAdoptionRuntime(profileId);
+        runtime.SeedDurableOrder(first);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        foreach (var order in orders)
+        {
+            await SeedOrderRevisionAsync(localState, order);
+        }
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            hasTrustedProjection: true,
+            lastAppliedRevision: 0,
+            DateTime.UtcNow,
+            $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
+        foreach (var order in orders)
+        {
+            Assert.True(store.TryPublishRemoteOrder(order, 1));
+        }
+        var profileSync = new ProfileSyncService(
+            new ProfileHostClient(
+                new HttpClient(new EmptyChangesHandler()),
+                new ProfileHostClientOptions(Host)),
+            localState,
+            new WebSettingsService(indexedDb),
+            store,
+            []);
+        var ownerHandler = new PriorityOwnerHandler(orders);
+        await using var coordinator = new HostedOrderSyncCoordinator(
+            runtime,
+            profileSync,
+            localState,
+            store,
+            new TradeCommissionOperationsClient(
+                new HttpClient(ownerHandler) { BaseAddress = new Uri(Host) },
+                localState),
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            new AppState(),
+            NullLogger<HostedOrderSyncCoordinator>.Instance);
+        SetField(coordinator, "_activeProfileId", profileId);
+        SetField(coordinator, "_session", new CancellationTokenSource());
+
+        await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
+        await ownerHandler.FirstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var selected = orders.First(order => !ownerHandler.FirstBatch.Contains(order.Id));
+        var priority = coordinator.RefreshOwnerProjectionAsync(selected.Id);
+        ownerHandler.ReleaseFirst.TrySetResult();
+
+        await priority.WaitAsync(TimeSpan.FromSeconds(5));
+        if (GetField<Task?>(coordinator, "_ownerAdoptionPass") is { } ownerPass)
+        {
+            await ownerPass.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Equal(2, ownerHandler.RequestCount);
+        Assert.Equal(orders.Length, ownerHandler.OrderIds.Count);
+        Assert.Equal(selected.Id, ownerHandler.OrderIds[50]);
+        Assert.Equal(orders.Select(order => order.Id).ToHashSet(), ownerHandler.OrderIds.ToHashSet());
+    }
+
+    [Fact]
+    public async Task LateOwnerAcknowledgementCannotRegressANewerProfileReplay()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateCommissionOrder();
+        var runtime = new OwnerAdoptionRuntime(profileId);
+        runtime.SeedDurableOrder(order);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await SeedOrderRevisionAsync(localState, order);
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            hasTrustedProjection: true,
+            lastAppliedRevision: 0,
+            DateTime.UtcNow,
+            $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(order, 1));
+        var profileSync = new ProfileSyncService(
+            new ProfileHostClient(
+                new HttpClient(new EmptyChangesHandler()),
+                new ProfileHostClientOptions(Host)),
+            localState,
+            new WebSettingsService(indexedDb),
+            store,
+            []);
+        var ownerHandler = new ReplayRaceOwnerHandler(order);
+        await using var coordinator = new HostedOrderSyncCoordinator(
+            runtime,
+            profileSync,
+            localState,
+            store,
+            new TradeCommissionOperationsClient(
+                new HttpClient(ownerHandler) { BaseAddress = new Uri(Host) },
+                localState),
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            new AppState(),
+            NullLogger<HostedOrderSyncCoordinator>.Instance);
+        SetField(coordinator, "_activeProfileId", profileId);
+        SetField(coordinator, "_session", new CancellationTokenSource());
+
+        await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
+        await ownerHandler.FirstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var newer = TradeOrderWorkflow.CopyOrder(order);
+        newer.Title = "Newer replay winner";
+        runtime.SeedDurableOrder(newer);
+        var connection = await localState.LoadConnectionSettingsAsync();
+        await localState.SaveObjectRevisionAsync(
+            connection,
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"),
+            2);
+        Assert.True(store.TryPublishRemoteOrder(newer, 2));
+        ownerHandler.ReleaseFirst.TrySetResult();
+
+        await ownerHandler.SecondReturned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (GetField<Task?>(coordinator, "_ownerAdoptionPass") is { } ownerPass)
+        {
+            await ownerPass.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Equal(2, ownerHandler.RequestCount);
+        Assert.Equal("Newer replay winner", store.Get(order.Id)?.Order?.Title);
+        Assert.Same(newer, store.Get(order.Id)?.Order);
+        Assert.Equal(2, store.GetOwnerProjection(order.Id)?.ProfileObjectRevision?.Value);
+        Assert.Equal(0, runtime.SaveTradeOrderCount);
+    }
+
+    [Fact]
+    public async Task CrossCompanyOwnerResponsePreservesTheLastKnownBoard()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var order = CreateCommissionOrder();
+        var runtime = new OwnerAdoptionRuntime(profileId);
+        runtime.SeedDurableOrder(order);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        await SeedOrderRevisionAsync(localState, order);
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            hasTrustedProjection: true,
+            lastAppliedRevision: 0,
+            DateTime.UtcNow,
+            $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
+        Assert.True(store.TryPublishRemoteOrder(order, 1));
+        var profileSync = new ProfileSyncService(
+            new ProfileHostClient(
+                new HttpClient(new EmptyChangesHandler()),
+                new ProfileHostClientOptions(Host)),
+            localState,
+            new WebSettingsService(indexedDb),
+            store,
+            []);
+        var ownerHandler = new InvalidComparisonHandler();
+        await using var coordinator = new HostedOrderSyncCoordinator(
+            runtime,
+            profileSync,
+            localState,
+            store,
+            new TradeCommissionOperationsClient(
+                new HttpClient(ownerHandler) { BaseAddress = new Uri(Host) },
+                localState),
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            new AppState(),
+            NullLogger<HostedOrderSyncCoordinator>.Instance);
+        SetField(coordinator, "_activeProfileId", profileId);
+        SetField(coordinator, "_session", new CancellationTokenSource());
+
+        await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
+        await ownerHandler.Returned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (GetField<Task?>(coordinator, "_ownerAdoptionPass") is { } ownerPass)
+        {
+            await ownerPass.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Same(order, store.Get(order.Id)?.Order);
+        Assert.Null(store.GetOwnerProjection(order.Id));
+        Assert.Equal(HostedOrderDisplayState.LastKnown, store.Get(order.Id)?.DisplayState);
+        Assert.Same(order, runtime.DurableOrder);
+        Assert.Equal(0, runtime.SaveTradeOrderCount);
+    }
+
+    [Fact]
+    public async Task RoutineOwnerVerificationRunsFourCompaniesInParallel()
+    {
+        var profileId = Guid.NewGuid().ToString("D");
+        var orders = Enumerable.Range(0, 5)
+            .Select(_ => CreateCommissionOrder())
+            .ToArray();
+        var runtime = new OwnerAdoptionRuntime(profileId);
+        runtime.SeedDurableOrder(orders[0]);
+        var indexedDb = new IndexedDbService(runtime);
+        var localState = new ProfileSyncLocalStateService(
+            indexedDb,
+            new ProfileHostClientOptions(Host));
+        foreach (var order in orders)
+        {
+            await SeedOrderRevisionAsync(localState, order);
+        }
+        var store = new HostedOrderProjectionStore();
+        store.BeginProfileRestore(
+            profileId,
+            hasTrustedProjection: true,
+            lastAppliedRevision: 0,
+            DateTime.UtcNow,
+            $"{ProfileHostClient.NormalizeHostUrl(Host)}|{profileId}");
+        Assert.Equal(
+            orders.Length,
+            store.PublishRemoteOrders(orders.Select(order => (order, 1L)).ToArray()));
+        var profileSync = new ProfileSyncService(
+            new ProfileHostClient(
+                new HttpClient(new EmptyChangesHandler()),
+                new ProfileHostClientOptions(Host)),
+            localState,
+            new WebSettingsService(indexedDb),
+            store,
+            []);
+        var ownerHandler = new CompanyConcurrencyHandler(orders);
+        await using var coordinator = new HostedOrderSyncCoordinator(
+            runtime,
+            profileSync,
+            localState,
+            store,
+            new TradeCommissionOperationsClient(
+                new HttpClient(ownerHandler) { BaseAddress = new Uri(Host) },
+                localState),
+            new TradeOperationsPersistenceService(
+                indexedDb,
+                new TradeCompanyProfilePackageService()),
+            new AppState(),
+            NullLogger<HostedOrderSyncCoordinator>.Instance);
+        SetField(coordinator, "_activeProfileId", profileId);
+        SetField(coordinator, "_session", new CancellationTokenSource());
+
+        await coordinator.ReceiveProfileRevision(profileId, 1, "leader", 0);
+        await ownerHandler.AllReturned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        if (GetField<Task?>(coordinator, "_ownerAdoptionPass") is { } ownerPass)
+        {
+            await ownerPass.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        Assert.Equal(5, ownerHandler.RequestCount);
+        Assert.Equal(4, ownerHandler.MaximumConcurrency);
     }
 
     [Theory]
@@ -381,8 +655,21 @@ public sealed class HostedOrderSyncCoordinatorTests
         {
             Order = order,
             ObjectRevision = new CompanyRecordRevision(objectRevision),
-            CompanyRevision = new CompanyRecordRevision(companyRevision)
+            CompanyRevision = new CompanyRecordRevision(companyRevision),
+            ProfileObjectRevision = new CompanyRecordRevision(objectRevision)
         };
+
+    private static async Task SeedOrderRevisionAsync(
+        ProfileSyncLocalStateService localState,
+        TradeOrder order)
+    {
+        var connection = await localState.LoadConnectionSettingsAsync();
+        await localState.SaveObjectRevisionAsync(
+            connection,
+            ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"),
+            1);
+    }
 
     private static TradeOrder CreateCommissionOrder(
         Guid? orderId = null,
@@ -465,8 +752,7 @@ public sealed class HostedOrderSyncCoordinatorTests
         }
     }
 
-    private sealed class BlockingOwnerHandler(
-        CompanyCommissionOwnerProjection projection) : HttpMessageHandler
+    private sealed class BlockingOwnerHandler(TradeOrder order) : HttpMessageHandler
     {
         private int _requestCount;
 
@@ -480,15 +766,267 @@ public sealed class HostedOrderSyncCoordinatorTests
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            Assert.EndsWith("/owner", request.RequestUri!.AbsolutePath);
+            Assert.EndsWith("/owner-comparison", request.RequestUri!.AbsolutePath);
+            var comparison = (await request.Content!
+                .ReadFromJsonAsync<CompanyCommissionOwnerComparisonRequest>(
+                    cancellationToken: cancellationToken))!;
             Interlocked.Increment(ref _requestCount);
             Entered.TrySetResult();
             await Release.Task.WaitAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = JsonContent.Create(projection)
+                Content = JsonContent.Create(ComparisonResponse(order, comparison.Items))
             };
         }
+    }
+
+    private sealed class PriorityOwnerHandler : HttpMessageHandler
+    {
+        private readonly IReadOnlyDictionary<Guid, CompanyCommissionOwnerProjection> _projections;
+        private readonly List<Guid> _orderIds = [];
+        private int _requestCount;
+
+        public PriorityOwnerHandler(IEnumerable<TradeOrder> orders)
+        {
+            _projections = orders.ToDictionary(
+                order => order.CompanyCommission!.CommissionId,
+                order => Projection(order, 1, 1));
+        }
+
+        public IReadOnlyList<Guid> OrderIds
+        {
+            get
+            {
+                lock (_orderIds)
+                {
+                    return _orderIds.ToArray();
+                }
+            }
+        }
+
+        public IReadOnlyList<Guid> FirstBatch { get; private set; } = [];
+        public int RequestCount => Volatile.Read(ref _requestCount);
+
+        public TaskCompletionSource FirstEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirst { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Assert.EndsWith("/owner-comparison", request.RequestUri!.AbsolutePath);
+            var comparison = (await request.Content!
+                .ReadFromJsonAsync<CompanyCommissionOwnerComparisonRequest>(
+                    cancellationToken: cancellationToken))!;
+            lock (_orderIds)
+            {
+                _orderIds.AddRange(comparison.Items.Select(item => item.OrderId));
+            }
+            if (Interlocked.Increment(ref _requestCount) == 1)
+            {
+                FirstBatch = comparison.Items.Select(item => item.OrderId).ToArray();
+                FirstEntered.TrySetResult();
+                await ReleaseFirst.Task.WaitAsync(cancellationToken);
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new CompanyCommissionOwnerComparisonResponse
+                {
+                    CompanyId = _projections.Values.First().Order.CompanyCommission!.CompanyId,
+                    CompanyRevision = new(1),
+                    VerifiedAtUtc = DateTime.UtcNow,
+                    Items = comparison.Items.Select(item => Acknowledgement(
+                        _projections[item.CommissionId].Order,
+                        item)).ToArray()
+                })
+            };
+        }
+    }
+
+    private sealed class ReplayRaceOwnerHandler(TradeOrder order) : HttpMessageHandler
+    {
+        private int _requestCount;
+
+        public int RequestCount => Volatile.Read(ref _requestCount);
+        public TaskCompletionSource FirstEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirst { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondReturned { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var comparison = (await request.Content!
+                .ReadFromJsonAsync<CompanyCommissionOwnerComparisonRequest>(
+                    cancellationToken: cancellationToken))!;
+            var count = Interlocked.Increment(ref _requestCount);
+            if (count == 1)
+            {
+                FirstEntered.TrySetResult();
+                await ReleaseFirst.Task.WaitAsync(cancellationToken);
+            }
+            var response = ComparisonResponse(
+                order,
+                comparison.Items,
+                comparison.Items[0].ProfileObjectRevision.Value);
+            if (count == 2)
+            {
+                SecondReturned.TrySetResult();
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(response)
+            };
+        }
+    }
+
+    private sealed class InvalidComparisonHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource Returned { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var comparison = (await request.Content!
+                .ReadFromJsonAsync<CompanyCommissionOwnerComparisonRequest>(
+                    cancellationToken: cancellationToken))!;
+            Returned.TrySetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new CompanyCommissionOwnerComparisonResponse
+                {
+                    CompanyId = new(Guid.NewGuid()),
+                    CompanyRevision = new(1),
+                    VerifiedAtUtc = DateTime.UtcNow,
+                    Items = comparison.Items.Select(item => new CompanyCommissionOwnerComparisonResult
+                    {
+                        OrderId = item.OrderId,
+                        CommissionId = item.CommissionId,
+                        Status = CompanyCommissionOwnerComparisonStatus.Missing
+                    }).ToArray()
+                })
+            };
+        }
+    }
+
+    private sealed class CompanyConcurrencyHandler : HttpMessageHandler
+    {
+        private readonly IReadOnlyDictionary<Guid, TradeOrder> _orders;
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _concurrency;
+        private int _maximumConcurrency;
+        private int _requestCount;
+
+        public CompanyConcurrencyHandler(IEnumerable<TradeOrder> orders)
+        {
+            _orders = orders.ToDictionary(
+                order => order.CompanyCommission!.CommissionId);
+        }
+
+        public int RequestCount => Volatile.Read(ref _requestCount);
+        public int MaximumConcurrency => Volatile.Read(ref _maximumConcurrency);
+        public TaskCompletionSource AllReturned { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var comparison = (await request.Content!
+                .ReadFromJsonAsync<CompanyCommissionOwnerComparisonRequest>(
+                    cancellationToken: cancellationToken))!;
+            var concurrency = Interlocked.Increment(ref _concurrency);
+            UpdateMaximumConcurrency(concurrency);
+            if (concurrency == 4)
+            {
+                _release.TrySetResult();
+            }
+            await _release.Task.WaitAsync(cancellationToken);
+            var order = _orders[comparison.Items[0].CommissionId];
+            var response = ComparisonResponse(order, comparison.Items);
+            Interlocked.Decrement(ref _concurrency);
+            if (Interlocked.Increment(ref _requestCount) == 5)
+            {
+                AllReturned.TrySetResult();
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(response)
+            };
+        }
+
+        private void UpdateMaximumConcurrency(int concurrency)
+        {
+            var current = Volatile.Read(ref _maximumConcurrency);
+            while (concurrency > current)
+            {
+                var observed = Interlocked.CompareExchange(
+                    ref _maximumConcurrency,
+                    concurrency,
+                    current);
+                if (observed == current)
+                {
+                    return;
+                }
+                current = observed;
+            }
+        }
+    }
+
+    private static CompanyCommissionOwnerComparisonResponse ComparisonResponse(
+        TradeOrder order,
+        IReadOnlyList<CompanyCommissionOwnerComparisonItem> items,
+        long objectRevision = 1) =>
+        new()
+        {
+            CompanyId = order.CompanyCommission!.CompanyId,
+            CompanyRevision = new(1),
+            VerifiedAtUtc = DateTime.UtcNow,
+            Items = items.Select(item => Acknowledgement(
+                order,
+                item,
+                objectRevision)).ToArray()
+        };
+
+    private static CompanyCommissionOwnerComparisonResult Acknowledgement(
+        TradeOrder order,
+        CompanyCommissionOwnerComparisonItem item,
+        long objectRevision = 1) =>
+        new()
+        {
+            OrderId = item.OrderId,
+            CommissionId = item.CommissionId,
+            Status = CompanyCommissionOwnerComparisonStatus.Unchanged,
+            Receipt = new CompanyCommissionOwnerReceipt
+            {
+                OrderId = item.OrderId,
+                CompanyId = order.CompanyCommission!.CompanyId,
+                CommissionId = item.CommissionId,
+                ProfileObjectRevision = item.ProfileObjectRevision,
+                ObjectRevision = new(objectRevision),
+                CompanyRevision = new(1),
+                VerifiedAtUtc = DateTime.UtcNow
+            }
+        };
+
+    private static TradeOrder CopyWithNewIdentity(TradeOrder source)
+    {
+        var copy = TradeOrderWorkflow.CopyOrder(source);
+        copy.Id = Guid.NewGuid();
+        copy.CompanyCommission = copy.CompanyCommission! with
+        {
+            CommissionId = Guid.NewGuid(),
+            Reference = $"CA-{Guid.NewGuid():N}"
+        };
+        return copy;
     }
 
     private sealed class OwnerAdoptionRuntime(string profileId) : IJSRuntime
@@ -502,6 +1040,9 @@ public sealed class HostedOrderSyncCoordinatorTests
         };
 
         public TradeOrder? DurableOrder { get; private set; }
+        public int SaveTradeOrderCount { get; private set; }
+
+        public void SeedDurableOrder(TradeOrder order) => DurableOrder = order;
 
         public ValueTask<TValue> InvokeAsync<TValue>(
             string identifier,
@@ -521,6 +1062,12 @@ public sealed class HostedOrderSyncCoordinatorTests
                 "IndexedDB.saveSetting" => SaveSetting((string)args![0]!, (string)args[1]!),
                 "IndexedDB.loadAllTradeOrders" => new List<TradeOrder>(),
                 "IndexedDB.saveTradeOrder" => SaveOrder((TradeOrder)args![0]!),
+                "IndexedDB.applyHostedTradeOrderState" =>
+                    ApplyHostedTradeOrderState(args!),
+                "IndexedDB.applyHostedOwnerVerificationBatch" =>
+                    ApplyOwnerVerificationBatch(args!),
+                "IndexedDB.loadHostedOwnerSettings" =>
+                    LoadOwnerSettings((IReadOnlyList<string>)args![0]!),
                 "IndexedDB.deleteTradeOrder" => true,
                 _ => throw new NotSupportedException(identifier)
             };
@@ -544,9 +1091,55 @@ public sealed class HostedOrderSyncCoordinatorTests
 
         private bool SaveOrder(TradeOrder order)
         {
+            SaveTradeOrderCount++;
             DurableOrder = order;
             return true;
         }
+
+        private bool ApplyHostedTradeOrderState(object?[] args)
+        {
+            var order = args[0] as TradeOrder;
+            var orderId = Guid.Parse((string)args[1]!);
+            if ((bool)args[4]!)
+            {
+                DurableOrder = DurableOrder?.Id == orderId ? null : DurableOrder;
+            }
+            else
+            {
+                SaveOrder(order!);
+            }
+            _settings[(string)args[2]!] = (string)args[3]!;
+            return true;
+        }
+
+        private bool ApplyOwnerVerificationBatch(object?[] args)
+        {
+            var expectedSettings = (Dictionary<string, string>)args[3]!;
+            if (expectedSettings.Any(expected =>
+                    !_settings.TryGetValue(expected.Key, out var actual) ||
+                    !string.Equals(actual, expected.Value, StringComparison.Ordinal)))
+            {
+                return false;
+            }
+            foreach (var order in (IReadOnlyList<TradeOrder>)args[0]!)
+            {
+                SaveOrder(order);
+            }
+            foreach (var (key, value) in (Dictionary<string, string>)args[1]!)
+            {
+                _settings[key] = value;
+            }
+            foreach (var key in (IReadOnlyList<string>)args[2]!)
+            {
+                _settings.Remove(key);
+            }
+            return true;
+        }
+
+        private Dictionary<string, string> LoadOwnerSettings(IReadOnlyList<string> keys) =>
+            keys
+                .Where(_settings.ContainsKey)
+                .ToDictionary(key => key, key => _settings[key], StringComparer.Ordinal);
     }
 
 }

@@ -34,3 +34,26 @@ or cleanup failures produce a nonzero exit.
 `crasher-verify.mjs` and `workflow-oracle.mjs` remain diagnostic benchmark tooling. They are
 intentionally outside `npm test` and are not correctness evidence while route generation is
 disabled.
+
+## Hosted order board acceptance
+
+`hosted-order-board.mjs` is a focused Chromium acceptance probe for the last-known order
+board. It seeds 100 active hosted commissions across every real attention group, holds owner
+verification open, and proves that classification, selection, collapse, and scroll state stay
+stable. It then releases one background response and proves a selected-order lifecycle demand
+runs first in the queued page, opens one dialog, and does not duplicate that identity.
+
+```powershell
+npm run test:hosted-order-board -- --web-root "C:\artifacts\craft-architect\wwwroot" --output "C:\tmp\hosted-order-board.json" --screenshot "C:\tmp\hosted-order-board.png"
+```
+
+The same deterministic fixture records exact request count, serialized request and response
+bytes, and wall time for the singleton baseline or the batch implementation. Run each mode
+against an immutable published source tree; `baseline` requires 100 paced singleton requests,
+while `feature` requires two 50-item comparison batches, 100 unique identities, clean browser
+diagnostics, and no more than 4,079.271 ms wall time.
+
+```powershell
+npm run test:hosted-order-board -- --web-root "C:\artifacts\craft-architect\wwwroot" --output "C:\tmp\hosted-owner-baseline.json" --benchmark baseline
+npm run test:hosted-order-board -- --web-root "C:\artifacts\craft-architect\wwwroot" --output "C:\tmp\hosted-owner-feature.json" --benchmark feature
+```

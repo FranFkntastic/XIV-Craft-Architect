@@ -4,7 +4,7 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
-public sealed class ProfileHostedTradeCompanyService(
+public sealed partial class ProfileHostedTradeCompanyService(
     SqliteProfileHostStore profiles,
     ProfileAccessKeyHasher accessKeyHasher,
     SqliteMembershipStore? memberships = null)

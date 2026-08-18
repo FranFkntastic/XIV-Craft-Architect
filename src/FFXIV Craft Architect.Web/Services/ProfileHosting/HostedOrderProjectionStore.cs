@@ -1,6 +1,13 @@
+using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Web.Services.ProfileHosting;
+
+public enum HostedOrderDisplayState
+{
+    LastKnown,
+    Verified
+}
 
 public sealed record HostedOrderProjectionSnapshot(
     Guid OrderId,
@@ -9,7 +16,14 @@ public sealed record HostedOrderProjectionSnapshot(
     long? CompanyRevision,
     TradeOrder? Order,
     CompanyCommissionOwnerProjection? OwnerProjection,
-    bool Deleted);
+    bool Deleted,
+    HostedOrderDisplayState DisplayState = HostedOrderDisplayState.LastKnown);
+
+public sealed record HostedOrderOwnerBatchApplyResult(
+    int ChangedCount,
+    int VerificationCount,
+    int RejectedCount,
+    IReadOnlyList<Guid> AppliedOrderIds);
 
 public readonly record struct HostedOrderAuthorityScope(
     string? ProfileId,
@@ -28,6 +42,8 @@ public enum HostedOrderCommittedProjectionResult
 public sealed class HostedOrderProjectionStore
 {
     private const int CommittedWinnerReconciliationLimit = 4;
+    private static readonly JsonSerializerOptions ProjectionComparisonJson =
+        ProfileSyncJson.CreateOptions();
     private readonly object _gate = new();
     private readonly Dictionary<Guid, HostedOrderProjectionSnapshot> _orders = [];
     private string? _profileId;
@@ -37,6 +53,7 @@ public sealed class HostedOrderProjectionStore
 
     public event Action<HostedOrderProjectionSnapshot>? Changed;
     public event Action<IReadOnlyList<HostedOrderProjectionSnapshot>>? BatchChanged;
+    public event Action<HostedOrderProjectionSnapshot>? VerificationChanged;
     public event Action? Reset;
     public event Action<HostedOrderRestoreState>? RestoreStateChanged;
 
@@ -246,7 +263,10 @@ public sealed class HostedOrderProjectionStore
                 current?.ObjectRevision == objectRevision
                     ? current.OwnerProjection
                     : null,
-                Deleted: false);
+                Deleted: false,
+                current?.ObjectRevision == objectRevision
+                    ? current.DisplayState
+                    : HostedOrderDisplayState.LastKnown);
             accepted = TryAcceptUnderLock(candidate);
         }
         return NotifyIfAccepted(candidate, accepted);
@@ -279,7 +299,10 @@ public sealed class HostedOrderProjectionStore
                     current?.ObjectRevision == objectRevision
                         ? current.OwnerProjection
                         : null,
-                    Deleted: false);
+                    Deleted: false,
+                    current?.ObjectRevision == objectRevision
+                        ? current.DisplayState
+                        : HostedOrderDisplayState.LastKnown);
                 if (TryAcceptUnderLock(candidate))
                 {
                     accepted.Add(candidate);
@@ -326,7 +349,10 @@ public sealed class HostedOrderProjectionStore
                 current?.ObjectRevision == objectRevision
                     ? current.OwnerProjection
                     : null,
-                Deleted: false);
+                Deleted: false,
+                current?.ObjectRevision == objectRevision
+                    ? current.DisplayState
+                    : HostedOrderDisplayState.LastKnown);
             result = ClassifyCommittedCandidateUnderLock(current, candidate);
             if (result == HostedOrderCommittedProjectionResult.Adopted)
             {
@@ -398,7 +424,10 @@ public sealed class HostedOrderProjectionStore
                 current?.ObjectRevision == objectRevision
                     ? current.OwnerProjection
                     : null,
-                Deleted: false);
+                Deleted: false,
+                current?.ObjectRevision == objectRevision
+                    ? current.DisplayState
+                    : HostedOrderDisplayState.LastKnown);
             try
             {
                 if (current != null)
@@ -547,14 +576,11 @@ public sealed class HostedOrderProjectionStore
     public bool TryPublishOwner(CompanyCommissionOwnerProjection projection)
     {
         ArgumentNullException.ThrowIfNull(projection);
-        return TryPublish(new HostedOrderProjectionSnapshot(
-            projection.Order.Id,
-            projection.Order.CompanyProfileId,
-            (projection.ProfileObjectRevision ?? projection.ObjectRevision).Value,
-            projection.CompanyRevision.Value,
-            projection.Order,
-            projection,
-            Deleted: false));
+        var before = Get(projection.Order.Id);
+        var result = TryAdoptCommittedOwner(CaptureAuthorityScope(), projection);
+        var after = Get(projection.Order.Id);
+        return result == HostedOrderCommittedProjectionResult.Adopted ||
+               !ReferenceEquals(before, after);
     }
 
     public HostedOrderCommittedProjectionResult TryAdoptCommittedOwner(
@@ -569,8 +595,10 @@ public sealed class HostedOrderProjectionStore
             projection.CompanyRevision.Value,
             projection.Order,
             projection,
-            Deleted: false);
+            Deleted: false,
+            HostedOrderDisplayState.Verified);
         HostedOrderCommittedProjectionResult result;
+        HostedOrderProjectionSnapshot? verificationChanged = null;
         lock (_gate)
         {
             if (!IsCurrentAuthorityUnderLock(authority))
@@ -602,9 +630,25 @@ public sealed class HostedOrderProjectionStore
                 return HostedOrderCommittedProjectionResult.AlreadyCurrent;
             }
 
-            result = TryAcceptUnderLock(candidate)
-                ? HostedOrderCommittedProjectionResult.Adopted
-                : HostedOrderCommittedProjectionResult.AlreadyCurrent;
+            if (current is { Deleted: false, Order: not null } &&
+                HasSamePresentedOrder(current.Order, candidate.Order!))
+            {
+                if (!HasNewerOwnerVerification(current, candidate))
+                {
+                    return HostedOrderCommittedProjectionResult.AlreadyCurrent;
+                }
+
+                verificationChanged = candidate with { Order = current.Order };
+                _orders[candidate.OrderId] = verificationChanged;
+                AdvanceRestoreRevisionUnderLock(candidate.ObjectRevision);
+                result = HostedOrderCommittedProjectionResult.AlreadyCurrent;
+            }
+            else
+            {
+                result = TryAcceptUnderLock(candidate)
+                    ? HostedOrderCommittedProjectionResult.Adopted
+                    : HostedOrderCommittedProjectionResult.AlreadyCurrent;
+            }
         }
 
         if (result == HostedOrderCommittedProjectionResult.Adopted)
@@ -612,7 +656,114 @@ public sealed class HostedOrderProjectionStore
             Changed?.Invoke(candidate);
             RestoreStateChanged?.Invoke(RestoreState);
         }
+        else if (verificationChanged != null)
+        {
+            VerificationChanged?.Invoke(verificationChanged);
+        }
         return result;
+    }
+
+    public HostedOrderOwnerBatchApplyResult TryAdoptCommittedOwnerBatch(
+        HostedOrderAuthorityScope authority,
+        IReadOnlyList<CompanyCommissionOwnerProjection> projections)
+    {
+        ArgumentNullException.ThrowIfNull(projections);
+        if (projections.Count == 0)
+        {
+            return new HostedOrderOwnerBatchApplyResult(0, 0, 0, []);
+        }
+
+        var changed = new List<HostedOrderProjectionSnapshot>(projections.Count);
+        var verified = new List<HostedOrderProjectionSnapshot>(projections.Count);
+        var applied = new List<Guid>(projections.Count);
+        var rejected = 0;
+        lock (_gate)
+        {
+            if (!IsCurrentAuthorityUnderLock(authority))
+            {
+                return new HostedOrderOwnerBatchApplyResult(
+                    0,
+                    0,
+                    projections.Count,
+                    []);
+            }
+
+            foreach (var projection in projections)
+            {
+                var candidate = new HostedOrderProjectionSnapshot(
+                    projection.Order.Id,
+                    projection.Order.CompanyProfileId,
+                    (projection.ProfileObjectRevision ?? projection.ObjectRevision).Value,
+                    projection.CompanyRevision.Value,
+                    projection.Order,
+                    projection,
+                    Deleted: false,
+                    HostedOrderDisplayState.Verified);
+                var current = _orders.GetValueOrDefault(candidate.OrderId);
+                try
+                {
+                    if (current != null)
+                    {
+                        ValidateIdentity(current, candidate);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    rejected++;
+                    continue;
+                }
+
+                if (current != null &&
+                    (candidate.ObjectRevision < current.ObjectRevision ||
+                     candidate.ObjectRevision == current.ObjectRevision && current.Deleted))
+                {
+                    rejected++;
+                    continue;
+                }
+                if (current != null && HasSameVersionTuple(current, candidate))
+                {
+                    applied.Add(candidate.OrderId);
+                    continue;
+                }
+                if (current is { Deleted: false, Order: not null } &&
+                    HasSamePresentedOrder(current.Order, candidate.Order!))
+                {
+                    if (HasNewerOwnerVerification(current, candidate))
+                    {
+                        var verification = candidate with { Order = current.Order };
+                        _orders[candidate.OrderId] = verification;
+                        AdvanceRestoreRevisionUnderLock(candidate.ObjectRevision);
+                        verified.Add(verification);
+                    }
+                    applied.Add(candidate.OrderId);
+                    continue;
+                }
+                if (TryAcceptUnderLock(candidate))
+                {
+                    changed.Add(candidate);
+                    applied.Add(candidate.OrderId);
+                }
+                else
+                {
+                    rejected++;
+                }
+            }
+        }
+
+        if (changed.Count > 0)
+        {
+            BatchChanged?.Invoke(changed);
+            RestoreStateChanged?.Invoke(RestoreState);
+        }
+        foreach (var verification in verified)
+        {
+            VerificationChanged?.Invoke(verification);
+        }
+        return new HostedOrderOwnerBatchApplyResult(
+            changed.Count,
+            verified.Count,
+            rejected,
+            applied);
     }
 
     public bool TryPublishTombstone(
@@ -644,7 +795,8 @@ public sealed class HostedOrderProjectionStore
                 existing?.CompanyRevision,
                 Order: null,
                 OwnerProjection: null,
-                Deleted: true);
+                Deleted: true,
+                HostedOrderDisplayState.LastKnown);
             accepted = TryAcceptUnderLock(candidate);
         }
         return NotifyIfAccepted(candidate, accepted);
@@ -685,7 +837,8 @@ public sealed class HostedOrderProjectionStore
                 current?.CompanyRevision,
                 Order: null,
                 OwnerProjection: null,
-                Deleted: true);
+                Deleted: true,
+                HostedOrderDisplayState.LastKnown);
             result = ClassifyCommittedCandidateUnderLock(current, candidate);
             if (result == HostedOrderCommittedProjectionResult.Adopted)
             {
@@ -710,13 +863,17 @@ public sealed class HostedOrderProjectionStore
             if (_orders.TryGetValue(orderId, out var current) &&
                 current.OwnerProjection != null)
             {
-                changed = current with { OwnerProjection = null };
+                changed = current with
+                {
+                    OwnerProjection = null,
+                    DisplayState = HostedOrderDisplayState.LastKnown
+                };
                 _orders[orderId] = changed;
             }
         }
         if (changed != null)
         {
-            Changed?.Invoke(changed);
+            VerificationChanged?.Invoke(changed);
         }
     }
 
@@ -740,13 +897,17 @@ public sealed class HostedOrderProjectionStore
             }
             if (current?.OwnerProjection != null)
             {
-                changed = current with { OwnerProjection = null };
+                changed = current with
+                {
+                    OwnerProjection = null,
+                    DisplayState = HostedOrderDisplayState.LastKnown
+                };
                 _orders[orderId] = changed;
             }
         }
         if (changed != null)
         {
-            Changed?.Invoke(changed);
+            VerificationChanged?.Invoke(changed);
         }
         return true;
     }
@@ -840,6 +1001,33 @@ public sealed class HostedOrderProjectionStore
         left.OwnerProjection?.ObjectRevision == right.OwnerProjection?.ObjectRevision &&
         left.OwnerProjection?.CompanyRevision == right.OwnerProjection?.CompanyRevision &&
         ReferenceEquals(left.OwnerProjection, right.OwnerProjection);
+
+    private static bool HasNewerOwnerVerification(
+        HostedOrderProjectionSnapshot current,
+        HostedOrderProjectionSnapshot candidate) =>
+        current.DisplayState != HostedOrderDisplayState.Verified ||
+        candidate.ObjectRevision > current.ObjectRevision ||
+        (candidate.CompanyRevision ?? 0) > (current.CompanyRevision ?? 0) ||
+        (candidate.OwnerProjection?.ObjectRevision.Value ?? 0) >
+        (current.OwnerProjection?.ObjectRevision.Value ?? 0) ||
+        (candidate.OwnerProjection?.ProfileObjectRevision?.Value ?? 0) >
+        (current.OwnerProjection?.ProfileObjectRevision?.Value ?? 0);
+
+    private static bool HasSamePresentedOrder(TradeOrder left, TradeOrder right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        var leftJson = JsonSerializer.SerializeToUtf8Bytes(
+            left,
+            ProjectionComparisonJson);
+        var rightJson = JsonSerializer.SerializeToUtf8Bytes(
+            right,
+            ProjectionComparisonJson);
+        return leftJson.AsSpan().SequenceEqual(rightJson);
+    }
 
     private void AdvanceRestoreRevisionUnderLock(long objectRevision)
     {

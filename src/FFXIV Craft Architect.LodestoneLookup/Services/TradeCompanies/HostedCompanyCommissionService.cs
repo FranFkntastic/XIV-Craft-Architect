@@ -27,7 +27,7 @@ public interface ICompanyCommissionPostCommitSink
         CancellationToken cancellationToken);
 }
 
-public sealed class HostedCompanyCommissionService(
+public sealed partial class HostedCompanyCommissionService(
     ProfileHostedTradeCompanyService companies,
     SqliteProfileHostStore profileHost,
     TimeProvider timeProvider,
