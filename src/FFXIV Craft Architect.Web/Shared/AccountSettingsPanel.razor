@@ -566,10 +566,7 @@
         _busyMessage = "Signing out this browser...";
         try
         {
-            await ProfileHostClient.RevokeCurrentAccessKeyAsync(
-                _settings.HostUrl!,
-                _settings.AccessKey!,
-                CancellationToken.None);
+            await TryRevokeCurrentAccessKeyAsync();
             await ProfileSync.DisconnectAsync();
             await LoadAsync();
             SetStatus("This browser is signed out.", Color.Success);
@@ -581,6 +578,22 @@
         finally
         {
             _accountBusy = false;
+        }
+    }
+
+    private async Task TryRevokeCurrentAccessKeyAsync()
+    {
+        try
+        {
+            await ProfileHostClient.RevokeCurrentAccessKeyAsync(
+                _settings.HostUrl!,
+                _settings.AccessKey!,
+                CancellationToken.None);
+        }
+        catch
+        {
+            // Signing out this browser is a local operation. Remote revocation is best effort:
+            // an already-revoked key must never be able to prevent its local removal.
         }
     }
 

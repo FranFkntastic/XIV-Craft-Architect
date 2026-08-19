@@ -29,9 +29,12 @@
             </MudButton>
         </ActivatorContent>
         <ChildContent>
-            <MudMenuItem Href="@CompanyHubUrl(_activeCompany)" Icon="@Icons.Material.Filled.Home">
-                Company hub
-            </MudMenuItem>
+            @if (_activeCompany.IsHosted)
+            {
+                <MudMenuItem Href="@CompanyHubUrl(_activeCompany)" Icon="@Icons.Material.Filled.Home">
+                    Company hub
+                </MudMenuItem>
+            }
             <div class="trade-company-switcher-heading">Active Trade company</div>
             @foreach (var company in _companies)
             {
@@ -42,7 +45,7 @@
                     <span class="trade-company-switcher-option">
                         <span class="trade-company-switcher-option-name">@company.Name</span>
                         <span class="trade-company-switcher-option-meta">
-                            ID @FormatCompanyId(company.Id)
+                            @(company.IsHosted ? "Company" : "Local workspace") · ID @FormatCompanyId(company.Id)
                         </span>
                     </span>
                 </MudMenuItem>
@@ -205,7 +208,8 @@ else
                     hub.DisplayName,
                     hub.Slug,
                     SentenceCase(hub.Standing.Role),
-                    localProfile));
+                    localProfile,
+                    IsHosted: true));
         }
         catch
         {
@@ -247,7 +251,8 @@ else
                     hub.DisplayName,
                     hub.Slug,
                     SentenceCase(hub.Standing.Role),
-                    localProfile);
+                    localProfile,
+                    IsHosted: true);
             }
 
             foreach (var local in localCompanies.Where(company => !contexts.ContainsKey(company.Id)))
@@ -261,7 +266,8 @@ else
                         hub.DisplayName,
                         hub.Slug,
                         SentenceCase(hub.Standing.Role),
-                        local);
+                        local,
+                        IsHosted: true);
                 }
             }
         }
@@ -325,7 +331,8 @@ else
         company.Name,
         Slugify(company.Name),
         null,
-        company);
+        company,
+        IsHosted: false);
 
     private static IReadOnlyList<WorkspaceCompanyContext> SortContexts(
         IEnumerable<WorkspaceCompanyContext> contexts) => contexts
@@ -421,7 +428,8 @@ else
         string Name,
         string Slug,
         string? Role,
-        TradeCompanyProfile? LocalProfile);
+        TradeCompanyProfile? LocalProfile,
+        bool IsHosted);
 
     private sealed record SelectableCompanyLoad(
         IReadOnlyList<WorkspaceCompanyContext> Companies,

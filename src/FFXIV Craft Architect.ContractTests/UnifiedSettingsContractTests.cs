@@ -150,6 +150,32 @@ public sealed class UnifiedSettingsContractTests
     }
 
     [Fact]
+    public void LocalWorkspacesCannotAdvertiseHostedCompanyHubs()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var switcher = File.ReadAllText(Path.Combine(web, "Shared", "TradeCompanySwitcher.razor"));
+
+        Assert.Contains("@if (_activeCompany.IsHosted)", switcher, StringComparison.Ordinal);
+        Assert.Contains("company.IsHosted ? \"Company\" : \"Local workspace\"", switcher, StringComparison.Ordinal);
+        Assert.Contains("IsHosted: false", switcher, StringComparison.Ordinal);
+        Assert.Contains("IsHosted: true", switcher, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BrowserSignOutCannotBeVetoedByRemoteRevocation()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var account = File.ReadAllText(Path.Combine(web, "Shared", "AccountSettingsPanel.razor"));
+
+        Assert.Contains("await TryRevokeCurrentAccessKeyAsync();", account, StringComparison.Ordinal);
+        Assert.Contains("await ProfileSync.DisconnectAsync();", account, StringComparison.Ordinal);
+        Assert.Contains("an already-revoked key must never be able to prevent its local removal", account, StringComparison.Ordinal);
+        Assert.True(
+            account.IndexOf("await TryRevokeCurrentAccessKeyAsync();", StringComparison.Ordinal) <
+            account.IndexOf("await ProfileSync.DisconnectAsync();", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ImportedCompanyAndRosterEnterHostedAuthorityImmediately()
     {
         var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
