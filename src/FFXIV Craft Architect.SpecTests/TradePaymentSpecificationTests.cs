@@ -281,6 +281,55 @@ public sealed class TradePaymentSpecificationTests
         Assert.DoesNotContain("upload age", line.UnitCostExplanation, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void SelectedSourceEvidenceKeepsNqAndHqDemandSeparate()
+    {
+        var lines = new CommissionCostBasisResolver().BuildSelectedSourceLines(
+            [
+                SelectedDemand(
+                    30,
+                    "Mixed cloth",
+                    4,
+                    AcquisitionSource.MarketBuyNq,
+                    unitPrice: 40m),
+                SelectedDemand(
+                    30,
+                    "Mixed cloth",
+                    2,
+                    AcquisitionSource.MarketBuyHq,
+                    unitPrice: 40m,
+                    requiresHq: true,
+                    hqUnitPrice: 150m)
+            ],
+            [Analysis(30, "Mixed cloth", 40m)],
+            [
+                SpecificationFixtures.Evidence(
+                    30,
+                    "Mixed cloth",
+                    6,
+                    SpecificationFixtures.World(
+                        "Aether",
+                        "Siren",
+                        (4, 40, false),
+                        (2, 150, true)))
+            ]);
+
+        Assert.Collection(
+            lines.OrderBy(line => line.RequiresHq),
+            line =>
+            {
+                Assert.False(line.RequiresHq);
+                Assert.Equal(4, line.Quantity);
+                Assert.Equal(40m, line.UnitCost);
+            },
+            line =>
+            {
+                Assert.True(line.RequiresHq);
+                Assert.Equal(2, line.Quantity);
+                Assert.Equal(150m, line.UnitCost);
+            });
+    }
+
     [Theory]
     [InlineData(-1, 100, 20)]
     [InlineData(1, -100, 20)]

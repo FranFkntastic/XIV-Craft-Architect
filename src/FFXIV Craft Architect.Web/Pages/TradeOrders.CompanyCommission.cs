@@ -80,6 +80,7 @@ public partial class TradeOrders
                 SelectedCommissionOwner);
 
     private bool HasCanonicalCommission =>
+        SelectedCanonicalCommission != null ||
         _selectedOrder?.CompanyCommission != null;
 
     private bool IsSelectedCanonicalOwnerMissing =>

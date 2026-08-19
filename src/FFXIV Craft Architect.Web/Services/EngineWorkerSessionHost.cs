@@ -1647,7 +1647,11 @@ public static partial class ManagedHost
         var warnings = new List<string>();
         TradeMaterialQuote? materialQuote = null;
         string? materialQuoteFailureReason = null;
-        IReadOnlyList<CommissionPayrollInputLine> materialLines = [];
+        IReadOnlyList<CommissionPayrollInputLine> materialLines =
+            new CommissionCostBasisResolver().BuildSelectedSourceLines(
+                activeDemand,
+                evidence.ItemAnalyses,
+                evidence.ShoppingPlans);
         if (conflictingSelections.Length > 0)
         {
             foreach (var conflict in conflictingSelections)
