@@ -184,12 +184,25 @@ public sealed class UnifiedSettingsContractTests
         var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
         var account = File.ReadAllText(Path.Combine(web, "Shared", "AccountSettingsPanel.razor"));
 
-        Assert.Contains("await TryRevokeCurrentAccessKeyAsync();", account, StringComparison.Ordinal);
+        Assert.Contains("var revocationConfirmed = await TryRevokeCurrentAccessKeyAsync();", account, StringComparison.Ordinal);
         Assert.Contains("await ProfileSync.DisconnectAsync();", account, StringComparison.Ordinal);
-        Assert.Contains("an already-revoked key must never be able to prevent its local removal", account, StringComparison.Ordinal);
+        Assert.Contains("ProfileHostConnectionFailure.AccessKeyRejected", account, StringComparison.Ordinal);
+        Assert.Contains("server revocation could not be confirmed", account, StringComparison.Ordinal);
         Assert.True(
-            account.IndexOf("await TryRevokeCurrentAccessKeyAsync();", StringComparison.Ordinal) <
+            account.IndexOf("var revocationConfirmed = await TryRevokeCurrentAccessKeyAsync();", StringComparison.Ordinal) <
             account.IndexOf("await ProfileSync.DisconnectAsync();", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CompanySelectionCannotReloadAnUnrelatedHubRoute()
+    {
+        var web = Path.Combine(LocateRepositoryRoot(), "src", "FFXIV Craft Architect.Web");
+        var switcher = File.ReadAllText(Path.Combine(web, "Shared", "TradeCompanySwitcher.razor"));
+
+        Assert.Contains("if (company.IsHosted)", switcher, StringComparison.Ordinal);
+        Assert.Contains("NavigationManager.NavigateTo(CompanyHubUrl(company));", switcher, StringComparison.Ordinal);
+        Assert.Contains("else if (IsCompanyRoute())", switcher, StringComparison.Ordinal);
+        Assert.Contains("NavigationManager.NavigateTo(\"/trade/orders\", forceLoad: true);", switcher, StringComparison.Ordinal);
     }
 
     [Fact]
