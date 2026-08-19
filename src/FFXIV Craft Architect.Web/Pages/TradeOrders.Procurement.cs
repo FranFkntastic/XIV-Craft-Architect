@@ -71,9 +71,10 @@ public partial class TradeOrders
                 warning,
                 live.MaterialLines))
             .ToList();
+        var liveQuoteFailureReason = ResolveLiveQuoteFailureReason(live);
         if (savedQuoteUnavailable &&
             live.MaterialQuote == null &&
-            !string.IsNullOrWhiteSpace(live.MaterialQuoteFailureReason))
+            !string.IsNullOrWhiteSpace(liveQuoteFailureReason))
         {
             warnings.RemoveAll(warning => string.Equals(
                 warning,
@@ -87,10 +88,10 @@ public partial class TradeOrders
                     StringComparison.OrdinalIgnoreCase));
             }
             if (!warnings.Contains(
-                    live.MaterialQuoteFailureReason,
+                    liveQuoteFailureReason,
                     StringComparer.OrdinalIgnoreCase))
             {
-                warnings.Add(live.MaterialQuoteFailureReason);
+                warnings.Add(liveQuoteFailureReason);
             }
         }
 
@@ -100,6 +101,21 @@ public partial class TradeOrders
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray()
         };
+    }
+
+    private static string? ResolveLiveQuoteFailureReason(WorkerTradeProjection live)
+    {
+        if (!string.IsNullOrWhiteSpace(live.MaterialQuoteFailureReason))
+        {
+            return live.MaterialQuoteFailureReason;
+        }
+
+        return live.Warnings.FirstOrDefault(warning =>
+            warning.StartsWith("Trade cannot quote ", StringComparison.OrdinalIgnoreCase) ||
+            warning.StartsWith("No current market evidence is loaded", StringComparison.OrdinalIgnoreCase) ||
+            warning.StartsWith("Trade material quotes require current-region market evidence", StringComparison.OrdinalIgnoreCase) ||
+            warning.StartsWith("No complete executable route fits company policy", StringComparison.OrdinalIgnoreCase) ||
+            warning.StartsWith("Trade material quote is incomplete", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsIrrelevantMarketWarningForSelectedSource(

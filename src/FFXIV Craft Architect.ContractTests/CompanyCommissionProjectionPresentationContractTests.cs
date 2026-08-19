@@ -79,7 +79,7 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             CraftLabor: [],
             Warnings: [exactFailure],
             MaterialQuote: null,
-            MaterialQuoteFailureReason: exactFailure);
+            MaterialQuoteFailureReason: null);
 
         var reconciled = (TradeCommissionPaymentSummary)typeof(TradeOrders)
             .GetMethod(
