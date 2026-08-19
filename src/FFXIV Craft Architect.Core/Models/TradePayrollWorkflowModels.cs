@@ -158,7 +158,10 @@ public sealed record TradeCommissionPaymentSummary(
                 .ToArray(),
             appliedAllowance,
             quote is null ? null : quotedCrafterCash,
-            RequireMaterialRouteQuote: requireMaterialRouteQuote && requiresMaterialQuote));
+            RequireMaterialRouteQuote: requireMaterialRouteQuote && requiresMaterialQuote,
+            MaterialRouteUnavailableReason: sourceSnapshot.MaterialQuote == null
+                ? sourceSnapshot.MaterialQuoteFailureReason
+                : null));
 
         return new TradeCommissionPaymentSummary(
             materials,

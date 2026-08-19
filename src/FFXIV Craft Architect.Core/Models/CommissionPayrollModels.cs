@@ -119,7 +119,8 @@ public sealed record TradePaymentCalculationRequest(
     IReadOnlyList<string> Warnings,
     decimal MaterialSafetyAllowance = 0m,
     decimal? MaterialRouteCashRequired = null,
-    bool RequireMaterialRouteQuote = false);
+    bool RequireMaterialRouteQuote = false,
+    string? MaterialRouteUnavailableReason = null);
 
 public sealed record TradeCraftLaborLine(
     string NodeId,

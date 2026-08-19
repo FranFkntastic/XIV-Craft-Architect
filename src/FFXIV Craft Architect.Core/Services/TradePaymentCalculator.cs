@@ -16,6 +16,10 @@ public sealed class TradePaymentCalculator
         var estimatedProcurementTotal = RoundGil(materials.Sum(material => material.UnitCost * material.Quantity));
         var materialQuoteAvailable = !request.RequireMaterialRouteQuote ||
             request.MaterialRouteCashRequired.HasValue;
+        var materialQuoteUnavailableReason = string.IsNullOrWhiteSpace(
+            request.MaterialRouteUnavailableReason)
+            ? "Executable material quote is unavailable."
+            : request.MaterialRouteUnavailableReason.Trim();
         var routeCashReimbursement = request.MaterialRouteCashRequired.HasValue
             ? RoundGil(Math.Max(0m, request.MaterialRouteCashRequired.Value))
             : request.RequireMaterialRouteQuote
@@ -41,13 +45,15 @@ public sealed class TradePaymentCalculator
             policy,
             materialReimbursementTotal,
             estimatedProcurementTotal,
-            materialQuoteAvailable);
+            materialQuoteAvailable,
+            materialQuoteUnavailableReason);
         var labor = BuildLaborStandard(
             policy,
             laborInputs,
             materialReimbursementTotal,
             estimatedProcurementTotal,
-            materialQuoteAvailable);
+            materialQuoteAvailable,
+            materialQuoteUnavailableReason);
         var active = policy.ActiveContract == TradePaymentContractMode.LaborStandard
             ? labor
             : legacy;
@@ -105,13 +111,14 @@ public sealed class TradePaymentCalculator
         TradePaymentPolicy policy,
         decimal materialReimbursementTotal,
         decimal estimatedProcurementTotal,
-        bool materialQuoteAvailable)
+        bool materialQuoteAvailable,
+        string materialQuoteUnavailableReason)
     {
         if (!materialQuoteAvailable)
         {
             return UnavailableContract(
                 TradePaymentContractMode.LegacyCommission,
-                "Executable material quote is unavailable.");
+                materialQuoteUnavailableReason);
         }
 
         var percent = policy.LegacyCommissionPercent ?? policy.MaterialValueBonusPercent;
@@ -136,13 +143,14 @@ public sealed class TradePaymentCalculator
         IReadOnlyList<TradeCraftLaborInput> laborInputs,
         decimal materialReimbursementTotal,
         decimal estimatedProcurementTotal,
-        bool materialQuoteAvailable)
+        bool materialQuoteAvailable,
+        string materialQuoteUnavailableReason)
     {
         if (!materialQuoteAvailable)
         {
             return UnavailableContract(
                 TradePaymentContractMode.LaborStandard,
-                "Executable material quote is unavailable.");
+                materialQuoteUnavailableReason);
         }
 
         var activeInputs = laborInputs.Where(input => input.CraftCount > 0).ToArray();

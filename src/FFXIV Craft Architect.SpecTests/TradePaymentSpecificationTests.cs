@@ -53,6 +53,56 @@ public sealed class TradePaymentSpecificationTests
     }
 
     [Fact]
+    public void RequiredExecutableQuoteUsesCanonicalFailureReason()
+    {
+        const string failureReason =
+            "No complete executable route fits company policy and current listing evidence (8 worlds, 3 data-center transfers, 15% consolidation premium, listings at most 120 minutes old).";
+        var order = new TradeOrder
+        {
+            SourceSnapshot = new TradeOrderSourceSnapshot
+            {
+                Materials =
+                [
+                    new TradeOrderMaterialSnapshot(
+                        1,
+                        "Crafter ore",
+                        2,
+                        false,
+                        100m,
+                        200m,
+                        "Acquisition evaluation",
+                        "Selected acquisition quote",
+                        DateTime.UtcNow,
+                        [])
+                ],
+                CraftLabor =
+                    [new TradeOrderCraftLaborSnapshot("root", 10, "Craft", 1, 1, Warnings: [])],
+                MaterialQuote = null,
+                MaterialQuoteFailureReason = failureReason,
+                Warnings = [failureReason]
+            }
+        };
+
+        var summary = TradeCommissionPaymentSummary.FromOrder(
+            order,
+            draft: null,
+            LaborPolicy(materialValueBonusPercent: 20m));
+
+        Assert.Equal(0m, summary.MaterialReimbursementTotal);
+        Assert.False(summary.Active.IsAvailable);
+        Assert.Equal(0m, summary.TotalPayment);
+        Assert.Equal(failureReason, Assert.Single(summary.Legacy.Warnings));
+        Assert.Equal(failureReason, Assert.Single(summary.LaborStandard.Warnings));
+        Assert.Equal(failureReason, summary.Warnings[0]);
+        Assert.DoesNotContain(
+            summary.Warnings,
+            warning => string.Equals(
+                warning,
+                "Executable material quote is unavailable.",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void OrderPaymentUsesWholeListingRouteCashAndAllowance()
     {
         var quotedAt = new DateTime(2026, 8, 18, 12, 0, 0, DateTimeKind.Utc);
