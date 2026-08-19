@@ -74,7 +74,7 @@ public partial class TradeOrders
         }
 
         var commission = SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission;
-        return commission?.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published
+        return commission != null
             ? CreateCanonicalTermsWorkPackage(_selectedOrder, commission.CurrentTerms)
             : _selectedOrder;
     }

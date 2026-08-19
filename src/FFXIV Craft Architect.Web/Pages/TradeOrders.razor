@@ -431,8 +431,9 @@
                                             var paymentSummary = GetSelectedOrderPaymentSummary();
                                             var displayedPaymentTotal = SelectedCanonicalCommission?.CurrentTerms.Payment.Total ??
                                                 paymentSummary.TotalPayment;
-                                            var materialQuote = SelectedCanonicalCommission?.CurrentTerms.PricingEvidence.MaterialQuote ??
-                                                _selectedOrder.SourceSnapshot.MaterialQuote;
+                                            var materialQuote = SelectedCanonicalCommission is { } canonicalCommission
+                                                ? canonicalCommission.CurrentTerms.PricingEvidence.MaterialQuote
+                                                : _selectedOrder.SourceSnapshot.MaterialQuote;
                                         }
                                @if (SelectedCommissionOwner is { } operationsOwner &&
                                     operationsOwner.Order.CompanyCommission is { } operationsCommission)
