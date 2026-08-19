@@ -566,10 +566,14 @@
         _busyMessage = "Signing out this browser...";
         try
         {
-            await TryRevokeCurrentAccessKeyAsync();
+            var revocationConfirmed = await TryRevokeCurrentAccessKeyAsync();
             await ProfileSync.DisconnectAsync();
             await LoadAsync();
-            SetStatus("This browser is signed out.", Color.Success);
+            SetStatus(
+                revocationConfirmed
+                    ? "This browser is signed out."
+                    : "This browser is signed out, but server revocation could not be confirmed.",
+                revocationConfirmed ? Color.Success : Color.Warning);
         }
         catch (Exception ex)
         {
@@ -581,7 +585,7 @@
         }
     }
 
-    private async Task TryRevokeCurrentAccessKeyAsync()
+    private async Task<bool> TryRevokeCurrentAccessKeyAsync()
     {
         try
         {
@@ -589,11 +593,19 @@
                 _settings.HostUrl!,
                 _settings.AccessKey!,
                 CancellationToken.None);
+            return true;
+        }
+        catch (ProfileHostConnectionException exception)
+            when (exception.Failure == ProfileHostConnectionFailure.AccessKeyRejected)
+        {
+            // The server has already removed this key. Local removal must still complete.
+            return true;
         }
         catch
         {
-            // Signing out this browser is a local operation. Remote revocation is best effort:
-            // an already-revoked key must never be able to prevent its local removal.
+            // Signing out this browser is local. Preserve that escape hatch while reporting that
+            // an unexpected server failure left remote revocation unconfirmed.
+            return false;
         }
     }
 
