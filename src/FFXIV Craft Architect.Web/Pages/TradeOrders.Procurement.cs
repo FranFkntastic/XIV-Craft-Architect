@@ -48,7 +48,94 @@ public partial class TradeOrders
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
             GetOrderEffectivePaymentPolicy(workPackage));
-        return summary;
+        return ReconcileVisibleQuoteWarnings(
+            summary,
+            GetVisibleLiveProcurementSnapshot(),
+            savedQuoteUnavailable: workPackage.SourceSnapshot.MaterialQuote == null,
+            workPackage.SourceSnapshot.MaterialQuoteFailureReason);
+    }
+
+    private static TradeCommissionPaymentSummary ReconcileVisibleQuoteWarnings(
+        TradeCommissionPaymentSummary summary,
+        WorkerTradeProjection? live,
+        bool savedQuoteUnavailable,
+        string? savedQuoteFailureReason)
+    {
+        if (live == null)
+        {
+            return summary;
+        }
+
+        var warnings = summary.Warnings
+            .Where(warning => !IsIrrelevantMarketWarningForSelectedSource(
+                warning,
+                live.MaterialLines))
+            .ToList();
+        if (savedQuoteUnavailable &&
+            live.MaterialQuote == null &&
+            !string.IsNullOrWhiteSpace(live.MaterialQuoteFailureReason))
+        {
+            warnings.RemoveAll(warning => string.Equals(
+                warning,
+                "Executable material quote is unavailable.",
+                StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(savedQuoteFailureReason))
+            {
+                warnings.RemoveAll(warning => string.Equals(
+                    warning,
+                    savedQuoteFailureReason,
+                    StringComparison.OrdinalIgnoreCase));
+            }
+            if (!warnings.Contains(
+                    live.MaterialQuoteFailureReason,
+                    StringComparer.OrdinalIgnoreCase))
+            {
+                warnings.Add(live.MaterialQuoteFailureReason);
+            }
+        }
+
+        return summary with
+        {
+            Warnings = warnings
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+        };
+    }
+
+    private static bool IsIrrelevantMarketWarningForSelectedSource(
+        string warning,
+        IReadOnlyList<CommissionPayrollInputLine> materials)
+    {
+        var describesMarketEvidence =
+            warning.Contains("market data", StringComparison.OrdinalIgnoreCase) ||
+            warning.Contains("market evidence", StringComparison.OrdinalIgnoreCase) ||
+            warning.Contains("market-analysis", StringComparison.OrdinalIgnoreCase);
+        if (!describesMarketEvidence)
+        {
+            return false;
+        }
+
+        var matchingNames = materials
+            .Select(material => material.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(name => warning.StartsWith(
+                $"{name} uses ",
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return matchingNames.Length == 1 && materials
+            .Where(material => string.Equals(
+                material.Name,
+                matchingNames[0],
+                StringComparison.OrdinalIgnoreCase))
+            .All(material =>
+                string.Equals(
+                    material.EvidenceSource,
+                    "Vendor price",
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    material.EvidenceSource,
+                    TradeOrderWorkflow.OnHandEvidenceSource,
+                    StringComparison.OrdinalIgnoreCase));
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()
