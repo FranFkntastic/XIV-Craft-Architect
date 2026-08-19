@@ -5,12 +5,125 @@ using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 using FFXIV_Craft_Architect.Web.Pages;
+using FFXIV_Craft_Architect.Web.Services;
 using FFXIV_Craft_Architect.Web.Services.TradeCompany;
 namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class CompanyCommissionProjectionPresentationContractTests
 {
     private static readonly DateTime CapturedAt = new(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void LiveSamePlanFailureReplacesGenericDraftWarningWithoutChangingPayment()
+    {
+        const string exactFailure =
+            "No complete executable route fits company policy and current listing evidence (8 worlds, 3 data-center transfers, 15% consolidation premium, listings at most 120 minutes old).";
+        var breakdown = new TradePaymentContractBreakdown(
+            TradePaymentContractMode.LaborStandard,
+            IsAvailable: false,
+            MaterialReimbursementTotal: 0,
+            CommissionPercent: 0,
+            CommissionAmount: 0,
+            CraftLaborTotal: 0,
+            CraftSynthCount: 0,
+            GilPerSynth: 0,
+            Total: 0,
+            CraftLaborLines: [],
+            Warnings: []);
+        var summary = new TradeCommissionPaymentSummary(
+            Materials: [],
+            EstimatedProcurementTotal: 7_477_139,
+            MaterialReimbursementTotal: 0,
+            ProvidedMaterialTotal: 0,
+            CommissionPercent: 0,
+            CommissionAmount: 0,
+            TotalPayment: 0,
+            Warnings:
+            [
+                "Copper Ore uses very old market data from Goblin uploaded 22h ago.",
+                "Executable material quote is unavailable."
+            ],
+            Legacy: breakdown,
+            LaborStandard: breakdown,
+            Active: breakdown);
+        var live = new WorkerTradeProjection(
+            Revision: 7,
+            HasPlan: true,
+            PlanId: "j11-gold-ore",
+            PlanName: "J11 Gold Ore route quote proof 2026-08-18",
+            SelectedDataCenter: "Aether",
+            SelectedRegion: "North America",
+            MarketFetchScope: MarketFetchScope.EntireRegion,
+            RequestedDataCenters: ["Aether", "Crystal", "Dynamis", "Primal"],
+            MarketLens: MarketAcquisitionLens.MinimumUpfrontCost,
+            PlanSessionVersion: 4,
+            MarketAnalysisVersion: 9,
+            CraftedItems: [],
+            RootItems: [],
+            MaterialLines:
+            [
+                new CommissionPayrollInputLine(
+                    5111,
+                    "Copper Ore",
+                    4_995,
+                    2,
+                    false,
+                    CommissionMaterialResponsibility.Crafter,
+                    "Vendor price",
+                    "the selected vendor price",
+                    EvidenceTimestampUtc: null,
+                    Warnings: [])
+            ],
+            ActiveProcurementItems: [],
+            AcquisitionRows: [],
+            CraftLabor: [],
+            Warnings: [exactFailure],
+            MaterialQuote: null,
+            MaterialQuoteFailureReason: exactFailure);
+
+        var reconciled = (TradeCommissionPaymentSummary)typeof(TradeOrders)
+            .GetMethod(
+                "ReconcileVisibleQuoteWarnings",
+                BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [summary, live, true, "Prior route failure."])!;
+
+        Assert.Equal(summary with { Warnings = reconciled.Warnings }, reconciled);
+        Assert.Equal([exactFailure], reconciled.Warnings);
+
+        var savedQuoteWarnings = (TradeCommissionPaymentSummary)typeof(TradeOrders)
+            .GetMethod(
+                "ReconcileVisibleQuoteWarnings",
+                BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [summary, live, false, null])!;
+        Assert.Equal(summary with { Warnings = savedQuoteWarnings.Warnings }, savedQuoteWarnings);
+        Assert.Equal(["Executable material quote is unavailable."], savedQuoteWarnings.Warnings);
+
+        var mixedQualitySources = live with
+        {
+            MaterialLines =
+            [
+                .. live.MaterialLines,
+                new CommissionPayrollInputLine(
+                    5111,
+                    "Copper Ore",
+                    1,
+                    9,
+                    true,
+                    CommissionMaterialResponsibility.Crafter,
+                    "Market coverage",
+                    "current HQ listings",
+                    CapturedAt,
+                    [])
+            ]
+        };
+        var qualityAwareWarnings = (TradeCommissionPaymentSummary)typeof(TradeOrders)
+            .GetMethod(
+                "ReconcileVisibleQuoteWarnings",
+                BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [summary, mixedQualitySources, false, null])!;
+        Assert.Equal(summary.Warnings, qualityAwareWarnings.Warnings);
+    }
+
     [Fact]
     public void DiscordPublicationUsesCurrentCraftingAndDeliveryLanguage()
     {
@@ -82,7 +195,11 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
         Contains(procurementSource,
             "var commission = SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission;",
             "return commission != null",
-            "CreateCanonicalTermsWorkPackage(_selectedOrder, commission.CurrentTerms)");
+            "CreateCanonicalTermsWorkPackage(_selectedOrder, commission.CurrentTerms)",
+            "ReconcileVisibleQuoteWarnings(",
+            "live.MaterialQuoteFailureReason",
+            "Executable material quote is unavailable.",
+            "IsIrrelevantMarketWarningForSelectedSource(");
         Contains(source,
             "SelectedCanonicalCommission is { } canonicalCommission",
             "canonicalCommission.CurrentTerms.PricingEvidence.MaterialQuote",
@@ -95,7 +212,9 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             "terms.PricingEvidence.MaterialQuoteFailureReason;",
             "SelectedCanonicalCommission != null ||",
             "_selectedOrder?.CompanyCommission != null;");
-        Omits(procurementSource, "GetCurrentLiveProcurementSnapshot()?.Warnings");
+        Omits(procurementSource,
+            "GetCurrentLiveProcurementSnapshot()?.Warnings",
+            "MaterialReimbursementTotal =");
         var craftPlanSource = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.CraftPlan.cs");
         Contains(craftPlanSource,
             "pricingResult.UpdatedOrder.SourceSnapshot.MaterialQuoteFailureReason",
