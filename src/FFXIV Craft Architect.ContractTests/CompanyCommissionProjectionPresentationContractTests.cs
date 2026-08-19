@@ -89,14 +89,24 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             ": _selectedOrder.SourceSnapshot.MaterialQuote;");
         Omits(source,
             "SelectedCanonicalCommission?.CurrentTerms.PricingEvidence.MaterialQuote ??");
-        Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.CompanyCommission.cs"),
+        var companyCommissionSource = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.CompanyCommission.cs");
+        Contains(companyCommissionSource,
             "copy.SourceSnapshot.Warnings = terms.PricingEvidence.Warnings?.ToArray() ?? [];",
-            "terms.PricingEvidence.MaterialQuoteFailureReason;");
+            "terms.PricingEvidence.MaterialQuoteFailureReason;",
+            "SelectedCanonicalCommission != null ||",
+            "_selectedOrder?.CompanyCommission != null;");
         Omits(procurementSource, "GetCurrentLiveProcurementSnapshot()?.Warnings");
-        Contains(
-            ReadWebSource(repositoryRoot, "Pages", "TradeOrders.CraftPlan.cs"),
+        var craftPlanSource = ReadWebSource(repositoryRoot, "Pages", "TradeOrders.CraftPlan.cs");
+        Contains(craftPlanSource,
             "pricingResult.UpdatedOrder.SourceSnapshot.MaterialQuoteFailureReason",
-            "Order pricing could not be saved.");
+            "Order pricing could not be saved.",
+            "var saved = !HasCanonicalCommission");
+        Omits(craftPlanSource,
+            "_selectedOrder.CompanyCommission == null",
+            "_selectedOrder.CompanyCommission != null");
+        Contains(ReadWebSource(repositoryRoot, "Services", "EngineWorkerSessionHost.cs"),
+            "new CommissionCostBasisResolver().BuildSelectedSourceLines(",
+            "materialLines = ApplyOnHandReferenceValues(quoteResult.MaterialLines, acquisition.Rows);");
         Omits(procurementSource, "IsRequestedOutputReferenceRow");
         Contains(ReadWebSource(repositoryRoot, "Services", "TradeProcurementRowBuilder.cs"), "output.MustBeHq == row.RequiresHq");
         Contains(ReadWebSource(repositoryRoot, "Pages", "TradeOrders.Selection.cs"), "Rebuild from Requested Outputs", "isSameLinkedPlan", "if (!isSameOrder)");

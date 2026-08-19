@@ -21,7 +21,7 @@ public sealed class CommissionCostBasisResolver
 
         return demand
             .Where(row => row.Quantity > 0)
-            .GroupBy(row => row.ItemId)
+            .GroupBy(row => (row.ItemId, row.MustBeHq))
             .Select(ToSelectedSourceDemand)
             .Where(item => item.TotalQuantity > 0)
             .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
@@ -53,7 +53,8 @@ public sealed class CommissionCostBasisResolver
             .ToArray();
     }
 
-    private static SelectedSourceDemand ToSelectedSourceDemand(IGrouping<int, RecipeDemandRow> group)
+    private static SelectedSourceDemand ToSelectedSourceDemand(
+        IGrouping<(int ItemId, bool MustBeHq), RecipeDemandRow> group)
     {
         var rows = group.ToArray();
         var primary = rows
@@ -64,7 +65,7 @@ public sealed class CommissionCostBasisResolver
             primary.ItemId,
             primary.ItemName,
             rows.Sum(row => row.Quantity),
-            rows.Any(row => row.MustBeHq),
+            group.Key.MustBeHq,
             primary.Source,
             primary.CanBuyFromMarket,
             primary.CanBuyFromVendor,

@@ -103,7 +103,7 @@ public partial class TradeOrders
             }
 
             orderToSave = pricingResult.UpdatedOrder;
-            var saved = _selectedOrder.CompanyCommission == null
+            var saved = !HasCanonicalCommission
                 ? await SaveOrderAndNotifyAsync(orderToSave)
                 : await UpdateCanonicalDraftAsync(
                     orderToSave,
@@ -131,7 +131,7 @@ public partial class TradeOrders
                 return;
             }
 
-            if (_selectedOrder.CompanyCommission == null)
+            if (!HasCanonicalCommission)
             {
                 await LoadAsync();
                 if (string.IsNullOrWhiteSpace(_loadError) &&
@@ -171,7 +171,7 @@ public partial class TradeOrders
             return;
         }
 
-        if (_selectedOrder.CompanyCommission != null)
+        if (HasCanonicalCommission)
         {
             Snackbar.Add(
                 "Published commission details are projection-driven. Use commission operations to revise terms.",
@@ -352,7 +352,7 @@ public partial class TradeOrders
                 return;
             }
 
-            var saved = _selectedOrder.CompanyCommission == null
+            var saved = !HasCanonicalCommission
                 ? await SaveOrderAndNotifyAsync(result.UpdatedOrder)
                 : await UpdateCanonicalDraftAsync(
                     result.UpdatedOrder,
@@ -369,7 +369,7 @@ public partial class TradeOrders
                 return;
             }
 
-            if (_selectedOrder.CompanyCommission == null)
+            if (!HasCanonicalCommission)
             {
                 await LoadAsync();
                 if (string.IsNullOrWhiteSpace(_loadError))
@@ -585,7 +585,7 @@ public partial class TradeOrders
                 return;
             }
 
-            var saved = _selectedOrder.CompanyCommission == null
+            var saved = !HasCanonicalCommission
                 ? await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder)
                 : await UpdateCanonicalDraftAsync(
                     pricingResult.UpdatedOrder,
@@ -617,7 +617,7 @@ public partial class TradeOrders
                 return;
             }
 
-            if (_selectedOrder.CompanyCommission == null)
+            if (!HasCanonicalCommission)
             {
                 await LoadAsync();
                 if (string.IsNullOrWhiteSpace(_loadError) &&
