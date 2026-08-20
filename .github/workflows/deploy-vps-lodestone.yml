@@ -576,6 +576,8 @@ jobs:
               echo "Cutover failed after canonical exposure; preserving isolated canonical and staging writes." >&2
               staging_fail_forward_candidate="$(mktemp)"
               {
+                printf 'AuthorityBoundary__Environment=staging\n'
+                printf 'AuthorityBoundary__AccountFederationMode=disabled\n'
                 printf 'ProfileHost__Enabled=true\n'
                 printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
                 printf 'ProfileHost__DeepArchiveAfterDays=%s\n' "$deep_archive_after_days"
@@ -749,6 +751,8 @@ jobs:
               rm -f "$rollback_marker_candidate"
               staging_fail_closed_candidate="$(mktemp)"
               {
+                printf 'AuthorityBoundary__Environment=staging\n'
+                printf 'AuthorityBoundary__AccountFederationMode=disabled\n'
                 printf 'ProfileHost__Enabled=true\n'
                 printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
                 printf 'ProfileHost__DeepArchiveAfterDays=%s\n' "$deep_archive_after_days"
@@ -835,6 +839,8 @@ jobs:
           test "$(stat -c '%a' "$discord_upload")" = "600"
           umask 077
           {
+            printf 'AuthorityBoundary__Environment=%s\n' "$target"
+            printf 'AuthorityBoundary__AccountFederationMode=disabled\n'
             printf 'ProfileHost__Enabled=%s\n' "$runtime_profile_host_enabled"
             printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
             printf 'ProfileHost__DeepArchiveAfterDays=%s\n' "$deep_archive_after_days"
@@ -851,6 +857,8 @@ jobs:
           grep -Fxq "ProfileHost__DeepArchiveEnabled=$deep_archive_enabled" "$root/env/profile-host.env"
           grep -Fxq "ProfileHost__DeepArchiveAfterDays=$deep_archive_after_days" "$root/env/profile-host.env"
           grep -Fxq "ProfileHost__DatabasePath=$profile_db" "$root/env/profile-host.env"
+          grep -Fxq "AuthorityBoundary__Environment=$target" "$root/env/profile-host.env"
+          grep -Fxq "AuthorityBoundary__AccountFederationMode=disabled" "$root/env/profile-host.env"
           grep -Fxq "Discord__Enabled=$discord_enabled" "$root/env/discord.env"
           grep -Fxq "CraftAppraisal__Enabled=true" "$root/env/discord.env"
 
@@ -985,6 +993,8 @@ jobs:
 
             staging_profile_candidate="$(mktemp)"
             {
+              printf 'AuthorityBoundary__Environment=staging\n'
+              printf 'AuthorityBoundary__AccountFederationMode=disabled\n'
               printf 'ProfileHost__Enabled=true\n'
               printf 'ProfileHost__DeepArchiveEnabled=%s\n' "$deep_archive_enabled"
               printf 'ProfileHost__DeepArchiveAfterDays=%s\n' "$deep_archive_after_days"
@@ -1041,12 +1051,12 @@ jobs:
                 sleep 1
               done
             done
-            for direct in '5128:true' '5129:true'; do
-              direct_port="${direct%%:*}"
-              expected_enabled="${direct##*:}"
+            for direct in '5128:true:canonical' '5129:true:staging'; do
+              IFS=: read -r direct_port expected_enabled expected_environment <<< "$direct"
               curl --fail --silent --show-error \
                 "http://127.0.0.1:$direct_port/profile-host/health" \
-                | EXPECTED_ENABLED="$expected_enabled" python3 -c '
+                | EXPECTED_ENABLED="$expected_enabled" \
+                  EXPECTED_ENVIRONMENT="$expected_environment" python3 -c '
           import json
           import os
           import sys
@@ -1054,6 +1064,10 @@ jobs:
           expected = os.environ["EXPECTED_ENABLED"] == "true"
           if health.get("status") != "ready" or health.get("profileHostEnabled") is not expected:
               raise SystemExit("Profile Host runtime authority does not match the cutover.")
+          if health.get("serviceEnvironment") != os.environ["EXPECTED_ENVIRONMENT"]:
+              raise SystemExit("Profile Host service environment does not match the cutover target.")
+          if health.get("accountFederationMode") != "disabled":
+              raise SystemExit("Account federation activated during the isolation cutover.")
           '
             done
 
@@ -1080,6 +1094,18 @@ jobs:
               fi
               sleep 1
             done
+            curl --fail --silent --show-error \
+              "http://127.0.0.1:$port/profile-host/health" \
+              | EXPECTED_ENVIRONMENT="$target" python3 -c '
+          import json
+          import os
+          import sys
+          health = json.load(sys.stdin)
+          if health.get("serviceEnvironment") != os.environ["EXPECTED_ENVIRONMENT"]:
+              raise SystemExit("Profile Host service environment does not match the deployment target.")
+          if health.get("accountFederationMode") != "disabled":
+              raise SystemExit("Account federation activated without a reviewed runtime.")
+          '
             if [[ "$target" == "staging" ]]; then
               curl --fail --silent --show-error \
                 "http://127.0.0.1:$port/profile-host/health" \

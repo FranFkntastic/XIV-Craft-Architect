@@ -17,6 +17,17 @@ const string PrivateNetworkAccessRequestHeader = "Access-Control-Request-Private
 const string PrivateNetworkAccessResponseHeader = "Access-Control-Allow-Private-Network";
 
 var builder = WebApplication.CreateBuilder(args);
+var accountFederationBoundary = new AccountFederationBoundaryOptions
+{
+    ServiceEnvironment = builder.Configuration["AuthorityBoundary:Environment"] ?? "local",
+    Mode = builder.Configuration["AuthorityBoundary:AccountFederationMode"] ?? "disabled",
+    CanonicalAccountAuthority = builder.Configuration["AuthorityBoundary:CanonicalAccountAuthority"] ?? string.Empty,
+    TokenIssuer = builder.Configuration["AuthorityBoundary:TokenIssuer"] ?? string.Empty,
+    TokenAudience = builder.Configuration["AuthorityBoundary:TokenAudience"] ?? string.Empty,
+    ActivationPermit = builder.Configuration["AuthorityBoundary:ActivationPermit"] ?? string.Empty
+};
+accountFederationBoundary.Validate();
+builder.Services.AddSingleton(accountFederationBoundary);
 var allowedOrigins = new[]
 {
     "http://localhost:5000",

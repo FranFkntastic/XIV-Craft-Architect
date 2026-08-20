@@ -297,6 +297,8 @@ public sealed class ProfileHostHealthResponse
     public bool ProfileHostEnabled { get; set; }
     public bool DeepArchiveEnabled { get; set; }
     public int DeepArchiveAfterDays { get; set; }
+    public string ServiceEnvironment { get; set; } = "local";
+    public string AccountFederationMode { get; set; } = "disabled";
     public int ProtocolVersion { get; set; } = 1;
 }
 

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
@@ -11,11 +12,15 @@ public static class ProfileHostEndpoints
     {
         var group = routes.MapGroup("/profile-host");
 
-        group.MapGet("/health", (ProfileHostOptions options) => Results.Ok(new ProfileHostHealthResponse
+        group.MapGet("/health", (
+            ProfileHostOptions options,
+            AccountFederationBoundaryOptions boundary) => Results.Ok(new ProfileHostHealthResponse
         {
             ProfileHostEnabled = options.Enabled,
             DeepArchiveEnabled = options.DeepArchiveEnabled,
             DeepArchiveAfterDays = options.DeepArchiveAfterDays,
+            ServiceEnvironment = boundary.ServiceEnvironment,
+            AccountFederationMode = boundary.Mode,
             ProtocolVersion = 1
         }));
 
