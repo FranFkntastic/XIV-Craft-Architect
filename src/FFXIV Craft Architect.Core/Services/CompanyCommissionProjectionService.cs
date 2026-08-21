@@ -17,6 +17,7 @@ public static class CompanyCommissionProjectionService
         {
             PublicBriefId = commission.PublicMetadata.PublicBriefId,
             CommissionId = commission.CommissionId,
+            CompanyId = commission.CompanyId,
             Title = order.Title,
             CompanyDisplayName = companyDisplayName,
             Reference = commission.Reference,

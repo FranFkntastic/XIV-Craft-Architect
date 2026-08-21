@@ -1,0 +1,62 @@
+.workforce-heading {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.workforce-invitation {
+    margin-top: 1px;
+    border-radius: 0;
+}
+
+.workforce-table-panel {
+    margin-bottom: 12px;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    overflow: hidden;
+}
+
+.workforce-table :deep(th) {
+    white-space: nowrap;
+}
+
+.workforce-table :deep(td) {
+    vertical-align: middle;
+}
+
+.workforce-access {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+}
+
+.workforce-access-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--mud-palette-text-disabled);
+}
+
+.workforce-access-dot.active {
+    background: var(--mud-palette-success);
+}
+
+.workforce-access-dot.pending {
+    background: var(--mud-palette-secondary);
+}
+
+.workforce-access-dot.external {
+    background: var(--mud-palette-warning);
+}
+
+.workforce-history-manager {
+    border-top: 1px solid var(--mud-palette-lines-default);
+    background: var(--mud-palette-background-gray);
+}
+
+@media (max-width: 900px) {
+    .workforce-heading :deep(.d-flex) {
+        align-items: flex-start !important;
+        flex-wrap: wrap;
+    }
+}

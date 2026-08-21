@@ -1013,6 +1013,7 @@ public sealed class DiscordCommissionMessageLifecycleTests
         {
             PublicBriefId = "discord-lifecycle",
             CommissionId = CommissionId,
+            CompanyId = new CompanyId(Guid.NewGuid()),
             Title = "Cobalt Joint Plate",
             CompanyDisplayName = "Test Company",
             Reference = "CA-LIFECYCLE",

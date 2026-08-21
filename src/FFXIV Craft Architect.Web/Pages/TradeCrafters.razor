@@ -13,7 +13,9 @@
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-crafters-page">
     @if (!string.IsNullOrWhiteSpace(Company))
     {
-        <CompanyMembershipManager CompanyId="@Company" />
+        <CompanyMembershipManager CompanyId="@Company"
+                                  CurrentWorkCounts="@CurrentWorkCounts"
+                                  LegacyCrafterSelected="OpenLegacyCrafter" />
     }
     @if (!string.IsNullOrWhiteSpace(_loadError))
     {
@@ -160,21 +162,6 @@
                     </div>
                 </section>
 
-                <section class="trade-crafters-panel">
-                    <MudText Typo="Typo.subtitle1">Roster</MudText>
-                    <WebDataTable TItem="TradeCrafterProfile"
-                                  TColumnId="TradeCrafterColumn"
-                                  Items="SortedCrafters"
-                                  Columns="CrafterColumns"
-                                  GetRowKey="GetCrafterKey"
-                                  GetRowClass="GetCrafterRowClass"
-                                  RowClicked="SelectCrafter"
-                                  CssClass="trade-crafters-table">
-                        <EmptyContent>
-                            <span>No crafters on the roster.</span>
-                        </EmptyContent>
-                    </WebDataTable>
-                </section>
             </section>
 
             <aside class="trade-crafters-detail">
@@ -377,6 +364,10 @@
     private IReadOnlyList<TradeCrafterProfile> SortedCrafters => _crafters
         .OrderBy(crafter => crafter.DisplayName, StringComparer.OrdinalIgnoreCase)
         .ToArray();
+
+    private IReadOnlyDictionary<Guid, int> CurrentWorkCounts => _crafters.ToDictionary(
+        crafter => crafter.Id,
+        crafter => GetAssignmentsForCrafter(crafter.Id).Count);
 
     private IReadOnlyList<WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>> CrafterColumns => CreateCrafterColumns();
 
@@ -661,6 +652,18 @@
         _detailPaymentNotes = crafter.PaymentNotes;
         _detailOperatorNotes = crafter.OperatorNotes;
         _jobLevels = crafter.JobLevels.ToDictionary(level => level.Job, level => level.Level);
+    }
+
+    private void OpenLegacyCrafter(Guid crafterId)
+    {
+        var crafter = _crafters.FirstOrDefault(candidate => candidate.Id == crafterId);
+        if (crafter == null)
+        {
+            Snackbar.Add("That contractor history is not available in this workspace yet.", Severity.Warning);
+            return;
+        }
+
+        SelectCrafter(crafter);
     }
 
     private string GetCrafterRowClass(TradeCrafterProfile crafter)

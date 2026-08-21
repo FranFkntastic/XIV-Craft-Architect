@@ -2,6 +2,7 @@ const PROTOCOL_VERSION = 1;
 const ACCESS_STORAGE_PREFIX = "craftArchitect.companyCommission.participant.v1.";
 const ACCOUNT_STORAGE_PREFIX = "craftArchitect.companyCommission.discordAccount.v1.";
 const SIGN_IN_STORAGE_PREFIX = "craftArchitect.companyCommission.discordSignIn.v1.";
+const MEMBERSHIP_INTENT_STORAGE_PREFIX = "craftArchitect.companyCommission.membershipRequest.v1.";
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DISCORD_USER_ID_PATTERN = /^\d{17,20}$/;
@@ -155,6 +156,46 @@ export class CommissionBriefApiClient {
                 headers: { "Accept": "application/json" },
                 cache: "no-store",
                 redirect: "error"
+            }));
+    }
+
+    async loadMyMemberships(accessKey) {
+        const key = requiredCapability(accessKey, "Account access key");
+        const result = await adaptResponse(await this.fetch(
+            "/trade/v1/memberships",
+            {
+                headers: {
+                    "Accept": "application/json",
+                    "X-Profile-Key": key
+                },
+                cache: "no-store",
+                redirect: "error"
+            }));
+        return requiredArray(result, "Company memberships").map(item => {
+            const membership = requiredObject(item, "Company membership");
+            return {
+                companyId: requiredGuid(membership.companyId, "Membership company ID"),
+                state: requiredText(membership.state, "Membership state"),
+                role: requiredText(membership.role, "Membership role")
+            };
+        });
+    }
+
+    async requestMembership(companyId, accessKey, requestNote = null) {
+        const id = requiredGuid(companyId, "Company ID");
+        const key = requiredCapability(accessKey, "Account access key");
+        return adaptResponse(await this.fetch(
+            `/trade/v1/companies/${encodeURIComponent(id)}/membership-requests`,
+            {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "X-Profile-Key": key
+                },
+                cache: "no-store",
+                redirect: "error",
+                body: JSON.stringify({ requestNote })
             }));
     }
 
@@ -589,6 +630,69 @@ export class PortableClaimAccountStore {
     }
 }
 
+export class PortableMembershipRequestStore {
+    constructor(publicId, storage = window.localStorage) {
+        this.publicId = publicId;
+        this.storage = storage;
+        this.key = `${MEMBERSHIP_INTENT_STORAGE_PREFIX}${publicId}`;
+    }
+
+    load() {
+        let serialized;
+        try {
+            serialized = this.storage.getItem(this.key);
+        } catch {
+            throw new CommissionClientError(
+                "Browser storage cannot read the saved membership request.",
+                "storage-unavailable");
+        }
+        if (!serialized) return null;
+        try {
+            const value = JSON.parse(serialized);
+            if (value.version !== 1 || value.publicId !== this.publicId) {
+                throw new Error("version mismatch");
+            }
+            return {
+                version: 1,
+                publicId: this.publicId,
+                companyId: requiredGuid(value.companyId, "Membership company ID"),
+                savedAtUtc: requiredDate(value.savedAtUtc, "Membership request time")
+            };
+        } catch {
+            throw new CommissionClientError(
+                "The saved membership request is damaged. The commission claim remains unchanged.",
+                "invalid-membership-intent");
+        }
+    }
+
+    begin(companyId) {
+        const intent = {
+            version: 1,
+            publicId: this.publicId,
+            companyId: requiredGuid(companyId, "Company ID"),
+            savedAtUtc: new Date().toISOString()
+        };
+        try {
+            this.storage.setItem(this.key, JSON.stringify(intent));
+        } catch {
+            throw new CommissionClientError(
+                "Browser storage could not save the membership request. No claim was sent.",
+                "storage-write-failed");
+        }
+        return intent;
+    }
+
+    complete() {
+        try {
+            this.storage.removeItem(this.key);
+        } catch {
+            throw new CommissionClientError(
+                "The completed membership request could not be cleared from browser storage.",
+                "storage-write-failed");
+        }
+    }
+}
+
 export function readCapabilityFragment(location = window.location) {
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
     const claimCapability = optionalCapability(fragment.get("claim"), "Claim capability");
@@ -904,6 +1008,7 @@ function adaptPublicBrief(source) {
     return {
         publicBriefId: requiredText(brief.publicBriefId, "Public brief ID"),
         commissionId: requiredGuid(brief.commissionId, "Commission ID"),
+        companyId: requiredGuid(brief.companyId, "Company ID"),
         title: requiredText(brief.title, "Commission title"),
         companyDisplayName: requiredText(brief.companyDisplayName, "Company display name"),
         reference: requiredText(brief.reference, "Commission reference"),

@@ -4,9 +4,24 @@
 @inject NavigationManager Navigation
 @inject IJSRuntime JSRuntime
 
-<MudPaper Class="pa-3 mb-3">
+<MudPaper Class="pa-3 workforce-heading">
     <div class="d-flex align-center justify-space-between gap-2">
-        <div><MudText Typo="Typo.h6">Invite a crafter</MudText><MudText Typo="Typo.body2">Choose when the company invitation expires. No commission is required.</MudText></div>
+        <div>
+            <MudText Typo="Typo.h5">Company workforce</MudText>
+            <MudText Typo="Typo.body2">Membership controls company access. Contractor records preserve character, assignment, and commission history.</MudText>
+        </div>
+        <div class="d-flex align-center gap-2">
+            <MudChip T="string" Size="Size.Small">@Pending.Count() requests</MudChip>
+            <MudButton Variant="Variant.Outlined" OnClick="ToggleInviteComposer">@(_inviteComposerOpen ? "Close invitation" : "Invite crafter")</MudButton>
+        </div>
+    </div>
+</MudPaper>
+
+@if (_inviteComposerOpen)
+{
+<MudPaper Class="pa-3 workforce-invitation">
+    <div class="d-flex align-center justify-space-between gap-2">
+        <div><MudText Typo="Typo.h6">Invite a crafter</MudText><MudText Typo="Typo.body2">Choose when company access expires. No commission is required.</MudText></div>
         <MudButton Color="Color.Primary" Variant="Variant.Filled" Disabled="@(_issuingInvitation || !_invitationExpiresOn.HasValue)" OnClick="IssueInvitationAsync">Create invitation</MudButton>
     </div>
     @if (AvailableLegacyCrafters.Any())
@@ -46,89 +61,100 @@
         </MudTable>
     }
 </MudPaper>
+}
 
-<MudPaper Class="pa-3 mb-3">
-    <MudText Typo="Typo.h6">Membership requests</MudText>
+<MudPaper Class="pa-0 workforce-table-panel">
     @if (_loading)
     {
         <MudProgressLinear Indeterminate="true" />
     }
     else
     {
-        <MudTable Items="Pending" Dense="true" Hover="true">
-            <HeaderContent><MudTh>Requester</MudTh><MudTh>Note</MudTh><MudTh>Requested</MudTh><MudTh>Existing history</MudTh><MudTh></MudTh></HeaderContent>
+        <MudTable Items="WorkforceRows" Dense="true" Hover="true" Class="workforce-table">
+            <HeaderContent><MudTh>Person</MudTh><MudTh>Relationship</MudTh><MudTh>Company access</MudTh><MudTh>Connected history</MudTh><MudTh>Current work</MudTh><MudTh></MudTh></HeaderContent>
             <RowTemplate>
-                <MudTd><strong>@context.Member.DisplayName</strong></MudTd><MudTd>@(context.Request.RequestNote ?? "No note")</MudTd><MudTd>@context.Request.RequestedAtUtc.ToLocalTime().ToString("g")</MudTd>
                 <MudTd>
-                    @if (BindingsFor(context.Member.AccountProfileId).Any())
+                    <strong>@context.DisplayName</strong>
+                    @if (!string.IsNullOrWhiteSpace(context.SupportingIdentity))
                     {
-                        <MudText Typo="Typo.body2">Connected: @BindingNames(context.Member.AccountProfileId)</MudText>
+                        <MudText Typo="Typo.caption">@context.SupportingIdentity</MudText>
                     }
-                    else if (AvailableLegacyCrafters.Any())
+                </MudTd>
+                <MudTd><MudChip T="string" Size="Size.Small" Color="@RelationshipColor(context)">@context.Relationship</MudChip></MudTd>
+                <MudTd>
+                    <div class="workforce-access"><span class="workforce-access-dot @AccessTone(context)"></span><span>@context.Access</span></div>
+                    @if (context.Request != null && !string.IsNullOrWhiteSpace(context.Request.RequestNote))
                     {
-                        <MudSelect T="Guid?" Label="Legacy crafter" Dense="true" Value="@SelectedLegacyCrafter(context.Member.AccountProfileId)" ValueChanged="@(value => SelectLegacyCrafter(context.Member.AccountProfileId, value))">
-                            @foreach (var crafter in AvailableLegacyCrafters)
-                            {
-                                <MudSelectItem T="Guid?" Value="@((Guid?)crafter.LegacyCrafterId)">@CrafterLabel(crafter)</MudSelectItem>
-                            }
-                        </MudSelect>
-                    }
-                    else
-                    {
-                        <MudText Typo="Typo.body2">No legacy history</MudText>
+                        <MudText Typo="Typo.caption">@context.Request.RequestNote</MudText>
                     }
                 </MudTd>
                 <MudTd>
-                    @if (SelectedLegacyCrafter(context.Member.AccountProfileId).HasValue)
+                    @if (context.Member != null && context.LegacyCrafters.Count > 0)
                     {
-                        <MudButton Size="Size.Small" Color="Color.Primary" OnClick="@(() => ApproveAndConnectAsync(context.Member.AccountProfileId))">Approve + connect history</MudButton>
+                        <MudText Typo="Typo.body2">@string.Join(", ", context.LegacyCrafters.Select(CrafterLabel))</MudText>
+                    }
+                    else if (context.Member != null)
+                    {
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">No connected history</MudText>
                     }
                     else
                     {
-                        <MudButton Size="Size.Small" Color="Color.Primary" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "approve"))">Approve</MudButton>
+                        <MudText Typo="Typo.body2">Character profile</MudText>
                     }
-                    <MudButton Size="Size.Small" Color="Color.Error" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "deny"))">Deny</MudButton>
+                </MudTd>
+                <MudTd>@CurrentWorkLabel(context)</MudTd>
+                <MudTd>
+                    @if (context.Request != null && context.Member != null)
+                    {
+                        @if (SelectedLegacyCrafter(context.Member.AccountProfileId).HasValue)
+                        {
+                            <MudButton Size="Size.Small" Color="Color.Primary" OnClick="@(() => ApproveAndConnectAsync(context.Member.AccountProfileId))">Approve + connect</MudButton>
+                        }
+                        else
+                        {
+                            <MudButton Size="Size.Small" Color="Color.Primary" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "approve"))">Approve</MudButton>
+                        }
+                        <MudButton Size="Size.Small" Color="Color.Error" Variant="Variant.Text" OnClick="@(() => TransitionAsync(context.Member.AccountProfileId, "deny"))">Deny</MudButton>
+                    }
+                    else if (context.Member != null)
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => ToggleHistoryManager(context.Member.AccountProfileId))">@(_manageHistoryMemberId == context.Member.AccountProfileId ? "Done" : "Manage")</MudButton>
+                        @if (CanRevoke(context.Member))
+                        {
+                            <MudButton Size="Size.Small" Color="Color.Error" Variant="Variant.Text" OnClick="() => _revokeMember = context.Member">Revoke</MudButton>
+                        }
+                    }
+                    else if (context.LegacyCrafter is { } crafter)
+                    {
+                        <MudButton Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled" OnClick="@(() => PrepareInvitation(crafter.LegacyCrafterId))">Invite to join</MudButton>
+                        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => OpenLegacyCrafterAsync(crafter.LegacyCrafterId))">Open</MudButton>
+                    }
                 </MudTd>
             </RowTemplate>
-            <NoRecordsContent><MudText Typo="Typo.body2">No pending requests.</MudText></NoRecordsContent>
+            <NoRecordsContent><MudText Typo="Typo.body2" Class="pa-3">No members or contractors are known to this company.</MudText></NoRecordsContent>
         </MudTable>
     }
-</MudPaper>
-
-<MudPaper Class="pa-3 mb-3">
-    <MudText Typo="Typo.h6">Company members</MudText>
-    <MudTable Items="ActiveMembers" Dense="true" Hover="true">
-        <HeaderContent><MudTh>Member</MudTh><MudTh>Role</MudTh><MudTh>Standing</MudTh><MudTh>Routing</MudTh><MudTh>Existing history</MudTh><MudTh></MudTh></HeaderContent>
-        <RowTemplate>
-            <MudTd><strong>@context.DisplayName</strong></MudTd><MudTd>@context.Role</MudTd><MudTd>@context.State</MudTd><MudTd>@(context.DiscordLinked ? "Linked Discord" : "Discord not linked")</MudTd>
-            <MudTd>
+    @if (_manageHistoryMemberId.HasValue)
+    {
+        <div class="pa-3 workforce-history-manager">
+            @foreach (var binding in BindingsFor(_manageHistoryMemberId.Value))
+            {
+                <div class="d-flex align-center gap-1"><MudText Typo="Typo.body2">Connected: @BindingName(binding)</MudText><MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => DisconnectAsync(binding.LegacyCrafterId))">Disconnect</MudButton></div>
+            }
+            @if (AvailableLegacyCrafters.Any())
+            {
                 <div class="d-flex align-center gap-1">
-                    <MudText Typo="Typo.body2">@(BindingsFor(context.AccountProfileId).Any() ? BindingNames(context.AccountProfileId) : "No connected history")</MudText>
-                    <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => ToggleHistoryManager(context.AccountProfileId))">@(_manageHistoryMemberId == context.AccountProfileId ? "Done" : "Manage")</MudButton>
+                    <MudSelect T="Guid?" Label="Connect contractor history" Dense="true" Value="@SelectedLegacyCrafter(_manageHistoryMemberId.Value)" ValueChanged="@(value => SelectLegacyCrafter(_manageHistoryMemberId.Value, value))">
+                        @foreach (var crafter in AvailableLegacyCrafters)
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)crafter.LegacyCrafterId)">@CrafterLabel(crafter)</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudButton Size="Size.Small" Disabled="@(!SelectedLegacyCrafter(_manageHistoryMemberId.Value).HasValue)" OnClick="@(() => ConnectAsync(_manageHistoryMemberId.Value))">Connect</MudButton>
                 </div>
-                @if (_manageHistoryMemberId == context.AccountProfileId)
-                {
-                    @foreach (var binding in BindingsFor(context.AccountProfileId))
-                    {
-                        <div class="d-flex align-center gap-1"><MudText Typo="Typo.body2">@BindingName(binding)</MudText><MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => DisconnectAsync(binding.LegacyCrafterId))">Disconnect</MudButton></div>
-                    }
-                    @if (AvailableLegacyCrafters.Any())
-                    {
-                        <div class="d-flex align-center gap-1">
-                            <MudSelect T="Guid?" Label="Connect legacy crafter" Dense="true" Value="@SelectedLegacyCrafter(context.AccountProfileId)" ValueChanged="@(value => SelectLegacyCrafter(context.AccountProfileId, value))">
-                                @foreach (var crafter in AvailableLegacyCrafters)
-                                {
-                                    <MudSelectItem T="Guid?" Value="@((Guid?)crafter.LegacyCrafterId)">@CrafterLabel(crafter)</MudSelectItem>
-                                }
-                            </MudSelect>
-                            <MudButton Size="Size.Small" Disabled="@(!SelectedLegacyCrafter(context.AccountProfileId).HasValue)" OnClick="@(() => ConnectAsync(context.AccountProfileId))">Connect</MudButton>
-                        </div>
-                    }
-                }
-            </MudTd>
-            <MudTd>@if (CanRevoke(context)) { <MudButton Size="Size.Small" Color="Color.Error" OnClick="() => _revokeMember = context">Revoke</MudButton> }</MudTd>
-        </RowTemplate>
-    </MudTable>
+            }
+        </div>
+    }
     @if (_revokeMember != null)
     {
         <div class="d-flex align-center gap-2 mt-2"><MudTextField @bind-Value="_revokeReason" Label="Reason" Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" /><MudButton OnClick="CancelRevoke">Cancel</MudButton><MudButton Color="Color.Error" Disabled="@string.IsNullOrWhiteSpace(_revokeReason)" OnClick="RevokeAsync">Revoke @_revokeMember.DisplayName</MudButton></div>
@@ -137,6 +163,8 @@
 
 @code {
     [Parameter, EditorRequired] public string CompanyId { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyDictionary<Guid, int> CurrentWorkCounts { get; set; } = new Dictionary<Guid, int>();
+    [Parameter] public EventCallback<Guid> LegacyCrafterSelected { get; set; }
     private bool _loading = true;
     private string _viewerRole = string.Empty;
     private IReadOnlyList<CompanyMembership> _requests = [];
@@ -151,9 +179,52 @@
     private DateTime? _invitationExpiresOn = DateTime.Today.AddDays(7);
     private CompanyMembershipInvitation? _issuedInvitation;
     private bool _issuingInvitation;
+    private bool _inviteComposerOpen;
     private IEnumerable<PendingMember> Pending => _requests.Join(_members, request => request.AccountProfileId, member => member.AccountProfileId, (request, member) => new PendingMember(request, member));
-    private IEnumerable<CompanyMember> ActiveMembers => _members.Where(member => member.State == "active");
     private IEnumerable<LegacyCrafterCandidate> AvailableLegacyCrafters => _migration.LegacyCrafters.Where(crafter => _migration.Bindings.All(binding => binding.LegacyCrafterId != crafter.LegacyCrafterId));
+    private IReadOnlyList<WorkforceRow> WorkforceRows
+    {
+        get
+        {
+            var rows = new List<WorkforceRow>();
+            foreach (var member in _members.Where(member => member.State is "active" or "pending"))
+            {
+                var request = _requests.FirstOrDefault(item => item.AccountProfileId == member.AccountProfileId);
+                var crafters = BindingsFor(member.AccountProfileId)
+                    .Select(binding => _migration.LegacyCrafters.FirstOrDefault(crafter => crafter.LegacyCrafterId == binding.LegacyCrafterId))
+                    .Where(crafter => crafter != null)
+                    .Cast<LegacyCrafterCandidate>()
+                    .ToArray();
+                rows.Add(new WorkforceRow(
+                    member.DisplayName,
+                    member.Role == "owner" ? "Owner" : member.State == "pending" ? "Requesting" : "Member · Crafter",
+                    member.State == "pending" ? "Pending approval" : "Active",
+                    member.DiscordLinked ? "Discord linked" : "Account only",
+                    member,
+                    request,
+                    null,
+                    crafters));
+            }
+
+            var boundIds = _migration.Bindings.Select(binding => binding.LegacyCrafterId).ToHashSet();
+            rows.AddRange(_migration.LegacyCrafters
+                .Where(crafter => !boundIds.Contains(crafter.LegacyCrafterId))
+                .Select(crafter => new WorkforceRow(
+                    crafter.DisplayName,
+                    "Contractor",
+                    "No company access",
+                    string.IsNullOrWhiteSpace(crafter.WorldName) ? "Character profile" : crafter.WorldName,
+                    null,
+                    null,
+                    crafter,
+                    [crafter])));
+
+            return rows
+                .OrderBy(row => row.Member == null ? 1 : 0)
+                .ThenBy(row => row.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();
     private async Task LoadAsync()
@@ -195,6 +266,20 @@
             _issuingInvitation = false;
         }
     }
+    private void ToggleInviteComposer() => _inviteComposerOpen = !_inviteComposerOpen;
+    private void PrepareInvitation(Guid legacyCrafterId)
+    {
+        _invitationLegacyCrafterId = legacyCrafterId;
+        _inviteComposerOpen = true;
+        Snackbar.Add("Invitation prepared. Confirm the expiry date, then create it.", Severity.Info);
+    }
+    private async Task OpenLegacyCrafterAsync(Guid legacyCrafterId)
+    {
+        if (LegacyCrafterSelected.HasDelegate)
+        {
+            await LegacyCrafterSelected.InvokeAsync(legacyCrafterId);
+        }
+    }
     private void SetInvitationExpiry(DateTime? value) =>
         _invitationExpiresOn = value?.Date;
     private DateTimeOffset InvitationExpiresAtUtc()
@@ -230,5 +315,21 @@
     private async Task DisconnectAsync(Guid legacyCrafterId) { await HubClient.DisconnectLegacyCrafterAsync(CompanyId, legacyCrafterId); await LoadAsync(); Snackbar.Add("Existing crafter history disconnected.", Severity.Success); }
     private void CancelRevoke() { _revokeMember = null; _revokeReason = null; }
     private async Task RevokeAsync() { await HubClient.TransitionMembershipAsync(CompanyId, _revokeMember!.AccountProfileId, "revoke", _revokeReason!.Trim()); CancelRevoke(); await LoadAsync(); Snackbar.Add("Membership revoked.", Severity.Success); }
+    private static Color RelationshipColor(WorkforceRow row) => row.Member == null ? Color.Warning : row.Request == null ? Color.Success : Color.Secondary;
+    private static string AccessTone(WorkforceRow row) => row.Access == "Active" ? "active" : row.Request != null ? "pending" : "external";
+    private string CurrentWorkLabel(WorkforceRow row)
+    {
+        var count = row.LegacyCrafters.Sum(crafter => CurrentWorkCounts.GetValueOrDefault(crafter.LegacyCrafterId));
+        return count == 0 ? "None" : $"{count:N0} active";
+    }
     private sealed record PendingMember(CompanyMembership Request, CompanyMember Member);
+    private sealed record WorkforceRow(
+        string DisplayName,
+        string Relationship,
+        string Access,
+        string SupportingIdentity,
+        CompanyMember? Member,
+        CompanyMembership? Request,
+        LegacyCrafterCandidate? LegacyCrafter,
+        IReadOnlyList<LegacyCrafterCandidate> LegacyCrafters);
 }

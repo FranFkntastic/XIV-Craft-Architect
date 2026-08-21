@@ -385,6 +385,7 @@ public sealed record CompanyCommissionPublicBrief
 {
     public required string PublicBriefId { get; init; }
     public required Guid CommissionId { get; init; }
+    public required CompanyId CompanyId { get; init; }
     public required string Title { get; init; }
     public required string CompanyDisplayName { get; init; }
     public required string Reference { get; init; }
