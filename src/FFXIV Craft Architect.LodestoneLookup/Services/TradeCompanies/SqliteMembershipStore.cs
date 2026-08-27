@@ -30,6 +30,20 @@ public enum MembershipMutationStatus
     LastOwner
 }
 
+public enum MembershipRoleMutationStatus
+{
+    Applied,
+    Replayed,
+    NotFound,
+    InvalidState,
+    ForbiddenRole,
+    NotAuthorized
+}
+
+public sealed record MembershipRoleMutationResult(
+    MembershipRoleMutationStatus Status,
+    CompanyMembership? Membership = null);
+
 public sealed record CompanyMembership(
     CompanyId CompanyId,
     Guid AccountProfileId,
@@ -887,6 +901,205 @@ public sealed class SqliteMembershipStore(
             MembershipState.Revoked,
             NormalizeReason(reason),
             cancellationToken);
+
+    public async Task<MembershipRoleMutationResult> ChangeRoleAsync(
+        CompanyId companyId,
+        Guid targetProfileId,
+        MembershipRole targetRole,
+        Guid actorProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        RequireIdentity(companyId, targetProfileId);
+        RequireActor(actorProfileId);
+        if (targetRole is not (MembershipRole.Operator or MembershipRole.Crafter))
+        {
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.ForbiddenRole);
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var actor = await LoadAsync(connection, transaction, companyId, actorProfileId, cancellationToken);
+        if (actor is not { State: MembershipState.Active, Role: MembershipRole.Owner })
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.NotAuthorized);
+        }
+
+        var target = await LoadAsync(connection, transaction, companyId, targetProfileId, cancellationToken);
+        if (target == null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.NotFound);
+        }
+        if (target.State != MembershipState.Active || target.Role == MembershipRole.Owner)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.InvalidState);
+        }
+        if (target.Role == targetRole)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.Replayed, target);
+        }
+
+        var updated = target with { Role = targetRole };
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                UPDATE company_memberships
+                SET role = $role
+                WHERE company_id = $companyId AND account_profile_id = $accountProfileId;
+                """;
+            command.Parameters.AddWithValue("$role", ToStorage(targetRole));
+            AddMembershipIdentity(command, companyId, targetProfileId);
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new MembershipRoleMutationResult(MembershipRoleMutationStatus.InvalidState);
+            }
+        }
+        await InsertEventAsync(
+            connection,
+            transaction,
+            target.State,
+            updated,
+            actorProfileId,
+            timeProvider.GetUtcNow(),
+            $"role_changed:{ToStorage(target.Role)}->{ToStorage(targetRole)}",
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return new MembershipRoleMutationResult(MembershipRoleMutationStatus.Applied, updated);
+    }
+
+    public async Task<MembershipRoleMutationResult> TransferOwnershipAsync(
+        CompanyId companyId,
+        Guid targetProfileId,
+        Guid actorProfileId,
+        MembershipRole formerOwnerRole = MembershipRole.Operator,
+        CancellationToken cancellationToken = default)
+    {
+        RequireIdentity(companyId, targetProfileId);
+        RequireActor(actorProfileId);
+        if (formerOwnerRole is not (MembershipRole.Operator or MembershipRole.Crafter))
+        {
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.ForbiddenRole);
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var actor = await LoadAsync(connection, transaction, companyId, actorProfileId, cancellationToken);
+        var target = await LoadAsync(connection, transaction, companyId, targetProfileId, cancellationToken);
+
+        // Replay: a prior transfer completed and this request repeats it.
+        // Verified by audit evidence, not role shapes alone — a random operator
+        // requesting ownership must stay Forbidden.
+        if (actor is { State: MembershipState.Active, Role: MembershipRole.Crafter or MembershipRole.Operator } &&
+            target is { State: MembershipState.Active, Role: MembershipRole.Owner })
+        {
+            var transferEvidence = await HasOwnershipTransferEventAsync(
+                connection,
+                transaction,
+                companyId,
+                actorProfileId,
+                cancellationToken);
+            if (transferEvidence)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return new MembershipRoleMutationResult(MembershipRoleMutationStatus.Replayed, target);
+            }
+        }
+        if (actor is not { State: MembershipState.Active, Role: MembershipRole.Owner })
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.NotAuthorized);
+        }
+        if (target == null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.NotFound);
+        }
+        if (target.State != MembershipState.Active ||
+            target.Role == MembershipRole.Owner ||
+            target.AccountProfileId == actorProfileId)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.InvalidState);
+        }
+        if (await CountActiveOwnersExcludingAsync(connection, transaction, companyId, excludeNone: true, cancellationToken) > 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.InvalidState);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        await using (var promote = connection.CreateCommand())
+        {
+            promote.Transaction = transaction;
+            promote.CommandText = """
+                UPDATE company_memberships
+                SET role = 'owner'
+                WHERE company_id = $companyId AND account_profile_id = $accountProfileId;
+                """;
+            AddMembershipIdentity(promote, companyId, targetProfileId);
+            await promote.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await using (var demote = connection.CreateCommand())
+        {
+            demote.Transaction = transaction;
+            demote.CommandText = """
+                UPDATE company_memberships
+                SET role = $role
+                WHERE company_id = $companyId AND account_profile_id = $actorProfileId;
+                """;
+            demote.Parameters.AddWithValue("$role", ToStorage(formerOwnerRole));
+            demote.Parameters.AddWithValue("$companyId", companyId.ToString());
+            demote.Parameters.AddWithValue("$actorProfileId", actorProfileId.ToString("D"));
+            if (await demote.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new MembershipRoleMutationResult(MembershipRoleMutationStatus.InvalidState);
+            }
+        }
+
+        await InsertRoleEventAsync(
+            connection,
+            transaction,
+            companyId,
+            targetProfileId,
+            target.Role,
+            MembershipRole.Owner,
+            actorProfileId,
+            now,
+            "ownership_transfer",
+            cancellationToken);
+        await InsertRoleEventAsync(
+            connection,
+            transaction,
+            companyId,
+            actorProfileId,
+            MembershipRole.Owner,
+            formerOwnerRole,
+            actorProfileId,
+            now,
+            "ownership_transfer",
+            cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        var promotedTarget = target with
+        {
+            Role = MembershipRole.Owner,
+            DecidedAtUtc = now,
+            DecidedByProfileId = actorProfileId
+        };
+        return new MembershipRoleMutationResult(MembershipRoleMutationStatus.Applied, promotedTarget);
+    }
 
     public async Task<CompanyMembership?> LoadAsync(
         CompanyId companyId,
@@ -1998,6 +2211,128 @@ public sealed class SqliteMembershipStore(
         {
             throw new ArgumentException("Valid company and account profile identities are required.");
         }
+    }
+
+    private static void RequireActor(Guid actorProfileId)
+    {
+        if (actorProfileId == Guid.Empty)
+        {
+            throw new ArgumentException("A valid actor profile identity is required.");
+        }
+    }
+
+    public async Task UpdateRoleInternalForTestsAsync(
+        CompanyId companyId,
+        Guid accountProfileId,
+        MembershipRole role)
+    {
+        await using var connection = await OpenAsync(CancellationToken.None);
+        await EnsureSchemaAsync(connection, CancellationToken.None);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE company_memberships
+            SET role = $role
+            WHERE company_id = $companyId AND account_profile_id = $accountProfileId;
+            """;
+        command.Parameters.AddWithValue("$role", ToStorage(role));
+        AddMembershipIdentity(command, companyId, accountProfileId);
+        AssertHelper.Equal(1, await command.ExecuteNonQueryAsync(CancellationToken.None));
+    }
+
+    private static class AssertHelper
+    {
+        public static void Equal<T>(T expected, T actual)
+        {
+            if (!EqualityComparer<T>.Default.Equals(expected, actual))
+            {
+                throw new InvalidOperationException($"Test role setup failed: expected {expected}, got {actual}.");
+            }
+        }
+    }
+
+    private static async Task<bool> HasOwnershipTransferEventAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyId companyId,
+        Guid accountProfileId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT 1
+            FROM membership_events
+            WHERE company_id = $companyId
+              AND account_profile_id = $accountProfileId
+              AND reason LIKE 'ownership_transfer:%'
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$accountProfileId", accountProfileId.ToString("D"));
+        return await command.ExecuteScalarAsync(cancellationToken) != null;
+    }
+
+    private static async Task<long> CountActiveOwnersExcludingAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyId companyId,
+        bool excludeNone,
+        CancellationToken cancellationToken)
+    {
+        // excludeNone is retained for call-site readability; the transfer path
+        // counts every active owner because the actor has not been demoted yet.
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM company_memberships
+            WHERE company_id = $companyId AND role = 'owner' AND state = 'active';
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+    }
+
+    private static async Task InsertRoleEventAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CompanyId companyId,
+        Guid accountProfileId,
+        MembershipRole fromRole,
+        MembershipRole toRole,
+        Guid actorProfileId,
+        DateTimeOffset createdAtUtc,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        const int MaximumReasonLength = 500;
+        var reasonText = $"{reason}:{ToStorage(fromRole)}->{ToStorage(toRole)}";
+        if (reasonText.Length > MaximumReasonLength)
+        {
+            // keep the head (action + from->to fit in practice); the check constraint
+            // on membership_events.reason rejects longer values, so truncate.
+            reasonText = reasonText[..MaximumReasonLength];
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO membership_events (
+                event_id, company_id, account_profile_id, from_state, to_state,
+                actor_profile_id, created_at_utc, role, decided_at_utc,
+                decided_by_profile_id, reason)
+            VALUES (
+                $eventId, $companyId, $accountProfileId, 'active', 'active',
+                $actorProfileId, $createdAtUtc, $role, $createdAtUtc,
+                $actorProfileId, $reason);
+            """;
+        command.Parameters.AddWithValue("$eventId", Guid.NewGuid().ToString("D"));
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        command.Parameters.AddWithValue("$accountProfileId", accountProfileId.ToString("D"));
+        command.Parameters.AddWithValue("$actorProfileId", actorProfileId.ToString("D"));
+        command.Parameters.AddWithValue("$createdAtUtc", createdAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$role", ToStorage(toRole));
+        command.Parameters.AddWithValue("$reason", reasonText);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static string? NormalizeNote(string? note)
