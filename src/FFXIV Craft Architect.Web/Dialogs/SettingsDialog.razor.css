@@ -252,3 +252,13 @@
         gap: 8px;
     }
 }
+
+/* Role permission matrix */
+.perm-yes {
+    color: var(--mud-palette-success, #4caf50);
+    font-weight: 700;
+}
+
+.perm-no {
+    color: var(--mud-palette-text-disabled, #9e9e9e);
+}
