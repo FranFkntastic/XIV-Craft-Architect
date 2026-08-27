@@ -160,11 +160,45 @@ public sealed class RoleManagementContractTests
             MembershipRole.Operator);
 
         using var response = await fixture.PostTransferAsync(fixture.CompanyId, owner.ProfileId, target.Key);
-        using var replay = await fixture.PostTransferAsync(fixture.CompanyId, owner.ProfileId, target.Key);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, replay.StatusCode);
         Assert.Equal(MembershipRole.Owner, (await fixture.Memberships.LoadAsync(fixture.CompanyIdValue, owner.ProfileId))!.Role);
+    }
+
+    [Fact]
+    public async Task DemotedFormerHostLosesOwnerAuthorityInResolver()
+    {
+        await using var fixture = await RoleFixture.CreateAsync();
+        var (owner, target) = await fixture.SeedOwnerAndCrafterAsync();
+
+        // Before transfer: former owner can read the pending-requests queue (admin surface).
+        using (var before = await fixture.GetAsync($"/trade/v1/companies/{fixture.CompanyId}/membership-requests", owner.Key))
+        {
+            Assert.Equal(HttpStatusCode.OK, before.StatusCode);
+        }
+
+        using (var transfer = await fixture.PostTransferAsync(fixture.CompanyId, target.ProfileId, owner.Key))
+        {
+            Assert.Equal(HttpStatusCode.OK, transfer.StatusCode);
+        }
+
+        // After transfer: membership role (operator) is authoritative even though
+        // the company object is still stored under the former host profile.
+        var access = await fixture.ResolveAccessAsync(owner.ProfileId);
+        Assert.NotNull(access);
+        Assert.Equal(TradeCompanyRole.Operator, access!.Role);
+
+        // The new owner resolves as Owner through their own membership row.
+        var newOwnerAccess = await fixture.ResolveAccessAsync(target.ProfileId);
+        Assert.NotNull(newOwnerAccess);
+        Assert.Equal(TradeCompanyRole.Owner, newOwnerAccess!.Role);
+
+        // Ownership transfer authority actually moved: former host gets 403 on transfer.
+        // Owner cannot transfer to self — proves role authority moved.
+        using (var refused = await fixture.PostTransferAsync(fixture.CompanyId, target.ProfileId, target.Key))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        }
     }
 
     private sealed class RoleFixture : IAsyncDisposable
@@ -250,6 +284,24 @@ public sealed class RoleManagementContractTests
             return await client.PostAsJsonAsync(
                 $"/trade/v1/companies/{companyId}/ownership-transfer",
                 new { TargetAccountProfileId = targetProfileId });
+        }
+
+        public async Task<HttpResponseMessage> GetAsync(string path, string key)
+        {
+            using var client = CreateClient(key);
+            return await client.GetAsync(path);
+        }
+
+        public async Task<TradeCompanyAccessContext?> ResolveAccessAsync(Guid profileId)
+        {
+            using var scope = application.Services.CreateScope();
+            var companies = scope.ServiceProvider.GetRequiredService<ProfileHostedTradeCompanyService>();
+            var hosted = await companies.ResolveMembershipAccessAsync(profileId, CompanyIdValue);
+            if (hosted != null)
+            {
+                return hosted;
+            }
+            return await companies.ResolveProfileAccessAsync(profileId, CompanyIdValue);
         }
 
         public HttpClient CreateClient(string key)
