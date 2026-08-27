@@ -14,6 +14,10 @@ public sealed record CompanyOwnershipTransferBody(
     Guid IdempotencyKey,
     string ExpectedScopeFingerprint);
 public sealed record LegacyCrafterBindingBody(Guid AccountProfileId);
+public sealed record MembershipRoleUpdateBody(string Role);
+public sealed record OwnershipTransferBody(
+    Guid TargetAccountProfileId,
+    string? FormerOwnerRole);
 public sealed record MembershipInvitationIssueBody(
     Guid? LegacyCrafterId,
     DateTimeOffset? ExpiresAtUtc);
@@ -714,6 +718,121 @@ public static class MembershipEndpoints
             store.DenyAsync(companyId, accountId, actorId, ct));
         MapTransition(companies, "revoke", static (store, companyId, accountId, actorId, reason, ct) =>
             store.RevokeAsync(companyId, accountId, actorId, reason, ct));
+
+        companies.MapPut(
+            "/{companyId}/memberships/{accountProfileId:guid}/role",
+            async (
+                string companyId,
+                Guid accountProfileId,
+                MembershipRoleUpdateBody body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (!CompanyId.TryParse(companyId, out var parsedCompanyId) ||
+                    await companyService.LoadPublicCompanyProfileAsync(parsedCompanyId, cancellationToken) == null)
+                {
+                    return Results.NotFound();
+                }
+
+                if (!Enum.TryParse<MembershipRole>(body.Role, ignoreCase: true, out var targetRole) ||
+                    targetRole is not (MembershipRole.Operator or MembershipRole.Crafter))
+                {
+                    return Results.BadRequest(new MembershipErrorResponse(
+                        "invalid_membership_role",
+                        "Role must be 'operator' or 'crafter'."));
+                }
+
+                var result = await memberships.ChangeRoleAsync(
+                    parsedCompanyId,
+                    accountProfileId,
+                    targetRole,
+                    account.ProfileId,
+                    cancellationToken);
+                return result.Status switch
+                {
+                    MembershipRoleMutationStatus.Applied or MembershipRoleMutationStatus.Replayed => Results.Ok(
+                        ToResponse(result.Membership!)),
+                    MembershipRoleMutationStatus.NotFound => Results.NotFound(),
+                    MembershipRoleMutationStatus.NotAuthorized => Results.StatusCode(StatusCodes.Status403Forbidden),
+                    _ => Results.Conflict(new MembershipErrorResponse(
+                        "membership_not_active",
+                        "The member is not an active non-owner membership."))
+                };
+            });
+
+        companies.MapPost(
+            "/{companyId}/ownership-transfer",
+            async (
+                string companyId,
+                OwnershipTransferBody body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (!CompanyId.TryParse(companyId, out var parsedCompanyId) ||
+                    await companyService.LoadPublicCompanyProfileAsync(parsedCompanyId, cancellationToken) == null)
+                {
+                    return Results.NotFound();
+                }
+
+                MembershipRole formerOwnerRole = MembershipRole.Operator;
+                if (!string.IsNullOrWhiteSpace(body.FormerOwnerRole))
+                {
+                    if (!Enum.TryParse<MembershipRole>(body.FormerOwnerRole, ignoreCase: true, out var parsedFormer) ||
+                        parsedFormer is not (MembershipRole.Operator or MembershipRole.Crafter))
+                    {
+                        return Results.BadRequest(new MembershipErrorResponse(
+                            "invalid_membership_role",
+                            "Former owner role must be 'operator' or 'crafter'."));
+                    }
+                    formerOwnerRole = parsedFormer;
+                }
+
+                var result = await memberships.TransferOwnershipAsync(
+                    parsedCompanyId,
+                    body.TargetAccountProfileId,
+                    account.ProfileId,
+                    formerOwnerRole,
+                    cancellationToken);
+                return result.Status switch
+                {
+                    MembershipRoleMutationStatus.Applied or MembershipRoleMutationStatus.Replayed => Results.Ok(
+                        ToResponse(result.Membership!)),
+                    MembershipRoleMutationStatus.NotFound => Results.NotFound(),
+                    MembershipRoleMutationStatus.NotAuthorized => Results.StatusCode(StatusCodes.Status403Forbidden),
+                    MembershipRoleMutationStatus.ForbiddenRole => Results.BadRequest(new MembershipErrorResponse(
+                        "invalid_membership_role",
+                        "Former owner role must be 'operator' or 'crafter'.")),
+                    _ => Results.Conflict(new MembershipErrorResponse(
+                        "ownership_transfer_unavailable",
+                        "Ownership requires a single active owner and a different active member to receive it."))
+                };
+            });
 
         app.MapGet(
             "/trade/v1/memberships",
