@@ -2405,6 +2405,15 @@ public sealed class SqliteMembershipStore(
         string reason,
         CancellationToken cancellationToken)
     {
+        const int MaximumReasonLength = 500;
+        var reasonText = $"{reason}:{ToStorage(fromRole)}->{ToStorage(toRole)}";
+        if (reasonText.Length > MaximumReasonLength)
+        {
+            // keep the head (action + from->to fit in practice); the check constraint
+            // on membership_events.reason rejects longer values, so truncate.
+            reasonText = reasonText[..MaximumReasonLength];
+        }
+
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -2423,7 +2432,7 @@ public sealed class SqliteMembershipStore(
         command.Parameters.AddWithValue("$actorProfileId", actorProfileId.ToString("D"));
         command.Parameters.AddWithValue("$createdAtUtc", createdAtUtc.ToString("O"));
         command.Parameters.AddWithValue("$role", ToStorage(toRole));
-        command.Parameters.AddWithValue("$reason", $"{reason}:{ToStorage(fromRole)}->{ToStorage(toRole)}");
+        command.Parameters.AddWithValue("$reason", reasonText);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
