@@ -64,6 +64,9 @@ public sealed partial class ProfileHostedTradeCompanyService(
         CompanyId companyId,
         CancellationToken cancellationToken = default)
     {
+        // Legacy/key-only compatibility: only grants owner when the profile has
+        // no active membership row. A demoted former host resolves through its
+        // membership role instead (ResolveMembershipAccessAsync).
         if (hostProfileId == Guid.Empty ||
             await profiles.LoadProfileAsync(
                 hostProfileId.ToString("D"),
@@ -74,6 +77,26 @@ public sealed partial class ProfileHostedTradeCompanyService(
                 cancellationToken) == null)
         {
             return null;
+        }
+
+        var membership = memberships == null
+            ? null
+            : await memberships.LoadAsync(
+                companyId,
+                hostProfileId,
+                cancellationToken);
+        if (membership is { State: MembershipState.Active })
+        {
+            return new TradeCompanyAccessContext(
+                companyId,
+                hostProfileId,
+                membership.Role switch
+                {
+                    MembershipRole.Owner => TradeCompanyRole.Owner,
+                    MembershipRole.Operator => TradeCompanyRole.Operator,
+                    _ => TradeCompanyRole.ReadOnly
+                },
+                hostProfileId);
         }
 
         return new TradeCompanyAccessContext(
@@ -108,6 +131,30 @@ public sealed partial class ProfileHostedTradeCompanyService(
             return null;
         }
 
+        // Active membership row wins. The profile physically hosting the company
+        // object is a storage route, not an authority grant — after an ownership
+        // transfer the former host must resolve through its membership role.
+        var membership = memberships == null
+            ? null
+            : await memberships.LoadAsync(
+                companyId,
+                accountProfileId,
+                cancellationToken);
+        if (membership is { State: MembershipState.Active })
+        {
+            return new TradeCompanyAccessContext(
+                companyId,
+                accountProfileId,
+                membership.Role switch
+                {
+                    MembershipRole.Owner => TradeCompanyRole.Owner,
+                    MembershipRole.Operator => TradeCompanyRole.Operator,
+                    _ => TradeCompanyRole.ReadOnly
+                },
+                hostProfileId);
+        }
+
+        // Legacy compatibility only: a key-only host with no membership row at all.
         if (accountProfileId == hostProfileId)
         {
             return new TradeCompanyAccessContext(
@@ -117,27 +164,7 @@ public sealed partial class ProfileHostedTradeCompanyService(
                 hostProfileId);
         }
 
-        var membership = memberships == null
-            ? null
-            : await memberships.LoadAsync(
-                companyId,
-                accountProfileId,
-                cancellationToken);
-        if (membership is not { State: MembershipState.Active })
-        {
-            return null;
-        }
-
-        return new TradeCompanyAccessContext(
-            companyId,
-            accountProfileId,
-            membership.Role switch
-            {
-                MembershipRole.Owner => TradeCompanyRole.Owner,
-                MembershipRole.Operator => TradeCompanyRole.Operator,
-                _ => TradeCompanyRole.ReadOnly
-            },
-            hostProfileId);
+        return null;
     }
 
     public async Task<TradeCompanyAccessContext?> ResolveDelegatedOperatorAccessAsync(
