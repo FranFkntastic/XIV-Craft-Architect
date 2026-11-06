@@ -1343,6 +1343,11 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         WorkerSessionResultEnvelope result,
         CancellationToken cancellationToken)
     {
+        if (!result.Accepted && result.RejectionCode == "command-rejected")
+        {
+            _projections.TryPublish(result with { Accepted = true });
+            return;
+        }
         if (!string.Equals(result.RejectionCode, "stale-revision", StringComparison.Ordinal))
         {
             return;
@@ -1388,7 +1393,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             result.RejectionCode,
             result.Revision,
             result.Message ??
-            "The plan changed before this edit was accepted. The current Worker projection has been restored.");
+            "The Worker response could not be applied. No edit acknowledgement was published.");
 
     private void OnCrossTabSessionProjectionReceived(
         object? sender,
