@@ -545,6 +545,62 @@ public sealed class WorkerSessionContractTests
         Assert.Equal(export.StoredPlan.SourcePlanId, reexport.StoredPlan.SourcePlanId);
         Assert.Equal(export.StoredPlan.SourcePlanName, reexport.StoredPlan.SourcePlanName);
         Assert.Equal(export.StoredPlan.DataCenter, reexport.StoredPlan.DataCenter);
+
+        await AssertPublishedProcurementWithoutRouteAcceptsNextEditAsync(reexport.StoredPlan);
+    }
+
+    private static async Task AssertPublishedProcurementWithoutRouteAcceptsNextEditAsync(
+        StoredPlan storedPlan)
+    {
+        // Reproduce the saved-plan failure without live market requests: retained
+        // evidence exists, but the only target is on hand and needs no route.
+        var plan = JsonSerializer.Deserialize<CraftingPlan>(storedPlan.PlanJson!)!;
+        plan.RootItems[0].Source = AcquisitionSource.OnHand;
+        plan.RootItems[0].SourceReason = AcquisitionSourceReason.UserSelected;
+        storedPlan.PlanJson = JsonSerializer.Serialize(plan);
+        storedPlan.PlanStateJson = StoredPlanRuntimeState.Capture(plan);
+        storedPlan.ProcurementRouteJson = null;
+        var restored = await SendAsync("restore", 7,
+            new WorkerSessionRestorePayload(8, storedPlan, false, false));
+        Assert.True(restored.Accepted, restored.Message);
+
+        var operationId = Guid.NewGuid();
+        var revision = restored.Revision;
+        var started = await SendAsync(WorkerSessionCommandKinds.OperationBegin, revision,
+            new WorkerSessionOperationBeginRequest(operationId,
+                WorkerSessionOperationKind.ProcurementAnalysis, "no-route:8", "No-route regression"),
+            operationId);
+        Assert.True(started.Accepted, started.Message);
+        var generated = await SendAsync(WorkerSessionCommandKinds.ProcurementRun, revision,
+            new WorkerProcurementRequest(MarketFetchScope.SelectedDataCenter,
+                "Aether", "North America", MarketAcquisitionLens.MinimumUpfrontCost,
+                0, true, false, MarketTravelPriority.DataCenterTransfersFirst), operationId);
+        Assert.True(generated.Accepted, generated.Message);
+        Assert.Equal(revision + 1, generated.Revision);
+        var mutation = generated.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions)!;
+        Assert.True(mutation.DurablePatch?.ReplaceProcurementRoute);
+        Assert.Null(mutation.DurablePatch?.ProcurementRouteJson);
+        var outcome = mutation.PublicProjection.Deserialize<WorkerProcurementOutcome>(WireOptions)!;
+        Assert.Equal(CoreProcurementWorkflowStatus.Published, outcome.Status);
+        Assert.False(outcome.Procurement.HasRoute);
+        Assert.False(mutation.Shell.HasProcurementRoute);
+
+        var edited = await SendAsync(WorkerSessionCommandKinds.ProjectItemsMutation, generated.Revision,
+            new WorkerProjectItemsMutation("quantity", ItemId: 42, Quantity: 3));
+        Assert.True(edited.Accepted, edited.Message);
+        Assert.Equal(generated.Revision + 1, edited.Revision);
+        var exported = await SendAsync("export", edited.Revision,
+            new WorkerSessionExportRequest("autosave", "Autosave", true));
+        Assert.True(exported.Accepted, exported.Message);
+        var saved = exported.Projection.Deserialize<WorkerSessionExportProjection>(WireOptions)!.StoredPlan!;
+        Assert.Equal(3, saved.ProjectItems.Single(item => item.Id == 42).Quantity);
+        var reloaded = await SendAsync("restore", edited.Revision,
+            new WorkerSessionRestorePayload(edited.Revision + 1, saved, false, false));
+        Assert.True(reloaded.Accepted, reloaded.Message);
+        var recipe = await SendAsync(WorkerSessionCommandKinds.RecipeProjection, reloaded.Revision, new { });
+        Assert.True(recipe.Accepted, recipe.Message);
+        Assert.Equal(3, recipe.Projection.Deserialize<WorkerRecipePlannerProjection>(WireOptions)!
+            .ProjectItems.Single(item => item.Id == 42).Quantity);
     }
 
     private static MarketItemAnalysis Analysis(int id, string name, int quantity) => new()
