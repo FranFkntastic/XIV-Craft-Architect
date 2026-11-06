@@ -92,7 +92,7 @@ jobs:
           node-version: '22'
 
       - name: Test truthful-suite tooling
-        run: node --test "tools/TruthfulSuite/truthful-suite.test.mjs"
+        run: node --test "tools/TruthfulSuite/truthful-suite.test.mjs" "tools/TruthfulSuite/worker-session-persistence.test.mjs"
 
       - name: Restore pinned browser package
         shell: bash

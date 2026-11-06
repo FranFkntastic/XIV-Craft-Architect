@@ -1259,10 +1259,10 @@ public static partial class ManagedHost
                 result.ShoppingPlanCount,
                 CaptureProcurementProjection(),
                 diagnostics),
-            new WorkerSessionDurablePatch(
-                ReplaceProcurementRoute: true,
-                ProcurementRouteJson: _canonicalSession.ExportProcurementRoute(),
-                ProcurementTravelTolerance: request.TravelTolerance));
+            _canonicalSession.CreateDurablePatch(replaceProcurementRoute: true) with
+            {
+                ProcurementTravelTolerance = request.TravelTolerance
+            });
         Console.WriteLine(
             $"[EngineSession] procurement world-data={worldDataMilliseconds}ms " +
             $"workflow={workflowMilliseconds}ms projection-and-patch=" +
