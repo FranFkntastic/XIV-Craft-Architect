@@ -2,11 +2,12 @@ $ErrorActionPreference = "Stop"
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $dependencyRoot = Join-Path $repositoryRoot "artifacts\dependencies\Franthropy"
-$revisionPath = Join-Path $repositoryRoot "eng\Franthropy.version"
-$revision = (Get-Content -LiteralPath $revisionPath -Raw).Trim()
+$revisionPath = Join-Path $repositoryRoot "eng\Franthropy.Version.props"
+[xml]$versionProps = Get-Content -LiteralPath $revisionPath -Raw
+$revision = ([string]$versionProps.Project.PropertyGroup.FranthropyPackageVersion) -replace '^0\.1\.0-commit\.', ''
 
 if ($revision -notmatch '^[0-9a-f]{40}$') {
-    throw "eng/Franthropy.version must contain one exact lowercase commit SHA."
+    throw "eng/Franthropy.Version.props must contain one exact lowercase commit version."
 }
 
 $mutex = [System.Threading.Mutex]::new($false, 'Local\FFXIVCraftArchitect.FranthropyDependency')
