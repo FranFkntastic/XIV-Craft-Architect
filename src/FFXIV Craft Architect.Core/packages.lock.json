@@ -2,6 +2,15 @@
   "version": 1,
   "dependencies": {
     "net8.0": {
+      "Franthropy.FFXIV": {
+        "type": "Direct",
+        "requested": "[0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9, 0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9]",
+        "resolved": "0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9",
+        "contentHash": "un6Z0QTABd7zandHpZW2cxfI4yeIAPR9NACDkLvwwQ89XN7fLgIGjB9TlIbfA6f4gN+Jfg3C+po58PUt0HRhmw==",
+        "dependencies": {
+          "Franthropy.Filtering": "0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9"
+        }
+      },
       "Microsoft.Extensions.DependencyInjection.Abstractions": {
         "type": "Direct",
         "requested": "[8.0.0, )",
@@ -42,6 +51,11 @@
         "requested": "[8.0.5, )",
         "resolved": "8.0.5",
         "contentHash": "0f1B50Ss7rqxXiaBJyzUu9bWFOO2/zSlifZ/UNMdiIpDYe4cY4LQQicP4nirK1OS31I43rn062UIJ1Q9bpmHpg=="
+      },
+      "Franthropy.Filtering": {
+        "type": "Transitive",
+        "resolved": "0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9",
+        "contentHash": "B4xFngCSyrKB1BXpz7fYG88cLO87qalPZMw761d7nQpW7oqc9AFSMNzw9bKvC0w9QssadSzQUFUP2S1BlzK2hg=="
       },
       "Microsoft.Extensions.Configuration": {
         "type": "Transitive",
@@ -136,15 +150,6 @@
         "type": "Transitive",
         "resolved": "8.0.0",
         "contentHash": "c9xLpVz6PL9lp/djOWtk5KPDZq3cSYpmXoJQY524EOtuFl5z9ZtsotpsyrDW40U1DRnQSYvcPKEUV0X//u6gkQ=="
-      },
-      "franthropy.ffxiv": {
-        "type": "Project",
-        "dependencies": {
-          "Franthropy.Filtering": "[0.1.0, )"
-        }
-      },
-      "franthropy.filtering": {
-        "type": "Project"
       }
     }
   }
