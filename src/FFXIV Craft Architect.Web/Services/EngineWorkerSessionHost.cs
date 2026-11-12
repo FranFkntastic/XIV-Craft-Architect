@@ -1696,6 +1696,8 @@ public static partial class ManagedHost
                     unitPrice * node.Quantity);
             })
             .ToArray();
+        var activeProcurementIds = demand.ActiveProcurementDemand.Select(node => node.NodeId)
+            .ToHashSet(StringComparer.Ordinal);
         return new WorkerTradeProjection(
             _sessionRevision,
             HasPlan: true,
@@ -1722,7 +1724,16 @@ public static partial class ManagedHost
                 .Where(warning => !string.IsNullOrWhiteSpace(warning))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
-                .ToArray());
+                .ToArray(),
+            demand.AllPlanDemand.Select(occurrence => new WorkerPlanOccurrence(
+                occurrence.NodeId,
+                occurrence.ParentNodeId,
+                occurrence.ItemId,
+                occurrence.MustBeHq,
+                occurrence.Quantity,
+                occurrence.Source,
+                activeProcurementIds.Contains(occurrence.NodeId),
+                occurrence.SuppressedByNodeId != null)).ToArray());
     }
 
     private static IReadOnlyList<string> ResolveTradeRequestedDataCenters(
