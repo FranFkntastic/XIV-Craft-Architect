@@ -18,7 +18,9 @@ public static class TradeProcurementPaymentImpact
         if (occurrences == null || occurrences.Count == 0 ||
             occurrences.Any(node => string.IsNullOrWhiteSpace(node.NodeId)) ||
             occurrences.Select(node => node.NodeId).Distinct(StringComparer.Ordinal).Count() != occurrences.Count)
+        {
             return impacts;
+        }
 
         var nodes = occurrences.ToDictionary(node => node.NodeId, StringComparer.Ordinal);
         var paths = new Dictionary<string, List<WorkerPlanOccurrence>>(StringComparer.Ordinal);
@@ -29,10 +31,21 @@ public static class TradeProcurementPaymentImpact
             var current = node;
             while (true)
             {
-                if (!visited.Add(current.NodeId)) return impacts;
+                if (!visited.Add(current.NodeId))
+                {
+                    return impacts;
+                }
+
                 path.Add(current);
-                if (current.ParentNodeId == null) break;
-                if (!nodes.TryGetValue(current.ParentNodeId, out current!)) return impacts;
+                if (current.ParentNodeId == null)
+                {
+                    break;
+                }
+
+                if (!nodes.TryGetValue(current.ParentNodeId, out current!))
+                {
+                    return impacts;
+                }
             }
             paths[node.NodeId] = path;
         }
@@ -41,7 +54,10 @@ public static class TradeProcurementPaymentImpact
             .ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var row in snapshot.AcquisitionRows)
         {
-            if (targetsByItem.ContainsKey(row.ItemId)) impacts[(row.ItemId, row.MustBeHq)] = 0m;
+            if (targetsByItem.ContainsKey(row.ItemId))
+            {
+                impacts[(row.ItemId, row.MustBeHq)] = 0m;
+            }
         }
         var frontierGroups = occurrences.Where(node => node.IsActiveProcurement && !node.IsSuppressed && node.Quantity > 0)
             .GroupBy(node => (node.ItemId, node.MustBeHq))
@@ -67,20 +83,28 @@ public static class TradeProcurementPaymentImpact
                 // Expiry controls whether a quote can be accepted, not what its recorded cash means.
                 if (quoteLines != null && quoteLines.TryGetValue(key, out var quotes) &&
                     quotes.Length == 1 && quotes[0].RequiredQuantity == quantity)
+                {
                     cash = quotes[0].CashRequired;
+                }
                 else if (quoteLines == null && !requireQuotedCash &&
                     string.IsNullOrWhiteSpace(snapshot.MaterialQuoteFailureReason) &&
                     materialLines.TryGetValue(key, out var lines) && lines.Length == 1 &&
                     lines[0].Quantity == quantity && TradeOrderWorkflow.IsResolvedMaterialEvidence(
                         lines[0].UnitCost, lines[0].UnitCost * quantity, lines[0].EvidenceSource))
+                {
                     cash = lines[0].UnitCost * quantity;
+                }
             }
             foreach (var frontier in peers)
             {
                 foreach (var ancestor in paths[frontier.NodeId]
                     .Select(node => (node.ItemId, node.MustBeHq)).Distinct())
                 {
-                    if (!impacts.TryGetValue(ancestor, out var current)) continue;
+                    if (!impacts.TryGetValue(ancestor, out var current))
+                    {
+                        continue;
+                    }
+
                     impacts[ancestor] = cash >= 0 ? current + cash * frontier.Quantity / quantity : null;
                 }
             }
@@ -91,7 +115,9 @@ public static class TradeProcurementPaymentImpact
             if (targetsByItem.TryGetValue(row.ItemId, out var targets) &&
                 targets.Any(node => !node.IsSuppressed &&
                     (node.MustBeHq != row.MustBeHq || node.Source != row.Source)))
+            {
                 impacts[(row.ItemId, row.MustBeHq)] = null;
+            }
         }
         return impacts;
     }

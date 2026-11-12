@@ -123,16 +123,22 @@ public partial class TradeOrders
     {
         var canonicalTerms = (_selectedOrder?.Id == order.Id ? SelectedCanonicalCommission : null)
             ?.CurrentTerms ?? order.CompanyCommission?.CurrentTerms;
-        if (_selectedOrder?.Id == order.Id && IsEditingCommissionTermsRevision) canonicalTerms = null;
+        if (_selectedOrder?.Id == order.Id && IsEditingCommissionTermsRevision)
+        {
+            canonicalTerms = null;
+        }
+
         if (canonicalTerms != null)
         {
             order = CreateCanonicalTermsWorkPackage(order, canonicalTerms);
         }
-        var responsibilities = canonicalTerms == null ? GetPayrollDraftForOrder(order) : new TradePayrollWorkflowDraft
-        {
-            Responsibilities = canonicalTerms.Materials.Select(material => new TradePayrollResponsibilityLine(
-                material.ItemId, material.RequiresHq, material.Responsibility)).ToArray()
-        };
+        var responsibilities = canonicalTerms == null
+            ? _selectedOrder?.Id == order.Id ? GetSelectedOrderResponsibilityProjection() : GetPayrollDraftForOrder(order)
+            : new TradePayrollWorkflowDraft
+            {
+                Responsibilities = canonicalTerms.Materials.Select(material => new TradePayrollResponsibilityLine(
+                    material.ItemId, material.RequiresHq, material.Responsibility)).ToArray()
+            };
         var summary = TradeCommissionPaymentSummary.FromOrder(
             order,
             responsibilities,

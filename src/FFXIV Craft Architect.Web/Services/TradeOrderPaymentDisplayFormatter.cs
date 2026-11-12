@@ -50,7 +50,10 @@ public static class TradeOrderPaymentDisplayFormatter
                 : "Impact unavailable";
         }
 
-        if (requireQuotedCash) return "Not itemized in terms";
+        if (requireQuotedCash)
+        {
+            return "Not itemized in terms";
+        }
 
         if (material.TotalCost <= 0)
         {
