@@ -72,7 +72,7 @@ public static class TradeProcurementPaymentImpact
             var source = peers[0].Source;
             var quantity = peers.Sum(node => (long)node.Quantity);
             decimal? cash = null;
-            if (source == AcquisitionSource.OnHand ||
+            if (peers.All(node => node.Source == AcquisitionSource.OnHand) ||
                 responsibilities.GetValueOrDefault(key) == CommissionMaterialResponsibility.Provided)
             {
                 cash = 0m;
