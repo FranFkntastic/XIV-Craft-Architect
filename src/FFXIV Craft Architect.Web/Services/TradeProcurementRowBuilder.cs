@@ -60,7 +60,8 @@ public static class TradeProcurementRowBuilder
         TradeOrder order,
         TradePayrollWorkflowDraft? draft,
         string? activePlanId,
-        WorkerTradeProjection? liveSnapshot)
+        WorkerTradeProjection? liveSnapshot,
+        bool useRecordedPayment = false)
     {
         ArgumentNullException.ThrowIfNull(order);
 
@@ -84,9 +85,17 @@ public static class TradeProcurementRowBuilder
             .Where(group => group.Count() == 1)
             .ToDictionary(group => group.Key, group => group.Single());
         var retainedEvidence = BuildRetainedEvidenceLookup(order, snapshot.PlanId);
+        var paymentSnapshot = useRecordedPayment
+            ? snapshot with { MaterialQuote = order.SourceSnapshot.MaterialQuote, MaterialQuoteFailureReason = null }
+            : snapshot;
+        var impacts = TradeProcurementPaymentImpact.CalculateAll(paymentSnapshot, responsibilities,
+            requireQuotedCash: useRecordedPayment);
 
         return snapshot.AcquisitionRows
-            .Select(row => ToTradeRow(row, lines, retainedEvidence, responsibilities))
+            .Select(row => ToTradeRow(row, lines, retainedEvidence, responsibilities) with
+            {
+                PaymentImpact = impacts.GetValueOrDefault((row.ItemId, row.MustBeHq))
+            })
             .OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
