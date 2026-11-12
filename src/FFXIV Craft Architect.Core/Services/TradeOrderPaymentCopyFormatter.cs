@@ -25,7 +25,8 @@ public sealed record TradeOrderPaymentCopyContext(
     IReadOnlyList<TradeOrderPaymentOutput> Outputs,
     TradeOrderPaymentProvenance Provenance,
     TradeCommissionPaymentSummary Payment,
-    CompanyCommissionPaymentTerms? CanonicalPayment = null);
+    CompanyCommissionPaymentTerms? CanonicalPayment = null,
+    bool IsDraftTerms = false);
 
 public static class TradeOrderPaymentCopyFormatter
 {
@@ -38,7 +39,7 @@ public static class TradeOrderPaymentCopyFormatter
         var builder = CreateHeader("Payment receipt", context);
         if (context.CanonicalPayment is { } canonical)
         {
-            AppendCanonicalPayment(builder, canonical);
+            AppendCanonicalPayment(builder, canonical, context.IsDraftTerms);
             return builder.ToString();
         }
         builder.AppendLine($"Active basis: {FormatPaymentContract(active.Contract)}");
@@ -75,7 +76,7 @@ public static class TradeOrderPaymentCopyFormatter
         builder.AppendLine();
         if (context.CanonicalPayment is { } canonical)
         {
-            AppendCanonicalPayment(builder, canonical);
+            AppendCanonicalPayment(builder, canonical, context.IsDraftTerms);
             return builder.ToString();
         }
         builder.AppendLine($"Active basis: {FormatPaymentContract(summary.Active.Contract)}");
@@ -101,12 +102,13 @@ public static class TradeOrderPaymentCopyFormatter
         return "Needs reprice";
     }
 
-    private static void AppendCanonicalPayment(StringBuilder builder, CompanyCommissionPaymentTerms payment)
+    private static void AppendCanonicalPayment(StringBuilder builder, CompanyCommissionPaymentTerms payment, bool isDraft)
     {
         builder.AppendLine($"Active basis: {CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(payment.ContractLabel)}");
+        builder.AppendLine(isDraft ? "Payment status: Draft estimate" : "Payment status: Recorded terms");
         builder.AppendLine($"Payment amount: {FormatGilAllowZero(payment.Total)}");
         builder.AppendLine($"Crafter-procured reimbursement: {FormatGilAllowZero(payment.MaterialReimbursement)}");
-        builder.AppendLine($"Agreed material adjustment: {FormatGilAllowZero(payment.MaterialAdjustment)}");
+        builder.AppendLine($"{(isDraft ? "Draft" : "Agreed")} material adjustment: {FormatGilAllowZero(payment.MaterialAdjustment)}");
         builder.AppendLine($"Craft labor: {FormatGilAllowZero(payment.CraftLabor)}");
     }
 

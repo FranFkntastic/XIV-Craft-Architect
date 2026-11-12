@@ -18,6 +18,9 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 
 public partial class TradeOrders
 {
+    private bool HasAgreedPaymentTerms => HasCanonicalCommission && !IsEditingCommissionTermsRevision &&
+        (SelectedCanonicalCommission ?? _selectedOrder?.CompanyCommission)?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft;
+
     private TradePayrollWorkflowDraft? GetPayrollDraftForOrder(TradeOrder order)
     {
         return _payrollDrafts.FirstOrDefault(draft =>
@@ -159,7 +162,9 @@ public partial class TradeOrders
                 order.SourceSnapshot.ImportedAtUtc,
                 order.SourceSnapshot.MaterialQuote),
             summary,
-            canonicalTerms?.Payment);
+            canonicalTerms?.Payment,
+            IsDraftTerms: canonicalTerms != null &&
+                (SelectedCanonicalCommission ?? order.CompanyCommission)?.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft);
     }
 
     private async Task CopyTextToClipboardAsync(string text, string successMessage)

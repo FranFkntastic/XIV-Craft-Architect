@@ -429,7 +429,9 @@
                                     <RequirementsContent>
                                         @{
                                             var paymentSummary = GetSelectedOrderPaymentSummary();
-                                            var showAgreed = HasCanonicalCommission && !IsEditingCommissionTermsRevision;
+                                            var showAgreed = HasAgreedPaymentTerms;
+                                            var termsBasis = HasCanonicalCommission && !IsEditingCommissionTermsRevision
+                                                ? showAgreed ? "Agreed terms" : "Draft terms" : null;
                                             var displayedPaymentTotal = paymentSummary.TotalPayment;
                                             var materialQuote = showAgreed && (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission) is { } canonicalCommission
                                                 ? canonicalCommission.CurrentTerms.PricingEvidence.MaterialQuote
@@ -1021,14 +1023,14 @@
                                         </div>
                                         <div class="trade-orders-payment-breakdown-row">
                                             <span>Material reimbursement</span>
-                                            <span>@(showAgreed ? "Agreed terms; includes any shopping allowance" : "Executable route cash + shopping allowance")</span>
+                                            <span>@(termsBasis ?? "Executable route cash + shopping allowance")</span>
                                             <strong>@FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal)</strong>
                                         </div>
-                                        @if (showAgreed || paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
+                                        @if (termsBasis != null || paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
                                         {
                                             <div class="trade-orders-payment-breakdown-row">
-                                                <span>@(showAgreed ? "Material adjustment" : "Material value bonus")</span>
-                                                <span>@(showAgreed ? "Agreed terms" : $"{paymentSummary.Active.CommissionPercent:N0}% of material value")</span>
+                                                <span>@(termsBasis != null ? "Material adjustment" : "Material value bonus")</span>
+                                                <span>@(termsBasis ?? $"{paymentSummary.Active.CommissionPercent:N0}% of material value")</span>
                                                 <strong>@FormatGilAllowZero(paymentSummary.Active.CommissionAmount)</strong>
                                             </div>
                                             <div class="trade-orders-payment-breakdown-row">
@@ -1039,7 +1041,7 @@
                                         }
                                         <div class="trade-orders-payment-breakdown-row is-total">
                                             <span>Total payment</span>
-                                            <span>@(showAgreed ? "Agreed payment terms" : FormatPaymentContract(paymentSummary.Active.Contract))</span>
+                                            <span>@(termsBasis ?? FormatPaymentContract(paymentSummary.Active.Contract))</span>
                                             <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
                                         </div>
                                     </div>
@@ -2332,7 +2334,7 @@
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => @<div class="trade-orders-procurement-cost-cell">
         <strong title="Active crafter procurement cash only; excludes labor, material bonus, and route safety allowance. Craft subtree rollups overlap their ingredient rows and must not be added together.">@(row.IsLiveAcquisitionRow
             ? row.PaymentImpact.HasValue ? FormatGilAllowZero(row.PaymentImpact.Value)
-                : HasCanonicalCommission && !IsEditingCommissionTermsRevision ? "Not itemized in terms" : "Impact unavailable"
+                : HasAgreedPaymentTerms ? "Not itemized in terms" : "Impact unavailable"
             : row.Responsibility == CommissionMaterialResponsibility.Provided || row.Source == AcquisitionSource.OnHand
                 ? FormatGilAllowZero(0) : FormatGil(row.TotalCost))</strong>
         <span>
