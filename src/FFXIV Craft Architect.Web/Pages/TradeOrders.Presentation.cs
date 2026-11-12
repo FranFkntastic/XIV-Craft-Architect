@@ -95,9 +95,11 @@ public partial class TradeOrders
             _ => "Other handoff"
         };
 
-    private static string FormatMaterialPaymentImpact(TradeCommissionPaymentMaterial material)
+    private static string FormatMaterialPaymentImpact(TradeCommissionPaymentMaterial material,
+        TradeMaterialQuote? quote, bool showAgreed)
     {
-        return TradeOrderPaymentDisplayFormatter.FormatMaterialPaymentImpact(material);
+        return TradeOrderPaymentDisplayFormatter.FormatMaterialPaymentImpact(
+            material, quote, requireQuotedCash: showAgreed);
     }
 
     private static string FormatResponsibility(CommissionMaterialResponsibility responsibility)
@@ -119,9 +121,27 @@ public partial class TradeOrders
 
     private TradeOrderPaymentCopyContext CreateOrderPaymentCopyContext(TradeOrder order)
     {
+        var canonicalTerms = (_selectedOrder?.Id == order.Id ? SelectedCanonicalCommission : null)
+            ?.CurrentTerms ?? order.CompanyCommission?.CurrentTerms;
+        if (_selectedOrder?.Id == order.Id && IsEditingCommissionTermsRevision)
+        {
+            canonicalTerms = null;
+        }
+
+        if (canonicalTerms != null)
+        {
+            order = CreateCanonicalTermsWorkPackage(order, canonicalTerms);
+        }
+        var responsibilities = canonicalTerms == null
+            ? _selectedOrder?.Id == order.Id ? GetSelectedOrderResponsibilityProjection() : GetPayrollDraftForOrder(order)
+            : new TradePayrollWorkflowDraft
+            {
+                Responsibilities = canonicalTerms.Materials.Select(material => new TradePayrollResponsibilityLine(
+                    material.ItemId, material.RequiresHq, material.Responsibility)).ToArray()
+            };
         var summary = TradeCommissionPaymentSummary.FromOrder(
             order,
-            GetPayrollDraftForOrder(order),
+            responsibilities,
             GetOrderEffectivePaymentPolicy(order));
         return new TradeOrderPaymentCopyContext(
             order.Title,
@@ -138,7 +158,8 @@ public partial class TradeOrders
                 order.SourceSnapshot.RequestedDataCenters,
                 order.SourceSnapshot.ImportedAtUtc,
                 order.SourceSnapshot.MaterialQuote),
-            summary);
+            summary,
+            canonicalTerms?.Payment);
     }
 
     private async Task CopyTextToClipboardAsync(string text, string successMessage)

@@ -201,7 +201,7 @@ public sealed class CompanyCommissionProjectionPresentationContractTests
             "Executable material quote is unavailable.",
             "IsIrrelevantMarketWarningForSelectedSource(");
         Contains(source,
-            "SelectedCanonicalCommission is { } canonicalCommission",
+            "showAgreed && (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission) is { } canonicalCommission",
             "canonicalCommission.CurrentTerms.PricingEvidence.MaterialQuote",
             ": _selectedOrder.SourceSnapshot.MaterialQuote;");
         Omits(source,

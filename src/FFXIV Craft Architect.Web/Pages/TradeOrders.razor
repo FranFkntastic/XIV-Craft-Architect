@@ -429,9 +429,9 @@
                                     <RequirementsContent>
                                         @{
                                             var paymentSummary = GetSelectedOrderPaymentSummary();
-                                            var displayedPaymentTotal = SelectedCanonicalCommission?.CurrentTerms.Payment.Total ??
-                                                paymentSummary.TotalPayment;
-                                            var materialQuote = SelectedCanonicalCommission is { } canonicalCommission
+                                            var showAgreed = HasCanonicalCommission && !IsEditingCommissionTermsRevision;
+                                            var displayedPaymentTotal = paymentSummary.TotalPayment;
+                                            var materialQuote = showAgreed && (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission) is { } canonicalCommission
                                                 ? canonicalCommission.CurrentTerms.PricingEvidence.MaterialQuote
                                                 : _selectedOrder.SourceSnapshot.MaterialQuote;
                                         }
@@ -1021,14 +1021,14 @@
                                         </div>
                                         <div class="trade-orders-payment-breakdown-row">
                                             <span>Material reimbursement</span>
-                                            <span>Executable route cash + shopping allowance</span>
-                                            <strong>@FormatGil(paymentSummary.MaterialReimbursementTotal)</strong>
+                                            <span>@(showAgreed ? "Agreed terms; includes any shopping allowance" : "Executable route cash + shopping allowance")</span>
+                                            <strong>@FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal)</strong>
                                         </div>
-                                        @if (paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
+                                        @if (showAgreed || paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
                                         {
                                             <div class="trade-orders-payment-breakdown-row">
-                                                <span>Material value bonus</span>
-                                                <span>@paymentSummary.Active.CommissionPercent.ToString("N0")% of material value</span>
+                                                <span>@(showAgreed ? "Material adjustment" : "Material value bonus")</span>
+                                                <span>@(showAgreed ? "Agreed terms" : $"{paymentSummary.Active.CommissionPercent:N0}% of material value")</span>
                                                 <strong>@FormatGilAllowZero(paymentSummary.Active.CommissionAmount)</strong>
                                             </div>
                                             <div class="trade-orders-payment-breakdown-row">
@@ -1039,7 +1039,7 @@
                                         }
                                         <div class="trade-orders-payment-breakdown-row is-total">
                                             <span>Total payment</span>
-                                            <span>@FormatPaymentContract(paymentSummary.Active.Contract)</span>
+                                            <span>@(showAgreed ? "Agreed payment terms" : FormatPaymentContract(paymentSummary.Active.Contract))</span>
                                             <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
                                         </div>
                                     </div>
@@ -1102,7 +1102,7 @@
                                                 <span class="trade-orders-payment-responsibility">
                                                     @FormatResponsibility(material.Responsibility)
                                                 </span>
-                                                <span>@FormatMaterialPaymentImpact(material)</span>
+                                                <span>@FormatMaterialPaymentImpact(material, materialQuote, showAgreed)</span>
                                             </div>
                                         }
                                     </div>
@@ -1643,7 +1643,7 @@
                                     <section class="trade-orders-procurement-summary">
                                         <div class="trade-orders-procurement-total">
                                             <span>Crafter reimbursable</span>
-                                            <strong>@(currentMaterialQuote is null ? "Unavailable" : FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal))</strong>
+                                            <strong>@(currentMaterialQuote is null && !(HasCanonicalCommission && !IsEditingCommissionTermsRevision) ? "Unavailable" : FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal))</strong>
                                         </div>
                                         <div class="trade-orders-procurement-health">
                                             <span>Company handoff</span>
@@ -1743,7 +1743,7 @@
                                         <span>@FormatProcurementFooter(procurementRows)</span>
                                         <div>
                                             <small>@FormatGilAllowZero(GetProcurementMaterialValueTotal(procurementRows)) material value</small>
-                                            <strong>@(currentMaterialQuote is null ? "Quote unavailable" : $"{FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal)} reimbursable")</strong>
+                                            <strong>@(currentMaterialQuote is null && !(HasCanonicalCommission && !IsEditingCommissionTermsRevision) ? "Quote unavailable" : $"{FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal)} reimbursable")</strong>
                                         </div>
                                     </div>
                                     @if (paymentSummary.Warnings.Count > 0)
@@ -2330,11 +2330,15 @@
     </div>;
 
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => @<div class="trade-orders-procurement-cost-cell">
-        <strong>@(row.Responsibility == CommissionMaterialResponsibility.Provided || row.Source == AcquisitionSource.OnHand
-            ? FormatGilAllowZero(0)
-            : FormatGil(row.TotalCost))</strong>
+        <strong title="Active crafter procurement cash only; excludes labor, material bonus, and route safety allowance. Craft subtree rollups overlap their ingredient rows and must not be added together.">@(row.IsLiveAcquisitionRow
+            ? row.PaymentImpact.HasValue ? FormatGilAllowZero(row.PaymentImpact.Value)
+                : HasCanonicalCommission && !IsEditingCommissionTermsRevision ? "Not itemized in terms" : "Impact unavailable"
+            : row.Responsibility == CommissionMaterialResponsibility.Provided || row.Source == AcquisitionSource.OnHand
+                ? FormatGilAllowZero(0) : FormatGil(row.TotalCost))</strong>
         <span>
-            @(row.Responsibility == CommissionMaterialResponsibility.Provided
+            @(row.IsLiveAcquisitionRow && row.HasChildren && row.Source == AcquisitionSource.Craft
+                ? $"{FormatGil(row.TotalCost)} full acquisition value; subtree cash (not additive)"
+                : row.Responsibility == CommissionMaterialResponsibility.Provided
                 ? row.TotalCost > 0
                     ? $"{FormatGil(row.TotalCost)} company value"
                     : "Company provided"

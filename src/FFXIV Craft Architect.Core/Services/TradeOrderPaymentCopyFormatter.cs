@@ -24,7 +24,8 @@ public sealed record TradeOrderPaymentCopyContext(
     string AssignedCrafter,
     IReadOnlyList<TradeOrderPaymentOutput> Outputs,
     TradeOrderPaymentProvenance Provenance,
-    TradeCommissionPaymentSummary Payment);
+    TradeCommissionPaymentSummary Payment,
+    CompanyCommissionPaymentTerms? CanonicalPayment = null);
 
 public static class TradeOrderPaymentCopyFormatter
 {
@@ -35,9 +36,14 @@ public static class TradeOrderPaymentCopyFormatter
         var summary = context.Payment;
         var active = summary.Active;
         var builder = CreateHeader("Payment receipt", context);
+        if (context.CanonicalPayment is { } canonical)
+        {
+            AppendCanonicalPayment(builder, canonical);
+            return builder.ToString();
+        }
         builder.AppendLine($"Active basis: {FormatPaymentContract(active.Contract)}");
         builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
-        builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(active.MaterialReimbursementTotal)}");
+        builder.AppendLine($"Crafter-procured reimbursement: {FormatGilAllowZero(active.MaterialReimbursementTotal)}");
         if (active.Contract == TradePaymentContractMode.LaborStandard)
         {
             builder.AppendLine($"Material value bonus ({active.CommissionPercent:N0}%): {FormatGil(active.CommissionAmount)}");
@@ -58,13 +64,23 @@ public static class TradeOrderPaymentCopyFormatter
 
         var summary = context.Payment;
         var builder = CreateHeader("Payment summary", context);
-        AppendMaterialSection(builder, "Crafter procures", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter));
+        AppendMaterialSection(builder, context.CanonicalPayment == null ? "Crafter procures (material value)" : "Crafter material responsibility (reference value)", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter && !material.IsOnHand));
+        if (summary.Materials.Any(material => material.Responsibility == CommissionMaterialResponsibility.Crafter && material.IsOnHand))
+        {
+            builder.AppendLine();
+            AppendMaterialSection(builder, "Crafter on-hand stock (value only; no reimbursement)", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Crafter && material.IsOnHand));
+        }
         builder.AppendLine();
-        AppendMaterialSection(builder, "Provided by commissioner", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided));
+        AppendMaterialSection(builder, "Provided by commissioner (value only; no reimbursement)", summary.Materials.Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided));
         builder.AppendLine();
+        if (context.CanonicalPayment is { } canonical)
+        {
+            AppendCanonicalPayment(builder, canonical);
+            return builder.ToString();
+        }
         builder.AppendLine($"Active basis: {FormatPaymentContract(summary.Active.Contract)}");
         builder.AppendLine($"Payment amount: {FormatGil(summary.TotalPayment)}");
-        builder.AppendLine($"Crafter-procured reimbursement: {FormatGil(summary.MaterialReimbursementTotal)}");
+        builder.AppendLine($"Crafter-procured reimbursement: {FormatGilAllowZero(summary.MaterialReimbursementTotal)}");
         if (summary.LaborStandard.IsAvailable)
         {
             builder.AppendLine($"Material value bonus ({summary.Active.CommissionPercent:N0}%): {FormatGil(summary.Active.CommissionAmount)}");
@@ -83,6 +99,15 @@ public static class TradeOrderPaymentCopyFormatter
         }
 
         return "Needs reprice";
+    }
+
+    private static void AppendCanonicalPayment(StringBuilder builder, CompanyCommissionPaymentTerms payment)
+    {
+        builder.AppendLine($"Active basis: {CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(payment.ContractLabel)}");
+        builder.AppendLine($"Payment amount: {FormatGilAllowZero(payment.Total)}");
+        builder.AppendLine($"Crafter-procured reimbursement: {FormatGilAllowZero(payment.MaterialReimbursement)}");
+        builder.AppendLine($"Agreed material adjustment: {FormatGilAllowZero(payment.MaterialAdjustment)}");
+        builder.AppendLine($"Craft labor: {FormatGilAllowZero(payment.CraftLabor)}");
     }
 
     public static string FormatPaymentContract(TradePaymentContractMode mode)
@@ -251,4 +276,7 @@ public static class TradeOrderPaymentCopyFormatter
     {
         return value > 0 ? $"{value:N0} gil" : "Not priced";
     }
+
+    private static string FormatGilAllowZero(decimal value) =>
+        value >= 0 ? $"{value:N0} gil" : "Not priced";
 }
