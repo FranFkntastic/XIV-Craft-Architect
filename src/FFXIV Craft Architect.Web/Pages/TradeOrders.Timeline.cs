@@ -107,6 +107,7 @@ public partial class TradeOrders
     private bool MatchesTimelineFilter(CommissionTimelineItem item) =>
         _timelineFilter switch
         {
+            CommissionTimelineFilter.TermsRevisions => GetTermsRevisionActivity(item.Id) != null,
             CommissionTimelineFilter.Commission =>
                 item.Source == CommissionTimelineSource.Commission,
             CommissionTimelineFilter.Planning =>
@@ -120,6 +121,10 @@ public partial class TradeOrders
 
     private void SetTimelineFilter(CommissionTimelineFilter filter) =>
         _timelineFilter = filter;
+
+    private CompanyCommissionActivityEvent? GetTermsRevisionActivity(Guid id) =>
+        SelectedCanonicalCommission?.Activity.FirstOrDefault(e => e.EventId == id &&
+            e.Kind is CompanyCommissionActivityKind.TermsAmended or CompanyCommissionActivityKind.PaymentPolicyChangeAccepted);
 
     private string GetTimelineFilterClass(CommissionTimelineFilter filter) =>
         _timelineFilter == filter
@@ -309,7 +314,8 @@ public enum CommissionTimelineFilter
     Commission,
     Planning,
     Shared,
-    CompanyOnly
+    CompanyOnly,
+    TermsRevisions
 }
 
 public enum CommissionTimelineVisibility
