@@ -1,0 +1,58 @@
+<details class="terms-revision" open="@(Version == Commission.CurrentTermsVersion)">
+    <summary>Terms revised · @($"v{Version - 1}") → @($"v{Version}") @if (Version == Commission.CurrentTermsVersion) { <span class="version-badge">Current</span> }</summary>
+    @if (Terms is { } terms)
+    {
+        <p class="revision-meta">@terms.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt") · @(terms.CreatedBy.DisplayName ?? terms.CreatedBy.Kind.ToString()) · Shared</p>
+    }
+    @if (Comparison is { Available: true } diff)
+    {
+        <div class="revision-delta">
+            <strong>@CommissionTermsChanges.PaymentHeading(diff.PaymentDelta!.Value)</strong>
+            <small>@CompanyCommissionTermsComparison.Money(diff.Payment.Last().Before) → @CompanyCommissionTermsComparison.Money(diff.Payment.Last().After)</small>
+        </div>
+    }
+    <p class="revision-reason"><span>Reason:</span> @Reason</p>
+    <div class="revision-tabs" role="tablist" aria-label="Revision detail">
+        <button @ref="_changesTab" id="@(_id + "-changes")" type="button" role="tab" tabindex="@(_fullTerms ? -1 : 0)" aria-controls="@(_id + "-changes-panel")" aria-selected="@(_fullTerms ? "false" : "true")" @onkeydown="TabKeyDown" @onclick="@(() => _fullTerms = false)">What changed</button>
+        <button @ref="_termsTab" id="@(_id + "-terms")" type="button" role="tab" tabindex="@(_fullTerms ? 0 : -1)" aria-controls="@(_id + "-terms-panel")" aria-selected="@(_fullTerms ? "true" : "false")" @onkeydown="TabKeyDown" @onclick="@(() => _fullTerms = true)">Full terms</button>
+    </div>
+    <div id="@(_id + "-changes-panel")" role="tabpanel" aria-labelledby="@(_id + "-changes")" hidden="@_fullTerms" tabindex="0">
+        <CommissionTermsChanges Comparison="@Comparison" ShowSummary="false" />
+    </div>
+    <div id="@(_id + "-terms-panel")" role="tabpanel" aria-labelledby="@(_id + "-terms")" hidden="@(!_fullTerms)" tabindex="0">
+        <CommissionTermsHistory Versions="Commission.TermsVersions" CurrentVersion="Commission.CurrentTermsVersion" InitialVersion="Version" CommissionId="Commission.CommissionId" />
+    </div>
+    @if (Version == Commission.CurrentTermsVersion && Commission.ActiveClaim != null)
+    {
+        <p class="revision-status">@(Commission.ParticipantAcknowledgedTermsVersion == Version ? "Crafter acknowledged current terms" : "Awaiting crafter acknowledgement") · @($"v{Version}")</p>
+    }
+</details>
+@code {
+    [Parameter, EditorRequired] public TradeCompanyCommission Commission { get; set; } = null!;
+    [Parameter] public int Version { get; set; }
+    [Parameter] public string? Reason { get; set; }
+    private readonly string _id = "revision-" + Guid.NewGuid().ToString("N");
+    private bool _fullTerms;
+    private ElementReference _changesTab;
+    private ElementReference _termsTab;
+    private CommissionTermsComparison Comparison => CompanyCommissionTermsComparison.Between(Commission.TermsVersions, Version - 1, Version);
+    private async Task TabKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key is not ("ArrowLeft" or "ArrowRight" or "Home" or "End"))
+        {
+            return;
+        }
+        _fullTerms = args.Key == "End" || (args.Key != "Home" && !_fullTerms);
+        await (_fullTerms ? _termsTab : _changesTab).FocusAsync();
+    }
+    private (Guid, int)? _identity;
+    private CompanyCommissionTermsVersion? Terms => Commission.TermsVersions.Count(t => t.Version == Version) == 1 ? Commission.TermsVersions.Single(t => t.Version == Version) : null;
+    protected override void OnParametersSet()
+    {
+        if (_identity != (Commission.CommissionId, Version))
+        {
+            _identity = (Commission.CommissionId, Version);
+            _fullTerms = false;
+        }
+    }
+}

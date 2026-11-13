@@ -1,0 +1,5 @@
+.terms-snapshot { font-size: .8rem; line-height: 1.6; overflow-wrap: anywhere; }
+.terms-snapshot h4 { margin: 8px 0; font-size: .85rem; }
+.terms-snapshot h5 { margin: 12px 0 3px; font-size: .75rem; color: var(--mud-palette-warning); }
+.terms-snapshot p { margin: 4px 0; }
+.terms-snapshot small { display: block; margin-top: 10px; color: var(--mud-palette-text-secondary); font-size: .7rem; }

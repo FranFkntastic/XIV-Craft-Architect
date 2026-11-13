@@ -449,6 +449,7 @@ function render() {
     renderTerms();
     renderAccess();
     renderActivity();
+    renderTermsReview();
     renderCommentForm();
 }
 
@@ -677,7 +678,7 @@ function resolveNextStep() {
     if (requiresTermsAcknowledgement(projection)) {
         return {
             title: `Accept updated terms v${brief.terms.version}`,
-            body: "The commissioner accepted a payment-policy change. Review the current terms before work continues.",
+            body: "The terms were revised. Review the recorded changes in Commission terms before accepting the current version.",
             tone: "waiting",
             actions: [{
                 label: "Accept current terms",
@@ -1212,6 +1213,93 @@ function renderActivity() {
         if (item.comment) detail.append(element("p", null, item.comment));
         event.append(element("time", null, formatShortDate(item.createdAtUtc)), detail);
         target.append(event);
+    }
+}
+
+function renderTermsReview() {
+    const target = byId("termsReview");
+    const projection = state.projection;
+    const sameCommission = target.getAttribute("data-commission-id") === projection.public?.commissionId;
+    const openStates = new Map(sameCommission
+        ? [...target.querySelectorAll("details[data-terms-key]")].map(node => [node.getAttribute("data-terms-key"), node.open])
+        : []);
+    const selectedVersion = sameCommission ? target.querySelector("select")?.value : null;
+    target.replaceChildren();
+    target.setAttribute("data-commission-id", projection.public?.commissionId ?? "");
+    target.hidden = projection.kind !== "participant";
+    if (target.hidden) return;
+    target.append(element("h3", null, "Terms revisions"));
+    if (projection.termsComparisons == null) {
+        target.append(element("p", "empty-row", "This host did not provide historical comparisons. Only the published current terms are available; no prior terms have been inferred."));
+        return;
+    }
+    for (const diff of [...projection.termsComparisons].reverse()) {
+        const details = element("details", "terms-detail");
+        const key = `revision-${diff.beforeVersion}-${diff.afterVersion}`;
+        details.setAttribute("data-terms-key", key);
+        details.open = openStates.get(key) ?? (diff.afterVersion === projection.public.terms.version);
+        details.append(element("summary", null, `What changed · v${diff.beforeVersion} → v${diff.afterVersion}`));
+        if (!diff.available) {
+            details.append(element("p", null, diff.unavailableReason));
+        } else {
+            for (const row of diff.changes) {
+                details.append(element("p", null, `${row.term}: ${row.before} → ${row.after}`));
+            }
+            const total = diff.payment.find(row => row.component === "Total");
+            if (total) {
+                const delta = total.after - total.before;
+                details.append(element("strong", null, delta === 0 ? "Total payment unchanged" :
+                    `Payment ${delta > 0 ? "increased" : "decreased"} by ${Math.abs(delta).toLocaleString()} gil`));
+            }
+            const breakdown = element("details", "terms-detail");
+            breakdown.setAttribute("data-terms-key", key + "-payment");
+            breakdown.open = openStates.get(key + "-payment") ?? false;
+            breakdown.append(element("summary", null, "Payment breakdown"));
+            for (const row of diff.payment) breakdown.append(element("p", null,
+                `${row.component}: ${row.before.toLocaleString()} → ${row.after.toLocaleString()} gil (${row.after === row.before ? "Unchanged" : (row.after > row.before ? "+" : "") + (row.after - row.before).toLocaleString()})`));
+            details.append(breakdown);
+            if (total && (diff.payment.filter(row => row.component !== "Total").reduce((sum, row) => sum + row.before, 0) !== total.before ||
+                diff.payment.filter(row => row.component !== "Total").reduce((sum, row) => sum + row.after, 0) !== total.after)) {
+                details.append(element("p", null, "Recorded components do not reconcile to the recorded total. No missing amount has been inferred."));
+            }
+            if (diff.evidenceChanged) details.append(element("p", null, "Pricing evidence changed separately."));
+            details.append(element("p", "empty-row", "Recorded amounts only; this does not establish a transfer, refund or outstanding balance."));
+        }
+        target.append(details);
+    }
+    const snapshots = projection.permittedTermsVersions ?? [];
+    if (snapshots.length) {
+        const details = element("details", "terms-detail");
+        details.setAttribute("data-terms-key", "snapshots");
+        details.open = openStates.get("snapshots") ?? false;
+        details.append(element("summary", null, "Full permitted saved terms"));
+        const select = element("select");
+        select.setAttribute("aria-label", "Inspect saved participant terms version");
+        const content = element("div");
+        for (const [index, terms] of [...snapshots].reverse().entries()) {
+            const option = element("option", null, terms.version == null
+                ? "Unavailable saved version" : `v${terms.version}${terms.unavailableReason ? " · unavailable" : ""}`);
+            option.value = terms.version == null ? `unavailable-${index}` : String(terms.version);
+            select.append(option);
+        }
+        if ([...select.options].some(option => option.value === selectedVersion)) select.value = selectedVersion;
+        const show = () => {
+            const terms = [...snapshots].reverse()[select.selectedIndex];
+            content.replaceChildren();
+            if (!terms) return;
+            if (terms.unavailableReason) {
+                content.append(element("p", "empty-row", terms.unavailableReason));
+                return;
+            }
+            for (const row of terms.outputs) content.append(element("p", null, `${row.name} × ${row.requiredQuantity} · ${row.mustBeHq ? "HQ" : "NQ accepted"}`));
+            for (const row of terms.materials) content.append(element("p", null, `${row.name} × ${row.quantity} · ${row.requiresHq ? "HQ" : "NQ"} · ${row.responsibility}`));
+            content.append(element("p", null, `${terms.payment.total.toLocaleString()} gil · ${terms.payment.schedule} · ${terms.payment.customTerms ?? ""}`),
+                element("p", null, terms.deliveryInstructions), element("p", null, terms.contactInstructions));
+        };
+        select.onchange = show;
+        details.append(select, content);
+        target.append(details);
+        show();
     }
 }
 
