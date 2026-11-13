@@ -752,7 +752,9 @@ public partial class TradeOrders
             return "Unassigned";
         }
 
-        return _crafters.FirstOrDefault(crafter => crafter.Id == order.AssignedCrafterId.Value)?.DisplayName ?? "Assigned";
+        return _crafters.FirstOrDefault(crafter => crafter.Id == order.AssignedCrafterId.Value)?.DisplayName
+            ?? _companyMembers.FirstOrDefault(member => member.AccountProfileId == order.AssignedCrafterId.Value)?.DisplayName
+            ?? "Assigned";
     }
 
     private async Task ReopenSelectedOrderAsync()
