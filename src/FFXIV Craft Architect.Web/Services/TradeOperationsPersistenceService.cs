@@ -139,14 +139,21 @@ public sealed class TradeOperationsPersistenceService
         return await LoadSelectedCompanyProfileIdAsync();
     }
 
+    public event Action? WorkspaceCompanyChanged;
+
     public async Task SelectWorkspaceCompanyAsync(Guid companyId)
     {
+        var previous = await LoadSelectedWorkspaceCompanyIdAsync();
         if (!await _indexedDb.SaveSettingAsync(
                 SelectedWorkspaceCompanyIdKey,
                 companyId.ToString("D")))
         {
             throw new InvalidOperationException(
                 $"Browser storage could not persist selected company workspace '{companyId:D}'.");
+        }
+        if (previous != companyId)
+        {
+            WorkspaceCompanyChanged?.Invoke();
         }
     }
 
