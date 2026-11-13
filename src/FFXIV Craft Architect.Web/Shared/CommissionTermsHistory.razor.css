@@ -1,0 +1,5 @@
+.terms-history { padding: 10px 0; font-size: .8rem; }
+.terms-history label { display: block; color: var(--mud-palette-text-secondary); font-size: .7rem; }
+.terms-history select { width: 100%; margin: 5px 0 10px; padding: 7px; font: inherit; background: var(--mud-palette-surface); color: var(--mud-palette-text-primary); border: 1px solid var(--mud-palette-lines-default); border-radius: var(--mud-default-borderradius); }
+.original-link { cursor: pointer; background: transparent; border: 0; color: var(--mud-palette-warning); padding: 8px 0; font: inherit; }
+.terms-history select:focus-visible, .original-link:focus-visible { outline: 2px solid var(--mud-palette-warning); outline-offset: 3px; }

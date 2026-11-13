@@ -1,0 +1,17 @@
+<section class="terms-snapshot" aria-label="Read-only saved terms">
+    <h4>Full terms · @($"v{Terms.Version}")</h4>
+    <p>@Terms.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt") · @(Terms.CreatedBy.DisplayName ?? Terms.CreatedBy.Kind.ToString())</p>
+    <h5>Outputs</h5>
+    @foreach (var row in Terms.Outputs) { <p>@row.Name × @row.RequiredQuantity.ToString("N0") · @(row.MustBeHq ? "HQ required" : "NQ accepted")</p> }
+    <h5>Materials</h5>
+    @foreach (var row in Terms.Materials) { <p>@row.Name × @row.Quantity.ToString("N0") · @(row.RequiresHq ? "HQ" : "NQ") · @(row.Responsibility == CommissionMaterialResponsibility.Provided ? "Company supplies" : "Crafter supplies")</p> }
+    <h5>Payment</h5><p>@CompanyCommissionTermsComparison.Money(Terms.Payment.Total) · @Terms.Payment.Schedule · @Terms.Payment.ContractLabel</p>
+    <p>Reimbursement @CompanyCommissionTermsComparison.Money(Terms.Payment.MaterialReimbursement) · Labor @CompanyCommissionTermsComparison.Money(Terms.Payment.CraftLabor) · Adjustment @CompanyCommissionTermsComparison.Money(Terms.Payment.MaterialAdjustment)</p>
+    <p>@Terms.Payment.CustomTerms</p>
+    <p>Labor calculation: @Terms.Payment.CraftSynthCount synths × @CompanyCommissionTermsComparison.Money(Terms.Payment.GilPerSynth)</p>
+    <h5>Delivery instructions</h5><p>@Terms.DeliveryInstructions</p>
+    <h5>Contact instructions</h5><p>@Terms.ContactInstructions</p>
+    <h5>Recorded evidence</h5><p>@Terms.PricingEvidence.CostBasis · @Terms.PricingEvidence.MarketScope · @Terms.PricingEvidence.Location · @Terms.PricingEvidence.CapturedAtUtc.ToString("u")</p>
+    <small>Read-only snapshot. The current Plan is unchanged.</small>
+</section>
+@code { [Parameter, EditorRequired] public CompanyCommissionTermsVersion Terms { get; set; } = null!; }

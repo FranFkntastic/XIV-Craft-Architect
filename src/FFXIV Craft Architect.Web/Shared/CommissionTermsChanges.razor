@@ -1,0 +1,45 @@
+@if (Comparison is { } diff)
+{
+    <section class="terms-changes" aria-label="Recorded terms comparison">
+        @if (ShowSummary)
+        {
+            <h4>What changed · @($"v{diff.BeforeVersion}") → @($"v{diff.AfterVersion}")</h4>
+        }
+        @if (!diff.Available)
+        {
+            <p>@diff.UnavailableReason</p>
+        }
+        else
+        {
+            @if (ShowSummary)
+            {
+            <div class="terms-delta">
+                <strong>@PaymentHeading(diff.PaymentDelta!.Value)</strong>
+                <small>@CompanyCommissionTermsComparison.Money(diff.Payment.Last().Before) → @CompanyCommissionTermsComparison.Money(diff.Payment.Last().After)</small>
+            </div>
+            }
+            <table aria-label="Recorded term changes"><thead><tr><th>Changed term</th><th>@($"v{diff.BeforeVersion}")</th><th>@($"v{diff.AfterVersion}")</th></tr></thead><tbody>
+                @foreach (var row in diff.Changes)
+                {
+                    <tr><th>@row.Term</th><td>@row.Before</td><td>@row.After</td></tr>
+                }
+            </tbody></table>
+            @if (diff.Changes.Count == 0) { <p>No contractual changes recorded.</p> }
+            <details><summary>Payment breakdown</summary><table><thead><tr><th>Component</th><th>Before → After (gil)</th><th>Change (gil)</th></tr></thead><tbody>
+                @foreach (var row in diff.Payment)
+                {
+                    <tr><th>@row.Component</th><td>@CompanyCommissionTermsComparison.Number(row.Before) → @CompanyCommissionTermsComparison.Number(row.After)</td><td>@(row.Delta == 0 ? "Unchanged" : (row.Delta > 0 ? "+" : "") + CompanyCommissionTermsComparison.Number(row.Delta))</td></tr>
+                }
+            </tbody></table></details>
+            @if (!diff.ComponentsReconcile) { <p>Recorded payment components do not reconcile to the recorded total. No missing amount has been inferred.</p> }
+            @if (diff.EvidenceChanged) { <p>Pricing evidence changed separately from contractual changes.</p> }
+            <p class="terms-footnote">Recorded amounts only. A payment change is not a transfer, refund, or outstanding balance.</p>
+        }
+    </section>
+}
+@code {
+    [Parameter] public CommissionTermsComparison? Comparison { get; set; }
+    [Parameter] public bool ShowSummary { get; set; } = true;
+    public static string PaymentHeading(decimal delta) => delta == 0 ? "Total payment unchanged" :
+        $"Payment {(delta > 0 ? "increased" : "decreased")} by {CompanyCommissionTermsComparison.Money(Math.Abs(delta))}";
+}

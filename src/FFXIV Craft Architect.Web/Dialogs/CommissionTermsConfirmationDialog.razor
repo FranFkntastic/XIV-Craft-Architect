@@ -1,0 +1,13 @@
+<MudDialog><DialogContent>
+    <p>Reason: @Reason</p>
+    <CommissionTermsChanges Comparison="Comparison" />
+    <p>The crafter must acknowledge this version before work continues.</p>
+</DialogContent><DialogActions>
+    <MudButton OnClick="@(() => Dialog.Cancel())">Cancel</MudButton>
+    <MudButton Color="Color.Primary" OnClick="@(() => Dialog.Close(DialogResult.Ok(true)))">Create Revision</MudButton>
+</DialogActions></MudDialog>
+@code {
+    [CascadingParameter] private MudDialogInstance Dialog { get; set; } = null!;
+    [Parameter] public CommissionTermsComparison Comparison { get; set; } = null!;
+    [Parameter] public string Reason { get; set; } = "";
+}

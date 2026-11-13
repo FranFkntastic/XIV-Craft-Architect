@@ -59,8 +59,21 @@ public static class CompanyCommissionProjectionService
         var commission = order.CompanyCommission ??
             throw new InvalidOperationException("The Trade order does not have a canonical company commission.");
 
+        var grant = commission.ParticipantGrant;
+        var claim = commission.ActiveClaim;
+        var hasHistoryAccess = grant is { RevokedAtUtc: null } && claim != null && grant.ClaimId == claim.ClaimId;
+        var floor = hasHistoryAccess ? Math.Max(grant!.TermsVersionFloor, claim!.AcceptedTermsVersion) : int.MaxValue;
+        var permitted = commission.TermsVersions.Where(t => t.Version >= floor && t.Version <= commission.CurrentTermsVersion)
+            .OrderBy(t => t.Version).ToArray();
         return new CompanyCommissionParticipantBrief
         {
+            PermittedTermsVersions = permitted.Select(t => CreatePublicTerms(t) with
+            {
+                PricingEvidence = new CompanyCommissionPricingEvidence(t.PricingEvidence.CostBasis,
+                    t.PricingEvidence.MarketScope, t.PricingEvidence.Location, t.PricingEvidence.CapturedAtUtc)
+            }).ToArray(),
+            TermsComparisons = permitted.Where(t => t.Version > floor)
+                .Select(t => CompanyCommissionTermsComparison.Between(permitted, t.Version - 1, t.Version)).ToArray(),
             Public = CreatePublicBrief(order, companyDisplayName),
             ProvisionalCrafter = commission.ProvisionalCrafter,
             ClaimAccountEvidence = commission.ActiveClaim?.AccountEvidence,
