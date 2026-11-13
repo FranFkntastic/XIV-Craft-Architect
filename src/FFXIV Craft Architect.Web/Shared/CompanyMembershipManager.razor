@@ -163,7 +163,7 @@
                         }
                         @if (CanRevoke(context))
                         {
-                            <MudMenuItem Color="Color.Error" OnClick="@(() => { CloseMenus(); _revokeMember = context; })">Revoke membership</MudMenuItem>
+                            <MudMenuItem Color="Color.Error" OnClick="@(() => _revokeMember = context)">Revoke membership</MudMenuItem>
                         }
                     </ChildContent>
                 </MudMenu>
@@ -219,7 +219,6 @@
         RoleDraftFor(member) != member.Role &&
         RoleDraftFor(member) is "operator" or "crafter";
 
-    private void CloseMenus() { }
 
     private async Task ApplyRoleAsync(CompanyMember member)
     {

@@ -2221,7 +2221,7 @@ public sealed class SqliteMembershipStore(
         }
     }
 
-    public async Task UpdateRoleInternalForTestsAsync(
+    internal async Task UpdateRoleInternalForTestsAsync(
         CompanyId companyId,
         Guid accountProfileId,
         MembershipRole role)
