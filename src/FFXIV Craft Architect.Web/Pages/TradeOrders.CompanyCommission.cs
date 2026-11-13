@@ -502,33 +502,28 @@ public partial class TradeOrders
         }
 
         var reason = _commissionTermsRevisionReason.Trim();
-        var confirmed = await DialogService.ShowMessageBox(
-            "Create Terms Revision",
-            $"Create terms v{commission.CurrentTermsVersion + 1} from the current work package and pricing? The crafter must acknowledge it before work can continue.",
-            yesText: "Create Revision",
-            cancelText: "Cancel");
-        if (confirmed != true)
+        var terms = BuildStagedTermsRevision();
+        var comparison = GetStagedTermsComparison(terms);
+        if (terms == null || comparison?.Available != true)
         {
             return;
         }
-
-        var now = DateTime.UtcNow;
-        var workPackage = _commissionTermsRevisionWorkPackage ?? _selectedOrder;
-        var brief = _commissionTermsRevisionBrief ?? BuildCommissionBrief(
-            workPackage,
-            TradeCommissionPaymentSummary.FromOrder(
-                workPackage,
-                GetSelectedOrderResponsibilityProjection(),
-                GetSelectedOrderEffectivePaymentPolicy()));
-        brief.Contact = _commissionContact?.Trim() ?? string.Empty;
-        brief.DeliveryInstructions =
-            _commissionDeliveryInstructions?.Trim() ?? string.Empty;
-        var terms = TradeCompanyCommissionMigrationService.CreateTermsRevision(
-            workPackage,
-            brief,
-            checked(commission.CurrentTermsVersion + 1),
-            reason,
-            now);
+        var parameters = new DialogParameters { ["Comparison"] = comparison, ["Reason"] = reason };
+        var workPackage = TradeOrderWorkflow.CopyOrder(_commissionTermsRevisionWorkPackage ?? _selectedOrder);
+        var dialog = await DialogService.ShowAsync<FFXIV_Craft_Architect.Web.Dialogs.CommissionTermsConfirmationDialog>("Create Terms Revision", parameters);
+        var confirmation = await dialog.Result;
+        if (confirmation.Canceled)
+        {
+            return;
+        }
+        // The modal describes this frozen pair. Never commit it using a newer owner/base.
+        if (!CanConfirmTermsRevision(commission.CommissionId, owner.ObjectRevision, comparison.BeforeVersion,
+            SelectedCanonicalCommission?.CommissionId, SelectedCommissionOwner?.ObjectRevision,
+            SelectedCanonicalCommission?.CurrentTermsVersion, HasCommissionTermsRevisionConflict))
+        {
+            Snackbar.Add("Terms changed during confirmation. Your local revision is preserved; review the conflict before publishing.", Severity.Warning);
+            return;
+        }
         _isCommissionCommandRunning = true;
         try
         {
@@ -551,6 +546,49 @@ public partial class TradeOrders
         {
             _isCommissionCommandRunning = false;
         }
+    }
+
+    private static bool CanConfirmTermsRevision(Guid expectedCommission, CompanyRecordRevision expectedRevision, int expectedVersion,
+        Guid? currentCommission, CompanyRecordRevision? currentRevision, int? currentVersion, bool conflict) =>
+        !conflict && currentCommission == expectedCommission && currentRevision == expectedRevision && currentVersion == expectedVersion;
+
+    private CompanyCommissionTermsVersion? BuildStagedTermsRevision()
+    {
+        if (!IsEditingCommissionTermsRevision || _commissionTermsRevisionBase == null || _selectedOrder == null)
+        {
+            return null;
+        }
+
+        var workPackage = _commissionTermsRevisionWorkPackage ?? _selectedOrder;
+        var original = _commissionTermsRevisionBrief ?? BuildCommissionBrief(workPackage,
+            TradeCommissionPaymentSummary.FromOrder(workPackage, GetSelectedOrderResponsibilityProjection(), GetSelectedOrderEffectivePaymentPolicy()));
+        var brief = new CommissionBriefDocument
+        {
+            Outputs = original.Outputs,
+            CrafterMaterials = original.CrafterMaterials,
+            CompanyMaterials = original.CompanyMaterials,
+            Payment = original.Payment,
+            Evidence = original.Evidence,
+            Contact = _commissionContact?.Trim() ?? "",
+            DeliveryInstructions = _commissionDeliveryInstructions?.Trim() ?? ""
+        };
+        return TradeCompanyCommissionMigrationService.CreateTermsRevision(workPackage, brief,
+            checked(_commissionTermsRevisionBase.Value.TermsVersion + 1),
+            string.IsNullOrWhiteSpace(_commissionTermsRevisionReason) ? "Revision preview" : _commissionTermsRevisionReason.Trim(), DateTime.UtcNow);
+    }
+
+    private CommissionTermsComparison? GetStagedTermsComparison(CompanyCommissionTermsVersion? staged = null)
+    {
+        staged ??= BuildStagedTermsRevision();
+        if (staged == null || _commissionTermsRevisionBase == null)
+        {
+            return null;
+        }
+
+        var version = _commissionTermsRevisionBase.Value.TermsVersion;
+        var versions = SelectedCanonicalCommission?.TermsVersions ?? [];
+        var before = versions.Count(t => t.Version == version) == 1 ? versions.Single(t => t.Version == version) : null;
+        return CompanyCommissionTermsComparison.Between(before, staged, version, staged.Version);
     }
 
     private async Task<bool> UpdateCanonicalDraftAsync(

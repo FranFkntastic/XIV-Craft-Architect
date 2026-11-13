@@ -1,0 +1,68 @@
+<section class="terms-history" aria-label="Saved terms versions">
+    <label for="@_pickerId">Inspect saved terms</label>
+    <select id="@_pickerId" value="@SelectedVersion" @onchange="SelectVersion">
+        @foreach (var terms in Versions.OrderByDescending(t => t.Version))
+        {
+            <option value="@terms.Version">@($"v{terms.Version}") @(terms.Version == CurrentVersion ? "· Current" : "") @(terms.Version == 1 ? "· Original" : "") · @terms.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt")</option>
+        }
+    </select>
+    @if (Versions.Count(t => t.Version == SelectedVersion) == 1)
+    {
+        <CommissionTermsSnapshot Terms="@Versions.Single(t => t.Version == SelectedVersion)" />
+    }
+    else
+    {
+        <p>Recorded version missing or ambiguous. No historical terms have been reconstructed.</p>
+    }
+    @if (Versions.Any(t => t.Version == 1) && SelectedVersion != 1)
+    {
+        <button class="original-link" type="button" @onclick="SelectOriginal">View full v1 terms · Original</button>
+    }
+    @if (!Versions.Any(t => t.Version == 1))
+    {
+        <p>Original terms are not retained.</p>
+    }
+</section>
+@code {
+    [Parameter] public IReadOnlyList<CompanyCommissionTermsVersion> Versions { get; set; } = [];
+    [Parameter] public int CurrentVersion { get; set; }
+    [Parameter] public Guid CommissionId { get; set; }
+    [Parameter] public int? InitialVersion { get; set; }
+    private readonly string _pickerId = "terms-version-" + Guid.NewGuid().ToString("N");
+    private Guid _identity;
+    private bool _initialized;
+    private bool _historicalSelection;
+    private int? _initialVersion;
+    private int SelectedVersion;
+
+    protected override void OnParametersSet()
+    {
+        if (!_initialized || _identity != CommissionId || _initialVersion != InitialVersion)
+        {
+            _initialized = true;
+            _identity = CommissionId;
+            _initialVersion = InitialVersion;
+            SelectedVersion = InitialVersion ?? CurrentVersion;
+            _historicalSelection = InitialVersion.HasValue && InitialVersion != CurrentVersion;
+        }
+        else if (!_historicalSelection)
+        {
+            SelectedVersion = CurrentVersion;
+        }
+    }
+
+    private void SelectOriginal()
+    {
+        SelectedVersion = 1;
+        _historicalSelection = CurrentVersion != 1;
+    }
+
+    private void SelectVersion(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var version))
+        {
+            SelectedVersion = version;
+            _historicalSelection = version != CurrentVersion;
+        }
+    }
+}

@@ -449,6 +449,7 @@ function render() {
     renderTerms();
     renderAccess();
     renderActivity();
+    renderTermsReview();
     renderCommentForm();
 }
 
@@ -677,7 +678,7 @@ function resolveNextStep() {
     if (requiresTermsAcknowledgement(projection)) {
         return {
             title: `Accept updated terms v${brief.terms.version}`,
-            body: "The commissioner accepted a payment-policy change. Review the current terms before work continues.",
+            body: "The terms were revised. Review the recorded changes in Commission terms before accepting the current version.",
             tone: "waiting",
             actions: [{
                 label: "Accept current terms",
@@ -1237,6 +1238,75 @@ function renderActivity() {
         if (item.comment) detail.append(element("p", null, item.comment));
         event.append(element("time", null, formatShortDate(item.createdAtUtc)), detail);
         target.append(event);
+    }
+}
+
+function renderTermsReview() {
+    const target = byId("termsReview");
+    target.replaceChildren();
+    const projection = state.projection;
+    target.hidden = projection.kind !== "participant";
+    if (target.hidden) return;
+    target.append(element("h3", null, "Terms revisions"));
+    if (projection.termsComparisons == null) {
+        target.append(element("p", "empty-row", "This host did not provide historical comparisons. Only the published current terms are available; no prior terms have been inferred."));
+        return;
+    }
+    for (const diff of [...projection.termsComparisons].reverse()) {
+        const details = element("details", "terms-detail");
+        details.open = diff.afterVersion === projection.public.terms.version;
+        details.append(element("summary", null, `What changed · v${diff.beforeVersion} → v${diff.afterVersion}`));
+        if (!diff.available) {
+            details.append(element("p", null, diff.unavailableReason));
+        } else {
+            for (const row of diff.changes) {
+                details.append(element("p", null, `${row.term}: ${row.before} → ${row.after}`));
+            }
+            const total = diff.payment.find(row => row.component === "Total");
+            if (total) {
+                const delta = total.after - total.before;
+                details.append(element("strong", null, delta === 0 ? "Total payment unchanged" :
+                    `Payment ${delta > 0 ? "increased" : "decreased"} by ${Math.abs(delta).toLocaleString()} gil`));
+            }
+            const breakdown = element("details", "terms-detail");
+            breakdown.append(element("summary", null, "Payment breakdown"));
+            for (const row of diff.payment) breakdown.append(element("p", null,
+                `${row.component}: ${row.before.toLocaleString()} → ${row.after.toLocaleString()} gil (${row.after === row.before ? "Unchanged" : (row.after > row.before ? "+" : "") + (row.after - row.before).toLocaleString()})`));
+            details.append(breakdown);
+            if (total && (diff.payment.filter(row => row.component !== "Total").reduce((sum, row) => sum + row.before, 0) !== total.before ||
+                diff.payment.filter(row => row.component !== "Total").reduce((sum, row) => sum + row.after, 0) !== total.after)) {
+                details.append(element("p", null, "Recorded components do not reconcile to the recorded total. No missing amount has been inferred."));
+            }
+            if (diff.evidenceChanged) details.append(element("p", null, "Pricing evidence changed separately."));
+            details.append(element("p", "empty-row", "Recorded amounts only; this does not establish a transfer, refund or outstanding balance."));
+        }
+        target.append(details);
+    }
+    const snapshots = projection.permittedTermsVersions ?? [];
+    if (snapshots.length) {
+        const details = element("details", "terms-detail");
+        details.append(element("summary", null, "Full permitted saved terms"));
+        const select = element("select");
+        select.setAttribute("aria-label", "Inspect saved participant terms version");
+        const content = element("div");
+        for (const terms of [...snapshots].reverse()) {
+            const option = element("option", null, `v${terms.version}`);
+            option.value = String(terms.version);
+            select.append(option);
+        }
+        const show = () => {
+            const terms = snapshots.find(t => String(t.version) === select.value);
+            content.replaceChildren();
+            if (!terms) return;
+            for (const row of terms.outputs) content.append(element("p", null, `${row.name} × ${row.requiredQuantity} · ${row.mustBeHq ? "HQ" : "NQ accepted"}`));
+            for (const row of terms.materials) content.append(element("p", null, `${row.name} × ${row.quantity} · ${row.requiresHq ? "HQ" : "NQ"} · ${row.responsibility}`));
+            content.append(element("p", null, `${terms.payment.total.toLocaleString()} gil · ${terms.payment.schedule} · ${terms.payment.customTerms ?? ""}`),
+                element("p", null, terms.deliveryInstructions), element("p", null, terms.contactInstructions));
+        };
+        select.onchange = show;
+        details.append(select, content);
+        target.append(details);
+        show();
     }
 }
 
