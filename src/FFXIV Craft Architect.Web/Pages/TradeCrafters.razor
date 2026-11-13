@@ -468,7 +468,16 @@
             _crafterBindings = [];
             if (_hostedCompanyId != null && hub?.Standing.Role is "owner" or "operator")
             {
-                _crafterBindings = (await CompanyHubs.LoadLegacyCrafterMigrationAsync(_hostedCompanyId)).Bindings;
+                try
+                {
+                    _crafterBindings = (await CompanyHubs.LoadLegacyCrafterMigrationAsync(_hostedCompanyId)).Bindings;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+                {
+                    Console.Error.WriteLine(
+                        $"[TradeCrafters] Account bindings unavailable for company {_hostedCompanyId}; " +
+                        $"assignment counts use roster ids only. {ex.GetType().Name}: {ex.Message}");
+                }
             }
             var selectedCrafterId = _selectedCrafter?.Id;
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
