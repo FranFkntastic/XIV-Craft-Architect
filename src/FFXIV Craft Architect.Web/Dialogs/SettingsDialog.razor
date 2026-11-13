@@ -345,7 +345,7 @@
                     <MudPaper Variant="Variant.Outlined" Class="pa-3 mb-4">
                         <MudText Typo="Typo.subtitle2">Role permissions</MudText>
                         <MudText Typo="Typo.caption" Color="Color.Secondary">
-                            What each company role can do. Roles are fixed; a member can manage anyone strictly below their own role, never at or above it.
+                            What each company role can do. Owners and Operators administer membership; only Owners change roles or transfer ownership. Operators cannot revoke Owners, and the last active Owner cannot be revoked.
                         </MudText>
                         <MudTable Items="RolePermissionRows" Dense="true" Hover="false" Class="mt-2" DisableHeaders="@false">
                             <HeaderContent>
@@ -925,7 +925,7 @@
         new("Issue and revoke invitations", false, true, true, "✓"),
         new("Connect crafter history bindings", false, true, true, "✓"),
         new("Publish commissions to Discord", false, true, true, "✓"),
-        new("Manage company hub (theme, updates)", false, false, true, "—"),
+        new("Manage company hub (theme, updates)", false, true, true, "✓"),
         new("Assign member roles (Crafter ↔ Operator)", false, false, true, "Owner only"),
         new("Transfer ownership", false, false, true, "—")
     ];
