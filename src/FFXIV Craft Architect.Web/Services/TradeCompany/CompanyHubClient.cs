@@ -14,6 +14,24 @@ public sealed class CompanyHubClient(
     private const string AccessKeyHeader = "X-Profile-Key";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    public async Task<IReadOnlyList<CompanyHubRosterMember>> LoadAssignmentMembersAsync(Guid companyId)
+    {
+        var hub = await LoadWorkspaceHubAsync(companyId);
+        if (hub?.Standing.Role is "owner" or "operator")
+        {
+            return (await LoadCompanyMembersAsync(companyId.ToString("D")))
+                .Select(member => new CompanyHubRosterMember(member.AccountProfileId, member.DisplayName, member.Role))
+                .ToArray();
+        }
+        return hub?.Roster ?? [];
+    }
+
+    public async Task<CompanyHubProjection?> LoadWorkspaceHubAsync(Guid companyId)
+    {
+        var connection = await localState.LoadConnectionSettingsAsync();
+        return connection.IsConfigured ? await LoadAsync(companyId.ToString("D")) : null;
+    }
+
     public async Task<CompanyHubProjection?> LoadAsync(string slug, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(HttpMethod.Get, $"trade/v1/companies/{Uri.EscapeDataString(slug)}/hub", null, cancellationToken);

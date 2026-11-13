@@ -8,12 +8,14 @@
 @inject TradeCrafterProfileImportMapper LodestoneImportMapper
 @inject NavigationManager NavigationManager
 @inject ISnackbar Snackbar
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+@inject CompanyHubClient CompanyHubs
 @implements IDisposable
 
 <MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-crafters-page">
-    @if (!string.IsNullOrWhiteSpace(Company))
+    @if (_hostedCompanyId != null && _loadError == null)
     {
-        <CompanyMembershipManager CompanyId="@Company" />
+        <CompanyMembershipManager @key="_hostedCompanyId" CompanyId="@_hostedCompanyId" />
     }
     @if (!string.IsNullOrWhiteSpace(_loadError))
     {
@@ -337,6 +339,8 @@
 @code {
     [SupplyParameterFromQuery(Name = "company")] private string? Company { get; set; }
     private TradeCompanyProfile? _companyProfile;
+    private string? _hostedCompanyId;
+    private IReadOnlyList<LegacyCrafterBinding> _crafterBindings = [];
     private List<TradeCrafterProfile> _crafters = [];
     private List<TradeOrder> _orders = [];
     private TradeCrafterProfile? _selectedCrafter;
@@ -421,11 +425,12 @@
         return crafter.Id.ToString("N");
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         AppState.OnStateChanged += OnAppStateChanged;
-        await EnsureLoadedAsync();
     }
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
 
     private void OnAppStateChanged(AppStateChange change)
     {
@@ -434,6 +439,7 @@
             return;
         }
 
+        _hasLoaded = false;
         _ = InvokeAsync(EnsureLoadedAsync);
     }
 
@@ -456,8 +462,17 @@
         {
             _loadError = null;
             await ProfileSync.SyncNowAsync();
-            _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+            _companyProfile = await TradeCompanyContext.ResolveAsync(TradeOperationsPersistence, CompanyHubs, Company);
+            var hub = await CompanyHubs.LoadWorkspaceHubAsync(_companyProfile.Id);
+            _hostedCompanyId = hub?.Kind == "hub" ? _companyProfile.Id.ToString("D") : null;
+            _crafterBindings = [];
+            if (_hostedCompanyId != null && hub?.Standing.Role is "owner" or "operator")
+            {
+                _crafterBindings = (await CompanyHubs.LoadLegacyCrafterMigrationAsync(_hostedCompanyId)).Bindings;
+            }
+            var selectedCrafterId = _selectedCrafter?.Id;
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
+            _selectedCrafter = _crafters.FirstOrDefault(crafter => crafter.Id == selectedCrafterId);
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
             EnsureNewCrafterLocationDefaults();
             _hasLoaded = true;
@@ -829,7 +844,10 @@
     private IReadOnlyList<TradeOrder> GetAssignmentsForCrafter(Guid crafterId)
     {
         return _orders
-            .Where(order => order.AssignedCrafterId == crafterId && !TradeOrderStatusWorkflow.IsArchived(order.Status))
+            .Where(order => (order.AssignedCrafterId == crafterId ||
+                            _crafterBindings.Any(binding => binding.LegacyCrafterId == crafterId &&
+                                binding.AccountProfileId == order.AssignedCrafterId)) &&
+                            !TradeOrderStatusWorkflow.IsArchived(order.Status))
             .OrderByDescending(order => order.CommissionedAtUtc)
             .ToArray();
     }

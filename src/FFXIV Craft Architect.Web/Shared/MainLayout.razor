@@ -130,6 +130,10 @@
                 </MudButton>
             }
         </MudButtonGroup>
+        @if (IsTradeMode)
+        {
+            <TradeCompanySwitcher HubLinkOnly="true" />
+        }
         
         <!-- Menu Bar using MudMenu -->
         <div style="display: flex; gap: 4px; flex-shrink: 0;">

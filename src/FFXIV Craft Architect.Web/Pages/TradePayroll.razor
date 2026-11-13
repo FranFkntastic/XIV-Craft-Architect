@@ -1,6 +1,8 @@
 @page "/trade"
 @page "/trade/payroll"
 @using System.Text
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+@inject CompanyHubClient CompanyHubs
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Web.Services
@@ -299,7 +301,8 @@
             return;
         }
 
-        _companyProfile = await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
+        _companyProfile = await TradeCompanyContext.ResolveAsync(TradeOperationsPersistence, CompanyHubs);
+        _companyMembers = await CompanyHubs.LoadAssignmentMembersAsync(_companyProfile.Id);
         _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
         _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
         _linkedOrder = FindMatchingOrder();
@@ -682,9 +685,12 @@
             : _linkedOrder.Title;
     }
 
+    private IReadOnlyList<CompanyHubRosterMember> _companyMembers = [];
+
     private string? GetCrafterDisplayName(Guid crafterId)
     {
         return _crafters.FirstOrDefault(crafter => crafter.Id == crafterId)?.DisplayName
+            ?? _companyMembers.FirstOrDefault(member => member.AccountProfileId == crafterId)?.DisplayName
             ?? _workflowDraft?.AssignedCrafterDisplayName;
     }
 
