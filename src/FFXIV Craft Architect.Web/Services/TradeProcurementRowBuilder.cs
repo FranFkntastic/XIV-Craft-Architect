@@ -60,7 +60,8 @@ public static class TradeProcurementRowBuilder
         TradeOrder order,
         TradePayrollWorkflowDraft? draft,
         string? activePlanId,
-        WorkerTradeProjection? liveSnapshot)
+        WorkerTradeProjection? liveSnapshot,
+        bool useRecordedPayment = false)
     {
         ArgumentNullException.ThrowIfNull(order);
 
@@ -84,9 +85,26 @@ public static class TradeProcurementRowBuilder
             .Where(group => group.Count() == 1)
             .ToDictionary(group => group.Key, group => group.Single());
         var retainedEvidence = BuildRetainedEvidenceLookup(order, snapshot.PlanId);
+        foreach (var row in snapshot.AcquisitionRows)
+        {
+            var key = new MaterialKey(row.ItemId, row.MustBeHq, Math.Max(row.ActiveQuantity, 0));
+            if ((!lines.TryGetValue(key, out var current) || !TradeOrderWorkflow.IsResolvedMaterialEvidence(
+                    current.UnitCost, current.UnitCost * current.Quantity, current.EvidenceSource)) &&
+                retainedEvidence.TryGetValue(key, out var retained))
+            {
+                lines[key] = ToPayrollLine(retained);
+            }
+        }
+        // The cost cell and subtree attribution consume the same recovered evidence.
+        var paymentSnapshot = snapshot with { MaterialLines = lines.Values.ToArray() };
+        var impacts = TradeProcurementPaymentImpact.CalculateAll(paymentSnapshot, responsibilities,
+            requireRecordedCash: useRecordedPayment);
 
         return snapshot.AcquisitionRows
-            .Select(row => ToTradeRow(row, lines, retainedEvidence, responsibilities))
+            .Select(row => ToTradeRow(row, lines, retainedEvidence, responsibilities) with
+            {
+                PaymentImpact = impacts.GetValueOrDefault((row.ItemId, row.MustBeHq))
+            })
             .OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }

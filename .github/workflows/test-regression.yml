@@ -18,6 +18,7 @@ jobs:
       TRUTHFUL_RUN_ID: ${{ github.run_id }}
       TRUTHFUL_RUN_ATTEMPT: ${{ github.run_attempt }}
       FranthropyRoot: /tmp/franthropy
+      FranthropySource: Local
     steps:
       - name: Checkout source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -74,7 +75,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          revision="$(tr -d '[:space:]' < eng/Franthropy.version)"
+          revision="$(sed -n 's/.*<FranthropyPackageVersion>0.1.0-commit.\([0-9a-f]*\)<\/FranthropyPackageVersion>.*/\1/p' eng/Franthropy.Version.props)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
           git init "$FranthropyRoot"
           git -C "$FranthropyRoot" remote add origin https://github.com/FranFkntastic/Franthropy.git
           git -C "$FranthropyRoot" fetch --depth=1 origin "$revision"
@@ -92,7 +94,7 @@ jobs:
           node-version: '22'
 
       - name: Test truthful-suite tooling
-        run: node --test "tools/TruthfulSuite/truthful-suite.test.mjs"
+        run: node --test "tools/TruthfulSuite/truthful-suite.test.mjs" "tools/TruthfulSuite/worker-session-persistence.test.mjs" "tools/TruthfulSuite/deployment-handoff.test.mjs"
 
       - name: Restore pinned browser package
         shell: bash

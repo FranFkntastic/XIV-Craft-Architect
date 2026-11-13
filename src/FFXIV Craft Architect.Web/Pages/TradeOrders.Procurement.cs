@@ -44,10 +44,14 @@ public partial class TradeOrders
         }
 
         var workPackage = GetSelectedOrderPricingWorkPackage();
-        return TradeCommissionPaymentSummary.FromOrder(
+        var summary = TradeCommissionPaymentSummary.FromOrder(
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
             GetOrderEffectivePaymentPolicy(workPackage));
+        return !IsEditingCommissionTermsRevision &&
+            (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission)?.CurrentTerms.Payment is { } payment
+                ? TradeOrderPaymentDisplayFormatter.ApplyCanonicalPayment(summary, payment)
+                : summary;
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()
@@ -62,7 +66,8 @@ public partial class TradeOrders
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
             WorkerProjections.Shell.PlanId,
-            GetVisibleLiveProcurementSnapshot());
+            GetVisibleLiveProcurementSnapshot(),
+            useRecordedPayment: HasAgreedPaymentTerms);
     }
 
     private TradeOrder GetSelectedOrderPricingWorkPackage()
@@ -582,7 +587,7 @@ public partial class TradeOrders
             TradeOrderProcurementColumn.Item => rows.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase),
             TradeOrderProcurementColumn.Quantity => rows.OrderBy(GetProcurementSortQuantity),
             TradeOrderProcurementColumn.Source => rows.OrderBy(row => row.SourceLabel, StringComparer.OrdinalIgnoreCase),
-            TradeOrderProcurementColumn.Cost => rows.OrderBy(row => row.TotalCost),
+            TradeOrderProcurementColumn.Cost => rows.OrderBy(row => row.IsLiveAcquisitionRow ? row.PaymentImpact : row.TotalCost),
             TradeOrderProcurementColumn.Responsibility => rows.OrderBy(row => row.Responsibility.ToString(), StringComparer.OrdinalIgnoreCase),
             _ => rows.OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
         };

@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
+      handoff_artifact_id: ${{ steps.handoff.outputs.artifact-id }}
       archive_name: ${{ steps.artifact.outputs.archive_name }}
       archive_sha256: ${{ steps.artifact.outputs.archive_sha256 }}
       configuration_sha256: ${{ steps.artifact.outputs.effective_configuration_sha256 }}
@@ -39,6 +40,7 @@ jobs:
       TRUTHFUL_RUN_ID: ${{ github.run_id }}
       TRUTHFUL_RUN_ATTEMPT: ${{ github.run_attempt }}
       FranthropyRoot: /tmp/franthropy
+      FranthropySource: Local
     steps:
       - name: Resolve deploy target
         id: deploy-target
@@ -116,7 +118,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          revision="$(tr -d '[:space:]' < eng/Franthropy.version)"
+          revision="$(sed -n 's/.*<FranthropyPackageVersion>0.1.0-commit.\([0-9a-f]*\)<\/FranthropyPackageVersion>.*/\1/p' eng/Franthropy.Version.props)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
           git init "$FranthropyRoot"
           git -C "$FranthropyRoot" remote add origin https://github.com/FranFkntastic/Franthropy.git
           git -C "$FranthropyRoot" fetch --depth=1 origin "$revision"
@@ -190,6 +193,7 @@ jobs:
           "${{ steps.deploy-target.outputs.profile_host_domain }}"
 
       - name: Upload verified release handoff
+        id: handoff
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: web-release-${{ github.run_id }}-${{ github.run_attempt }}
@@ -215,10 +219,18 @@ jobs:
       VPS_SSH_PORT: 22
       REMOTE_UPLOAD_DIR: .craftarchitect-deploy/${{ github.run_id }}-${{ github.run_attempt }}
     steps:
+      - name: Require exact package handoff identity
+        shell: bash
+        env:
+          HANDOFF_ARTIFACT_ID: ${{ needs.package.outputs.handoff_artifact_id }}
+        run: '[[ "$HANDOFF_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]'
+
       - name: Download verified release handoff
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: web-release-${{ github.run_id }}-${{ github.run_attempt }}
+          # A deploy-only retry keeps the original package job's artifact.
+          artifact-ids: ${{ needs.package.outputs.handoff_artifact_id }}
+          merge-multiple: true
           path: accepted
 
       - name: Verify release handoff without source checkout
@@ -302,12 +314,20 @@ jobs:
           trap cleanup EXIT
 
           printf '%s  %s\n' "$expected_sha" "$archive" | sha256sum --check --strict -
-          sudo test ! -e "$release_dir"
           sudo test ! -e "$staging_dir"
           sudo mkdir -p "$staging_dir"
           sudo tar -xzf "$archive" -C "$staging_dir"
           sudo chown -R "$USER:$USER" "$staging_dir"
-          sudo mv "$staging_dir" "$release_dir"
+          if sudo test -e "$release_dir"; then
+            # A previous attempt may have activated before HTTPS verification failed.
+            # Reuse only an identical release; never overwrite conflicting bytes.
+            sudo test -d "$release_dir"
+            sudo test ! -L "$release_dir"
+            sudo diff --no-dereference -qr "$staging_dir" "$release_dir"
+            sudo rm -rf "$staging_dir"
+          else
+            sudo mv "$staging_dir" "$release_dir"
+          fi
           sudo ln -sfn "$release_dir" "$root/current"
           rm -f "$archive"
           rmdir "$upload_dir"

@@ -8,6 +8,8 @@ const workspaceId = normalizeWorkspaceId(
     workerModuleUrl.searchParams.get("workspace") ?? "active");
 let workerGeneration = null;
 let sessionBootstrapPromise = null;
+let sessionCommandQueue = Promise.resolve();
+let sessionFault = null;
 
 self.onmessage = async event => {
     const message = event.data ?? {};
@@ -230,7 +232,26 @@ const sessionComponentFields = Object.freeze([
     "procurementRouteJson"
 ]);
 
-async function executeSessionCommand(messageJson, host) {
+function executeSessionCommand(messageJson, host) {
+    // The managed gate ends before IndexedDB commits. Keep reads and other tabs
+    // behind the entire durable transaction, not just its managed portion.
+    const pending = sessionCommandQueue.then(async () => {
+        if (sessionFault) throw sessionFault;
+        try {
+            return await executeSessionCommandCore(messageJson, host);
+        } catch (error) {
+            // The main-thread transport replaces a failed mutation Worker. Until
+            // then, no queued read may observe an uncommitted candidate.
+            const kind = JSON.parse(messageJson).payload?.commandKind;
+            if (kind === "replace" || kind?.startsWith("mutate-")) sessionFault = error;
+            throw error;
+        }
+    });
+    sessionCommandQueue = pending.catch(() => {});
+    return pending;
+}
+
+async function executeSessionCommandCore(messageJson, host) {
     const message = JSON.parse(messageJson);
     const command = message.payload ?? {};
     if (command.commandKind === "bootstrap") {
@@ -311,15 +332,11 @@ async function bootstrapSession(host, requestMessage) {
 }
 
 async function replaceDurableSession(host, requestMessage) {
+    const prepared = await prepareDurableCommand(host, requestMessage);
+    if (prepared.rejection) return prepared.rejection;
+    const { current } = prepared;
+    requestMessage = prepared.requestMessage;
     const command = requestMessage.payload;
-    const current = await loadDurableSession();
-    if (current.revision !== command.expectedRevision) {
-        return await host.ExecuteSessionCommandJson(JSON.stringify(createManagedSessionMessage(
-            requestMessage,
-            "shell",
-            command.expectedRevision,
-            {})));
-    }
 
     const targetRevision = current.revision + 1;
     const restoreMessage = createManagedSessionMessage(
@@ -335,6 +352,13 @@ async function replaceDurableSession(host, requestMessage) {
     const resultJson = await host.ExecuteSessionCommandJson(JSON.stringify(restoreMessage));
     const result = JSON.parse(resultJson);
     if (result.payload?.accepted !== true) {
+        if (result.payload?.rejectionCode === "command-rejected") {
+            const recovered = await restoreCommittedSession(
+                host, requestMessage, current, result.payload.revision);
+            result.payload.revision = recovered.payload.revision;
+            result.payload.projection = recovered.payload.projection;
+            return JSON.stringify(result);
+        }
         return resultJson;
     }
 
@@ -358,21 +382,26 @@ async function replaceDurableSession(host, requestMessage) {
 
 async function mutateDurableSession(host, requestMessage) {
     const startedAt = performance.now();
+    const prepared = await prepareDurableCommand(host, requestMessage);
+    if (prepared.rejection) return prepared.rejection;
+    const { current } = prepared;
+    requestMessage = prepared.requestMessage;
     const command = requestMessage.payload;
-    const current = await loadDurableSession();
     const loadedAt = performance.now();
-    if (current.revision !== command.expectedRevision) {
-        return await host.ExecuteSessionCommandJson(JSON.stringify(createManagedSessionMessage(
-            requestMessage,
-            "shell",
-            command.expectedRevision,
-            {})));
-    }
 
     const resultJson = await host.ExecuteSessionCommandJson(JSON.stringify(requestMessage));
     const managedAt = performance.now();
     const result = JSON.parse(resultJson);
     if (result.payload?.accepted !== true) {
+        if (result.payload?.rejectionCode === "command-rejected") {
+            // Domain code may throw after mutating its candidate or incrementing
+            // the revision. Never expose that candidate as the next command base.
+            const recovered = await restoreCommittedSession(
+                host, requestMessage, current, result.payload.revision);
+            result.payload.revision = recovered.payload.revision;
+            result.payload.projection = recovered.payload.projection;
+            return JSON.stringify(result);
+        }
         return resultJson;
     }
 
@@ -384,31 +413,91 @@ async function mutateDurableSession(host, requestMessage) {
         throw new Error("Worker mutation did not return one durable successor revision.");
     }
 
-    try {
-        const durableState = carrier.durableState ??
-            applyDurablePatch(current.storedPlan, carrier.durablePatch);
-        await commitDurableSession(
-            current.revision,
-            targetRevision,
-            durableState,
-            carrier.durablePatch ?? null,
-            current.trackStoredPlanIdentity);
-        const committedAt = performance.now();
-        console.info(
-            `[EngineSession] ${command.commandKind} load=${Math.round(loadedAt - startedAt)}ms ` +
-            `managed=${Math.round(managedAt - loadedAt)}ms ` +
-            `commit=${Math.round(committedAt - managedAt)}ms ` +
-            `durable=${carrier.durablePatch ? "patch" : "snapshot"} ` +
-            `total=${Math.round(committedAt - startedAt)}ms`);
-        result.payload.projection = {
-            shell: carrier.shell,
-            view: carrier.publicProjection
-        };
-        return JSON.stringify(result);
-    } catch (error) {
-        sessionBootstrapPromise = null;
-        throw new Error(`Worker session durable mutation failed: ${String(error)}`);
+    const durableState = carrier.durableState ??
+        applyDurablePatch(current.storedPlan, carrier.durablePatch);
+    await commitDurableSession(
+        current.revision,
+        targetRevision,
+        durableState,
+        carrier.durablePatch ?? null,
+        current.trackStoredPlanIdentity);
+    const committedAt = performance.now();
+    console.info(
+        `[EngineSession] ${command.commandKind} load=${Math.round(loadedAt - startedAt)}ms ` +
+        `managed=${Math.round(managedAt - loadedAt)}ms ` +
+        `commit=${Math.round(committedAt - managedAt)}ms ` +
+        `durable=${carrier.durablePatch ? "patch" : "snapshot"} ` +
+        `total=${Math.round(committedAt - startedAt)}ms`);
+    result.payload.projection = {
+        shell: carrier.shell,
+        view: carrier.publicProjection
+    };
+    return JSON.stringify(result);
+}
+
+async function prepareDurableCommand(host, requestMessage) {
+    let command = requestMessage.payload;
+    let current = await loadDurableSession();
+    const observed = JSON.parse(await host.ExecuteSessionCommandJson(JSON.stringify(
+        createManagedSessionMessage(requestMessage, "shell", -1, {}))));
+    const managedRevision = observed.payload.revision;
+    if (current.revision !== command.expectedRevision || managedRevision !== current.revision) {
+        if (managedRevision > current.revision) {
+            const recovered = await restoreCommittedSession(host, requestMessage, current, managedRevision);
+            // Only a caller observing the committed base or unpublished candidate may continue.
+            // Older edits must not be replayed over a genuinely newer revision.
+            const selfContained = ["replace", "mutate-project-items", "mutate-plan-identity",
+                "mutate-active-context", "mutate-recipe-build", "mutate-acquisition"];
+            if (![managedRevision, current.revision].includes(command.expectedRevision) ||
+                !selfContained.includes(command.commandKind)) {
+                return { rejection: staleSessionResult(requestMessage, recovered) };
+            }
+            requestMessage = {
+                ...requestMessage,
+                payload: { ...command, expectedRevision: recovered.payload.revision }
+            };
+            command = requestMessage.payload;
+            current = await loadDurableSession();
+        } else if (managedRevision === current.revision) {
+            return { rejection: staleSessionResult(requestMessage, observed) };
+        } else {
+            throw new Error("The Worker is behind committed storage and must be restarted.");
+        }
     }
+
+    return { current, requestMessage };
+}
+
+function staleSessionResult(requestMessage, observed) {
+    return JSON.stringify({
+        ...observed,
+        payload: {
+            ...observed.payload,
+            commandKind: requestMessage.payload.commandKind,
+            accepted: false,
+            rejectionCode: "stale-revision",
+            message: `Expected Worker session revision ${requestMessage.payload.expectedRevision}, ` +
+                `but ${observed.payload.revision} is committed.`
+        }
+    });
+}
+
+async function restoreCommittedSession(host, requestMessage, current, managedRevision) {
+    const restored = JSON.parse(await host.ExecuteSessionCommandJson(JSON.stringify(
+        createManagedSessionMessage(requestMessage, "restore", managedRevision, {
+            revision: managedRevision + 1,
+            storedPlan: current.storedPlan,
+            trackStoredPlanIdentity: current.trackStoredPlanIdentity,
+            migratedFromLegacy: false
+        }))));
+    if (!restored.payload?.accepted) {
+        throw new Error(restored.payload?.message ?? "The committed Worker session could not be restored.");
+    }
+    const repair = restored.payload.durableRepairPatch ?? null;
+    const storedPlan = repair ? applyDurablePatch(current.storedPlan, repair) : current.storedPlan;
+    await commitDurableSession(current.revision, restored.payload.revision, storedPlan,
+        repair, current.trackStoredPlanIdentity);
+    return restored;
 }
 
 function applyDurablePatch(storedPlan, patch) {

@@ -4,13 +4,44 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public static class TradeOrderPaymentDisplayFormatter
 {
-    public static string FormatMaterialPaymentImpact(TradeCommissionPaymentMaterial material)
+    public static TradeCommissionPaymentSummary ApplyCanonicalPayment(
+        TradeCommissionPaymentSummary summary,
+        CompanyCommissionPaymentTerms payment)
+    {
+        var breakdown = summary.Active with
+        {
+            IsAvailable = true,
+            MaterialReimbursementTotal = payment.MaterialReimbursement,
+            CommissionAmount = payment.MaterialAdjustment,
+            CraftLaborTotal = payment.CraftLabor,
+            CraftSynthCount = payment.CraftSynthCount,
+            GilPerSynth = payment.GilPerSynth,
+            Total = payment.Total,
+            Warnings = []
+        };
+        return summary with
+        {
+            MaterialReimbursementTotal = payment.MaterialReimbursement,
+            CommissionAmount = payment.MaterialAdjustment,
+            TotalPayment = payment.Total,
+            Active = breakdown
+        };
+    }
+
+    public static string FormatMaterialPaymentImpact(
+        TradeCommissionPaymentMaterial material,
+        bool requireRecordedCash = false)
     {
         ArgumentNullException.ThrowIfNull(material);
 
-        if (material.Responsibility == CommissionMaterialResponsibility.Provided)
+        if (material.Responsibility == CommissionMaterialResponsibility.Provided || material.IsOnHand)
         {
             return FormatGilAllowZero(0);
+        }
+
+        if (requireRecordedCash)
+        {
+            return "Not itemized in terms";
         }
 
         if (material.TotalCost <= 0)

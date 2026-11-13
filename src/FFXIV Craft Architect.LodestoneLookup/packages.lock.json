@@ -39,6 +39,19 @@
           "SourceGear.sqlite3": "3.50.4.5"
         }
       },
+      "Franthropy.FFXIV": {
+        "type": "Transitive",
+        "resolved": "0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9",
+        "contentHash": "un6Z0QTABd7zandHpZW2cxfI4yeIAPR9NACDkLvwwQ89XN7fLgIGjB9TlIbfA6f4gN+Jfg3C+po58PUt0HRhmw==",
+        "dependencies": {
+          "Franthropy.Filtering": "0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9"
+        }
+      },
+      "Franthropy.Filtering": {
+        "type": "Transitive",
+        "resolved": "0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9",
+        "contentHash": "B4xFngCSyrKB1BXpz7fYG88cLO87qalPZMw761d7nQpW7oqc9AFSMNzw9bKvC0w9QssadSzQUFUP2S1BlzK2hg=="
+      },
       "HtmlAgilityPack": {
         "type": "Transitive",
         "resolved": "1.11.46",
@@ -221,19 +234,10 @@
         "resolved": "8.0.5",
         "contentHash": "0f1B50Ss7rqxXiaBJyzUu9bWFOO2/zSlifZ/UNMdiIpDYe4cY4LQQicP4nirK1OS31I43rn062UIJ1Q9bpmHpg=="
       },
-      "franthropy.ffxiv": {
-        "type": "Project",
-        "dependencies": {
-          "Franthropy.Filtering": "[0.1.0, )"
-        }
-      },
-      "franthropy.filtering": {
-        "type": "Project"
-      },
       "Gooseworks.FFXIVCraftArchitect.Core": {
         "type": "Project",
         "dependencies": {
-          "Franthropy.FFXIV": "[0.1.0, )",
+          "Franthropy.FFXIV": "[0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9, 0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9]",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[8.0.0, )",
           "Microsoft.Extensions.Http": "[8.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[8.0.0, )",

@@ -428,8 +428,10 @@
                                     <RequirementsContent>
                                         @{
                                             var paymentSummary = GetSelectedOrderPaymentSummary();
-                                            var displayedPaymentTotal = SelectedCanonicalCommission?.CurrentTerms.Payment.Total ??
-                                                paymentSummary.TotalPayment;
+                                            var showAgreed = HasAgreedPaymentTerms;
+                                            var termsBasis = HasCanonicalCommission && !IsEditingCommissionTermsRevision
+                                                ? showAgreed ? "Agreed terms" : "Draft terms" : null;
+                                            var displayedPaymentTotal = paymentSummary.TotalPayment;
                                             var displayedProcurementTotal = SelectedCanonicalCommission?.CurrentTerms.Materials
                                                 .Sum(material => material.TotalCost) ??
                                                 paymentSummary.EstimatedProcurementTotal;
@@ -738,13 +740,14 @@
                                              }
                                              <MudTextField @bind-Value="_commissionTermsRevisionReason"
                                                            id="commission-terms-revision-reason"
-                                                           Label="What changed?"
+                                                           Label="Reason for revision"
                                                            HelperText="The crafter must acknowledge this immutable revision before work continues."
                                                            Variant="Variant.Outlined"
                                                            Margin="Margin.Dense"
                                                            Immediate="true"
                                                            Lines="2"
                                                            MaxLength="500" />
+                                             <CommissionTermsChanges Comparison="@GetStagedTermsComparison()" />
                                              <div class="trade-orders-inline-actions">
                                                  <MudButton Variant="Variant.Text"
                                                             Color="Color.Secondary"
@@ -1016,8 +1019,8 @@
                                         </div>
                                         <div class="trade-orders-payment-breakdown-row">
                                             <span>Crafter-procured materials</span>
-                                            <span>Payable materials</span>
-                                            <strong>@FormatGil(paymentSummary.MaterialReimbursementTotal)</strong>
+                                            <span>@(termsBasis ?? "Payable materials")</span>
+                                            <strong>@FormatGilAllowZero(paymentSummary.MaterialReimbursementTotal)</strong>
                                         </div>
                                         @if (paymentSummary.OnHandMaterialValueTotal > 0)
                                         {
@@ -1032,32 +1035,32 @@
                                             <span>Estimate only</span>
                                             <strong>@FormatGilAllowZero(paymentSummary.ProvidedMaterialTotal)</strong>
                                         </div>
-                                        @if (paymentSummary.Active.Contract == TradePaymentContractMode.LegacyCommission)
+                                        @if (termsBasis != null || paymentSummary.Active.Contract == TradePaymentContractMode.LegacyCommission)
                                         {
                                             <div class="trade-orders-payment-breakdown-row">
-                                                <span>Legacy material commission</span>
-                                                <span>@paymentSummary.CommissionPercent.ToString("N0")% of procurement</span>
-                                                <strong>@FormatGil(paymentSummary.CommissionAmount)</strong>
+                                                <span>@(termsBasis != null ? "Material adjustment" : "Legacy material commission")</span>
+                                                <span>@(termsBasis ?? $"{paymentSummary.CommissionPercent:N0}% of procurement")</span>
+                                                <strong>@FormatGilAllowZero(paymentSummary.CommissionAmount)</strong>
                                             </div>
                                         }
-                                        @if (paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
+                                        @if (termsBasis != null || paymentSummary.Active.Contract == TradePaymentContractMode.LaborStandard)
                                         {
                                             <div class="trade-orders-payment-breakdown-row">
                                                 <span>Craft labor</span>
-                                                <span>@FormatCraftLaborBasis(paymentSummary.LaborStandard)</span>
-                                                <strong>@FormatGilAllowZero(paymentSummary.LaborStandard.CraftLaborTotal)</strong>
+                                                <span>@FormatCraftLaborBasis(paymentSummary.Active)</span>
+                                                <strong>@FormatGilAllowZero(paymentSummary.Active.CraftLaborTotal)</strong>
                                             </div>
                                         }
                                         <div class="trade-orders-payment-breakdown-row is-total">
                                             <span>Total payment</span>
-                                            <span>@FormatPaymentContract(paymentSummary.Active.Contract)</span>
+                                            <span>@(termsBasis ?? FormatPaymentContract(paymentSummary.Active.Contract))</span>
                                             <strong>@FormatGil(paymentSummary.TotalPayment)</strong>
                                         </div>
                                     </div>
                                     <div class="trade-orders-payment-table">
                                         <div class="trade-orders-payment-table-title">
-                                            <span>Policy Comparison</span>
-                                            <span>Same current route</span>
+                                            <span>@(showAgreed ? "Current policy estimates (not agreed payment)" : "Policy Comparison")</span>
+                                            <span>Same material reference values</span>
                                         </div>
                                         <div class="trade-orders-policy-comparison-header">
                                             <span>Contract</span>
@@ -1137,7 +1140,7 @@
                                                 <span class="trade-orders-payment-responsibility">
                                                     @FormatResponsibility(material.Responsibility)
                                                 </span>
-                                                <span>@FormatMaterialPaymentImpact(material)</span>
+                                                <span>@FormatMaterialPaymentImpact(material, showAgreed)</span>
                                             </div>
                                         }
                                     </div>
@@ -1685,7 +1688,7 @@
                                     <section class="trade-orders-procurement-summary">
                                         <div class="trade-orders-procurement-total">
                                             <span>Crafter reimbursable</span>
-                                            <strong>@FormatGilAllowZero(GetProcurementReimbursementTotal(procurementRows))</strong>
+                                            <strong>@FormatGilAllowZero(HasCanonicalCommission && !IsEditingCommissionTermsRevision ? paymentSummary.MaterialReimbursementTotal : GetProcurementReimbursementTotal(procurementRows))</strong>
                                         </div>
                                         <div class="trade-orders-procurement-health">
                                             <span>Company handoff</span>
@@ -1785,7 +1788,7 @@
                                         <span>@FormatProcurementFooter(procurementRows)</span>
                                         <div>
                                             <small>@FormatGilAllowZero(GetProcurementMaterialValueTotal(procurementRows)) material value</small>
-                                            <strong>@FormatGilAllowZero(GetProcurementReimbursementTotal(procurementRows)) reimbursable</strong>
+                                            <strong>@FormatGilAllowZero(HasCanonicalCommission && !IsEditingCommissionTermsRevision ? paymentSummary.MaterialReimbursementTotal : GetProcurementReimbursementTotal(procurementRows)) reimbursable</strong>
                                         </div>
                                     </div>
                                     @if (paymentSummary.Warnings.Count > 0)
@@ -1814,7 +1817,7 @@
                                                      @onclick="@(() => SetTimelineFilter(filter))">
                                                  @(filter == CommissionTimelineFilter.CompanyOnly
                                                      ? "Company only"
-                                                     : filter.ToString())
+                                                     : filter == CommissionTimelineFilter.TermsRevisions ? "Terms revisions" : filter.ToString())
                                              </button>
                                          }
                                      </div>
@@ -1871,17 +1874,31 @@
                                                  <time>@item.CreatedAtUtc.ToLocalTime().ToString("MMM d, h:mm tt")</time>
                                                  <span class="trade-orders-timeline-dot"></span>
                                                  <div>
+                                                     @if (GetTermsRevisionActivity(item.Id) is { } revision && SelectedCanonicalCommission is { } revisionCommission)
+                                                     {
+                                                         <CommissionTermsRevision Commission="revisionCommission" Version="revision.TermsVersion" Reason="@revision.Comment" />
+                                                     }
+                                                     else
+                                                     {
                                                      <div class="trade-orders-timeline-item-heading">
                                                          <strong>@item.Title</strong>
                                                          <span>@FormatTimelineImportance(item.Importance) - @FormatTimelineVisibility(item.Visibility)</span>
                                                      </div>
                                                      <p>@item.Detail</p>
                                                      <small>@item.Actor</small>
+                                                     }
                                                  </div>
                                              </article>
                                          }
                                      }
                                  </div>
+                                 @if (SelectedCanonicalCommission is { } historyCommission && historyCommission.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft)
+                                 {
+                                     <details class="trade-orders-timeline-routine-group">
+                                         <summary>Original terms · v1</summary>
+                                         <CommissionTermsHistory Versions="historyCommission.TermsVersions" CurrentVersion="historyCommission.CurrentTermsVersion" InitialVersion="1" CommissionId="historyCommission.CommissionId" />
+                                     </details>
+                                 }
                                  <div class="trade-orders-timeline-composer">
                                      @if (HasCanonicalCommission)
                                      {
@@ -2372,11 +2389,15 @@
     </div>;
 
     private RenderFragment<TradeOrderProcurementRow> RenderProcurementCostCell => row => @<div class="trade-orders-procurement-cost-cell">
-        <strong>@(row.Responsibility == CommissionMaterialResponsibility.Provided || row.Source == AcquisitionSource.OnHand
-            ? FormatGilAllowZero(0)
-            : FormatGil(row.TotalCost))</strong>
+        <strong title="Active crafter procurement cash only; excludes labor, material bonus, and route safety allowance. Craft subtree rollups overlap their ingredient rows and must not be added together.">@(row.IsLiveAcquisitionRow
+            ? row.PaymentImpact.HasValue ? FormatGilAllowZero(row.PaymentImpact.Value)
+                : HasAgreedPaymentTerms ? "Not itemized in terms" : "Impact unavailable"
+            : row.Responsibility == CommissionMaterialResponsibility.Provided || row.Source == AcquisitionSource.OnHand
+                ? FormatGilAllowZero(0) : FormatGil(row.TotalCost))</strong>
         <span>
-            @(row.Responsibility == CommissionMaterialResponsibility.Provided
+            @(row.IsLiveAcquisitionRow && row.HasChildren && row.Source == AcquisitionSource.Craft
+                ? $"{FormatGil(row.TotalCost)} full acquisition value; subtree cash (not additive)"
+                : row.Responsibility == CommissionMaterialResponsibility.Provided
                 ? row.TotalCost > 0
                     ? $"{FormatGil(row.TotalCost)} company value"
                     : "Company provided"

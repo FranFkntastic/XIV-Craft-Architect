@@ -167,7 +167,19 @@ public sealed record WorkerTradeProjection(
     IReadOnlyList<MaterialAggregate> ActiveProcurementItems,
     IReadOnlyList<WorkerAcquisitionRowProjection> AcquisitionRows,
     IReadOnlyList<TradeOrderCraftLaborSnapshot> CraftLabor,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    IReadOnlyList<WorkerPlanOccurrence>? PlanOccurrences = null);
+
+// Occurrence identity, not presentation strings, defines acquisition ancestry.
+public sealed record WorkerPlanOccurrence(
+    string NodeId,
+    string? ParentNodeId,
+    int ItemId,
+    bool MustBeHq,
+    int Quantity,
+    AcquisitionSource Source,
+    bool IsActiveProcurement,
+    bool IsSuppressed);
 
 public sealed record WorkerSessionMutationProjection(
     WorkerSessionShellProjection Shell,

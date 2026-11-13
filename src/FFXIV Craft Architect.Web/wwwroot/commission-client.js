@@ -798,6 +798,8 @@ export function adaptBriefProjection(payload) {
 
     return {
         kind: "participant",
+        termsComparisons: payload.termsComparisons == null ? null : requiredArray(payload.termsComparisons, "Terms comparisons").map(adaptTermsComparison),
+        permittedTermsVersions: payload.permittedTermsVersions == null ? null : requiredArray(payload.permittedTermsVersions, "Permitted terms").map(adaptHistoricalTerms),
         public: publicBrief,
         provisionalCrafter: payload.provisionalCrafter
             ? adaptProvisionalCrafter(payload.provisionalCrafter)
@@ -817,6 +819,37 @@ export function adaptBriefProjection(payload) {
         settlementPayment: adaptSettlementPayment(
             requiredObject(payload.settlementPayment, "Participant settlement state")),
         activity: requiredArray(payload.activity, "Participant activity").map(adaptParticipantActivity)
+    };
+}
+
+function adaptHistoricalTerms(value) {
+    try {
+        return adaptPublicTerms(requiredObject(value, "Saved terms"));
+    } catch (error) {
+        if (!(error instanceof CommissionClientError)) throw error;
+        return {
+            version: Number.isInteger(value?.version) && value.version >= 1 ? value.version : null,
+            unavailableReason: "This saved version could not be validated. Current published terms remain available."
+        };
+    }
+}
+
+function adaptTermsComparison(value) {
+    const diff = requiredObject(value, "Terms comparison");
+    return {
+        beforeVersion: requiredInteger(diff.beforeVersion, "Before version", 1),
+        afterVersion: requiredInteger(diff.afterVersion, "After version", 1),
+        available: requiredBoolean(diff.available, "Comparison availability"),
+        unavailableReason: diff.unavailableReason == null ? null : requiredText(diff.unavailableReason, "Comparison gap"),
+        evidenceChanged: requiredBoolean(diff.evidenceChanged, "Evidence change"),
+        changes: requiredArray(diff.changes, "Term changes").map(row => ({
+            term: requiredText(row.term, "Changed term"), before: String(row.before ?? ""), after: String(row.after ?? "")
+        })),
+        payment: requiredArray(diff.payment, "Payment changes").map(row => ({
+            component: requiredText(row.component, "Payment component"),
+            before: requiredNumber(row.before, "Recorded before amount"),
+            after: requiredNumber(row.after, "Recorded after amount")
+        }))
     };
 }
 

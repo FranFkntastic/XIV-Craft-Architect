@@ -672,7 +672,8 @@ public sealed record TradeOrderProcurementRow(
     bool HasEditableOccurrences = true,
     AcquisitionSource Source = AcquisitionSource.UnknownSource,
     bool HasChildren = false,
-    IReadOnlyList<AcquisitionSource>? AvailableSources = null)
+    IReadOnlyList<AcquisitionSource>? AvailableSources = null,
+    decimal? PaymentImpact = null)
 {
     public IReadOnlyList<string> SuppressedBy { get; init; } = SuppressedBy ?? Array.Empty<string>();
     public IReadOnlyList<AcquisitionSource> AvailableSources { get; init; } = AvailableSources ?? [Source];

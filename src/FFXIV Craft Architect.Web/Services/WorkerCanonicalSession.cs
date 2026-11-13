@@ -151,10 +151,6 @@ internal sealed class WorkerCanonicalSession
         _legacyProcurementRouteJson = null;
     }
 
-    public string ExportProcurementRoute() =>
-        BuildProcurementRouteJson()
-        ?? throw new InvalidOperationException("The current procurement route is unavailable.");
-
     public WorkerSessionDurablePatch CreateDurablePatch(
         bool replacePlanJson = false,
         bool replacePlanStateJson = false,

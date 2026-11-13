@@ -18,6 +18,9 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 
 public partial class TradeOrders
 {
+    private bool HasAgreedPaymentTerms => HasCanonicalCommission && !IsEditingCommissionTermsRevision &&
+        (SelectedCanonicalCommission ?? _selectedOrder?.CompanyCommission)?.PublicMetadata.ViewState != CompanyCommissionPublicViewState.Draft;
+
     private TradePayrollWorkflowDraft? GetPayrollDraftForOrder(TradeOrder order)
     {
         return _payrollDrafts.FirstOrDefault(draft =>
@@ -79,9 +82,10 @@ public partial class TradeOrders
         return TradeOrderPaymentDisplayFormatter.FormatCraftLaborBasis(breakdown);
     }
 
-    private static string FormatMaterialPaymentImpact(TradeCommissionPaymentMaterial material)
+    private static string FormatMaterialPaymentImpact(TradeCommissionPaymentMaterial material, bool showAgreed)
     {
-        return TradeOrderPaymentDisplayFormatter.FormatMaterialPaymentImpact(material);
+        return TradeOrderPaymentDisplayFormatter.FormatMaterialPaymentImpact(
+            material, requireRecordedCash: showAgreed);
     }
 
     private static string FormatResponsibility(CommissionMaterialResponsibility responsibility)
@@ -103,9 +107,26 @@ public partial class TradeOrders
 
     private TradeOrderPaymentCopyContext CreateOrderPaymentCopyContext(TradeOrder order)
     {
+        var canonicalTerms = (_selectedOrder?.Id == order.Id ? SelectedCanonicalCommission : null)
+            ?.CurrentTerms ?? order.CompanyCommission?.CurrentTerms;
+        if (_selectedOrder?.Id == order.Id && IsEditingCommissionTermsRevision)
+        {
+            canonicalTerms = null;
+        }
+        if (canonicalTerms != null)
+        {
+            order = CreateCanonicalTermsWorkPackage(order, canonicalTerms);
+        }
+        var responsibilities = canonicalTerms == null
+            ? _selectedOrder?.Id == order.Id ? GetSelectedOrderResponsibilityProjection() : GetPayrollDraftForOrder(order)
+            : new TradePayrollWorkflowDraft
+            {
+                Responsibilities = canonicalTerms.Materials.Select(material => new TradePayrollResponsibilityLine(
+                    material.ItemId, material.RequiresHq, material.Responsibility)).ToArray()
+            };
         var summary = TradeCommissionPaymentSummary.FromOrder(
             order,
-            GetPayrollDraftForOrder(order),
+            responsibilities,
             GetOrderEffectivePaymentPolicy(order));
         return new TradeOrderPaymentCopyContext(
             order.Title,
@@ -121,7 +142,10 @@ public partial class TradeOrders
                 order.SourceSnapshot.Region,
                 order.SourceSnapshot.RequestedDataCenters,
                 order.SourceSnapshot.ImportedAtUtc),
-            summary);
+            summary,
+            canonicalTerms?.Payment,
+            IsDraftTerms: canonicalTerms != null &&
+                (SelectedCanonicalCommission ?? order.CompanyCommission)?.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Draft);
     }
 
     private async Task CopyTextToClipboardAsync(string text, string successMessage)
