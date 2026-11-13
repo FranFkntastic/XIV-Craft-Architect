@@ -352,6 +352,46 @@ public sealed class MembershipContractTests
         Assert.Equal(CrafterAccountBindingEvidence.OperatorConfirmed, binding.Evidence);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OldInvitationCannotOverrideMembershipDecisionEvenAfterNewRequest(bool revoke)
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var recipient = await fixture.CreateAccountAsync("Recipient");
+        var company = CreateCompany();
+        var companyId = new CompanyId(company.Id);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var recipientClient = fixture.CreateClient(recipient.Key);
+        await PutCompanyAsync(ownerClient, company);
+        var oldInvite = await fixture.Memberships.IssueInvitationAsync(companyId, owner.ProfileId, null);
+        await fixture.Memberships.RequestAsync(companyId, recipient.ProfileId, null);
+        if (revoke)
+        {
+            await fixture.Memberships.ApproveAsync(companyId, recipient.ProfileId, owner.ProfileId);
+            await fixture.Memberships.RevokeAsync(companyId, recipient.ProfileId, owner.ProfileId);
+        }
+        else
+        {
+            await fixture.Memberships.DenyAsync(companyId, recipient.ProfileId, owner.ProfileId);
+        }
+        using var refused = await recipientClient.PostAsync(
+            $"/trade/v1/membership-invitations/{oldInvite.Token}/accept", null);
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Contains("invitation_predates_membership_decision", await refused.Content.ReadAsStringAsync());
+        await fixture.Memberships.RequestAsync(companyId, recipient.ProfileId, null);
+        var pendingRefusal = await fixture.Memberships.ConsumeInvitationAsync(oldInvite.Token!, recipient.ProfileId);
+        Assert.Equal(MembershipInvitationConsumptionStatus.MembershipDecisionConflict, pendingRefusal.Status);
+        Assert.Equal(MembershipState.Pending, (await fixture.Memberships.LoadAsync(companyId, recipient.ProfileId))!.State);
+        Assert.Null((await fixture.Memberships.LoadInvitationAsync(oldInvite.Token!))!.ConsumedAtUtc);
+        var fresh = await fixture.Memberships.IssueInvitationAsync(companyId, owner.ProfileId, null);
+        Assert.Equal(MembershipInvitationConsumptionStatus.Applied,
+            (await fixture.Memberships.ConsumeInvitationAsync(fresh.Token!, recipient.ProfileId)).Status);
+        Assert.Equal(MembershipInvitationConsumptionStatus.Replayed,
+            (await fixture.Memberships.ConsumeInvitationAsync(fresh.Token!, recipient.ProfileId)).Status);
+    }
+
     [Fact]
     public async Task OperatorCanConnectAndCorrectLegacyCrafterHistoryWithoutRewritingIt()
     {

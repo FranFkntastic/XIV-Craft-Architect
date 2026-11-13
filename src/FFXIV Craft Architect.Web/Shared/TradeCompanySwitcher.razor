@@ -11,7 +11,14 @@
 @inject CompanyHubClient CompanyHubClient
 @implements IDisposable
 
-@if (_activeCompany != null)
+@if (HubLinkOnly)
+{
+    @if (_activeCompany?.IsHosted == true)
+    {
+        <MudButton Href="@CompanyHubUrl(_activeCompany)" Size="Size.Small" StartIcon="@Icons.Material.Filled.Home">Company hub</MudButton>
+    }
+}
+else if (_activeCompany != null)
 {
     <MudMenu Dense="true"
              AnchorOrigin="Origin.TopCenter"
@@ -69,6 +76,7 @@ else
 }
 
 @code {
+    [Parameter] public bool HubLinkOnly { get; set; }
     private WorkspaceCompanyContext? _activeCompany;
     private IReadOnlyList<WorkspaceCompanyContext> _companies = [];
     private bool _refreshQueued;
@@ -77,8 +85,13 @@ else
     protected override async Task OnInitializedAsync()
     {
         ProfileSync.StatusChanged += OnProfileSyncStatusChanged;
+        TradeOperationsPersistence.WorkspaceCompanyChanged += OnProfileSyncStatusChanged;
+        NavigationManager.LocationChanged += OnLocationChanged;
         await LoadCompaniesAsync();
     }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs args) =>
+        OnProfileSyncStatusChanged();
 
     private void OnProfileSyncStatusChanged()
     {
@@ -438,6 +451,8 @@ else
     {
         _disposed = true;
         ProfileSync.StatusChanged -= OnProfileSyncStatusChanged;
+        TradeOperationsPersistence.WorkspaceCompanyChanged -= OnProfileSyncStatusChanged;
+        NavigationManager.LocationChanged -= OnLocationChanged;
     }
 
     private sealed record WorkspaceCompanyContext(

@@ -98,7 +98,8 @@ public enum MembershipInvitationConsumptionStatus
     Applied,
     Replayed,
     Unavailable,
-    BindingConflict
+    BindingConflict,
+    MembershipDecisionConflict
 }
 
 public sealed record CompanyMembershipInvitation(
@@ -487,6 +488,35 @@ public sealed class SqliteMembershipStore(
             invitation.CompanyId,
             accountProfileId,
             cancellationToken);
+        // Consult history as well as the current row: a new pending request must
+        // not erase an administrator's denial/revocation for an old shared link.
+        if (existing is not { State: MembershipState.Active })
+        {
+            var blocked = existing is { State: MembershipState.Revoked or MembershipState.Denied } &&
+                (!existing.DecidedAtUtc.HasValue || invitation.IssuedAtUtc <= existing.DecidedAtUtc.Value);
+            await using var decisions = connection.CreateCommand();
+            decisions.Transaction = transaction;
+            decisions.CommandText = """
+                SELECT created_at_utc FROM membership_events
+                WHERE company_id = $companyId AND account_profile_id = $accountProfileId
+                  AND to_state IN ('revoked', 'denied');
+                """;
+            AddMembershipIdentity(decisions, invitation.CompanyId, accountProfileId);
+            await using (var reader = await decisions.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    blocked |= invitation.IssuedAtUtc <= DateTimeOffset.Parse(
+                        reader.GetString(0), CultureInfo.InvariantCulture);
+                }
+            }
+            if (blocked)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return new MembershipInvitationConsumptionResult(
+                    MembershipInvitationConsumptionStatus.MembershipDecisionConflict);
+            }
+        }
         var membership = existing is { State: MembershipState.Active }
             ? existing
             : new CompanyMembership(

@@ -697,6 +697,11 @@ public static class MembershipEndpoints
                 {
                     MembershipInvitationConsumptionStatus.Applied or
                         MembershipInvitationConsumptionStatus.Replayed => Results.Ok(ToResponse(result.Membership!)),
+                    MembershipInvitationConsumptionStatus.MembershipDecisionConflict => Results.Json(
+                        new MembershipErrorResponse(
+                            "invitation_predates_membership_decision",
+                            "Your membership was denied or revoked after this invitation was issued. Ask a company administrator for a new invitation."),
+                        statusCode: StatusCodes.Status403Forbidden),
                     MembershipInvitationConsumptionStatus.BindingConflict => Results.Conflict(
                         new MembershipErrorResponse(
                             "invitation_history_conflict",

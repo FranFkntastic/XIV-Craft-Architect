@@ -28,6 +28,16 @@ public partial class TradeOrders
     private const int MaximumOpsPaneWidth = 860;
 
     private TradeCompanyProfile? _companyProfile;
+    private IReadOnlyList<CompanyHubRosterMember> _companyMembers = [];
+    private string? _loadedCompanyQuery;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedCompanyQuery != Company)
+        {
+            await LoadAsync();
+        }
+    }
     private List<TradeCrafterProfile> _crafters = [];
     private List<TradeOrder> _orders = [];
     private List<TradeOrderArchiveSummaryRecord> _archiveSummaryRecords = [];
@@ -455,10 +465,19 @@ public partial class TradeOrders
 
                 requestedWorkspace = await ResolveWorkspaceProfileAsync(requestedCompanyId);
                 await TradeOperationsPersistence.SelectWorkspaceCompanyAsync(requestedCompanyId);
+                // Normalize the URL so a later company switch is not overridden by a stale query.
                 Company = null;
                 NavigationManager.NavigateTo("trade/orders", replace: true);
             }
-            _companyProfile = requestedWorkspace ?? await ResolveSelectedWorkspaceProfileAsync();
+            var resolvedCompany = requestedWorkspace ?? await ResolveSelectedWorkspaceProfileAsync();
+            if (_companyProfile?.Id != resolvedCompany.Id)
+            {
+                _selectedOrder = null;
+                _selectedOrderProjectionRevision = null;
+            }
+            _companyProfile = resolvedCompany;
+            _loadedCompanyQuery = Company;
+            _companyMembers = await CompanyHubs.LoadAssignmentMembersAsync(_companyProfile.Id);
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
             await SelectPendingNavigationOrderAsync();
