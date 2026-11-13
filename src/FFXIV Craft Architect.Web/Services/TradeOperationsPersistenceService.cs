@@ -318,7 +318,7 @@ public sealed class TradeOperationsPersistenceService
 
         if (profile.SchemaVersion < TradeCompanyProfile.CurrentSchemaVersion)
         {
-            if (string.IsNullOrWhiteSpace(profile.CommissionContact))
+            if (profile.SchemaVersion < 3 && string.IsNullOrWhiteSpace(profile.CommissionContact))
             {
                 profile.CommissionContact = PrototypeDefaultCommissionContact;
             }

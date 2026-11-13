@@ -13,7 +13,8 @@ public sealed record TradeCompanyWorkspaceProfileResponse(
     TradeMaterialPricingPolicy MaterialPricingPolicy,
     long Revision,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    TradeCompanyPricingScope? CommissionPricingScope = null);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     long ExpectedRevision,
@@ -21,7 +22,9 @@ public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     string? Description,
     string? CommissionContact,
     TradePaymentPolicy PaymentPolicy,
-    TradeMaterialPricingPolicy MaterialPricingPolicy);
+    TradeMaterialPricingPolicy MaterialPricingPolicy,
+    TradeCompanyPricingScope? CommissionPricingScope = null,
+    bool UpdateCommissionPricingScope = false);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateResponse(long Revision);
 
@@ -78,7 +81,8 @@ public static class TradeCompanyWorkspaceEndpoints
                         snapshot.Profile.MaterialPricingPolicy,
                         snapshot.Revision.Value,
                         snapshot.Profile.CreatedAtUtc,
-                        snapshot.Profile.UpdatedAtUtc));
+                        snapshot.Profile.UpdatedAtUtc,
+                        snapshot.Profile.CommissionPricingScope));
             });
 
         companies.MapPut(
@@ -106,7 +110,8 @@ public static class TradeCompanyWorkspaceEndpoints
                     string.IsNullOrWhiteSpace(body.Name) ||
                     body.Name.Trim().Length > 160 ||
                     body.Description?.Length > 4_000 ||
-                    body.CommissionContact?.Length > 240)
+                    body.CommissionContact?.Length > 240 ||
+                    body.CommissionPricingScope is { IsValid: false })
                 {
                     return Results.BadRequest(new { error = "invalid_company_name" });
                 }
@@ -119,7 +124,9 @@ public static class TradeCompanyWorkspaceEndpoints
                     body.CommissionContact,
                     body.PaymentPolicy,
                     body.MaterialPricingPolicy,
-                    cancellationToken);
+                    cancellationToken,
+                    body.CommissionPricingScope,
+                    body.UpdateCommissionPricingScope);
                 return result.Status switch
                 {
                     CompanyHubMutationStatus.Applied => Results.Ok(

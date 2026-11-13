@@ -132,7 +132,9 @@ public sealed class CompanyHubClient(
                 profile.Description,
                 profile.CommissionContact,
                 profile.PaymentPolicy,
-                profile.MaterialPricingPolicy
+                profile.MaterialPricingPolicy,
+                profile.CommissionPricingScope,
+                UpdateCommissionPricingScope = true
             },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
@@ -601,7 +603,8 @@ public sealed record TradeCompanyWorkspaceProfile(
     TradeMaterialPricingPolicy? MaterialPricingPolicy,
     long Revision,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc)
+    DateTime UpdatedAtUtc,
+    TradeCompanyPricingScope? CommissionPricingScope = null)
 {
     public TradeCompanyProfile ToTransientProfile() => new()
     {
@@ -611,6 +614,7 @@ public sealed record TradeCompanyWorkspaceProfile(
         CommissionContact = CommissionContact,
         PaymentPolicy = PaymentPolicy!,
         MaterialPricingPolicy = MaterialPricingPolicy!,
+        CommissionPricingScope = CommissionPricingScope,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,
         CreatedAtUtc = CreatedAtUtc,

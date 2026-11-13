@@ -31,7 +31,7 @@ public sealed class TradeCompanyDiscordInstallationBinding
 
 public sealed class TradeCompanyProfile
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     public Guid Id { get; set; } = Guid.NewGuid();
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -45,6 +45,7 @@ public sealed class TradeCompanyProfile
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
     public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.Default;
     public TradeMaterialPricingPolicy MaterialPricingPolicy { get; set; } = TradeMaterialPricingPolicy.Default;
+    public TradeCompanyPricingScope? CommissionPricingScope { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 

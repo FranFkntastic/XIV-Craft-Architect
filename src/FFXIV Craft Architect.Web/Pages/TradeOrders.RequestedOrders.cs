@@ -259,7 +259,14 @@ public partial class TradeOrders
                     MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
-                Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+                if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
+                {
+                    ShowCompanyPricingRequired(pricingResult);
+                }
+                else
+                {
+                    Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+                }
                 return;
             }
 
@@ -327,7 +334,14 @@ public partial class TradeOrders
                 MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
         if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
         {
-            Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+            if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
+            {
+                ShowCompanyPricingRequired(pricingResult);
+            }
+            else
+            {
+                Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+            }
             return;
         }
 
