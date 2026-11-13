@@ -98,9 +98,36 @@
 <MudPaper Class="pa-3 mb-3">
     <MudText Typo="Typo.h6">Company members</MudText>
     <MudTable Items="ActiveMembers" Dense="true" Hover="true">
-        <HeaderContent><MudTh>Member</MudTh><MudTh>Role</MudTh><MudTh>Standing</MudTh><MudTh>Routing</MudTh><MudTh>Existing history</MudTh><MudTh></MudTh></HeaderContent>
+        <HeaderContent><MudTh>Member</MudTh><MudTh>Company role</MudTh><MudTh>Standing</MudTh><MudTh>Existing history</MudTh><MudTh></MudTh></HeaderContent>
         <RowTemplate>
-            <MudTd><strong>@context.DisplayName</strong></MudTd><MudTd>@context.Role</MudTd><MudTd>@context.State</MudTd><MudTd>@(context.DiscordLinked ? "Linked Discord" : "Discord not linked")</MudTd>
+            <MudTd>
+                <strong>@context.DisplayName</strong>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">@(context.DiscordLinked ? "Linked Discord" : "Discord not linked")</MudText>
+            </MudTd>
+            <MudTd>
+                @if (context.Role == "owner")
+                {
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning">Owner</MudChip>
+                }
+                else if (_viewerRole == "owner")
+                {
+                    <div class="d-flex align-center gap-1">
+                        <MudSelect T="string" Dense="true" Value="@RoleDraftFor(context)" ValueChanged="@(value => SetRoleDraft(context, value))"
+                                   Disabled="@_roleBusy">
+                            <MudSelectItem T="string" Value="@("crafter")">Crafter</MudSelectItem>
+                            <MudSelectItem T="string" Value="@("operator")">Operator</MudSelectItem>
+                        </MudSelect>
+                        <MudButton Size="Size.Small" Color="Color.Primary"
+                                   Disabled="@(_roleBusy || !HasPendingRoleChange(context))"
+                                   OnClick="@(() => ApplyRoleAsync(context))">Apply</MudButton>
+                    </div>
+                }
+                else
+                {
+                    <span class="text-capitalize">@context.Role</span>
+                }
+            </MudTd>
+            <MudTd>@context.State</MudTd>
             <MudTd>
                 <div class="d-flex align-center gap-1">
                     <MudText Typo="Typo.body2">@(BindingsFor(context.AccountProfileId).Any() ? BindingNames(context.AccountProfileId) : "No connected history")</MudText>
@@ -126,15 +153,20 @@
                     }
                 }
             </MudTd>
-            <MudTd>
-                @if (context.CanReceiveOwnership)
-                {
-                    <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => BeginOwnershipTransferAsync(context))">Transfer ownership</MudButton>
-                }
-                @if (CanRevoke(context))
-                {
-                    <MudButton Size="Size.Small" Color="Color.Error" Variant="Variant.Text" OnClick="() => _revokeMember = context">Revoke</MudButton>
-                }
+            <MudTd Class="member-actions-cell">
+                <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Variant="Variant.Text" Dense="true"
+                         EndIcon="@null" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                    <ChildContent>
+                        @if (context.CanReceiveOwnership)
+                        {
+                            <MudMenuItem OnClick="@(() => BeginOwnershipTransferAsync(context))">Transfer ownership…</MudMenuItem>
+                        }
+                        @if (CanRevoke(context))
+                        {
+                            <MudMenuItem Color="Color.Error" OnClick="@(() => _revokeMember = context)">Revoke membership</MudMenuItem>
+                        }
+                    </ChildContent>
+                </MudMenu>
             </MudTd>
         </RowTemplate>
     </MudTable>
@@ -197,6 +229,45 @@
     private DateTime? _invitationExpiresOn = DateTime.Today.AddDays(7);
     private CompanyMembershipInvitation? _issuedInvitation;
     private bool _issuingInvitation;
+    private readonly Dictionary<Guid, string> _roleDrafts = [];
+    private bool _roleBusy;
+
+    private string RoleDraftFor(CompanyMember member) =>
+        _roleDrafts.TryGetValue(member.AccountProfileId, out var draft) ? draft : member.Role;
+
+    private void SetRoleDraft(CompanyMember member, string role) =>
+        _roleDrafts[member.AccountProfileId] = role;
+
+    private bool HasPendingRoleChange(CompanyMember member) =>
+        RoleDraftFor(member) != member.Role &&
+        RoleDraftFor(member) is "operator" or "crafter";
+
+
+    private async Task ApplyRoleAsync(CompanyMember member)
+    {
+        var role = RoleDraftFor(member);
+        if (role is not ("operator" or "crafter"))
+        {
+            return;
+        }
+        _roleBusy = true;
+        try
+        {
+            await HubClient.ChangeMembershipRoleAsync(CompanyId, member.AccountProfileId, role);
+            _roleDrafts.Remove(member.AccountProfileId);
+            await LoadAsync();
+            Snackbar.Add($"{member.DisplayName} is now {role}.", Severity.Success);
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
+        finally
+        {
+            _roleBusy = false;
+        }
+    }
+
     private IEnumerable<PendingMember> Pending => _requests.Join(_members, request => request.AccountProfileId, member => member.AccountProfileId, (request, member) => new PendingMember(request, member));
     private IEnumerable<CompanyMember> ActiveMembers => _members.Where(member => member.State == "active");
     private IEnumerable<LegacyCrafterCandidate> AvailableLegacyCrafters => _migration.LegacyCrafters.Where(crafter => _migration.Bindings.All(binding => binding.LegacyCrafterId != crafter.LegacyCrafterId));

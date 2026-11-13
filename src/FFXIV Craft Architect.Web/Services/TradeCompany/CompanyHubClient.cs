@@ -357,7 +357,21 @@ public sealed class CompanyHubClient(
     public async Task TransitionMembershipAsync(string companyId, Guid accountProfileId, string action, string? reason = null, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(HttpMethod.Post, $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/memberships/{accountProfileId:D}/{action}", reason == null ? null : new { Reason = reason }, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        await EnsureHubSuccessAsync(response, cancellationToken);
+    }
+
+    public async Task ChangeMembershipRoleAsync(
+        string companyId,
+        Guid accountProfileId,
+        string role,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Put,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/memberships/{accountProfileId:D}/role",
+            new { Role = role },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
     }
 
     public async Task<CompanyOwnershipTransferPreview> PreviewOwnershipTransferAsync(

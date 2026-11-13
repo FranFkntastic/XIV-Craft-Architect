@@ -14,6 +14,7 @@ public sealed record CompanyOwnershipTransferBody(
     Guid IdempotencyKey,
     string ExpectedScopeFingerprint);
 public sealed record LegacyCrafterBindingBody(Guid AccountProfileId);
+public sealed record MembershipRoleUpdateBody(string Role);
 public sealed record MembershipInvitationIssueBody(
     Guid? LegacyCrafterId,
     DateTimeOffset? ExpiresAtUtc);
@@ -714,6 +715,60 @@ public static class MembershipEndpoints
             store.DenyAsync(companyId, accountId, actorId, ct));
         MapTransition(companies, "revoke", static (store, companyId, accountId, actorId, reason, ct) =>
             store.RevokeAsync(companyId, accountId, actorId, reason, ct));
+
+        companies.MapPut(
+            "/{companyId}/memberships/{accountProfileId:guid}/role",
+            async (
+                string companyId,
+                Guid accountProfileId,
+                MembershipRoleUpdateBody body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (!CompanyId.TryParse(companyId, out var parsedCompanyId) ||
+                    await companyService.LoadPublicCompanyProfileAsync(parsedCompanyId, cancellationToken) == null)
+                {
+                    return Results.NotFound();
+                }
+
+                if (!Enum.TryParse<MembershipRole>(body.Role, ignoreCase: true, out var targetRole) ||
+                    targetRole is not (MembershipRole.Operator or MembershipRole.Crafter))
+                {
+                    return Results.BadRequest(new MembershipErrorResponse(
+                        "invalid_membership_role",
+                        "Role must be 'operator' or 'crafter'."));
+                }
+
+                var result = await memberships.ChangeRoleAsync(
+                    parsedCompanyId,
+                    accountProfileId,
+                    targetRole,
+                    account.ProfileId,
+                    cancellationToken);
+                return result.Status switch
+                {
+                    MembershipRoleMutationStatus.Applied or MembershipRoleMutationStatus.Replayed => Results.Ok(
+                        ToResponse(result.Membership!)),
+                    MembershipRoleMutationStatus.NotFound => Results.NotFound(),
+                    MembershipRoleMutationStatus.NotAuthorized => Results.StatusCode(StatusCodes.Status403Forbidden),
+                    _ => Results.Conflict(new MembershipErrorResponse(
+                        "membership_not_active",
+                        "The member is not an active non-owner membership."))
+                };
+            });
 
         app.MapGet(
             "/trade/v1/memberships",
