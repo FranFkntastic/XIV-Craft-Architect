@@ -342,6 +342,24 @@
                         </MudText>
                     </MudPaper>
 
+                    <MudPaper Variant="Variant.Outlined" Class="pa-3 mb-4">
+                        <MudText Typo="Typo.subtitle2">Role permissions</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">
+                            What each company role can do. Owners and Operators administer membership; only Owners change roles or transfer ownership. Operators cannot revoke Owners, and the last active Owner cannot be revoked.
+                        </MudText>
+                        <MudTable Items="RolePermissionRows" Dense="true" Hover="false" Class="mt-2" DisableHeaders="@false">
+                            <HeaderContent>
+                                <MudTh>Capability</MudTh><MudTh>Crafter</MudTh><MudTh>Operator</MudTh><MudTh>Owner</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>@context.Capability</MudTd>
+                                <MudTd DataLabel="Crafter"><span class="@context.CrafterClass">@(context.Crafter ? "✓" : "—")</span></MudTd>
+                                <MudTd DataLabel="Operator"><span class="@context.OperatorClass">@context.OperatorDisplay</span></MudTd>
+                                <MudTd DataLabel="Owner"><span class="@context.OwnerClass">@(context.Owner ? "✓" : "—")</span></MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    </MudPaper>
+
                     <MudTextField @bind-Value="_companyName"
                                   id="company-name"
                                   Label="Company name"
@@ -886,6 +904,31 @@
     private readonly ElementReference[] _tabElements = new ElementReference[AllSettingsSections.Count];
     private SettingsSection _activePanel = SettingsSection.MarketAndRoutes;
     private bool _canAdministerCompany;
+
+    private sealed record RolePermissionRow(
+        string Capability,
+        bool Crafter,
+        bool Operator,
+        bool Owner,
+        string OperatorDisplay)
+    {
+        public string CrafterClass => Crafter ? "perm-yes" : "perm-no";
+        public string OperatorClass => Operator ? "perm-yes" : "perm-no";
+        public string OwnerClass => Owner ? "perm-yes" : "perm-no";
+    }
+
+    private static readonly IReadOnlyList<RolePermissionRow> RolePermissionRows =
+    [
+        new("Work assigned commissions", true, true, true, "✓"),
+        new("Report progress / declare readiness", true, true, true, "✓"),
+        new("Approve or deny membership requests", false, true, true, "✓"),
+        new("Issue and revoke invitations", false, true, true, "✓"),
+        new("Connect crafter history bindings", false, true, true, "✓"),
+        new("Publish commissions to Discord", false, true, true, "✓"),
+        new("Manage company hub (theme, updates)", false, true, true, "✓"),
+        new("Assign member roles (Crafter ↔ Operator)", false, false, true, "Owner only"),
+        new("Transfer ownership", false, false, true, "—")
+    ];
 
     private static string GetTabId(SettingsSection panel) => $"settings-nav-{panel.ToString().ToLowerInvariant()}";
     private static string GetPanelId(SettingsSection panel) => $"settings-section-{panel.ToString().ToLowerInvariant()}";
