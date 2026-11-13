@@ -799,7 +799,7 @@ export function adaptBriefProjection(payload) {
     return {
         kind: "participant",
         termsComparisons: payload.termsComparisons == null ? null : requiredArray(payload.termsComparisons, "Terms comparisons").map(adaptTermsComparison),
-        permittedTermsVersions: payload.permittedTermsVersions == null ? null : requiredArray(payload.permittedTermsVersions, "Permitted terms").map(adaptPublicTerms),
+        permittedTermsVersions: payload.permittedTermsVersions == null ? null : requiredArray(payload.permittedTermsVersions, "Permitted terms").map(adaptHistoricalTerms),
         public: publicBrief,
         provisionalCrafter: payload.provisionalCrafter
             ? adaptProvisionalCrafter(payload.provisionalCrafter)
@@ -820,6 +820,18 @@ export function adaptBriefProjection(payload) {
             requiredObject(payload.settlementPayment, "Participant settlement state")),
         activity: requiredArray(payload.activity, "Participant activity").map(adaptParticipantActivity)
     };
+}
+
+function adaptHistoricalTerms(value) {
+    try {
+        return adaptPublicTerms(requiredObject(value, "Saved terms"));
+    } catch (error) {
+        if (!(error instanceof CommissionClientError)) throw error;
+        return {
+            version: Number.isInteger(value?.version) && value.version >= 1 ? value.version : null,
+            unavailableReason: "This saved version could not be validated. Current published terms remain available."
+        };
+    }
 }
 
 function adaptTermsComparison(value) {
