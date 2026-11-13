@@ -1218,8 +1218,14 @@ function renderActivity() {
 
 function renderTermsReview() {
     const target = byId("termsReview");
-    target.replaceChildren();
     const projection = state.projection;
+    const sameCommission = target.getAttribute("data-commission-id") === projection.public?.commissionId;
+    const openStates = new Map(sameCommission
+        ? [...target.querySelectorAll("details[data-terms-key]")].map(node => [node.getAttribute("data-terms-key"), node.open])
+        : []);
+    const selectedVersion = sameCommission ? target.querySelector("select")?.value : null;
+    target.replaceChildren();
+    target.setAttribute("data-commission-id", projection.public?.commissionId ?? "");
     target.hidden = projection.kind !== "participant";
     if (target.hidden) return;
     target.append(element("h3", null, "Terms revisions"));
@@ -1229,7 +1235,9 @@ function renderTermsReview() {
     }
     for (const diff of [...projection.termsComparisons].reverse()) {
         const details = element("details", "terms-detail");
-        details.open = diff.afterVersion === projection.public.terms.version;
+        const key = `revision-${diff.beforeVersion}-${diff.afterVersion}`;
+        details.setAttribute("data-terms-key", key);
+        details.open = openStates.get(key) ?? (diff.afterVersion === projection.public.terms.version);
         details.append(element("summary", null, `What changed · v${diff.beforeVersion} → v${diff.afterVersion}`));
         if (!diff.available) {
             details.append(element("p", null, diff.unavailableReason));
@@ -1244,6 +1252,8 @@ function renderTermsReview() {
                     `Payment ${delta > 0 ? "increased" : "decreased"} by ${Math.abs(delta).toLocaleString()} gil`));
             }
             const breakdown = element("details", "terms-detail");
+            breakdown.setAttribute("data-terms-key", key + "-payment");
+            breakdown.open = openStates.get(key + "-payment") ?? false;
             breakdown.append(element("summary", null, "Payment breakdown"));
             for (const row of diff.payment) breakdown.append(element("p", null,
                 `${row.component}: ${row.before.toLocaleString()} → ${row.after.toLocaleString()} gil (${row.after === row.before ? "Unchanged" : (row.after > row.before ? "+" : "") + (row.after - row.before).toLocaleString()})`));
@@ -1260,19 +1270,27 @@ function renderTermsReview() {
     const snapshots = projection.permittedTermsVersions ?? [];
     if (snapshots.length) {
         const details = element("details", "terms-detail");
+        details.setAttribute("data-terms-key", "snapshots");
+        details.open = openStates.get("snapshots") ?? false;
         details.append(element("summary", null, "Full permitted saved terms"));
         const select = element("select");
         select.setAttribute("aria-label", "Inspect saved participant terms version");
         const content = element("div");
-        for (const terms of [...snapshots].reverse()) {
-            const option = element("option", null, `v${terms.version}`);
-            option.value = String(terms.version);
+        for (const [index, terms] of [...snapshots].reverse().entries()) {
+            const option = element("option", null, terms.version == null
+                ? "Unavailable saved version" : `v${terms.version}${terms.unavailableReason ? " · unavailable" : ""}`);
+            option.value = terms.version == null ? `unavailable-${index}` : String(terms.version);
             select.append(option);
         }
+        if ([...select.options].some(option => option.value === selectedVersion)) select.value = selectedVersion;
         const show = () => {
-            const terms = snapshots.find(t => String(t.version) === select.value);
+            const terms = [...snapshots].reverse()[select.selectedIndex];
             content.replaceChildren();
             if (!terms) return;
+            if (terms.unavailableReason) {
+                content.append(element("p", "empty-row", terms.unavailableReason));
+                return;
+            }
             for (const row of terms.outputs) content.append(element("p", null, `${row.name} × ${row.requiredQuantity} · ${row.mustBeHq ? "HQ" : "NQ accepted"}`));
             for (const row of terms.materials) content.append(element("p", null, `${row.name} × ${row.quantity} · ${row.requiresHq ? "HQ" : "NQ"} · ${row.responsibility}`));
             content.append(element("p", null, `${terms.payment.total.toLocaleString()} gil · ${terms.payment.schedule} · ${terms.payment.customTerms ?? ""}`),
