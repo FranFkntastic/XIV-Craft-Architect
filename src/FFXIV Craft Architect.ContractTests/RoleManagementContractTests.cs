@@ -127,9 +127,9 @@ public sealed class RoleManagementContractTests
         using var pendingTransfer = await fixture.PostTransferAsync(fixture.CompanyId, pending.ProfileId, owner.Key);
         using var missingTransfer = await fixture.PostTransferAsync(fixture.CompanyId, Guid.NewGuid(), owner.Key);
 
-        Assert.Equal(HttpStatusCode.Conflict, selfTransfer.StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, pendingTransfer.StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, missingTransfer.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, selfTransfer.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, pendingTransfer.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, missingTransfer.StatusCode);
         Assert.Equal(
             owner.ProfileId,
             (await fixture.Memberships.LoadAsync(fixture.CompanyIdValue, owner.ProfileId))!.AccountProfileId);
@@ -183,7 +183,7 @@ public sealed class RoleManagementContractTests
         }
 
         // After transfer: membership role (operator) is authoritative even though
-        // the company object is still stored under the former host profile.
+        // the canonical hosted data has moved to the new owner account.
         var access = await fixture.ResolveAccessAsync(owner.ProfileId);
         Assert.NotNull(access);
         Assert.Equal(TradeCompanyRole.Operator, access!.Role);
@@ -197,7 +197,7 @@ public sealed class RoleManagementContractTests
         // Owner cannot transfer to self — proves role authority moved.
         using (var refused = await fixture.PostTransferAsync(fixture.CompanyId, target.ProfileId, target.Key))
         {
-            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
         }
     }
 
@@ -205,6 +205,7 @@ public sealed class RoleManagementContractTests
     {
         private readonly string root;
         private readonly WebApplicationFactory<Program> application;
+        private readonly Dictionary<(string CompanyId, Guid Target, string Key), CompanyOwnershipTransferBody> transfers = [];
 
         private RoleFixture(string root, WebApplicationFactory<Program> application)
         {
@@ -281,9 +282,22 @@ public sealed class RoleManagementContractTests
             string key)
         {
             using var client = CreateClient(key);
+            var requestKey = (companyId, targetProfileId, key);
+            if (!transfers.TryGetValue(requestKey, out var body))
+            {
+                using var previewResponse = await client.GetAsync(
+                    $"/trade/v1/companies/{companyId}/ownership-transfer/preview/{targetProfileId:D}");
+                if (!previewResponse.IsSuccessStatusCode)
+                {
+                    return new HttpResponseMessage(previewResponse.StatusCode);
+                }
+                var preview = (await previewResponse.Content.ReadFromJsonAsync<CompanyOwnershipTransferPreview>())!;
+                body = new CompanyOwnershipTransferBody(
+                    targetProfileId, "operator", Guid.NewGuid(), preview.ScopeFingerprint);
+                transfers.Add(requestKey, body);
+            }
             return await client.PostAsJsonAsync(
-                $"/trade/v1/companies/{companyId}/ownership-transfer",
-                new { TargetAccountProfileId = targetProfileId });
+                $"/trade/v1/companies/{companyId}/ownership-transfer", body);
         }
 
         public async Task<HttpResponseMessage> GetAsync(string path, string key)
