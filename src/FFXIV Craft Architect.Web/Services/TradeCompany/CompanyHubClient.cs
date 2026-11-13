@@ -14,22 +14,55 @@ public sealed class CompanyHubClient(
     private const string AccessKeyHeader = "X-Profile-Key";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    // Member names only decorate assignment labels; a host failure must never block
+    // the local Orders, Crafters or Payroll workspace from loading.
     public async Task<IReadOnlyList<CompanyHubRosterMember>> LoadAssignmentMembersAsync(Guid companyId)
     {
-        var hub = await LoadWorkspaceHubAsync(companyId);
-        if (hub?.Standing.Role is "owner" or "operator")
+        try
         {
-            return (await LoadCompanyMembersAsync(companyId.ToString("D")))
-                .Select(member => new CompanyHubRosterMember(member.AccountProfileId, member.DisplayName, member.Role))
-                .ToArray();
+            var hub = await LoadWorkspaceHubAsync(companyId);
+            if (hub?.Standing.Role is "owner" or "operator")
+            {
+                return (await LoadCompanyMembersAsync(companyId.ToString("D")))
+                    .Select(member => new CompanyHubRosterMember(member.AccountProfileId, member.DisplayName, member.Role))
+                    .ToArray();
+            }
+            return hub?.Roster ?? [];
         }
-        return hub?.Roster ?? [];
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        {
+            Console.Error.WriteLine(
+                $"[CompanyHub] Assignment member names unavailable for company {companyId:D}; " +
+                $"labels fall back to roster names. {ex.GetType().Name}: {ex.Message}");
+            return [];
+        }
     }
 
+    // Returns null when no hosted connection is configured, the company is not hosted (404),
+    // or the host is unreachable/failing (transport error or 5xx), so local workspaces keep
+    // working offline. Definitive refusals (other 4xx) still throw to the caller.
     public async Task<CompanyHubProjection?> LoadWorkspaceHubAsync(Guid companyId)
     {
         var connection = await localState.LoadConnectionSettingsAsync();
-        return connection.IsConfigured ? await LoadAsync(companyId.ToString("D")) : null;
+        if (!connection.IsConfigured)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await LoadAsync(companyId.ToString("D"));
+        }
+        catch (Exception ex) when (
+            ex is TaskCanceledException ||
+            ex is HttpRequestException { StatusCode: null } ||
+            ex is HttpRequestException { StatusCode: >= HttpStatusCode.InternalServerError })
+        {
+            Console.Error.WriteLine(
+                $"[CompanyHub] Hub standing unavailable for company {companyId:D}; " +
+                $"continuing with the local workspace. {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
     }
 
     public async Task<CompanyHubProjection?> LoadAsync(string slug, CancellationToken cancellationToken = default)
