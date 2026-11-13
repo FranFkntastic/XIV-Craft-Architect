@@ -463,8 +463,19 @@
             _loadError = null;
             await ProfileSync.SyncNowAsync();
             _companyProfile = await TradeCompanyContext.ResolveAsync(TradeOperationsPersistence, CompanyHubs, Company);
+            if (!string.IsNullOrWhiteSpace(Company))
+            {
+                // The query has been applied to the workspace selector; drop it so a later
+                // company switch is not overridden by a stale ?company= on reload.
+                Company = null;
+                NavigationManager.NavigateTo("trade/crafters", replace: true);
+            }
             var hub = await CompanyHubs.LoadWorkspaceHubAsync(_companyProfile.Id);
-            _hostedCompanyId = hub?.Kind == "hub" ? _companyProfile.Id.ToString("D") : null;
+            // Membership administration (requests, invitations, bindings) is Owner/Operator only;
+            // crafter-role members would get 403s from every manager endpoint.
+            _hostedCompanyId = hub is { Kind: "hub", Standing.Role: "owner" or "operator" }
+                ? _companyProfile.Id.ToString("D")
+                : null;
             _crafterBindings = [];
             if (_hostedCompanyId != null && hub?.Standing.Role is "owner" or "operator")
             {

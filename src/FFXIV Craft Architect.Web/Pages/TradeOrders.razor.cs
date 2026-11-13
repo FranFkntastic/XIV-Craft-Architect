@@ -463,9 +463,13 @@ public partial class TradeOrders
                     throw new InvalidOperationException("The requested company workspace identity is invalid.");
                 }
 
-                requestedWorkspace = await TradeCompanyContext.ResolveAsync(TradeOperationsPersistence, CompanyHubs, Company);
+                requestedWorkspace = await ResolveWorkspaceProfileAsync(requestedCompanyId);
+                await TradeOperationsPersistence.SelectWorkspaceCompanyAsync(requestedCompanyId);
+                // Normalize the URL so a later company switch is not overridden by a stale query.
+                Company = null;
+                NavigationManager.NavigateTo("trade/orders", replace: true);
             }
-            var resolvedCompany = requestedWorkspace ?? await TradeCompanyContext.ResolveAsync(TradeOperationsPersistence, CompanyHubs);
+            var resolvedCompany = requestedWorkspace ?? await ResolveSelectedWorkspaceProfileAsync();
             if (_companyProfile?.Id != resolvedCompany.Id)
             {
                 _selectedOrder = null;
