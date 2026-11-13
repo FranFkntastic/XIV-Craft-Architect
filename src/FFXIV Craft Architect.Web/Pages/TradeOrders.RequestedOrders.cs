@@ -258,7 +258,14 @@ public partial class TradeOrders
                     ForceRefreshMarketData: false));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
-                Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+                if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
+                {
+                    ShowCompanyPricingRequired(pricingResult);
+                }
+                else
+                {
+                    Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+                }
                 return;
             }
 
@@ -325,7 +332,14 @@ public partial class TradeOrders
                 ForceRefreshMarketData: false));
         if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
         {
-            Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+            if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
+            {
+                ShowCompanyPricingRequired(pricingResult);
+            }
+            else
+            {
+                Snackbar.Add(pricingResult.Message, ToSnackbarSeverity(pricingResult.MessageLevel));
+            }
             return;
         }
 

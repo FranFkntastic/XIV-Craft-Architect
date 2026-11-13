@@ -1224,7 +1224,14 @@ public partial class TradeOrders
                         rollbackSnapshot,
                         failedFence);
                 }
-                Snackbar.Add(pricingResult.Message, ToSeverity(pricingResult.MessageLevel));
+                if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
+                {
+                    ShowCompanyPricingRequired(pricingResult);
+                }
+                else
+                {
+                    Snackbar.Add(pricingResult.Message, ToSeverity(pricingResult.MessageLevel));
+                }
                 return false;
             }
             orderToSave = pricingResult.UpdatedOrder;
@@ -1277,7 +1284,14 @@ public partial class TradeOrders
 
         if (showSuccess)
         {
-            Snackbar.Add(pricingResult.Message, ToSeverity(pricingResult.MessageLevel));
+            if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
+            {
+                ShowCompanyPricingRequired(pricingResult);
+            }
+            else
+            {
+                Snackbar.Add(pricingResult.Message, ToSeverity(pricingResult.MessageLevel));
+            }
         }
 
         return true;

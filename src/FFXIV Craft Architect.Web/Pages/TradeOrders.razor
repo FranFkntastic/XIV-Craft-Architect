@@ -1637,6 +1637,22 @@
                                         </MudButton>
                                     }
                                 </section>
+                                <MudText Typo="Typo.caption">Quote region: @(string.IsNullOrWhiteSpace(_selectedOrder.SourceSnapshot.Region) ? "Not recorded" : _selectedOrder.SourceSnapshot.Region)</MudText>
+                                @if (_companyProfile?.CommissionPricingScope is not { IsValid: true })
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="true">
+                                        The company needs a commission pricing region.
+                                        <MudButton OnClick="OpenCommissionPricingSettingsAsync" Size="Size.Small">Company pricing settings</MudButton>
+                                    </MudAlert>
+                                }
+                                else if (CompanyQuoteScopeChanged)
+                                {
+                                    <MudAlert Severity="Severity.Warning" Dense="true">
+                                        This quote uses a different scope from the company's current commission pricing.
+                                        <MudButton OnClick="RepriceSelectedOrderAsync" Size="Size.Small"
+                                                   Disabled="@(_isRepricingSelectedOrder || !CanEditSelectedOrderPlan || !HasLinkedCraftPlan(_selectedOrder))">Reprice</MudButton>
+                                    </MudAlert>
+                                }
                                 @if (HasLinkedCraftPlan(_selectedOrder) && GetVisibleLiveProcurementSnapshot() is null)
                                 {
                                     @if (_isLoadingSelectedOrderSupplyPlan ||

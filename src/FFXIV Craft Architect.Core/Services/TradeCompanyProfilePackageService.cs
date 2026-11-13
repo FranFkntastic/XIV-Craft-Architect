@@ -37,6 +37,7 @@ public sealed class TradeCompanyProfilePackageService
         importedProfile.Description = sourceProfile.Description;
         importedProfile.CommissionContact = sourceProfile.CommissionContact;
         importedProfile.PaymentPolicy = NormalizePaymentPolicy(sourceProfile.PaymentPolicy);
+        importedProfile.CommissionPricingScope = sourceProfile.CommissionPricingScope;
 
         var importedCrafters = package.Crafters
             .Select(crafter => ImportCrafter(crafter, importedProfile.Id, importedAtUtc))
@@ -83,6 +84,7 @@ public sealed class TradeCompanyProfilePackageService
             RemoteId = profile.RemoteId,
             SyncState = profile.SyncState,
             PaymentPolicy = NormalizePaymentPolicy(profile.PaymentPolicy),
+            CommissionPricingScope = profile.CommissionPricingScope,
             CreatedAtUtc = profile.CreatedAtUtc,
             UpdatedAtUtc = profile.UpdatedAtUtc
         };

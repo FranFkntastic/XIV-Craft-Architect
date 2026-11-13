@@ -95,6 +95,22 @@ public sealed class CompanyHubClient(
                 "The selected company workspace returned an empty profile.");
     }
 
+    public async Task UpdatePolicyAsync(TradeCompanyProfile profile, long expectedProfileRevision,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(HttpMethod.Put, $"trade/v1/companies/{profile.Id:D}/policy",
+            new
+            {
+                ExpectedProfileRevision = expectedProfileRevision,
+                profile.Name,
+                profile.Description,
+                profile.CommissionContact,
+                profile.PaymentPolicy,
+                profile.CommissionPricingScope
+            }, cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+    }
+
     public async Task RequestMembershipAsync(string companyId, string? note, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(
@@ -508,7 +524,9 @@ public sealed record TradeCompanyWorkspaceProfile(
     string? CommissionContact,
     TradePaymentPolicy PaymentPolicy,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc)
+    DateTime UpdatedAtUtc,
+    TradeCompanyPricingScope? CommissionPricingScope = null,
+    string? Description = null)
 {
     public TradeCompanyProfile ToTransientProfile() => new()
     {
@@ -516,6 +534,8 @@ public sealed record TradeCompanyWorkspaceProfile(
         Name = Name,
         CommissionContact = CommissionContact,
         PaymentPolicy = PaymentPolicy,
+        CommissionPricingScope = CommissionPricingScope,
+        Description = Description,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,
         CreatedAtUtc = CreatedAtUtc,
