@@ -1834,7 +1834,7 @@
                                                  <div>
                                                      @if (GetTermsRevisionActivity(item.Id) is { } revision && SelectedCanonicalCommission is { } revisionCommission)
                                                      {
-                                                         <CommissionTermsRevision Commission="revisionCommission" Version="revision.TermsVersion" Reason="revision.Comment" />
+                                                         <CommissionTermsRevision Commission="revisionCommission" Version="revision.TermsVersion" Reason="@revision.Comment" />
                                                      }
                                                      else
                                                      {
