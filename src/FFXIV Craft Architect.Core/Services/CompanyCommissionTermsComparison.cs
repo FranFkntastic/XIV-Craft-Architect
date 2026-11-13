@@ -83,18 +83,26 @@ public static class CompanyCommissionTermsComparison
     {
         var remaining = after.ToList();
         var unresolved = new List<T>();
-        foreach (var old in before)
+        // Reserve every unambiguous stable identity before any fallback can consume it.
+        var stableMatches = before.Select(old =>
         {
-            var candidates = remaining.Where(x => id(x) == id(old) && item(x) == item(old) && id(old) != Guid.Empty).ToArray();
-            if (candidates.Length != 1 || before.Count(x => id(x) == id(old)) != 1)
+            var candidates = after.Where(x => id(x) == id(old) && item(x) == item(old) && id(old) != Guid.Empty).ToArray();
+            return candidates.Length == 1 && before.Count(x => id(x) == id(old)) == 1 ? candidates[0] : null;
+        }).ToArray();
+        var reserved = stableMatches.OfType<T>().ToHashSet();
+        for (var index = 0; index < before.Count; index++)
+        {
+            var old = before[index];
+            var candidates = stableMatches[index] is { } stable ? new[] { stable } : [];
+            if (candidates.Length == 0)
             {
                 candidates = before.Count(x => item(x) == item(old) && quality(x) == quality(old)) == 1
-                    ? remaining.Where(x => item(x) == item(old) && quality(x) == quality(old)).ToArray() : [];
+                    ? remaining.Where(x => !reserved.Contains(x) && item(x) == item(old) && quality(x) == quality(old)).ToArray() : [];
             }
 
             if (candidates.Length == 0 && before.Count(x => item(x) == item(old)) == 1)
             {
-                candidates = remaining.Where(x => item(x) == item(old)).ToArray();
+                candidates = remaining.Where(x => !reserved.Contains(x) && item(x) == item(old)).ToArray();
             }
 
             string Label(T line, IReadOnlyList<T> lines)
