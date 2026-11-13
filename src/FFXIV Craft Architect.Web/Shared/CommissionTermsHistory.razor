@@ -43,7 +43,7 @@
             _identity = CommissionId;
             _initialVersion = InitialVersion;
             SelectedVersion = InitialVersion ?? CurrentVersion;
-            _historicalSelection = InitialVersion.HasValue && InitialVersion != CurrentVersion;
+            _historicalSelection = InitialVersion.HasValue;
         }
         else if (!_historicalSelection)
         {
@@ -54,7 +54,7 @@
     private void SelectOriginal()
     {
         SelectedVersion = 1;
-        _historicalSelection = CurrentVersion != 1;
+        _historicalSelection = true;
     }
 
     private void SelectVersion(ChangeEventArgs e)
@@ -62,7 +62,7 @@
         if (int.TryParse(e.Value?.ToString(), out var version))
         {
             SelectedVersion = version;
-            _historicalSelection = version != CurrentVersion;
+            _historicalSelection = true;
         }
     }
 }
