@@ -24,6 +24,13 @@ public sealed class TradeCommissionOperationsService(
     private sealed record LinkedOwnerProjection(
         HostedOrderAuthorityScope Authority,
         CompanyCommissionOwnerProjection Projection);
+    private sealed record ConfirmedTermsBase(
+        Guid OrderId,
+        Guid CompanyProfileId,
+        CompanyId CompanyId,
+        Guid CommissionId,
+        CompanyRecordRevision ObjectRevision,
+        int TermsVersion);
     private readonly Dictionary<Guid, string> _errors = [];
     private readonly Dictionary<Guid, LinkedOwnerProjection> _linkedOwnerProjections = [];
     private readonly Dictionary<Guid, HostedOrderAuthorityScope> _dismissedLinkedProjections = [];
@@ -404,7 +411,7 @@ public sealed class TradeCommissionOperationsService(
         catch (Exception exception)
         {
             _errors[current.Order.Id] = exception.Message;
-            return Rejected(current, exception.Message);
+            return Rejected(GetForOrder(current.Order.Id) ?? current, exception.Message);
         }
     }
 
@@ -440,7 +447,7 @@ public sealed class TradeCommissionOperationsService(
         catch (Exception exception)
         {
             _errors[current.Order.Id] = exception.Message;
-            return Rejected(current, exception.Message);
+            return Rejected(GetForOrder(current.Order.Id) ?? current, exception.Message);
         }
     }
 
@@ -492,6 +499,7 @@ public sealed class TradeCommissionOperationsService(
             return current;
         }
 
+        var confirmedBase = CaptureConfirmedTermsBase(current);
         var stored = await planPersistence.LoadPlanPayloadAsync(workPackage.CraftPlanId);
         if (stored == null ||
             !string.Equals(stored.Id, workPackage.CraftPlanId, StringComparison.Ordinal) ||
@@ -520,12 +528,14 @@ public sealed class TradeCommissionOperationsService(
             commission.CommissionId,
             cancellationToken);
         ValidateProjection(current.Order, refreshed);
-        if (refreshed.ObjectRevision != current.ObjectRevision)
+        await ApplyProjectionAsync(authority, refreshed, allowStale: true);
+        await RequireCurrentAuthorityAsync(authority, "linked-plan owner refresh");
+        refreshed = GetForOrder(current.Order.Id) ?? refreshed;
+        if (!HasSameConfirmedTermsBase(confirmedBase, refreshed))
         {
             throw new InvalidOperationException(
                 "The commission changed while its linked plan was being published. Rebase the terms revision before retrying.");
         }
-        await ApplyProjectionAsync(authority, refreshed);
         return refreshed;
     }
 
@@ -1007,6 +1017,8 @@ public sealed class TradeCommissionOperationsService(
         }
 
         var commandProjection = current;
+        var requiresConfirmedBase = route is "amend-terms" or "update-draft";
+        var confirmedBase = requiresConfirmedBase ? CaptureConfirmedTermsBase(current) : null;
         CompanyCommissionOwnerProjection? committedProjection = null;
         var hostCommitted = false;
         try
@@ -1014,6 +1026,10 @@ public sealed class TradeCommissionOperationsService(
             var authority = capturedAuthority ?? await CaptureOrderAuthorityAsync();
             for (var attempt = 0; attempt < 2; attempt++)
             {
+                if (requiresConfirmedBase)
+                {
+                    await RequireCurrentAuthorityAsync(authority, "commission command");
+                }
                 ValidateProjection(current.Order, commandProjection);
                 TradeCommissionOwnerMutationResponse response;
                 try
@@ -1030,18 +1046,33 @@ public sealed class TradeCommissionOperationsService(
                         authority.Connection);
                 }
                 catch (CompanyCommissionRevisionConflictException)
-                    when (attempt == 0 &&
+                    when (requiresConfirmedBase || attempt == 0 &&
                           replayRevisionConflict &&
                           CanReplayAfterRevisionConflict(route))
                 {
                     var commission = RequireCommission(commandProjection);
+                    var previousCompanyRevision = commandProjection.CompanyRevision;
                     commandProjection = await client.LoadOwnerProjectionAsync(
                         authority.Connection,
                         commission.CompanyId.Value,
                         commission.CommissionId,
                         cancellationToken);
                     ValidateProjection(current.Order, commandProjection);
-                    await ApplyProjectionAsync(authority, commandProjection);
+                    await ApplyProjectionAsync(authority, commandProjection, allowStale: requiresConfirmedBase);
+                    if (requiresConfirmedBase)
+                    {
+                        await RequireCurrentAuthorityAsync(authority, "commission conflict refresh");
+                        // Adoption may have lost to a newer projection while persistence awaited.
+                        commandProjection = GetForOrder(current.Order.Id) ?? commandProjection;
+                        if (attempt != 0 || !replayRevisionConflict ||
+                            !HasSameConfirmedTermsBase(confirmedBase!, commandProjection) ||
+                            commandProjection.CompanyRevision.Value <= previousCompanyRevision.Value)
+                        {
+                            // Keep the refreshed canonical owner for the existing conflict/rebase UI;
+                            // never replace the caller's frozen terms or local work package.
+                            throw;
+                        }
+                    }
                     continue;
                 }
 
@@ -1090,6 +1121,30 @@ public sealed class TradeCommissionOperationsService(
                 hostCommitted);
         }
     }
+
+    private static ConfirmedTermsBase CaptureConfirmedTermsBase(
+        CompanyCommissionOwnerProjection projection)
+    {
+        var commission = RequireCommission(projection);
+        return new(
+            projection.Order.Id,
+            projection.Order.CompanyProfileId,
+            commission.CompanyId,
+            commission.CommissionId,
+            projection.ObjectRevision,
+            commission.CurrentTermsVersion);
+    }
+
+    private static bool HasSameConfirmedTermsBase(
+        ConfirmedTermsBase confirmedBase,
+        CompanyCommissionOwnerProjection projection) =>
+        projection.Order.CompanyCommission is { } commission &&
+        projection.Order.Id == confirmedBase.OrderId &&
+        projection.Order.CompanyProfileId == confirmedBase.CompanyProfileId &&
+        commission.CompanyId == confirmedBase.CompanyId &&
+        commission.CommissionId == confirmedBase.CommissionId &&
+        projection.ObjectRevision == confirmedBase.ObjectRevision &&
+        commission.CurrentTermsVersion == confirmedBase.TermsVersion;
 
     private static bool CanReplayAfterRevisionConflict(string route) =>
         route switch
