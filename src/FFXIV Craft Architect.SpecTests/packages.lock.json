@@ -31,16 +31,16 @@
       },
       "Franthropy.FFXIV": {
         "type": "Transitive",
-        "resolved": "0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9",
-        "contentHash": "un6Z0QTABd7zandHpZW2cxfI4yeIAPR9NACDkLvwwQ89XN7fLgIGjB9TlIbfA6f4gN+Jfg3C+po58PUt0HRhmw==",
+        "resolved": "0.1.0-commit.d1b5846804569f1422c24cec4acf919cef63e69e",
+        "contentHash": "9wIWA94lvvO3Tb8FmxxLKK08CxE5/RtoVtFkUPLuhdgQrg0XFq02OTZY28yyWCQlSn2yeMahQ8kL4FgoHKkuYQ==",
         "dependencies": {
-          "Franthropy.Filtering": "0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9"
+          "Franthropy.Filtering": "0.1.0-commit.d1b5846804569f1422c24cec4acf919cef63e69e"
         }
       },
       "Franthropy.Filtering": {
         "type": "Transitive",
-        "resolved": "0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9",
-        "contentHash": "B4xFngCSyrKB1BXpz7fYG88cLO87qalPZMw761d7nQpW7oqc9AFSMNzw9bKvC0w9QssadSzQUFUP2S1BlzK2hg=="
+        "resolved": "0.1.0-commit.d1b5846804569f1422c24cec4acf919cef63e69e",
+        "contentHash": "tN5mcGcH9PEqDPamM2Ykeue0tOi8rqwvNAKgHDprzKqllEOFqDmjp/8cij2WiD9RbU73QlCXyLMoe6gM+UAbsw=="
       },
       "Microsoft.CodeCoverage": {
         "type": "Transitive",
@@ -255,7 +255,7 @@
       "Gooseworks.FFXIVCraftArchitect.Core": {
         "type": "Project",
         "dependencies": {
-          "Franthropy.FFXIV": "[0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9, 0.1.0-commit.29cd7dd3dae84ff22009020e1ac4a5424a9fe3a9]",
+          "Franthropy.FFXIV": "[0.1.0-commit.d1b5846804569f1422c24cec4acf919cef63e69e, 0.1.0-commit.d1b5846804569f1422c24cec4acf919cef63e69e]",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[8.0.0, )",
           "Microsoft.Extensions.Http": "[8.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[8.0.0, )",
