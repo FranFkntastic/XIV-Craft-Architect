@@ -631,7 +631,7 @@ public sealed class CompanyHubContractTests
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
 
         Assert.Equal("teaser", json.RootElement.GetProperty("kind").GetString());
-        Assert.Equal("none", json.RootElement.GetProperty("standing").GetProperty("state").GetString());
+        Assert.Equal("closed", json.RootElement.GetProperty("standing").GetProperty("state").GetString());
     }
 
     [Fact]

@@ -931,7 +931,8 @@ public sealed class CompanyHubService(
         }
         if (membership?.State is MembershipState.Denied or MembershipState.Revoked)
         {
-            return new CompanyHubStandingResponse("none", null);
+            // Only a fresh administrator invitation readmits; requests are refused.
+            return new CompanyHubStandingResponse("closed", null);
         }
         if (account?.ProfileId == company.HostProfileId)
         {
