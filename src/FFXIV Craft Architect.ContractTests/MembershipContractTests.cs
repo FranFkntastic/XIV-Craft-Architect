@@ -380,10 +380,13 @@ public sealed class MembershipContractTests
             $"/trade/v1/membership-invitations/{oldInvite.Token}/accept", null);
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
         Assert.Contains("invitation_predates_membership_decision", await refused.Content.ReadAsStringAsync());
-        await fixture.Memberships.RequestAsync(companyId, recipient.ProfileId, null);
+        var rerequest = await fixture.Memberships.RequestAsync(companyId, recipient.ProfileId, null);
+        Assert.Equal(MembershipMutationStatus.RequestClosed, rerequest.Status);
         var pendingRefusal = await fixture.Memberships.ConsumeInvitationAsync(oldInvite.Token!, recipient.ProfileId);
         Assert.Equal(MembershipInvitationConsumptionStatus.MembershipDecisionConflict, pendingRefusal.Status);
-        Assert.Equal(MembershipState.Pending, (await fixture.Memberships.LoadAsync(companyId, recipient.ProfileId))!.State);
+        Assert.Equal(
+            revoke ? MembershipState.Revoked : MembershipState.Denied,
+            (await fixture.Memberships.LoadAsync(companyId, recipient.ProfileId))!.State);
         Assert.Null((await fixture.Memberships.LoadInvitationAsync(oldInvite.Token!))!.ConsumedAtUtc);
         var fresh = await fixture.Memberships.IssueInvitationAsync(companyId, owner.ProfileId, null);
         Assert.Equal(MembershipInvitationConsumptionStatus.Applied,
@@ -642,7 +645,7 @@ public sealed class MembershipContractTests
     }
 
     [Fact]
-    public async Task DenyRerequestApproveAndRevokePersistEveryAuditTransition()
+    public async Task DenyRefusedRerequestInvitationAndRevokePersistEveryAuditTransition()
     {
         await using var fixture = await MembershipFixture.CreateAsync();
         var owner = await fixture.CreateAccountAsync("Owner");
@@ -658,9 +661,12 @@ public sealed class MembershipContractTests
         using var denied = await ownerClient.PostAsync(
             $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/deny",
             null);
-        var second = await RequestAsync(crafterClient, company.Id, "Second request");
-        using var approved = await ownerClient.PostAsync(
-            $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/approve",
+        using var rerequest = await crafterClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-requests",
+            new MembershipRequestBody("Second request"));
+        var invitation = await fixture.Memberships.IssueInvitationAsync(companyId, owner.ProfileId, null);
+        using var approved = await crafterClient.PostAsync(
+            $"/trade/v1/membership-invitations/{invitation.Token}/accept",
             null);
         using var revoked = await ownerClient.PostAsJsonAsync(
             $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/revoke",
@@ -669,8 +675,8 @@ public sealed class MembershipContractTests
         var current = await fixture.Memberships.LoadAsync(companyId, crafter.ProfileId);
 
         Assert.Equal(first.RequestedAtUtc, duplicate.RequestedAtUtc);
-        Assert.True(second.RequestedAtUtc >= first.RequestedAtUtc);
         Assert.Equal(HttpStatusCode.OK, denied.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, rerequest.StatusCode);
         Assert.Equal(HttpStatusCode.OK, approved.StatusCode);
         Assert.Equal(HttpStatusCode.OK, revoked.StatusCode);
         Assert.Equal(MembershipState.Revoked, current!.State);
@@ -679,7 +685,6 @@ public sealed class MembershipContractTests
             {
                 MembershipState.Pending,
                 MembershipState.Denied,
-                MembershipState.Pending,
                 MembershipState.Active,
                 MembershipState.Revoked
             },
@@ -691,9 +696,8 @@ public sealed class MembershipContractTests
             {
                 "First request",
                 "First request",
-                "Second request",
-                "Second request",
-                "Second request"
+                "Joined by company invitation",
+                "Joined by company invitation"
             },
             events.Select(item => item.RequestNote));
         Assert.All(events, item => Assert.Equal(MembershipRole.Crafter, item.Role));
@@ -701,11 +705,68 @@ public sealed class MembershipContractTests
         Assert.Null(events[0].DecidedAtUtc);
         Assert.Null(events[0].DecidedByProfileId);
         Assert.Equal(owner.ProfileId, events[1].DecidedByProfileId);
-        Assert.Null(events[2].DecidedAtUtc);
-        Assert.Null(events[2].DecidedByProfileId);
+        Assert.Equal(owner.ProfileId, events[2].DecidedByProfileId);
         Assert.Equal(owner.ProfileId, events[3].DecidedByProfileId);
-        Assert.Equal(owner.ProfileId, events[4].DecidedByProfileId);
-        Assert.Equal("Repeated missed handoffs", events[4].Reason);
+        Assert.Equal("Repeated missed handoffs", events[3].Reason);
+    }
+
+    // An administrator's deny/revoke decision must not be undone by the account itself:
+    // self-service requests are refused, and only a fresh invitation readmits.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ClosedMembershipRefusesSelfServiceRequestUntilFreshInvitation(bool revoke)
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var crafter = await fixture.CreateAccountAsync("Crafter");
+        var company = CreateCompany();
+        var companyId = new CompanyId(company.Id);
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var crafterClient = fixture.CreateClient(crafter.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(crafterClient, company.Id, "Let me in");
+        if (revoke)
+        {
+            (await ownerClient.PostAsync(
+                $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/approve",
+                null)).EnsureSuccessStatusCode();
+            (await ownerClient.PostAsJsonAsync(
+                $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/revoke",
+                new MembershipTransitionBody(null))).EnsureSuccessStatusCode();
+        }
+        else
+        {
+            (await ownerClient.PostAsync(
+                $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/deny",
+                null)).EnsureSuccessStatusCode();
+        }
+        var decided = await fixture.Memberships.LoadAsync(companyId, crafter.ProfileId);
+        var eventCount = (await fixture.Memberships.LoadEventsAsync(companyId, crafter.ProfileId)).Count;
+
+        using var refused = await crafterClient.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/membership-requests",
+            new MembershipRequestBody("Please reconsider"));
+        var error = await refused.Content.ReadFromJsonAsync<MembershipErrorResponse>();
+
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Equal("membership_request_closed", error!.Error);
+        Assert.False(string.IsNullOrWhiteSpace(error.Message));
+        Assert.Equal(decided, await fixture.Memberships.LoadAsync(companyId, crafter.ProfileId));
+        Assert.Equal(
+            eventCount,
+            (await fixture.Memberships.LoadEventsAsync(companyId, crafter.ProfileId)).Count);
+
+        var fresh = await fixture.Memberships.IssueInvitationAsync(companyId, owner.ProfileId, null);
+        using var accepted = await crafterClient.PostAsync(
+            $"/trade/v1/membership-invitations/{fresh.Token}/accept",
+            null);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        Assert.Equal(
+            MembershipState.Active,
+            (await fixture.Memberships.LoadAsync(companyId, crafter.ProfileId))!.State);
+        var replayed = await RequestAsync(crafterClient, company.Id, "Already in");
+        Assert.Equal("active", replayed.State);
     }
 
     [Fact]

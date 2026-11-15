@@ -27,7 +27,9 @@ public enum MembershipMutationStatus
     Replayed,
     NotFound,
     InvalidState,
-    LastOwner
+    LastOwner,
+    // A denied or revoked decision stands; only a fresh administrator invitation readmits.
+    RequestClosed
 }
 
 public enum MembershipRoleMutationStatus
@@ -924,6 +926,11 @@ public sealed class SqliteMembershipStore(
         {
             await transaction.CommitAsync(cancellationToken);
             return new MembershipMutationResult(MembershipMutationStatus.Replayed, existing);
+        }
+        if (existing is { State: MembershipState.Denied or MembershipState.Revoked })
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return new MembershipMutationResult(MembershipMutationStatus.RequestClosed, existing);
         }
 
         var now = timeProvider.GetUtcNow();

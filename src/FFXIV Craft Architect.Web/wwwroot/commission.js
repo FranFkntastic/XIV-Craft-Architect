@@ -1598,6 +1598,15 @@ async function sendMembershipRequest(intent) {
             "[Commission] Membership request failed after the claim committed.",
             error.code,
             error.message);
+        if (error.code === "membership_request_closed") {
+            // The company's decision stands; a retry cannot succeed.
+            state.membershipStore.discard();
+            state.claimReceipt.membership = { state: "closed", error };
+            if (state.membership) {
+                state.membership = { ...state.membership, standing: "closed", canRequestMembership: false };
+            }
+            return;
+        }
         try {
             state.membershipStore.save(intent.companyId, intent.requestNote, "failed", error);
         } catch {
@@ -1647,6 +1656,14 @@ function renderClaimReceipt() {
             `${company} approves company access separately.`));
     } else if (membership?.state === "member") {
         list.append(createReceiptItem("is-done", "✓", `You are already a ${company} member`, null));
+    } else if (membership?.state === "closed") {
+        const item = createReceiptItem(
+            "is-failed",
+            "✕",
+            "Membership request not sent",
+            `${membership.error.message} (${membership.error.code}) Your claim is kept.`);
+        item.setAttribute("role", "alert");
+        list.append(item);
     } else if (membership?.state === "failed") {
         const item = createReceiptItem(
             "is-failed",
