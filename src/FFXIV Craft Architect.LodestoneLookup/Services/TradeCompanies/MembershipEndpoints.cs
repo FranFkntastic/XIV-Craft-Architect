@@ -135,6 +135,14 @@ public static class MembershipEndpoints
                         account.ProfileId,
                         body.RequestNote,
                         cancellationToken);
+                    if (result.Status == MembershipMutationStatus.RequestClosed)
+                    {
+                        return Results.Json(
+                            new MembershipErrorResponse(
+                                "membership_request_closed",
+                                "This company closed your membership. Ask a company administrator for a new invitation."),
+                            statusCode: StatusCodes.Status403Forbidden);
+                    }
                     await crafterAccounts.DiscoverCommittedDiscordBindingsAsync(
                         parsedCompanyId,
                         account.ProfileId,
