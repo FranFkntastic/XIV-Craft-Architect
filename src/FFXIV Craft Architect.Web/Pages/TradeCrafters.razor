@@ -42,7 +42,13 @@
                     <button type="button" class="workforce-button is-quiet" @onclick="() => OpenDrawer(WorkforceDrawerKind.Requests)">
                         Review requests <span class="workforce-count">@RequestedRows.Count</span>
                     </button>
-                    <button type="button" class="workforce-button" @onclick="() => OpenInvite(null)">Invite crafter</button>
+                    <button type="button" class="workforce-button" @onclick="() => OpenInvite(null)">
+                        Invite crafter
+                        @if (OpenInvitationCount > 0)
+                        {
+                            <span class="workforce-count" title="Open invitations">@OpenInvitationCount</span>
+                        }
+                    </button>
                 }
                 @if (CanEditRecords)
                 {
@@ -332,7 +338,7 @@
                 {
                     <button type="button"
                             class="workforce-button is-primary"
-                            aria-label="Create crafter"
+                            aria-label="Create contractor"
                             disabled="@string.IsNullOrWhiteSpace(_newCrafterName)"
                             @onclick="CreateCrafterAsync">
                         Create contractor
@@ -345,7 +351,7 @@
                             class="workforce-button is-primary"
                             disabled="@string.IsNullOrWhiteSpace(_detailName)"
                             @onclick="SaveSelectedCrafterAsync">
-                        Save crafter
+                        Save contractor
                     </button>
                 }
             </Actions>
@@ -533,7 +539,13 @@
     // owners/operators may create, import and edit company crafter records.
     private bool CanEditRecords => _companyProfile != null && (_hub is not { Kind: "hub" } || _isAdmin);
 
-    private IReadOnlyList<LegacyCrafterBinding> CrafterBindings => _hosted?.Migration?.Bindings ?? [];
+    private IReadOnlyList<CompanyCrafterBinding> CrafterBindings =>
+        _hosted?.Migration?.Bindings.Select(binding => new CompanyCrafterBinding(binding.LegacyCrafterId, binding.AccountProfileId)).ToArray()
+        ?? _hosted?.Bindings
+        ?? [];
+
+    // Invitations not tied to a record are not people yet; they live in the Invite drawer.
+    private int OpenInvitationCount => (_hosted?.Invitations ?? []).Count(invitation => invitation.State == "active");
 
     private IReadOnlyList<CompanyWorkforceRow> RequestedRows => _rows
         .Where(row => row.Relationship == CompanyWorkforceRelationship.Requested && row.Member != null)
@@ -589,10 +601,6 @@
                 <button type="button" class="workforce-button is-small is-quiet" @onclick="() => OpenInvite(null)">Invitation</button>
             }
             <button type="button" class="workforce-button is-small is-quiet" @onclick="() => OpenRecord(recordId)">Open</button>
-        }
-        else if (_isAdmin && row.Invitation != null)
-        {
-            <button type="button" class="workforce-button is-small is-quiet" @onclick="() => OpenInvite(null)">Invitation</button>
         }
     };
 
@@ -680,7 +688,7 @@
         var crafter = _crafters.FirstOrDefault(candidate => candidate.Id == recordId);
         if (crafter == null)
         {
-            Snackbar.Add("That crafter record is not available in this workspace yet.", Severity.Warning);
+            Snackbar.Add("That contractor record is not available in this workspace yet.", Severity.Warning);
             return;
         }
 
@@ -804,7 +812,7 @@
         {
             Console.Error.WriteLine(
                 $"[TradeCrafters] Company hub unavailable for company {companyId}; " +
-                $"showing crafter records only. {ex.GetType().Name}: {ex.Message}");
+                $"showing contractor records only. {ex.GetType().Name}: {ex.Message}");
             _hub = null;
         }
 
@@ -820,7 +828,13 @@
 
         if (!_isAdmin)
         {
-            _hosted = new CompanyWorkforceHostedFacts(HubRoster: _hub.Roster ?? []);
+            // The member list comes from the hub roster; active members may also read the
+            // record↔account pairs so a member's own contractor record folds into their row.
+            // On failure rows stay separate.
+            var memberBindings = _hub.Standing?.State == "active"
+                ? await TryLoadAsync("account bindings", () => CompanyHubs.LoadCrafterBindingsAsync(companyId))
+                : null;
+            _hosted = new CompanyWorkforceHostedFacts(HubRoster: _hub.Roster ?? [], Bindings: memberBindings);
             return;
         }
 
@@ -846,7 +860,7 @@
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.Text.Json.JsonException)
         {
             Console.Error.WriteLine(
-                $"[TradeCrafters] Company {label} unavailable for company {_hostedCompanyId}; " +
+                $"[TradeCrafters] Company {label} unavailable for company {_companyProfile?.Id:D}; " +
                 $"workforce rows omit them. {ex.GetType().Name}: {ex.Message}");
             return null;
         }
@@ -874,7 +888,7 @@
 
         if (string.IsNullOrWhiteSpace(_newCrafterName))
         {
-            Snackbar.Add("Crafter display name is required.", Severity.Warning);
+            Snackbar.Add("Contractor display name is required.", Severity.Warning);
             return;
         }
 
@@ -893,19 +907,19 @@
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
-            Snackbar.Add("Failed to save crafter.", Severity.Error);
+            Snackbar.Add("Failed to save contractor.", Severity.Error);
             return;
         }
 
         _newCrafterName = string.Empty;
         await LoadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
-            !SelectCrafterAfterReload(crafter.Id, "Crafter was saved, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafter.Id, "Contractor was saved, but it could not be loaded."))
         {
             return;
         }
 
-        Snackbar.Add("Crafter created", Severity.Success);
+        Snackbar.Add("Contractor added", Severity.Success);
     }
 
     private async Task SearchLodestoneAsync()
@@ -982,20 +996,20 @@
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
-            Snackbar.Add("Failed to save Lodestone crafter.", Severity.Error);
+            Snackbar.Add("Failed to save Lodestone contractor.", Severity.Error);
             return;
         }
 
         await LoadAsync();
         if (_loadError != null ||
-            !SelectCrafterAfterReload(crafter.Id, "Crafter imported, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafter.Id, "Contractor imported, but it could not be loaded."))
         {
             return;
         }
 
         _lodestoneTarget = null;
         _drawer = WorkforceDrawerKind.Record;
-        Snackbar.Add("Crafter imported from Lodestone", Severity.Success);
+        Snackbar.Add("Contractor imported from Lodestone", Severity.Success);
     }
 
     private async Task UpdateSelectedCrafterFromLodestoneAsync()
@@ -1011,20 +1025,20 @@
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
-            Snackbar.Add("Failed to update crafter from Lodestone.", Severity.Error);
+            Snackbar.Add("Failed to update contractor from Lodestone.", Severity.Error);
             return;
         }
 
         await LoadAsync();
         if (_loadError != null ||
-            !SelectCrafterAfterReload(crafter.Id, "Crafter updated, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafter.Id, "Contractor updated, but it could not be loaded."))
         {
             return;
         }
 
         _lodestoneTarget = null;
         _drawer = WorkforceDrawerKind.Record;
-        Snackbar.Add("Crafter updated from Lodestone", Severity.Success);
+        Snackbar.Add("Contractor updated from Lodestone", Severity.Success);
     }
 
     private void SelectCrafter(TradeCrafterProfile crafter)
@@ -1091,18 +1105,18 @@
         var saved = await SaveCrafterAsync(crafterToSave);
         if (!saved)
         {
-            Snackbar.Add("Failed to save crafter.", Severity.Error);
+            Snackbar.Add("Failed to save contractor.", Severity.Error);
             return;
         }
 
         await LoadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
-            !SelectCrafterAfterReload(crafterId, "Crafter was saved, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafterId, "Contractor was saved, but it could not be loaded."))
         {
             return;
         }
 
-        Snackbar.Add("Crafter saved", Severity.Success);
+        Snackbar.Add("Contractor saved", Severity.Success);
     }
 
     private int GetJobLevel(TradeCraftingJob job)

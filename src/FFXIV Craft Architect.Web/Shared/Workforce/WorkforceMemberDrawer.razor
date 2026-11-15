@@ -66,7 +66,7 @@
             {
                 <div class="workforce-inline-form">
                     <CompactSelectField Id="workforce-member-connect"
-                                        Label="Connect crafter record"
+                                        Label="Connect contractor record"
                                         Value="@(_connectRecordId?.ToString("D") ?? string.Empty)"
                                         ValueChanged="SetConnectRecord"
                                         Options="AvailableRecordOptions" />
@@ -180,7 +180,7 @@
 
     private bool CanRevoke(CompanyMember member) => member.Role != "owner" || ViewerRole == "owner";
 
-    private string RecordName(Guid recordId) => RecordNames.TryGetValue(recordId, out var name) ? name : "Crafter record";
+    private string RecordName(Guid recordId) => RecordNames.TryGetValue(recordId, out var name) ? name : "Contractor record";
 
     private static string FormatRole(string role) => role switch
     {
@@ -225,7 +225,7 @@
         if (await RunAsync(() => HubClient.ConnectLegacyCrafterAsync(CompanyId, recordId, member.AccountProfileId)))
         {
             _connectRecordId = null;
-            Snackbar.Add("Crafter history connected.", Severity.Success);
+            Snackbar.Add("Contractor record connected.", Severity.Success);
         }
     }
 
@@ -233,7 +233,7 @@
     {
         if (await RunAsync(() => HubClient.DisconnectLegacyCrafterAsync(CompanyId, recordId)))
         {
-            Snackbar.Add("Crafter history disconnected.", Severity.Success);
+            Snackbar.Add("Contractor record disconnected.", Severity.Success);
         }
     }
 

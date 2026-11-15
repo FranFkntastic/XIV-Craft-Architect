@@ -77,6 +77,9 @@ public sealed record LegacyCrafterBindingResponse(
     Guid AccountProfileId,
     string Evidence,
     DateTimeOffset CreatedAtUtc);
+public sealed record CompanyCrafterBindingResponse(
+    Guid LegacyCrafterId,
+    Guid AccountProfileId);
 public sealed record LegacyCrafterMigrationResponse(
     IReadOnlyList<LegacyCrafterCandidateResponse> LegacyCrafters,
     IReadOnlyList<LegacyCrafterBindingResponse> Bindings);
@@ -279,6 +282,42 @@ public static class MembershipEndpoints
                         item.AccountProfileId,
                         item.Evidence.ToString(),
                         item.CreatedAtUtc)).ToArray()));
+            });
+
+        // Member-readable: which contractor record belongs to which account. Pairs only;
+        // migration candidates, evidence, invitations and requests stay administrator-only.
+        companies.MapGet(
+            "/{companyId}/crafter-bindings",
+            async (
+                string companyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeActiveCompanyMemberAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    memberships,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+
+                var bindings = await memberships.LoadCrafterBindingsAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                return Results.Ok(bindings
+                    .Select(item => new CompanyCrafterBindingResponse(
+                        item.LegacyCrafterId,
+                        item.AccountProfileId))
+                    .ToArray());
             });
 
         companies.MapPut(
@@ -1205,6 +1244,37 @@ public static class MembershipEndpoints
                 account,
                 null,
                 Results.StatusCode(StatusCodes.Status403Forbidden));
+    }
+
+    private static async Task<CompanyAuthorizationResult> AuthorizeActiveCompanyMemberAsync(
+        string rawCompanyId,
+        HttpRequest request,
+        ProfileHostOptions options,
+        MembershipAccessResolver accessResolver,
+        ProfileHostedTradeCompanyService companyService,
+        SqliteMembershipStore memberships,
+        CancellationToken cancellationToken)
+    {
+        var administrator = await AuthorizeCompanyAdministratorAsync(
+            rawCompanyId,
+            request,
+            options,
+            accessResolver,
+            companyService,
+            cancellationToken);
+        if (administrator.Error is not IStatusCodeHttpResult { StatusCode: StatusCodes.Status403Forbidden } ||
+            administrator.Account == null)
+        {
+            return administrator;
+        }
+
+        var membership = await memberships.LoadForAccountAsync(
+            administrator.CompanyId,
+            administrator.Account.ProfileId,
+            cancellationToken);
+        return membership?.State == MembershipState.Active
+            ? administrator with { Error = null }
+            : administrator;
     }
 
     private static MembershipResponse ToResponse(

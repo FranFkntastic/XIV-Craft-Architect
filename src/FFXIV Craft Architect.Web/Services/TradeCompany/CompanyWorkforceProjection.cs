@@ -35,7 +35,8 @@ public sealed record CompanyWorkforceHostedFacts(
     IReadOnlyList<CompanyHubRosterMember>? HubRoster = null,
     IReadOnlyList<CompanyMembership>? Requests = null,
     IReadOnlyList<CompanyMembershipInvitation>? Invitations = null,
-    LegacyCrafterMigration? Migration = null);
+    LegacyCrafterMigration? Migration = null,
+    IReadOnlyList<CompanyCrafterBinding>? Bindings = null);
 
 public sealed record CompanyWorkforceRow(
     string Key,
@@ -54,9 +55,9 @@ public sealed record CompanyWorkforceRow(
 {
     public bool HasCharacterProfile => RecordIds.Count > 0;
 
-    // Account-backed rows and bare invitations are prospective or actual members;
+    // Account-backed rows are prospective or actual members;
     // every other row is a company-owned contractor record.
-    public bool IsMemberSide => AccountProfileId.HasValue || (Relationship == CompanyWorkforceRelationship.Invited && RecordIds.Count == 0);
+    public bool IsMemberSide => AccountProfileId.HasValue;
 
     public bool Matches(CompanyWorkforceFilter filter) => filter switch
     {
@@ -79,7 +80,12 @@ public static class CompanyWorkforceProjection
         CompanyWorkforceHostedFacts? hosted)
     {
         hosted ??= new CompanyWorkforceHostedFacts();
-        var bindings = hosted.Migration?.Bindings ?? [];
+        // Administrators read bindings from the migration view; members get the narrow pair list.
+        var bindings = hosted.Migration?.Bindings
+                           .Select(item => new CompanyCrafterBinding(item.LegacyCrafterId, item.AccountProfileId))
+                           .ToArray()
+                       ?? hosted.Bindings
+                       ?? [];
         var candidates = hosted.Migration?.LegacyCrafters ?? [];
         var requests = hosted.Requests ?? [];
         var activeInvitations = (hosted.Invitations ?? [])
@@ -154,7 +160,7 @@ public static class CompanyWorkforceProjection
                 .ToHashSet();
             rows.Add(new CompanyWorkforceRow(
                 $"record:{recordId:N}",
-                record?.DisplayName ?? candidate?.DisplayName ?? "Unnamed crafter",
+                record?.DisplayName ?? candidate?.DisplayName ?? "Unnamed contractor",
                 record != null ? FormatLocation(record.WorldName, record.DataCenter) : FormatLocation(candidate?.WorldName, null),
                 invitation != null ? CompanyWorkforceRelationship.Invited : CompanyWorkforceRelationship.Contractor,
                 invitation != null ? CompanyWorkforceAccess.Pending : CompanyWorkforceAccess.None,
@@ -166,26 +172,6 @@ public static class CompanyWorkforceProjection
                 ActiveOrdersFor(orders, assignmentIds),
                 orders.Count(order => order.AssignedCrafterId is { } id && assignmentIds.Contains(id)),
                 string.IsNullOrWhiteSpace(record?.LodestoneAvatarUrl) ? null : record.LodestoneAvatarUrl));
-        }
-
-        var knownRecordIds = recordsById.Keys.Concat(candidatesById.Keys).ToHashSet();
-        foreach (var invitation in activeInvitations.Where(item =>
-                     item.LegacyCrafterId is not { } id || !knownRecordIds.Contains(id)))
-        {
-            rows.Add(new CompanyWorkforceRow(
-                $"invitation:{invitation.InvitationId:N}",
-                invitation.LegacyCrafterName ?? "Open invitation",
-                $"Expires {invitation.ExpiresAtUtc.ToLocalTime():MMM d}",
-                CompanyWorkforceRelationship.Invited,
-                CompanyWorkforceAccess.Pending,
-                null,
-                null,
-                null,
-                invitation,
-                [],
-                [],
-                0,
-                null));
         }
 
         return rows

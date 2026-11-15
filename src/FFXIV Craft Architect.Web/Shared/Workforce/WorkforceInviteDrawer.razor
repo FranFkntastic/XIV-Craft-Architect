@@ -9,7 +9,7 @@
             @if (AvailableRecords.Count > 0)
             {
                 <CompactSelectField Id="workforce-invite-record"
-                                    Label="Connect crafter record"
+                                    Label="Connect contractor record"
                                     Value="@(_recordId?.ToString("D") ?? string.Empty)"
                                     ValueChanged="SetRecord"
                                     Options="AvailableRecordOptions" />

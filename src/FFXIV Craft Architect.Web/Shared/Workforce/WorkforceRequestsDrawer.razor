@@ -34,14 +34,14 @@
                             else if (AvailableRecords.Count > 0)
                             {
                                 <CompactSelectField Id="@($"workforce-request-record-{accountId:N}")"
-                                                    Label="Crafter record"
+                                                    Label="Contractor record"
                                                     Value="@(SelectedRecord(accountId)?.ToString("D") ?? string.Empty)"
                                                     ValueChanged="value => SelectRecord(accountId, value)"
                                                     Options="AvailableRecordOptions" />
                             }
                             else
                             {
-                                <span class="workforce-muted">No crafter records</span>
+                                <span class="workforce-muted">No contractor records</span>
                             }
                         </td>
                         <td class="workforce-row-actions">
@@ -84,7 +84,7 @@
                 string.IsNullOrWhiteSpace(record.WorldName) ? record.DisplayName : $"{record.DisplayName} · {record.WorldName}")))
             .ToArray();
 
-    private string RecordName(Guid recordId) => RecordNames.TryGetValue(recordId, out var name) ? name : "Crafter record";
+    private string RecordName(Guid recordId) => RecordNames.TryGetValue(recordId, out var name) ? name : "Contractor record";
 
     private Guid? SelectedRecord(Guid accountId) => _selectedRecords.GetValueOrDefault(accountId);
 
@@ -109,7 +109,7 @@
         if (approved)
         {
             _selectedRecords.Remove(accountId);
-            Snackbar.Add(recordId.HasValue ? "Membership approved and crafter history connected." : "Membership approved.", Severity.Success);
+            Snackbar.Add(recordId.HasValue ? "Membership approved and contractor record connected." : "Membership approved.", Severity.Success);
         }
     }
 

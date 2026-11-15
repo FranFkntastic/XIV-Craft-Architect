@@ -405,6 +405,23 @@ public sealed class CompanyHubClient(
                ?? new LegacyCrafterMigration([], []);
     }
 
+    // Readable by any active member; returns record ↔ account pairs only.
+    public async Task<IReadOnlyList<CompanyCrafterBinding>> LoadCrafterBindingsAsync(
+        string companyId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/crafter-bindings",
+            null,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<CompanyCrafterBinding[]>(
+                   JsonOptions,
+                   cancellationToken)
+               ?? [];
+    }
+
     public async Task ConnectLegacyCrafterAsync(
         string companyId,
         Guid legacyCrafterId,
@@ -594,6 +611,7 @@ public sealed record LegacyCrafterCandidate(
     string DisplayName,
     string? WorldName,
     string? LodestoneCharacterId);
+public sealed record CompanyCrafterBinding(Guid LegacyCrafterId, Guid AccountProfileId);
 public sealed record LegacyCrafterBinding(
     Guid LegacyCrafterId,
     Guid AccountProfileId,

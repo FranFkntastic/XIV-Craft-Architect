@@ -52,7 +52,7 @@ public sealed class CompanyWorkforceProjectionTests
         var rows = CompanyWorkforceProjection.Build([boundRecord, contractor, invitedRecord, formerRecord], orders, hosted);
 
         Assert.Equal(rows.Count, rows.Select(row => row.Key).Distinct().Count());
-        Assert.Equal(8, rows.Count);
+        Assert.Equal(7, rows.Count);
 
         var member = Assert.Single(rows, row => row.AccountProfileId == crafterMember);
         Assert.Equal(CompanyWorkforceRelationship.Crafter, member.Relationship);
@@ -83,8 +83,8 @@ public sealed class CompanyWorkforceProjectionTests
         Assert.Single(former.ActiveOrders);
 
         Assert.Single(rows, row => row.RecordIds.Contains(unsyncedCandidate));
-        var bare = Assert.Single(rows, row => row.Invitation?.InvitationId == openInvitation.InvitationId);
-        Assert.True(bare.IsMemberSide);
+        // An invitation not tied to a record is not a person; it lives only in the Invite drawer.
+        Assert.DoesNotContain(rows, row => row.Invitation?.InvitationId == openInvitation.InvitationId);
     }
 
     [Fact]
@@ -101,6 +101,22 @@ public sealed class CompanyWorkforceProjectionTests
         Assert.Equal(CompanyWorkforceRelationship.Operator, Assert.Single(rows, row => row.AccountProfileId == account).Relationship);
         Assert.Single(rows, row => row.RecordIds.Contains(record.Id));
         Assert.Single(CompanyWorkforceProjection.Build([record], [], null));
+    }
+
+    [Fact]
+    public void MemberReadableBindingsFoldARecordIntoTheMemberRowForNonAdministrators()
+    {
+        var account = Guid.NewGuid();
+        var record = Crafter("Old Name");
+        var hosted = new CompanyWorkforceHostedFacts(
+            HubRoster: [new CompanyHubRosterMember(account, "Member", "crafter")],
+            Bindings: [new CompanyCrafterBinding(record.Id, account)]);
+
+        var row = Assert.Single(CompanyWorkforceProjection.Build([record], [Order(record.Id, TradeOrderStatus.Assigned)], hosted));
+
+        Assert.Equal(account, row.AccountProfileId);
+        Assert.Equal([record.Id], row.RecordIds);
+        Assert.Single(row.ActiveOrders);
     }
 
     private static TradeCrafterProfile Crafter(string name) => new()
