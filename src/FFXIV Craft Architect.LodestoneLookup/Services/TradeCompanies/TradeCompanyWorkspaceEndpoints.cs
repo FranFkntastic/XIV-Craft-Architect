@@ -14,7 +14,8 @@ public sealed record TradeCompanyWorkspaceProfileResponse(
     long Revision,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
-    TradeCompanyPricingScope? CommissionPricingScope = null);
+    TradeCompanyPricingScope? CommissionPricingScope = null,
+    IReadOnlyList<TradeMarginItem>? MarginItems = null);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     long ExpectedRevision,
@@ -24,7 +25,9 @@ public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     TradePaymentPolicy PaymentPolicy,
     TradeMaterialPricingPolicy MaterialPricingPolicy,
     TradeCompanyPricingScope? CommissionPricingScope = null,
-    bool UpdateCommissionPricingScope = false);
+    bool UpdateCommissionPricingScope = false,
+    IReadOnlyList<TradeMarginItem>? MarginItems = null,
+    bool UpdateMarginItems = false);
 
 public sealed record TradeCompanyWorkspaceProfileUpdateResponse(long Revision);
 
@@ -82,7 +85,8 @@ public static class TradeCompanyWorkspaceEndpoints
                         snapshot.Revision.Value,
                         snapshot.Profile.CreatedAtUtc,
                         snapshot.Profile.UpdatedAtUtc,
-                        snapshot.Profile.CommissionPricingScope));
+                        snapshot.Profile.CommissionPricingScope,
+                        snapshot.Profile.MarginItems));
             });
 
         companies.MapPut(
@@ -115,6 +119,12 @@ public static class TradeCompanyWorkspaceEndpoints
                 {
                     return Results.BadRequest(new { error = "invalid_company_name" });
                 }
+                if (body.MarginItems is { } items &&
+                    (items.Count > 500 || items.Any(item => item == null || item.ItemId <= 0 || item.SalePrice < 0) ||
+                     items.Select(item => item.ItemId).Distinct().Count() != items.Count))
+                {
+                    return Results.BadRequest(new { error = "invalid_margin_items" });
+                }
 
                 var result = await companies.UpdateCompanyProfileAsync(
                     access,
@@ -126,7 +136,9 @@ public static class TradeCompanyWorkspaceEndpoints
                     body.MaterialPricingPolicy,
                     cancellationToken,
                     body.CommissionPricingScope,
-                    body.UpdateCommissionPricingScope);
+                    body.UpdateCommissionPricingScope,
+                    body.MarginItems,
+                    body.UpdateMarginItems);
                 return result.Status switch
                 {
                     CompanyHubMutationStatus.Applied => Results.Ok(

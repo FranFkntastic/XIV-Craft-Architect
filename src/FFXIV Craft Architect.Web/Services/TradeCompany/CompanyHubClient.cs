@@ -134,7 +134,9 @@ public sealed class CompanyHubClient(
                 profile.PaymentPolicy,
                 profile.MaterialPricingPolicy,
                 profile.CommissionPricingScope,
-                UpdateCommissionPricingScope = true
+                UpdateCommissionPricingScope = true,
+                profile.MarginItems,
+                UpdateMarginItems = true
             },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
@@ -621,7 +623,8 @@ public sealed record TradeCompanyWorkspaceProfile(
     long Revision,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
-    TradeCompanyPricingScope? CommissionPricingScope = null)
+    TradeCompanyPricingScope? CommissionPricingScope = null,
+    IReadOnlyList<TradeMarginItem>? MarginItems = null)
 {
     public TradeCompanyProfile ToTransientProfile() => new()
     {
@@ -632,6 +635,7 @@ public sealed record TradeCompanyWorkspaceProfile(
         PaymentPolicy = PaymentPolicy!,
         MaterialPricingPolicy = MaterialPricingPolicy!,
         CommissionPricingScope = CommissionPricingScope,
+        MarginItems = MarginItems ?? [],
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,
         CreatedAtUtc = CreatedAtUtc,

@@ -533,6 +533,8 @@ public sealed class CommissionCostBasisResolver
         return ("Procurement route", "the recommended procurement route");
     }
 
+    public static decimal GetReferenceUnitCost(MarketItemAnalysis analysis) => SelectUnitCost(analysis).UnitCost;
+
     private static SelectedUnitCost SelectUnitCost(MarketItemAnalysis analysis)
     {
         if (analysis.CostToCoverUnitPrice > 0)

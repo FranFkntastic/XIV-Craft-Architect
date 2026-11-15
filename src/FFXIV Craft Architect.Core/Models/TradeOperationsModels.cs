@@ -46,6 +46,7 @@ public sealed class TradeCompanyProfile
     public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.Default;
     public TradeMaterialPricingPolicy MaterialPricingPolicy { get; set; } = TradeMaterialPricingPolicy.Default;
     public TradeCompanyPricingScope? CommissionPricingScope { get; set; }
+    public IReadOnlyList<TradeMarginItem> MarginItems { get; set; } = [];
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 
@@ -64,6 +65,8 @@ public sealed class TradeCompanyProfile
         };
     }
 }
+
+public sealed record TradeMarginItem(int ItemId, long? SalePrice = null);
 
 public sealed record TradeCompanyUpdate
 {

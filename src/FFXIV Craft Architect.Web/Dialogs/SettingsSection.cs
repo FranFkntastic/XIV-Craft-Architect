@@ -10,5 +10,6 @@ public enum SettingsSection
     CompanyAdministration,
     Storage,
     Diagnostics,
+    Appearance,
     About
 }

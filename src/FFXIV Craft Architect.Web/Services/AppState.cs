@@ -238,7 +238,7 @@ public sealed class AppState
             operation.Name,
             StringComparison.Ordinal);
 
-    private void NotifySettingsChanged()
+    public void NotifySettingsChanged()
     {
         _settingsVersion++;
         PublishChange(AppStateChangeScope.Settings);

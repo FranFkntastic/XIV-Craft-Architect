@@ -45,6 +45,7 @@ public class WebSettingsService : ISettingsService
         ["marketmafioso.active_item_id"] = 0,
         ["marketmafioso.active_data_center"] = "",
         ["marketmafioso.active_purchase_world"] = "",
+        ["ui.glass_surfaces"] = true,
         ["ui.accent_color"] = "#d4af37",
         ["ui.use_split_pane_market_view"] = true,
         ["ui.trade_orders_ops_pane_width"] = 820,

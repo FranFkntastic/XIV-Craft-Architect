@@ -40,6 +40,7 @@ public sealed class TradeCompanyProfilePackageService
         importedProfile.MaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
             sourceProfile.MaterialPricingPolicy);
         importedProfile.CommissionPricingScope = sourceProfile.CommissionPricingScope;
+        importedProfile.MarginItems = (sourceProfile.MarginItems ?? []).ToArray();
 
         var importedCrafters = package.Crafters
             .Select(crafter => ImportCrafter(crafter, importedProfile.Id, importedAtUtc))
@@ -89,6 +90,7 @@ public sealed class TradeCompanyProfilePackageService
             MaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
                 profile.MaterialPricingPolicy),
             CommissionPricingScope = profile.CommissionPricingScope,
+            MarginItems = (profile.MarginItems ?? []).ToArray(),
             CreatedAtUtc = profile.CreatedAtUtc,
             UpdatedAtUtc = profile.UpdatedAtUtc
         };
