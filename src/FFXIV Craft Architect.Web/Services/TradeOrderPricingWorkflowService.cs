@@ -571,8 +571,15 @@ public sealed class TradeOrderPricingWorkflowService
     {
         if (_profileSync.CurrentStatus.IsConnected)
         {
-            var profile = await _companyHub.LoadWorkspaceProfileAsync(order.CompanyProfileId, cancellationToken);
-            return profile.CommissionPricingScope;
+            try
+            {
+                var profile = await _companyHub.LoadWorkspaceProfileAsync(order.CompanyProfileId, cancellationToken);
+                return profile.CommissionPricingScope;
+            }
+            catch (TradeCompany.CompanyHubRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Signed in, but this company is not hosted (e.g. an imported package): use the local profile.
+            }
         }
 
         var profiles = await _companies.LoadCompanyProfilesAsync();

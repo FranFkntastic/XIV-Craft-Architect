@@ -919,6 +919,7 @@
     private readonly ElementReference[] _tabElements = new ElementReference[AllSettingsSections.Count];
     private SettingsSection _activePanel = SettingsSection.MarketAndRoutes;
     private bool _canAdministerCompany;
+    private bool _initialWorkspaceCompanyConsumed;
     private long _companyPolicyRevision;
 
     private sealed record RolePermissionRow(
@@ -1144,6 +1145,7 @@
 
     private async Task OnWorkspaceCompanyChangedAsync(string companyId)
     {
+        _initialWorkspaceCompanyConsumed = true;
         await LoadCompanyProfileAsync();
         await RefreshCompanyAdministrationAccessAsync();
         if (_companyProfile == null ||
@@ -1158,6 +1160,12 @@
         _canAdministerCompany = false;
         if (_companyProfile == null)
         {
+            return;
+        }
+        if (!ProfileSync.CurrentStatus.IsConnected)
+        {
+            // Local-only companies have no hosted roles; the local user owns the data.
+            _canAdministerCompany = true;
             return;
         }
         try
@@ -1546,7 +1554,7 @@
             _companyProfile = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
             if (ProfileSync.CurrentStatus.IsConnected)
             {
-                var companyId = Guid.TryParse(InitialWorkspaceCompanyId, out var requestedCompanyId)
+                var companyId = !_initialWorkspaceCompanyConsumed && Guid.TryParse(InitialWorkspaceCompanyId, out var requestedCompanyId)
                     ? requestedCompanyId
                     : _companyProfile?.Id;
                 if (companyId.HasValue)
