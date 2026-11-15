@@ -6,6 +6,9 @@ namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed class WebPlanPersistenceService
 {
+    /// <summary>Name suffix given to copies preserved from order-linked plans.</summary>
+    public const string LocalChangesSuffix = " (local changes)";
+
     private static readonly JsonSerializerOptions ComparisonJson = new(JsonSerializerDefaults.Web);
     private readonly IndexedDbService _indexedDb;
 
@@ -14,20 +17,23 @@ public sealed class WebPlanPersistenceService
         _indexedDb = indexedDb;
     }
 
-    public async Task<IReadOnlyList<StoredPlanSummary>> LoadPlanSummariesAsync()
-    {
-        var summaries = await _indexedDb.LoadPlanSummariesAsync();
-        var visible = new List<StoredPlanSummary>();
-        foreach (var summary in summaries)
-        {
-            var plan = await _indexedDb.LoadPlanAsync(summary.Id);
-            if (plan?.LinkedOrderId.HasValue != true)
-            {
-                visible.Add(summary);
-            }
-        }
-        return visible;
-    }
+    /// <summary>
+    /// Every stored plan summary, including order-linked plans. Summaries carry
+    /// <see cref="StoredPlanSummary.LinkedOrderId"/> and
+    /// <see cref="StoredPlanSummary.SourceOrderId"/> so callers classify without
+    /// loading full plans.
+    /// </summary>
+    public async Task<IReadOnlyList<StoredPlanSummary>> LoadPlanSummariesAsync() =>
+        await _indexedDb.LoadPlanSummariesAsync();
+
+    /// <summary>
+    /// Plan summaries that are not sealed to a Trade order (the historical
+    /// saved-plan list; "local changes" forks are included).
+    /// </summary>
+    public async Task<IReadOnlyList<StoredPlanSummary>> LoadUnlinkedPlanSummariesAsync() =>
+        (await _indexedDb.LoadPlanSummariesAsync())
+            .Where(summary => !summary.LinkedOrderId.HasValue)
+            .ToArray();
 
     public Task<StoredPlan?> LoadPlanPayloadAsync(string planId) =>
         _indexedDb.LoadPlanAsync(planId);
@@ -40,6 +46,14 @@ public sealed class WebPlanPersistenceService
             !HasSameStoredSnapshot(existing, snapshot))
         {
             return false;
+        }
+
+        // Worker exports do not know the fork's source order; keep it across saves.
+        if (existing is { LinkedOrderId: null, SourceOrderId: { } sourceOrderId } &&
+            !snapshot.LinkedOrderId.HasValue &&
+            !snapshot.SourceOrderId.HasValue)
+        {
+            snapshot.SourceOrderId = sourceOrderId;
         }
 
         return await _indexedDb.SavePlanAsync(snapshot);
@@ -64,11 +78,12 @@ public sealed class WebPlanPersistenceService
 
             var now = DateTime.UtcNow;
             snapshot.Id = Guid.NewGuid().ToString("D");
-            snapshot.Name = $"{snapshot.Name} (local changes)";
+            snapshot.Name = $"{snapshot.Name}{LocalChangesSuffix}";
             snapshot.CreatedAt = now;
             snapshot.ModifiedAt = now;
             snapshot.SavedAt = now;
             snapshot.LinkedOrderId = null;
+            snapshot.SourceOrderId = existing.LinkedOrderId;
         }
 
         var saved = await SaveSnapshotAsync(snapshot);
@@ -116,11 +131,12 @@ public sealed class WebPlanPersistenceService
             ?? throw new InvalidOperationException("Linked plan preservation failed.");
         var now = DateTime.UtcNow;
         preserved.Id = Guid.NewGuid().ToString("D");
-        preserved.Name = $"{existing.Name} (local changes)";
+        preserved.Name = $"{existing.Name}{LocalChangesSuffix}";
         preserved.CreatedAt = now;
         preserved.ModifiedAt = now;
         preserved.SavedAt = now;
         preserved.LinkedOrderId = null;
+        preserved.SourceOrderId = linkedOrderId;
 
         return await _indexedDb.SavePlansBatchAsync([preserved, replacement]);
     }
@@ -145,6 +161,33 @@ public sealed class WebPlanPersistenceService
 
         return await _indexedDb.DeletePlanAsync(planId);
     }
+
+    /// <summary>
+    /// Deletes several plans in one storage transaction. Plans linked to any of
+    /// <paramref name="protectedLinkedOrderIds"/> are skipped. This is the plan
+    /// browser's user-initiated delete; sync tombstones keep using
+    /// <see cref="IsDeleteProtectedAsync"/>.
+    /// </summary>
+    public Task<StoredPlanBatchDeleteResult> DeletePlansAsync(
+        IReadOnlyCollection<string> planIds,
+        IReadOnlyCollection<Guid> protectedLinkedOrderIds) =>
+        _indexedDb.DeletePlansBatchAsync(planIds, protectedLinkedOrderIds);
+
+    /// <summary>
+    /// Detaches a "local changes" fork from its source order so it lists as an
+    /// ordinary user plan: clears <see cref="StoredPlan.SourceOrderId"/> and, when
+    /// present, the generated fork-name suffix. Linked plans are never touched.
+    /// </summary>
+    public Task<bool> DetachFromSourceOrderAsync(string planId, string? renamedTo) =>
+        _indexedDb.PatchUnlinkedPlanMetadataAsync(
+            planId,
+            renamedTo == null
+                ? new Dictionary<string, object?> { ["sourceOrderId"] = null }
+                : new Dictionary<string, object?>
+                {
+                    ["sourceOrderId"] = null,
+                    ["name"] = renamedTo
+                });
 
     public async Task<bool> DeletePlanForLinkedOrderAsync(
         string planId,
@@ -196,6 +239,13 @@ public sealed class WebPlanPersistenceService
         var saved = await SaveSnapshotAsync(plan);
         return new RenameStoredPlanResult(saved, oldName, newName);
     }
+}
+
+public sealed class StoredPlanBatchDeleteResult
+{
+    public List<string> DeletedIds { get; set; } = [];
+    public List<string> SkippedIds { get; set; } = [];
+    public List<string> MissingIds { get; set; } = [];
 }
 
 public sealed record RenameStoredPlanResult(

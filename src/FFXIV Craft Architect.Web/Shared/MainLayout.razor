@@ -540,7 +540,7 @@
     
     private async Task RefreshSavedPlansListAsync()
     {
-        var summaries = await PlanPersistence.LoadPlanSummariesAsync();
+        var summaries = await PlanPersistence.LoadUnlinkedPlanSummariesAsync();
         AppState.ReplaceSavedPlans(summaries.Where(p => p.Id != "autosave"));
     }
 

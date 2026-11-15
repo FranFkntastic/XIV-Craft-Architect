@@ -47,7 +47,8 @@ public sealed class PlansProfileSyncAdapter :
             SavedMarketAnalysisLens = plan.SavedMarketAnalysisLens,
             SourcePlanId = plan.SourcePlanId,
             SourcePlanName = plan.SourcePlanName,
-            LinkedOrderId = plan.LinkedOrderId
+            LinkedOrderId = plan.LinkedOrderId,
+            SourceOrderId = plan.SourceOrderId
         };
         return new ProfileSyncObjectEnvelope
         {
@@ -164,7 +165,8 @@ public sealed class PlansProfileSyncAdapter :
             SavedMarketAnalysisLens = snapshot.SavedMarketAnalysisLens,
             SourcePlanId = snapshot.SourcePlanId,
             SourcePlanName = snapshot.SourcePlanName,
-            LinkedOrderId = snapshot.LinkedOrderId
+            LinkedOrderId = snapshot.LinkedOrderId,
+            SourceOrderId = snapshot.SourceOrderId
         };
     }
 
