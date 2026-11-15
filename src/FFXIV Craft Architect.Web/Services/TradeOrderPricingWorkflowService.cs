@@ -588,14 +588,11 @@ public sealed class TradeOrderPricingWorkflowService
     private async Task<TradeCompanyPricingScope?> LoadPricingScopeAsync(
         TradeOrder order, CancellationToken cancellationToken)
     {
-        if (_profileSync.CurrentStatus.IsConnected)
-        {
-            var profile = await _companyHub.LoadWorkspaceProfileAsync(order.CompanyProfileId, cancellationToken);
-            return profile.CommissionPricingScope;
-        }
-
-        var profiles = await _companies.LoadCompanyProfilesAsync();
-        return profiles.FirstOrDefault(profile => profile.Id == order.CompanyProfileId)?.CommissionPricingScope;
+        // Same hosted-then-local resolution the Orders page uses, so an unhosted company
+        // still prices from its own scope while profile sync is connected.
+        var resolved = await new TradeCompany.TradeWorkspaceProfileResolver(_companies, _companyHub)
+            .ResolveAsync(order.CompanyProfileId, cancellationToken);
+        return resolved.Profile?.CommissionPricingScope;
     }
 
     private static TradeOrderPricingWorkflowResult PricingScopeRequired() =>
