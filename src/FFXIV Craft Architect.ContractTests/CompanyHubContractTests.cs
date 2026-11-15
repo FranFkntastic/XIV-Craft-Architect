@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -14,6 +15,60 @@ namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class CompanyHubContractTests
 {
+    [Theory]
+    [InlineData("Procurement route", "Crafter-supplied materials require procurement-route pricing evidence.")]
+    [InlineData("ProcurementRoute", "quote")]
+    public async Task PublicationTermsRefusalIsStructuredAndLeavesNoPublicBrief(
+        string costBasis,
+        string expectedMessage)
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany();
+        using var client = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(client, company);
+        var order = CreateOrder(company.Id);
+        order.CompanyCommission = null;
+        order.CommissionPublication = null;
+        order.SourceSnapshot.CostBasis = CommissionCostBasis.ProcurementRoute;
+        order.SourceSnapshot.MaterialQuote = null;
+        await PutOrderAsync(client, order);
+        var stored = await fixture.Profiles.LoadObjectAsync(
+            owner.ProfileId.ToString("D"), ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"), CancellationToken.None);
+        var revision = new CompanyRecordRevision(stored!.Revision);
+        var ownership = new TradeCompanyPublicationOwnership(new CompanyId(company.Id), order.Id, revision);
+        var request = new CompanyCommissionBriefCreateRequest
+        {
+            OrderId = order.Id,
+            OrderRevision = revision,
+            IdempotencyKey = "refused-publication",
+            Brief = new CommissionBriefDocument
+            {
+                CompanyName = company.Name,
+                Title = "Larimar commission",
+                Outputs = [new(12541, "Larimar", 1, false)],
+                CrafterMaterials = [new(1, "Fixture material", 1, false, 100, 100)],
+                Payment = new("Commission", 100, 0, 0, 100),
+                Evidence = new(costBasis, "Entire region", "North America", DateTime.UtcNow)
+            }
+        };
+
+        using var refused = await client.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/commission-briefs", request);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var problem = await refused.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("commission_terms_invalid", problem.GetProperty("error").GetString());
+        Assert.Contains(expectedMessage, problem.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        var publicId = SqliteCommissionBriefStore.CreateCompanyPublicId(ownership, request.IdempotencyKey);
+        var briefs = fixture.Application.Services.GetRequiredService<SqliteCommissionBriefStore>();
+        Assert.Null(await briefs.LoadIncludingRevokedAsync(publicId, CancellationToken.None));
+        var unchanged = await fixture.Profiles.LoadObjectAsync(
+            owner.ProfileId.ToString("D"), ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"), CancellationToken.None);
+        Assert.Equal(stored.PayloadJson, unchanged!.PayloadJson);
+    }
+
     [Fact]
     public async Task CommissionPricingScopeIsCompanyOwnedAcrossOperatorsAndRejectsStaleWrites()
     {

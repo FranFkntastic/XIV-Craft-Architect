@@ -262,7 +262,7 @@ public sealed class TradeCompanyCollaborationClient(
             },
             cancellationToken,
             capturedConnection);
-        await EnsureSuccessAsync(response, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken, publication: true);
         var published = await response.Content.ReadFromJsonAsync<CommissionBriefCreateResponse>(
             JsonOptions,
             cancellationToken)
@@ -370,7 +370,8 @@ public sealed class TradeCompanyCollaborationClient(
 
     private static async Task EnsureSuccessAsync(
         HttpResponseMessage response,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool publication = false)
     {
         if (response.IsSuccessStatusCode)
         {
@@ -380,6 +381,11 @@ public sealed class TradeCompanyCollaborationClient(
         var problem = await response.Content.ReadFromJsonAsync<DiscordProblemDto>(
             JsonOptions,
             cancellationToken);
+        if (publication && (int)response.StatusCode is >= 400 and < 500 &&
+            !string.IsNullOrWhiteSpace(problem?.Message))
+        {
+            throw new TradeCompanyPublicationRefusedException(problem.Message);
+        }
         throw new InvalidOperationException(
             problem?.Message ??
             $"Discord collaboration failed with HTTP {(int)response.StatusCode}.");
@@ -459,3 +465,6 @@ public sealed record TradeCompanyPortablePublication(
     PortableCommissionLink Link,
     TradeCompanyRecordEnvelope OrderRecord,
     CompanyRecordRevision ProfileOrderRevision);
+
+public sealed class TradeCompanyPublicationRefusedException(string message)
+    : InvalidOperationException(message);

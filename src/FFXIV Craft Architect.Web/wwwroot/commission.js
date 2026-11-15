@@ -1086,7 +1086,7 @@ function renderTerms() {
         element(
             "span",
             null,
-            `Evidence: ${terms.pricingEvidence.costBasis}; ${terms.pricingEvidence.marketScope}; ${terms.pricingEvidence.location}; captured ${formatDate(terms.pricingEvidence.capturedAtUtc)}.`)
+            `Evidence: ${formatCostBasis(terms.pricingEvidence.costBasis)}; ${terms.pricingEvidence.marketScope}; ${terms.pricingEvidence.location}; captured ${formatDate(terms.pricingEvidence.capturedAtUtc)}.`)
     );
     if (terms.payment.customTerms) {
         detail.append(element("span", null, `Custom payment terms: ${terms.payment.customTerms}`));
@@ -1331,6 +1331,11 @@ function formatDeliveryInstructions(value) {
 
 function formatWords(value) {
     return value.replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+function formatCostBasis(value) {
+    const words = formatWords(value || "Unspecified");
+    return words.charAt(0) + words.slice(1).toLowerCase();
 }
 
 function requiredUserText(value, label) {

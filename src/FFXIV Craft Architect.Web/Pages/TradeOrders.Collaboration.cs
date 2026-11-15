@@ -362,6 +362,10 @@ public partial class TradeOrders
                 link.Url,
                 "Commission published and link copied");
         }
+        catch (TradeCompanyPublicationRefusedException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
         catch (Exception exception)
         {
             if (localLink != null && !localOrderAttached)
@@ -832,7 +836,7 @@ public partial class TradeOrders
                 paymentTiming.Schedule,
                 paymentTiming.CustomTerms),
             Evidence = new CommissionBriefEvidence(
-                FormatCommissionCostBasis(source),
+                source.CostBasis?.ToString() ?? "Unspecified",
                 FormatCommissionMarketScope(source),
                 FormatCommissionLocation(source),
                 evidenceCapturedAt)
@@ -971,15 +975,6 @@ public partial class TradeOrders
         publication.PublicUrl = resolved.Url;
         return resolved;
     }
-
-    private static string FormatCommissionCostBasis(TradeOrderSourceSnapshot source) =>
-        source.CostBasis switch
-        {
-            CommissionCostBasis.MarketRecommendation => "Market recommendation",
-            CommissionCostBasis.SelectedAcquisitionSources => "Selected acquisition sources",
-            CommissionCostBasis.ProcurementRoute => "Procurement route",
-            _ => "Selected acquisition sources"
-        };
 
     private static string FormatCommissionMarketScope(TradeOrderSourceSnapshot source) =>
         source.MarketFetchScope switch
