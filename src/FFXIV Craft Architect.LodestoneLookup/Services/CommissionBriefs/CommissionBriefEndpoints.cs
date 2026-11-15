@@ -2,9 +2,18 @@ using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
+
+// Standing: none | pending | active | closed (denied or revoked).
+public sealed record CommissionMembershipStandingResponse(
+    string CompanyId,
+    string Standing,
+    string? Role,
+    bool CanRequestMembership,
+    string? RequestBlockedReason);
 
 public static class CommissionBriefEndpoints
 {
@@ -184,6 +193,51 @@ public static class CommissionBriefEndpoints
                     Version = brief.Version,
                     PublishedAtUtc = brief.PublishedAtUtc
                 });
+            });
+
+        // Read-only standing of the signed-in account toward the commission's company.
+        // The membership request itself still goes through the authoritative
+        // POST /trade/v1/companies/{companyId}/membership-requests endpoint.
+        group.MapGet(
+            "/{publicId}/membership",
+            async (
+                HttpContext context,
+                string publicId,
+                CommissionBriefOptions options,
+                SqliteCommissionBriefStore store,
+                MembershipAccessResolver accessResolver,
+                SqliteMembershipStore memberships,
+                SqliteDiscordIdentityStore identities,
+                CancellationToken ct) =>
+            {
+                context.Response.Headers.CacheControl = "private, no-store";
+                if (!IsAvailable(context, options) || !IsValidPublicId(publicId))
+                {
+                    return Results.NotFound();
+                }
+
+                var account = await accessResolver.ResolveAccountAsync(context.Request, ct);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                var brief = await store.LoadAsync(publicId, ct);
+                if (brief?.Ownership == null)
+                {
+                    return Results.NotFound();
+                }
+
+                var companyId = brief.Ownership.CompanyId;
+                var access = await accessResolver.ResolveCompanyAccessAsync(account, companyId, ct);
+                var membership = await memberships.LoadForAccountAsync(companyId, account.ProfileId, ct);
+                var hasDiscordIdentity =
+                    await identities.LoadByProfileAsync(account.ProfileId, ct) != null;
+                return Results.Ok(ResolveCommissionMembershipStanding(
+                    companyId,
+                    access,
+                    membership,
+                    hasDiscordIdentity));
             });
 
         group.MapDelete(
@@ -853,6 +907,37 @@ public static class CommissionBriefEndpoints
     private static bool IsAvailable(HttpContext context, CommissionBriefOptions options) =>
         options.Enabled &&
         options.IsAllowedRequestHost(context.Request.Host.Host);
+
+    internal static CommissionMembershipStandingResponse ResolveCommissionMembershipStanding(
+        CompanyId companyId,
+        TradeCompanyAccessContext? access,
+        CompanyMembership? membership,
+        bool hasDiscordIdentity)
+    {
+        var id = companyId.ToString();
+        if (access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator })
+        {
+            return new(id, "active", access.Role.ToString().ToLowerInvariant(), false, "already_member");
+        }
+
+        return membership?.State switch
+        {
+            MembershipState.Active => new(
+                id,
+                "active",
+                membership.Role.ToString().ToLowerInvariant(),
+                false,
+                "already_member"),
+            MembershipState.Pending => new(id, "pending", null, false, "request_pending"),
+            // Mirrors invitation consumption: a denied or revoked decision is not
+            // re-opened from a commission link.
+            MembershipState.Denied or MembershipState.Revoked =>
+                new(id, "closed", null, false, "membership_closed"),
+            _ when !hasDiscordIdentity =>
+                new(id, "none", null, false, "account_sign_in_required"),
+            _ => new(id, "none", null, true, null)
+        };
+    }
 
     private static bool IsValidPublicId(string value) =>
         value.Length is >= 8 and <= 128 &&
