@@ -1,6 +1,6 @@
 @page "/trade/crafters"
-@using FFXIV_Craft_Architect.Web.Shared.TablePrimitives
 @using FFXIV_Craft_Architect.Web.Shared
+@using FFXIV_Craft_Architect.Web.Shared.Workforce
 @inject AppState AppState
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncService ProfileSync
@@ -12,11 +12,7 @@
 @inject CompanyHubClient CompanyHubs
 @implements IDisposable
 
-<MudContainer MaxWidth="MaxWidth.ExtraExtraLarge" Class="trade-crafters-page">
-    @if (_hostedCompanyId != null && _loadError == null)
-    {
-        <CompanyMembershipManager @key="_hostedCompanyId" CompanyId="@_hostedCompanyId" />
-    }
+<div class="trade-crafters-page">
     @if (!string.IsNullOrWhiteSpace(_loadError))
     {
         <MudAlert Severity="Severity.Error" Class="ma-4">
@@ -32,105 +28,149 @@
     }
     else
     {
-        <div class="trade-crafters-layout">
-            <section class="trade-crafters-main">
-                <section class="trade-crafters-panel trade-crafters-lodestone-import">
-                    <MudText Typo="Typo.subtitle1">Import from Lodestone</MudText>
-                    <div class="trade-crafters-lodestone-search-row">
-                        <MudTextField @bind-Value="_lodestoneSearchName"
-                                      id="lodestone-character-name"
-                                      Label="Character name"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Immediate="true" />
-                        <CompactSelectField Id="lodestone-search-scope"
-                                            Label="Search scope"
-                                            Value="@_lodestoneSearchScope.ToString()"
-                                            ValueChanged="SetLodestoneSearchScope"
-                                            Options="LodestoneSearchScopeOptions"
-                                            Tooltip="Choose how widely Lodestone should search. Entire region checks every data center in your selected region; specific world is only needed when you already know the home world." />
-                        @if (_lodestoneSearchScope == LodestoneSearchScope.SpecificWorld)
-                        {
-                            <CompactSelectField @key="_lodestoneSearchScope"
-                                                Id="lodestone-search-world"
-                                                Label="World"
-                                                Value="@_lodestoneSearchWorld"
-                                                ValueChanged="SetLodestoneSearchWorld"
-                                                Options="GetLodestoneSearchWorldOptions()" />
-                        }
-                        else
-                        {
-                            <CompactValueField @key="_lodestoneSearchScope"
-                                               Label="Location"
-                                               Value="@GetLodestoneSearchScopeSummary()" />
-                        }
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Primary"
-                                   Class="trade-crafters-row-action"
-                                   aria-label="Search Lodestone"
-                                   OnClick="SearchLodestoneAsync"
-                                   Disabled="@(_lodestoneIsBusy || string.IsNullOrWhiteSpace(_lodestoneSearchName) || IsLodestoneSearchLocationMissing())">
-                            Search
-                        </MudButton>
-                    </div>
-                    @if (!string.IsNullOrWhiteSpace(_lodestoneError))
-                    {
-                        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">@_lodestoneError</MudAlert>
-                    }
-                    @if (_lodestoneCandidates.Count > 0)
-                    {
-                        <div class="trade-crafters-lodestone-results">
-                            @foreach (var candidate in _lodestoneCandidates)
-                            {
-                                <button type="button"
-                                        class="trade-crafters-lodestone-result"
-                                        @onclick="@(() => PreviewLodestoneCandidateAsync(candidate))">
-                                    <span>@candidate.DisplayName</span>
-                                    <small>@FormatLodestoneCandidateLocation(candidate) @candidate.LodestoneCharacterId</small>
-                                </button>
-                            }
-                        </div>
-                    }
-                    @if (_lodestonePreview != null)
-                    {
-                        <div class="trade-crafters-lodestone-preview">
-                            <div class="trade-crafters-lodestone-preview-heading">
-                                <strong>@_lodestonePreview.DisplayName</strong>
-                                <span>@FormatPreviewLocation(_lodestonePreview)</span>
-                            </div>
-                            <span>@FormatImportedJobSummary(_lodestonePreview)</span>
-                            @if (!string.IsNullOrWhiteSpace(_lodestonePreview.FreeCompanyName))
-                            {
-                                <span>@_lodestonePreview.FreeCompanyName</span>
-                            }
-                            @if (!string.IsNullOrWhiteSpace(FormatLodestonePreviewIdentity(_lodestonePreview)))
-                            {
-                                <span>@FormatLodestonePreviewIdentity(_lodestonePreview)</span>
-                            }
-                            <div class="trade-crafters-lodestone-actions">
-                                <MudButton Variant="Variant.Filled"
-                                           Color="Color.Primary"
-                                           OnClick="CreateCrafterFromLodestoneAsync"
-                                           Disabled="@_lodestoneIsBusy">
-                                    Create Crafter From Lodestone
-                                </MudButton>
-                                @if (_selectedCrafter != null)
-                                {
-                                    <MudButton Variant="Variant.Outlined"
-                                               Color="Color.Secondary"
-                                               OnClick="UpdateSelectedCrafterFromLodestoneAsync"
-                                               Disabled="@_lodestoneIsBusy">
-                                        Update Selected Crafter
-                                    </MudButton>
-                                }
-                            </div>
-                        </div>
-                    }
-                </section>
+        <header class="workforce-header">
+            <div class="workforce-heading">
+                @if (_companyProfile != null)
+                {
+                    <span class="workforce-company">@_companyProfile.Name</span>
+                }
+                <h1>Company workforce</h1>
+            </div>
+            <div class="workforce-header-actions">
+                @if (_isAdmin)
+                {
+                    <button type="button" class="workforce-button is-quiet" @onclick="() => OpenDrawer(WorkforceDrawerKind.Requests)">
+                        Review requests <span class="workforce-count">@RequestedRows.Count</span>
+                    </button>
+                    <button type="button" class="workforce-button" @onclick="() => OpenInvite(null)">Invite crafter</button>
+                }
+                @if (CanEditRecords)
+                {
+                    <button type="button" class="workforce-button is-primary" @onclick="OpenNewRecord">Add contractor</button>
+                }
+            </div>
+        </header>
 
-                <section class="trade-crafters-panel">
-                    <MudText Typo="Typo.subtitle1">Create Crafter</MudText>
-                    <div class="trade-crafters-create-row">
+        <div class="workforce-toolbar">
+            <input type="search"
+                   class="workforce-search"
+                   aria-label="Search company workforce"
+                   placeholder="Search people, characters, or worlds"
+                   value="@_search"
+                   @oninput="args => _search = args.Value?.ToString() ?? string.Empty" />
+            <div class="workforce-segmented" role="group" aria-label="Relationship filter">
+                @foreach (var filter in Enum.GetValues<CompanyWorkforceFilter>())
+                {
+                    <button type="button"
+                            class="@(_filter == filter ? "is-active" : null)"
+                            aria-pressed="@(_filter == filter ? "true" : "false")"
+                            @onclick="() => _filter = filter">
+                        @filter @_rows.Count(row => row.Matches(filter))
+                    </button>
+                }
+            </div>
+            <span class="workforce-spacer"></span>
+            @if (CanEditRecords)
+            {
+                <button type="button" class="workforce-button is-small is-quiet" @onclick="() => OpenLodestone(null)">Import from Lodestone</button>
+            }
+        </div>
+
+        <div class="workforce-table-wrap">
+            @if (!_hasLoaded)
+            {
+                <MudProgressLinear Indeterminate="true" />
+            }
+            <table class="workforce-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Person</th>
+                        <th scope="col">Relationship</th>
+                        <th scope="col">Company access</th>
+                        <th scope="col">Connected history</th>
+                        <th scope="col">Current work</th>
+                        <th scope="col"><span class="workforce-visually-hidden">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in VisibleRows)
+                    {
+                        <tr @key="row.Key">
+                            <td>
+                                <div class="workforce-person">
+                                    @if (!string.IsNullOrWhiteSpace(row.AvatarUrl))
+                                    {
+                                        <img class="workforce-avatar" src="@row.AvatarUrl" alt="" loading="lazy" />
+                                    }
+                                    else
+                                    {
+                                        <span class="workforce-avatar" aria-hidden="true">@Initial(row.DisplayName)</span>
+                                    }
+                                    <div>
+                                        <strong>@row.DisplayName</strong>
+                                        @if (!string.IsNullOrWhiteSpace(row.Secondary))
+                                        {
+                                            <span>@row.Secondary</span>
+                                        }
+                                    </div>
+                                </div>
+                            </td>
+                            <td><WorkforceRelationshipPill Row="row" /></td>
+                            <td><WorkforceAccessStatus Access="row.Access" /></td>
+                            <td>
+                                @if (FormatHistory(row) is { } history)
+                                {
+                                    <span>@history</span>
+                                }
+                                else
+                                {
+                                    <span class="workforce-muted">No connected history</span>
+                                }
+                            </td>
+                            <td>
+                                @if (row.ActiveOrders.Count == 0)
+                                {
+                                    <span class="workforce-muted">None</span>
+                                }
+                                else
+                                {
+                                    <span>@row.ActiveOrders.Count.ToString("N0") active</span>
+                                }
+                            </td>
+                            <td class="workforce-row-actions">
+                                @RowActions(row)
+                            </td>
+                        </tr>
+                    }
+                    @if (_hasLoaded && VisibleRows.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="6" class="workforce-empty">
+                                @(_rows.Count == 0 ? "No members or contractors yet." : "No one matches this search.")
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="workforce-summary">
+            <span><strong>@_rows.Count(row => row.AccountProfileId.HasValue && row.Access == CompanyWorkforceAccess.Active)</strong> authenticated members</span>
+            <span><strong>@_rows.Count(row => !row.IsMemberSide)</strong> external contractors</span>
+            @if (_isAdmin)
+            {
+                <span><strong>@RequestedRows.Count</strong> pending requests</span>
+            }
+        </div>
+
+        <WorkforceDrawer Open="@(_drawer == WorkforceDrawerKind.Record)"
+                         OnClose="CloseDrawer"
+                         Title="@(_selectedCrafter?.DisplayName ?? "Add contractor")"
+                         Eyebrow="@(_selectedCrafter == null ? "Company workforce" : RecordEyebrow(_selectedCrafter.Id))"
+                         Wide="@(_selectedCrafter != null)">
+            <ChildContent>
+                @if (_selectedCrafter == null)
+                {
+                    <div class="workforce-form-grid">
                         <MudTextField @bind-Value="_newCrafterName"
                                       id="new-crafter-name"
                                       Label="Display name"
@@ -152,86 +192,62 @@
                                             Value="@_newCrafterWorld"
                                             ValueChanged="SetNewCrafterWorld"
                                             Options="GetWorldOptions(_newCrafterDataCenter)" />
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Primary"
-                                   Class="trade-crafters-row-action"
-                                   aria-label="Create crafter"
-                                   OnClick="CreateCrafterAsync">
-                            Create
-                        </MudButton>
                     </div>
-                </section>
-
-                <section class="trade-crafters-panel">
-                    <MudText Typo="Typo.subtitle1">Roster</MudText>
-                    <WebDataTable TItem="TradeCrafterProfile"
-                                  TColumnId="TradeCrafterColumn"
-                                  Items="SortedCrafters"
-                                  Columns="CrafterColumns"
-                                  GetRowKey="GetCrafterKey"
-                                  GetRowClass="GetCrafterRowClass"
-                                  RowClicked="SelectCrafter"
-                                  CssClass="trade-crafters-table">
-                        <EmptyContent>
-                            <span>No crafters on the roster.</span>
-                        </EmptyContent>
-                    </WebDataTable>
-                </section>
-            </section>
-
-            <aside class="trade-crafters-detail">
-                @if (_selectedCrafter == null)
-                {
-                    <section class="trade-crafters-panel">
-                        <MudText Typo="Typo.subtitle1">Crafter Details</MudText>
-                        <MudText Typo="Typo.body2" Color="Color.Secondary">Select a crafter to edit profile details, crafting job levels, and current assignments.</MudText>
-                    </section>
                 }
                 else
                 {
-                    <section class="trade-crafters-panel">
-                        <MudText Typo="Typo.subtitle1">Crafter Details</MudText>
-                        <MudTextField @bind-Value="_detailName"
-                                      id="crafter-detail-name"
-                                      Label="Display name"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense"
-                                      Immediate="true" />
-                        <MudTextField @bind-Value="_detailAlias"
-                                      id="crafter-detail-alias"
-                                      Label="Alias"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" />
-                        <MudTextField @bind-Value="_detailContact"
-                                      id="crafter-detail-contact"
-                                      Label="General contact"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" />
-                        <MudTextField @bind-Value="_detailDiscordHandle"
-                                      id="crafter-detail-discord"
-                                      Label="Discord"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" />
-                        <MudTextField @bind-Value="_detailSocialProfileUrl"
-                                      id="crafter-detail-social-profile"
-                                      Label="Social/profile URL"
-                                      Variant="Variant.Outlined"
-                                      Margin="Margin.Dense" />
-                        <CompactSelectField Id="detail-region"
-                                            Label="Region"
-                                            Value="@_detailRegion"
-                                            ValueChanged="SetDetailRegion"
-                                            Options="RegionOptions" />
-                        <CompactSelectField Id="detail-data-center"
-                                            Label="Data center"
-                                            Value="@_detailDataCenter"
-                                            ValueChanged="SetDetailDataCenter"
-                                            Options="GetDataCenterOptions(_detailRegion)" />
-                        <CompactSelectField Id="detail-world"
-                                            Label="World"
-                                            Value="@_detailWorld"
-                                            ValueChanged="SetDetailWorld"
-                                            Options="GetWorldOptions(_detailDataCenter)" />
+                    <section class="workforce-drawer-section">
+                        <div class="workforce-form-grid">
+                            <MudTextField @bind-Value="_detailName"
+                                          id="crafter-detail-name"
+                                          Label="Display name"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          ReadOnly="@(!CanEditRecords)"
+                                          Immediate="true" />
+                            <MudTextField @bind-Value="_detailAlias"
+                                          id="crafter-detail-alias"
+                                          Label="Alias"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          ReadOnly="@(!CanEditRecords)" />
+                            <MudTextField @bind-Value="_detailContact"
+                                          id="crafter-detail-contact"
+                                          Label="General contact"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          ReadOnly="@(!CanEditRecords)" />
+                            <MudTextField @bind-Value="_detailDiscordHandle"
+                                          id="crafter-detail-discord"
+                                          Label="Discord"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          ReadOnly="@(!CanEditRecords)" />
+                            <MudTextField @bind-Value="_detailSocialProfileUrl"
+                                          id="crafter-detail-social-profile"
+                                          Label="Social/profile URL"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          ReadOnly="@(!CanEditRecords)" />
+                            <CompactSelectField Id="detail-region"
+                                                Label="Region"
+                                                Value="@_detailRegion"
+                                                ValueChanged="SetDetailRegion"
+                                                Disabled="@(!CanEditRecords)"
+                                                Options="RegionOptions" />
+                            <CompactSelectField Id="detail-data-center"
+                                                Label="Data center"
+                                                Value="@_detailDataCenter"
+                                                ValueChanged="SetDetailDataCenter"
+                                                Disabled="@(!CanEditRecords)"
+                                                Options="GetDataCenterOptions(_detailRegion)" />
+                            <CompactSelectField Id="detail-world"
+                                                Label="World"
+                                                Value="@_detailWorld"
+                                                ValueChanged="SetDetailWorld"
+                                                Disabled="@(!CanEditRecords)"
+                                                Options="GetWorldOptions(_detailDataCenter)" />
+                        </div>
                         @if (HasLodestoneFlair(_selectedCrafter))
                         {
                             <div class="trade-crafter-lodestone-flair">
@@ -274,17 +290,19 @@
                                       Label="Payment notes"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
+                                      ReadOnly="@(!CanEditRecords)"
                                       Lines="2" />
                         <MudTextField @bind-Value="_detailOperatorNotes"
                                       id="crafter-detail-operator-notes"
                                       Label="Operator notes"
                                       Variant="Variant.Outlined"
                                       Margin="Margin.Dense"
+                                      ReadOnly="@(!CanEditRecords)"
                                       Lines="2" />
                     </section>
 
-                    <section class="trade-crafters-panel">
-                        <MudText Typo="Typo.subtitle1">Crafting Job Levels</MudText>
+                    <section class="workforce-drawer-section">
+                        <h3>Crafting job levels</h3>
                         <div class="trade-crafter-jobs">
                             @foreach (var job in Enum.GetValues<TradeCraftingJob>())
                             {
@@ -296,51 +314,184 @@
                                                  Min="0"
                                                  Max="100"
                                                  HideSpinButtons="true"
+                                                 ReadOnly="@(!CanEditRecords)"
                                                  Variant="Variant.Outlined"
                                                  Margin="Margin.Dense" />
                             }
                         </div>
-                        <MudButton Variant="Variant.Filled"
-                                   Color="Color.Primary"
-                                   FullWidth="true"
-                                   OnClick="SaveSelectedCrafterAsync"
-                                   Disabled="@string.IsNullOrWhiteSpace(_detailName)">
-                            Save Crafter
-                        </MudButton>
                     </section>
 
-                    <section class="trade-crafters-panel">
-                        <MudText Typo="Typo.subtitle1">Current Assignments</MudText>
-                        @if (GetAssignmentsForSelectedCrafter().Count == 0)
+                    <section class="workforce-drawer-section">
+                        <h3>Current assignments</h3>
+                        <WorkforceOrderList Orders="GetAssignmentsForSelectedCrafter()" OnOpenOrder="OpenOrderAssignment" />
+                    </section>
+                }
+            </ChildContent>
+            <Actions>
+                @if (_selectedCrafter == null)
+                {
+                    <button type="button"
+                            class="workforce-button is-primary"
+                            aria-label="Create crafter"
+                            disabled="@string.IsNullOrWhiteSpace(_newCrafterName)"
+                            @onclick="CreateCrafterAsync">
+                        Create contractor
+                    </button>
+                }
+                else if (CanEditRecords)
+                {
+                    <button type="button" class="workforce-button is-quiet" @onclick="() => OpenLodestone(_selectedCrafter.Id)">Update from Lodestone</button>
+                    <button type="button"
+                            class="workforce-button is-primary"
+                            disabled="@string.IsNullOrWhiteSpace(_detailName)"
+                            @onclick="SaveSelectedCrafterAsync">
+                        Save crafter
+                    </button>
+                }
+            </Actions>
+        </WorkforceDrawer>
+
+        <WorkforceDrawer Open="@(_drawer == WorkforceDrawerKind.Lodestone)"
+                         OnClose="CloseLodestone"
+                         Title="@(_lodestoneTarget == null ? "Import from Lodestone" : $"Update {_lodestoneTarget.DisplayName}")"
+                         Eyebrow="Lodestone"
+                         Wide="true">
+            <div class="trade-crafters-lodestone-search-row">
+                <MudTextField @bind-Value="_lodestoneSearchName"
+                              id="lodestone-character-name"
+                              Label="Character name"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Immediate="true" />
+                <CompactSelectField Id="lodestone-search-scope"
+                                    Label="Search scope"
+                                    Value="@_lodestoneSearchScope.ToString()"
+                                    ValueChanged="SetLodestoneSearchScope"
+                                    Options="LodestoneSearchScopeOptions" />
+                @if (_lodestoneSearchScope == LodestoneSearchScope.SpecificWorld)
+                {
+                    <CompactSelectField @key="_lodestoneSearchScope"
+                                        Id="lodestone-search-world"
+                                        Label="World"
+                                        Value="@_lodestoneSearchWorld"
+                                        ValueChanged="SetLodestoneSearchWorld"
+                                        Options="GetLodestoneSearchWorldOptions()" />
+                }
+                else
+                {
+                    <CompactValueField @key="_lodestoneSearchScope"
+                                       Label="Location"
+                                       Value="@GetLodestoneSearchScopeSummary()" />
+                }
+                <button type="button"
+                        class="workforce-button is-primary"
+                        aria-label="Search Lodestone"
+                        disabled="@(_lodestoneIsBusy || string.IsNullOrWhiteSpace(_lodestoneSearchName) || IsLodestoneSearchLocationMissing())"
+                        @onclick="SearchLodestoneAsync">
+                    Search
+                </button>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_lodestoneError))
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">@_lodestoneError</MudAlert>
+            }
+            @if (_lodestoneCandidates.Count > 0)
+            {
+                <div class="trade-crafters-lodestone-results">
+                    @foreach (var candidate in _lodestoneCandidates)
+                    {
+                        <button type="button"
+                                class="trade-crafters-lodestone-result"
+                                @onclick="@(() => PreviewLodestoneCandidateAsync(candidate))">
+                            <span>@candidate.DisplayName</span>
+                            <small>@FormatLodestoneCandidateLocation(candidate) @candidate.LodestoneCharacterId</small>
+                        </button>
+                    }
+                </div>
+            }
+            @if (_lodestonePreview != null)
+            {
+                <div class="trade-crafters-lodestone-preview">
+                    <div class="trade-crafters-lodestone-preview-heading">
+                        <strong>@_lodestonePreview.DisplayName</strong>
+                        <span>@FormatPreviewLocation(_lodestonePreview)</span>
+                    </div>
+                    <span>@FormatImportedJobSummary(_lodestonePreview)</span>
+                    @if (!string.IsNullOrWhiteSpace(_lodestonePreview.FreeCompanyName))
+                    {
+                        <span>@_lodestonePreview.FreeCompanyName</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(FormatLodestonePreviewIdentity(_lodestonePreview)))
+                    {
+                        <span>@FormatLodestonePreviewIdentity(_lodestonePreview)</span>
+                    }
+                    <div class="trade-crafters-lodestone-actions">
+                        @if (_lodestoneTarget == null)
                         {
-                            <MudText Typo="Typo.body2" Color="Color.Secondary">No active assignments.</MudText>
+                            <button type="button"
+                                    class="workforce-button is-primary"
+                                    disabled="@_lodestoneIsBusy"
+                                    @onclick="CreateCrafterFromLodestoneAsync">
+                                Add as contractor
+                            </button>
                         }
                         else
                         {
-                            <div class="trade-crafter-assignments">
-                                @foreach (var order in GetAssignmentsForSelectedCrafter())
-                                {
-                                    <button type="button"
-                                            class="trade-crafter-assignment-link"
-                                            @onclick="@(() => OpenOrderAssignment(order.Id))">
-                                        <span>@order.Title</span>
-                                        <small>@FormatStatus(order.Status)</small>
-                                    </button>
-                                }
-                            </div>
+                            <button type="button"
+                                    class="workforce-button is-primary"
+                                    disabled="@_lodestoneIsBusy"
+                                    @onclick="UpdateSelectedCrafterFromLodestoneAsync">
+                                Update @_lodestoneTarget.DisplayName
+                            </button>
                         }
-                    </section>
-                }
-            </aside>
-        </div>
+                    </div>
+                </div>
+            }
+        </WorkforceDrawer>
+
+        @if (_isAdmin && _hostedCompanyId != null)
+        {
+            <WorkforceMemberDrawer CompanyId="@_hostedCompanyId"
+                                   ViewerRole="@(_hub?.Standing.Role ?? string.Empty)"
+                                   Row="@(_drawer == WorkforceDrawerKind.Member ? _rows.FirstOrDefault(row => row.Key == _memberRowKey) : null)"
+                                   AvailableRecords="AvailableRecords"
+                                   RecordNames="RecordNames"
+                                   OnClose="CloseDrawer"
+                                   OnChanged="RefreshHostedAsync"
+                                   OnOpenRecord="OpenRecord"
+                                   OnOpenOrder="OpenOrderAssignment" />
+            <WorkforceRequestsDrawer Open="@(_drawer == WorkforceDrawerKind.Requests)"
+                                     CompanyId="@_hostedCompanyId"
+                                     Requests="RequestedRows"
+                                     AvailableRecords="AvailableRecords"
+                                     RecordNames="RecordNames"
+                                     OnClose="CloseDrawer"
+                                     OnChanged="RefreshHostedAsync" />
+            <WorkforceInviteDrawer Open="@(_drawer == WorkforceDrawerKind.Invite)"
+                                   CompanyId="@_hostedCompanyId"
+                                   PreselectedRecordId="_invitePreselect"
+                                   AvailableRecords="AvailableRecords"
+                                   Invitations="@(_hosted?.Invitations ?? [])"
+                                   OnClose="CloseDrawer"
+                                   OnChanged="RefreshHostedAsync" />
+        }
     }
-</MudContainer>
+</div>
 
 @code {
     [SupplyParameterFromQuery(Name = "company")] private string? Company { get; set; }
     private TradeCompanyProfile? _companyProfile;
+    private CompanyHubProjection? _hub;
     private string? _hostedCompanyId;
-    private IReadOnlyList<LegacyCrafterBinding> _crafterBindings = [];
+    private bool _isAdmin;
+    private CompanyWorkforceHostedFacts? _hosted;
+    private IReadOnlyList<CompanyWorkforceRow> _rows = [];
+    private CompanyWorkforceFilter _filter = CompanyWorkforceFilter.Everyone;
+    private string _search = string.Empty;
+    private WorkforceDrawerKind _drawer;
+    private string? _memberRowKey;
+    private Guid? _invitePreselect;
+    private TradeCrafterProfile? _lodestoneTarget;
     private List<TradeCrafterProfile> _crafters = [];
     private List<TradeOrder> _orders = [];
     private TradeCrafterProfile? _selectedCrafter;
@@ -378,51 +529,186 @@
     private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
         TradeRegions.Select(ToOption).ToArray();
 
-    private IReadOnlyList<TradeCrafterProfile> SortedCrafters => _crafters
-        .OrderBy(crafter => crafter.DisplayName, StringComparer.OrdinalIgnoreCase)
+    // Hosted crafter-role members get a read-only view; local-only companies (no hub) and
+    // owners/operators may create, import and edit company crafter records.
+    private bool CanEditRecords => _companyProfile != null && (_hub is not { Kind: "hub" } || _isAdmin);
+
+    private IReadOnlyList<LegacyCrafterBinding> CrafterBindings => _hosted?.Migration?.Bindings ?? [];
+
+    private IReadOnlyList<CompanyWorkforceRow> RequestedRows => _rows
+        .Where(row => row.Relationship == CompanyWorkforceRelationship.Requested && row.Member != null)
         .ToArray();
 
-    private IReadOnlyList<WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>> CrafterColumns => CreateCrafterColumns();
+    private IReadOnlyList<LegacyCrafterCandidate> AvailableRecords => (_hosted?.Migration?.LegacyCrafters ?? [])
+        .Where(candidate => CrafterBindings.All(binding => binding.LegacyCrafterId != candidate.LegacyCrafterId))
+        .OrderBy(candidate => candidate.DisplayName, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
 
-    private IReadOnlyList<WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>> CreateCrafterColumns()
+    private IReadOnlyDictionary<Guid, string> RecordNames
     {
-        return
-        [
-            WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.Name, "Crafter", crafter => crafter.DisplayName, widthPx: 220),
-            WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.World, "World", FormatWorld, widthPx: 180),
-            new WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>
+        get
+        {
+            var names = new Dictionary<Guid, string>();
+            foreach (var candidate in _hosted?.Migration?.LegacyCrafters ?? [])
             {
-                Id = TradeCrafterColumn.Assignments,
-                Header = "Assignments",
-                Size = new WebTableColumnSize(180, 120),
-                CellTemplate = crafter => @<div class="trade-crafter-assignment-cell">
-                    @{
-                        var assignments = GetAssignmentsForCrafter(crafter.Id);
-                    }
-                    @if (assignments.Count == 0)
-                    {
-                        <span class="trade-crafter-assignment-empty">None</span>
-                    }
-                    else
-                    {
-                        var firstOrder = assignments[0];
-                        <button type="button"
-                                class="trade-crafter-assignment-chip"
-                                title="@firstOrder.Title"
-                                @onclick="@(() => OpenOrderAssignment(firstOrder.Id))"
-                                @onclick:stopPropagation="true">
-                            @(assignments.Count == 1 ? firstOrder.Title : $"{assignments.Count:N0} active")
-                        </button>
-                    }
-                </div>
-            },
-            WebTableColumn<TradeCrafterProfile, TradeCrafterColumn>.Text(TradeCrafterColumn.Jobs, "Jobs", FormatJobSummary, widthPx: 120)
-        ];
+                names[candidate.LegacyCrafterId] = candidate.DisplayName;
+            }
+
+            foreach (var crafter in _crafters)
+            {
+                names[crafter.Id] = crafter.DisplayName;
+            }
+
+            return names;
+        }
     }
 
-    private static string GetCrafterKey(TradeCrafterProfile crafter)
+    private IReadOnlyList<CompanyWorkforceRow> VisibleRows => _rows
+        .Where(row => row.Matches(_filter) && MatchesSearch(row))
+        .ToArray();
+
+    private RenderFragment RowActions(CompanyWorkforceRow row) => __builder =>
     {
-        return crafter.Id.ToString("N");
+        if (_isAdmin && row.Relationship == CompanyWorkforceRelationship.Requested)
+        {
+            <button type="button" class="workforce-button is-small is-blue" @onclick="() => OpenDrawer(WorkforceDrawerKind.Requests)">Review</button>
+        }
+        else if (_isAdmin && row.Member != null)
+        {
+            <button type="button" class="workforce-button is-small is-quiet" @onclick="() => OpenMember(row)">Manage</button>
+        }
+        else if (row.RecordIds.Count > 0)
+        {
+            var recordId = row.RecordIds[0];
+            if (_isAdmin && row.Relationship == CompanyWorkforceRelationship.Contractor && AvailableRecords.Any(candidate => candidate.LegacyCrafterId == recordId))
+            {
+                <button type="button" class="workforce-button is-small is-blue" @onclick="() => OpenInvite(recordId)">Invite to join</button>
+            }
+            else if (_isAdmin && row.Invitation != null)
+            {
+                <button type="button" class="workforce-button is-small is-quiet" @onclick="() => OpenInvite(null)">Invitation</button>
+            }
+            <button type="button" class="workforce-button is-small is-quiet" @onclick="() => OpenRecord(recordId)">Open</button>
+        }
+        else if (_isAdmin && row.Invitation != null)
+        {
+            <button type="button" class="workforce-button is-small is-quiet" @onclick="() => OpenInvite(null)">Invitation</button>
+        }
+    };
+
+    private bool MatchesSearch(CompanyWorkforceRow row)
+    {
+        var term = _search.Trim();
+        if (term.Length == 0)
+        {
+            return true;
+        }
+
+        var haystack = new List<string?> { row.DisplayName, row.Secondary };
+        foreach (var recordId in row.RecordIds)
+        {
+            var record = _crafters.FirstOrDefault(crafter => crafter.Id == recordId);
+            haystack.Add(RecordNames.GetValueOrDefault(recordId));
+            haystack.AddRange([record?.Alias, record?.WorldName, record?.DataCenter, record?.LodestoneFreeCompanyName]);
+        }
+
+        return haystack.Any(value => value?.Contains(term, StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    private static string? FormatHistory(CompanyWorkforceRow row)
+    {
+        var parts = new List<string>();
+        if (row.CommissionCount > 0)
+        {
+            parts.Add(row.CommissionCount == 1 ? "1 commission" : $"{row.CommissionCount:N0} commissions");
+        }
+
+        if (row.HasCharacterProfile)
+        {
+            parts.Add(row.RecordIds.Count == 1 ? "character profile" : $"{row.RecordIds.Count:N0} character profiles");
+        }
+
+        if (parts.Count == 0)
+        {
+            return null;
+        }
+
+        var text = string.Join(" · ", parts);
+        return char.ToUpperInvariant(text[0]) + text[1..];
+    }
+
+    private static string Initial(string name) =>
+        string.IsNullOrWhiteSpace(name) ? "?" : name.Trim()[0].ToString().ToUpperInvariant();
+
+    private string RecordEyebrow(Guid recordId)
+    {
+        var row = _rows.FirstOrDefault(candidate => candidate.RecordIds.Contains(recordId));
+        return row?.Member != null ? $"Character profile · {row.DisplayName}" : "Contractor";
+    }
+
+    private void OpenDrawer(WorkforceDrawerKind drawer) => _drawer = drawer;
+
+    private void CloseDrawer()
+    {
+        _drawer = WorkforceDrawerKind.None;
+        _memberRowKey = null;
+    }
+
+    private void OpenMember(CompanyWorkforceRow row)
+    {
+        _memberRowKey = row.Key;
+        _drawer = WorkforceDrawerKind.Member;
+    }
+
+    private void OpenInvite(Guid? recordId)
+    {
+        _invitePreselect = recordId;
+        _drawer = WorkforceDrawerKind.Invite;
+    }
+
+    private void OpenNewRecord()
+    {
+        _selectedCrafter = null;
+        _jobLevels = [];
+        _newCrafterName = string.Empty;
+        EnsureNewCrafterLocationDefaults();
+        _drawer = WorkforceDrawerKind.Record;
+    }
+
+    private void OpenRecord(Guid recordId)
+    {
+        var crafter = _crafters.FirstOrDefault(candidate => candidate.Id == recordId);
+        if (crafter == null)
+        {
+            Snackbar.Add("That crafter record is not available in this workspace yet.", Severity.Warning);
+            return;
+        }
+
+        SelectCrafter(crafter);
+        _drawer = WorkforceDrawerKind.Record;
+    }
+
+    private void OpenLodestone(Guid? targetRecordId)
+    {
+        _lodestoneTarget = targetRecordId is { } id ? _crafters.FirstOrDefault(crafter => crafter.Id == id) : null;
+        _lodestoneError = null;
+        _lodestonePreview = null;
+        _lodestoneCandidates = [];
+        if (_lodestoneTarget != null && string.IsNullOrWhiteSpace(_lodestoneSearchName))
+        {
+            _lodestoneSearchName = _lodestoneTarget.DisplayName;
+        }
+
+        _drawer = WorkforceDrawerKind.Lodestone;
+    }
+
+    private void CloseLodestone()
+    {
+        // Updating an existing record returns to that record; a fresh import returns to the table.
+        _drawer = _lodestoneTarget != null && _selectedCrafter?.Id == _lodestoneTarget.Id
+            ? WorkforceDrawerKind.Record
+            : WorkforceDrawerKind.None;
+        _lodestoneTarget = null;
     }
 
     protected override void OnInitialized()
@@ -470,30 +756,12 @@
                 Company = null;
                 NavigationManager.NavigateTo("trade/crafters", replace: true);
             }
-            var hub = await CompanyHubs.LoadWorkspaceHubAsync(_companyProfile.Id);
-            // Membership administration (requests, invitations, bindings) is Owner/Operator only;
-            // crafter-role members would get 403s from every manager endpoint.
-            _hostedCompanyId = hub is { Kind: "hub", Standing.Role: "owner" or "operator" }
-                ? _companyProfile.Id.ToString("D")
-                : null;
-            _crafterBindings = [];
-            if (_hostedCompanyId != null && hub?.Standing.Role is "owner" or "operator")
-            {
-                try
-                {
-                    _crafterBindings = (await CompanyHubs.LoadLegacyCrafterMigrationAsync(_hostedCompanyId)).Bindings;
-                }
-                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
-                {
-                    Console.Error.WriteLine(
-                        $"[TradeCrafters] Account bindings unavailable for company {_hostedCompanyId}; " +
-                        $"assignment counts use roster ids only. {ex.GetType().Name}: {ex.Message}");
-                }
-            }
+            await LoadHostedFactsAsync();
             var selectedCrafterId = _selectedCrafter?.Id;
             _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
             _selectedCrafter = _crafters.FirstOrDefault(crafter => crafter.Id == selectedCrafterId);
             _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+            RebuildRows();
             EnsureNewCrafterLocationDefaults();
             _hasLoaded = true;
         }
@@ -503,9 +771,84 @@
             _companyProfile = null;
             _crafters = [];
             _orders = [];
+            _rows = [];
             _selectedCrafter = null;
             _loadError = ex.Message;
             Snackbar.Add("Trade operations storage is unavailable.", Severity.Error);
+        }
+    }
+
+    private async Task RefreshHostedAsync()
+    {
+        await LoadHostedFactsAsync();
+        RebuildRows();
+        StateHasChanged();
+    }
+
+    private void RebuildRows() =>
+        _rows = CompanyWorkforceProjection.Build(_crafters, _orders, _hosted);
+
+    private async Task LoadHostedFactsAsync()
+    {
+        if (_companyProfile == null)
+        {
+            return;
+        }
+
+        var companyId = _companyProfile.Id.ToString("D");
+        try
+        {
+            _hub = await CompanyHubs.LoadWorkspaceHubAsync(_companyProfile.Id);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        {
+            Console.Error.WriteLine(
+                $"[TradeCrafters] Company hub unavailable for company {companyId}; " +
+                $"showing crafter records only. {ex.GetType().Name}: {ex.Message}");
+            _hub = null;
+        }
+
+        // Membership administration (requests, invitations, bindings) is Owner/Operator only;
+        // crafter-role members would get 403s from every manager endpoint.
+        _isAdmin = _hub is { Kind: "hub", Standing.Role: "owner" or "operator" };
+        _hostedCompanyId = _isAdmin ? companyId : null;
+        if (_hub is not { Kind: "hub" })
+        {
+            _hosted = null;
+            return;
+        }
+
+        if (!_isAdmin)
+        {
+            _hosted = new CompanyWorkforceHostedFacts(HubRoster: _hub.Roster ?? []);
+            return;
+        }
+
+        var membersTask = TryLoadAsync("members", () => CompanyHubs.LoadCompanyMembersAsync(companyId));
+        var requestsTask = TryLoadAsync("membership requests", () => CompanyHubs.LoadPendingMembershipsAsync(companyId));
+        var invitationsTask = TryLoadAsync("invitations", () => CompanyHubs.LoadMembershipInvitationsAsync(companyId));
+        var migrationTask = TryLoadAsync("account bindings", () => CompanyHubs.LoadLegacyCrafterMigrationAsync(companyId));
+        await Task.WhenAll(membersTask, requestsTask, invitationsTask, migrationTask);
+        _hosted = new CompanyWorkforceHostedFacts(
+            await membersTask,
+            _hub.Roster ?? [],
+            await requestsTask,
+            await invitationsTask,
+            await migrationTask);
+    }
+
+    private async Task<T?> TryLoadAsync<T>(string label, Func<Task<T>> load) where T : class
+    {
+        try
+        {
+            return await load();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.Text.Json.JsonException)
+        {
+            Console.Error.WriteLine(
+                $"[TradeCrafters] Company {label} unavailable for company {_hostedCompanyId}; " +
+                $"workforce rows omit them. {ex.GetType().Name}: {ex.Message}");
+            return null;
         }
     }
 
@@ -650,19 +993,21 @@
             return;
         }
 
+        _lodestoneTarget = null;
+        _drawer = WorkforceDrawerKind.Record;
         Snackbar.Add("Crafter imported from Lodestone", Severity.Success);
     }
 
     private async Task UpdateSelectedCrafterFromLodestoneAsync()
     {
         if (_companyProfile == null ||
-            _selectedCrafter == null ||
+            _lodestoneTarget == null ||
             _lodestonePreview == null)
         {
             return;
         }
 
-        var crafter = LodestoneImportMapper.UpdateProfile(_selectedCrafter, _lodestonePreview);
+        var crafter = LodestoneImportMapper.UpdateProfile(_lodestoneTarget, _lodestonePreview);
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
@@ -677,6 +1022,8 @@
             return;
         }
 
+        _lodestoneTarget = null;
+        _drawer = WorkforceDrawerKind.Record;
         Snackbar.Add("Crafter updated from Lodestone", Severity.Success);
     }
 
@@ -698,11 +1045,6 @@
         _jobLevels = crafter.JobLevels.ToDictionary(level => level.Job, level => level.Level);
     }
 
-    private string GetCrafterRowClass(TradeCrafterProfile crafter)
-    {
-        return _selectedCrafter?.Id == crafter.Id ? "is-selected" : string.Empty;
-    }
-
     private bool SelectCrafterAfterReload(Guid crafterId, string missingMessage)
     {
         var reloadedCrafter = _crafters.FirstOrDefault(crafter => crafter.Id == crafterId);
@@ -710,6 +1052,7 @@
         {
             _selectedCrafter = null;
             _jobLevels = [];
+            _drawer = WorkforceDrawerKind.None;
             Snackbar.Add(missingMessage, Severity.Warning);
             return false;
         }
@@ -865,7 +1208,7 @@
     {
         return _orders
             .Where(order => (order.AssignedCrafterId == crafterId ||
-                            _crafterBindings.Any(binding => binding.LegacyCrafterId == crafterId &&
+                            CrafterBindings.Any(binding => binding.LegacyCrafterId == crafterId &&
                                 binding.AccountProfileId == order.AssignedCrafterId)) &&
                             !TradeOrderStatusWorkflow.IsArchived(order.Status))
             .OrderByDescending(order => order.CommissionedAtUtc)
@@ -1168,12 +1511,14 @@
         };
     }
 
-    private enum TradeCrafterColumn
+    private enum WorkforceDrawerKind
     {
-        Name,
-        World,
-        Assignments,
-        Jobs
+        None,
+        Record,
+        Lodestone,
+        Member,
+        Requests,
+        Invite
     }
 
     private enum LodestoneSearchScope

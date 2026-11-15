@@ -1,0 +1,208 @@
+@inject CompanyHubClient HubClient
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+
+<WorkforceDrawer Open="Open" OnClose="CloseAsync" Title="Invite crafter" Eyebrow="Company access">
+    <ChildContent>
+        <section class="workforce-drawer-section">
+            @if (AvailableRecords.Count > 0)
+            {
+                <CompactSelectField Id="workforce-invite-record"
+                                    Label="Connect crafter record"
+                                    Value="@(_recordId?.ToString("D") ?? string.Empty)"
+                                    ValueChanged="SetRecord"
+                                    Options="AvailableRecordOptions" />
+            }
+            <div class="workforce-field">
+                <label for="workforce-invite-expiry">Expires at end of</label>
+                <input id="workforce-invite-expiry"
+                       type="date"
+                       class="workforce-date-input"
+                       min="@DateTime.Today.ToString("yyyy-MM-dd")"
+                       max="@DateTime.Today.AddDays(365).ToString("yyyy-MM-dd")"
+                       value="@_expiresOn?.ToString("yyyy-MM-dd")"
+                       @onchange="SetExpiry" />
+            </div>
+            @if (_issued != null)
+            {
+                <div class="workforce-receipt" role="status">
+                    <span>
+                        Invitation copied · expires @_issued.ExpiresAtUtc.ToLocalTime().ToString("g")@(_issued.LegacyCrafterName == null ? null : $" · connects {_issued.LegacyCrafterName}")
+                    </span>
+                    <button type="button" class="workforce-button is-small is-quiet" @onclick="CopyIssuedAsync">Copy again</button>
+                </div>
+            }
+        </section>
+
+        @if (ActiveInvitations.Count > 0)
+        {
+            <section class="workforce-drawer-section">
+                <h3>Open invitations</h3>
+                <table class="workforce-subtable">
+                    <thead>
+                        <tr>
+                            <th scope="col">Invitation</th>
+                            <th scope="col">Expires</th>
+                            <th scope="col"><span class="workforce-visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var invitation in ActiveInvitations)
+                        {
+                            <tr @key="invitation.InvitationId">
+                                <td>@(invitation.LegacyCrafterName ?? "New company member")</td>
+                                <td>@invitation.ExpiresAtUtc.ToLocalTime().ToString("g")</td>
+                                <td class="workforce-row-actions">
+                                    <button type="button"
+                                            class="workforce-button is-small is-danger"
+                                            disabled="@_busy"
+                                            @onclick="() => RevokeAsync(invitation.InvitationId)">
+                                        Revoke
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        }
+    </ChildContent>
+    <Actions>
+        <button type="button"
+                class="workforce-button is-primary"
+                disabled="@(_busy || !_expiresOn.HasValue)"
+                @onclick="IssueAsync">
+            Create invitation
+        </button>
+    </Actions>
+</WorkforceDrawer>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter, EditorRequired] public string CompanyId { get; set; } = string.Empty;
+    [Parameter] public Guid? PreselectedRecordId { get; set; }
+    [Parameter] public IReadOnlyList<LegacyCrafterCandidate> AvailableRecords { get; set; } = [];
+    [Parameter] public IReadOnlyList<CompanyMembershipInvitation> Invitations { get; set; } = [];
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private bool _wasOpen;
+    private Guid? _recordId;
+    private DateTime? _expiresOn = DateTime.Today.AddDays(7);
+    private CompanyMembershipInvitation? _issued;
+    private bool _busy;
+
+    private IReadOnlyList<CompanyMembershipInvitation> ActiveInvitations =>
+        Invitations.Where(invitation => invitation.State == "active").ToArray();
+
+    private IReadOnlyList<CompactSelectOption> AvailableRecordOptions =>
+        new[] { new CompactSelectOption(string.Empty, "New company member") }
+            .Concat(AvailableRecords.Select(record => new CompactSelectOption(
+                record.LegacyCrafterId.ToString("D"),
+                string.IsNullOrWhiteSpace(record.WorldName) ? record.DisplayName : $"{record.DisplayName} · {record.WorldName}")))
+            .ToArray();
+
+    protected override void OnParametersSet()
+    {
+        if (Open && !_wasOpen)
+        {
+            _recordId = PreselectedRecordId;
+            _expiresOn = DateTime.Today.AddDays(7);
+            _issued = null;
+        }
+
+        _wasOpen = Open;
+    }
+
+    private void SetRecord(string value) =>
+        _recordId = Guid.TryParse(value, out var id) ? id : null;
+
+    private void SetExpiry(ChangeEventArgs args)
+    {
+        if (DateTime.TryParse(args.Value?.ToString(), out var date) &&
+            date.Date >= DateTime.Today &&
+            date.Date <= DateTime.Today.AddDays(365))
+        {
+            _expiresOn = date.Date;
+        }
+        else
+        {
+            _expiresOn = null;
+        }
+    }
+
+    private DateTimeOffset ExpiresAtUtc()
+    {
+        var endOfLocalDay = DateTime.SpecifyKind(_expiresOn!.Value.Date.AddDays(1).AddTicks(-1), DateTimeKind.Local);
+        return new DateTimeOffset(endOfLocalDay).ToUniversalTime();
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task IssueAsync()
+    {
+        if (!_expiresOn.HasValue)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            _issued = await HubClient.IssueMembershipInvitationAsync(CompanyId, _recordId, ExpiresAtUtc());
+            _recordId = null;
+            await CopyIssuedAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Console.Error.WriteLine($"[Workforce] Invitation issue failed for company {CompanyId}: {ex.GetType().Name}: {ex.Message}");
+            Snackbar.Add(ex is CompanyHubRequestException ? ex.Message : "The company host could not create the invitation.", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CopyIssuedAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_issued?.Token))
+        {
+            return;
+        }
+
+        var url = Navigation.ToAbsoluteUri($"companies/{Uri.EscapeDataString(CompanyId)}?invite={Uri.EscapeDataString(_issued.Token)}").AbsoluteUri;
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", url);
+            Snackbar.Add("Company invitation copied.", Severity.Success);
+        }
+        catch (JSException ex)
+        {
+            Console.Error.WriteLine($"[Workforce] Clipboard write failed: {ex.Message}");
+            Snackbar.Add($"Copy failed. Invitation link: {url}", Severity.Warning);
+        }
+    }
+
+    private async Task RevokeAsync(Guid invitationId)
+    {
+        _busy = true;
+        try
+        {
+            await HubClient.RevokeMembershipInvitationAsync(CompanyId, invitationId);
+            Snackbar.Add("Invitation revoked.", Severity.Success);
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            Console.Error.WriteLine($"[Workforce] Invitation revoke failed for company {CompanyId}: {ex.GetType().Name}: {ex.Message}");
+            Snackbar.Add("The company host could not revoke the invitation.", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
