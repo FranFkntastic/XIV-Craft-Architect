@@ -205,7 +205,7 @@ public static class CommissionBriefEndpoints
                 HttpContext context,
                 string publicId,
                 CommissionBriefOptions options,
-                SqliteCommissionBriefStore store,
+                ProfileHostedTradeCompanyService companies,
                 MembershipAccessResolver accessResolver,
                 SqliteMembershipStore memberships,
                 SqliteDiscordIdentityStore identities,
@@ -223,13 +223,15 @@ public static class CommissionBriefEndpoints
                     return Results.Unauthorized();
                 }
 
-                var brief = await store.LoadAsync(publicId, ct);
-                if (brief?.Ownership == null)
+                // The host's canonical publication record names the owning company,
+                // not the brief-store snapshot taken at publish time.
+                var ownership = await companies.ResolvePublicationOwnershipAsync(publicId, ct);
+                if (ownership == null)
                 {
                     return Results.NotFound();
                 }
 
-                var companyId = brief.Ownership.CompanyId;
+                var companyId = ownership.CompanyId;
                 var access = await accessResolver.ResolveCompanyAccessAsync(account, companyId, ct);
                 var membership = await memberships.LoadForAccountAsync(companyId, account.ProfileId, ct);
                 var hasDiscordIdentity =
