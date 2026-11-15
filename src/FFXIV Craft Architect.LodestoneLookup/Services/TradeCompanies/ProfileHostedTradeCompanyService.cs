@@ -599,7 +599,9 @@ public sealed partial class ProfileHostedTradeCompanyService(
         TradeMaterialPricingPolicy? materialPricingPolicy,
         CancellationToken cancellationToken = default,
         TradeCompanyPricingScope? commissionPricingScope = null,
-        bool updateCommissionPricingScope = false)
+        bool updateCommissionPricingScope = false,
+        IReadOnlyList<TradeMarginItem>? marginItems = null,
+        bool updateMarginItems = false)
     {
         var snapshot = await LoadCompanyProfileSnapshotAsync(access, cancellationToken);
         if (snapshot == null)
@@ -629,6 +631,10 @@ public sealed partial class ProfileHostedTradeCompanyService(
         if (updateCommissionPricingScope)
         {
             updated.CommissionPricingScope = commissionPricingScope;
+        }
+        if (updateMarginItems)
+        {
+            updated.MarginItems = marginItems ?? [];
         }
         updated.UpdatedAtUtc = DateTime.UtcNow;
         updated.SyncState = TradeSyncState.Synced;

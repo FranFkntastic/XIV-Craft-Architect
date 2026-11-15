@@ -1,0 +1,44 @@
+.margins-backdrop { min-height:calc(100dvh - 92px); min-width:0; }
+.margins-backdrop:not(.franthropy-glass-backdrop) { background:#1e1e1e; }
+.trade-margins-page { max-width:1460px; min-width:0; margin:0 auto; padding:18px 24px 26px; color:#e0e0e0; }
+.margins-header { margin-bottom:14px; }
+.margins-header > span { display:block; color:#71a5ec; font-weight:700; }
+.margins-header h1 { margin:0; font-size:22px; font-weight:700; }
+.margins-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:12px; border:1px solid #3b3b3b; border-radius:5px 5px 0 0; background:#242424; }
+.add-item { position:relative; flex:0 1 300px; min-width:0; }
+.add-item input { width:100%; padding:8px 10px; border:1px solid #555; border-radius:4px; background:#1d1d1d; color:white; font:inherit; }
+.add-results { position:absolute; z-index:30; top:calc(100% + 4px); left:0; right:0; padding:4px 0; border:1px solid #48596b; border-radius:4px; background:#2d2d2d; box-shadow:0 10px 28px #0006; }
+.add-results button { display:flex; justify-content:flex-start; width:100%; align-items:center; gap:10px; padding:7px 12px; border:0; background:none; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.add-results button:hover,.add-results button[aria-selected=true] { background:rgba(212,167,58,.12); }
+.toolbar-spacer { flex:1; }
+.margin-button { min-height:30px; padding:5px 10px; border:1px solid #555; border-radius:4px; background:transparent; color:#f3f3f3; font-size:12px; font-weight:700; cursor:pointer; }
+.margins-table-wrap { width:100%; max-width:100%; overflow-x:auto; border:1px solid #3b3b3b; border-top:0; background:#242424; }
+.margins-table-wrap ::deep .web-data-table { width:100%; min-width:1178px; table-layout:fixed; border-collapse:collapse; }
+.margins-table-wrap ::deep th,.margins-table-wrap ::deep td { padding:7px 10px; vertical-align:middle; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
+.margins-table-wrap ::deep th { color:#bdbdbd; font-size:12px; }
+.margins-table-wrap ::deep td { border-top:1px solid #343434; font-variant-numeric:tabular-nums; }
+.margins-table-wrap ::deep th:first-child,.margins-table-wrap ::deep td:first-child { position:sticky; left:0; z-index:1; background:#242424; }
+.margins-table-wrap ::deep tr:hover td { background:rgba(212,167,58,.08); }
+.margins-table-wrap ::deep tr:hover td:first-child { background:#2c2a23; }
+.margins-table-wrap ::deep .is-align-end { text-align:right; }
+.margins-table-wrap ::deep .is-align-end .web-table-sort-button { justify-content:flex-end; }
+.margins-table-wrap ::deep .item-cell { display:flex; gap:10px; align-items:center; min-width:0; }
+.margins-table-wrap ::deep .item-cell > span:last-child { overflow:hidden; text-overflow:ellipsis; font-weight:500; color:#f1f1f1; }
+.margins-table-wrap ::deep .sale-input { width:100%; max-width:116px; padding:5px 8px; border:1px solid #555; border-radius:4px; background:#1d1d1d; color:white; text-align:right; font:inherit; }
+.margins-table-wrap ::deep .sub { display:block; color:#9aa1a9; font-size:11px; line-height:1.3; }
+.margins-table-wrap ::deep .is-gain { color:#aee4bb; }
+.margins-table-wrap ::deep .is-loss { color:#f0a3a3; }
+.margins-table-wrap ::deep .missing { display:block; color:#d4a746; font-size:12px; white-space:normal; overflow-wrap:anywhere; }
+.margins-table-wrap ::deep .age { color:#9aa1a9; }
+.margins-table-wrap ::deep .is-stale { color:#d4a746; }
+.margins-table-wrap ::deep .remove-btn { width:26px; height:26px; border:1px solid transparent; border-radius:4px; background:transparent; color:#8a8a8a; font-size:20px; cursor:pointer; }
+.margins-table-wrap ::deep .remove-btn:hover { border-color:#8d4646; color:#f0a3a3; }
+.margins-summary { display:flex; flex-wrap:wrap; gap:22px; padding:12px 14px; border:1px solid #3b3b3b; border-top:0; border-radius:0 0 5px 5px; background:#202020; color:#bbb; }
+.margins-summary strong { color:white; font-weight:700; }
+input:focus-visible,button:focus-visible { outline:1px solid #91baf4; outline-offset:1px; }
+@media (max-width:720px) {
+    .trade-margins-page { padding:14px 16px 22px; }
+    .add-item { flex-basis:100%; }
+    .toolbar-spacer { display:none; }
+    .margins-summary { gap:12px; }
+}

@@ -36,6 +36,7 @@ public sealed class ProfileSyncLocalStateService
             "procurement.world_exclusion_duration_minutes",
             "procurement.start_from_home_data_center",
             "procurement.travel_priority",
+            "ui.glass_surfaces",
             "ui.accent_color",
             "ui.use_split_pane_market_view",
             "ui.trade_orders_ops_pane_width",

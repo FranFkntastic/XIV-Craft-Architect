@@ -313,6 +313,14 @@
       "franthropy.filtering": {
         "type": "Project"
       },
+      "franthropy.web": {
+        "type": "Project",
+        "dependencies": {
+          "Franthropy.FFXIV": "[0.1.0, )",
+          "Franthropy.Filtering": "[0.1.0, )",
+          "Microsoft.AspNetCore.Components.Web": "[8.0.28, )"
+        }
+      },
       "Gooseworks.FFXIVCraftArchitect.Core": {
         "type": "Project",
         "dependencies": {

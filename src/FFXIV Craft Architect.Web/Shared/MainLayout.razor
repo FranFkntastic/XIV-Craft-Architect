@@ -64,7 +64,7 @@
 <MudSnackbarProvider MaxDisplayedSnackbars="3" 
                      SnackbarDefaults="new SnackbarOptions { ShowCloseIcon = false, HideIcon = true }" />
 
-<MudLayout Style="height: 100vh; display: flex; flex-direction: column;">
+<MudLayout Class="@(_activeTab == "margins" ? "margins-workspace" : null)" Style="height: 100vh; display: flex; flex-direction: column;">
     <!-- Title Bar with Menu - Fixed at top -->
     <MudAppBar Elevation="0" Style="@GetAppBarStyle()">
         <MudMenu Dense="true"
@@ -103,6 +103,12 @@
                            Variant="@GetTabVariant("crafters")"
                            Style="@GetTabStyle("crafters")">
                     Crafters
+                </MudButton>
+                <MudButton OnClick="@(() => NavigateTo("trade/margins"))"
+                           Color="@GetTabColor("margins")"
+                           Variant="@GetTabVariant("margins")"
+                           Style="@GetTabStyle("margins")">
+                    Margins
                 </MudButton>
             }
             else
@@ -456,6 +462,8 @@
         var uriLower = uri.ToLowerInvariant();
         if (IsTradeRoute(uri) && uriLower.Contains("/trade/orders"))
             _activeTab = "orders";
+        else if (IsTradeRoute(uri) && uriLower.Contains("/trade/margins"))
+            _activeTab = "margins";
         else if (IsTradeRoute(uri) && uriLower.Contains("/trade/crafters"))
             _activeTab = "crafters";
         else if (IsTradeRoute(uri))

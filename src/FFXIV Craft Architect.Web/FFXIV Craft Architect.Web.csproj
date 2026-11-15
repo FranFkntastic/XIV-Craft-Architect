@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj" />
+    <ProjectReference Include="$(FranthropyWebProject)" />
   </ItemGroup>
 
   <PropertyGroup>

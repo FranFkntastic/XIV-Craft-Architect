@@ -71,6 +71,10 @@
                                         OpenProfile="@(() => SelectTab(SettingsSection.Profile))"
                                         CompanyChanged="OnWorkspaceCompanyChangedAsync" />
             }
+            else if (_activePanel == SettingsSection.Appearance)
+            {
+                <MudSwitch T="bool" Value="@(Settings.Get<bool>("ui.glass_surfaces", true))" ValueChanged="SetGlassAsync" Label="Glass surfaces" />
+            }
             else if (_activePanel == SettingsSection.MarketAndRoutes)
             {
                 <MudText Typo="Typo.body2" Class="mb-4" Color="Color.Secondary">
@@ -897,6 +901,7 @@
         new(SettingsSection.MarketAndRoutes, "Market & routes", Icons.Material.Filled.Public, GroupBreak: true),
         new(SettingsSection.Integrations, "Integrations", Icons.Material.Filled.Hub),
         new(SettingsSection.CompanyAdministration, "Company administration", Icons.Material.Filled.AdminPanelSettings),
+        new(SettingsSection.Appearance, "Appearance", Icons.Material.Filled.Palette),
         new(SettingsSection.Storage, "Storage", Icons.Material.Filled.Storage),
         new(SettingsSection.Diagnostics, "Diagnostics", Icons.Material.Filled.Troubleshoot),
         new(SettingsSection.About, "About", Icons.Material.Filled.Info)
@@ -962,6 +967,12 @@
 
     private static string GetTabId(SettingsSection panel) => $"settings-nav-{panel.ToString().ToLowerInvariant()}";
     private static string GetPanelId(SettingsSection panel) => $"settings-section-{panel.ToString().ToLowerInvariant()}";
+
+    private async Task SetGlassAsync(bool value)
+    {
+        await Settings.SetAsync("ui.glass_surfaces", value);
+        AppState.NotifySettingsChanged();
+    }
 
     private async Task SelectTab(SettingsSection panel)
     {
@@ -2027,6 +2038,7 @@
                     return;
                 }
                 _persistedCompanyFingerprint = BuildCompanyFingerprint();
+                AppState.NotifyTradeOperationsDataChanged();
             }
 
             Snackbar.Add("Company changes saved", Severity.Success);

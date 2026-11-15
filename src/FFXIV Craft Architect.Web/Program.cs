@@ -30,6 +30,7 @@ builder.Services.AddScoped<IGarlandService>(sp => sp.GetRequiredService<GarlandS
 builder.Services.AddScoped<UniversalisService>();
 builder.Services.AddScoped<IUniversalisService>(sp => sp.GetRequiredService<UniversalisService>());
 builder.Services.AddScoped<RecipeCalculationService>();
+builder.Services.AddScoped<TradeMarginCalculator>();
 builder.Services.AddScoped<IRecipePlanBuilder, RecipeCalculationPlanBuilder>();
 builder.Services.AddScoped<IVendorCacheService, VendorCacheService>();
 builder.Services.AddScoped<ITeamcraftRecipeService, TeamcraftRecipeService>();
