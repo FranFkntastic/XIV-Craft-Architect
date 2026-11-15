@@ -1536,10 +1536,28 @@ async function refreshMembershipStanding() {
 async function completeClaimFollowUp() {
     state.claimReceipt = { claimed: true, membership: null };
     const intent = state.membershipStore.load();
-    if (intent) {
-        await sendMembershipRequest(intent);
-    } else {
+    if (!intent) {
         renderClaimReceipt();
+    } else if (state.projection?.kind !== "participant") {
+        // The claim committed but the brief did not refresh; the next load
+        // validates the saved request against the claim before sending it.
+        renderClaimReceipt();
+    } else {
+        // Same binding rules as the reload and retry paths: only the account that
+        // chose the option, for this claim, while it is held.
+        const binding = await checkMembershipIntentBinding(intent);
+        if (binding.discard) {
+            console.warn(
+                "[Commission] Discarded saved membership request without sending:",
+                binding.check);
+            state.membershipStore.discard();
+            renderClaimReceipt();
+        } else if (!binding.ok) {
+            state.claimReceipt.membership = { state: "failed", error: binding.error, intent };
+            renderClaimReceipt();
+        } else {
+            await sendMembershipRequest(intent);
+        }
     }
     focusClaimReceipt();
 }
