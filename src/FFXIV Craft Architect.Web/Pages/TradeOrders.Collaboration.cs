@@ -362,6 +362,10 @@ public partial class TradeOrders
                 link.Url,
                 "Commission published and link copied");
         }
+        catch (TradeCompanyPublicationRefusedException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Error);
+        }
         catch (Exception exception)
         {
             if (localLink != null && !localOrderAttached)

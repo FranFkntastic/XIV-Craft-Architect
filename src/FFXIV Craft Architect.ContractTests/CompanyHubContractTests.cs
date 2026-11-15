@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -14,6 +15,54 @@ namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class CompanyHubContractTests
 {
+    [Fact]
+    public async Task PublicationBindingRefusalIsStructuredAndLeavesNoPublicBrief()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var company = CreateCompany();
+        using var client = fixture.CreateClient(owner.Key);
+        await PutCompanyAsync(client, company);
+        // The canonical terms match, but the commission is already published under another identity.
+        var order = CreateOrder(company.Id);
+        await PutOrderAsync(client, order);
+        var stored = await fixture.Profiles.LoadObjectAsync(
+            owner.ProfileId.ToString("D"), ProfileSyncCollections.TradeOrders,
+            order.Id.ToString("D"), CancellationToken.None);
+        var revision = new CompanyRecordRevision(stored!.Revision);
+        var ownership = new TradeCompanyPublicationOwnership(new CompanyId(company.Id), order.Id, revision);
+        var terms = order.CompanyCommission!.CurrentTerms;
+        var request = new CompanyCommissionBriefCreateRequest
+        {
+            OrderId = order.Id,
+            OrderRevision = revision,
+            IdempotencyKey = "refused-publication",
+            Brief = new CommissionBriefDocument
+            {
+                CompanyName = company.Name,
+                Title = order.Title,
+                Reference = order.CompanyCommission.Reference,
+                Outputs = [new(100, "Rarefied Sykon Bavarois", 120, false)],
+                Payment = new("Delivery", 0, 0, 180000, 180000,
+                    Schedule: CompanyCommissionPaymentSchedule.OnDelivery),
+                DeliveryInstructions = terms.DeliveryInstructions,
+                Contact = terms.ContactInstructions,
+                Evidence = new("test", "test", "test", terms.PricingEvidence.CapturedAtUtc)
+            }
+        };
+
+        using var refused = await client.PostAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/commission-briefs", request);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var problem = await refused.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("commission_terms_invalid", problem.GetProperty("error").GetString());
+        Assert.Equal("A claimed or differently published commission cannot be rebound.",
+            problem.GetProperty("message").GetString());
+        var publicId = SqliteCommissionBriefStore.CreateCompanyPublicId(ownership, request.IdempotencyKey);
+        var briefs = fixture.Application.Services.GetRequiredService<SqliteCommissionBriefStore>();
+        Assert.Null(await briefs.LoadIncludingRevokedAsync(publicId, CancellationToken.None));
+    }
+
     [Fact]
     public async Task CommissionPricingScopeIsCompanyOwnedAcrossOperatorsAndRejectsStaleWrites()
     {

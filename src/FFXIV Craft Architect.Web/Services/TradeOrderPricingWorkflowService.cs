@@ -192,6 +192,7 @@ public sealed class TradeOrderPricingWorkflowService
         }
         finally
         {
+            operation.Complete("Ready");
             if (workerOperation is not null)
             {
                 await workerOperation.DisposeAsync();
@@ -296,6 +297,7 @@ public sealed class TradeOrderPricingWorkflowService
         }
         finally
         {
+            operation.Complete("Ready");
             if (workerOperation is not null)
             {
                 await workerOperation.DisposeAsync();
@@ -386,6 +388,7 @@ public sealed class TradeOrderPricingWorkflowService
         }
         finally
         {
+            operation.Complete("Ready");
             if (workerOperation is not null)
             {
                 await workerOperation.DisposeAsync();
