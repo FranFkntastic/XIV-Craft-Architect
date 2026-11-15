@@ -152,12 +152,8 @@ public static class CompanyWorkforceProjection
             candidatesById.TryGetValue(recordId, out var candidate);
             var invitation = activeInvitations.FirstOrDefault(item => item.LegacyCrafterId == recordId);
             // Orders assigned to an account bound to this record (e.g. a former member) remain
-            // this record's history, mirroring the roster assignment rule.
-            var assignmentIds = bindings
-                .Where(binding => binding.LegacyCrafterId == recordId)
-                .Select(binding => binding.AccountProfileId)
-                .Append(recordId)
-                .ToHashSet();
+            // record history, but each account counts on exactly one record.
+            var assignmentIds = AssignmentIdsForRecord(recordId, bindings);
             rows.Add(new CompanyWorkforceRow(
                 $"record:{recordId:N}",
                 record?.DisplayName ?? candidate?.DisplayName ?? "Unnamed contractor",
@@ -181,6 +177,25 @@ public static class CompanyWorkforceProjection
             .ToArray();
     }
 
+    /// <summary>
+    /// Assignee ids whose orders belong to a contractor record: the record itself plus each
+    /// bound account whose canonical record (lowest record id among its bindings) it is, so an
+    /// account bound to several records never has its orders counted more than once.
+    /// </summary>
+    public static IReadOnlySet<Guid> AssignmentIdsForRecord(Guid recordId, IReadOnlyList<CompanyCrafterBinding> bindings)
+    {
+        var ids = new HashSet<Guid> { recordId };
+        foreach (var account in bindings.GroupBy(binding => binding.AccountProfileId))
+        {
+            if (account.Min(binding => binding.LegacyCrafterId) == recordId)
+            {
+                ids.Add(account.Key);
+            }
+        }
+
+        return ids;
+    }
+
     public static string FormatLocation(string? world, string? dataCenter)
     {
         if (string.IsNullOrWhiteSpace(world) && string.IsNullOrWhiteSpace(dataCenter))
@@ -196,7 +211,7 @@ public static class CompanyWorkforceProjection
         return string.IsNullOrWhiteSpace(dataCenter) ? world : $"{world} · {dataCenter}";
     }
 
-    private static IReadOnlyList<TradeOrder> ActiveOrdersFor(IReadOnlyList<TradeOrder> orders, HashSet<Guid> assignmentIds) => orders
+    public static IReadOnlyList<TradeOrder> ActiveOrdersFor(IReadOnlyList<TradeOrder> orders, IReadOnlySet<Guid> assignmentIds) => orders
         .Where(order => order.AssignedCrafterId is { } id &&
                         assignmentIds.Contains(id) &&
                         !TradeOrderStatusWorkflow.IsArchived(order.Status))

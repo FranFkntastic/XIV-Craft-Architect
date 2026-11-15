@@ -88,6 +88,7 @@
     [Parameter] public EventCallback OnChanged { get; set; }
 
     private bool _wasOpen;
+    private string? _companyId;
     private Guid? _recordId;
     private DateTime? _expiresOn = DateTime.Today.AddDays(7);
     private CompanyMembershipInvitation? _issued;
@@ -105,13 +106,17 @@
 
     protected override void OnParametersSet()
     {
-        if (Open && !_wasOpen)
+        // A different company must never inherit the previous company's preselected record
+        // or issued link, even if the drawer stays mounted across the switch.
+        var companyChanged = !string.Equals(_companyId, CompanyId, StringComparison.Ordinal);
+        if ((Open && !_wasOpen) || companyChanged)
         {
-            _recordId = PreselectedRecordId;
+            _recordId = Open ? PreselectedRecordId : null;
             _expiresOn = DateTime.Today.AddDays(7);
             _issued = null;
         }
 
+        _companyId = CompanyId;
         _wasOpen = Open;
     }
 
@@ -155,7 +160,7 @@
             await CopyIssuedAsync();
             await OnChanged.InvokeAsync();
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
             Console.Error.WriteLine($"[Workforce] Invitation issue failed for company {CompanyId}: {ex.GetType().Name}: {ex.Message}");
             Snackbar.Add(ex is CompanyHubRequestException ? ex.Message : "The company host could not create the invitation.", Severity.Error);
@@ -195,7 +200,7 @@
             Snackbar.Add("Invitation revoked.", Severity.Success);
             await OnChanged.InvokeAsync();
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
             Console.Error.WriteLine($"[Workforce] Invitation revoke failed for company {CompanyId}: {ex.GetType().Name}: {ex.Message}");
             Snackbar.Add("The company host could not revoke the invitation.", Severity.Error);

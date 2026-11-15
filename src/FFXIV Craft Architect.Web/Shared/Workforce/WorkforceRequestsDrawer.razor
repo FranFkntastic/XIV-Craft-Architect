@@ -129,7 +129,7 @@
             await action();
             return true;
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
             Console.Error.WriteLine($"[Workforce] Membership request action failed for company {CompanyId}: {ex.GetType().Name}: {ex.Message}");
             Snackbar.Add(ex is CompanyHubRequestException ? ex.Message : "The company host could not complete that change.", Severity.Error);

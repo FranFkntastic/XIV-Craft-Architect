@@ -1220,30 +1220,41 @@ public static class MembershipEndpoints
     {
         if (!options.Enabled)
         {
-            return new(default, null, null, Results.NotFound());
+            return new(default, null, null, Results.NotFound(), CompanyAuthorizationRefusal.Disabled);
         }
         var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
         if (account == null)
         {
-            return new(default, null, null, Results.Unauthorized());
+            return new(default, null, null, Results.Unauthorized(), CompanyAuthorizationRefusal.Unauthenticated);
         }
         if (!CompanyId.TryParse(rawCompanyId, out var companyId) ||
             await companyService.LoadPublicCompanyProfileAsync(companyId, cancellationToken) == null)
         {
-            return new(default, account, null, Results.NotFound());
+            return new(default, account, null, Results.NotFound(), CompanyAuthorizationRefusal.UnknownCompany);
         }
 
-        var access = await accessResolver.ResolveCompanyAccessAsync(
+        var outcome = await accessResolver.ResolveCompanyAccessOutcomeAsync(
             account,
             companyId,
             cancellationToken);
-        return access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator }
-            ? new CompanyAuthorizationResult(companyId, account, access.Role, null)
-            : new CompanyAuthorizationResult(
+        if (outcome.Access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator } access)
+        {
+            return new CompanyAuthorizationResult(
                 companyId,
                 account,
+                access.Role,
                 null,
-                Results.StatusCode(StatusCodes.Status403Forbidden));
+                CompanyAuthorizationRefusal.None);
+        }
+
+        return new CompanyAuthorizationResult(
+            companyId,
+            account,
+            null,
+            Results.StatusCode(StatusCodes.Status403Forbidden),
+            outcome.AmbiguousCompany
+                ? CompanyAuthorizationRefusal.AmbiguousCompany
+                : CompanyAuthorizationRefusal.NotAdministrator);
     }
 
     private static async Task<CompanyAuthorizationResult> AuthorizeActiveCompanyMemberAsync(
@@ -1262,7 +1273,9 @@ public static class MembershipEndpoints
             accessResolver,
             companyService,
             cancellationToken);
-        if (administrator.Error is not IStatusCodeHttpResult { StatusCode: StatusCodes.Status403Forbidden } ||
+        // Only an authenticated caller on an unambiguously resolved company who is merely not an
+        // administrator may fall through to the membership check; every other refusal stands.
+        if (administrator.Refusal != CompanyAuthorizationRefusal.NotAdministrator ||
             administrator.Account == null)
         {
             return administrator;
@@ -1273,7 +1286,7 @@ public static class MembershipEndpoints
             administrator.Account.ProfileId,
             cancellationToken);
         return membership?.State == MembershipState.Active
-            ? administrator with { Error = null }
+            ? administrator with { Error = null, Refusal = CompanyAuthorizationRefusal.None }
             : administrator;
     }
 
@@ -1325,5 +1338,16 @@ public static class MembershipEndpoints
         CompanyId CompanyId,
         MembershipAccount? Account,
         TradeCompanyRole? Role,
-        IResult? Error);
+        IResult? Error,
+        CompanyAuthorizationRefusal Refusal);
+
+    private enum CompanyAuthorizationRefusal
+    {
+        None,
+        Disabled,
+        Unauthenticated,
+        UnknownCompany,
+        AmbiguousCompany,
+        NotAdministrator
+    }
 }

@@ -4,6 +4,7 @@
 @inject AppState AppState
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncService ProfileSync
+@inject FFXIV_Craft_Architect.Web.Services.ProfileHosting.ProfileSyncLocalStateService ProfileSyncLocalState
 @inject ILodestoneCrafterLookupService LodestoneCrafterLookup
 @inject TradeCrafterProfileImportMapper LodestoneImportMapper
 @inject NavigationManager NavigationManager
@@ -168,7 +169,7 @@
             }
         </div>
 
-        <WorkforceDrawer Open="@(_drawer == WorkforceDrawerKind.Record)"
+        <WorkforceDrawer Open="@(_drawer == WorkforceDrawerKind.Record && (_selectedCrafter != null || CanEditRecords))"
                          OnClose="CloseDrawer"
                          Title="@(_selectedCrafter?.DisplayName ?? "Add contractor")"
                          Eyebrow="@(_selectedCrafter == null ? "Company workforce" : RecordEyebrow(_selectedCrafter.Id))"
@@ -334,7 +335,7 @@
                 }
             </ChildContent>
             <Actions>
-                @if (_selectedCrafter == null)
+                @if (_selectedCrafter == null && CanEditRecords)
                 {
                     <button type="button"
                             class="workforce-button is-primary"
@@ -344,7 +345,7 @@
                         Create contractor
                     </button>
                 }
-                else if (CanEditRecords)
+                else if (_selectedCrafter != null && CanEditRecords)
                 {
                     <button type="button" class="workforce-button is-quiet" @onclick="() => OpenLodestone(_selectedCrafter.Id)">Update from Lodestone</button>
                     <button type="button"
@@ -357,7 +358,7 @@
             </Actions>
         </WorkforceDrawer>
 
-        <WorkforceDrawer Open="@(_drawer == WorkforceDrawerKind.Lodestone)"
+        <WorkforceDrawer Open="@(_drawer == WorkforceDrawerKind.Lodestone && CanEditRecords)"
                          OnClose="CloseLodestone"
                          Title="@(_lodestoneTarget == null ? "Import from Lodestone" : $"Update {_lodestoneTarget.DisplayName}")"
                          Eyebrow="Lodestone"
@@ -535,9 +536,10 @@
     private static readonly IReadOnlyList<CompactSelectOption> RegionOptions =
         TradeRegions.Select(ToOption).ToArray();
 
-    // Hosted crafter-role members get a read-only view; local-only companies (no hub) and
-    // owners/operators may create, import and edit company crafter records.
-    private bool CanEditRecords => _companyProfile != null && (_hub is not { Kind: "hub" } || _isAdmin);
+    // Local-only companies stay fully editable. Hosted companies are editable only for an
+    // active owner/operator; crafter-role, pending/revoked viewers and a hosted company whose
+    // hub did not load get a read-only view.
+    private bool CanEditRecords => _companyProfile != null && (!_isHostedCompany || _isAdmin);
 
     private IReadOnlyList<CompanyCrafterBinding> CrafterBindings =>
         _hosted?.Migration?.Bindings.Select(binding => new CompanyCrafterBinding(binding.LegacyCrafterId, binding.AccountProfileId)).ToArray()
@@ -676,6 +678,11 @@
 
     private void OpenNewRecord()
     {
+        if (!CanEditRecords)
+        {
+            return;
+        }
+
         _selectedCrafter = null;
         _jobLevels = [];
         _newCrafterName = string.Empty;
@@ -698,6 +705,11 @@
 
     private void OpenLodestone(Guid? targetRecordId)
     {
+        if (!CanEditRecords)
+        {
+            return;
+        }
+
         _lodestoneTarget = targetRecordId is { } id ? _crafters.FirstOrDefault(crafter => crafter.Id == id) : null;
         _lodestoneError = null;
         _lodestonePreview = null;
@@ -745,18 +757,46 @@
             return;
         }
 
-        await LoadAsync();
+        await ReloadAsync();
         _hasLoaded = string.IsNullOrWhiteSpace(_loadError);
         await InvokeAsync(StateHasChanged);
     }
 
+    // Loads can overlap (parameter set, settings change, the ?company= replace navigation).
+    // Each load captures its company and generation and only the newest one applies.
+    private int _loadGeneration;
+    private Task? _activeLoad;
+    private Guid? _loadedCompanyId;
+    private bool _isHostedCompany;
+
     private async Task LoadAsync()
+    {
+        var load = LoadCoreAsync(++_loadGeneration);
+        _activeLoad = load;
+        await load;
+    }
+
+    // Reload after a mutation and wait for whichever load ends up current.
+    private async Task ReloadAsync()
+    {
+        await LoadAsync();
+        while (_activeLoad is { IsCompleted: false } pending)
+        {
+            await pending;
+        }
+    }
+
+    private async Task LoadCoreAsync(int generation)
     {
         try
         {
-            _loadError = null;
             await ProfileSync.SyncNowAsync();
-            _companyProfile = await TradeCompanyContext.ResolveAsync(TradeOperationsPersistence, CompanyHubs, Company);
+            var profile = await TradeCompanyContext.ResolveAsync(TradeOperationsPersistence, CompanyHubs, Company);
+            if (generation != _loadGeneration)
+            {
+                return;
+            }
+
             if (!string.IsNullOrWhiteSpace(Company))
             {
                 // The query has been applied to the workspace selector; drop it so a later
@@ -764,31 +804,84 @@
                 Company = null;
                 NavigationManager.NavigateTo("trade/crafters", replace: true);
             }
-            await LoadHostedFactsAsync();
+
+            var hosted = await LoadHostedFactsAsync(profile);
+            var crafters = (await TradeOperationsPersistence.LoadCraftersAsync(profile.Id)).ToList();
+            var orders = (await TradeOperationsPersistence.LoadOrdersAsync(profile.Id)).ToList();
+            if (generation != _loadGeneration)
+            {
+                return;
+            }
+
+            if (_loadedCompanyId != profile.Id)
+            {
+                ResetDrawerState();
+            }
+
+            _loadError = null;
+            _loadedCompanyId = profile.Id;
+            _companyProfile = profile;
+            ApplyHostedLoad(hosted);
             var selectedCrafterId = _selectedCrafter?.Id;
-            _crafters = (await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id)).ToList();
+            _crafters = crafters;
             _selectedCrafter = _crafters.FirstOrDefault(crafter => crafter.Id == selectedCrafterId);
-            _orders = (await TradeOperationsPersistence.LoadOrdersAsync(_companyProfile.Id)).ToList();
+            _orders = orders;
             RebuildRows();
             EnsureNewCrafterLocationDefaults();
             _hasLoaded = true;
         }
         catch (Exception ex)
         {
+            if (generation != _loadGeneration)
+            {
+                return;
+            }
+
             _hasLoaded = false;
             _companyProfile = null;
+            _loadedCompanyId = null;
+            ApplyHostedLoad(HostedLoad.None);
             _crafters = [];
             _orders = [];
             _rows = [];
-            _selectedCrafter = null;
+            ResetDrawerState();
             _loadError = ex.Message;
             Snackbar.Add("Trade operations storage is unavailable.", Severity.Error);
         }
     }
 
+    // Closes every drawer and forgets everything a drawer could act on, so nothing opened for
+    // one company can create, invite or edit in another.
+    private void ResetDrawerState()
+    {
+        _drawer = WorkforceDrawerKind.None;
+        _memberRowKey = null;
+        _invitePreselect = null;
+        _lodestoneTarget = null;
+        _lodestonePreview = null;
+        _lodestoneCandidates = [];
+        _lodestoneError = null;
+        _selectedCrafter = null;
+        _jobLevels = [];
+        _newCrafterName = string.Empty;
+    }
+
     private async Task RefreshHostedAsync()
     {
-        await LoadHostedFactsAsync();
+        var generation = _loadGeneration;
+        var profile = _companyProfile;
+        if (profile == null)
+        {
+            return;
+        }
+
+        var hosted = await LoadHostedFactsAsync(profile);
+        if (generation != _loadGeneration || _companyProfile?.Id != profile.Id)
+        {
+            return;
+        }
+
+        ApplyHostedLoad(hosted);
         RebuildRows();
         StateHasChanged();
     }
@@ -796,62 +889,122 @@
     private void RebuildRows() =>
         _rows = CompanyWorkforceProjection.Build(_crafters, _orders, _hosted);
 
-    private async Task LoadHostedFactsAsync()
+    private void ApplyHostedLoad(HostedLoad load)
     {
-        if (_companyProfile == null)
-        {
-            return;
-        }
+        _hub = load.Hub;
+        _isHostedCompany = load.IsHostedCompany;
+        _isAdmin = load.IsAdmin;
+        _hostedCompanyId = load.IsAdmin ? load.CompanyId : null;
+        _hosted = load.Facts;
+    }
 
-        var companyId = _companyProfile.Id.ToString("D");
+    private sealed record HostedLoad(
+        string? CompanyId,
+        CompanyHubProjection? Hub,
+        bool IsHostedCompany,
+        bool IsAdmin,
+        CompanyWorkforceHostedFacts? Facts)
+    {
+        public static HostedLoad None { get; } = new(null, null, false, false, null);
+    }
+
+    private async Task<HostedLoad> LoadHostedFactsAsync(TradeCompanyProfile profile)
+    {
+        var companyId = profile.Id.ToString("D");
+        CompanyHubProjection? hub;
         try
         {
-            _hub = await CompanyHubs.LoadWorkspaceHubAsync(_companyProfile.Id);
+            hub = await CompanyHubs.LoadWorkspaceHubAsync(profile.Id);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.Text.Json.JsonException)
         {
             Console.Error.WriteLine(
                 $"[TradeCrafters] Company hub unavailable for company {companyId}; " +
                 $"showing contractor records only. {ex.GetType().Name}: {ex.Message}");
-            _hub = null;
+            hub = null;
+        }
+
+        var isHosted = await IsHostedCompanyAsync(profile, hub);
+        if (isHosted && hub is not { Kind: "hub" })
+        {
+            Console.Error.WriteLine(
+                $"[TradeCrafters] Hosted company {companyId} has no active hub standing for this viewer; " +
+                "contractor records are read-only until the hub loads.");
         }
 
         // Membership administration (requests, invitations, bindings) is Owner/Operator only;
         // crafter-role members would get 403s from every manager endpoint.
-        _isAdmin = _hub is { Kind: "hub", Standing.Role: "owner" or "operator" };
-        _hostedCompanyId = _isAdmin ? companyId : null;
-        if (_hub is not { Kind: "hub" })
+        var isAdmin = hub is { Kind: "hub", Standing.State: "active", Standing.Role: "owner" or "operator" };
+        if (hub is not { Kind: "hub" })
         {
-            _hosted = null;
-            return;
+            return new HostedLoad(companyId, hub, isHosted, false, null);
         }
 
-        if (!_isAdmin)
+        if (!isAdmin)
         {
             // The member list comes from the hub roster; active members may also read the
-            // record↔account pairs so a member's own contractor record folds into their row.
+            // record/account pairs so a member's own contractor record folds into their row.
             // On failure rows stay separate.
-            var memberBindings = _hub.Standing?.State == "active"
-                ? await TryLoadAsync("account bindings", () => CompanyHubs.LoadCrafterBindingsAsync(companyId))
+            var memberBindings = hub.Standing?.State == "active"
+                ? await TryLoadAsync(companyId, "account bindings", () => CompanyHubs.LoadCrafterBindingsAsync(companyId))
                 : null;
-            _hosted = new CompanyWorkforceHostedFacts(HubRoster: _hub.Roster ?? [], Bindings: memberBindings);
-            return;
+            return new HostedLoad(
+                companyId,
+                hub,
+                isHosted,
+                false,
+                new CompanyWorkforceHostedFacts(HubRoster: hub.Roster ?? [], Bindings: memberBindings));
         }
 
-        var membersTask = TryLoadAsync("members", () => CompanyHubs.LoadCompanyMembersAsync(companyId));
-        var requestsTask = TryLoadAsync("membership requests", () => CompanyHubs.LoadPendingMembershipsAsync(companyId));
-        var invitationsTask = TryLoadAsync("invitations", () => CompanyHubs.LoadMembershipInvitationsAsync(companyId));
-        var migrationTask = TryLoadAsync("account bindings", () => CompanyHubs.LoadLegacyCrafterMigrationAsync(companyId));
+        var membersTask = TryLoadAsync(companyId, "members", () => CompanyHubs.LoadCompanyMembersAsync(companyId));
+        var requestsTask = TryLoadAsync(companyId, "membership requests", () => CompanyHubs.LoadPendingMembershipsAsync(companyId));
+        var invitationsTask = TryLoadAsync(companyId, "invitations", () => CompanyHubs.LoadMembershipInvitationsAsync(companyId));
+        var migrationTask = TryLoadAsync(companyId, "account bindings", () => CompanyHubs.LoadLegacyCrafterMigrationAsync(companyId));
         await Task.WhenAll(membersTask, requestsTask, invitationsTask, migrationTask);
-        _hosted = new CompanyWorkforceHostedFacts(
-            await membersTask,
-            _hub.Roster ?? [],
-            await requestsTask,
-            await invitationsTask,
-            await migrationTask);
+        return new HostedLoad(
+            companyId,
+            hub,
+            isHosted,
+            true,
+            new CompanyWorkforceHostedFacts(
+                await membersTask,
+                hub.Roster ?? [],
+                await requestsTask,
+                await invitationsTask,
+                await migrationTask));
     }
 
-    private async Task<T?> TryLoadAsync<T>(string label, Func<Task<T>> load) where T : class
+    // A company is hosted when the host answered for it, when it is the hub's transient copy,
+    // or when this connection has synced its company profile. Local-only companies (never
+    // synced, or no Profile Hosting connection) stay fully editable offline.
+    private async Task<bool> IsHostedCompanyAsync(TradeCompanyProfile profile, CompanyHubProjection? hub)
+    {
+        if (hub != null ||
+            profile.SyncState != TradeSyncState.LocalOnly ||
+            !string.IsNullOrWhiteSpace(profile.RemoteId))
+        {
+            return true;
+        }
+
+        try
+        {
+            var connection = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
+            return connection.IsConfigured &&
+                   await ProfileSyncLocalState.HasKnownHostedObjectAsync(
+                       ProfileSyncCollections.TradeCompanyProfiles,
+                       profile.Id.ToString("D"));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Microsoft.JSInterop.JSException)
+        {
+            // Unknown provenance: fail closed rather than grant edits on a possibly hosted company.
+            Console.Error.WriteLine(
+                $"[TradeCrafters] Could not confirm whether company {profile.Id:D} is hosted; " +
+                $"treating contractor records as read-only. {ex.GetType().Name}: {ex.Message}");
+            return true;
+        }
+    }
+
+    private static async Task<T?> TryLoadAsync<T>(string companyId, string label, Func<Task<T>> load) where T : class
     {
         try
         {
@@ -860,7 +1013,7 @@
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.Text.Json.JsonException)
         {
             Console.Error.WriteLine(
-                $"[TradeCrafters] Company {label} unavailable for company {_companyProfile?.Id:D}; " +
+                $"[TradeCrafters] Company {label} unavailable for company {companyId}; " +
                 $"workforce rows omit them. {ex.GetType().Name}: {ex.Message}");
             return null;
         }
@@ -881,6 +1034,11 @@
 
     private async Task CreateCrafterAsync()
     {
+        if (!CanEditRecords)
+        {
+            return;
+        }
+
         if (_companyProfile == null)
         {
             return;
@@ -912,7 +1070,7 @@
         }
 
         _newCrafterName = string.Empty;
-        await LoadAsync();
+        await ReloadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
             !SelectCrafterAfterReload(crafter.Id, "Contractor was saved, but it could not be loaded."))
         {
@@ -987,6 +1145,11 @@
 
     private async Task CreateCrafterFromLodestoneAsync()
     {
+        if (!CanEditRecords)
+        {
+            return;
+        }
+
         if (_companyProfile == null || _lodestonePreview == null)
         {
             return;
@@ -1000,7 +1163,7 @@
             return;
         }
 
-        await LoadAsync();
+        await ReloadAsync();
         if (_loadError != null ||
             !SelectCrafterAfterReload(crafter.Id, "Contractor imported, but it could not be loaded."))
         {
@@ -1014,8 +1177,14 @@
 
     private async Task UpdateSelectedCrafterFromLodestoneAsync()
     {
+        if (!CanEditRecords)
+        {
+            return;
+        }
+
         if (_companyProfile == null ||
             _lodestoneTarget == null ||
+            _lodestoneTarget.CompanyProfileId != _companyProfile.Id ||
             _lodestonePreview == null)
         {
             return;
@@ -1029,7 +1198,7 @@
             return;
         }
 
-        await LoadAsync();
+        await ReloadAsync();
         if (_loadError != null ||
             !SelectCrafterAfterReload(crafter.Id, "Contractor updated, but it could not be loaded."))
         {
@@ -1077,8 +1246,14 @@
 
     private async Task SaveSelectedCrafterAsync()
     {
+        if (!CanEditRecords)
+        {
+            return;
+        }
+
         if (_companyProfile == null ||
             _selectedCrafter == null ||
+            _selectedCrafter.CompanyProfileId != _companyProfile.Id ||
             string.IsNullOrWhiteSpace(_detailName))
         {
             return;
@@ -1109,7 +1284,7 @@
             return;
         }
 
-        await LoadAsync();
+        await ReloadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
             !SelectCrafterAfterReload(crafterId, "Contractor was saved, but it could not be loaded."))
         {
@@ -1218,16 +1393,11 @@
         return GetAssignmentsForCrafter(_selectedCrafter.Id);
     }
 
-    private IReadOnlyList<TradeOrder> GetAssignmentsForCrafter(Guid crafterId)
-    {
-        return _orders
-            .Where(order => (order.AssignedCrafterId == crafterId ||
-                            CrafterBindings.Any(binding => binding.LegacyCrafterId == crafterId &&
-                                binding.AccountProfileId == order.AssignedCrafterId)) &&
-                            !TradeOrderStatusWorkflow.IsArchived(order.Status))
-            .OrderByDescending(order => order.CommissionedAtUtc)
-            .ToArray();
-    }
+    // Same attribution as the workforce row, so the drawer list matches the row's count.
+    private IReadOnlyList<TradeOrder> GetAssignmentsForCrafter(Guid crafterId) =>
+        CompanyWorkforceProjection.ActiveOrdersFor(
+            _orders,
+            CompanyWorkforceProjection.AssignmentIdsForRecord(crafterId, CrafterBindings));
 
     private void OpenOrderAssignment(Guid orderId)
     {

@@ -119,6 +119,42 @@ public sealed class CompanyWorkforceProjectionTests
         Assert.Single(row.ActiveOrders);
     }
 
+    [Fact]
+    public void AccountBoundToSeveralContractorRecordsCountsItsOrdersOnExactlyOneRecord()
+    {
+        var former = Guid.NewGuid();
+        var first = Crafter("First");
+        var second = Crafter("Second");
+        var orders = new[]
+        {
+            Order(former, TradeOrderStatus.Assigned),
+            Order(former, TradeOrderStatus.Completed),
+            Order(second.Id, TradeOrderStatus.InProgress)
+        };
+        CompanyCrafterBinding[] bindings = [new(first.Id, former), new(second.Id, former)];
+        var hosted = new CompanyWorkforceHostedFacts(
+            HubRoster: [],
+            Bindings: bindings);
+
+        var rows = CompanyWorkforceProjection.Build([first, second], orders, hosted);
+
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(orders.Length, rows.Sum(row => row.CommissionCount));
+        Assert.Equal(2, rows.Sum(row => row.ActiveOrders.Count));
+        var owning = first.Id.CompareTo(second.Id) < 0 ? first.Id : second.Id;
+        var owner = Assert.Single(rows, row => row.RecordIds.Contains(owning));
+        Assert.Contains(owner.ActiveOrders, order => order.AssignedCrafterId == former);
+        // The record drawer uses the same attribution, so it lists what the row counts.
+        foreach (var row in rows)
+        {
+            Assert.Equal(
+                row.ActiveOrders,
+                CompanyWorkforceProjection.ActiveOrdersFor(
+                    orders,
+                    CompanyWorkforceProjection.AssignmentIdsForRecord(row.RecordIds[0], bindings)));
+        }
+    }
+
     private static TradeCrafterProfile Crafter(string name) => new()
     {
         Id = Guid.NewGuid(),
