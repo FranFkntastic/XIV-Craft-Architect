@@ -15,6 +15,49 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class CompanyHubContractTests
 {
     [Fact]
+    public async Task CommissionPricingScopeIsCompanyOwnedAcrossOperatorsAndRejectsStaleWrites()
+    {
+        await using var fixture = await HubFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var operatorAccount = await fixture.CreateAccountAsync("Operator");
+        var company = CreateCompany();
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var operatorClient = fixture.CreateClient(operatorAccount.Key);
+        await PutCompanyAsync(ownerClient, company);
+        await RequestAsync(operatorClient, company.Id);
+        using (var approved = await ownerClient.PostAsync(
+                   $"/trade/v1/companies/{company.Id:D}/memberships/{operatorAccount.ProfileId:D}/approve", null))
+        {
+            approved.EnsureSuccessStatusCode();
+        }
+        await fixture.SetMembershipRoleAsync(company.Id, operatorAccount.ProfileId, "operator");
+        var initial = await operatorClient.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(
+            $"/trade/v1/companies/{company.Id:D}/workspace-profile");
+        Assert.Null(initial!.CommissionPricingScope);
+        var hub = await operatorClient.GetFromJsonAsync<JsonElement>(
+            $"/trade/v1/companies/{company.Id:D}/hub");
+        var revision = hub.GetProperty("profileRevision").GetInt64();
+        var scope = new TradeCompanyPricingScope("Europe");
+        var body = new CompanyPolicyUpdateRequest(revision, company.Name, null, null, company.PaymentPolicy, scope);
+        using (var saved = await operatorClient.PutAsJsonAsync(
+                   $"/trade/v1/companies/{company.Id:D}/policy", body))
+        {
+            saved.EnsureSuccessStatusCode();
+        }
+        using (var stale = await ownerClient.PutAsJsonAsync(
+                   $"/trade/v1/companies/{company.Id:D}/policy", body))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        }
+        foreach (var client in new[] { ownerClient, operatorClient })
+        {
+            var profile = await client.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(
+                $"/trade/v1/companies/{company.Id:D}/workspace-profile");
+            Assert.Equal(scope, profile!.CommissionPricingScope);
+        }
+    }
+
+    [Fact]
     public async Task OperatorLoadsExactHostedWorkspaceProfileButCrafterCannot()
     {
         await using var fixture = await HubFixture.CreateAsync();

@@ -9,7 +9,9 @@ public sealed record TradeCompanyWorkspaceProfileResponse(
     string? CommissionContact,
     TradePaymentPolicy PaymentPolicy,
     DateTime CreatedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc,
+    TradeCompanyPricingScope? CommissionPricingScope = null,
+    string? Description = null);
 
 public sealed record TradeCompanyOrderAdoptionRequest(
     CompanyRecordRevision SourceRevision,
@@ -60,7 +62,9 @@ public static class TradeCompanyWorkspaceEndpoints
                         profile.CommissionContact,
                         profile.PaymentPolicy,
                         profile.CreatedAtUtc,
-                        profile.UpdatedAtUtc));
+                        profile.UpdatedAtUtc,
+                        profile.CommissionPricingScope,
+                        profile.Description));
             });
 
         companies.MapPost(

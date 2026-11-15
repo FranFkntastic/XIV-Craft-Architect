@@ -106,6 +106,9 @@ public sealed record CompanyHubPostUpdateRequest(
     bool IsPinned);
 
 public sealed record CompanyHubMutationResponse(long ProfileRevision);
+public sealed record CompanyPolicyUpdateRequest(long ExpectedProfileRevision, string Name,
+    string? Description, string? CommissionContact, TradePaymentPolicy PaymentPolicy,
+    TradeCompanyPricingScope? CommissionPricingScope);
 public sealed record CompanyHubAttentionReadRequest(long OpenedRevision);
 public sealed record CompanyHubAttentionReadResponse(long ReadRevision);
 
@@ -129,6 +132,18 @@ public static class CompanyHubEndpoints
 {
     public static void MapCompanyHubEndpoints(this WebApplication app)
     {
+        app.MapPut("/trade/v1/companies/{slugOrGuid}/policy",
+            async (string slugOrGuid, CompanyPolicyUpdateRequest body, HttpRequest request,
+                ProfileHostOptions options, MembershipAccessResolver accessResolver,
+                CompanyHubService hubs, CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                return ToMutationResult(await hubs.UpdatePolicyAsync(slugOrGuid, account, body, cancellationToken));
+            });
         app.MapGet(
             "/trade/v1/companies/{slugOrGuid}/hub",
             async (
@@ -421,6 +436,36 @@ public sealed class CompanyHubService(
             openedRevision,
             cancellationToken);
         return new(CompanyHubAttentionReadStatus.Applied, readRevision);
+    }
+
+    public async Task<CompanyHubMutationResult> UpdatePolicyAsync(
+        string slugOrGuid, MembershipAccount? account, CompanyPolicyUpdateRequest body,
+        CancellationToken cancellationToken = default)
+    {
+        var company = await ResolveCompanyAsync(slugOrGuid, cancellationToken);
+        var authorization = await AuthorizeAdministratorAsync(company, account, cancellationToken);
+        if (authorization != null)
+        {
+            return authorization;
+        }
+        if (body.ExpectedProfileRevision != company!.ObjectRevision)
+        {
+            return RevisionConflict();
+        }
+        if (string.IsNullOrWhiteSpace(body.Name) || body.PaymentPolicy == null ||
+            body.CommissionPricingScope is { IsValid: false })
+        {
+            return new(CompanyHubMutationStatus.Invalid, ErrorMessage: "Invalid company policy or commission pricing scope.");
+        }
+        var updated = CloneProfile(company.Profile);
+        updated.SchemaVersion = TradeCompanyProfile.CurrentSchemaVersion;
+        updated.Name = body.Name.Trim();
+        updated.Description = body.Description;
+        updated.CommissionContact = body.CommissionContact;
+        updated.PaymentPolicy = TradePaymentPolicyNormalizer.Normalize(body.PaymentPolicy);
+        updated.CommissionPricingScope = body.CommissionPricingScope;
+        updated.UpdatedAtUtc = DateTime.UtcNow;
+        return await SaveProfileAsync(company, updated, body.ExpectedProfileRevision, cancellationToken);
     }
 
     public async Task<CompanyHubMutationResult> UpdateThemeAsync(

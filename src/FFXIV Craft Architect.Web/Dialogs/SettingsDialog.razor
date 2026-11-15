@@ -101,7 +101,7 @@
                                     Options="MarketFetchScopeOptions"
                                     Class="options-select my-3" />
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    Controls Market Analysis, Procurement, and new or explicitly repriced commissions.
+                    Controls personal Market Analysis and Procurement.
                 </MudText>
 
                 @if (_defaultMarketFetchScope == MarketFetchScope.EntireRegion)
@@ -360,6 +360,21 @@
                         </MudTable>
                     </MudPaper>
 
+                    <MudText Typo="Typo.subtitle2">Commission pricing</MudText>
+                    <CompactSelectField Id="company-pricing-region"
+                                        Label="Region"
+                                        Value="@_companyPricingRegion"
+                                        ValueChanged="OnCompanyPricingRegionChanged"
+                                        Options="CompanyPricingRegionOptions"
+                                        Disabled="@(!_canAdministerCompany || _companyIsBusy)"
+                                        Class="options-select my-2" />
+                    <CompactSelectField Id="company-pricing-data-center"
+                                        Label="Data center"
+                                        @bind-Value="_companyPricingDataCenter"
+                                        Options="CompanyPricingDataCenterOptions"
+                                        Disabled="@(!_canAdministerCompany || _companyIsBusy || string.IsNullOrWhiteSpace(_companyPricingRegion))"
+                                        Class="options-select my-2" />
+                    <MudDivider Class="my-4" />
                     <MudTextField @bind-Value="_companyName"
                                   id="company-name"
                                   Label="Company name"
@@ -863,7 +878,7 @@
         new(SettingsSection.AccessAndDevices, "Access & devices", Icons.Material.Filled.Devices),
         new(SettingsSection.MarketAndRoutes, "Market & routes", Icons.Material.Filled.Public, GroupBreak: true),
         new(SettingsSection.Integrations, "Integrations", Icons.Material.Filled.Hub),
-        new(SettingsSection.CompanyAdministration, "Company administration", Icons.Material.Filled.AdminPanelSettings, AdministratorOnly: true),
+        new(SettingsSection.CompanyAdministration, "Company administration", Icons.Material.Filled.AdminPanelSettings),
         new(SettingsSection.Storage, "Storage", Icons.Material.Filled.Storage),
         new(SettingsSection.Diagnostics, "Diagnostics", Icons.Material.Filled.Troubleshoot),
         new(SettingsSection.About, "About", Icons.Material.Filled.Info)
@@ -904,6 +919,8 @@
     private readonly ElementReference[] _tabElements = new ElementReference[AllSettingsSections.Count];
     private SettingsSection _activePanel = SettingsSection.MarketAndRoutes;
     private bool _canAdministerCompany;
+    private bool _initialWorkspaceCompanyConsumed;
+    private long _companyPolicyRevision;
 
     private sealed record RolePermissionRow(
         string Capability,
@@ -919,6 +936,7 @@
 
     private static readonly IReadOnlyList<RolePermissionRow> RolePermissionRows =
     [
+        new("Edit company commission pricing", false, true, true, "Yes"),
         new("Work assigned commissions", true, true, true, "✓"),
         new("Report progress / declare readiness", true, true, true, "✓"),
         new("Approve or deny membership requests", false, true, true, "✓"),
@@ -1028,6 +1046,18 @@
     private string _companyName = string.Empty;
     private string? _companyDescription;
     private string? _companyCommissionContact;
+    private string _companyPricingRegion = string.Empty;
+    private string _companyPricingDataCenter = string.Empty;
+    private IReadOnlyList<CompactSelectOption> CompanyPricingRegionOptions =>
+        [new("", "Not configured"), .. RegionOptions];
+    private IReadOnlyList<CompactSelectOption> CompanyPricingDataCenterOptions =>
+        [new("", "Entire region"), .. MarketFetchScopeResolver.GetDataCentersForRegion(_companyPricingRegion).Select(ToSelectOption)];
+
+    private void OnCompanyPricingRegionChanged(string region)
+    {
+        _companyPricingRegion = region;
+        _companyPricingDataCenter = string.Empty;
+    }
     private int _companyCrafterCount;
     private string? _companyLoadError;
     private bool _companyIsBusy;
@@ -1115,6 +1145,7 @@
 
     private async Task OnWorkspaceCompanyChangedAsync(string companyId)
     {
+        _initialWorkspaceCompanyConsumed = true;
         await LoadCompanyProfileAsync();
         await RefreshCompanyAdministrationAccessAsync();
         if (_companyProfile == null ||
@@ -1131,9 +1162,16 @@
         {
             return;
         }
+        if (!ProfileSync.CurrentStatus.IsConnected)
+        {
+            // Local-only companies have no hosted roles; the local user owns the data.
+            _canAdministerCompany = true;
+            return;
+        }
         try
         {
             var hub = await CompanyHubClient.LoadAsync(_companyProfile.Id.ToString("D"));
+            _companyPolicyRevision = hub?.ProfileRevision ?? 0;
             _canAdministerCompany = hub?.Kind == "hub" &&
                 string.Equals(hub.Standing.State, "active", StringComparison.OrdinalIgnoreCase) &&
                 hub.Standing.Role is "owner" or "operator";
@@ -1514,6 +1552,16 @@
         {
             await ProfileSync.SyncNowAsync();
             _companyProfile = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
+            if (ProfileSync.CurrentStatus.IsConnected)
+            {
+                var companyId = !_initialWorkspaceCompanyConsumed && Guid.TryParse(InitialWorkspaceCompanyId, out var requestedCompanyId)
+                    ? requestedCompanyId
+                    : _companyProfile?.Id;
+                if (companyId.HasValue)
+                {
+                    _companyProfile = (await CompanyHubClient.LoadWorkspaceProfileAsync(companyId.Value)).ToTransientProfile();
+                }
+            }
             if (_companyProfile == null)
             {
                 _companyCrafterCount = 0;
@@ -1537,6 +1585,13 @@
 
     private async Task<bool> SaveCompanyProfileAsync(TradeCompanyProfile profile)
     {
+        if (ProfileSync.CurrentStatus.IsConnected)
+        {
+            await CompanyHubClient.UpdatePolicyAsync(profile, _companyPolicyRevision);
+            await ProfileSync.SyncNowAsync();
+            await RefreshCompanyAdministrationAccessAsync();
+            return true;
+        }
         if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(profile))
         {
             return false;
@@ -1553,6 +1608,8 @@
         _companyName = profile.Name;
         _companyDescription = profile.Description;
         _companyCommissionContact = profile.CommissionContact;
+        _companyPricingRegion = profile.CommissionPricingScope?.Region ?? string.Empty;
+        _companyPricingDataCenter = profile.CommissionPricingScope?.DataCenter ?? string.Empty;
         var policy = TradePaymentPolicyNormalizer.Normalize(
             profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
         _companyPaymentContract = policy.ActiveContract;
@@ -1574,6 +1631,8 @@
         _companyName.Trim(),
         NormalizeOptionalText(_companyDescription) ?? string.Empty,
         NormalizeOptionalText(_companyCommissionContact) ?? string.Empty,
+        _companyPricingRegion,
+        _companyPricingDataCenter,
         _companyPaymentContract.ToString(),
         _companyLegacyCommissionPercent.ToString(CultureInfo.InvariantCulture),
         _companyLaborGilPerSynth.ToString(CultureInfo.InvariantCulture));
@@ -1874,6 +1933,11 @@
         {
             if (_activePanel == SettingsSection.CompanyAdministration && _companyProfile != null)
             {
+                if (!_canAdministerCompany)
+                {
+                    Snackbar.Add("Only Owners and Operators can edit company policy.", Severity.Warning);
+                    return;
+                }
                 if (string.IsNullOrWhiteSpace(_companyName))
                 {
                     Snackbar.Add("Company name is required.", Severity.Error);
@@ -1897,6 +1961,19 @@
                 _companyProfile.Description = NormalizeOptionalText(_companyDescription);
                 _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
                 _companyProfile.PaymentPolicy = paymentPolicy;
+                if (!_canAdministerCompany)
+                {
+                    Snackbar.Add("Only Owners and Operators can edit company policy.", Severity.Warning);
+                    return;
+                }
+                _companyProfile.CommissionPricingScope = string.IsNullOrWhiteSpace(_companyPricingRegion)
+                    ? null
+                    : new TradeCompanyPricingScope(
+                        _companyPricingRegion,
+                        NormalizeOptionalText(_companyPricingDataCenter),
+                        string.IsNullOrWhiteSpace(_companyPricingDataCenter)
+                            ? MarketFetchScope.EntireRegion
+                            : MarketFetchScope.SelectedDataCenter);
                 var companySaved = await SaveCompanyProfileAsync(_companyProfile);
                 if (!companySaved)
                 {

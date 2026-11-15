@@ -14,7 +14,8 @@ public sealed record PlanDerivationRequest(
     bool ForceRefreshMarketData = false,
     IReadOnlyCollection<int>? MarketItemIdsToRefresh = null,
     bool SkipMarketRefresh = false,
-    bool UseCurrentSettingsContext = false);
+    bool UseCurrentSettingsContext = false,
+    TradeCompanyPricingScope? CompanyPricingScope = null);
 
 public sealed record PlanDerivationResult(
     bool MarketPublished,
@@ -208,6 +209,13 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
             : MarketFetchScopeResolver.ResolveRegionsForDataCenters(
                 market?.RequestedDataCenters ?? Array.Empty<string>(),
                 selectedRegion);
+        if (request.CompanyPricingScope is { } companyScope)
+        {
+            marketScope = companyScope.MarketFetchScope;
+            selectedDataCenter = companyScope.EffectiveDataCenter;
+            selectedRegion = companyScope.Region;
+            selectedRegions = [companyScope.Region];
+        }
         var requestedDataCenters = MarketFetchScopeResolver.GetDataCenters(
             marketScope,
             selectedDataCenter,
@@ -228,8 +236,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                  .SetEquals(requestedDataCenters));
 
         if (!hadMarketCandidates &&
-            request.UseCurrentSettingsContext &&
-            marketContextChanged)
+            (request.UseCurrentSettingsContext || request.CompanyPricingScope != null) &&
+            (marketContextChanged || request.CompanyPricingScope != null))
         {
             await _worker.MutateActiveContextAsync(
                 new WorkerActiveContextMutation(
@@ -244,7 +252,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
 
         if (hadMarketCandidates)
         {
-            if (request.SkipMarketRefresh)
+            if (request.SkipMarketRefresh && !marketContextChanged)
             {
                 marketPublished = market?.HasAnalysis == true;
                 analyzedCount = market?.AvailableCount ?? 0;
@@ -254,7 +262,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                         "Market evidence is not available. Run Market Analysis before using payment totals.");
                 }
             }
-            else if (request.MarketItemIdsToRefresh is { Count: > 0 })
+            else if (!marketContextChanged && request.MarketItemIdsToRefresh is { Count: > 0 })
             {
                 var candidates = acquisition.Rows
                     .Where(row => row.IsMarketCandidate)
@@ -356,6 +364,8 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                     HasRoute: true
                 } &&
                 procurement.Scope == requestedScope &&
+                string.Equals(procurement.SelectedRegion, selectedRegion, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(procurement.SelectedDataCenter, selectedDataCenter, StringComparison.OrdinalIgnoreCase) &&
                 procurement.TravelTolerance == _settings.ProcurementTravelTolerance &&
                 (procurement.IncludeSplitPurchases is null ||
                  procurement.IncludeSplitPurchases == _settings.ProcurementEnableSplitWorldPurchases) &&
