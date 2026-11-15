@@ -87,15 +87,19 @@
         public TradeMarginCost? Cost { get; set; }
         public string Name => Cost?.Name ?? "…";
     }
-    private decimal? Total(MarginRow row) => row.Cost?.Materials is { } materials ? materials + row.Cost.Synths * Rate : null;
+    // Calculator costs one full root batch; every displayed figure is per unit sold.
+    private static decimal? PerUnit(MarginRow row, decimal? batch) => batch / Math.Max(1, row.Cost?.Units ?? 1);
+    private decimal? Materials(MarginRow row) => PerUnit(row, row.Cost?.Materials);
+    private decimal? Labor(MarginRow row) => PerUnit(row, row.Cost?.Synths * Rate);
+    private decimal? Total(MarginRow row) => Materials(row) is { } materials && Labor(row) is { } labor ? materials + labor : null;
     private decimal? MarginGil(MarginRow row) => row.Sale is { } sale && Total(row) is { } total ? sale - total : null;
     private decimal? Percent(MarginRow row) => row.Sale > 0 && MarginGil(row) is { } margin ? margin / row.Sale * 100 : null;
     private static string Number(decimal? value) => value?.ToString("N0") ?? "—";
     private string Sign(MarginRow row) => MarginGil(row) < 0 ? "is-loss" : "is-gain";
     private object? SortValue(MarginRow row) => _sort.Column switch
     {
-        Column.Item => row.Name, Column.Sale => row.Sale, Column.Materials => row.Cost?.Materials,
-        Column.Labor => row.Cost?.Synths * Rate, Column.Total => Total(row), Column.Margin => MarginGil(row),
+        Column.Item => row.Name, Column.Sale => row.Sale, Column.Materials => Materials(row),
+        Column.Labor => Labor(row), Column.Total => Total(row), Column.Margin => MarginGil(row),
         Column.Percent => Percent(row), Column.Age => row.Cost?.OldestPriceUtc, _ => null
     };
     private IReadOnlyList<MarginRow> SortedRows => _sort.Column == null ? _rows :
@@ -105,8 +109,8 @@
     [
         new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell"><ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
 new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@(_editingSale == row.ItemId ? row.Sale?.ToString(CultureInfo.InvariantCulture) : row.Sale?.ToString("N0", CultureInfo.InvariantCulture))" @onfocus="() => _editingSale = row.ItemId" @onblur="() => _editingSale = null" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> },
-        new() { Id = Column.Materials, Header = "Materials", Size = new(150), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@if (row.Cost?.Issue is { } issue) { <span class="missing">@issue</span> } else if (row.Cost?.Missing.Count > 0) { <span class="missing">@string.Join(", ", row.Cost.Missing) unpriced</span> } else { @Number(row.Cost?.Materials) }</span> },
-        new() { Id = Column.Labor, Header = "Labor", Size = new(100), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@Number(row.Cost?.Synths * Rate)<span class="sub">@(row.Cost?.Synths is { } synths ? $"{synths:N0} synths" : "")</span></span> },
+        new() { Id = Column.Materials, Header = "Materials", Size = new(150), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@if (row.Cost?.Issue is { } issue) { <span class="missing">@issue</span> } else if (row.Cost?.Missing.Count > 0) { <span class="missing">@string.Join(", ", row.Cost.Missing) unpriced</span> } else { @Number(Materials(row)) }</span> },
+        new() { Id = Column.Labor, Header = "Labor", Size = new(100), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@Number(Labor(row))<span class="sub">@(row.Cost?.Synths is { } synths ? row.Cost.Units > 1 ? $"{synths:N0} synths per {row.Cost.Units}" : $"{synths:N0} synths" : "")</span></span> },
         WebTableColumn<MarginRow, Column>.Text(Column.Total, "Total cost", row => Number(Total(row)), 116, alignEnd: true, headerCssClass: "is-align-end"),
         new() { Id = Column.Margin, Header = "Margin", Size = new(110), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@Number(MarginGil(row))</span> },
         new() { Id = Column.Percent, Header = "Margin %", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@(Percent(row) is { } percent ? $"{percent:N1}%" : "—")</span> },

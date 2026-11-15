@@ -5,7 +5,7 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public sealed record TradeMarginCost(
     string Name, int IconId, decimal? Materials, int? Synths,
-    DateTime? OldestPriceUtc, IReadOnlyList<string> Missing, string? Issue = null);
+    DateTime? OldestPriceUtc, IReadOnlyList<string> Missing, string? Issue = null, int Units = 1);
 
 /// <summary>Read-only full-tree commissioning projection, independent of planner sourcing choices.</summary>
 public sealed class TradeMarginCalculator(
@@ -67,7 +67,9 @@ public sealed class TradeMarginCalculator(
             return new(root.Name, root.IconId, null, null, null, [], "Recipe mismatch");
         }
         order.Reverse();
-        var demand = new Dictionary<int, int> { [itemId] = 1 };
+        // Cost one full root batch; Units lets callers report per-unit figures.
+        var units = edges.TryGetValue(itemId, out var rootRecipe) ? rootRecipe.Yield : 1;
+        var demand = new Dictionary<int, int> { [itemId] = units };
         var synths = 0;
         foreach (var id in order)
         {
@@ -85,7 +87,7 @@ public sealed class TradeMarginCalculator(
         }
         if (scope is not { IsValid: true })
         {
-            return new(root.Name, root.IconId, null, synths, null, [], "Pricing scope missing");
+            return new(root.Name, root.IconId, null, synths, null, [], "Pricing scope missing", units);
         }
 
         var leaves = order.Where(id => !edges.ContainsKey(id)).ToArray();
@@ -130,6 +132,6 @@ public sealed class TradeMarginCalculator(
             }
         }
         return new(root.Name, root.IconId, missing.Count == 0 ? materials : null, synths,
-            unknownAge ? null : oldest, missing);
+            unknownAge ? null : oldest, missing, Units: units);
     }
 }
