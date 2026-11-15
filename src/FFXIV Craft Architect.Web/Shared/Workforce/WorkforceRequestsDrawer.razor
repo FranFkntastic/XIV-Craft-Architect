@@ -95,16 +95,18 @@
 
     private async Task ApproveAsync(CompanyWorkforceRow row)
     {
+        // Pin the company: both calls must hit the company the request was reviewed in.
+        var companyId = CompanyId;
         var accountId = row.AccountProfileId!.Value;
         var recordId = SelectedRecord(accountId);
         var approved = await RunAsync(async () =>
         {
             if (recordId.HasValue)
             {
-                await HubClient.ConnectLegacyCrafterAsync(CompanyId, recordId.Value, accountId);
+                await HubClient.ConnectLegacyCrafterAsync(companyId, recordId.Value, accountId);
             }
 
-            await HubClient.TransitionMembershipAsync(CompanyId, accountId, "approve");
+            await HubClient.TransitionMembershipAsync(companyId, accountId, "approve");
         });
         if (approved)
         {

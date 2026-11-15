@@ -458,7 +458,8 @@
 
         @if (_isAdmin && _hostedCompanyId != null)
         {
-            <WorkforceMemberDrawer CompanyId="@_hostedCompanyId"
+            <WorkforceMemberDrawer @key="_hostedCompanyId"
+                                   CompanyId="@_hostedCompanyId"
                                    ViewerRole="@(_hub?.Standing.Role ?? string.Empty)"
                                    Row="@(_drawer == WorkforceDrawerKind.Member ? _rows.FirstOrDefault(row => row.Key == _memberRowKey) : null)"
                                    AvailableRecords="AvailableRecords"
@@ -468,6 +469,7 @@
                                    OnOpenRecord="OpenRecord"
                                    OnOpenOrder="OpenOrderAssignment" />
             <WorkforceRequestsDrawer Open="@(_drawer == WorkforceDrawerKind.Requests)"
+                                     @key="_hostedCompanyId"
                                      CompanyId="@_hostedCompanyId"
                                      Requests="RequestedRows"
                                      AvailableRecords="AvailableRecords"
@@ -475,6 +477,7 @@
                                      OnClose="CloseDrawer"
                                      OnChanged="RefreshHostedAsync" />
             <WorkforceInviteDrawer Open="@(_drawer == WorkforceDrawerKind.Invite)"
+                                   @key="_hostedCompanyId"
                                    CompanyId="@_hostedCompanyId"
                                    PreselectedRecordId="_invitePreselect"
                                    AvailableRecords="AvailableRecords"
