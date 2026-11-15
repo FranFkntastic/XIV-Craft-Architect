@@ -433,39 +433,48 @@ public static class CommissionBriefEndpoints
 
                 // Exercise the complete binding/terms validation before exposing a public brief.
                 // In particular, legacy orders are not covered by the canonical-terms check above.
-                try
+                // An already-committed publication (an idempotent retry after a lost response) is
+                // returned below without rebinding, so it must not be re-validated here: its terms
+                // may have moved on, or a crafter may already hold the claim.
+                var committedPublication = alreadyBound &&
+                    order.CompanyCommission?.PublicMetadata.ViewState ==
+                    CompanyCommissionPublicViewState.Published;
+                if (!committedPublication)
                 {
-                    var candidate = new PublishedCommissionBrief
+                    try
                     {
-                        PublicId = publicId,
-                        Version = 1,
-                        PublishedAtUtc = timeProvider.GetUtcNow().UtcDateTime,
-                        Brief = request.Brief,
-                        Ownership = ownership
-                    };
-                    var candidateOrder = TradeOrderWorkflow.CopyOrder(order);
-                    candidateOrder.CommissionPublication = new TradeCommissionPublication
+                        var candidate = new PublishedCommissionBrief
+                        {
+                            PublicId = publicId,
+                            Version = 1,
+                            PublishedAtUtc = timeProvider.GetUtcNow().UtcDateTime,
+                            Brief = request.Brief,
+                            Ownership = ownership
+                        };
+                        var candidateOrder = TradeOrderWorkflow.CopyOrder(order);
+                        candidateOrder.CommissionPublication = new TradeCommissionPublication
+                        {
+                            PublicId = publicId,
+                            PublicUrl = publicUrl,
+                            Version = candidate.Version,
+                            PublishedAtUtc = candidate.PublishedAtUtc,
+                            IsTestFixture = candidate.Brief.IsTestFixture,
+                            Ownership = ownership
+                        };
+                        TradeCompanyCommissionMigrationService.BindPublishedBrief(
+                            candidateOrder, candidate, candidate.PublishedAtUtc);
+                    }
+                    catch (InvalidOperationException exception)
                     {
-                        PublicId = publicId,
-                        PublicUrl = publicUrl,
-                        Version = candidate.Version,
-                        PublishedAtUtc = candidate.PublishedAtUtc,
-                        IsTestFixture = candidate.Brief.IsTestFixture,
-                        Ownership = ownership
-                    };
-                    TradeCompanyCommissionMigrationService.BindPublishedBrief(
-                        candidateOrder, candidate, candidate.PublishedAtUtc);
-                }
-                catch (InvalidOperationException exception)
-                {
-                    loggerFactory.CreateLogger(nameof(CommissionBriefEndpoints)).LogWarning(
-                        "Commission publication refused by {Check} for company {CompanyId}, order {OrderId}: {Reason}",
-                        "BindPublishedBrief/ValidateTerms", companyId, request.OrderId, exception.Message);
-                    return Results.UnprocessableEntity(new
-                    {
-                        error = "commission_terms_invalid",
-                        message = exception.Message
-                    });
+                        loggerFactory.CreateLogger(nameof(CommissionBriefEndpoints)).LogWarning(
+                            "Commission publication refused by {Check} for company {CompanyId}, order {OrderId}: {Reason}",
+                            "BindPublishedBrief/ValidateTerms", companyId, request.OrderId, exception.Message);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "commission_terms_invalid",
+                            message = exception.Message
+                        });
+                    }
                 }
 
                 PublishedCommissionBrief published;
@@ -572,7 +581,12 @@ public static class CommissionBriefEndpoints
                     }
                     catch (InvalidOperationException exception)
                     {
-                        await store.DiscardCompanyOwnedAsync(published.PublicId, ownership, CancellationToken.None);
+                        if (!alreadyBound)
+                        {
+                            // Only roll back a brief this request created; a retry must never
+                            // discard a publication the order already references.
+                            await store.DiscardCompanyOwnedAsync(published.PublicId, ownership, CancellationToken.None);
+                        }
                         loggerFactory.CreateLogger(nameof(CommissionBriefEndpoints)).LogWarning(
                             "Commission publication refused by {Check} for company {CompanyId}, order {OrderId}: {Reason}",
                             "BindPublishedBrief/ValidateTerms", companyId, request.OrderId, exception.Message);
