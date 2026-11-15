@@ -13,7 +13,8 @@ public sealed record CommissionMembershipStandingResponse(
     string Standing,
     string? Role,
     bool CanRequestMembership,
-    string? RequestBlockedReason);
+    string? RequestBlockedReason,
+    Guid? AccountProfileId = null);
 
 public static class CommissionBriefEndpoints
 {
@@ -237,7 +238,8 @@ public static class CommissionBriefEndpoints
                     companyId,
                     access,
                     membership,
-                    hasDiscordIdentity));
+                    hasDiscordIdentity) with
+                { AccountProfileId = account.ProfileId });
             });
 
         group.MapDelete(
