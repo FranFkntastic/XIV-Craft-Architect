@@ -948,7 +948,7 @@
 
     private static readonly IReadOnlyList<RolePermissionRow> RolePermissionRows =
     [
-        new("Edit company commission pricing", false, true, true, "Yes"),
+        new("Edit company commission pricing", false, true, true, "✓"),
         new("Work assigned commissions", true, true, true, "✓"),
         new("Report progress / declare readiness", true, true, true, "✓"),
         new("Approve or deny membership requests", false, true, true, "✓"),
@@ -2029,7 +2029,7 @@
                 _persistedCompanyFingerprint = BuildCompanyFingerprint();
             }
 
-            Snackbar.Add($"{SaveButtonLabel} saved", Severity.Success);
+            Snackbar.Add("Company changes saved", Severity.Success);
         }
         catch (Exception ex)
         {

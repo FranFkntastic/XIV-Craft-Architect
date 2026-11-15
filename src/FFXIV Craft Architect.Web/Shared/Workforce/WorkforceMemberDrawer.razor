@@ -101,7 +101,7 @@
                         {
                             <strong>Transfer ownership to @member.DisplayName?</strong>
                             <span>
-                                This keeps the company ID and moves @_transferPreview.Counts.CompanyProfiles company profile, @_transferPreview.Counts.Orders orders, @_transferPreview.Counts.Crafters contractor records, @_transferPreview.Counts.Publications publications, @_transferPreview.Counts.PayrollDrafts payroll drafts, @_transferPreview.Counts.LinkedPlans linked plans, and @_transferPreview.Counts.DeepArchivedOrders archived orders.
+                                This keeps the company ID and moves @CountLabel(_transferPreview.Counts.CompanyProfiles, "company profile"), @CountLabel(_transferPreview.Counts.Orders, "order"), @CountLabel(_transferPreview.Counts.Crafters, "contractor record"), @CountLabel(_transferPreview.Counts.Publications, "publication"), @CountLabel(_transferPreview.Counts.PayrollDrafts, "payroll draft"), @CountLabel(_transferPreview.Counts.LinkedPlans, "linked plan"), and @CountLabel(_transferPreview.Counts.DeepArchivedOrders, "archived order").
                                 @if (_transferPreview.Counts.Collisions > 0)
                                 {
                                     <span> @_transferPreview.Counts.Collisions shared records will keep the current company's canonical version.</span>
@@ -392,6 +392,9 @@
             _busy = false;
         }
     }
+
+    private static string CountLabel(int count, string singular) =>
+        $"{count} {singular}{(count == 1 ? string.Empty : "s")}";
 
     private enum PendingConfirm
     {

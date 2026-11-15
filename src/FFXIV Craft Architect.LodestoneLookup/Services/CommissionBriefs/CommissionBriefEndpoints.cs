@@ -302,6 +302,7 @@ public static class CommissionBriefEndpoints
                 SqliteCommissionBriefStore store,
                 SqliteCompanyCommissionCapabilityStore capabilities,
                 TimeProvider timeProvider,
+                ILoggerFactory loggerFactory,
                 CancellationToken ct) =>
             {
                 if (!options.Enabled)
@@ -337,7 +338,10 @@ public static class CommissionBriefEndpoints
                 var validationError = CommissionBriefValidator.Validate(request.Brief);
                 if (validationError != null)
                 {
-                    return Results.BadRequest(new { error = validationError });
+                    loggerFactory.CreateLogger(nameof(CommissionBriefEndpoints)).LogWarning(
+                        "Commission publication refused by {Check} for company {CompanyId}, order {OrderId}: {Reason}",
+                        nameof(CommissionBriefValidator), companyId, request.OrderId, validationError);
+                    return Results.BadRequest(new { error = "invalid_commission_brief", message = validationError });
                 }
 
                 var ownership = new TradeCompanyPublicationOwnership(
@@ -416,12 +420,52 @@ public static class CommissionBriefEndpoints
                     }
                     catch (InvalidOperationException exception)
                     {
+                        loggerFactory.CreateLogger(nameof(CommissionBriefEndpoints)).LogWarning(
+                            "Commission publication refused by {Check} for company {CompanyId}, order {OrderId}: {Reason}",
+                            "RequireCanonicalBriefMatchesCurrentTerms", companyId, request.OrderId, exception.Message);
                         return Results.Conflict(new
                         {
                             error = "canonical_terms_conflict",
                             message = exception.Message
                         });
                     }
+                }
+
+                // Exercise the complete binding/terms validation before exposing a public brief.
+                // In particular, legacy orders are not covered by the canonical-terms check above.
+                try
+                {
+                    var candidate = new PublishedCommissionBrief
+                    {
+                        PublicId = publicId,
+                        Version = 1,
+                        PublishedAtUtc = timeProvider.GetUtcNow().UtcDateTime,
+                        Brief = request.Brief,
+                        Ownership = ownership
+                    };
+                    var candidateOrder = TradeOrderWorkflow.CopyOrder(order);
+                    candidateOrder.CommissionPublication = new TradeCommissionPublication
+                    {
+                        PublicId = publicId,
+                        PublicUrl = publicUrl,
+                        Version = candidate.Version,
+                        PublishedAtUtc = candidate.PublishedAtUtc,
+                        IsTestFixture = candidate.Brief.IsTestFixture,
+                        Ownership = ownership
+                    };
+                    TradeCompanyCommissionMigrationService.BindPublishedBrief(
+                        candidateOrder, candidate, candidate.PublishedAtUtc);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    loggerFactory.CreateLogger(nameof(CommissionBriefEndpoints)).LogWarning(
+                        "Commission publication refused by {Check} for company {CompanyId}, order {OrderId}: {Reason}",
+                        "BindPublishedBrief/ValidateTerms", companyId, request.OrderId, exception.Message);
+                    return Results.UnprocessableEntity(new
+                    {
+                        error = "commission_terms_invalid",
+                        message = exception.Message
+                    });
                 }
 
                 PublishedCommissionBrief published;
@@ -435,6 +479,9 @@ public static class CommissionBriefEndpoints
                 }
                 catch (InvalidOperationException exception)
                 {
+                    loggerFactory.CreateLogger(nameof(CommissionBriefEndpoints)).LogWarning(
+                        "Commission publication refused by {Check} for company {CompanyId}, order {OrderId}: {Reason}",
+                        "CreateCompanyOwnedAsync", companyId, request.OrderId, exception.Message);
                     return Results.Conflict(new
                     {
                         error = "publication_conflict",
@@ -516,10 +563,25 @@ public static class CommissionBriefEndpoints
                             .ToArray();
                     }
 
-                    publishedOrder = TradeCompanyCommissionMigrationService.BindPublishedBrief(
-                        publishedOrder,
-                        published,
-                        published.PublishedAtUtc);
+                    try
+                    {
+                        publishedOrder = TradeCompanyCommissionMigrationService.BindPublishedBrief(
+                            publishedOrder,
+                            published,
+                            published.PublishedAtUtc);
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        await store.DiscardCompanyOwnedAsync(published.PublicId, ownership, CancellationToken.None);
+                        loggerFactory.CreateLogger(nameof(CommissionBriefEndpoints)).LogWarning(
+                            "Commission publication refused by {Check} for company {CompanyId}, order {OrderId}: {Reason}",
+                            "BindPublishedBrief/ValidateTerms", companyId, request.OrderId, exception.Message);
+                        return Results.UnprocessableEntity(new
+                        {
+                            error = "commission_terms_invalid",
+                            message = exception.Message
+                        });
+                    }
                     var canonicalCommission = publishedOrder.CompanyCommission!;
                     if (!canonicalCommission.PublicMetadata.IsTestFixture &&
                         canonicalCommission.ActiveClaimCapabilityRevision <= 0)
