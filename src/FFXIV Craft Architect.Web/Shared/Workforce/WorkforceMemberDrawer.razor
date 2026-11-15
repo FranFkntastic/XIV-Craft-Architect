@@ -317,6 +317,15 @@
             return;
         }
 
+        // The confirmation must name the person the preview targets; refuse if the drawer moved on.
+        if (preview.TargetProfileId != member.AccountProfileId || Row?.AccountProfileId != preview.TargetProfileId)
+        {
+            Console.Error.WriteLine($"[Workforce] Ownership transfer refused: preview target {preview.TargetProfileId} does not match the displayed member {Row?.AccountProfileId}.");
+            Snackbar.Add("The selected member changed. Review the transfer again.", Severity.Warning);
+            CancelConfirm();
+            return;
+        }
+
         _transferring = true;
         try
         {
@@ -339,6 +348,11 @@
         finally
         {
             _transferring = false;
+            if (Row?.AccountProfileId != preview.TargetProfileId)
+            {
+                // Another member was opened while this attempt ran; drop the stale confirmation.
+                CancelConfirm();
+            }
         }
     }
 
