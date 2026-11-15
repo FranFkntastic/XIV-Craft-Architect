@@ -43,7 +43,8 @@ public enum TradeOrderPricingWorkflowStatus
     ProcurementUnavailable,
     OrderEvidenceIncomplete,
     Canceled,
-    Failed
+    Failed,
+    CompanyPricingScopeRequired
 }
 
 public sealed class TradeOrderPricingWorkflowService
@@ -52,23 +53,29 @@ public sealed class TradeOrderPricingWorkflowService
     private readonly PlanLifecycleWorkflowService _planLifecycle;
     private readonly WorkerProjectionStore _projections;
     private readonly WebPlanPersistenceService _planPersistence;
-    private readonly AppState _viewSettings;
     private readonly CancellableOperationService _operations;
+    private readonly TradeOperationsPersistenceService _companies;
+    private readonly TradeCompany.CompanyHubClient _companyHub;
+    private readonly ProfileHosting.ProfileSyncService _profileSync;
 
     public TradeOrderPricingWorkflowService(
         WorkerSessionCoordinator worker,
         PlanLifecycleWorkflowService planLifecycle,
         WorkerProjectionStore projections,
         WebPlanPersistenceService planPersistence,
-        AppState viewSettings,
-        CancellableOperationService operations)
+        CancellableOperationService operations,
+        TradeOperationsPersistenceService companies,
+        TradeCompany.CompanyHubClient companyHub,
+        ProfileHosting.ProfileSyncService profileSync)
     {
         _worker = worker;
         _planLifecycle = planLifecycle;
         _projections = projections;
         _planPersistence = planPersistence;
-        _viewSettings = viewSettings;
         _operations = operations;
+        _companies = companies;
+        _companyHub = companyHub;
+        _profileSync = profileSync;
     }
 
     public async Task<TradeOrderPricingWorkflowResult> RebuildAndPriceAsync(
@@ -94,6 +101,11 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrder? stagedOrder = null;
         try
         {
+            var pricingScope = await LoadPricingScopeAsync(order, operation.Token);
+            if (pricingScope is not { IsValid: true })
+            {
+                return PricingScopeRequired();
+            }
             workerOperation = await _worker.BeginOperationAsync(
                 WorkerSessionOperationKind.TradeOrderPricing,
                 $"trade-pricing:{order.Id}",
@@ -114,9 +126,9 @@ public sealed class TradeOrderPricingWorkflowService
             var build = await _planLifecycle.BuildRecipeAsync(
                 new WorkerRecipeBuildRequest(
                     projectItems,
-                    _viewSettings.SelectedDataCenter,
-                    _viewSettings.SelectedRegion,
-                    MarketFetchScope.EntireRegion),
+                    pricingScope.EffectiveDataCenter,
+                    pricingScope.Region,
+                    pricingScope.MarketFetchScope),
                 PlanDerivationDispatch.Deferred,
                 operation.Token,
                 workerOperation.OperationId);
@@ -229,6 +241,10 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrder? stagedOrder = null;
         try
         {
+            if (await LoadPricingScopeAsync(order, operation.Token) is not { IsValid: true })
+            {
+                return PricingScopeRequired();
+            }
             workerOperation = await _worker.BeginOperationAsync(
                 WorkerSessionOperationKind.TradeOrderPricing,
                 $"trade-pricing:{order.Id}",
@@ -313,6 +329,10 @@ public sealed class TradeOrderPricingWorkflowService
         WorkerSessionOperationLease? workerOperation = null;
         try
         {
+            if (await LoadPricingScopeAsync(order, operation.Token) is not { IsValid: true })
+            {
+                return PricingScopeRequired();
+            }
             workerOperation = await _worker.BeginOperationAsync(
                 WorkerSessionOperationKind.TradeOrderPricing,
                 $"trade-pricing:{order.Id}",
@@ -407,6 +427,11 @@ public sealed class TradeOrderPricingWorkflowService
         TradeMaterialPricingPolicy? materialPricingPolicy = null,
         IReadOnlyList<string>? initialWarnings = null)
     {
+        var pricingScope = await LoadPricingScopeAsync(order, operation.Token);
+        if (pricingScope is not { IsValid: true })
+        {
+            return PricingScopeRequired();
+        }
         var source = await _worker.GetTradeProjectionAsync(
             cancellationToken: operation.Token);
         if (source is not { HasPlan: true })
@@ -422,8 +447,8 @@ public sealed class TradeOrderPricingWorkflowService
                 refresh.ForceRefresh,
                 refresh.ItemIds,
                 refresh.SkipRefresh,
-                UseCurrentSettingsContext: useCurrentSettingsContext,
-                RequiredMarketScope: MarketFetchScope.EntireRegion),
+                UseCurrentSettingsContext: false,
+                CompanyPricingScope: pricingScope),
             operation.Token,
             (message, progress) => operation.ReportStatus(
                 message,
@@ -559,6 +584,21 @@ public sealed class TradeOrderPricingWorkflowService
             ? new WorkerPlanOwnershipFence(shell.PlanId, shell.Revision)
             : null;
     }
+
+    private async Task<TradeCompanyPricingScope?> LoadPricingScopeAsync(
+        TradeOrder order, CancellationToken cancellationToken)
+    {
+        // Same hosted-then-local resolution the Orders page uses, so an unhosted company
+        // still prices from its own scope while profile sync is connected.
+        var resolved = await new TradeCompany.TradeWorkspaceProfileResolver(_companies, _companyHub)
+            .ResolveAsync(order.CompanyProfileId, cancellationToken);
+        return resolved.Profile?.CommissionPricingScope;
+    }
+
+    private static TradeOrderPricingWorkflowResult PricingScopeRequired() =>
+        TradeOrderPricingWorkflowResult.Noop(
+            TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired,
+            "The company needs a commission pricing region. Owners and Operators can configure it in Settings > Company administration > Commission pricing.");
 
     private static ProjectItem ToProjectItem(TradeOrderRootItemSnapshot item) =>
         new()

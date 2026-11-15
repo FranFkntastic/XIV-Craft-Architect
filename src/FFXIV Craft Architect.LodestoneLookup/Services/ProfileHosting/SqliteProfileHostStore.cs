@@ -1816,6 +1816,42 @@ public sealed partial class SqliteProfileHostStore
             ProfileSyncCollections.TradeCompanyProfiles,
             StringComparison.Ordinal);
         var introducesCompany = isCompany && existing == null;
+        if (isCompany)
+        {
+            try
+            {
+                // Legacy clients omit the optional field. Preserve company authority
+                // rather than clearing it when an older client edits another setting.
+                var nodeOptions = new System.Text.Json.Nodes.JsonNodeOptions { PropertyNameCaseInsensitive = true };
+                var incoming = System.Text.Json.Nodes.JsonNode.Parse(payloadJson, nodeOptions);
+                if (existing != null && incoming is System.Text.Json.Nodes.JsonObject incomingObject &&
+                    !incomingObject.ContainsKey("commissionPricingScope"))
+                {
+                    var previous = System.Text.Json.Nodes.JsonNode.Parse(existing.PayloadJson, nodeOptions);
+                    if (previous?["commissionPricingScope"] is { } previousScope)
+                    {
+                        incomingObject["commissionPricingScope"] = previousScope.DeepClone();
+                        payloadJson = incomingObject.ToJsonString();
+                    }
+                }
+                var company = JsonSerializer.Deserialize<TradeCompanyProfile>(
+                    payloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                if (company?.CommissionPricingScope is { IsValid: false })
+                {
+                    throw new JsonException("Invalid commission pricing scope.");
+                }
+            }
+            catch (JsonException)
+            {
+                await transaction.RollbackAsync(ct);
+                return new ProfileSyncPutResponse
+                {
+                    Success = false,
+                    ErrorCode = "company_pricing_scope_invalid",
+                    ErrorMessage = "Select a known commission pricing region and a data center in that region."
+                };
+            }
+        }
 
         if (introducesCompany &&
             _identityStore != null &&
