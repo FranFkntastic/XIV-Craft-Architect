@@ -4,11 +4,11 @@
     "net8.0": {
       "Franthropy.FFXIV": {
         "type": "Direct",
-        "requested": "[0.1.0-commit.16c3dc2aa549ab97c54d7ad67022b28b04138620, 0.1.0-commit.16c3dc2aa549ab97c54d7ad67022b28b04138620]",
-        "resolved": "0.1.0-commit.16c3dc2aa549ab97c54d7ad67022b28b04138620",
-        "contentHash": "oWGW+qiEhSvzFspJSr4OZp3cjpX3FmZvBMx5wtYzawsVLNR5stSl7OdhUfHsFgKFHlx9BOiXhQBpfptdNbJ4zg==",
+        "requested": "[0.1.0-commit.dccc910d3c0f92ec27ac1b70d80283204617c075, 0.1.0-commit.dccc910d3c0f92ec27ac1b70d80283204617c075]",
+        "resolved": "0.1.0-commit.dccc910d3c0f92ec27ac1b70d80283204617c075",
+        "contentHash": "AkUvPBD2P0bR2ZrRlKM3XpPdQHFDjnOFrBVop8MbWHPJ8XbioXXU23Xz+33eHLqXE2wZ4LaXWoLmmZnvYZQhKA==",
         "dependencies": {
-          "Franthropy.Filtering": "0.1.0-commit.16c3dc2aa549ab97c54d7ad67022b28b04138620"
+          "Franthropy.Filtering": "0.1.0-commit.dccc910d3c0f92ec27ac1b70d80283204617c075"
         }
       },
       "Microsoft.Extensions.DependencyInjection.Abstractions": {
@@ -54,8 +54,8 @@
       },
       "Franthropy.Filtering": {
         "type": "Transitive",
-        "resolved": "0.1.0-commit.16c3dc2aa549ab97c54d7ad67022b28b04138620",
-        "contentHash": "23Uf40WqGOkZ72B7HCk7TdU3XyO92p5OKuEUVXa+e4tKi2JwXM/f0Qz63xPGQpMma7tm1ZPafUo89k8AxtIGng=="
+        "resolved": "0.1.0-commit.dccc910d3c0f92ec27ac1b70d80283204617c075",
+        "contentHash": "s9eh05drpwPI1QDrzgQb8I1Bdr3QIC/u1bdJY0dColCROqsoAVpDHflXE/GmxeQfOsRWLyin+UG7VpGNQCXLsw=="
       },
       "Microsoft.Extensions.Configuration": {
         "type": "Transitive",
