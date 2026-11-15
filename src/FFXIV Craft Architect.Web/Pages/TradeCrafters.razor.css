@@ -1,186 +1,598 @@
+/* Company workforce. Rules use ::deep so the Shared/Workforce drawer components share one visual language. */
+
 .trade-crafters-page {
-  padding: 16px;
+  max-width: 1460px;
+  margin: 0 auto;
+  padding: 18px 24px 26px;
+  color: #f2f2f2;
 }
 
-.trade-crafters-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
-  gap: 16px;
-}
-
-.trade-crafters-main,
-.trade-crafters-detail,
-.trade-crafters-panel {
-  min-width: 0;
-}
-
-.trade-crafters-main {
-  container-type: inline-size;
-}
-
-.trade-crafters-header,
-.trade-crafters-create-row {
-  gap: 12px;
-}
-
-.trade-crafters-header {
+.trade-crafters-page ::deep .workforce-header {
   display: flex;
-  align-items: end;
-  justify-content: space-between;
-}
-
-.trade-crafters-create-row {
-  display: grid;
-  grid-template-columns: minmax(150px, 1.2fr) repeat(3, minmax(120px, 1fr)) max-content;
-  align-items: end;
-}
-
-.trade-crafters-lodestone-search-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.2fr) minmax(140px, 0.9fr) minmax(140px, 0.9fr) max-content;
-  gap: 12px;
-  align-items: end;
-}
-
-::deep .trade-crafters-row-action {
-  min-width: 92px;
-  min-height: 40px;
-  padding-inline: 16px;
-  white-space: nowrap;
-}
-
-.trade-crafters-panel {
-  background: #252525;
-  border: 1px solid #343434;
-  border-radius: 6px;
-  padding: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
   margin-bottom: 14px;
 }
 
-.trade-crafters-list {
-  display: grid;
+.trade-crafters-page ::deep .workforce-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.trade-crafters-page ::deep .workforce-company {
+  display: block;
+  color: #71a5ec;
+  font-weight: 700;
+}
+
+.trade-crafters-page ::deep .workforce-heading h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.trade-crafters-page ::deep .workforce-header-actions,
+.trade-crafters-page ::deep .workforce-row-actions:not(td) {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  align-items: center;
+  justify-content: flex-end;
 }
 
-.trade-crafters-table {
+.trade-crafters-page ::deep td.workforce-row-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.trade-crafters-page ::deep td.workforce-row-actions > * + * {
+  margin-left: 6px;
+}
+
+.trade-crafters-page ::deep .workforce-row-actions.is-start {
+  justify-content: flex-start;
+}
+
+/* Buttons: neutral default, gold primary, blue contextual, quiet secondary. */
+.trade-crafters-page ::deep .workforce-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #2d2d2d;
+  color: #f3f3f3;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.trade-crafters-page ::deep .workforce-button:hover:not(:disabled),
+.trade-crafters-page ::deep .workforce-button:focus-visible {
+  border-color: #91baf4;
+  outline: none;
+}
+
+.trade-crafters-page ::deep .workforce-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.trade-crafters-page ::deep .workforce-button.is-primary {
+  border-color: #ecc850;
+  background: #d4a73a;
+  color: #fff;
+}
+
+.trade-crafters-page ::deep .workforce-button.is-blue {
+  border-color: #72a9ec;
+  background: #4e8edb;
+  color: #fff;
+}
+
+.trade-crafters-page ::deep .workforce-button.is-quiet {
+  background: transparent;
+}
+
+.trade-crafters-page ::deep .workforce-button.is-danger {
+  border-color: #8d4646;
+  background: transparent;
+  color: #f0a3a3;
+}
+
+.trade-crafters-page ::deep .workforce-button.is-warning {
+  border-color: #b98a2c;
+  background: #5a4415;
+  color: #fbe2a6;
+}
+
+.trade-crafters-page ::deep .workforce-button.is-small {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.trade-crafters-page ::deep .workforce-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid #666;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.trade-crafters-page ::deep .workforce-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #3b3b3b;
+  border-radius: 5px 5px 0 0;
+  background: #242424;
+}
+
+.trade-crafters-page ::deep .workforce-search {
+  flex: 0 1 300px;
+  min-width: 200px;
+  padding: 8px 10px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #1d1d1d;
+  color: #fff;
+  font: inherit;
+}
+
+.trade-crafters-page ::deep .workforce-search:focus-visible {
+  border-color: #91baf4;
+  outline: none;
+}
+
+.trade-crafters-page ::deep .workforce-segmented {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid #505050;
+  border-radius: 4px;
+}
+
+.trade-crafters-page ::deep .workforce-segmented button {
+  padding: 8px 12px;
+  border: 0;
+  border-right: 1px solid #505050;
+  background: #202020;
+  color: #ccc;
+  font: inherit;
+  cursor: pointer;
+}
+
+.trade-crafters-page ::deep .workforce-segmented button:last-child {
+  border-right: 0;
+}
+
+.trade-crafters-page ::deep .workforce-segmented button.is-active {
+  background: #3a4e2d;
+  color: #eef9df;
+  font-weight: 700;
+}
+
+.trade-crafters-page ::deep .workforce-segmented button:focus-visible {
+  outline: 1px solid #91baf4;
+  outline-offset: -2px;
+}
+
+.trade-crafters-page ::deep .workforce-spacer {
+  flex: 1;
+}
+
+.trade-crafters-page ::deep .workforce-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #3b3b3b;
+  border-top: 0;
+  background: #242424;
+}
+
+.trade-crafters-page ::deep .workforce-table,
+.trade-crafters-page ::deep .workforce-subtable {
   width: 100%;
+  border-collapse: collapse;
 }
 
-.trade-crafter-row {
+.trade-crafters-page ::deep .workforce-table th,
+.trade-crafters-page ::deep .workforce-subtable th {
+  padding: 11px 14px;
+  border-bottom: 1px solid #4a4a4a;
+  color: #cfcfcf;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.trade-crafters-page ::deep .workforce-table td,
+.trade-crafters-page ::deep .workforce-subtable td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #3c3c3c;
+  vertical-align: middle;
+}
+
+.trade-crafters-page ::deep .workforce-subtable th,
+.trade-crafters-page ::deep .workforce-subtable td {
+  padding: 8px;
+}
+
+.trade-crafters-page ::deep .workforce-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.trade-crafters-page ::deep .workforce-table tbody tr:hover {
+  background: #292929;
+}
+
+.trade-crafters-page ::deep .workforce-empty {
+  color: #aaa;
+  text-align: center;
+}
+
+.trade-crafters-page ::deep .workforce-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 160px;
+}
+
+.trade-crafters-page ::deep .workforce-person strong,
+.trade-crafters-page ::deep .workforce-person span {
+  display: block;
+}
+
+.trade-crafters-page ::deep .workforce-person div > span {
+  color: #aaa;
+  font-size: 12px;
+}
+
+.trade-crafters-page ::deep .workforce-person .workforce-avatar {
+  display: grid;
+  flex: 0 0 32px;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #44556d;
+  font-weight: 800;
+  object-fit: cover;
+}
+
+.trade-crafters-page ::deep .workforce-pill {
+  display: inline-block;
+  padding: 3px 9px;
+  border: 1px solid #555;
+  border-radius: 999px;
+  color: #ddd;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.trade-crafters-page ::deep .workforce-pill.is-member {
+  border-color: #48795a;
+  background: #25382b;
+  color: #aee4bb;
+}
+
+.trade-crafters-page ::deep .workforce-pill.is-contractor {
+  border-color: #806b3d;
+  background: #3c3423;
+  color: #f1d78c;
+}
+
+.trade-crafters-page ::deep .workforce-pill.is-pending {
+  border-color: #6b5b83;
+  background: #30293c;
+  color: #d6c2ed;
+}
+
+.trade-crafters-page ::deep .workforce-access {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.trade-crafters-page ::deep .workforce-access-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #888;
+}
+
+.trade-crafters-page ::deep .workforce-access-dot.is-active {
+  background: #71c18a;
+}
+
+.trade-crafters-page ::deep .workforce-access-dot.is-pending {
+  background: #b39ddb;
+}
+
+.trade-crafters-page ::deep .workforce-access-dot.is-none {
+  background: #d4a746;
+}
+
+.trade-crafters-page ::deep .workforce-muted {
+  color: #aaa;
+}
+
+.trade-crafters-page ::deep .workforce-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 12px 14px;
+  border: 1px solid #3b3b3b;
+  border-top: 0;
+  border-radius: 0 0 5px 5px;
+  background: #202020;
+  color: #bbb;
+}
+
+.trade-crafters-page ::deep .workforce-summary strong {
+  color: #fff;
+}
+
+.trade-crafters-page ::deep .workforce-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Drawers */
+.trade-crafters-page ::deep .workforce-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1350;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.58);
+}
+
+.trade-crafters-page ::deep .workforce-drawer {
+  width: min(440px, 94vw);
+  height: 100%;
+  overflow-y: auto;
+  border-left: 1px solid #48596b;
+  background: #232323;
+  color: #e8e8e8;
+  box-shadow: -14px 0 34px rgba(0, 0, 0, 0.35);
+}
+
+.trade-crafters-page ::deep .workforce-drawer.is-wide {
+  width: min(720px, 94vw);
+}
+
+.trade-crafters-page ::deep .workforce-drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  width: 100%;
-  border: 1px solid #3a3a3a;
-  border-radius: 6px;
-  background: #1f1f1f;
-  color: #e0e0e0;
+  padding: 16px 18px;
+  border-bottom: 1px solid #383838;
+  background: #232323;
+}
+
+.trade-crafters-page ::deep .workforce-drawer-title {
+  min-width: 0;
+}
+
+.trade-crafters-page ::deep .workforce-drawer-eyebrow {
+  display: block;
+  color: #8ca7cf;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.trade-crafters-page ::deep .workforce-drawer-header h2 {
+  margin: 0;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.trade-crafters-page ::deep .workforce-drawer-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.trade-crafters-page ::deep .workforce-drawer-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid #383838;
+  background: #232323;
+}
+
+.trade-crafters-page ::deep .workforce-drawer-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trade-crafters-page ::deep .workforce-drawer-section + .workforce-drawer-section {
+  padding-top: 14px;
+  border-top: 1px solid #383838;
+}
+
+.trade-crafters-page ::deep .workforce-drawer-section h3 {
+  margin: 0;
+  color: #cfcfcf;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.trade-crafters-page ::deep .workforce-fact-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px;
+  align-items: center;
+}
+
+.trade-crafters-page ::deep .workforce-fact-grid > span:nth-child(odd) {
+  color: #aaa;
+  font-size: 12px;
+}
+
+.trade-crafters-page ::deep .workforce-inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
+  align-items: end;
+}
+
+.trade-crafters-page ::deep .workforce-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  align-items: end;
+}
+
+.trade-crafters-page ::deep .workforce-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.trade-crafters-page ::deep .workforce-confirm {
+  display: grid;
+  gap: 8px;
   padding: 10px 12px;
+  border: 1px solid #6b5426;
+  border-radius: 4px;
+  background: #2d2618;
+}
+
+.trade-crafters-page ::deep .workforce-receipt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #467054;
+  border-radius: 4px;
+  background: #23352a;
+}
+
+.trade-crafters-page ::deep .workforce-field {
+  display: grid;
+  gap: 4px;
+}
+
+.trade-crafters-page ::deep .workforce-field label {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.trade-crafters-page ::deep .workforce-date-input {
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid #595959;
+  border-radius: 5px;
+  background: #1f1f1f;
+  color: #f3f3f3;
+  color-scheme: dark;
+  font: inherit;
+}
+
+.trade-crafters-page ::deep .workforce-order-list {
+  display: grid;
+  gap: 8px;
+}
+
+.trade-crafters-page ::deep .workforce-order-link {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #4b5f3c;
+  border-radius: 6px;
+  background: #20281d;
+  color: #d7f1c3;
+  font: inherit;
   text-align: left;
+  cursor: pointer;
 }
 
-.trade-crafter-row small {
-  color: #9f9f9f;
+.trade-crafters-page ::deep .workforce-order-link span,
+.trade-crafters-page ::deep .workforce-order-link small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.trade-crafter-jobs {
+.trade-crafters-page ::deep .workforce-order-link small {
+  color: #b8c9ad;
+}
+
+/* Crafter record and Lodestone drawers (carried over from the former standing panels). */
+.trade-crafters-page ::deep .trade-crafter-jobs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  margin-bottom: 12px;
 }
 
-.trade-crafter-lodestone-flair {
+.trade-crafters-page ::deep .trade-crafter-lodestone-flair {
   display: grid;
   grid-template-columns: 72px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
   padding: 10px;
-  margin: 8px 0;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.03);
 }
 
-.trade-crafter-lodestone-flair img {
+.trade-crafters-page ::deep .trade-crafter-lodestone-flair img {
   width: 72px;
   height: 96px;
   object-fit: cover;
   border-radius: 4px;
 }
 
-.trade-crafter-lodestone-flair div {
+.trade-crafters-page ::deep .trade-crafter-lodestone-flair div {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.trade-crafters-detail {
-  position: sticky;
-  top: 16px;
-  align-self: start;
+.trade-crafters-page ::deep .trade-crafters-lodestone-search-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.2fr) minmax(130px, 0.9fr) minmax(130px, 0.9fr) max-content;
+  gap: 12px;
+  align-items: end;
 }
 
-.trade-crafter-assignments {
+.trade-crafters-page ::deep .trade-crafters-lodestone-results,
+.trade-crafters-page ::deep .trade-crafters-lodestone-preview {
   display: grid;
   gap: 8px;
-  margin-top: 8px;
-}
-
-.trade-crafter-assignment-cell {
   min-width: 0;
 }
 
-.trade-crafter-assignment-empty {
-  color: #9f9f9f;
-}
-
-.trade-crafter-assignment-chip,
-.trade-crafter-assignment-link {
-  border: 1px solid #4b5f3c;
-  border-radius: 6px;
-  background: #20281d;
-  color: #d7f1c3;
-  cursor: pointer;
-  text-align: left;
-}
-
-.trade-crafter-assignment-chip {
-  max-width: 100%;
-  padding: 4px 7px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.trade-crafter-assignment-link {
-  display: grid;
-  gap: 2px;
-  padding: 8px 10px;
-}
-
-.trade-crafter-assignment-link span,
-.trade-crafter-assignment-link small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.trade-crafter-assignment-link small {
-  color: #b8c9ad;
-}
-
-.trade-crafters-lodestone-results,
-.trade-crafters-lodestone-preview {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-  min-width: 0;
-}
-
-.trade-crafters-lodestone-result {
+.trade-crafters-page ::deep .trade-crafters-lodestone-result {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -189,73 +601,49 @@
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.03);
   color: inherit;
-  cursor: pointer;
+  font: inherit;
   text-align: left;
+  cursor: pointer;
 }
 
-.trade-crafters-lodestone-result:hover {
+.trade-crafters-page ::deep .trade-crafters-lodestone-result:hover,
+.trade-crafters-page ::deep .trade-crafters-lodestone-result:focus-visible {
   border-color: rgba(146, 198, 99, 0.55);
+  outline: none;
 }
 
-.trade-crafters-lodestone-result span,
-.trade-crafters-lodestone-result small,
-.trade-crafters-lodestone-preview span {
+.trade-crafters-page ::deep .trade-crafters-lodestone-result span,
+.trade-crafters-page ::deep .trade-crafters-lodestone-result small,
+.trade-crafters-page ::deep .trade-crafters-lodestone-preview span {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.trade-crafters-lodestone-result small,
-.trade-crafters-lodestone-preview span {
+.trade-crafters-page ::deep .trade-crafters-lodestone-result small,
+.trade-crafters-page ::deep .trade-crafters-lodestone-preview span {
   color: rgba(255, 255, 255, 0.68);
 }
 
-.trade-crafters-lodestone-preview-heading,
-.trade-crafters-lodestone-actions {
+.trade-crafters-page ::deep .trade-crafters-lodestone-preview-heading,
+.trade-crafters-page ::deep .trade-crafters-lodestone-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
 
-@container (max-width: 660px) {
-  .trade-crafters-create-row,
-  .trade-crafters-lodestone-search-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (max-width: 720px) {
+  .trade-crafters-page {
+    padding: 14px 16px 22px;
   }
 
-  ::deep .trade-crafters-row-action {
-    grid-column: 2;
-    justify-self: end;
-  }
-}
-
-@container (max-width: 430px) {
-  .trade-crafters-create-row,
-  .trade-crafters-lodestone-search-row {
-    grid-template-columns: 1fr;
+  .trade-crafters-page ::deep .workforce-search {
+    flex-basis: 100%;
   }
 
-  ::deep .trade-crafters-row-action {
-    grid-column: auto;
-    justify-self: stretch;
-  }
-}
-
-@media (max-width: 1100px) {
-  .trade-crafters-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .trade-crafters-detail {
-    position: static;
-  }
-
-  .trade-crafters-create-row {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-
-  .trade-crafters-lodestone-search-row {
+  .trade-crafters-page ::deep .workforce-form-grid,
+  .trade-crafters-page ::deep .trade-crafters-lodestone-search-row,
+  .trade-crafters-page ::deep .workforce-inline-form {
     grid-template-columns: 1fr;
   }
 }

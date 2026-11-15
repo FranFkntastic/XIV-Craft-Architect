@@ -1,0 +1,21 @@
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+
+<span class="workforce-access"><span class="workforce-access-dot @ToneClass" aria-hidden="true"></span>@Label</span>
+
+@code {
+    [Parameter, EditorRequired] public CompanyWorkforceAccess Access { get; set; }
+
+    private string Label => Access switch
+    {
+        CompanyWorkforceAccess.Active => "Active",
+        CompanyWorkforceAccess.Pending => "Pending",
+        _ => "No company access"
+    };
+
+    private string ToneClass => Access switch
+    {
+        CompanyWorkforceAccess.Active => "is-active",
+        CompanyWorkforceAccess.Pending => "is-pending",
+        _ => "is-none"
+    };
+}
