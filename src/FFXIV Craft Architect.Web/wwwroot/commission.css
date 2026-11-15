@@ -652,6 +652,111 @@ textarea {
   font-weight: 700;
 }
 
+.claim-relationship {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid #4b4b4b;
+  border-radius: 5px;
+  background: #202020;
+}
+
+.claim-relationship legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.relationship-line {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+}
+
+.relationship-line span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.checkbox-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.checkbox-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--gold);
+}
+
+.claim-receipt {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-soft);
+}
+
+.claim-receipt:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.claim-receipt ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.receipt-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.receipt-item > div {
+  display: grid;
+  gap: 3px;
+}
+
+.receipt-item span:not(.receipt-mark) {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.receipt-item .inline-actions {
+  justify-content: flex-start;
+  margin-top: 4px;
+}
+
+.receipt-mark {
+  font-weight: 800;
+  text-align: center;
+}
+
+.receipt-item.is-done .receipt-mark {
+  color: var(--green);
+}
+
+.receipt-item.is-pending .receipt-mark {
+  color: var(--amber);
+}
+
+.receipt-item.is-failed .receipt-mark,
+.receipt-item.is-failed strong {
+  color: var(--red);
+}
+
 .lodestone-results {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
