@@ -1,0 +1,55 @@
+@* Right-hand modal drawer for workforce actions. MudFocusTrap keeps focus inside and returns it to
+   the opening control on close; Escape and the scrim both dismiss. *@
+@if (Open)
+{
+    <div class="workforce-drawer-scrim" role="presentation" @onclick="CloseAsync">
+        <aside class="workforce-drawer @(Wide ? "is-wide" : null)"
+               role="dialog"
+               aria-modal="true"
+               aria-labelledby="@_titleId"
+               @onclick:stopPropagation="true"
+               @onkeydown="OnKeyDownAsync">
+            <MudFocusTrap DefaultFocus="DefaultFocus.FirstChild">
+                <header class="workforce-drawer-header">
+                    <div class="workforce-drawer-title">
+                        @if (!string.IsNullOrWhiteSpace(Eyebrow))
+                        {
+                            <span class="workforce-drawer-eyebrow">@Eyebrow</span>
+                        }
+                        <h2 id="@_titleId">@Title</h2>
+                    </div>
+                    <button type="button" class="workforce-button is-quiet" @onclick="CloseAsync">Close</button>
+                </header>
+                <div class="workforce-drawer-body">
+                    @ChildContent
+                </div>
+                @if (Actions != null)
+                {
+                    <footer class="workforce-drawer-actions">@Actions</footer>
+                }
+            </MudFocusTrap>
+        </aside>
+    </div>
+}
+
+@code {
+    private readonly string _titleId = $"workforce-drawer-{Guid.NewGuid():N}";
+
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter] public string? Eyebrow { get; set; }
+    [Parameter] public bool Wide { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+        {
+            await CloseAsync();
+        }
+    }
+}

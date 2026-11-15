@@ -77,6 +77,9 @@ public sealed record LegacyCrafterBindingResponse(
     Guid AccountProfileId,
     string Evidence,
     DateTimeOffset CreatedAtUtc);
+public sealed record CompanyCrafterBindingResponse(
+    Guid LegacyCrafterId,
+    Guid AccountProfileId);
 public sealed record LegacyCrafterMigrationResponse(
     IReadOnlyList<LegacyCrafterCandidateResponse> LegacyCrafters,
     IReadOnlyList<LegacyCrafterBindingResponse> Bindings);
@@ -279,6 +282,42 @@ public static class MembershipEndpoints
                         item.AccountProfileId,
                         item.Evidence.ToString(),
                         item.CreatedAtUtc)).ToArray()));
+            });
+
+        // Member-readable: which contractor record belongs to which account. Pairs only;
+        // migration candidates, evidence, invitations and requests stay administrator-only.
+        companies.MapGet(
+            "/{companyId}/crafter-bindings",
+            async (
+                string companyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeActiveCompanyMemberAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    memberships,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+
+                var bindings = await memberships.LoadCrafterBindingsAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                return Results.Ok(bindings
+                    .Select(item => new CompanyCrafterBindingResponse(
+                        item.LegacyCrafterId,
+                        item.AccountProfileId))
+                    .ToArray());
             });
 
         companies.MapPut(
@@ -1181,30 +1220,74 @@ public static class MembershipEndpoints
     {
         if (!options.Enabled)
         {
-            return new(default, null, null, Results.NotFound());
+            return new(default, null, null, Results.NotFound(), CompanyAuthorizationRefusal.Disabled);
         }
         var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
         if (account == null)
         {
-            return new(default, null, null, Results.Unauthorized());
+            return new(default, null, null, Results.Unauthorized(), CompanyAuthorizationRefusal.Unauthenticated);
         }
         if (!CompanyId.TryParse(rawCompanyId, out var companyId) ||
             await companyService.LoadPublicCompanyProfileAsync(companyId, cancellationToken) == null)
         {
-            return new(default, account, null, Results.NotFound());
+            return new(default, account, null, Results.NotFound(), CompanyAuthorizationRefusal.UnknownCompany);
         }
 
-        var access = await accessResolver.ResolveCompanyAccessAsync(
+        var outcome = await accessResolver.ResolveCompanyAccessOutcomeAsync(
             account,
             companyId,
             cancellationToken);
-        return access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator }
-            ? new CompanyAuthorizationResult(companyId, account, access.Role, null)
-            : new CompanyAuthorizationResult(
+        if (outcome.Access is { Role: TradeCompanyRole.Owner or TradeCompanyRole.Operator } access)
+        {
+            return new CompanyAuthorizationResult(
                 companyId,
                 account,
+                access.Role,
                 null,
-                Results.StatusCode(StatusCodes.Status403Forbidden));
+                CompanyAuthorizationRefusal.None);
+        }
+
+        return new CompanyAuthorizationResult(
+            companyId,
+            account,
+            null,
+            Results.StatusCode(StatusCodes.Status403Forbidden),
+            outcome.AmbiguousCompany
+                ? CompanyAuthorizationRefusal.AmbiguousCompany
+                : CompanyAuthorizationRefusal.NotAdministrator);
+    }
+
+    private static async Task<CompanyAuthorizationResult> AuthorizeActiveCompanyMemberAsync(
+        string rawCompanyId,
+        HttpRequest request,
+        ProfileHostOptions options,
+        MembershipAccessResolver accessResolver,
+        ProfileHostedTradeCompanyService companyService,
+        SqliteMembershipStore memberships,
+        CancellationToken cancellationToken)
+    {
+        var administrator = await AuthorizeCompanyAdministratorAsync(
+            rawCompanyId,
+            request,
+            options,
+            accessResolver,
+            companyService,
+            cancellationToken);
+        // Only an authenticated caller on an unambiguously resolved company who is merely not an
+        // administrator may fall through to the membership check; every other refusal stands.
+        if (administrator.Refusal != CompanyAuthorizationRefusal.NotAdministrator ||
+            administrator.Account == null)
+        {
+            return administrator;
+        }
+
+        var membership = await memberships.LoadForAccountAsync(
+            administrator.CompanyId,
+            administrator.Account.ProfileId,
+            cancellationToken);
+        return membership?.State == MembershipState.Active
+            ? administrator with { Error = null, Refusal = CompanyAuthorizationRefusal.None }
+            : administrator;
     }
 
     private static MembershipResponse ToResponse(
@@ -1255,5 +1338,16 @@ public static class MembershipEndpoints
         CompanyId CompanyId,
         MembershipAccount? Account,
         TradeCompanyRole? Role,
-        IResult? Error);
+        IResult? Error,
+        CompanyAuthorizationRefusal Refusal);
+
+    private enum CompanyAuthorizationRefusal
+    {
+        None,
+        Disabled,
+        Unauthenticated,
+        UnknownCompany,
+        AmbiguousCompany,
+        NotAdministrator
+    }
 }

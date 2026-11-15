@@ -506,6 +506,79 @@ public sealed class MembershipContractTests
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
     }
 
+    // Leak guard: the member-readable binding list must stay closed to pending requesters and
+    // outsiders, and must expose only record↔account pairs.
+    [Fact]
+    public async Task CrafterBindingPairsAreReadableByActiveMembersOnly()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        var crafter = await fixture.CreateAccountAsync("Crafter");
+        var requester = await fixture.CreateAccountAsync("Requester");
+        var outsider = await fixture.CreateAccountAsync("Outsider");
+        var company = CreateCompany();
+        var record = new TradeCrafterProfile
+        {
+            Id = Guid.NewGuid(),
+            CompanyProfileId = company.Id,
+            DisplayName = "Old roster identity"
+        };
+        using var ownerClient = fixture.CreateClient(owner.Key);
+        using var crafterClient = fixture.CreateClient(crafter.Key);
+        using var requesterClient = fixture.CreateClient(requester.Key);
+        using var outsiderClient = fixture.CreateClient(outsider.Key);
+        await PutCompanyAsync(ownerClient, company);
+        using var recordPut = await ownerClient.PutAsJsonAsync(
+            $"/profile-host/objects/{ProfileSyncCollections.TradeCrafters}/{record.Id:D}",
+            new ProfileSyncPutRequest
+            {
+                PayloadJson = JsonSerializer.Serialize(record, ProfileSyncJson.CreateOptions()),
+                ExpectedRevision = 0
+            });
+        recordPut.EnsureSuccessStatusCode();
+        foreach (var client in new[] { crafterClient, requesterClient })
+        {
+            using var requested = await client.PostAsJsonAsync(
+                $"/trade/v1/companies/{company.Id:D}/membership-requests",
+                new MembershipRequestBody(null));
+            requested.EnsureSuccessStatusCode();
+        }
+        using var approved = await ownerClient.PostAsync(
+            $"/trade/v1/companies/{company.Id:D}/memberships/{crafter.ProfileId:D}/approve",
+            null);
+        approved.EnsureSuccessStatusCode();
+        using var connected = await ownerClient.PutAsJsonAsync(
+            $"/trade/v1/companies/{company.Id:D}/legacy-crafter-bindings/{record.Id:D}",
+            new LegacyCrafterBindingBody(crafter.ProfileId));
+        connected.EnsureSuccessStatusCode();
+
+        var url = $"/trade/v1/companies/{company.Id:D}/crafter-bindings";
+        using var asCrafter = await crafterClient.GetAsync(url);
+        using var asOwner = await ownerClient.GetAsync(url);
+        using var asRequester = await requesterClient.GetAsync(url);
+        using var asOutsider = await outsiderClient.GetAsync(url);
+        using var crafterAdminAttempt = await crafterClient.GetAsync(
+            $"/trade/v1/companies/{company.Id:D}/legacy-crafter-migration");
+
+        Assert.Equal(HttpStatusCode.OK, asCrafter.StatusCode);
+        var body = await asCrafter.Content.ReadAsStringAsync();
+        var pair = Assert.Single(JsonSerializer.Deserialize<CompanyCrafterBindingResponse[]>(
+            body,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!);
+        Assert.Equal(record.Id, pair.LegacyCrafterId);
+        Assert.Equal(crafter.ProfileId, pair.AccountProfileId);
+        using (var document = JsonDocument.Parse(body))
+        {
+            Assert.Equal(
+                ["accountProfileId", "legacyCrafterId"],
+                document.RootElement[0].EnumerateObject().Select(property => property.Name).Order());
+        }
+        Assert.Equal(HttpStatusCode.OK, asOwner.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, asRequester.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, asOutsider.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, crafterAdminAttempt.StatusCode);
+    }
+
     [Fact]
     public async Task CompanyMemberListIsAvailableOnlyToAdministratorsAndExcludesDiscordIds()
     {

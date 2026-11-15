@@ -1,0 +1,292 @@
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+@inject CompanyHubClient HubClient
+@inject ISnackbar Snackbar
+
+<WorkforceDrawer Open="@(Row?.Member != null)" OnClose="CloseAsync" Title="@(Row?.DisplayName ?? string.Empty)" Eyebrow="Manage member">
+    @if (Row?.Member is { } member)
+    {
+        <section class="workforce-drawer-section">
+            <div class="workforce-fact-grid">
+                <span>Relationship</span>
+                <span><WorkforceRelationshipPill Row="Row" /></span>
+                <span>Company access</span>
+                <span><WorkforceAccessStatus Access="Row.Access" /></span>
+                <span>Discord</span>
+                <span>@(member.DiscordLinked ? "Linked" : "Not linked")</span>
+                <span>Member since</span>
+                <span>@((member.DecidedAtUtc ?? member.RequestedAtUtc).ToLocalTime().ToString("MMM d, yyyy"))</span>
+            </div>
+        </section>
+
+        <section class="workforce-drawer-section">
+            <h3>Company role</h3>
+            @if (member.Role == "owner")
+            {
+                <span>Owner</span>
+            }
+            else if (ViewerRole == "owner")
+            {
+                <div class="workforce-inline-form">
+                    <CompactSelectField Id="workforce-member-role"
+                                        Label="Role"
+                                        Value="@RoleDraft"
+                                        ValueChanged="value => _roleDraft = value"
+                                        Options="RoleOptions" />
+                    <button type="button"
+                            class="workforce-button is-primary"
+                            disabled="@(_busy || RoleDraft == member.Role)"
+                            @onclick="() => ApplyRoleAsync(member)">
+                        Apply role
+                    </button>
+                </div>
+            }
+            else
+            {
+                <span>@FormatRole(member.Role)</span>
+            }
+        </section>
+
+        <section class="workforce-drawer-section">
+            <h3>Connected history</h3>
+            @foreach (var recordId in Row.RecordIds)
+            {
+                <div class="workforce-list-row">
+                    <span>@RecordName(recordId)</span>
+                    <span class="workforce-row-actions">
+                        <button type="button" class="workforce-button is-small is-quiet" @onclick="() => OnOpenRecord.InvokeAsync(recordId)">Open</button>
+                        <button type="button" class="workforce-button is-small is-quiet" disabled="@_busy" @onclick="() => DisconnectAsync(recordId)">Disconnect</button>
+                    </span>
+                </div>
+            }
+            @if (Row.RecordIds.Count == 0)
+            {
+                <span class="workforce-muted">No connected history</span>
+            }
+            @if (AvailableRecords.Count > 0)
+            {
+                <div class="workforce-inline-form">
+                    <CompactSelectField Id="workforce-member-connect"
+                                        Label="Connect contractor record"
+                                        Value="@(_connectRecordId?.ToString("D") ?? string.Empty)"
+                                        ValueChanged="SetConnectRecord"
+                                        Options="AvailableRecordOptions" />
+                    <button type="button"
+                            class="workforce-button"
+                            disabled="@(_busy || !_connectRecordId.HasValue)"
+                            @onclick="() => ConnectAsync(member)">
+                        Connect
+                    </button>
+                </div>
+            }
+        </section>
+
+        <section class="workforce-drawer-section">
+            <h3>Current work</h3>
+            <WorkforceOrderList Orders="Row.ActiveOrders" OnOpenOrder="OnOpenOrder" />
+        </section>
+
+        @if (CanTransfer(member) || CanRevoke(member))
+        {
+            <section class="workforce-drawer-section is-danger">
+                <h3>Membership</h3>
+                @if (_confirm == PendingConfirm.Transfer)
+                {
+                    <div class="workforce-confirm" role="alert">
+                        <span>Transfer ownership to @member.DisplayName? You become an operator.</span>
+                        <span class="workforce-row-actions">
+                            <button type="button" class="workforce-button is-small is-quiet" @onclick="CancelConfirm">Cancel</button>
+                            <button type="button" class="workforce-button is-small is-warning" disabled="@_busy" @onclick="() => TransferAsync(member)">Transfer ownership</button>
+                        </span>
+                    </div>
+                }
+                else if (_confirm == PendingConfirm.Revoke)
+                {
+                    <div class="workforce-confirm" role="alert">
+                        <MudTextField @bind-Value="_revokeReason"
+                                      id="workforce-revoke-reason"
+                                      Label="Reason"
+                                      Variant="Variant.Outlined"
+                                      Margin="Margin.Dense"
+                                      Immediate="true" />
+                        <span class="workforce-row-actions">
+                            <button type="button" class="workforce-button is-small is-quiet" @onclick="CancelConfirm">Cancel</button>
+                            <button type="button" class="workforce-button is-small is-danger" disabled="@(_busy || string.IsNullOrWhiteSpace(_revokeReason))" @onclick="() => RevokeAsync(member)">Revoke @member.DisplayName</button>
+                        </span>
+                    </div>
+                }
+                else
+                {
+                    <div class="workforce-row-actions is-start">
+                        @if (CanTransfer(member))
+                        {
+                            <button type="button" class="workforce-button is-small" @onclick="() => _confirm = PendingConfirm.Transfer">Transfer ownership…</button>
+                        }
+                        @if (CanRevoke(member))
+                        {
+                            <button type="button" class="workforce-button is-small is-danger" @onclick="() => _confirm = PendingConfirm.Revoke">Revoke membership…</button>
+                        }
+                    </div>
+                }
+            </section>
+        }
+    }
+</WorkforceDrawer>
+
+@code {
+    [Parameter, EditorRequired] public string CompanyId { get; set; } = string.Empty;
+    [Parameter] public string ViewerRole { get; set; } = string.Empty;
+    [Parameter] public CompanyWorkforceRow? Row { get; set; }
+    [Parameter] public IReadOnlyList<LegacyCrafterCandidate> AvailableRecords { get; set; } = [];
+    [Parameter] public IReadOnlyDictionary<Guid, string> RecordNames { get; set; } = new Dictionary<Guid, string>();
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+    [Parameter] public EventCallback<Guid> OnOpenRecord { get; set; }
+    [Parameter] public EventCallback<Guid> OnOpenOrder { get; set; }
+
+    private static readonly IReadOnlyList<CompactSelectOption> RoleOptions =
+    [
+        new("crafter", "Crafter"),
+        new("operator", "Operator")
+    ];
+
+    private Guid? _rowAccountId;
+    private string? _roleDraft;
+    private Guid? _connectRecordId;
+    private string? _revokeReason;
+    private PendingConfirm _confirm;
+    private bool _busy;
+
+    private string RoleDraft => _roleDraft ?? Row?.Member?.Role ?? "crafter";
+
+    private IReadOnlyList<CompactSelectOption> AvailableRecordOptions =>
+        new[] { new CompactSelectOption(string.Empty, "Choose record") }
+            .Concat(AvailableRecords.Select(record => new CompactSelectOption(
+                record.LegacyCrafterId.ToString("D"),
+                string.IsNullOrWhiteSpace(record.WorldName) ? record.DisplayName : $"{record.DisplayName} · {record.WorldName}")))
+            .ToArray();
+
+    protected override void OnParametersSet()
+    {
+        if (Row?.AccountProfileId != _rowAccountId)
+        {
+            _rowAccountId = Row?.AccountProfileId;
+            _roleDraft = null;
+            _connectRecordId = null;
+            CancelConfirm();
+        }
+    }
+
+    private bool CanTransfer(CompanyMember member) => ViewerRole == "owner" && member.Role != "owner";
+
+    private bool CanRevoke(CompanyMember member) => member.Role != "owner" || ViewerRole == "owner";
+
+    private string RecordName(Guid recordId) => RecordNames.TryGetValue(recordId, out var name) ? name : "Contractor record";
+
+    private static string FormatRole(string role) => role switch
+    {
+        "owner" => "Owner",
+        "operator" => "Operator",
+        _ => "Crafter"
+    };
+
+    private void SetConnectRecord(string value) =>
+        _connectRecordId = Guid.TryParse(value, out var id) ? id : null;
+
+    private void CancelConfirm()
+    {
+        _confirm = PendingConfirm.None;
+        _revokeReason = null;
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task ApplyRoleAsync(CompanyMember member)
+    {
+        var role = RoleDraft;
+        if (role is not ("operator" or "crafter"))
+        {
+            return;
+        }
+
+        if (await RunAsync(() => HubClient.ChangeMembershipRoleAsync(CompanyId, member.AccountProfileId, role)))
+        {
+            _roleDraft = null;
+            Snackbar.Add($"{member.DisplayName} is now {FormatRole(role).ToLowerInvariant()}.", Severity.Success);
+        }
+    }
+
+    private async Task ConnectAsync(CompanyMember member)
+    {
+        if (_connectRecordId is not { } recordId)
+        {
+            return;
+        }
+
+        if (await RunAsync(() => HubClient.ConnectLegacyCrafterAsync(CompanyId, recordId, member.AccountProfileId)))
+        {
+            _connectRecordId = null;
+            Snackbar.Add("Contractor record connected.", Severity.Success);
+        }
+    }
+
+    private async Task DisconnectAsync(Guid recordId)
+    {
+        if (await RunAsync(() => HubClient.DisconnectLegacyCrafterAsync(CompanyId, recordId)))
+        {
+            Snackbar.Add("Contractor record disconnected.", Severity.Success);
+        }
+    }
+
+    private async Task TransferAsync(CompanyMember member)
+    {
+        if (await RunAsync(() => HubClient.TransferOwnershipAsync(CompanyId, member.AccountProfileId)))
+        {
+            CancelConfirm();
+            Snackbar.Add($"Ownership transferred to {member.DisplayName}.", Severity.Success);
+        }
+    }
+
+    private async Task RevokeAsync(CompanyMember member)
+    {
+        var reason = _revokeReason?.Trim();
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return;
+        }
+
+        if (await RunAsync(() => HubClient.TransitionMembershipAsync(CompanyId, member.AccountProfileId, "revoke", reason)))
+        {
+            CancelConfirm();
+            Snackbar.Add("Membership revoked.", Severity.Success);
+            await CloseAsync();
+        }
+    }
+
+    private async Task<bool> RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        try
+        {
+            await action();
+            await OnChanged.InvokeAsync();
+            return true;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+            Console.Error.WriteLine($"[Workforce] Member action failed for company {CompanyId}: {ex.GetType().Name}: {ex.Message}");
+            Snackbar.Add(ex is CompanyHubRequestException ? ex.Message : "The company host could not complete that change.", Severity.Error);
+            return false;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private enum PendingConfirm
+    {
+        None,
+        Transfer,
+        Revoke
+    }
+}
