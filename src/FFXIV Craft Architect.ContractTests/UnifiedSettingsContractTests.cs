@@ -72,7 +72,8 @@ public sealed class UnifiedSettingsContractTests
         Assert.Contains("Transfer ownership", File.ReadAllText(Path.Combine(
             web,
             "Shared",
-            "CompanyMembershipManager.razor")), StringComparison.Ordinal);
+            "Workforce",
+            "WorkforceMemberDrawer.razor")), StringComparison.Ordinal);
         Assert.Contains("<TradeCompanySwitcher", status, StringComparison.Ordinal);
         Assert.DoesNotContain("IsTradeRoute", status, StringComparison.Ordinal);
         Assert.Contains("test-readiness", File.ReadAllText(Path.Combine(

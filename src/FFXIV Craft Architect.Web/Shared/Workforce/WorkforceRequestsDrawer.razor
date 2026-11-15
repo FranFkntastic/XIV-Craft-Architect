@@ -1,0 +1,147 @@
+@inject CompanyHubClient HubClient
+@inject ISnackbar Snackbar
+
+<WorkforceDrawer Open="Open" OnClose="CloseAsync" Title="Membership requests" Eyebrow="Review requests" Wide="true">
+    @if (Requests.Count == 0)
+    {
+        <span class="workforce-muted">No pending requests</span>
+    }
+    else
+    {
+        <table class="workforce-subtable">
+            <thead>
+                <tr>
+                    <th scope="col">Requester</th>
+                    <th scope="col">Note</th>
+                    <th scope="col">Requested</th>
+                    <th scope="col">Connect history</th>
+                    <th scope="col"><span class="workforce-visually-hidden">Decision</span></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in Requests)
+                {
+                    var accountId = row.AccountProfileId!.Value;
+                    <tr @key="row.Key">
+                        <td><strong>@row.DisplayName</strong></td>
+                        <td>@(row.Request?.RequestNote ?? "No note")</td>
+                        <td>@((row.Request?.RequestedAtUtc ?? row.Member!.RequestedAtUtc).ToLocalTime().ToString("g"))</td>
+                        <td>
+                            @if (row.RecordIds.Count > 0)
+                            {
+                                <span>Connected: @string.Join(", ", row.RecordIds.Select(RecordName))</span>
+                            }
+                            else if (AvailableRecords.Count > 0)
+                            {
+                                <CompactSelectField Id="@($"workforce-request-record-{accountId:N}")"
+                                                    Label="Contractor record"
+                                                    Value="@(SelectedRecord(accountId)?.ToString("D") ?? string.Empty)"
+                                                    ValueChanged="value => SelectRecord(accountId, value)"
+                                                    Options="AvailableRecordOptions" />
+                            }
+                            else
+                            {
+                                <span class="workforce-muted">No contractor records</span>
+                            }
+                        </td>
+                        <td class="workforce-row-actions">
+                            <button type="button"
+                                    class="workforce-button is-small is-primary"
+                                    disabled="@_busy"
+                                    @onclick="() => ApproveAsync(row)">
+                                @(SelectedRecord(accountId).HasValue ? "Approve + connect history" : "Approve")
+                            </button>
+                            <button type="button"
+                                    class="workforce-button is-small is-danger"
+                                    disabled="@_busy"
+                                    @onclick="() => DenyAsync(row)">
+                                Deny
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</WorkforceDrawer>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter, EditorRequired] public string CompanyId { get; set; } = string.Empty;
+    [Parameter] public IReadOnlyList<CompanyWorkforceRow> Requests { get; set; } = [];
+    [Parameter] public IReadOnlyList<LegacyCrafterCandidate> AvailableRecords { get; set; } = [];
+    [Parameter] public IReadOnlyDictionary<Guid, string> RecordNames { get; set; } = new Dictionary<Guid, string>();
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private readonly Dictionary<Guid, Guid?> _selectedRecords = [];
+    private bool _busy;
+
+    private IReadOnlyList<CompactSelectOption> AvailableRecordOptions =>
+        new[] { new CompactSelectOption(string.Empty, "Don't connect") }
+            .Concat(AvailableRecords.Select(record => new CompactSelectOption(
+                record.LegacyCrafterId.ToString("D"),
+                string.IsNullOrWhiteSpace(record.WorldName) ? record.DisplayName : $"{record.DisplayName} · {record.WorldName}")))
+            .ToArray();
+
+    private string RecordName(Guid recordId) => RecordNames.TryGetValue(recordId, out var name) ? name : "Contractor record";
+
+    private Guid? SelectedRecord(Guid accountId) => _selectedRecords.GetValueOrDefault(accountId);
+
+    private void SelectRecord(Guid accountId, string value) =>
+        _selectedRecords[accountId] = Guid.TryParse(value, out var id) ? id : null;
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private async Task ApproveAsync(CompanyWorkforceRow row)
+    {
+        // Both steps act on the company this approval started in, even if the page switches.
+        var companyId = CompanyId;
+        var accountId = row.AccountProfileId!.Value;
+        var recordId = SelectedRecord(accountId);
+        var approved = await RunAsync(async () =>
+        {
+            if (recordId.HasValue)
+            {
+                await HubClient.ConnectLegacyCrafterAsync(companyId, recordId.Value, accountId);
+            }
+
+            await HubClient.TransitionMembershipAsync(companyId, accountId, "approve");
+        });
+        if (approved)
+        {
+            _selectedRecords.Remove(accountId);
+            Snackbar.Add(recordId.HasValue ? "Membership approved and contractor record connected." : "Membership approved.", Severity.Success);
+        }
+    }
+
+    private async Task DenyAsync(CompanyWorkforceRow row)
+    {
+        if (await RunAsync(() => HubClient.TransitionMembershipAsync(CompanyId, row.AccountProfileId!.Value, "deny")))
+        {
+            Snackbar.Add("Membership denied.", Severity.Success);
+        }
+    }
+
+    private async Task<bool> RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        try
+        {
+            await action();
+            return true;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+            Console.Error.WriteLine($"[Workforce] Membership request action failed for company {CompanyId}: {ex.GetType().Name}: {ex.Message}");
+            Snackbar.Add(ex is CompanyHubRequestException ? ex.Message : "The company host could not complete that change.", Severity.Error);
+            return false;
+        }
+        finally
+        {
+            _busy = false;
+            // Reload even after a partial failure (e.g. history connected, approval refused).
+            await OnChanged.InvokeAsync();
+        }
+    }
+}

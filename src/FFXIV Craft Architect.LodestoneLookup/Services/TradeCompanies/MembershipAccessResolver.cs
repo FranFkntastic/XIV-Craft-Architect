@@ -47,10 +47,30 @@ public sealed class MembershipAccessResolver(
                 : null;
     }
 
-    public async Task<TradeCompanyAccessContext?> ResolveCompanyAccessAsync(
+    public Task<TradeCompanyAccessContext?> ResolveCompanyAccessAsync(
+        MembershipAccount account,
+        CompanyId companyId,
+        CancellationToken cancellationToken = default) =>
+        ResolveCompanyAccessCoreAsync(account, companyId, null, cancellationToken);
+
+    // Same resolution, but reports when access was refused because the company identity is
+    // ambiguous (duplicate hosted objects), so callers never treat that refusal as "merely
+    // not an administrator".
+    public async Task<CompanyAccessOutcome> ResolveCompanyAccessOutcomeAsync(
         MembershipAccount account,
         CompanyId companyId,
         CancellationToken cancellationToken = default)
+    {
+        var ambiguity = new AmbiguityProbe();
+        var access = await ResolveCompanyAccessCoreAsync(account, companyId, ambiguity, cancellationToken);
+        return new CompanyAccessOutcome(access, ambiguity.Detected);
+    }
+
+    private async Task<TradeCompanyAccessContext?> ResolveCompanyAccessCoreAsync(
+        MembershipAccount account,
+        CompanyId companyId,
+        AmbiguityProbe? ambiguity,
+        CancellationToken cancellationToken)
     {
         var profileAccess = await companies.ResolveProfileAccessAsync(
             account.ProfileId,
@@ -71,6 +91,7 @@ public sealed class MembershipAccessResolver(
         }
         catch (DuplicateHostedObjectIdentityException)
         {
+            ambiguity?.Mark();
             return null;
         }
 
@@ -114,7 +135,19 @@ public sealed class MembershipAccessResolver(
         }
         catch (DuplicateHostedObjectIdentityException)
         {
+            ambiguity?.Mark();
             return null;
         }
     }
+
+    private sealed class AmbiguityProbe
+    {
+        public bool Detected { get; private set; }
+
+        public void Mark() => Detected = true;
+    }
 }
+
+public sealed record CompanyAccessOutcome(
+    TradeCompanyAccessContext? Access,
+    bool AmbiguousCompany);

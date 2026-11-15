@@ -1,0 +1,33 @@
+@if (Orders.Count == 0)
+{
+    <span class="workforce-muted">No active assignments</span>
+}
+else
+{
+    <div class="workforce-order-list">
+        @foreach (var order in Orders)
+        {
+            <button type="button"
+                    class="workforce-order-link"
+                    @onclick="() => OnOpenOrder.InvokeAsync(order.Id)">
+                <span>@order.Title</span>
+                <small>@FormatStatus(order.Status)</small>
+            </button>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<TradeOrder> Orders { get; set; } = [];
+    [Parameter] public EventCallback<Guid> OnOpenOrder { get; set; }
+
+    private static string FormatStatus(TradeOrderStatus status) => status switch
+    {
+        TradeOrderStatus.ReadyToAssign => "Ready to Assign",
+        TradeOrderStatus.Assigned => "Assigned",
+        TradeOrderStatus.InProgress => "Crafting",
+        TradeOrderStatus.AwaitingDelivery => "Awaiting Delivery Review",
+        TradeOrderStatus.ResolutionRequired => "Resolution Required",
+        _ => status.ToString()
+    };
+}
