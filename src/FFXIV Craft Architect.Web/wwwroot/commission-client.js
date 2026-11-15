@@ -2,6 +2,9 @@ const PROTOCOL_VERSION = 1;
 const ACCESS_STORAGE_PREFIX = "craftArchitect.companyCommission.participant.v1.";
 const ACCOUNT_STORAGE_PREFIX = "craftArchitect.companyCommission.discordAccount.v1.";
 const SIGN_IN_STORAGE_PREFIX = "craftArchitect.companyCommission.discordSignIn.v1.";
+const MEMBERSHIP_INTENT_STORAGE_PREFIX = "craftArchitect.companyCommission.membershipRequest.v1.";
+const MEMBERSHIP_STANDINGS = ["none", "pending", "active", "closed"];
+export const MEMBERSHIP_REQUEST_NOTE_MAX_LENGTH = 500;
 const PUBLIC_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DISCORD_USER_ID_PATTERN = /^\d{17,20}$/;
@@ -156,6 +159,51 @@ export class CommissionBriefApiClient {
                 cache: "no-store",
                 redirect: "error"
             }));
+    }
+
+    async loadMembershipStanding(accessKey) {
+        const key = requiredCapability(accessKey, "Account access key");
+        const result = requiredObject(await adaptResponse(await this.fetch(
+            `${this.briefPath}/membership`,
+            {
+                headers: {
+                    "Accept": "application/json",
+                    "X-Profile-Key": key
+                },
+                cache: "no-store",
+                redirect: "error"
+            })), "Company membership standing");
+        return {
+            companyId: requiredGuid(result.companyId, "Company ID"),
+            standing: requiredEnum(result.standing, MEMBERSHIP_STANDINGS, "Membership standing"),
+            role: optionalText(result.role),
+            canRequestMembership: requiredBoolean(result.canRequestMembership, "Membership request availability"),
+            requestBlockedReason: optionalText(result.requestBlockedReason)
+        };
+    }
+
+    // Sent only after a claim has committed; the company's membership rules decide the outcome.
+    async requestMembership(companyId, accessKey, requestNote = null) {
+        const id = requiredGuid(companyId, "Company ID");
+        const key = requiredCapability(accessKey, "Account access key");
+        const note = optionalText(requestNote);
+        const result = requiredObject(await adaptResponse(await this.fetch(
+            `/api/trade/v1/companies/${encodeURIComponent(id)}/membership-requests`,
+            {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "X-Profile-Key": key
+                },
+                cache: "no-store",
+                redirect: "error",
+                body: JSON.stringify({ requestNote: note })
+            })), "Membership request");
+        return {
+            state: requiredText(result.state, "Membership state"),
+            hasMembership: Boolean(result.hasMembership)
+        };
     }
 
     async startDiscordSignIn(returnPath) {
@@ -585,6 +633,77 @@ export class PortableClaimAccountStore {
             throw new CommissionClientError(
                 `Browser storage could not clear the ${label}.`,
                 "storage-write-failed");
+        }
+    }
+}
+
+// Durable "also request membership" intent, saved before the claim is sent so a
+// committed claim can always finish or retry its membership request.
+export class PortableMembershipRequestStore {
+    constructor(publicId, storage = window.localStorage) {
+        this.publicId = publicId;
+        this.storage = storage;
+        this.key = `${MEMBERSHIP_INTENT_STORAGE_PREFIX}${publicId}`;
+    }
+
+    load() {
+        let serialized;
+        try {
+            serialized = this.storage.getItem(this.key);
+        } catch {
+            return null;
+        }
+        if (!serialized) return null;
+        try {
+            const value = JSON.parse(serialized);
+            if (value.version !== 1 || value.publicId !== this.publicId) {
+                throw new Error("version mismatch");
+            }
+            return {
+                version: 1,
+                publicId: this.publicId,
+                companyId: requiredGuid(value.companyId, "Company ID"),
+                requestNote: optionalText(value.requestNote),
+                state: requiredEnum(value.state, ["intended", "sent", "failed"], "Membership request state"),
+                error: value.error
+                    ? {
+                        code: optionalText(value.error.code) ?? "unknown",
+                        message: optionalText(value.error.message) ?? "The membership request failed."
+                    }
+                    : null,
+                savedAtUtc: requiredDate(value.savedAtUtc, "Membership request time")
+            };
+        } catch {
+            this.discard();
+            return null;
+        }
+    }
+
+    save(companyId, requestNote, state = "intended", error = null) {
+        const intent = {
+            version: 1,
+            publicId: this.publicId,
+            companyId: requiredGuid(companyId, "Company ID"),
+            requestNote: optionalText(requestNote),
+            state,
+            error,
+            savedAtUtc: new Date().toISOString()
+        };
+        try {
+            this.storage.setItem(this.key, JSON.stringify(intent));
+        } catch {
+            throw new CommissionClientError(
+                "Browser storage could not save the membership request. No claim was sent.",
+                "storage-write-failed");
+        }
+        return intent;
+    }
+
+    discard() {
+        try {
+            this.storage.removeItem(this.key);
+        } catch {
+            // Nothing durable to clean up.
         }
     }
 }
