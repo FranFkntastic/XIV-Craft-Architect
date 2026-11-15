@@ -178,7 +178,10 @@ export class CommissionBriefApiClient {
             standing: requiredEnum(result.standing, MEMBERSHIP_STANDINGS, "Membership standing"),
             role: optionalText(result.role),
             canRequestMembership: requiredBoolean(result.canRequestMembership, "Membership request availability"),
-            requestBlockedReason: optionalText(result.requestBlockedReason)
+            requestBlockedReason: optionalText(result.requestBlockedReason),
+            accountProfileId: result.accountProfileId == null
+                ? null
+                : requiredGuid(result.accountProfileId, "Account profile ID")
         };
     }
 
@@ -638,7 +641,8 @@ export class PortableClaimAccountStore {
 }
 
 // Durable "also request membership" intent, saved before the claim is sent so a
-// committed claim can always finish or retry its membership request.
+// committed claim can always finish or retry its membership request. It is bound
+// to the requesting account and to the claim's provisional crafter identity.
 export class PortableMembershipRequestStore {
     constructor(publicId, storage = window.localStorage) {
         this.publicId = publicId;
@@ -656,13 +660,15 @@ export class PortableMembershipRequestStore {
         if (!serialized) return null;
         try {
             const value = JSON.parse(serialized);
-            if (value.version !== 1 || value.publicId !== this.publicId) {
+            if (value.version !== 2 || value.publicId !== this.publicId) {
                 throw new Error("version mismatch");
             }
             return {
-                version: 1,
+                version: 2,
                 publicId: this.publicId,
                 companyId: requiredGuid(value.companyId, "Company ID"),
+                accountProfileId: requiredGuid(value.accountProfileId, "Account profile ID"),
+                provisionalCrafterId: requiredGuid(value.provisionalCrafterId, "Provisional crafter ID"),
                 requestNote: optionalText(value.requestNote),
                 state: requiredEnum(value.state, ["intended", "sent", "failed"], "Membership request state"),
                 error: value.error
@@ -679,11 +685,13 @@ export class PortableMembershipRequestStore {
         }
     }
 
-    save(companyId, requestNote, state = "intended", error = null) {
+    save(binding, requestNote, state = "intended", error = null) {
         const intent = {
-            version: 1,
+            version: 2,
             publicId: this.publicId,
-            companyId: requiredGuid(companyId, "Company ID"),
+            companyId: requiredGuid(binding.companyId, "Company ID"),
+            accountProfileId: requiredGuid(binding.accountProfileId, "Account profile ID"),
+            provisionalCrafterId: requiredGuid(binding.provisionalCrafterId, "Provisional crafter ID"),
             requestNote: optionalText(requestNote),
             state,
             error,

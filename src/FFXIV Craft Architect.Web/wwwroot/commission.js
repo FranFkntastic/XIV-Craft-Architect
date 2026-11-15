@@ -1471,15 +1471,8 @@ function openClaimForm(anonymous = false) {
             return;
         }
         try {
-            // Saved before the claim so a committed claim can always finish or retry
-            // its membership request; the claim itself never waits on membership.
-            const membershipIntent = relationship.readIntent();
-            if (membershipIntent) {
-                state.membershipStore.save(membershipIntent.companyId, membershipIntent.note);
-            } else {
-                state.membershipStore.discard();
-            }
             await submitClaim({
+                membershipIntent: relationship.readIntent(),
                 contactMethod: contactMethod?.value ?? null,
                 contactValue: contactValue?.value.trim() ?? null,
                 verifiedDiscordRequired: !anonymous
@@ -1513,7 +1506,7 @@ function buildClaimRelationship(anonymous) {
         fieldset.append(element("p", "form-help", `Your ${company} membership request is pending.`));
         return none;
     }
-    if (!membership?.canRequestMembership) {
+    if (!membership?.canRequestMembership || !membership.accountProfileId) {
         return none;
     }
 
@@ -1536,7 +1529,11 @@ function buildClaimRelationship(anonymous) {
     return {
         node: fieldset,
         readIntent: () => checkbox.checked
-            ? { companyId: membership.companyId, note: note.value.trim() || null }
+            ? {
+                companyId: membership.companyId,
+                accountProfileId: membership.accountProfileId,
+                note: note.value.trim() || null
+            }
             : null
     };
 }
@@ -1577,21 +1574,78 @@ async function completeClaimFollowUp() {
 async function resumeMembershipFollowUp() {
     const intent = state.membershipStore.load();
     if (!intent) return;
-    if (state.projection.kind !== "participant") {
-        if (state.access?.pending?.kind !== "claim") {
-            state.membershipStore.discard();
-        }
+    if (state.projection.kind !== "participant" && state.access?.pending?.kind === "claim") {
+        return; // The saved claim has not committed yet; its retry carries the intent.
+    }
+    const binding = await checkMembershipIntentBinding(intent);
+    if (binding.discard) {
+        console.warn(
+            "[Commission] Discarded saved membership request without sending:",
+            binding.check);
+        state.membershipStore.discard();
         return;
     }
-    if (intent.state === "failed") {
+    if (intent.state === "failed" || !binding.ok) {
         state.claimReceipt = {
             claimed: false,
-            membership: { state: "failed", error: intent.error, intent }
+            membership: {
+                state: "failed",
+                error: binding.ok ? intent.error : binding.error,
+                intent
+            }
         };
         renderClaimReceipt();
         return;
     }
     await sendMembershipRequest(intent);
+}
+
+// The saved request may only be sent by the account that made it, for the claim
+// it was made with, while that claim is still held.
+async function checkMembershipIntentBinding(intent) {
+    const projection = state.projection;
+    if (projection.kind !== "participant") {
+        return { ok: false, discard: true, check: "claim-not-held-by-this-browser" };
+    }
+    if (projection.provisionalCrafter?.provisionalCrafterId !== intent.provisionalCrafterId) {
+        return { ok: false, discard: true, check: "claim-replaced" };
+    }
+    if (projection.public.status === "Canceled" || projection.public.requiresManualResolution) {
+        return { ok: false, discard: true, check: "claim-released" };
+    }
+    if (projection.claimAccountEvidence &&
+        projection.claimAccountEvidence.profileId !== intent.accountProfileId) {
+        return { ok: false, discard: true, check: "claim-account-mismatch" };
+    }
+    if (!state.account) {
+        return {
+            ok: false,
+            discard: false,
+            check: "account-unavailable",
+            error: {
+                code: "verified-discord-identity-required",
+                message: "The Discord sign-in that made this request is no longer available in this browser."
+            }
+        };
+    }
+    let standing;
+    try {
+        standing = await state.client.loadMembershipStanding(state.account.accessKey);
+    } catch (caught) {
+        return {
+            ok: false,
+            discard: false,
+            check: "account-unverified",
+            error: {
+                code: caught?.code ?? "unknown",
+                message: caught?.message ?? "The signed-in account could not be verified."
+            }
+        };
+    }
+    if (standing.accountProfileId !== intent.accountProfileId) {
+        return { ok: false, discard: true, check: "account-mismatch" };
+    }
+    return { ok: true, discard: false, check: null };
 }
 
 async function sendMembershipRequest(intent) {
@@ -1633,7 +1687,7 @@ async function sendMembershipRequest(intent) {
             return;
         }
         try {
-            state.membershipStore.save(intent.companyId, intent.requestNote, "failed", error);
+            state.membershipStore.save(intent, intent.requestNote, "failed", error);
         } catch {
             // The in-page retry still holds the intent.
         }
@@ -1650,6 +1704,22 @@ async function retryMembershipRequest() {
         throw new CommissionClientError(
             "No saved membership request is available.",
             "missing-membership-request");
+    }
+    const binding = await checkMembershipIntentBinding(intent);
+    if (binding.discard) {
+        console.warn(
+            "[Commission] Discarded saved membership request without sending:",
+            binding.check);
+        state.membershipStore.discard();
+        if (state.claimReceipt) state.claimReceipt.membership = null;
+        renderClaimReceipt();
+        return;
+    }
+    if (!binding.ok) {
+        state.claimReceipt.membership = { state: "failed", error: binding.error, intent };
+        renderClaimReceipt();
+        focusClaimReceipt();
+        return;
     }
     await sendMembershipRequest(intent);
     focusClaimReceipt();
@@ -1697,9 +1767,11 @@ function renderClaimReceipt() {
             `${membership.error.message} (${membership.error.code}) Your claim is kept.`);
         item.setAttribute("role", "alert");
         const actions = element("div", "inline-actions");
-        actions.append(
-            createButton("Retry membership request", retryMembershipRequest, "button primary"),
-            createButton("Skip membership request", skipMembershipRequest));
+        if (state.account) {
+            actions.append(
+                createButton("Retry membership request", retryMembershipRequest, "button primary"));
+        }
+        actions.append(createButton("Skip membership request", skipMembershipRequest));
         item.lastElementChild.append(actions);
         list.append(item);
     }
@@ -1822,6 +1894,19 @@ async function submitClaim(contact) {
         existingCrafterId: null,
         verifiedDiscordRequired: Boolean(state.account)
     };
+    // Saved before the claim so a committed claim can always finish or retry its
+    // membership request; the claim itself never waits on membership.
+    if (contact.membershipIntent) {
+        state.membershipStore.save(
+            {
+                companyId: contact.membershipIntent.companyId,
+                accountProfileId: contact.membershipIntent.accountProfileId,
+                provisionalCrafterId: payload.provisionalCrafter.provisionalCrafterId
+            },
+            contact.membershipIntent.note);
+    } else {
+        state.membershipStore.discard();
+    }
     const access = state.store.beginAuthorityExchange("claim", payload);
     state.access = access;
     await sendAuthorityExchange(
