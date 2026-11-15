@@ -9,6 +9,21 @@ public enum CommissionCostBasis
     ProcurementRoute
 }
 
+public static class CommissionCostBasisDisplay
+{
+    /// <summary>Formats a stored cost-basis token (or an older stored label) for people to read.</summary>
+    public static string Format(string? costBasis) =>
+        Enum.TryParse<CommissionCostBasis>(costBasis, ignoreCase: false, out var basis)
+            ? basis switch
+            {
+                CommissionCostBasis.MarketRecommendation => "Market recommendation",
+                CommissionCostBasis.SelectedAcquisitionSources => "Selected acquisition sources",
+                CommissionCostBasis.ProcurementRoute => "Procurement route",
+                _ => basis.ToString()
+            }
+            : string.IsNullOrWhiteSpace(costBasis) ? "Unspecified" : costBasis;
+}
+
 public enum CommissionMaterialResponsibility
 {
     Crafter,

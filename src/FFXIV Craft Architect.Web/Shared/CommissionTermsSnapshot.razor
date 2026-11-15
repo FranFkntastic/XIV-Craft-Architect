@@ -11,7 +11,7 @@
     <p>Labor calculation: @Terms.Payment.CraftSynthCount synths × @CompanyCommissionTermsComparison.Money(Terms.Payment.GilPerSynth)</p>
     <h5>Delivery instructions</h5><p>@Terms.DeliveryInstructions</p>
     <h5>Contact instructions</h5><p>@Terms.ContactInstructions</p>
-    <h5>Recorded evidence</h5><p>@Terms.PricingEvidence.CostBasis · @Terms.PricingEvidence.MarketScope · @Terms.PricingEvidence.Location · @Terms.PricingEvidence.CapturedAtUtc.ToString("u")</p>
+    <h5>Recorded evidence</h5><p>@CommissionCostBasisDisplay.Format(Terms.PricingEvidence.CostBasis) · @Terms.PricingEvidence.MarketScope · @Terms.PricingEvidence.Location · @Terms.PricingEvidence.CapturedAtUtc.ToString("u")</p>
     <small>Read-only snapshot. The current Plan is unchanged.</small>
 </section>
 @code { [Parameter, EditorRequired] public CompanyCommissionTermsVersion Terms { get; set; } = null!; }

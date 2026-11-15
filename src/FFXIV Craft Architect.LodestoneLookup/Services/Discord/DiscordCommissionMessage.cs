@@ -259,7 +259,7 @@ public static class DiscordCommissionMessage
     }
 
     private static string EvidenceSummary(CommissionBriefEvidence evidence) =>
-        $"{evidence.CostBasis}\n" +
+        $"{CommissionCostBasisDisplay.Format(evidence.CostBasis)}\n" +
         $"{evidence.MarketScope} • {evidence.Location}\n" +
         $"Captured <t:{new DateTimeOffset(evidence.CapturedAtUtc.ToUniversalTime()).ToUnixTimeSeconds()}:R>";
 
