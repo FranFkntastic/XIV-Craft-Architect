@@ -575,7 +575,9 @@ public sealed class DiscordIdentityContractTests
                     publicId));
             Assert.NotNull(commissionerAuthorized);
             Assert.True(commissionerAuthorized.IsCompanyOperator);
-            Assert.False(commissionerAuthorized.IsActiveParticipant);
+            // The commissioner route adds operator authority; the account that claimed
+            // the commission stays its participant without company membership.
+            Assert.True(commissionerAuthorized.IsActiveParticipant);
 
             Assert.Equal(
                 DiscordIdentityLinkResultStatus.Linked,
