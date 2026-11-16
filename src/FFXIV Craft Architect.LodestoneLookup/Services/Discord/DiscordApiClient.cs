@@ -25,6 +25,15 @@ public sealed record DiscordApiResult(
 
 public interface IDiscordApiClient
 {
+    Task<DiscordApiResult> FindPublicationMessageAsync(
+        string channelId,
+        string actionToken,
+        DateTimeOffset createdAt,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new DiscordApiResult(
+            DiscordApiOutcome.TerminalFailure,
+            Error: "discord_reconciliation_search_unavailable: Channel history cannot be searched."));
+
     Task<DiscordApiResult> CreateMessageAsync(
         string channelId,
         object payload,
@@ -64,6 +73,84 @@ public sealed class DiscordApiClient(
 {
     private const int MaximumAttempts = 4;
     private static readonly TimeSpan MaximumRetryAfter = TimeSpan.FromSeconds(30);
+
+    public async Task<DiscordApiResult> FindPublicationMessageAsync(
+        string channelId,
+        string actionToken,
+        DateTimeOffset createdAt,
+        CancellationToken cancellationToken = default)
+    {
+        if (!options.CanPublishDirectly || !IsDiscordSnowflake(channelId))
+        {
+            return new(DiscordApiOutcome.TerminalFailure,
+                Error: "discord_reconciliation_unconfigured: Discord channel history is unavailable.");
+        }
+        string? before = null;
+        string? found = null;
+        try
+        {
+            for (var page = 0; page < 10; page++)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get,
+                    $"channels/{channelId}/messages?limit=100" + (before == null ? "" : $"&before={before}"));
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bot", options.BotToken);
+                using var response = await httpClient.SendAsync(request, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return new(DiscordApiOutcome.RetryableFailure, StatusCode: response.StatusCode,
+                        Error: $"discord_reconciliation_history_refused: {await ReadErrorAsync(response, cancellationToken)}");
+                }
+                using var document = await JsonDocument.ParseAsync(
+                    await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+                var messages = document.RootElement;
+                var reachedCreation = false;
+                foreach (var message in messages.EnumerateArray())
+                {
+                    var id = message.GetProperty("id").GetString()!;
+                    if (message.TryGetProperty("components", out var components) &&
+                        ContainsActionToken(components, actionToken))
+                    {
+                        if (found != null && found != id)
+                        {
+                            return new(DiscordApiOutcome.TerminalFailure,
+                                Error: "discord_reconciliation_multiple_matches: Multiple Discord messages match; manual review is required.");
+                        }
+                        found = id;
+                    }
+                    before = id;
+                    if (message.TryGetProperty("timestamp", out var timestamp) &&
+                        timestamp.TryGetDateTimeOffset(out var sentAt) && sentAt < createdAt.AddMinutes(-1))
+                    {
+                        reachedCreation = true;
+                    }
+                }
+                if (messages.GetArrayLength() < 100 || reachedCreation)
+                {
+                    return new(DiscordApiOutcome.Succeeded, found);
+                }
+            }
+            return new(DiscordApiOutcome.TerminalFailure,
+                Error: "discord_reconciliation_history_limit: Recent history did not reach publication creation; no create was retried.");
+        }
+        catch (Exception exception) when (exception is HttpRequestException or JsonException or OperationCanceledException &&
+            !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(exception, "Discord reconciliation history check failed.");
+            return new(DiscordApiOutcome.RetryableFailure,
+                Error: $"discord_reconciliation_history_failed: {exception.Message}");
+        }
+    }
+
+    private static bool ContainsActionToken(JsonElement element, string actionToken) =>
+        element.ValueKind switch
+        {
+            JsonValueKind.Array => element.EnumerateArray().Any(child => ContainsActionToken(child, actionToken)),
+            JsonValueKind.Object => element.EnumerateObject().Any(property =>
+                property.Name == "custom_id" && property.Value.ValueKind == JsonValueKind.String &&
+                property.Value.GetString()!.EndsWith(":" + actionToken, StringComparison.Ordinal) ||
+                property.Name == "components" && ContainsActionToken(property.Value, actionToken)),
+            _ => false
+        };
 
     public Task<DiscordApiResult> CreateMessageAsync(
         string channelId,
@@ -216,6 +303,7 @@ public sealed class DiscordApiClient(
             (payload != null &&
                 !HasSafeAllowedMentions(payload, allowedMentionUserId)))
         {
+            logger.LogWarning("discord_publication_preflight_failed: Discord publication configuration, channel identity, message identity, or mention suppression check failed.");
             return new DiscordApiResult(
                 DiscordApiOutcome.TerminalFailure,
                 Error: "Discord publication is disabled, has an invalid channel, or lacks mention suppression.");
@@ -253,12 +341,21 @@ public sealed class DiscordApiClient(
             }
             catch (HttpRequestException exception)
             {
-                logger.LogWarning(exception, "Discord {Method} {Path} failed before a response.", method, relativePath);
+                var beforeSend = exception.HttpRequestError is
+                    HttpRequestError.NameResolutionError ||
+                    exception.InnerException is System.Net.Sockets.SocketException
+                    {
+                        SocketErrorCode: System.Net.Sockets.SocketError.ConnectionRefused or
+                            System.Net.Sockets.SocketError.HostNotFound or System.Net.Sockets.SocketError.NetworkUnreachable
+                    } ||
+                    exception.Message.Contains("Request headers must contain only ASCII", StringComparison.OrdinalIgnoreCase);
+                var outcome = createOperation && !beforeSend
+                    ? DiscordApiOutcome.ReconciliationRequired
+                    : DiscordApiOutcome.RetryableFailure;
+                logger.LogWarning(exception, "Discord transport check failed: {Outcome}, {Method} {Path}.", outcome, method, relativePath);
                 return new DiscordApiResult(
-                    createOperation
-                        ? DiscordApiOutcome.ReconciliationRequired
-                        : DiscordApiOutcome.RetryableFailure,
-                    Error: "Discord request failed before a response.");
+                    outcome,
+                    Error: $"discord_transport_{(beforeSend ? "before_send" : "ambiguous")}: {exception.Message}");
             }
 
             using (response)

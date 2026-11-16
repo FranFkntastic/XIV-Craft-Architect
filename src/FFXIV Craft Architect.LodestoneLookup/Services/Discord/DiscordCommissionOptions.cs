@@ -32,6 +32,7 @@ public sealed class DiscordCommissionOptions
     public bool CanPublishDirectly =>
         Enabled &&
         !string.IsNullOrWhiteSpace(BotToken) &&
+        BotToken.All(character => character is >= '!' and <= '~') &&
         Uri.TryCreate(CommissionBaseUrl, UriKind.Absolute, out _) &&
         Uri.TryCreate(ApiBaseUrl, UriKind.Absolute, out _);
 

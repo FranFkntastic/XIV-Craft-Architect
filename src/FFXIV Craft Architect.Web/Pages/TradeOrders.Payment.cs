@@ -682,7 +682,6 @@ public partial class TradeOrders
         try
         {
             await OrderLifecycle.DeleteOrderAsync(order);
-            await LoadAsync();
             _selectedOrder = null;
             _selectedOrderProjectionRevision = null;
             _manualNote = string.Empty;
@@ -690,6 +689,7 @@ public partial class TradeOrders
             {
                 AppState.SelectTradeOrder(null);
             }
+            await LoadAsync();
             Snackbar.Add("Order and linked commission data deleted.", Severity.Success);
         }
         catch (Exception exception)

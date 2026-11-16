@@ -468,6 +468,7 @@ public sealed record CompanyCommissionParticipantActivity(
 
 public sealed record CompanyCommissionParticipantBrief
 {
+    public int? ParticipantAcknowledgedTermsVersion { get; init; }
     public IReadOnlyList<CompanyCommissionPublicTerms>? PermittedTermsVersions { get; init; }
     public IReadOnlyList<FFXIV_Craft_Architect.Core.Services.CommissionTermsComparison>? TermsComparisons { get; init; }
     public required CompanyCommissionPublicBrief Public { get; init; }

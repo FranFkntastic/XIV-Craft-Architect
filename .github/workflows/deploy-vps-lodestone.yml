@@ -215,6 +215,8 @@ jobs:
           fi
           runtime_profile_host_enabled="$TARGET_PROFILE_HOST_ENABLED"
           runtime_discord_enabled="$TARGET_DISCORD_ENABLED"
+          source tools/Discord/validate-environment.sh
+          validate_discord_environment STAGING_DISCORD_
           if [[ "$DEPLOY_TARGET" == "staging" && "$runtime_discord_enabled" == "true" ]]; then
             missing_staging_configuration="false"
             for value in \
@@ -262,6 +264,8 @@ jobs:
           TARGET_DISCORD_OAUTH_BOOTSTRAP_SECRET: ${{ secrets.CA_DISCORD_OAUTH_BOOTSTRAP_SECRET }}
         run: |
           set -euo pipefail
+          source tools/Discord/validate-environment.sh
+          validate_discord_environment TARGET_DISCORD_
           {
             printf 'DISCORD_BOT_TOKEN=%s\n' "$TARGET_DISCORD_BOT_TOKEN"
             printf 'DISCORD_APPLICATION_ID=%s\n' "$TARGET_DISCORD_APPLICATION_ID"
@@ -287,6 +291,8 @@ jobs:
           TARGET_DISCORD_OAUTH_BOOTSTRAP_SECRET: ${{ secrets.CA_DISCORD_STAGING_OAUTH_BOOTSTRAP_SECRET }}
         run: |
           set -euo pipefail
+          source tools/Discord/validate-environment.sh
+          validate_discord_environment TARGET_DISCORD_
           {
             printf 'DISCORD_BOT_TOKEN=%s\n' "$TARGET_DISCORD_BOT_TOKEN"
             printf 'DISCORD_APPLICATION_ID=%s\n' "$TARGET_DISCORD_APPLICATION_ID"
@@ -427,6 +433,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source tools/Discord/validate-environment.sh
+          validate_discord_environment DISCORD_
+          validate_discord_environment TARGET_DISCORD_
           umask 077
           if [[ "$TARGET_DISCORD_ENABLED" == "true" ]]; then
             [[ "$TARGET_DISCORD_CHANNEL_ID" =~ ^[0-9]{17,20}$ ]]
