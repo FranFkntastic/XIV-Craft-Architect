@@ -277,6 +277,14 @@ async function load() {
         state.access);
     state.projection = loaded.projection;
     state.capabilities.participantCapability = loaded.participantCapability;
+    if (state.projection.kind !== "participant" &&
+        state.access?.pending?.kind === "claim" &&
+        state.access.pending.payload.termsVersion < state.projection.public.terms.version) {
+        console.warn("[Commission] stale_pending_claim: saved claim terms were superseded.");
+        state.store.discard();
+        state.membershipStore.discard();
+        state.access = null;
+    }
 
     if (state.projection.public.publicBriefId !== publicId) {
         throw new CommissionClientError(
@@ -630,7 +638,7 @@ function resolveNextStep() {
         if (pending?.kind === "claim") {
             return {
                 title: "A saved claim is ready to retry",
-                body: "The participant secret and command ID were saved before the earlier request. Retrying replays that same atomic claim rather than creating another identity.",
+                body: "Your claim may not have gone through. Retry to finish it — you won't create a duplicate claim.",
                 tone: "waiting",
                 actions: [{
                     label: "Retry saved claim",
@@ -823,11 +831,8 @@ function createPreworkAction(choice) {
 }
 
 function requiresTermsAcknowledgement(projection) {
-    const accepted = Math.max(
-        latestActivityRevision(projection, "PaymentPolicyChangeAccepted"),
-        latestActivityRevision(projection, "TermsAmended"));
-    const acknowledged = latestActivityRevision(projection, "TermsAcknowledged");
-    return accepted > acknowledged;
+    return projection.kind === "participant" &&
+        projection.participantAcknowledgedTermsVersion !== projection.public.terms.version;
 }
 
 function areCompanyMaterialsReady(projection) {
@@ -1189,6 +1194,13 @@ function renderAccess() {
         return;
     }
 
+    if (state.capabilities.claimCapability) {
+        setText("accessState", "Can claim");
+        accessNote.append(
+            element("strong", null, "This link lets you claim the commission."),
+            element("small", null, "After claiming, you'll receive a private workspace link to manage your work."));
+        return;
+    }
     setText("accessState", "View only");
     accessNote.append(
         element("strong", null, "This stable public link cannot mutate the commission."),
@@ -1492,7 +1504,7 @@ function buildClaimRelationship(anonymous) {
     const none = { node: fieldset, readIntent: () => null };
 
     if (membership?.standing === "active") {
-        fieldset.append(element("p", "relationship-line", `You are already a ${company} member`));
+        fieldset.append(element("p", "relationship-line", `You're already a member of ${company}`));
         return none;
     }
 
@@ -1768,7 +1780,7 @@ function renderClaimReceipt() {
             "Membership request sent",
             `${company} approves company access separately.`));
     } else if (membership?.state === "member") {
-        list.append(createReceiptItem("is-done", "✓", `You are already a ${company} member`, null));
+        list.append(createReceiptItem("is-done", "✓", `You're already a member of ${company}`, null));
     } else if (membership?.state === "closed") {
         const item = createReceiptItem(
             "is-failed",
@@ -2011,6 +2023,51 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
         const refreshableConflict = !applied &&
             caught?.status === 409 &&
             ["projection_conflict", "revision_conflict"].includes(caught?.code);
+        let refusedClaim = !applied && command === "claim" &&
+            caught?.status >= 400 && caught?.status < 500 &&
+            ![408, 429].includes(caught.status);
+        if (refusedClaim) {
+            // A refused retry does not prove the original attempt failed: its response may
+            // have been lost after commit. Probe with the saved participant secret first.
+            let committed = null;
+            try {
+                const probe = await state.client.load(access.participantSecret);
+                committed = probe?.kind === "participant";
+            } catch (probeError) {
+                if (probeError?.status === 401) {
+                    // The saved participant secret was never installed: the claim did not commit.
+                    committed = false;
+                } else {
+                    console.warn(
+                        "[Commission] claim_refusal_probe_failed: keeping saved claim for retry.",
+                        probeError?.code,
+                        probeError?.message);
+                }
+            }
+            if (committed === true) {
+                console.warn("[Commission] claim_refused_but_committed:", caught.code);
+                state.store.completeAuthorityExchange(access);
+                replaceParticipantCapabilityFragment(access.participantSecret);
+                state.capabilities = {
+                    claimCapability: null,
+                    recoveryCapability: null,
+                    recoveryGrantId: null,
+                    bootstrapToken: null,
+                    participantCapability: null
+                };
+                await reloadProjection(successMessage);
+                return;
+            }
+            if (committed === false) {
+                console.warn("[Commission] claim_refused:", caught.code);
+                state.store.discard();
+                state.membershipStore.discard();
+                state.access = null;
+                render();
+            } else {
+                refusedClaim = false;
+            }
+        }
         if (refreshableConflict) {
             try {
                 const refreshed = await loadPortableCommissionProjection(
@@ -2028,10 +2085,10 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
         showNotice(
             applied ? "The command was accepted but the brief did not refresh" : "The command did not complete",
             applied
-                ? `${caught.message} The saved participant secret remains available for recovery.`
-                : refreshableConflict
-                    ? `${caught.message} Current commission state was refreshed without discarding your saved claim. Review it, then retry the same claim.`
-                    : `${caught.message} The saved secret and command ID are still available for an exact retry.`);
+                ? `${caught.message} Your private workspace link is saved; you can return to it later.`
+                : refusedClaim
+                    ? caught.message
+                    : `${caught.message} Your claim may not have gone through. Retry to finish it — you won't create a duplicate claim.`);
     } finally {
         setBusy(false);
     }
