@@ -2023,15 +2023,50 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
         const refreshableConflict = !applied &&
             caught?.status === 409 &&
             ["projection_conflict", "revision_conflict"].includes(caught?.code);
-        const refusedClaim = !applied && command === "claim" &&
+        let refusedClaim = !applied && command === "claim" &&
             caught?.status >= 400 && caught?.status < 500 &&
             ![408, 429].includes(caught.status);
         if (refusedClaim) {
-            console.warn("[Commission] claim_refused:", caught.code);
-            state.store.discard();
-            state.membershipStore.discard();
-            state.access = null;
-            render();
+            // A refused retry does not prove the original attempt failed: its response may
+            // have been lost after commit. Probe with the saved participant secret first.
+            let committed = null;
+            try {
+                const probe = await state.client.load(access.participantSecret);
+                committed = probe?.kind === "participant";
+            } catch (probeError) {
+                if (probeError?.status === 401) {
+                    // The saved participant secret was never installed: the claim did not commit.
+                    committed = false;
+                } else {
+                    console.warn(
+                        "[Commission] claim_refusal_probe_failed: keeping saved claim for retry.",
+                        probeError?.code,
+                        probeError?.message);
+                }
+            }
+            if (committed === true) {
+                console.warn("[Commission] claim_refused_but_committed:", caught.code);
+                state.store.completeAuthorityExchange(access);
+                replaceParticipantCapabilityFragment(access.participantSecret);
+                state.capabilities = {
+                    claimCapability: null,
+                    recoveryCapability: null,
+                    recoveryGrantId: null,
+                    bootstrapToken: null,
+                    participantCapability: null
+                };
+                await reloadProjection(successMessage);
+                return;
+            }
+            if (committed === false) {
+                console.warn("[Commission] claim_refused:", caught.code);
+                state.store.discard();
+                state.membershipStore.discard();
+                state.access = null;
+                render();
+            } else {
+                refusedClaim = false;
+            }
         }
         if (refreshableConflict) {
             try {

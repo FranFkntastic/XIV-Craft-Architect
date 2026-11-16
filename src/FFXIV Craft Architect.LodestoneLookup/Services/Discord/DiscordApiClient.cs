@@ -168,14 +168,18 @@ public sealed class DiscordApiClient(
             _ => false
         };
 
+    // Brief links are CommissionBaseUrl + publicId, so the id ends either a query value
+    // ("...?id=<id>") or a path segment (".../<id>"); fragments carry capabilities only.
     private static bool LinksToPublicBrief(string url, string publicId)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
             return false;
         }
-        return uri.Query.TrimStart('?').Split('&').Any(pair =>
-            string.Equals(pair, "id=" + Uri.EscapeDataString(publicId), StringComparison.Ordinal));
+        var withoutFragment = uri.GetLeftPart(UriPartial.Query);
+        var escapedId = Uri.EscapeDataString(publicId);
+        return withoutFragment.EndsWith("=" + escapedId, StringComparison.Ordinal) ||
+            withoutFragment.EndsWith("/" + escapedId, StringComparison.Ordinal);
     }
 
     public Task<DiscordApiResult> CreateMessageAsync(
