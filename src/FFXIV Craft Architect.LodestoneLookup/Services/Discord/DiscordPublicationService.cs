@@ -475,7 +475,11 @@ public sealed class DiscordPublicationService(
             publication.MessageId == null)
         {
             var search = await discordApi.FindPublicationMessageAsync(
-                publication.ChannelId, publication.ActionToken, publication.CreatedAt, cancellationToken);
+                publication.ChannelId,
+                publication.ActionToken,
+                publication.PublicId,
+                publication.CreatedAt,
+                cancellationToken);
             if (!search.Succeeded)
             {
                 logger.LogWarning("Discord ambiguous create reconciliation refused: {Check}", search.Error);

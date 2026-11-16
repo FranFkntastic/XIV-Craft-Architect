@@ -28,6 +28,7 @@ public interface IDiscordApiClient
     Task<DiscordApiResult> FindPublicationMessageAsync(
         string channelId,
         string actionToken,
+        string publicId,
         DateTimeOffset createdAt,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(new DiscordApiResult(
@@ -77,6 +78,7 @@ public sealed class DiscordApiClient(
     public async Task<DiscordApiResult> FindPublicationMessageAsync(
         string channelId,
         string actionToken,
+        string publicId,
         DateTimeOffset createdAt,
         CancellationToken cancellationToken = default)
     {
@@ -107,8 +109,18 @@ public sealed class DiscordApiClient(
                 foreach (var message in messages.EnumerateArray())
                 {
                     var id = message.GetProperty("id").GetString()!;
-                    if (message.TryGetProperty("components", out var components) &&
-                        ContainsActionToken(components, actionToken))
+                    var sentAfterCreation = message.TryGetProperty("timestamp", out var sentTimestamp) &&
+                        sentTimestamp.TryGetDateTimeOffset(out var messageSentAt) &&
+                        messageSentAt >= createdAt.AddMinutes(-1);
+                    var authoredByApplication = message.TryGetProperty("author", out var author) &&
+                        author.TryGetProperty("bot", out var isBot) &&
+                        isBot.ValueKind == JsonValueKind.True;
+                    // The action token only rides on the Open-state claim button, so also match the
+                    // brief link (present in every state) to find creates made in other states.
+                    if (sentAfterCreation &&
+                        authoredByApplication &&
+                        message.TryGetProperty("components", out var components) &&
+                        ContainsPublicationMarker(components, actionToken, publicId))
                     {
                         if (found != null && found != id)
                         {
@@ -141,16 +153,30 @@ public sealed class DiscordApiClient(
         }
     }
 
-    private static bool ContainsActionToken(JsonElement element, string actionToken) =>
+    private static bool ContainsPublicationMarker(JsonElement element, string actionToken, string publicId) =>
         element.ValueKind switch
         {
-            JsonValueKind.Array => element.EnumerateArray().Any(child => ContainsActionToken(child, actionToken)),
+            JsonValueKind.Array => element.EnumerateArray().Any(child =>
+                ContainsPublicationMarker(child, actionToken, publicId)),
             JsonValueKind.Object => element.EnumerateObject().Any(property =>
                 property.Name == "custom_id" && property.Value.ValueKind == JsonValueKind.String &&
                 property.Value.GetString()!.EndsWith(":" + actionToken, StringComparison.Ordinal) ||
-                property.Name == "components" && ContainsActionToken(property.Value, actionToken)),
+                property.Name == "url" && property.Value.ValueKind == JsonValueKind.String &&
+                LinksToPublicBrief(property.Value.GetString()!, publicId) ||
+                property.Name == "components" &&
+                ContainsPublicationMarker(property.Value, actionToken, publicId)),
             _ => false
         };
+
+    private static bool LinksToPublicBrief(string url, string publicId)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+        return uri.Query.TrimStart('?').Split('&').Any(pair =>
+            string.Equals(pair, "id=" + Uri.EscapeDataString(publicId), StringComparison.Ordinal));
+    }
 
     public Task<DiscordApiResult> CreateMessageAsync(
         string channelId,
