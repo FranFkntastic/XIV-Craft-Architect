@@ -290,6 +290,38 @@ public sealed partial class HostedCompanyCommissionService(
             protocolVersion);
     }
 
+    /// <summary>
+    /// True when the canonical commission already recorded this command, so a retry
+    /// replays the committed outcome instead of acting as a new command.
+    /// </summary>
+    public async Task<bool> IsRecordedCommandAsync(
+        CompanyCommissionCapabilityResolution capability,
+        Guid commandId,
+        CancellationToken cancellationToken = default)
+    {
+        if (commandId == Guid.Empty)
+        {
+            return false;
+        }
+
+        var ownership = await companies.ResolvePublicationOwnershipAsync(
+            capability.PublicBriefId,
+            cancellationToken);
+        if (ownership == null ||
+            ownership.CompanyId != capability.CompanyId ||
+            ownership.OrderId != capability.CommissionId)
+        {
+            return false;
+        }
+
+        var canonical = await companies.LoadPublicOrderAsync(
+            ownership,
+            capability.PublicBriefId,
+            cancellationToken);
+        return canonical?.Order.CompanyCommission?.ProcessedCommands.Any(
+            item => item.CommandId == commandId) == true;
+    }
+
     public Task<CompanyCommissionMutationResult> ExecuteCompanyAsync(
         TradeCompanyAccessContext access,
         ICompanyCommissionCompanyCommand command,

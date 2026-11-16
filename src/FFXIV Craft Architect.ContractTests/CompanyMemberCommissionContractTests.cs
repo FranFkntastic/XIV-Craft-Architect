@@ -279,24 +279,146 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
-    public async Task CapabilityOnlyPortableClaimRemainsAnAnonymousCompatibilityPath()
+    public async Task AnonymousPortableClaimRequiresAnAccount()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
         var capability = await fixture.IssueClaimCapabilityAsync();
 
         using var response = await fixture.ClaimPortableAsync(
             capability.PlaintextToken);
-        Assert.True(
-            response.StatusCode == HttpStatusCode.OK,
-            await response.Content.ReadAsStringAsync());
-        var projection = await response.Content
-            .ReadFromJsonAsync<CompanyCommissionParticipantBrief>();
-        var canonical = await fixture.LoadCanonicalOrderAsync();
+        var error = await response.Content.ReadFromJsonAsync<MembershipErrorResponse>();
+        var publicBrief = await fixture.LoadPublicBriefAsync();
 
-        Assert.Null(canonical.CompanyCommission!.ActiveClaim!.AccountEvidence);
-        Assert.Null(projection!.ClaimAccountEvidence);
-        Assert.Equal("Email", projection.ProvisionalCrafter?.ContactMethod);
-        Assert.Equal("portable@example.test", projection.ProvisionalCrafter?.ContactValue);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal("claim_requires_account", error!.Error);
+        Assert.False(publicBrief!.IsClaimed);
+    }
+
+    [Fact]
+    public async Task ClaimingAccountGetsParticipantAccessOnAnotherDeviceWithoutMembership()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.CreateAccountAsync("Contractor");
+        var capability = await fixture.IssueClaimCapabilityAsync();
+        var firstDevice = new string('a', 43);
+        var secondDevice = new string('b', 43);
+        using var claimed = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant,
+            participantCredential: firstDevice);
+        Assert.True(claimed.IsSuccessStatusCode, await claimed.Content.ReadAsStringAsync());
+
+        using var installed = await fixture.InstallParticipantAccessAsync(
+            claimant,
+            secondDevice);
+        Assert.True(installed.IsSuccessStatusCode, await installed.Content.ReadAsStringAsync());
+        var installedProjection = await installed.Content
+            .ReadFromJsonAsync<CompanyCommissionParticipantBrief>();
+        var firstBeforeRelease = await fixture.LoadParticipantWithCredentialAsync(firstDevice);
+        var secondBeforeRelease = await fixture.LoadParticipantWithCredentialAsync(secondDevice);
+
+        using var released = await fixture.ReleaseWithCapabilityAsync(
+            secondDevice,
+            installedProjection!.Public.ProjectionRevision);
+        Assert.True(released.IsSuccessStatusCode, await released.Content.ReadAsStringAsync());
+        var firstAfterRelease = await fixture.LoadParticipantWithCredentialAsync(firstDevice);
+        using var reinstall = await fixture.InstallParticipantAccessAsync(
+            claimant,
+            new string('c', 43));
+        var reinstallError = await reinstall.Content
+            .ReadFromJsonAsync<MembershipErrorResponse>();
+
+        Assert.NotNull(firstBeforeRelease);
+        Assert.NotNull(secondBeforeRelease);
+        Assert.Null(firstAfterRelease);
+        Assert.Equal(HttpStatusCode.Forbidden, reinstall.StatusCode);
+        Assert.Equal("participant_access_denied", reinstallError!.Error);
+    }
+
+    [Fact]
+    public async Task ForeignAccountsCannotTakeClaimantParticipantAccess()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.CreateAccountAsync("Contractor");
+        var otherMember = await fixture.AddActiveMemberAsync("Other member");
+        var capability = await fixture.IssueClaimCapabilityAsync();
+        using var claimed = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant);
+        claimed.EnsureSuccessStatusCode();
+
+        using var other = await fixture.InstallParticipantAccessAsync(
+            otherMember,
+            new string('o', 43));
+        using var owner = await fixture.InstallParticipantAccessAsync(
+            fixture.Owner,
+            new string('w', 43));
+        using var anonymous = await fixture.InstallParticipantAccessAsync(
+            null,
+            new string('n', 43));
+
+        Assert.Equal(HttpStatusCode.Forbidden, other.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, owner.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+    }
+
+    [Fact]
+    public async Task LegacyClaimParticipantAccessHonorsOnlyThisCompanysCrafterBinding()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var member = await fixture.AddActiveMemberAsync("Legacy claimant");
+        var returning = await fixture.CreateAccountAsync("Returning contractor");
+        using var claimed = await fixture.ClaimAsync(member);
+        claimed.EnsureSuccessStatusCode();
+        var legacyCrafterId = await fixture.ConvertClaimToLegacyCrafterAsync(
+            removeAccountEvidence: true);
+        Assert.Equal(
+            CrafterAccountBindingMutationStatus.Applied,
+            (await fixture.Memberships.BindCrafterAsync(
+                new CompanyId(Guid.NewGuid()),
+                legacyCrafterId,
+                returning.ProfileId,
+                CrafterAccountBindingEvidence.OperatorConfirmed,
+                Guid.NewGuid())).Status);
+
+        using var crossCompany = await fixture.InstallParticipantAccessAsync(
+            returning,
+            new string('x', 43));
+        Assert.Equal(
+            CrafterAccountBindingMutationStatus.Applied,
+            (await fixture.Memberships.BindCrafterAsync(
+                new CompanyId(fixture.Company.Id),
+                legacyCrafterId,
+                returning.ProfileId,
+                CrafterAccountBindingEvidence.OperatorConfirmed,
+                fixture.Owner.ProfileId)).Status);
+        using var sameCompany = await fixture.InstallParticipantAccessAsync(
+            returning,
+            new string('y', 43));
+
+        Assert.Equal(HttpStatusCode.Forbidden, crossCompany.StatusCode);
+        Assert.True(sameCompany.IsSuccessStatusCode, await sameCompany.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task DiscordWorkspaceRecognizesClaimingAccountWithoutMembership()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.CreateAccountAsync("Contractor");
+        var stranger = await fixture.CreateAccountAsync("Stranger");
+        var capability = await fixture.IssueClaimCapabilityAsync();
+        using var claimed = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant);
+        claimed.EnsureSuccessStatusCode();
+
+        var owned = await fixture.ResolveDiscordAuthorityAsync(claimant);
+        var foreign = await fixture.ResolveDiscordAuthorityAsync(stranger);
+
+        Assert.NotNull(owned);
+        Assert.True(owned.IsActiveParticipant);
+        Assert.False(owned.IsCompanyOperator);
+        Assert.Null(foreign);
     }
 
     [Fact]
@@ -386,7 +508,9 @@ public sealed class CompanyMemberCommissionContractTests
         claimed.EnsureSuccessStatusCode();
         var claimProjection = (await claimed.Content
             .ReadFromJsonAsync<CompanyCommissionParticipantBrief>())!;
-        var legacyCrafterId = await fixture.ConvertClaimToLegacyCrafterAsync();
+        // Legacy claims predate account evidence, so crafter bindings decide ownership.
+        var legacyCrafterId = await fixture.ConvertClaimToLegacyCrafterAsync(
+            removeAccountEvidence: true);
 
         var hubLoads = await Task.WhenAll(
             fixture.LoadCompanyHubAsync(member),
@@ -1193,7 +1317,8 @@ public sealed class CompanyMemberCommissionContractTests
             return order.CompanyCommission!.ActiveClaim!.CrafterId!.Value;
         }
 
-        public async Task<Guid> ConvertClaimToLegacyCrafterAsync()
+        public async Task<Guid> ConvertClaimToLegacyCrafterAsync(
+            bool removeAccountEvidence = false)
         {
             var legacyCrafter = new TradeCrafterProfile
             {
@@ -1225,7 +1350,10 @@ public sealed class CompanyMemberCommissionContractTests
             {
                 ActiveClaim = order.CompanyCommission.ActiveClaim! with
                 {
-                    CrafterId = legacyCrafter.Id
+                    CrafterId = legacyCrafter.Id,
+                    AccountEvidence = removeAccountEvidence
+                        ? null
+                        : order.CompanyCommission.ActiveClaim.AccountEvidence
                 }
             };
             var orderPut = await Profiles.PutObjectAsync(
@@ -1446,6 +1574,68 @@ public sealed class CompanyMemberCommissionContractTests
             return await client.PostAsJsonAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/commands/cancel",
                 command);
+        }
+
+        public Task<HttpResponseMessage> InstallParticipantAccessAsync(
+            Account? account,
+            string participantCredential)
+        {
+            var client = account == null
+                ? application.CreateClient()
+                : CreateClient(account.Key);
+            return client.PostAsJsonAsync(
+                $"/xivdata/commission-briefs/{Order.CommissionPublication!.PublicId}/participant-access",
+                new CompanyCommissionParticipantAccessRequest(participantCredential));
+        }
+
+        public async Task<CompanyCommissionParticipantBrief?> LoadParticipantWithCredentialAsync(
+            string credential)
+        {
+            var capability = await Capabilities.ResolveAsync(
+                Order.CommissionPublication!.PublicId,
+                CompanyCommissionCapabilityKind.Participant,
+                credential,
+                CancellationToken.None);
+            return capability == null
+                ? null
+                : await Commissions.LoadParticipantAsync(capability, CancellationToken.None);
+        }
+
+        public Task<HttpResponseMessage> ReleaseWithCapabilityAsync(
+            string capability,
+            long projectionRevision) =>
+            application.CreateClient().PostAsJsonAsync(
+                $"/xivdata/commission-briefs/{Order.CommissionPublication!.PublicId}/commands/release-claim",
+                new PublicCompanyCommissionCommandEnvelope
+                {
+                    ProtocolVersion = CompanyCommissionProtocol.Version1,
+                    PublicBriefId = Order.CommissionPublication.PublicId,
+                    ExpectedProjectionRevision = projectionRevision,
+                    CommandId = Guid.NewGuid(),
+                    ParticipantCapability = capability,
+                    Command = JsonSerializer.SerializeToElement(new
+                    {
+                        reason = "Released by contract fixture"
+                    })
+                });
+
+        public async Task<DiscordParticipantAuthority?> ResolveDiscordAuthorityAsync(
+            Account account)
+        {
+            var authority = application.Services
+                .GetRequiredService<IDiscordCanonicalInteractionAuthority>();
+            var link = await Identities.LoadByProfileAsync(
+                account.ProfileId,
+                CancellationToken.None);
+            return await authority.ResolveAsync(
+                link!,
+                new DiscordInteractionTarget(
+                    "131313131313131313",
+                    account.DiscordUserId,
+                    new CompanyId(Company.Id),
+                    Order.Id,
+                    Order.CommissionPublication!.PublicId),
+                CancellationToken.None);
         }
 
         public Task RevokeParticipantCapabilitiesAsync() =>

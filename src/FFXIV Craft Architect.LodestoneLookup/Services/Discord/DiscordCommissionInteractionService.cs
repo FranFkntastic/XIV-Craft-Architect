@@ -11,8 +11,6 @@ internal sealed class DiscordCommissionInteractionService(
     SqliteDiscordCollaborationStore collaboration,
     SqliteDiscordIdentityStore identities,
     SqliteProfileHostStore profiles,
-    ProfileHostedTradeCompanyService companies,
-    SqliteMembershipStore memberships,
     SqliteDiscordNotificationStore notifications,
     IDiscordInteractionClaimLinkIssuer claimLinks,
     IDiscordInteractionAccessResolver accessResolver,
@@ -97,21 +95,9 @@ internal sealed class DiscordCommissionInteractionService(
             return Refusal(
                 "Link Discord in Craft Architect Settings before claiming with Discord.");
         }
-        var holdingProfile = await companies.ResolveProfileAccessAsync(
-            link.ProfileId,
-            publication.CompanyId,
-            cancellationToken);
-        var membership = holdingProfile == null
-            ? await memberships.LoadAsync(
-                publication.CompanyId,
-                link.ProfileId,
-                cancellationToken)
-            : null;
-        if (holdingProfile == null && membership is not { State: MembershipState.Active })
-        {
-            return Refusal("This commission is not available to your company membership.");
-        }
 
+        // Commissions are externally claimable: any Discord-linked account may claim.
+        // The claim itself is committed by the signed-in account in Craft Architect.
         var issued = await claimLinks.IssueInteractionClaimLinkAsync(
             publication,
             cancellationToken);
