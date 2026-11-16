@@ -10,6 +10,9 @@ const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const DISCORD_USER_ID_PATTERN = /^\d{17,20}$/;
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{32,512}$/;
 const PROJECTION_TAG_PATTERN = /^[a-f0-9]{64}$/;
+const PERSONAL_DATABASE_NAME = "FFXIVCraftArchitect.Personal";
+const PERSONAL_SETTINGS_STORE = "settings";
+const PROFILE_ACCESS_KEY_SETTING = "profileHost.accessKey";
 
 const enumMaps = {
     viewState: ["Draft", "Published", "Revoked"],
@@ -255,6 +258,36 @@ export class CommissionBriefApiClient {
                 "The participant exchange returned a different commission.",
                 "bootstrap-authority-mismatch");
         }
+    }
+
+    // Installs a fresh participant credential for the signed-in account that holds
+    // the claim. The server decides ownership; any other account is refused.
+    async installParticipantAccess(participantCredential, accessKey) {
+        const participant = optionalCapability(
+            participantCredential,
+            "Participant credential");
+        const key = optionalCapability(accessKey, "Account access key");
+        if (!participant || !key) {
+            throw new CommissionClientError(
+                "The participant access request is invalid.",
+                "invalid-authority");
+        }
+
+        const response = await this.fetch(`${this.briefPath}/participant-access`, {
+            method: "POST",
+            headers: {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "X-Profile-Key": key
+            },
+            cache: "no-store",
+            redirect: "error",
+            body: JSON.stringify({ participantCredential: participant })
+        });
+        const projection = adaptBriefProjection(await adaptResponse(response));
+        projection.projectionTag = optionalProjectionTag(
+            response.headers.get("X-Commission-Projection-Tag"));
+        return projection;
     }
 
     watch(participantSecret, projectionTag, onProjectionChanged, onState = () => {}) {
@@ -541,11 +574,11 @@ export class PortableClaimAccountStore {
         }));
     }
 
-    beginSignIn(claimCapability) {
+    beginSignIn(claimCapability = null) {
         const pending = {
             version: 1,
             publicId: this.publicId,
-            claimCapability: requiredCapability(claimCapability, "Claim capability"),
+            claimCapability: optionalCapability(claimCapability, "Claim capability"),
             savedAtUtc: new Date().toISOString()
         };
         this.#save(this.signInKey, pending, "Discord sign-in return");
@@ -561,7 +594,7 @@ export class PortableClaimAccountStore {
         const pending = this.#load(this.signInKey, "Discord sign-in return", value => ({
             version: 1,
             publicId: this.publicId,
-            claimCapability: requiredCapability(value.claimCapability, "Claim capability"),
+            claimCapability: optionalCapability(value.claimCapability, "Claim capability"),
             savedAtUtc: requiredDate(value.savedAtUtc, "Discord sign-in start time")
         }));
         if (error) {
@@ -573,7 +606,7 @@ export class PortableClaimAccountStore {
         }
         if (!pending) {
             throw new CommissionClientError(
-                "Discord sign-in returned without the saved commission claim.",
+                "Discord sign-in returned without its saved commission context.",
                 "missing-signin-return");
         }
 
@@ -713,6 +746,40 @@ export class PortableMembershipRequestStore {
         } catch {
             // Nothing durable to clean up.
         }
+    }
+}
+
+// Best-effort read of the account key the main Craft Architect app remembers on this
+// origin. It never creates or upgrades the app's database, and any failure means
+// "no saved account" rather than an error.
+export async function readRememberedProfileAccessKey(factory = globalThis.indexedDB) {
+    let database = null;
+    try {
+        if (!factory || typeof factory.databases !== "function") return null;
+        const databases = await factory.databases();
+        if (!databases.some(item => item?.name === PERSONAL_DATABASE_NAME)) return null;
+        database = await new Promise((resolve, reject) => {
+            const request = factory.open(PERSONAL_DATABASE_NAME);
+            request.onupgradeneeded = () => request.transaction?.abort();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+            request.onblocked = () => reject(new Error("The app database is busy."));
+        });
+        if (!database.objectStoreNames.contains(PERSONAL_SETTINGS_STORE)) return null;
+        const record = await new Promise((resolve, reject) => {
+            const request = database
+                .transaction([PERSONAL_SETTINGS_STORE], "readonly")
+                .objectStore(PERSONAL_SETTINGS_STORE)
+                .get(PROFILE_ACCESS_KEY_SETTING);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+        const value = typeof record?.value === "string" ? JSON.parse(record.value) : null;
+        return typeof value === "string" && CAPABILITY_PATTERN.test(value) ? value : null;
+    } catch {
+        return null;
+    } finally {
+        database?.close();
     }
 }
 
@@ -1299,6 +1366,10 @@ function waitForReconnect(milliseconds, signal) {
         const timer = setTimeout(finish, milliseconds);
         signal.addEventListener("abort", finish, { once: true });
     });
+}
+
+export function createParticipantSecret() {
+    return createSecret();
 }
 
 function createSecret() {
