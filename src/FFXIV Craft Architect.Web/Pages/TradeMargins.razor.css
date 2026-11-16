@@ -20,6 +20,7 @@
 .margins-table-wrap ::deep th:first-child,.margins-table-wrap ::deep td:first-child { position:sticky; left:0; z-index:1; background:#242424; }
 .margins-table-wrap ::deep tr:hover td { background:rgba(212,167,58,.08); }
 .margins-table-wrap ::deep tr:hover td:first-child { background:#2c2a23; }
+.margins-table-wrap.franthropy-glass-table ::deep tbody tr:hover td:first-child { background:var(--glass-sticky-hover,#302d24) !important; }
 .margins-table-wrap ::deep .is-align-end { text-align:right; }
 .margins-table-wrap ::deep .is-align-end .web-table-sort-button { justify-content:flex-end; }
 .margins-table-wrap ::deep .item-cell { display:flex; gap:10px; align-items:center; min-width:0; }

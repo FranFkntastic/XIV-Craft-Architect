@@ -1632,6 +1632,9 @@
             return true;
         }
 
+        var latest = (await TradeOperationsPersistence.LoadCompanyProfilesAsync()).SingleOrDefault(item => item.Id == profile.Id)
+            ?? throw new InvalidOperationException("The company is no longer available.");
+        profile.MarginItems = latest.MarginItems;
         if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(profile))
         {
             return false;

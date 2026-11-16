@@ -5,7 +5,8 @@ namespace FFXIV_Craft_Architect.Core.Services;
 
 public sealed record TradeMarginCost(
     string Name, int IconId, decimal? Materials, int? Synths,
-    DateTime? OldestPriceUtc, IReadOnlyList<string> Missing, string? Issue = null, int Units = 1);
+    DateTime? OldestPriceUtc, IReadOnlyList<string> Missing, string? Issue = null, int Units = 1,
+    bool UnknownPriceAge = false);
 
 /// <summary>Read-only full-tree commissioning projection, independent of planner sourcing choices.</summary>
 public sealed class TradeMarginCalculator(
@@ -20,6 +21,17 @@ public sealed class TradeMarginCalculator(
         var edges = new Dictionary<int, (int Yield, List<(int Id, int Amount)> Inputs)>();
         var active = new HashSet<int>();
         var order = new List<int>();
+        var root = await garland.GetItemAsync(itemId, ct);
+        if (root == null)
+        {
+            return new("Item unavailable", 0, null, null, null, [], "Item data unavailable");
+        }
+
+        if (root.Crafts?.Count is not > 0 && root.CompanyCrafts?.Count is not > 0)
+        {
+            return new(root.Name, root.IconId, null, null, null, [], "Not craftable");
+        }
+
         async Task Discover(int id)
         {
             if (active.Contains(id))
@@ -33,8 +45,8 @@ public sealed class TradeMarginCalculator(
             }
 
             active.Add(id);
-            var item = await garland.GetItemAsync(id, ct)
-                ?? throw new InvalidOperationException("Recipe item data is unavailable.");
+            var item = (id == itemId ? root : await garland.GetItemAsync(id, ct))
+                ?? throw new ItemDataUnavailableException();
             data[id] = item;
             if (item.Crafts?.Count > 0 || item.CompanyCrafts?.Count > 0)
             {
@@ -59,9 +71,11 @@ public sealed class TradeMarginCalculator(
             active.Remove(id);
             order.Add(id);
         }
-        var root = await garland.GetItemAsync(itemId, ct)
-            ?? throw new InvalidOperationException("Item data is unavailable.");
         try { await Discover(itemId); }
+        catch (ItemDataUnavailableException)
+        {
+            return new(root.Name, root.IconId, null, null, null, [], "Item data unavailable");
+        }
         catch (InvalidOperationException)
         {
             return new(root.Name, root.IconId, null, null, null, [], "Recipe mismatch");
@@ -123,7 +137,13 @@ public sealed class TradeMarginCalculator(
                     .ThenBy(world => world.DataCenter, StringComparer.OrdinalIgnoreCase).ThenBy(world => world.WorldName, StringComparer.OrdinalIgnoreCase).First();
                 worlds = worlds.Where(pair => pair.entry.DataCenter == selected.DataCenter && pair.world.WorldName == selected.WorldName);
             }
-            foreach (var (entry, world) in worlds.Where(pair => pair.world.Listings.Count > 0))
+            var contributingWorlds = worlds.Where(pair => pair.world.Listings.Count > 0).ToArray();
+            if (contributingWorlds.Length == 0)
+            {
+                unknownAge = true;
+            }
+
+            foreach (var (entry, world) in contributingWorlds)
             {
                 var stamp = world.LastUploadTimeUnixMilliseconds ?? entry.LastUploadTimeUnixMilliseconds;
                 if (stamp is not > 0) { unknownAge = true; continue; }
@@ -132,6 +152,8 @@ public sealed class TradeMarginCalculator(
             }
         }
         return new(root.Name, root.IconId, missing.Count == 0 ? materials : null, synths,
-            unknownAge ? null : oldest, missing, Units: units);
+            unknownAge ? null : oldest, missing, Units: units, UnknownPriceAge: unknownAge);
     }
+
+    private sealed class ItemDataUnavailableException : Exception;
 }
