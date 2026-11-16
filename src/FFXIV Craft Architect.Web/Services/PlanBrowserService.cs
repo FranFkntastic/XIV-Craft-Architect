@@ -20,7 +20,13 @@ public enum PlanBrowserPlanKind
     Linked,
 
     /// <summary>A "local changes" copy edited from an order-linked plan.</summary>
-    Fork
+    Fork,
+
+    /// <summary>
+    /// An unsealed plan whose name is a Trade order's generated plan name
+    /// (saved before order plans were sealed, or after the seal was lost).
+    /// </summary>
+    OrderNamed
 }
 
 public enum PlanBrowserGroupKind
@@ -147,6 +153,30 @@ public sealed class PlanBrowserCatalog
         }
 
         var isFork = summary.SourceOrderId.HasValue || IsForkName(summary.Name);
+        if (!isFork &&
+            orderIdsByPlanName.TryGetValue(summary.Name.Trim(), out var namedOrderIds))
+        {
+            if (namedOrderIds.Count == 1)
+            {
+                return CreateOrderRow(
+                    summary,
+                    PlanBrowserPlanKind.OrderNamed,
+                    summary.Name,
+                    namedOrderIds.First(),
+                    orders,
+                    ordersAvailable);
+            }
+
+            return new PlanBrowserRow
+            {
+                Summary = summary,
+                Kind = PlanBrowserPlanKind.OrderNamed,
+                Tab = PlanBrowserTab.Trade,
+                GroupKind = PlanBrowserGroupKind.UnattributedEdits,
+                DisplayName = summary.Name
+            };
+        }
+
         if (!isFork)
         {
             return new PlanBrowserRow
