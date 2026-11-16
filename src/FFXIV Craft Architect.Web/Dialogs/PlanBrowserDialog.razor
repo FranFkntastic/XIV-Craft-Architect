@@ -301,7 +301,7 @@
         PlanBrowserGroupKind.Order => string.IsNullOrWhiteSpace(row.Order?.Title)
             ? "Untitled order"
             : row.Order!.Title,
-        PlanBrowserGroupKind.UnattributedEdits => "Trade edits (order unknown)",
+        PlanBrowserGroupKind.UnattributedEdits => "Order unknown",
         PlanBrowserGroupKind.OrderStatusUnavailable => "Order status unavailable",
         PlanBrowserGroupKind.MissingOrder => "Order no longer exists",
         _ => string.Empty
