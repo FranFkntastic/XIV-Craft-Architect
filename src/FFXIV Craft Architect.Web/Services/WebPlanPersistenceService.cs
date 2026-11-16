@@ -38,7 +38,12 @@ public sealed class WebPlanPersistenceService
     public Task<StoredPlan?> LoadPlanPayloadAsync(string planId) =>
         _indexedDb.LoadPlanAsync(planId);
 
-    public async Task<bool> SaveSnapshotAsync(StoredPlan snapshot)
+    /// <param name="authoritative">
+    /// True when the snapshot is the complete stored state (e.g. applied from
+    /// profile sync), so a null <see cref="StoredPlan.SourceOrderId"/> is an
+    /// intentional clear rather than a Worker export that lacks the field.
+    /// </param>
+    public async Task<bool> SaveSnapshotAsync(StoredPlan snapshot, bool authoritative = false)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         var existing = await _indexedDb.LoadPlanAsync(snapshot.Id);
@@ -49,7 +54,8 @@ public sealed class WebPlanPersistenceService
         }
 
         // Worker exports do not know the fork's source order; keep it across saves.
-        if (existing is { LinkedOrderId: null, SourceOrderId: { } sourceOrderId } &&
+        if (!authoritative &&
+            existing is { LinkedOrderId: null, SourceOrderId: { } sourceOrderId } &&
             !snapshot.LinkedOrderId.HasValue &&
             !snapshot.SourceOrderId.HasValue)
         {

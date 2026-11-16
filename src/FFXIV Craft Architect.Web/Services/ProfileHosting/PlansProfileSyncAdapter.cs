@@ -114,7 +114,7 @@ public sealed class PlansProfileSyncAdapter :
                 $"Hosted plan '{envelope.ObjectId}' conflicts with its linked-order plan.");
         }
 
-        if (!await _planPersistence.SaveSnapshotAsync(plan))
+        if (!await _planPersistence.SaveSnapshotAsync(plan, authoritative: true))
         {
             throw new InvalidOperationException(
                 $"Browser storage could not apply hosted plan '{envelope.ObjectId}'.");
