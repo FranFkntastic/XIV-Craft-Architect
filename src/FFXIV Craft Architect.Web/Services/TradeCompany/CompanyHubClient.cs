@@ -120,7 +120,8 @@ public sealed class CompanyHubClient(
     public async Task<long> UpdateWorkspaceProfileAsync(
         TradeCompanyProfile profile,
         long expectedRevision,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool updateMarginItems = false)
     {
         using var response = await SendAsync(
             HttpMethod.Put,
@@ -135,8 +136,8 @@ public sealed class CompanyHubClient(
                 profile.MaterialPricingPolicy,
                 profile.CommissionPricingScope,
                 UpdateCommissionPricingScope = true,
-                profile.MarginItems,
-                UpdateMarginItems = true
+                MarginItems = updateMarginItems ? profile.MarginItems : null,
+                UpdateMarginItems = updateMarginItems
             },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
