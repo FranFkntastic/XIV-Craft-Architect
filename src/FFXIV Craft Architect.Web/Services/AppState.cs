@@ -327,4 +327,14 @@ public sealed class StoredPlanSummary
     public DateTime SavedAt { get; set; }
     public string DataCenter { get; set; } = string.Empty;
     public int ItemCount { get; set; }
+    public Guid? LinkedOrderId { get; set; }
+    public Guid? SourceOrderId { get; set; }
+    public List<StoredPlanSummaryItem> TopItems { get; set; } = [];
+    public int SummaryVersion { get; set; }
+}
+
+public sealed class StoredPlanSummaryItem
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
 }

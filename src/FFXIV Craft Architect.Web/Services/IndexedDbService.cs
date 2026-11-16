@@ -82,6 +82,24 @@ public sealed class IndexedDbService
             $"delete plan {planId}",
             planId);
 
+    public Task<StoredPlanBatchDeleteResult> DeletePlansBatchAsync(
+        IReadOnlyCollection<string> planIds,
+        IReadOnlyCollection<Guid> protectedLinkedOrderIds) =>
+        InvokeRequiredAsync<StoredPlanBatchDeleteResult>(
+            "IndexedDB.deletePlansBatch",
+            "delete plans",
+            planIds,
+            protectedLinkedOrderIds.Select(id => id.ToString("D")).ToArray());
+
+    public Task<bool> PatchUnlinkedPlanMetadataAsync(
+        string planId,
+        IReadOnlyDictionary<string, object?> metadataPatch) =>
+        InvokeRequiredAsync<bool>(
+            "IndexedDB.patchUnlinkedPlanMetadata",
+            $"update plan {planId}",
+            planId,
+            metadataPatch);
+
     public Task<bool> ClearAllPlansAsync() =>
         InvokeOrDefaultAsync(
             "IndexedDB.clearAllPlans",
@@ -480,6 +498,12 @@ public sealed class StoredPlan
     public string? SourcePlanId { get; set; }
     public string? SourcePlanName { get; set; }
     public Guid? LinkedOrderId { get; set; }
+
+    /// <summary>
+    /// The Trade order this unlinked plan was edited from ("local changes" fork).
+    /// Never set together with <see cref="LinkedOrderId"/>.
+    /// </summary>
+    public Guid? SourceOrderId { get; set; }
 }
 
 public sealed record StoredProcurementRoute(

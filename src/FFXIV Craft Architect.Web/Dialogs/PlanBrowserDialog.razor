@@ -1,166 +1,807 @@
+@using System.Globalization
+@using System.Net
 @using FFXIV_Craft_Architect.Web.Services
 @using FFXIV_Craft_Architect.Core.Models
 @inject WebPlanPersistenceService PlanPersistence
+@inject PlanBrowserService PlanBrowser
 @inject WorkerSessionCoordinator WorkerSession
 @inject WorkerProjectionStore WorkerProjections
 @inject PlanLifecycleWorkflowService PlanLifecycle
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 
-<MudDialog Style="min-width: 500px; max-width: 600px;">
-    <DialogContent>
-        <div style="display: flex; flex-direction: column; gap: 16px;">
-            <!-- Header -->
-            <MudText Typo="Typo.h5" Style="color: #fff; font-weight: 600;">Saved Plans</MudText>
-            
-            <!-- Plan List -->
-            <MudPaper Elevation="0" Style="background: #2d2d2d; border-radius: 4px; overflow: hidden;">
-                @if (_savedPlans?.Any() != true)
-                {
-                    <div style="padding: 24px; text-align: center;">
-                        <MudText Typo="Typo.body2" Style="color: var(--ca-text-muted);">
-                            No named plans saved yet. Your current session is still saved automatically.
-                        </MudText>
-                    </div>
-                }
-                else
-                {
-                    <MudList T="StoredPlanSummary" Dense="true" Style="padding: 0;">
-                        @foreach (var plan in _savedPlans.OrderByDescending(p => p.ModifiedAt))
-                        {
-                            var isSelected = _selectedPlan?.Id == plan.Id;
-                            <MudListItem T="StoredPlanSummary" 
-                                         Style="@GetItemStyle(isSelected)"
-                                         OnClick="() => SelectPlan(plan)">
-                                <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px;">
-                                    <div style="display: flex; flex-direction: column; gap: 2px;">
-                                        <MudText Typo="Typo.body1" 
-                                                 Style="@GetNameStyle(isSelected)">
-                                            @plan.Name
-                                            @if (plan.Id == CurrentPlanId)
-                                            {
-                                                <span style="color: #4caf50; font-size: 11px; margin-left: 8px;">(current)</span>
-                                            }
-                                        </MudText>
-                                        <MudText Typo="Typo.caption" Style="color: var(--ca-text-muted);">
-                                            @FormatPlanItemCount(plan.ItemCount) · @plan.DataCenter
-                                        </MudText>
-                                    </div>
-                                    <MudText Typo="Typo.caption" Style="color: var(--ca-text-muted); font-size: 11px;">
-                                        @plan.ModifiedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-                                    </MudText>
-                                </div>
-                            </MudListItem>
-                        }
-                    </MudList>
-                }
-            </MudPaper>
-        </div>
-    </DialogContent>
-    <DialogActions>
-        <div style="display: flex; gap: 8px; width: 100%; padding: 8px 16px;">
-            <!-- Save: Enabled when there are items to save -->
+<MudDialog Class="pb-dialog">
+    <TitleContent>
+        <div class="pb-title-row">
+            <MudText Typo="Typo.h6" Class="pb-title">Plans</MudText>
+            <div class="pb-search">
+                <MudTextField T="string"
+                              Value="_search"
+                              ValueChanged="OnSearchChanged"
+                              Immediate="true"
+                              DebounceInterval="150"
+                              Placeholder="Search plans and items"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Clearable="true"
+                              aria-label="Search plans and items" />
+            </div>
             <MudButton OnClick="OnSaveCurrentPlan"
                        Color="Color.Primary"
                        Variant="Variant.Outlined"
                        Size="Size.Small"
                        Disabled="@(WorkerProjections.Shell.ProjectItemCount == 0)"
                        StartIcon="@Icons.Material.Filled.Save"
-                       title="Save current plan">
-                @(CurrentPlanId != null ? "Save" : "Save As")
-            </MudButton>
-            <!-- Rename/Delete: Enabled when a plan is selected -->
-            <MudButton OnClick="OnRenamePlan"
-                       Color="Color.Secondary"
-                       Variant="Variant.Outlined"
-                       Size="Size.Small"
-                       Disabled="@(_selectedPlan == null)"
-                       StartIcon="@Icons.Material.Filled.Edit">
-                Rename
-            </MudButton>
-            <MudButton OnClick="OnDeletePlan"
-                       Color="Color.Error"
-                       Variant="Variant.Outlined"
-                       Size="Size.Small"
-                       Disabled="@(_selectedPlan == null)"
-                       StartIcon="@Icons.Material.Filled.Delete">
-                Delete
-            </MudButton>
-            <MudSpacer />
-            <MudButton OnClick="Close"
-                       Color="Color.Secondary"
-                       Variant="Variant.Text"
-                       Size="Size.Small">
-                Cancel
-            </MudButton>
-            <MudButton OnClick="OnLoadPlan"
-                       Color="Color.Primary"
-                       Variant="Variant.Filled"
-                       Size="Size.Small"
-                       Disabled="@(_selectedPlan == null)"
-                       StartIcon="@Icons.Material.Filled.FolderOpen">
-                Load
+                       title="Save the current plan">
+                @(CurrentSavablePlan != null ? "Save" : "Save As")
             </MudButton>
         </div>
-    </DialogActions>
+    </TitleContent>
+    <DialogContent>
+        <div class="pb-shell">
+            <MudTabs Elevation="0"
+                     Rounded="true"
+                     ApplyEffectsToContainer="true"
+                     PanelClass="pb-tab-panel"
+                     ActivePanelIndex="(int)_tab"
+                     ActivePanelIndexChanged="OnTabChanged">
+                <MudTabPanel Text="@TabLabel("My plans", PlanBrowserTab.MyPlans)" />
+                <MudTabPanel Text="@TabLabel("Trade", PlanBrowserTab.Trade)" />
+                <MudTabPanel Text="@TabLabel("Archived", PlanBrowserTab.Archived)" />
+            </MudTabs>
+
+            @if (_catalog.OrdersError != null)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    Trade orders could not be read, so order-linked plans are shown without status and cannot be deleted.
+                </MudAlert>
+            }
+
+            <div class="pb-list-head">
+                <span class="pb-check"
+                      role="checkbox"
+                      tabindex="0"
+                      aria-checked="@HeaderCheckState"
+                      aria-label="Select all visible plans"
+                      @onclick="ToggleAllVisible"
+                      @onkeydown="OnHeaderCheckKeyDown">
+                    <MudIcon Icon="@HeaderCheckIcon" Size="Size.Small" />
+                </span>
+                <span>Name</span>
+                <span class="pb-date">Modified</span>
+                <span class="pb-actions-spacer"></span>
+            </div>
+
+            <div class="pb-list">
+                @if (_loading)
+                {
+                    <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+                }
+                else if (_visibleRows.Count == 0)
+                {
+                    <div class="pb-empty">@EmptyMessage</div>
+                }
+                else
+                {
+                    @if (_pinnedRow != null)
+                    {
+                        @RenderRow(_pinnedRow, true)
+                    }
+                    @foreach (var group in _groups)
+                    {
+                        @if (group.Kind != PlanBrowserGroupKind.None)
+                        {
+                            <div class="pb-group-head" @key="group.Key">
+                                <span class="pb-group-title">@group.Title</span>
+                                @if (group.Order != null)
+                                {
+                                    <MudChip T="string"
+                                             Size="Size.Small"
+                                             Variant="Variant.Outlined"
+                                             Color="@StatusColor(group.Order.Status)"
+                                             Class="pb-chip">
+                                        @StatusLabel(group.Order.Status)
+                                    </MudChip>
+                                }
+                                <span class="pb-group-count">@group.Rows.Count</span>
+                            </div>
+                        }
+                        @foreach (var row in group.Rows)
+                        {
+                            @RenderRow(row, false)
+                        }
+                    }
+                }
+            </div>
+
+            <div class="pb-footer">
+                <span class="pb-selected-count">
+                    @(_selected.Count == 0 ? "None selected" : $"{_selected.Count:N0} selected")
+                </span>
+                <MudButton OnClick="DeleteSelectedAsync"
+                           Color="Color.Error"
+                           Variant="Variant.Outlined"
+                           Size="Size.Small"
+                           Disabled="@(_selected.Count == 0 || _busy)"
+                           StartIcon="@Icons.Material.Filled.Delete">
+                    Delete
+                </MudButton>
+                <MudButton OnClick="MoveSelectedToMyPlansAsync"
+                           Color="Color.Secondary"
+                           Variant="Variant.Outlined"
+                           Size="Size.Small"
+                           Disabled="@(!CanMoveSelection || _busy)"
+                           StartIcon="@Icons.Material.Filled.DriveFileMove"
+                           title="Detach your edits from their Trade order">
+                    Move to My plans
+                </MudButton>
+                <MudSpacer />
+                <MudButton OnClick="Close"
+                           Color="Color.Secondary"
+                           Variant="Variant.Text"
+                           Size="Size.Small">
+                    Close
+                </MudButton>
+                <MudButton OnClick="OpenSelectedAsync"
+                           Color="Color.Primary"
+                           Variant="Variant.Filled"
+                           Size="Size.Small"
+                           Disabled="@(_selected.Count != 1 || _busy)"
+                           StartIcon="@Icons.Material.Filled.FolderOpen">
+                    Open
+                </MudButton>
+            </div>
+        </div>
+    </DialogContent>
 </MudDialog>
 
 @code {
     [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
-    
-    private List<StoredPlanSummary> _savedPlans = new();
-    private StoredPlanSummary? _selectedPlan;
+
+    private PlanBrowserCatalog _catalog = PlanBrowserCatalog.Empty;
+    private PlanBrowserTab _tab = PlanBrowserTab.MyPlans;
+    private string _search = string.Empty;
+    private bool _loading = true;
+    private bool _busy;
+
+    private readonly HashSet<string> _selected = new(StringComparer.Ordinal);
+    private string? _anchorId;
+
+    private PlanBrowserRow? _pinnedRow;
+    private List<RowGroup> _groups = [];
+    private List<PlanBrowserRow> _visibleRows = [];
+
     private string? CurrentPlanId => WorkerProjections.Recipe?.PlanId;
 
-    private static string FormatPlanItemCount(int count)
-    {
-        return count == 1 ? "1 item" : $"{count:N0} items";
-    }
-    
+    private PlanBrowserRow? FindRow(string? id) =>
+        id == null ? null : _catalog.Rows.FirstOrDefault(row => row.Id == id);
+
+    /// <summary>The loaded plan when it can be overwritten in place (not order-sealed).</summary>
+    private PlanBrowserRow? CurrentSavablePlan =>
+        FindRow(CurrentPlanId) is { Kind: not PlanBrowserPlanKind.Linked } row ? row : null;
+
+    private IEnumerable<PlanBrowserRow> SelectedRows =>
+        _visibleRows.Where(row => _selected.Contains(row.Id));
+
+    private bool CanMoveSelection =>
+        _selected.Count > 0 &&
+        SelectedRows.All(row => row.Kind == PlanBrowserPlanKind.Fork);
+
+    private string EmptyMessage => !string.IsNullOrWhiteSpace(_search)
+        ? "No plans match your search."
+        : _tab switch
+        {
+            PlanBrowserTab.MyPlans => "No saved plans yet. Your current session is still saved automatically.",
+            PlanBrowserTab.Trade => "No plans belong to open Trade orders.",
+            _ => "No archived plans."
+        };
+
+    private sealed record RowGroup(
+        string Key,
+        PlanBrowserGroupKind Kind,
+        string Title,
+        PlanBrowserOrderInfo? Order,
+        List<PlanBrowserRow> Rows);
+
     protected override async Task OnInitializedAsync()
     {
-        await RefreshSavedPlansListAsync();
+        await ReloadAsync();
     }
-    
-    private async Task RefreshSavedPlansListAsync()
+
+    private async Task ReloadAsync()
     {
+        _loading = true;
         try
         {
-            var summaries = await PlanPersistence.LoadPlanSummariesAsync();
-            _savedPlans = summaries
-                .Where(p => p.Id != "autosave")
-                .ToList();
-            
-            // Clear selection if plan no longer exists
-            if (_selectedPlan != null && !_savedPlans.Any(p => p.Id == _selectedPlan.Id))
-            {
-                _selectedPlan = null;
-            }
+            _catalog = await PlanBrowser.LoadAsync();
         }
         catch (Exception ex)
         {
+            _catalog = PlanBrowserCatalog.Empty;
             Snackbar.Add($"Failed to load saved plans: {ex.Message}", Severity.Error);
         }
+        finally
+        {
+            _loading = false;
+        }
+
+        Recompute();
     }
-    
-    private void SelectPlan(StoredPlanSummary plan)
+
+    // ==================== VIEW ====================
+
+    private string TabLabel(string label, PlanBrowserTab tab)
     {
-        _selectedPlan = plan;
+        var count = _catalog.Rows.Count(row => row.Tab == tab && row.Matches(_search));
+        return $"{label} ({count:N0})";
     }
-    
-    private string GetItemStyle(bool isSelected)
+
+    private void Recompute()
     {
-        if (isSelected)
-            return "background: #3d3d3d; cursor: pointer;";
-        return "cursor: pointer;";
+        var rows = _catalog.Rows
+            .Where(row => row.Tab == _tab && row.Matches(_search))
+            .ToList();
+        _pinnedRow = rows.FirstOrDefault(row => row.Id == CurrentPlanId);
+        if (_pinnedRow != null)
+        {
+            rows.Remove(_pinnedRow);
+        }
+
+        _groups = rows
+            .GroupBy(row => row.GroupKey, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var first = group.First();
+                return new RowGroup(
+                    group.Key,
+                    first.GroupKind,
+                    GroupTitle(first),
+                    first.Order,
+                    group
+                        .OrderBy(row => row.Kind == PlanBrowserPlanKind.Linked ? 0 : 1)
+                        .ThenByDescending(row => row.Summary.ModifiedAt)
+                        .ToList());
+            })
+            .OrderBy(group => GroupRank(group.Kind))
+            .ThenByDescending(group => group.Rows.Max(row => row.Summary.ModifiedAt))
+            .ToList();
+
+        _visibleRows = new List<PlanBrowserRow>(rows.Count + 1);
+        if (_pinnedRow != null)
+        {
+            _visibleRows.Add(_pinnedRow);
+        }
+
+        foreach (var group in _groups)
+        {
+            _visibleRows.AddRange(group.Rows);
+        }
+
+        var visibleIds = _visibleRows.Select(row => row.Id).ToHashSet(StringComparer.Ordinal);
+        _selected.IntersectWith(visibleIds);
+        if (_anchorId != null && !visibleIds.Contains(_anchorId))
+        {
+            _anchorId = null;
+        }
     }
-    
-    private string GetNameStyle(bool isSelected)
+
+    private static int GroupRank(PlanBrowserGroupKind kind) => kind switch
     {
-        if (isSelected)
-            return "color: #d4a73a; font-weight: 600;";
-        return "color: #fff; font-weight: 500;";
+        PlanBrowserGroupKind.None => 0,
+        PlanBrowserGroupKind.Order => 1,
+        PlanBrowserGroupKind.OrderStatusUnavailable => 2,
+        PlanBrowserGroupKind.UnattributedEdits => 3,
+        _ => 4
+    };
+
+    private static string GroupTitle(PlanBrowserRow row) => row.GroupKind switch
+    {
+        PlanBrowserGroupKind.Order => string.IsNullOrWhiteSpace(row.Order?.Title)
+            ? "Untitled order"
+            : row.Order!.Title,
+        PlanBrowserGroupKind.UnattributedEdits => "Trade edits (order unknown)",
+        PlanBrowserGroupKind.OrderStatusUnavailable => "Order status unavailable",
+        PlanBrowserGroupKind.MissingOrder => "Order no longer exists",
+        _ => string.Empty
+    };
+
+    private RenderFragment RenderRow(PlanBrowserRow row, bool pinned) => __builder =>
+    {
+        var selected = _selected.Contains(row.Id);
+        <div class="@($"pb-row{(selected ? " pb-row--selected" : string.Empty)}{(pinned ? " pb-row--pinned" : string.Empty)}")"
+             @key="row.Id"
+             @onclick="e => OnRowClick(row, e)"
+             @ondblclick="() => OpenAsync(row)">
+            <span class="pb-check"
+                  role="checkbox"
+                  tabindex="0"
+                  aria-checked="@(selected ? "true" : "false")"
+                  aria-label="@($"Select {row.DisplayName}")"
+                  @onclick="e => OnCheckClick(row, e)"
+                  @onclick:stopPropagation="true"
+                  @ondblclick:stopPropagation="true"
+                  @onkeydown="e => OnCheckKeyDown(row, e)">
+                <MudIcon Icon="@(selected ? Icons.Material.Filled.CheckBox : Icons.Material.Filled.CheckBoxOutlineBlank)"
+                         Size="Size.Small" />
+            </span>
+            <div class="pb-main">
+                <div class="pb-name-line">
+                    <span class="pb-name" title="@row.Summary.Name">@row.DisplayName</span>
+                    @if (row.Id == CurrentPlanId)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success" Class="pb-chip">Current</MudChip>
+                    }
+                    @if (row.Kind == PlanBrowserPlanKind.Fork)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" Class="pb-chip">Your edits</MudChip>
+                    }
+                    @if (row.IsEmpty)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" Class="pb-chip">Empty</MudChip>
+                    }
+                </div>
+                <div class="pb-sub">@SubLine(row, pinned)</div>
+            </div>
+            <span class="pb-date" title="@FormatTimestamp(row.Summary.ModifiedAt)">
+                @FormatRelativeDate(row.Summary.ModifiedAt)
+            </span>
+            <div class="pb-actions" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true">
+                <MudButton Size="Size.Small"
+                           Variant="Variant.Text"
+                           Color="Color.Primary"
+                           Disabled="_busy"
+                           OnClick="() => OpenAsync(row)">
+                    Open
+                </MudButton>
+                <MudMenu Icon="@Icons.Material.Filled.MoreVert"
+                         Size="Size.Small"
+                         Dense="true"
+                         AnchorOrigin="Origin.BottomRight"
+                         TransformOrigin="Origin.TopRight"
+                         aria-label="@($"More actions for {row.DisplayName}")">
+                    <MudMenuItem Icon="@Icons.Material.Filled.Edit"
+                                 Disabled="@(!row.CanRename)"
+                                 OnClick="() => RenameAsync(row)">
+                        Rename
+                    </MudMenuItem>
+                    <MudMenuItem Icon="@Icons.Material.Filled.Delete"
+                                 OnClick="() => DeleteAsync(new[] { row })">
+                        Delete
+                    </MudMenuItem>
+                </MudMenu>
+            </div>
+        </div>
+    };
+
+    private static string SubLine(PlanBrowserRow row, bool pinned)
+    {
+        var parts = new List<string>
+        {
+            row.Summary.ItemCount == 1 ? "1 item" : $"{row.Summary.ItemCount:N0} items",
+            row.Summary.DataCenter
+        };
+        if (row.Summary.TopItems.Count > 0)
+        {
+            var names = string.Join(", ", row.Summary.TopItems.Select(item => item.Name));
+            var more = row.Summary.ItemCount - row.Summary.TopItems.Count;
+            parts.Add(more > 0 ? $"{names} +{more:N0}" : names);
+        }
+
+        if (pinned && row.Tab != PlanBrowserTab.MyPlans)
+        {
+            parts.Add(GroupTitle(row));
+        }
+
+        return string.Join(" · ", parts.Where(part => !string.IsNullOrWhiteSpace(part)));
     }
+
+    private static string FormatRelativeDate(DateTime value)
+    {
+        var local = value.ToLocalTime();
+        var today = DateTime.Today;
+        if (local.Date == today)
+        {
+            return $"today {local.ToString("HH:mm", CultureInfo.InvariantCulture)}";
+        }
+
+        if (local.Date == today.AddDays(-1))
+        {
+            return "yesterday";
+        }
+
+        return local.Year == today.Year
+            ? local.ToString("MMM d", CultureInfo.InvariantCulture)
+            : local.ToString("MMM d, yyyy", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatTimestamp(DateTime value) =>
+        value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+
+    private static string StatusLabel(TradeOrderStatus status) => status switch
+    {
+        TradeOrderStatus.ReadyToAssign => "Ready to assign",
+        TradeOrderStatus.InProgress => "In progress",
+        TradeOrderStatus.AwaitingDelivery => "Ready for delivery",
+        TradeOrderStatus.ResolutionRequired => "Needs resolution",
+        _ => status.ToString()
+    };
+
+    private static Color StatusColor(TradeOrderStatus status) => status switch
+    {
+        TradeOrderStatus.Assigned or TradeOrderStatus.InProgress => Color.Info,
+        TradeOrderStatus.AwaitingDelivery => Color.Warning,
+        TradeOrderStatus.ResolutionRequired => Color.Error,
+        TradeOrderStatus.Completed => Color.Success,
+        _ => Color.Default
+    };
+
+    // ==================== SELECTION ====================
+
+    private void OnSearchChanged(string? value)
+    {
+        _search = value ?? string.Empty;
+        Recompute();
+    }
+
+    private void OnTabChanged(int index)
+    {
+        _tab = (PlanBrowserTab)index;
+        _selected.Clear();
+        _anchorId = null;
+        Recompute();
+    }
+
+    private void OnRowClick(PlanBrowserRow row, MouseEventArgs e)
+    {
+        if (e.ShiftKey && _anchorId != null)
+        {
+            if (!(e.CtrlKey || e.MetaKey))
+            {
+                _selected.Clear();
+            }
+
+            SelectRange(row, true);
+            return;
+        }
+
+        if (e.CtrlKey || e.MetaKey)
+        {
+            Toggle(row);
+        }
+        else
+        {
+            _selected.Clear();
+            _selected.Add(row.Id);
+        }
+
+        _anchorId = row.Id;
+    }
+
+    private void OnCheckClick(PlanBrowserRow row, MouseEventArgs e)
+    {
+        if (e.ShiftKey && _anchorId != null)
+        {
+            SelectRange(row, !_selected.Contains(row.Id));
+            return;
+        }
+
+        Toggle(row);
+        _anchorId = row.Id;
+    }
+
+    private void OnCheckKeyDown(PlanBrowserRow row, KeyboardEventArgs e)
+    {
+        if (e.Key is " " or "Enter")
+        {
+            Toggle(row);
+            _anchorId = row.Id;
+        }
+    }
+
+    private void Toggle(PlanBrowserRow row)
+    {
+        if (!_selected.Remove(row.Id))
+        {
+            _selected.Add(row.Id);
+        }
+    }
+
+    private void SelectRange(PlanBrowserRow target, bool select)
+    {
+        var anchorIndex = _visibleRows.FindIndex(row => row.Id == _anchorId);
+        var targetIndex = _visibleRows.FindIndex(row => row.Id == target.Id);
+        if (anchorIndex < 0 || targetIndex < 0)
+        {
+            Toggle(target);
+            _anchorId = target.Id;
+            return;
+        }
+
+        var (start, end) = anchorIndex <= targetIndex
+            ? (anchorIndex, targetIndex)
+            : (targetIndex, anchorIndex);
+        for (var index = start; index <= end; index++)
+        {
+            if (select)
+            {
+                _selected.Add(_visibleRows[index].Id);
+            }
+            else
+            {
+                _selected.Remove(_visibleRows[index].Id);
+            }
+        }
+    }
+
+    private bool AllVisibleSelected =>
+        _visibleRows.Count > 0 && _visibleRows.All(row => _selected.Contains(row.Id));
+
+    private string HeaderCheckState => AllVisibleSelected
+        ? "true"
+        : _selected.Count > 0 ? "mixed" : "false";
+
+    private string HeaderCheckIcon => AllVisibleSelected
+        ? Icons.Material.Filled.CheckBox
+        : _selected.Count > 0
+            ? Icons.Material.Filled.IndeterminateCheckBox
+            : Icons.Material.Filled.CheckBoxOutlineBlank;
+
+    private void ToggleAllVisible()
+    {
+        if (AllVisibleSelected)
+        {
+            _selected.Clear();
+        }
+        else
+        {
+            _selected.UnionWith(_visibleRows.Select(row => row.Id));
+        }
+
+        _anchorId = null;
+    }
+
+    private void OnHeaderCheckKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key is " " or "Enter")
+        {
+            ToggleAllVisible();
+        }
+    }
+
+    // ==================== ACTIONS ====================
+
+    private async Task OpenSelectedAsync()
+    {
+        if (_selected.Count == 1 && FindRow(_selected.First()) is { } row)
+        {
+            await OpenAsync(row);
+        }
+    }
+
+    private async Task OpenAsync(PlanBrowserRow row)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var stored = await PlanPersistence.LoadPlanPayloadAsync(row.Id);
+            if (stored == null)
+            {
+                Snackbar.Add("Plan not found", Severity.Error);
+                return;
+            }
+
+            await PlanLifecycle.ReplaceStoredPlanAsync(
+                stored,
+                trackStoredPlanIdentity: true);
+            Snackbar.Add($"Loaded '{stored.Name}'", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to load plan: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task RenameAsync(PlanBrowserRow row)
+    {
+        if (!row.CanRename)
+        {
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["CurrentName"] = row.Summary.Name
+        };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = await DialogService.ShowAsync<RenamePlanDialog>("Rename Plan", parameters, options);
+        var result = await dialog.Result;
+        if (result?.Data is not string newName ||
+            string.IsNullOrWhiteSpace(newName) ||
+            newName == row.Summary.Name)
+        {
+            return;
+        }
+
+        try
+        {
+            var renameResult = await PlanPersistence.RenamePlanAsync(row.Id, newName);
+            if (!renameResult.Success)
+            {
+                Snackbar.Add("Failed to rename plan", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add($"Renamed '{renameResult.OldName}' to '{renameResult.NewName}'", Severity.Success);
+            if (row.Id == CurrentPlanId)
+            {
+                await WorkerSession.MutatePlanIdentityAsync(row.Id, newName);
+            }
+
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Rename failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private Task DeleteSelectedAsync() => DeleteAsync(SelectedRows.ToArray());
+
+    private async Task DeleteAsync(IReadOnlyList<PlanBrowserRow> rows)
+    {
+        if (rows.Count == 0 || _busy)
+        {
+            return;
+        }
+
+        var ordersUnknown = _catalog.OrdersError != null;
+        var protectedRows = rows
+            .Where(row => row.Kind == PlanBrowserPlanKind.Linked &&
+                          (ordersUnknown || row.Order?.IsOpen == true))
+            .ToArray();
+        var doomed = rows.Except(protectedRows).ToArray();
+        if (doomed.Length == 0)
+        {
+            ReportSkipped(protectedRows.Select(row => row.DisplayName).ToArray());
+            return;
+        }
+
+        var message = new System.Text.StringBuilder();
+        message.Append(doomed.Length == 1
+            ? "This plan will be deleted. This cannot be undone."
+            : $"These {doomed.Length:N0} plans will be deleted. This cannot be undone.");
+        message.Append("<ul style=\"max-height: 240px; overflow-y: auto; margin: 8px 0; padding-left: 20px;\">");
+        foreach (var row in doomed)
+        {
+            message.Append("<li>").Append(WebUtility.HtmlEncode(row.Summary.Name)).Append("</li>");
+        }
+
+        message.Append("</ul>");
+        if (doomed.Any(row => row.Id == CurrentPlanId))
+        {
+            message.Append("<p>Your current plan is included. Your current work stays open, but you won't be able to overwrite the saved copy.</p>");
+        }
+
+        if (protectedRows.Length > 0)
+        {
+            message.Append($"<p>{protectedRows.Length:N0} selected plan{(protectedRows.Length == 1 ? " is" : "s are")} still used by an open order and will be kept.</p>");
+        }
+
+        var confirm = await DialogService.ShowMessageBox(
+            doomed.Length == 1 ? "Delete plan" : "Delete plans",
+            (MarkupString)message.ToString(),
+            yesText: doomed.Length == 1 ? "Delete" : $"Delete {doomed.Length:N0}",
+            cancelText: "Cancel");
+        if (confirm != true)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await PlanBrowser.DeleteAsync(rows.Select(row => row.Id).ToArray());
+            var deleted = result.DeletedIds.Count + result.MissingIds.Count;
+            if (deleted > 0)
+            {
+                Snackbar.Add(
+                    deleted == 1 ? "Deleted 1 plan" : $"Deleted {deleted:N0} plans",
+                    Severity.Success);
+            }
+
+            var skippedIds = result.SkippedIds.ToHashSet(StringComparer.Ordinal);
+            ReportSkipped(rows
+                .Where(row => skippedIds.Contains(row.Id))
+                .Select(row => row.DisplayName)
+                .ToArray());
+            _selected.ExceptWith(result.DeletedIds);
+            _selected.ExceptWith(result.MissingIds);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        await ReloadAsync();
+    }
+
+    private void ReportSkipped(IReadOnlyList<string> names)
+    {
+        if (names.Count == 0)
+        {
+            return;
+        }
+
+        var reason = _catalog.OrdersError != null
+            ? "Trade orders could not be read"
+            : "still used by an open order";
+        Snackbar.Add(
+            $"{names.Count:N0} skipped: {reason}: {string.Join(", ", names)}",
+            Severity.Warning);
+    }
+
+    private async Task MoveSelectedToMyPlansAsync()
+    {
+        if (!CanMoveSelection || _busy)
+        {
+            return;
+        }
+
+        var rows = SelectedRows.ToArray();
+        _busy = true;
+        try
+        {
+            var moved = await PlanBrowser.MoveToMyPlansAsync(rows);
+            if (moved.Count > 0)
+            {
+                Snackbar.Add(
+                    moved.Count == 1 ? "Moved 1 plan to My plans" : $"Moved {moved.Count:N0} plans to My plans",
+                    Severity.Success);
+            }
+
+            if (moved.Count < rows.Length)
+            {
+                Snackbar.Add($"{rows.Length - moved.Count:N0} plan(s) could not be moved", Severity.Warning);
+            }
+
+            if (rows.FirstOrDefault(row => row.Id == CurrentPlanId) is { } current &&
+                moved.Contains(current.Id) &&
+                current.DisplayName != current.Summary.Name)
+            {
+                await WorkerSession.MutatePlanIdentityAsync(current.Id, current.DisplayName);
+            }
+
+            _selected.Clear();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Move failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        await ReloadAsync();
+    }
+
+    // ==================== SAVE ====================
 
     private async Task OnSaveCurrentPlan()
     {
@@ -172,49 +813,48 @@
 
         try
         {
-            // Check if there's a current plan to potentially overwrite
-            StoredPlanSummary? currentPlan = null;
-            if (CurrentPlanId != null)
-            {
-                currentPlan = _savedPlans.FirstOrDefault(p => p.Id == CurrentPlanId);
-            }
+            var currentPlan = CurrentSavablePlan;
+            var selectedPlan = _selected.Count == 1 ? FindRow(_selected.First()) : null;
 
-            // If there's a selected plan that's not the current one, ask if user wants to overwrite it
-            // or save as current/new
-            if (_selectedPlan != null && _selectedPlan.Id != CurrentPlanId)
+            // A different, overwritable plan is selected: ask explicitly. Dismissing cancels.
+            if (selectedPlan is { Kind: not PlanBrowserPlanKind.Linked } &&
+                selectedPlan.Id != CurrentPlanId)
             {
-                var confirm = await DialogService.ShowMessageBox(
-                    "Save Plan",
-                    $"Overwrite '{_selectedPlan.Name}' or save as '{currentPlan?.Name ?? "current plan"}'?",
-                    yesText: $"Overwrite '{_selectedPlan.Name}'",
-                    noText: $"Save '{currentPlan?.Name ?? "current"}'",
-                    cancelText: "Save As New");
-
-                if (confirm == true)
+                var parameters = new DialogParameters
                 {
-                    // Overwrite the selected plan
-                    await SavePlanToIdAsync(_selectedPlan.Id, _selectedPlan.Name);
+                    [nameof(SavePlanChoiceDialog.SelectedPlanName)] = selectedPlan.Summary.Name,
+                    [nameof(SavePlanChoiceDialog.CurrentPlanName)] = currentPlan?.Summary.Name
+                };
+                var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+                var choiceDialog = await DialogService.ShowAsync<SavePlanChoiceDialog>("Save Plan", parameters, options);
+                var choice = await choiceDialog.Result;
+                if (choice is not { Canceled: false, Data: SavePlanChoiceDialog.SavePlanChoice picked })
+                {
                     return;
                 }
-                else if (confirm == false && currentPlan != null)
+
+                switch (picked)
                 {
-                    // Save to current plan
-                    await SavePlanToIdAsync(currentPlan.Id, currentPlan.Name);
-                    return;
+                    case SavePlanChoiceDialog.SavePlanChoice.OverwriteSelected:
+                        await SavePlanToIdAsync(selectedPlan.Id, selectedPlan.Summary.Name);
+                        return;
+                    case SavePlanChoiceDialog.SavePlanChoice.UpdateCurrent when currentPlan != null:
+                        await SavePlanToIdAsync(currentPlan.Id, currentPlan.Summary.Name);
+                        return;
+                    case SavePlanChoiceDialog.SavePlanChoice.SaveAsNew:
+                        break;
+                    default:
+                        return;
                 }
-                // else: fall through to Save As New
             }
             else if (currentPlan != null)
             {
-                // Current plan is selected or no selection - just update it
-                await SavePlanToIdAsync(currentPlan.Id, currentPlan.Name);
+                await SavePlanToIdAsync(currentPlan.Id, currentPlan.Summary.Name);
                 return;
             }
 
-            // No current plan or user chose "Save As New" - show save dialog
             var dialog = await DialogService.ShowAsync<SavePlanDialog>("Save Plan");
             var result = await dialog.Result;
-
             if (result?.Data is string newName && !string.IsNullOrWhiteSpace(newName))
             {
                 await SavePlanToIdAsync(Guid.NewGuid().ToString(), newName);
@@ -238,6 +878,7 @@
             {
                 return;
             }
+
             snapshot.SourcePlanId = planId;
             snapshot.SourcePlanName = planName;
             var success = await PlanPersistence.SaveSnapshotAsync(snapshot);
@@ -247,11 +888,15 @@
                 Snackbar.Add($"{action} '{planName}'", Severity.Success);
 
                 await WorkerSession.MutatePlanIdentityAsync(planId, planName);
-
-                await RefreshSavedPlansListAsync();
-
-                // Select the saved plan
-                _selectedPlan = _savedPlans.FirstOrDefault(p => p.Id == planId);
+                await ReloadAsync();
+                _selected.Clear();
+                if (FindRow(planId) is { } saved)
+                {
+                    _tab = saved.Tab;
+                    Recompute();
+                    _selected.Add(saved.Id);
+                    _anchorId = saved.Id;
+                }
             }
             else
             {
@@ -263,116 +908,7 @@
             Snackbar.Add($"Save failed: {ex.Message}", Severity.Error);
         }
     }
-    
-    private async Task OnRenamePlan()
-    {
-        if (_selectedPlan == null) return;
-        
-        var parameters = new DialogParameters
-        {
-            ["CurrentName"] = _selectedPlan.Name
-        };
-        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
-        var dialog = await DialogService.ShowAsync<RenamePlanDialog>("Rename Plan", parameters, options);
-        var result = await dialog.Result;
-        
-        if (result?.Data is string newName && !string.IsNullOrWhiteSpace(newName) && newName != _selectedPlan.Name)
-        {
-            try
-            {
-                var renameResult = await PlanPersistence.RenamePlanAsync(_selectedPlan.Id, newName);
-                if (!renameResult.Success)
-                {
-                    Snackbar.Add("Failed to rename plan", Severity.Error);
-                    return;
-                }
 
-                Snackbar.Add($"Renamed '{renameResult.OldName}' to '{renameResult.NewName}'", Severity.Success);
-
-                // Update current plan name if this is the current plan
-                if (_selectedPlan.Id == CurrentPlanId)
-                {
-                    await WorkerSession.MutatePlanIdentityAsync(
-                        _selectedPlan.Id,
-                        newName);
-                }
-
-                await RefreshSavedPlansListAsync();
-
-                // Re-select the renamed plan
-                _selectedPlan = _savedPlans.FirstOrDefault(p => p.Id == _selectedPlan.Id);
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"Rename failed: {ex.Message}", Severity.Error);
-            }
-        }
-    }
-    
-    private async Task OnDeletePlan()
-    {
-        if (_selectedPlan == null) return;
-        
-        // Check if deleting current plan
-        var isCurrentPlan = _selectedPlan.Id == CurrentPlanId;
-        var message = isCurrentPlan 
-            ? $"'{_selectedPlan.Name}' is your current plan. Deleting it will not affect your current work, but you won't be able to overwrite it anymore. Continue?"
-            : $"Are you sure you want to delete '{_selectedPlan.Name}'?";
-        
-        var confirm = await DialogService.ShowMessageBox(
-            "Delete Plan",
-            message,
-            yesText: "Delete",
-            cancelText: "Cancel");
-        
-        if (confirm == true)
-        {
-            try
-            {
-                var success = await PlanPersistence.DeletePlanAsync(_selectedPlan.Id);
-                if (success)
-                {
-                    Snackbar.Add($"Deleted '{_selectedPlan.Name}'", Severity.Success);
-                    
-                    _selectedPlan = null;
-                    await RefreshSavedPlansListAsync();
-                }
-                else
-                {
-                    Snackbar.Add("Failed to delete plan", Severity.Error);
-                }
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"Delete failed: {ex.Message}", Severity.Error);
-            }
-        }
-    }
-    
-    private async Task OnLoadPlan()
-    {
-        if (_selectedPlan == null) return;
-        
-        try
-        {
-            var stored = await PlanPersistence.LoadPlanPayloadAsync(_selectedPlan.Id);
-            if (stored == null)
-            {
-                Snackbar.Add("Plan not found", Severity.Error);
-                return;
-            }
-            await PlanLifecycle.ReplaceStoredPlanAsync(
-                stored,
-                trackStoredPlanIdentity: true);
-            Snackbar.Add($"Loaded '{stored.Name}'", Severity.Success);
-            MudDialog.Close(DialogResult.Ok(true));
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Failed to load plan: {ex.Message}", Severity.Error);
-        }
-    }
-    
     private void Close()
     {
         MudDialog.Close();
