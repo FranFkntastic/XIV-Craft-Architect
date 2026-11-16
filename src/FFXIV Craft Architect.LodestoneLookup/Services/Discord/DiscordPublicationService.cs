@@ -51,7 +51,9 @@ public sealed class DiscordPublicationService(
     SqliteDiscordCollaborationStore collaboration,
     DiscordCommissionOptions options,
     CommissionBriefOptions commissionBriefOptions,
-    TimeProvider timeProvider) :
+    TimeProvider timeProvider,
+    IDiscordApiClient discordApi,
+    ILogger<DiscordPublicationService> logger) :
     IDiscordPublicationRefresher,
     IDiscordInteractionClaimLinkIssuer
 {
@@ -469,6 +471,29 @@ public sealed class DiscordPublicationService(
                 "The failed publication destination no longer matches the company's ready Discord installation.");
         }
 
+        if (publication.State == DiscordPublicationState.ReconciliationRequired &&
+            publication.MessageId == null)
+        {
+            var search = await discordApi.FindPublicationMessageAsync(
+                publication.ChannelId, publication.ActionToken, publication.CreatedAt, cancellationToken);
+            if (!search.Succeeded)
+            {
+                logger.LogWarning("Discord ambiguous create reconciliation refused: {Check}", search.Error);
+                return RetryConflict(search.Error ?? "Discord channel history could not be checked.");
+            }
+            if (!await collaboration.ResolveAmbiguousCreateAsync(
+                publication, search.MessageId, timeProvider.GetUtcNow(), cancellationToken))
+            {
+                logger.LogWarning("Discord reconciliation_state_changed: publication changed during channel history lookup.");
+                return RetryConflict("discord_reconciliation_state_changed: Publication changed during reconciliation; refresh again.");
+            }
+            if (search.MessageId != null)
+            {
+                await RefreshOrderAsync(access, publication.OrderId, cancellationToken);
+                return new DiscordPublicationRetryResult(DiscordPublicationRetryStatus.Queued,
+                    await collaboration.LoadPublicationAsync(publication.PublicationId, cancellationToken));
+            }
+        }
         var restoredState = ResolvePublicationState(order.Order);
         var claimUrl = await IssueClaimUrlAsync(
             order.Order,
@@ -564,8 +589,26 @@ public sealed class DiscordPublicationService(
                 "The Discord publication was not found for this company.");
         }
 
+        if (publication.State is DiscordPublicationState.Failed or DiscordPublicationState.ReconciliationRequired)
+        {
+            var retry = await RetryFailedAsync(access, publicId, cancellationToken);
+            return new DiscordPublicationReconcileResult(
+                retry.Status == DiscordPublicationRetryStatus.Queued
+                    ? DiscordPublicationReconcileStatus.Queued : DiscordPublicationReconcileStatus.Conflict,
+                retry.Publication, retry.Error);
+        }
         var previousRevision = publication.DesiredProjectionRevision;
-        await RefreshOrderAsync(access, publication.OrderId, cancellationToken);
+        try
+        {
+            await RefreshOrderAsync(access, publication.OrderId, cancellationToken);
+        }
+        catch (InvalidOperationException exception)
+        {
+            logger.LogWarning(exception, "Discord projection_reconciliation_refused check failed.");
+            return new DiscordPublicationReconcileResult(
+                DiscordPublicationReconcileStatus.Conflict, publication,
+                $"discord_projection_reconciliation_refused: {exception.Message}");
+        }
         var refreshed = await collaboration.LoadPublicationAsync(
             publication.PublicationId,
             cancellationToken);

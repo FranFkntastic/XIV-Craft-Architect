@@ -34,6 +34,55 @@ public sealed class DiscordCommissionMessageLifecycleTests
         Assert.Equal(7, (int)TradeOrderStatus.ResolutionRequired);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("900000000000000123")]
+    public async Task AmbiguousCreateReconciliationAdoptsOrEnablesOneRetry(string? messageId)
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"discord-reconcile-{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = CreateDiscordOptions(databasePath);
+            var store = new SqliteDiscordCollaborationStore(options);
+            var delivery = CreateDelivery(store, options);
+            var created = await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign, projectionRevision: 1,
+                eventKind: CompanyCommissionActivityKind.CommissionOpened, claimed: false));
+            var work = Assert.Single(await LeaseAsync(store));
+            await store.RequireReconciliationAsync(work.WorkItemId, work.LeaseId,
+                "fixture ambiguous send", DateTimeOffset.UtcNow);
+            var ambiguous = (await store.LoadPublicationAsync(created.Publication!.PublicationId))!;
+            Assert.True(await store.ResolveAmbiguousCreateAsync(ambiguous, messageId, DateTimeOffset.UtcNow));
+            Assert.False(await store.ResolveAmbiguousCreateAsync(ambiguous, messageId, DateTimeOffset.UtcNow));
+            var resolved = (await store.LoadPublicationAsync(ambiguous.PublicationId))!;
+            Assert.Equal(messageId, resolved.MessageId);
+            Assert.Equal(messageId == null ? DiscordPublicationState.Failed : DiscordPublicationState.Open, resolved.State);
+            if (messageId == null)
+            {
+                var retry = await store.RetryFailedPublicationAsync(CompanyId, resolved.PublicationId,
+                    resolved.PublicId, DiscordPublicationState.Open, "{}", DateTimeOffset.UtcNow);
+                Assert.True(retry.Success, retry.Error);
+            }
+            else
+            {
+                await store.EnqueueProjectionAsync(resolved.PublicationId, DiscordPublicationState.Open,
+                    resolved.DesiredProjectionRevision + 1, "{}", DateTimeOffset.UtcNow);
+            }
+            var next = Assert.Single(await LeaseAsync(store));
+            Assert.Equal(messageId == null ? DiscordOutboxOperation.CreateMessage : DiscordOutboxOperation.EditMessage,
+                next.Operation);
+            Assert.Equal(messageId, next.MessageId);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
     [Fact]
     public void AssignedPublicationOmitsWorkspaceWhenDeploymentCapabilityIsDisabled()
     {

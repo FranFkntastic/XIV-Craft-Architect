@@ -925,6 +925,7 @@ export function adaptBriefProjection(payload) {
 
     return {
         kind: "participant",
+        participantAcknowledgedTermsVersion: payload.participantAcknowledgedTermsVersion ?? null,
         termsComparisons: payload.termsComparisons == null ? null : requiredArray(payload.termsComparisons, "Terms comparisons").map(adaptTermsComparison),
         permittedTermsVersions: payload.permittedTermsVersions == null ? null : requiredArray(payload.permittedTermsVersions, "Permitted terms").map(adaptHistoricalTerms),
         public: publicBrief,

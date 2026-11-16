@@ -363,6 +363,60 @@ public sealed class SqliteDiscordCollaborationStore(
         return publications;
     }
 
+    public async Task<bool> ResolveAmbiguousCreateAsync(
+        DiscordPublicationRecord expected,
+        string? messageId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            UPDATE discord_publications
+            SET message_id = $messageId, state = $failed, updated_at_utc = $now
+            WHERE publication_id = $id AND state = $ambiguous AND message_id IS NULL
+              AND desired_projection_revision = $revision
+              AND 1 = (SELECT COUNT(*) FROM discord_outbox
+                       WHERE publication_id = $id AND state = $ambiguousWork AND operation = $create)
+              AND NOT EXISTS (SELECT 1 FROM discord_outbox
+                              WHERE publication_id = $id AND state = $inFlight);
+            """;
+        command.Parameters.AddWithValue("$id", expected.PublicationId.ToString("D"));
+        command.Parameters.AddWithValue("$revision", expected.DesiredProjectionRevision);
+        command.Parameters.AddWithValue("$messageId", (object?)messageId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$failed", (int)(messageId == null
+            ? DiscordPublicationState.Failed : DiscordPublicationState.Open));
+        command.Parameters.AddWithValue("$ambiguous", (int)DiscordPublicationState.ReconciliationRequired);
+        command.Parameters.AddWithValue("$ambiguousWork", (int)DiscordOutboxState.ReconciliationRequired);
+        command.Parameters.AddWithValue("$inFlight", (int)DiscordOutboxState.InFlight);
+        command.Parameters.AddWithValue("$create", (int)DiscordOutboxOperation.CreateMessage);
+        command.Parameters.AddWithValue("$now", now.ToString("O"));
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+        command.CommandText =
+            """
+            UPDATE discord_outbox
+            SET state = $resolved, message_id = $messageId, last_error = $error,
+                updated_at_utc = $now
+            WHERE publication_id = $id AND state = $ambiguousWork AND operation = $create;
+            """;
+        command.Parameters.AddWithValue("$resolved", (int)(messageId == null
+            ? DiscordOutboxState.Failed : DiscordOutboxState.Succeeded));
+        command.Parameters.AddWithValue("$error", messageId == null
+            ? "discord_reconciliation_not_found: No matching message exists in channel history; create can be retried."
+            : "discord_reconciliation_adopted: Adopted existing channel message.");
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
     public async Task<DiscordPublicationRetryResult> RetryFailedPublicationAsync(
         CompanyId companyId,
         Guid publicationId,

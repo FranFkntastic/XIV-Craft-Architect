@@ -160,12 +160,22 @@ builder.Services.AddSingleton(_ => new CommissionBriefOptions
 });
 builder.Services.AddSingleton<SqliteCommissionBriefStore>();
 builder.Services.AddSingleton<CommissionProjectionChangeSignal>();
-builder.Services.AddSingleton(_ =>
+builder.Services.AddSingleton(services =>
 {
     var discordDatabasePath = builder.Configuration["Discord:DatabasePath"]
         ?? Path.Combine(
             Path.GetDirectoryName(Path.GetFullPath(profileDatabasePath))!,
             "discord-collaboration.db");
+    var botToken = builder.Configuration["Discord:RuntimeBotToken"] ?? string.Empty;
+    var tokenLogger = services.GetRequiredService<ILogger<DiscordCommissionOptions>>();
+    if (botToken.Any(character => !char.IsAscii(character)))
+    {
+        tokenLogger.LogWarning("Discord bot token contains non-ASCII characters (likely a byte-order mark)");
+    }
+    else if (botToken.Any(character => character is < '!' or > '~'))
+    {
+        tokenLogger.LogWarning("Discord bot token contains whitespace or control characters");
+    }
     return new DiscordCommissionOptions
     {
         Enabled = builder.Configuration.GetValue("Discord:Enabled", false),
@@ -175,7 +185,7 @@ builder.Services.AddSingleton(_ =>
         CompanyId = builder.Configuration["Discord:CompanyId"] ?? string.Empty,
         ApplicationId = builder.Configuration["Discord:ApplicationId"] ?? string.Empty,
         PublicKey = builder.Configuration["Discord:PublicKey"] ?? string.Empty,
-        BotToken = builder.Configuration["Discord:RuntimeBotToken"] ?? string.Empty,
+        BotToken = botToken,
         AllowedGuildId = builder.Configuration["Discord:AllowedGuildId"] ?? string.Empty,
         AllowedChannelId = builder.Configuration["Discord:AllowedChannelId"] ?? string.Empty,
         CommissionBaseUrl = builder.Configuration["Discord:CommissionBaseUrl"]

@@ -67,6 +67,7 @@ public static class CompanyCommissionProjectionService
             .OrderBy(t => t.Version).ToArray();
         return new CompanyCommissionParticipantBrief
         {
+            ParticipantAcknowledgedTermsVersion = commission.ParticipantAcknowledgedTermsVersion,
             PermittedTermsVersions = permitted.Select(t => CreatePublicTerms(t) with
             {
                 PricingEvidence = new CompanyCommissionPricingEvidence(t.PricingEvidence.CostBasis,

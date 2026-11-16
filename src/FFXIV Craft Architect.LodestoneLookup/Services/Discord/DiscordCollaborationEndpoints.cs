@@ -136,10 +136,21 @@ public static class DiscordCollaborationEndpoints
                     });
                 }
 
-                var result = await publications.RetryFailedAsync(
-                    access,
-                    publicId,
-                    cancellationToken);
+                DiscordPublicationRetryResult result;
+                try
+                {
+                    result = await publications.RetryFailedAsync(access, publicId, cancellationToken);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    request.HttpContext.RequestServices.GetRequiredService<ILogger<DiscordPublicationService>>()
+                        .LogWarning(exception, "discord_publication_recovery_refused check failed.");
+                    return Results.Conflict(new
+                    {
+                        error = "discord_publication_recovery_refused",
+                        message = exception.Message
+                    });
+                }
                 return result.Status switch
                 {
                     DiscordPublicationRetryStatus.Queued
@@ -201,10 +212,21 @@ public static class DiscordCollaborationEndpoints
                     });
                 }
 
-                var result = await publications.ReconcileAsync(
-                    access,
-                    publicId,
-                    cancellationToken);
+                DiscordPublicationReconcileResult result;
+                try
+                {
+                    result = await publications.ReconcileAsync(access, publicId, cancellationToken);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    request.HttpContext.RequestServices.GetRequiredService<ILogger<DiscordPublicationService>>()
+                        .LogWarning(exception, "discord_publication_recovery_refused check failed.");
+                    return Results.Conflict(new
+                    {
+                        error = "discord_publication_recovery_refused",
+                        message = exception.Message
+                    });
+                }
                 return result.Status switch
                 {
                     DiscordPublicationReconcileStatus.Queued

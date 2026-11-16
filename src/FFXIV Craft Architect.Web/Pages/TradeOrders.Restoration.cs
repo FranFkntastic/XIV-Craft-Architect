@@ -310,7 +310,10 @@ public partial class TradeOrders
             case TradeOrderWorkspaceProjectionAction.Ignore:
                 break;
             case TradeOrderWorkspaceProjectionAction.ClearUnavailableSelection:
-                ClearUnavailableSelectedOrder("This order is no longer available.");
+                if (!_isDeletingSelectedOrder)
+                {
+                    ClearUnavailableSelectedOrder("This order is no longer available.");
+                }
                 break;
             case TradeOrderWorkspaceProjectionAction.ClearLocalCollision:
                 _selectedLocalHostedCollision = null;
