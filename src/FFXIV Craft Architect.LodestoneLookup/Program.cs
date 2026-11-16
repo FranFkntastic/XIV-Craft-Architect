@@ -217,7 +217,7 @@ builder.Services.AddSingleton(new CompanyCrafterConsolidationOptions
 {
     Mode = builder.Configuration.GetValue(
         "TradeCrafterConsolidation:Mode",
-        CompanyCrafterConsolidationMode.Apply)
+        CompanyCrafterConsolidationMode.DryRun)
 });
 builder.Services.AddSingleton<CompanyCrafterConsolidationService>();
 builder.Services.AddHostedService<CompanyCrafterConsolidationHostedService>();

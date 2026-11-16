@@ -14,7 +14,9 @@ public enum CompanyCrafterConsolidationMode
 
 public sealed class CompanyCrafterConsolidationOptions
 {
-    public CompanyCrafterConsolidationMode Mode { get; set; } = CompanyCrafterConsolidationMode.Apply;
+    // Startup only reports; operators apply with `profile-host consolidate-crafters`
+    // or by setting TradeCrafterConsolidation:Mode to Apply.
+    public CompanyCrafterConsolidationMode Mode { get; set; } = CompanyCrafterConsolidationMode.DryRun;
 }
 
 public sealed record CompanyCrafterMergeOutcome(
@@ -46,8 +48,11 @@ public sealed record CompanyCrafterConsolidationReport(
 // One person is one crafter per company. Older clients created a second crafter row
 // for the same exact Lodestone character; this repair folds each such group into one
 // survivor, re-points every stored reference, and tombstones the rest through the
-// normal revisioned sync path so browser copies converge. Groups whose rows are bound
-// to different accounts are left alone. Reruns find nothing left to merge.
+// normal revisioned sync path so browser copies converge. Only rows held by the
+// company's hosting profile are read or rewritten: generic sync lets any profile
+// upload a payload naming any company, so rows elsewhere are never trusted. Companies
+// without a single host, and groups bound to different accounts, are left alone.
+// Reruns find nothing left to merge.
 public sealed class CompanyCrafterConsolidationService(
     ProfileHostOptions profileOptions,
     TradeMembershipOptions membershipOptions,
@@ -56,6 +61,8 @@ public sealed class CompanyCrafterConsolidationService(
     ILogger<CompanyCrafterConsolidationService> logger)
 {
     public const string SkippedForConflictingAccounts = "bound_to_different_accounts";
+    public const string SkippedForMissingHost = "host_profile_missing";
+    public const string SkippedForAmbiguousHost = "host_profile_ambiguous";
 
     private static readonly JsonSerializerOptions ReadOptions = ProfileSyncJson.CreateOptions();
     private static readonly JsonNodeOptions NodeOptions = new() { PropertyNameCaseInsensitive = true };
@@ -70,28 +77,13 @@ public sealed class CompanyCrafterConsolidationService(
         "operatorNotes", "lodestoneLastSyncedAtUtc"
     ];
 
-    private sealed record CrafterCopy(
-        string ProfileId,
-        string ObjectId,
-        long Revision,
-        string PayloadJson,
-        TradeCrafterProfile Crafter);
-
-    private sealed record CrafterIdentity(
-        Guid CompanyId,
-        Guid CrafterId,
-        string? LodestoneCharacterId,
-        DateTime CreatedAtUtc,
-        IReadOnlyList<CrafterCopy> Copies);
+    private readonly CompanyHostProfileResolver hosts = new(profiles);
 
     private sealed class RunState(bool dryRun)
     {
         public bool DryRun { get; } = dryRun;
         public List<string> Backups { get; } = [];
         public bool BackedUp { get; set; }
-        public IReadOnlyList<HostedProfileObject>? Orders { get; set; }
-        public IReadOnlyList<HostedProfileObject>? Drafts { get; set; }
-        public List<(string ProfileId, ProfileSyncObjectEnvelope Order)>? ArchivedOrders { get; set; }
     }
 
     public async Task<CompanyCrafterConsolidationReport> RunAsync(
@@ -101,81 +93,100 @@ public sealed class CompanyCrafterConsolidationService(
         var state = new RunState(dryRun);
         var merges = new List<CompanyCrafterMergeOutcome>();
         var skipped = new List<CompanyCrafterSkippedGroup>();
-        var identities = await LoadCrafterIdentitiesAsync(cancellationToken);
-        var groups = identities
-            .Where(item => item.LodestoneCharacterId != null)
-            .GroupBy(item => (item.CompanyId, Lodestone: item.LodestoneCharacterId!))
-            .Where(group => group.Count() > 1)
-            .OrderBy(group => group.Key.CompanyId)
-            .ThenBy(group => group.Key.Lodestone, StringComparer.Ordinal)
-            .ToArray();
-        var bindingsByCompany = new Dictionary<Guid, IReadOnlyDictionary<Guid, Guid>>();
+        var hostProfiles = await hosts.LoadAllAsync(cancellationToken);
 
-        foreach (var group in groups)
+        // Companies without a trusted host are only reported, never repaired.
+        foreach (var (companyId, lodestone, crafterIds) in await FindUnhostedDuplicatesAsync(hostProfiles, cancellationToken))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var companyId = new CompanyId(group.Key.CompanyId);
-            if (!bindingsByCompany.TryGetValue(companyId.Value, out var bindings))
-            {
-                bindings = (await memberships.LoadCrafterBindingsAsync(companyId, cancellationToken))
-                    .ToDictionary(item => item.LegacyCrafterId, item => item.AccountProfileId);
-                bindingsByCompany[companyId.Value] = bindings;
-            }
+            var reason = hostProfiles.ContainsKey(companyId) ? SkippedForAmbiguousHost : SkippedForMissingHost;
+            logger.LogWarning(
+                "Crafter consolidation skipped company {CompanyId} Lodestone {LodestoneCharacterId}: {Reason} (candidate hosts {CandidateProfileIds}).",
+                companyId,
+                lodestone,
+                reason,
+                hostProfiles.TryGetValue(companyId, out var host) ? string.Join(",", host.CandidateProfileIds) : "none");
+            skipped.Add(new CompanyCrafterSkippedGroup(companyId, lodestone, crafterIds, reason));
+        }
 
-            var members = group
-                .OrderBy(item => item.CreatedAtUtc)
-                .ThenBy(item => item.CrafterId)
+        foreach (var host in hostProfiles.Values
+                     .Where(item => item.Status == CompanyHostProfileStatus.Resolved)
+                     .OrderBy(item => item.CompanyId.Value))
+        {
+            var companyId = host.CompanyId;
+            var hostProfileId = host.ProfileId!;
+            var groups = (await hosts.LoadCraftersAsync(hostProfileId, companyId, cancellationToken))
+                .Select(item => (Crafter: item, Lodestone: LegacyCrafterAccountResolver.NormalizeLodestoneId(item.Crafter.LodestoneCharacterId)))
+                .Where(item => item.Lodestone != null)
+                .GroupBy(item => item.Lodestone!, item => item.Crafter, StringComparer.Ordinal)
+                .Where(group => group.Count() > 1)
+                .OrderBy(group => group.Key, StringComparer.Ordinal)
                 .ToArray();
-            var bound = members.Where(item => bindings.ContainsKey(item.CrafterId)).ToArray();
-            var accounts = bound.Select(item => bindings[item.CrafterId]).Distinct().ToArray();
-            if (accounts.Length > 1)
+            if (groups.Length == 0)
             {
-                logger.LogWarning(
-                    "Crafter consolidation skipped company {CompanyId} Lodestone {LodestoneCharacterId}: crafters {CrafterIds} are bound to different accounts.",
-                    companyId.Value,
-                    group.Key.Lodestone,
-                    string.Join(",", members.Select(item => item.CrafterId)));
-                skipped.Add(new CompanyCrafterSkippedGroup(
-                    companyId.Value,
-                    group.Key.Lodestone,
-                    members.Select(item => item.CrafterId).ToArray(),
-                    SkippedForConflictingAccounts));
                 continue;
             }
 
-            var survivor = (bound.Length > 0 ? bound : members)[0];
-            var losers = members.Where(item => item.CrafterId != survivor.CrafterId).ToArray();
-            try
+            var bindings = (await memberships.LoadCrafterBindingsAsync(companyId, cancellationToken))
+                .ToDictionary(item => item.LegacyCrafterId, item => item.AccountProfileId);
+            foreach (var group in groups)
             {
-                merges.Add(await MergeAsync(
-                    state,
-                    companyId,
-                    group.Key.Lodestone,
-                    survivor,
-                    losers,
-                    accounts.Length == 1 ? accounts[0] : null,
-                    cancellationToken));
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                logger.LogError(
-                    exception,
-                    "Crafter consolidation failed for company {CompanyId} Lodestone {LodestoneCharacterId}; the group stays unmerged and will be retried.",
-                    companyId.Value,
-                    group.Key.Lodestone);
-                merges.Add(new CompanyCrafterMergeOutcome(
-                    companyId.Value,
-                    group.Key.Lodestone,
-                    survivor.CrafterId,
-                    losers.Select(item => item.CrafterId).ToArray(),
-                    accounts.Length == 1 ? accounts[0] : null,
-                    0,
-                    0,
-                    0,
-                    0,
-                    [],
-                    "failed",
-                    exception.Message));
+                cancellationToken.ThrowIfCancellationRequested();
+                var members = group
+                    .OrderBy(item => item.Crafter.CreatedAtUtc)
+                    .ThenBy(item => item.Crafter.Id)
+                    .ToArray();
+                var bound = members.Where(item => bindings.ContainsKey(item.Crafter.Id)).ToArray();
+                var accounts = bound.Select(item => bindings[item.Crafter.Id]).Distinct().ToArray();
+                if (accounts.Length > 1)
+                {
+                    logger.LogWarning(
+                        "Crafter consolidation skipped company {CompanyId} Lodestone {LodestoneCharacterId}: crafters {CrafterIds} are bound to different accounts.",
+                        companyId.Value,
+                        group.Key,
+                        string.Join(",", members.Select(item => item.Crafter.Id)));
+                    skipped.Add(new CompanyCrafterSkippedGroup(
+                        companyId.Value,
+                        group.Key,
+                        members.Select(item => item.Crafter.Id).ToArray(),
+                        SkippedForConflictingAccounts));
+                    continue;
+                }
+
+                var survivor = (bound.Length > 0 ? bound : members)[0];
+                var losers = members.Where(item => item.Crafter.Id != survivor.Crafter.Id).ToArray();
+                try
+                {
+                    merges.Add(await MergeAsync(
+                        state,
+                        companyId,
+                        hostProfileId,
+                        group.Key,
+                        survivor,
+                        losers,
+                        accounts.Length == 1 ? accounts[0] : null,
+                        cancellationToken));
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    logger.LogError(
+                        exception,
+                        "Crafter consolidation failed for company {CompanyId} Lodestone {LodestoneCharacterId}; the group stays unmerged and will be retried.",
+                        companyId.Value,
+                        group.Key);
+                    merges.Add(new CompanyCrafterMergeOutcome(
+                        companyId.Value,
+                        group.Key,
+                        survivor.Crafter.Id,
+                        losers.Select(item => item.Crafter.Id).ToArray(),
+                        accounts.Length == 1 ? accounts[0] : null,
+                        0,
+                        0,
+                        0,
+                        0,
+                        [],
+                        "failed",
+                        exception.Message));
+                }
             }
         }
 
@@ -185,59 +196,39 @@ public sealed class CompanyCrafterConsolidationService(
     private async Task<CompanyCrafterMergeOutcome> MergeAsync(
         RunState state,
         CompanyId companyId,
+        string hostProfileId,
         string lodestone,
-        CrafterIdentity survivor,
-        IReadOnlyList<CrafterIdentity> losers,
+        HostedCompanyCrafter survivor,
+        IReadOnlyList<HostedCompanyCrafter> losers,
         Guid? accountProfileId,
         CancellationToken cancellationToken)
     {
-        var map = losers.ToDictionary(item => item.CrafterId, _ => survivor.CrafterId);
-        var survivorName = survivor.Copies
-            .Select(copy => copy.Crafter.DisplayName?.Trim())
-            .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name));
-        var donors = losers
-            .SelectMany(item => item.Copies)
-            .OrderBy(copy => copy.Crafter.CreatedAtUtc)
-            .ThenBy(copy => copy.Crafter.Id)
-            .ToArray();
+        var map = losers.ToDictionary(item => item.Crafter.Id, _ => survivor.Crafter.Id);
+        var survivorName = string.IsNullOrWhiteSpace(survivor.Crafter.DisplayName)
+            ? null
+            : survivor.Crafter.DisplayName.Trim();
+        var donors = losers.Select(item => item.PayloadJson).ToArray();
 
         // Plan every rewrite first so a dry run reports exactly what apply would change.
-        state.Orders ??= await profiles.LoadObjectsAsync(ProfileSyncCollections.TradeOrders, cancellationToken);
-        state.Drafts ??= await profiles.LoadObjectsAsync(ProfileSyncCollections.TradePayrollDrafts, cancellationToken);
-        if (state.ArchivedOrders == null)
-        {
-            state.ArchivedOrders = [];
-            foreach (var profileId in await profiles.LoadActiveProfileIdsAsync(cancellationToken))
-            {
-                foreach (var archived in await profiles.LoadAllDeepArchivedOrdersAsync(profileId, cancellationToken))
-                {
-                    state.ArchivedOrders.Add((profileId, archived));
-                }
-            }
-        }
+        // Reads are fresh per group so each merge plans against the revisions the
+        // previous one wrote.
+        var orders = await profiles.LoadProfileObjectsAsync(hostProfileId, ProfileSyncCollections.TradeOrders, cancellationToken);
+        var drafts = await profiles.LoadProfileObjectsAsync(hostProfileId, ProfileSyncCollections.TradePayrollDrafts, cancellationToken);
+        var archived = await profiles.LoadAllDeepArchivedOrdersAsync(hostProfileId, cancellationToken);
 
-        var orderRewrites = state.Orders
-            .Select(item => (Item: item, Payload: RewriteOrder(item.Object.PayloadJson, companyId, map)))
+        var orderRewrites = orders
+            .Select(item => (Item: item.Object, Payload: RewriteOrder(item.Object.PayloadJson, companyId, map)))
             .Where(item => item.Payload != null)
             .ToArray();
-        var draftRewrites = state.Drafts
-            .Select(item => (Item: item, Payload: RewriteDraft(item.Object.PayloadJson, companyId, map, survivorName)))
+        var draftRewrites = drafts
+            .Select(item => (Item: item.Object, Payload: RewriteDraft(item.Object.PayloadJson, companyId, map, survivorName)))
             .Where(item => item.Payload != null)
             .ToArray();
-        var archiveRewrites = state.ArchivedOrders
-            .Select(item => (Item: item, Payload: RewriteOrder(item.Order.PayloadJson, companyId, map)))
+        var archiveRewrites = archived
+            .Select(item => (Item: item, Payload: RewriteOrder(item.PayloadJson, companyId, map)))
             .Where(item => item.Payload != null)
             .ToArray();
-        var survivorRewrites = survivor.Copies
-            .Select(copy => (Copy: copy, Fill: FillBlanks(copy.PayloadJson, donors)))
-            .Where(item => item.Fill.Payload != null)
-            .ToArray();
-        var filledFields = survivorRewrites
-            .SelectMany(item => item.Fill.Fields)
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-        var loserCopies = losers.SelectMany(item => item.Copies).ToArray();
+        var fill = FillBlanks(survivor.PayloadJson, donors);
 
         if (state.DryRun)
         {
@@ -245,7 +236,7 @@ public sealed class CompanyCrafterConsolidationService(
                 "Crafter consolidation dry run: company {CompanyId} Lodestone {LodestoneCharacterId} would keep {SurvivorId} and merge {LoserIds} ({Orders} orders, {Drafts} payroll drafts, {Archived} archived orders).",
                 companyId.Value,
                 lodestone,
-                survivor.CrafterId,
+                survivor.Crafter.Id,
                 string.Join(",", map.Keys),
                 orderRewrites.Length,
                 draftRewrites.Length,
@@ -253,14 +244,14 @@ public sealed class CompanyCrafterConsolidationService(
             return new CompanyCrafterMergeOutcome(
                 companyId.Value,
                 lodestone,
-                survivor.CrafterId,
+                survivor.Crafter.Id,
                 map.Keys.ToArray(),
                 accountProfileId,
                 orderRewrites.Length,
                 draftRewrites.Length,
                 archiveRewrites.Length,
-                loserCopies.Length,
-                filledFields,
+                losers.Count,
+                fill.Fields,
                 "planned");
         }
 
@@ -268,92 +259,84 @@ public sealed class CompanyCrafterConsolidationService(
 
         foreach (var (item, payload) in orderRewrites)
         {
-            await PutAsync(item.ProfileId, ProfileSyncCollections.TradeOrders, item.Object, payload!, cancellationToken);
+            await PutAsync(hostProfileId, ProfileSyncCollections.TradeOrders, item.ObjectId, item.Revision, payload!, cancellationToken);
         }
 
         foreach (var (item, payload) in draftRewrites)
         {
-            await PutAsync(item.ProfileId, ProfileSyncCollections.TradePayrollDrafts, item.Object, payload!, cancellationToken);
+            await PutAsync(hostProfileId, ProfileSyncCollections.TradePayrollDrafts, item.ObjectId, item.Revision, payload!, cancellationToken);
         }
 
-        foreach (var ((profileId, archived), payload) in archiveRewrites)
+        foreach (var (item, payload) in archiveRewrites)
         {
             if (!await profiles.ReplaceDeepArchivedOrderPayloadAsync(
-                    profileId,
-                    archived.ObjectId,
-                    archived.PayloadJson,
+                    hostProfileId,
+                    item.ObjectId,
+                    item.PayloadJson,
                     payload!,
                     cancellationToken))
             {
                 throw new InvalidOperationException(
-                    $"Archived order {archived.ObjectId} changed while its crafter was being re-pointed.");
+                    $"Archived order {item.ObjectId} changed while its crafter was being re-pointed.");
             }
         }
 
-        foreach (var (copy, fill) in survivorRewrites)
+        if (fill.Payload != null)
         {
             await PutAsync(
-                copy.ProfileId,
+                hostProfileId,
                 ProfileSyncCollections.TradeCrafters,
-                copy.ObjectId,
-                copy.Revision,
-                fill.Payload!,
+                survivor.Crafter.Id.ToString("D"),
+                survivor.Revision,
+                fill.Payload,
                 cancellationToken);
         }
 
         var details = JsonSerializer.Serialize(new
         {
-            survivorCrafterId = survivor.CrafterId,
+            survivorCrafterId = survivor.Crafter.Id,
+            hostProfileId,
             ordersRepointed = orderRewrites.Length,
             payrollDraftsRepointed = draftRewrites.Length,
             archivedOrdersRepointed = archiveRewrites.Length,
-            filledFields
+            filledFields = fill.Fields
         });
         var mergedAt = DateTimeOffset.UtcNow;
         foreach (var loser in losers)
         {
-            var loserPayload = loser.Copies
-                .OrderByDescending(copy => copy.Crafter.UpdatedAtUtc)
-                .ThenByDescending(copy => copy.Revision)
-                .First()
-                .PayloadJson;
             await memberships.RepointCrafterReferencesAsync(
                 new CompanyCrafterMergeReceipt(
                     companyId,
-                    loser.CrafterId,
-                    survivor.CrafterId,
+                    loser.Crafter.Id,
+                    survivor.Crafter.Id,
                     lodestone,
                     accountProfileId,
-                    loserPayload,
+                    loser.PayloadJson,
                     details,
                     mergedAt),
                 cancellationToken);
         }
 
-        foreach (var copy in loserCopies)
+        foreach (var loser in losers)
         {
             var deleted = await profiles.DeleteObjectAsync(
-                copy.ProfileId,
+                hostProfileId,
                 ProfileSyncCollections.TradeCrafters,
-                copy.ObjectId,
-                copy.Revision,
+                loser.Crafter.Id.ToString("D"),
+                loser.Revision,
                 cancellationToken);
             if (!deleted.Success)
             {
                 throw new InvalidOperationException(
-                    $"Crafter {copy.ObjectId} changed before it could be tombstoned ({deleted.ErrorCode ?? "conflict"}).");
+                    $"Crafter {loser.Crafter.Id:D} changed before it could be tombstoned ({deleted.ErrorCode ?? "conflict"}).");
             }
         }
 
-        // Later groups must plan against the revisions this merge just wrote.
-        state.Orders = null;
-        state.Drafts = null;
-        state.ArchivedOrders = null;
         logger.LogInformation(
             "Crafter consolidation merged company {CompanyId} Lodestone {LodestoneCharacterId}: kept {SurvivorId}, merged {LoserIds}, re-pointed {Orders} orders, {Drafts} payroll drafts and {Archived} archived orders.",
             companyId.Value,
             lodestone,
-            survivor.CrafterId,
+            survivor.Crafter.Id,
             string.Join(",", map.Keys),
             orderRewrites.Length,
             draftRewrites.Length,
@@ -361,14 +344,14 @@ public sealed class CompanyCrafterConsolidationService(
         return new CompanyCrafterMergeOutcome(
             companyId.Value,
             lodestone,
-            survivor.CrafterId,
+            survivor.Crafter.Id,
             map.Keys.ToArray(),
             accountProfileId,
             orderRewrites.Length,
             draftRewrites.Length,
             archiveRewrites.Length,
-            loserCopies.Length,
-            filledFields,
+            losers.Count,
+            fill.Fields,
             "merged");
     }
 
@@ -390,14 +373,6 @@ public sealed class CompanyCrafterConsolidationService(
 
         state.BackedUp = true;
     }
-
-    private Task PutAsync(
-        string profileId,
-        string collection,
-        ProfileSyncObjectEnvelope current,
-        string payload,
-        CancellationToken cancellationToken) =>
-        PutAsync(profileId, collection, current.ObjectId, current.Revision, payload, cancellationToken);
 
     private async Task PutAsync(
         string profileId,
@@ -421,13 +396,14 @@ public sealed class CompanyCrafterConsolidationService(
         }
     }
 
-    private async Task<IReadOnlyList<CrafterIdentity>> LoadCrafterIdentitiesAsync(
+    // Duplicate groups in companies that have no single host profile. These rows are
+    // untrusted and only surface in the report so an operator can look at them.
+    private async Task<IReadOnlyList<(Guid CompanyId, string Lodestone, IReadOnlyList<Guid> CrafterIds)>> FindUnhostedDuplicatesAsync(
+        IReadOnlyDictionary<Guid, CompanyHostProfile> hostProfiles,
         CancellationToken cancellationToken)
     {
-        var copies = new List<CrafterCopy>();
-        foreach (var item in await profiles.LoadObjectsAsync(
-                     ProfileSyncCollections.TradeCrafters,
-                     cancellationToken))
+        var rows = new List<(Guid CompanyId, Guid CrafterId, string Lodestone)>();
+        foreach (var item in await profiles.LoadObjectsAsync(ProfileSyncCollections.TradeCrafters, cancellationToken))
         {
             TradeCrafterProfile? crafter;
             try
@@ -442,34 +418,23 @@ public sealed class CompanyCrafterConsolidationService(
             if (crafter == null ||
                 crafter.Id == Guid.Empty ||
                 crafter.CompanyProfileId == Guid.Empty ||
-                !string.Equals(item.Object.ObjectId, crafter.Id.ToString("D"), StringComparison.OrdinalIgnoreCase))
+                hostProfiles.TryGetValue(crafter.CompanyProfileId, out var host) &&
+                host.Status == CompanyHostProfileStatus.Resolved ||
+                LegacyCrafterAccountResolver.NormalizeLodestoneId(crafter.LodestoneCharacterId) is not { } lodestone)
             {
                 continue;
             }
 
-            copies.Add(new CrafterCopy(
-                item.ProfileId,
-                item.Object.ObjectId,
-                item.Object.Revision,
-                item.Object.PayloadJson,
-                crafter));
+            rows.Add((crafter.CompanyProfileId, crafter.Id, lodestone));
         }
 
-        return copies
-            .GroupBy(copy => (copy.Crafter.CompanyProfileId, copy.Crafter.Id))
-            .Select(group =>
-            {
-                var latest = group
-                    .OrderByDescending(copy => copy.Crafter.UpdatedAtUtc)
-                    .ThenByDescending(copy => copy.Revision)
-                    .First();
-                return new CrafterIdentity(
-                    group.Key.CompanyProfileId,
-                    group.Key.Id,
-                    LegacyCrafterAccountResolver.NormalizeLodestoneId(latest.Crafter.LodestoneCharacterId),
-                    group.Min(copy => copy.Crafter.CreatedAtUtc),
-                    group.ToArray());
-            })
+        return rows
+            .GroupBy(row => (row.CompanyId, row.Lodestone))
+            .Select(group => (group.Key.CompanyId, group.Key.Lodestone,
+                (IReadOnlyList<Guid>)group.Select(row => row.CrafterId).Distinct().Order().ToArray()))
+            .Where(group => group.Item3.Count > 1)
+            .OrderBy(group => group.CompanyId)
+            .ThenBy(group => group.Lodestone, StringComparer.Ordinal)
             .ToArray();
     }
 
@@ -559,7 +524,7 @@ public sealed class CompanyCrafterConsolidationService(
 
     private static (string? Payload, IReadOnlyList<string> Fields) FillBlanks(
         string survivorPayload,
-        IReadOnlyList<CrafterCopy> donors)
+        IReadOnlyList<string> donors)
     {
         if (JsonNode.Parse(survivorPayload, NodeOptions) is not JsonObject survivor)
         {
@@ -567,7 +532,7 @@ public sealed class CompanyCrafterConsolidationService(
         }
 
         var donorNodes = donors
-            .Select(copy => JsonNode.Parse(copy.PayloadJson, NodeOptions))
+            .Select(payload => JsonNode.Parse(payload, NodeOptions))
             .OfType<JsonObject>()
             .ToArray();
         var filled = new List<string>();

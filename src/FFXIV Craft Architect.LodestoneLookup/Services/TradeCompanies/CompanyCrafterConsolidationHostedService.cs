@@ -2,8 +2,9 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
-// Runs the duplicate-crafter repair at startup. A group that loses a write race with
-// live traffic is retried a few times; anything still failing waits for the next start.
+// Runs the duplicate-crafter repair at startup, as a logged dry run by default. When an
+// operator sets Apply, a group that loses a write race with live traffic is retried a
+// few times; anything still failing waits for the next start.
 public sealed class CompanyCrafterConsolidationHostedService(
     ProfileHostOptions profileOptions,
     CompanyCrafterConsolidationOptions options,
@@ -36,16 +37,13 @@ public sealed class CompanyCrafterConsolidationHostedService(
             }
 
             var failed = report.Merges.Count(item => item.Status == "failed");
-            if (report.Merges.Count > 0 || report.Skipped.Count > 0)
-            {
-                logger.LogInformation(
-                    "Crafter consolidation {Mode}: {Merged} merged, {Planned} planned, {Failed} failed, {Skipped} skipped.",
-                    options.Mode,
-                    report.Merges.Count(item => item.Status == "merged"),
-                    report.Merges.Count(item => item.Status == "planned"),
-                    failed,
-                    report.Skipped.Count);
-            }
+            logger.LogInformation(
+                "Crafter consolidation {Mode}: {Merged} merged, {Planned} planned, {Failed} failed, {Skipped} skipped.",
+                options.Mode,
+                report.Merges.Count(item => item.Status == "merged"),
+                report.Merges.Count(item => item.Status == "planned"),
+                failed,
+                report.Skipped.Count);
 
             if (failed == 0 || attempt == MaximumAttempts)
             {

@@ -145,6 +145,31 @@ public sealed partial class SqliteProfileHostStore
         return new ProfileSyncPutResponse { Success = true, ServerRevision = revision };
     }
 
+    // Profiles holding objects already retired for this company. A retirement that was
+    // interrupted after its tombstones landed resumes from this evidence.
+    public async Task<IReadOnlyList<string>> LoadRetiredProfileIdsAsync(
+        CompanyId companyId,
+        CancellationToken ct)
+    {
+        await EnsureSchemaAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select distinct profile_id from retired_sync_objects
+            where lower(company_id) = $companyId
+            order by profile_id;
+            """;
+        command.Parameters.AddWithValue("$companyId", companyId.Value.ToString("D"));
+        var profileIds = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            profileIds.Add(reader.GetString(0));
+        }
+
+        return profileIds;
+    }
+
     private static async Task<bool> IsRetiredObjectAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,

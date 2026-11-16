@@ -57,6 +57,8 @@ public sealed class CompanyCrafterConsolidationContractTests
             var host = (await profiles.CreateProfileAsync("Company host", CancellationToken.None)).ProfileId;
             var grant = (await profiles.CreateProfileAsync("Operator grant", CancellationToken.None)).ProfileId;
             var companyA = new CompanyId(CompanyA);
+            await PutCompanyAsync(profiles, host, CompanyA);
+            await PutCompanyAsync(profiles, host, CompanyB);
 
             var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             // July-era PascalCase payload: the merge must read it case-insensitively.
@@ -94,7 +96,7 @@ public sealed class CompanyCrafterConsolidationContractTests
             Assert.Empty(dryRun.Backups);
             Assert.All(dryRun.Merges, item => Assert.Equal("planned", item.Status));
             Assert.Equal(2, dryRun.Merges.Count);
-            Assert.Equal(2, dryRun.Merges.Single(item => item.SurvivorCrafterId == NewerBound).OrdersRepointed);
+            Assert.Equal(1, dryRun.Merges.Single(item => item.SurvivorCrafterId == NewerBound).OrdersRepointed);
             Assert.False((await LoadAsync(profiles, ProfileSyncCollections.TradeCrafters, OlderUnbound, host))!.Deleted);
 
             var applied = await service.RunAsync(dryRun: false, CancellationToken.None);
@@ -117,13 +119,14 @@ public sealed class CompanyCrafterConsolidationContractTests
             Assert.False((await LoadAsync(profiles, ProfileSyncCollections.TradeCrafters, BoundToY, host))!.Deleted);
             Assert.False((await LoadAsync(profiles, ProfileSyncCollections.TradeCrafters, OtherCompanyTwin, host))!.Deleted);
 
-            // Every reference in this company follows the survivor, in every profile copy.
-            foreach (var profile in new[] { host, grant })
-            {
-                var repointed = ReadOrder(await LoadAsync(profiles, ProfileSyncCollections.TradeOrders, order.Id, profile));
-                Assert.Equal(NewerBound, repointed.AssignedCrafterId);
-                Assert.All(repointed.History, item => Assert.Equal(NewerBound, item.CrafterId));
-            }
+            // Every reference in the host follows the survivor; copies held by other
+            // profiles are not trusted company state and are never rewritten.
+            var repointed = ReadOrder(await LoadAsync(profiles, ProfileSyncCollections.TradeOrders, order.Id, host));
+            Assert.Equal(NewerBound, repointed.AssignedCrafterId);
+            Assert.All(repointed.History, item => Assert.Equal(NewerBound, item.CrafterId));
+            Assert.Equal(
+                OlderUnbound,
+                ReadOrder(await LoadAsync(profiles, ProfileSyncCollections.TradeOrders, order.Id, grant)).AssignedCrafterId);
 
             Assert.Equal(
                 OlderUnbound,
@@ -152,6 +155,60 @@ public sealed class CompanyCrafterConsolidationContractTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task CraftersUploadedByOtherProfilesNeverDriveAMerge()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"craft-architect-crafter-merge-scope-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var profileOptions = new ProfileHostOptions { Enabled = true, DatabasePath = Path.Combine(root, "profiles.db") };
+            var membershipOptions = new TradeMembershipOptions { DatabasePath = Path.Combine(root, "memberships.db") };
+            var profiles = new SqliteProfileHostStore(profileOptions);
+            var service = new CompanyCrafterConsolidationService(
+                profileOptions,
+                membershipOptions,
+                profiles,
+                new SqliteMembershipStore(membershipOptions, TimeProvider.System, NullLogger<SqliteMembershipStore>.Instance),
+                NullLogger<CompanyCrafterConsolidationService>.Instance);
+            var host = (await profiles.CreateProfileAsync("Victim company host", CancellationToken.None)).ProfileId;
+            var attacker = (await profiles.CreateProfileAsync("Unrelated account", CancellationToken.None)).ProfileId;
+            await PutCompanyAsync(profiles, host, CompanyA);
+
+            var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var real = Guid.NewGuid();
+            await PutCrafterAsync(profiles, host, Crafter(real, CompanyA, "500", t0));
+            var order = Order(CompanyA, real);
+            await PutAsync(profiles, host, ProfileSyncCollections.TradeOrders, order.Id, JsonSerializer.Serialize(order, WebJson));
+
+            // Generic sync accepts this: an older row claiming the victim company and the
+            // same public Lodestone ID, which would otherwise win survivorship.
+            var forged = Guid.NewGuid();
+            await PutCrafterAsync(profiles, attacker, Crafter(forged, CompanyA, "500", t0.AddYears(-1), notes: "forged"));
+
+            var report = await service.RunAsync(dryRun: false, CancellationToken.None);
+
+            Assert.Empty(report.Merges);
+            Assert.Empty(report.Backups);
+            Assert.False((await LoadAsync(profiles, ProfileSyncCollections.TradeCrafters, real, host))!.Deleted);
+            Assert.Equal(real, ReadOrder(await LoadAsync(profiles, ProfileSyncCollections.TradeOrders, order.Id, host)).AssignedCrafterId);
+            var hostCrafter = JsonSerializer.Deserialize<TradeCrafterProfile>(
+                (await LoadAsync(profiles, ProfileSyncCollections.TradeCrafters, real, host))!.PayloadJson,
+                ProfileSyncJson.CreateOptions())!;
+            Assert.Null(hostCrafter.OperatorNotes);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static Task PutCompanyAsync(SqliteProfileHostStore profiles, string profileId, Guid companyId) =>
+        PutAsync(profiles, profileId, ProfileSyncCollections.TradeCompanyProfiles, companyId, JsonSerializer.Serialize(
+            new TradeCompanyProfile { Id = companyId, Name = "Merge contract company" },
+            WebJson));
 
     private static TradeCrafterProfile Crafter(
         Guid id,
