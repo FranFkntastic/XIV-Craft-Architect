@@ -31,6 +31,8 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
 {
     public const int MaximumCapabilityLength = 512;
     public const int MaximumPublicBriefIdLength = 128;
+    public const int MaximumLinkedParticipantCredentials = 8;
+    private const string LinkedSlotPrefix = "linked:";
     private readonly SemaphoreSlim _schemaGate = new(1, 1);
     private bool _schemaReady;
 
@@ -145,7 +147,8 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                     commission_id,
                     capability_kind,
                     grant_id,
-                    capability_revision
+                    capability_revision,
+                    linked_slot
                 )
                 WHERE capability_kind <> 'Claim'
                 DO UPDATE SET
@@ -180,6 +183,13 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
             plaintext);
     }
 
+    /// <summary>
+    /// Installs one additional device credential for the current participant grant.
+    /// Other devices keep their credentials: every linked credential shares the grant
+    /// and revision, so release, rejection, cancellation, and recovery rotation revoke
+    /// them together. Only credentials for a superseded revision and the oldest linked
+    /// credentials beyond the per-grant cap are revoked here.
+    /// </summary>
     public async Task<CompanyCommissionCapabilityResolution> InstallLinkedParticipantAsync(
         CompanyId companyId,
         Guid commissionId,
@@ -201,54 +211,95 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                 "A valid linked participant credential is required.");
         }
 
+        var tokenHash = HashToken(participantPlaintextToken);
         await using var connection = await OpenAsync(cancellationToken);
         await EnsureSchemaAsync(connection, cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
-        await using (var revoke = connection.CreateCommand())
+        await using (var revokeStale = connection.CreateCommand())
         {
-            revoke.Transaction = transaction;
-            revoke.CommandText = """
+            revokeStale.Transaction = transaction;
+            revokeStale.CommandText = """
                 UPDATE company_commission_capabilities
                 SET revoked_at_utc = COALESCE(revoked_at_utc, $installedAtUtc)
                 WHERE company_id = $companyId
                   AND commission_id = $commissionId
                   AND capability_kind = $kind
                   AND grant_id = $grantId
+                  AND capability_revision <> $capabilityRevision
                   AND revoked_at_utc IS NULL;
                 """;
-            revoke.Parameters.AddWithValue("$installedAtUtc", installedAtUtc.ToString("O"));
-            revoke.Parameters.AddWithValue("$companyId", companyId.ToString());
-            revoke.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
-            revoke.Parameters.AddWithValue(
+            revokeStale.Parameters.AddWithValue("$installedAtUtc", installedAtUtc.ToString("O"));
+            revokeStale.Parameters.AddWithValue("$companyId", companyId.ToString());
+            revokeStale.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+            revokeStale.Parameters.AddWithValue(
                 "$kind",
                 CompanyCommissionCapabilityKind.Participant.ToString());
-            revoke.Parameters.AddWithValue("$grantId", participantGrantId.ToString("D"));
-            await revoke.ExecuteNonQueryAsync(cancellationToken);
+            revokeStale.Parameters.AddWithValue("$grantId", participantGrantId.ToString("D"));
+            revokeStale.Parameters.AddWithValue("$capabilityRevision", participantCapabilityRevision);
+            await revokeStale.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var primary = connection.CreateCommand())
+        {
+            primary.Transaction = transaction;
+            primary.CommandText = """
+                SELECT COUNT(*)
+                FROM company_commission_capabilities
+                WHERE company_id = $companyId
+                  AND commission_id = $commissionId
+                  AND capability_kind = $kind
+                  AND grant_id = $grantId
+                  AND capability_revision = $capabilityRevision
+                  AND token_hash = $tokenHash
+                  AND linked_slot = ''
+                  AND revoked_at_utc IS NULL;
+                """;
+            primary.Parameters.AddWithValue("$companyId", companyId.ToString());
+            primary.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+            primary.Parameters.AddWithValue(
+                "$kind",
+                CompanyCommissionCapabilityKind.Participant.ToString());
+            primary.Parameters.AddWithValue("$grantId", participantGrantId.ToString("D"));
+            primary.Parameters.AddWithValue("$capabilityRevision", participantCapabilityRevision);
+            primary.Parameters.AddWithValue("$tokenHash", tokenHash);
+            if (Convert.ToInt64(await primary.ExecuteScalarAsync(cancellationToken)) > 0)
+            {
+                // The device already holds the primary credential for this grant.
+                await transaction.CommitAsync(cancellationToken);
+                return new CompanyCommissionCapabilityResolution(
+                    companyId,
+                    commissionId,
+                    publicBriefId,
+                    CompanyCommissionCapabilityKind.Participant,
+                    participantGrantId,
+                    participantCapabilityRevision);
+            }
         }
 
         await using (var install = connection.CreateCommand())
         {
             install.Transaction = transaction;
+            // The slot is derived from the credential itself, so replaying the same
+            // device install is idempotent and never displaces another device.
             install.CommandText = """
                 INSERT INTO company_commission_capabilities (
                     capability_id, company_id, commission_id, public_brief_id,
                     capability_kind, grant_id, capability_revision, token_hash,
-                    issued_at_utc, revoked_at_utc, consumed_by_command_id)
+                    issued_at_utc, revoked_at_utc, consumed_by_command_id, linked_slot)
                 VALUES (
                     $capabilityId, $companyId, $commissionId, $publicBriefId,
                     $kind, $grantId, $capabilityRevision, $tokenHash,
-                    $installedAtUtc, NULL, NULL)
+                    $installedAtUtc, NULL, NULL, $linkedSlot)
                 ON CONFLICT (
-                    company_id, commission_id, capability_kind, grant_id, capability_revision)
+                    company_id, commission_id, capability_kind, grant_id,
+                    capability_revision, linked_slot)
                 WHERE capability_kind <> 'Claim'
                 DO UPDATE SET
                     public_brief_id = excluded.public_brief_id,
-                    token_hash = excluded.token_hash,
                     issued_at_utc = excluded.issued_at_utc,
-                    revoked_at_utc = NULL,
-                    consumed_by_command_id = NULL;
+                    revoked_at_utc = NULL;
                 """;
             install.Parameters.AddWithValue("$capabilityId", Guid.NewGuid().ToString("D"));
             install.Parameters.AddWithValue("$companyId", companyId.ToString());
@@ -259,9 +310,41 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                 CompanyCommissionCapabilityKind.Participant.ToString());
             install.Parameters.AddWithValue("$grantId", participantGrantId.ToString("D"));
             install.Parameters.AddWithValue("$capabilityRevision", participantCapabilityRevision);
-            install.Parameters.AddWithValue("$tokenHash", HashToken(participantPlaintextToken));
+            install.Parameters.AddWithValue("$tokenHash", tokenHash);
             install.Parameters.AddWithValue("$installedAtUtc", installedAtUtc.ToString("O"));
+            install.Parameters.AddWithValue("$linkedSlot", LinkedSlotPrefix + tokenHash);
             await install.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var trim = connection.CreateCommand())
+        {
+            trim.Transaction = transaction;
+            trim.CommandText = """
+                UPDATE company_commission_capabilities
+                SET revoked_at_utc = $installedAtUtc
+                WHERE capability_id IN (
+                    SELECT capability_id
+                    FROM company_commission_capabilities
+                    WHERE company_id = $companyId
+                      AND commission_id = $commissionId
+                      AND capability_kind = $kind
+                      AND grant_id = $grantId
+                      AND capability_revision = $capabilityRevision
+                      AND linked_slot <> ''
+                      AND revoked_at_utc IS NULL
+                    ORDER BY issued_at_utc DESC, capability_id DESC
+                    LIMIT -1 OFFSET $maximumLinked);
+                """;
+            trim.Parameters.AddWithValue("$installedAtUtc", installedAtUtc.ToString("O"));
+            trim.Parameters.AddWithValue("$companyId", companyId.ToString());
+            trim.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+            trim.Parameters.AddWithValue(
+                "$kind",
+                CompanyCommissionCapabilityKind.Participant.ToString());
+            trim.Parameters.AddWithValue("$grantId", participantGrantId.ToString("D"));
+            trim.Parameters.AddWithValue("$capabilityRevision", participantCapabilityRevision);
+            trim.Parameters.AddWithValue("$maximumLinked", MaximumLinkedParticipantCredentials);
+            await trim.ExecuteNonQueryAsync(cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -503,7 +586,8 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                   AND commission_id = $commissionId
                   AND capability_kind = $participantKind
                   AND grant_id = $participantGrantId
-                  AND capability_revision = $participantRevision;
+                  AND capability_revision = $participantRevision
+                  AND linked_slot = '';
                 """;
             inspectParticipant.Parameters.AddWithValue("$companyId", authority.CompanyId.ToString());
             inspectParticipant.Parameters.AddWithValue("$commissionId", authority.CommissionId.ToString("D"));
@@ -762,16 +846,6 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                 );
 
                 DROP INDEX IF EXISTS ux_company_commission_capabilities_revision;
-
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_company_commission_capabilities_grant_revision
-                ON company_commission_capabilities (
-                    company_id,
-                    commission_id,
-                    capability_kind,
-                    grant_id,
-                    capability_revision
-                )
-                WHERE capability_kind <> 'Claim';
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
             await AddColumnIfMissingAsync(
@@ -779,6 +853,31 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                 "consumed_by_command_id",
                 "TEXT NULL",
                 cancellationToken);
+            // Account-linked device credentials share the grant revision with the
+            // primary claim/recovery credential; the slot keeps them distinct.
+            await AddColumnIfMissingAsync(
+                connection,
+                "linked_slot",
+                "TEXT NOT NULL DEFAULT ''",
+                cancellationToken);
+            await using (var index = connection.CreateCommand())
+            {
+                index.CommandText = """
+                    DROP INDEX IF EXISTS ux_company_commission_capabilities_grant_revision;
+
+                    CREATE UNIQUE INDEX IF NOT EXISTS ux_company_commission_capabilities_grant_revision_slot
+                    ON company_commission_capabilities (
+                        company_id,
+                        commission_id,
+                        capability_kind,
+                        grant_id,
+                        capability_revision,
+                        linked_slot
+                    )
+                    WHERE capability_kind <> 'Claim';
+                    """;
+                await index.ExecuteNonQueryAsync(cancellationToken);
+            }
             _schemaReady = true;
         }
         finally
