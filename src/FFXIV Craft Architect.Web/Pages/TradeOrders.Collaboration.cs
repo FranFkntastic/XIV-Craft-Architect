@@ -576,6 +576,10 @@ public partial class TradeOrders
                 orderId);
             Snackbar.Add("Discord brief refresh queued", Severity.Success);
         }
+        catch (TradeCompanyPublicationRefusedException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Warning);
+        }
         finally
         {
             _isReconcilingDiscordPublication = false;

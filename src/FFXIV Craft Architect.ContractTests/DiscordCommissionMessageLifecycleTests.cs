@@ -34,6 +34,111 @@ public sealed class DiscordCommissionMessageLifecycleTests
         Assert.Equal(7, (int)TradeOrderStatus.ResolutionRequired);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("900000000000000123")]
+    public async Task AmbiguousCreateReconciliationAdoptsOrEnablesOneRetry(string? messageId)
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"discord-reconcile-{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = CreateDiscordOptions(databasePath);
+            var store = new SqliteDiscordCollaborationStore(options);
+            var delivery = CreateDelivery(store, options);
+            var created = await delivery.ProjectAsync(CreateProjection(
+                TradeOrderStatus.ReadyToAssign, projectionRevision: 1,
+                eventKind: CompanyCommissionActivityKind.CommissionOpened, claimed: false));
+            var work = Assert.Single(await LeaseAsync(store));
+            // A projection change while the create is in flight defers an edit without a message id.
+            await store.EnqueueProjectionAsync(created.Publication!.PublicationId, DiscordPublicationState.Open,
+                created.Publication.DesiredProjectionRevision + 1, "{}", DateTimeOffset.UtcNow);
+            await store.RequireReconciliationAsync(work.WorkItemId, work.LeaseId,
+                "fixture ambiguous send", DateTimeOffset.UtcNow);
+            var ambiguous = (await store.LoadPublicationAsync(created.Publication!.PublicationId))!;
+            Assert.True(await store.ResolveAmbiguousCreateAsync(ambiguous, messageId, DateTimeOffset.UtcNow));
+            Assert.False(await store.ResolveAmbiguousCreateAsync(ambiguous, messageId, DateTimeOffset.UtcNow));
+            var resolved = (await store.LoadPublicationAsync(ambiguous.PublicationId))!;
+            Assert.Equal(messageId, resolved.MessageId);
+            Assert.Equal(messageId == null ? DiscordPublicationState.Failed : DiscordPublicationState.Open, resolved.State);
+            if (messageId == null)
+            {
+                var retry = await store.RetryFailedPublicationAsync(CompanyId, resolved.PublicationId,
+                    resolved.PublicId, DiscordPublicationState.Open, "{}", DateTimeOffset.UtcNow);
+                Assert.True(retry.Success, retry.Error);
+            }
+            else
+            {
+                await store.EnqueueProjectionAsync(resolved.PublicationId, DiscordPublicationState.Open,
+                    resolved.DesiredProjectionRevision + 1, "{}", DateTimeOffset.UtcNow);
+            }
+            var next = Assert.Single(await LeaseAsync(store));
+            Assert.Equal(messageId == null ? DiscordOutboxOperation.CreateMessage : DiscordOutboxOperation.EditMessage,
+                next.Operation);
+            Assert.Equal(messageId, next.MessageId);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AmbiguousCreateSearchFindsNonOpenMessagesByBriefLinkOnly()
+    {
+        var createdAt = new DateTimeOffset(2026, 11, 16, 1, 41, 30, TimeSpan.Zero);
+        static string Message(string id, DateTimeOffset sentAt, string url) =>
+            $$"""
+            {"id":"{{id}}","timestamp":"{{sentAt:O}}","author":{"id":"100000000000000001","bot":true},
+             "components":[{"type":1,"components":[{"type":2,"style":5,"label":"View commission","url":"{{url}}"}]}]}
+            """;
+        var olderSamePublicId = Message("900000000000000001", createdAt.AddHours(-2),
+            "https://example.test/commission.html?id=PUB1");
+        var prefixCollision = Message("900000000000000002", createdAt.AddSeconds(5),
+            "https://example.test/commission.html?id=PUB10");
+        var assignedCreate = Message("900000000000000003", createdAt.AddSeconds(1),
+            "https://example.test/commission.html?id=PUB1#participant");
+
+        async Task<DiscordApiResult> SearchAsync(params string[] messages)
+        {
+            var handler = new StubHistoryHandler($"[{string.Join(',', messages)}]");
+            var client = new DiscordApiClient(
+                new HttpClient(handler) { BaseAddress = new Uri("https://discord.test/api/v10/") },
+                CreateDiscordOptions(Path.Combine(Path.GetTempPath(), $"unused-{Guid.NewGuid():N}.db")),
+                NullLogger<DiscordApiClient>.Instance);
+            return await client.FindPublicationMessageAsync(
+                "100000000000000003", "ca:v1:token", "PUB1", createdAt);
+        }
+
+        var pathStyleCreate = Message("900000000000000004", createdAt.AddSeconds(1),
+            "https://example.test/commission/PUB1");
+        var pathFound = await SearchAsync(prefixCollision, pathStyleCreate, olderSamePublicId);
+        Assert.True(pathFound.Succeeded, pathFound.Error);
+        Assert.Equal("900000000000000004", pathFound.MessageId);
+
+        var found = await SearchAsync(prefixCollision, assignedCreate, olderSamePublicId);
+        Assert.True(found.Succeeded, found.Error);
+        Assert.Equal("900000000000000003", found.MessageId);
+
+        var notFound = await SearchAsync(prefixCollision, olderSamePublicId);
+        Assert.True(notFound.Succeeded, notFound.Error);
+        Assert.Null(notFound.MessageId);
+    }
+
+    private sealed class StubHistoryHandler(string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+            });
+    }
+
     [Fact]
     public void AssignedPublicationOmitsWorkspaceWhenDeploymentCapabilityIsDisabled()
     {

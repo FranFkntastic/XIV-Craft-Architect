@@ -8,6 +8,7 @@
 *.json text eol=lf
 *.md text eol=lf
 *.ps1 text eol=lf
+*.sh text eol=lf
 *.props text eol=lf
 *.targets text eol=lf
 *.yml text eol=lf

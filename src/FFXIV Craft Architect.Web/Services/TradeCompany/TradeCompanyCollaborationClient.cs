@@ -210,7 +210,7 @@ public sealed class TradeCompanyCollaborationClient(
             content: null,
             cancellationToken,
             capturedConnection);
-        await EnsureSuccessAsync(response, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken, publication: true);
         var publication = await response.Content.ReadFromJsonAsync<DiscordPublicationDto>(
             JsonOptions,
             cancellationToken)
@@ -232,7 +232,7 @@ public sealed class TradeCompanyCollaborationClient(
             content: null,
             cancellationToken,
             capturedConnection);
-        await EnsureSuccessAsync(response, cancellationToken);
+        await EnsureSuccessAsync(response, cancellationToken, publication: true);
         var publication = await response.Content.ReadFromJsonAsync<DiscordPublicationDto>(
             JsonOptions,
             cancellationToken)
