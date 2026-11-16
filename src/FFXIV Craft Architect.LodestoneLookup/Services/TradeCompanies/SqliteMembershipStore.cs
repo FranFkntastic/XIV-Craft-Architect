@@ -170,7 +170,7 @@ public interface ITradeCompanyFounderBinder
         CancellationToken cancellationToken = default);
 }
 
-public sealed class SqliteMembershipStore(
+public sealed partial class SqliteMembershipStore(
     TradeMembershipOptions options,
     TimeProvider timeProvider,
     ILogger<SqliteMembershipStore> logger) : ITradeCompanyFounderBinder
@@ -1878,6 +1878,18 @@ public sealed class SqliteMembershipStore(
                     actor_profile_id TEXT NOT NULL,
                     created_at_utc TEXT NOT NULL,
                     PRIMARY KEY(company_id, legacy_crafter_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS company_crafter_merge_receipts (
+                    company_id TEXT NOT NULL,
+                    loser_crafter_id TEXT NOT NULL,
+                    survivor_crafter_id TEXT NOT NULL,
+                    lodestone_character_id TEXT NOT NULL,
+                    account_profile_id TEXT NULL,
+                    loser_payload_json TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    merged_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(company_id, loser_crafter_id)
                 );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
