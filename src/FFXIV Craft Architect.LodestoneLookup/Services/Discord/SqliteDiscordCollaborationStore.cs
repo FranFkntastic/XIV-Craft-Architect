@@ -413,6 +413,29 @@ public sealed class SqliteDiscordCollaborationStore(
             ? "discord_reconciliation_not_found: No matching message exists in channel history; create can be retried."
             : "discord_reconciliation_adopted: Adopted existing channel message.");
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        // Edits and deletes queued while the create was in flight carry no message id and may
+        // have been marked reconciliation-required with it. Release them against the adopted
+        // message, or drop them when no message exists (the retried create projects the
+        // current state); otherwise they block every later retry.
+        command.CommandText = messageId == null
+            ? """
+              DELETE FROM discord_outbox
+              WHERE publication_id = $id AND operation IN ($edit, $delete)
+                AND message_id IS NULL AND state IN ($pending, $retry, $ambiguousWork);
+              """
+            : """
+              UPDATE discord_outbox
+              SET message_id = $messageId, state = $pending, next_attempt_at_utc = $now,
+                  updated_at_utc = $now
+              WHERE publication_id = $id AND operation IN ($edit, $delete)
+                AND message_id IS NULL AND state IN ($pending, $retry, $ambiguousWork);
+              """;
+        command.Parameters.AddWithValue("$edit", (int)DiscordOutboxOperation.EditMessage);
+        command.Parameters.AddWithValue("$delete", (int)DiscordOutboxOperation.DeleteMessage);
+        command.Parameters.AddWithValue("$pending", (int)DiscordOutboxState.Pending);
+        command.Parameters.AddWithValue("$retry", (int)DiscordOutboxState.Retry);
+        await command.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return true;
     }

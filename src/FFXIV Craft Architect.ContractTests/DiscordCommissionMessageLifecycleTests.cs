@@ -49,6 +49,9 @@ public sealed class DiscordCommissionMessageLifecycleTests
                 TradeOrderStatus.ReadyToAssign, projectionRevision: 1,
                 eventKind: CompanyCommissionActivityKind.CommissionOpened, claimed: false));
             var work = Assert.Single(await LeaseAsync(store));
+            // A projection change while the create is in flight defers an edit without a message id.
+            await store.EnqueueProjectionAsync(created.Publication!.PublicationId, DiscordPublicationState.Open,
+                created.Publication.DesiredProjectionRevision + 1, "{}", DateTimeOffset.UtcNow);
             await store.RequireReconciliationAsync(work.WorkItemId, work.LeaseId,
                 "fixture ambiguous send", DateTimeOffset.UtcNow);
             var ambiguous = (await store.LoadPublicationAsync(created.Publication!.PublicationId))!;
@@ -109,6 +112,12 @@ public sealed class DiscordCommissionMessageLifecycleTests
             return await client.FindPublicationMessageAsync(
                 "100000000000000003", "ca:v1:token", "PUB1", createdAt);
         }
+
+        var pathStyleCreate = Message("900000000000000004", createdAt.AddSeconds(1),
+            "https://example.test/commission/PUB1");
+        var pathFound = await SearchAsync(prefixCollision, pathStyleCreate, olderSamePublicId);
+        Assert.True(pathFound.Succeeded, pathFound.Error);
+        Assert.Equal("900000000000000004", pathFound.MessageId);
 
         var found = await SearchAsync(prefixCollision, assignedCreate, olderSamePublicId);
         Assert.True(found.Succeeded, found.Error);
