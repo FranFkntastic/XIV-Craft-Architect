@@ -638,14 +638,17 @@ public static class CompanyCommissionEndpoints
                     return Results.Unauthorized();
                 }
 
-                // Claims are account-bound. A retry of an anonymous claim that already
-                // committed still replays, so in-flight claims keep their outcome.
-                if (capability.Kind == CompanyCommissionCapabilityKind.Claim &&
-                    claimAccount == null &&
-                    !await commissions.IsRecordedCommandAsync(
+                // Claims are account-bound. A retry of a claim that already committed
+                // replays exactly as recorded, so in-flight claims keep their outcome.
+                var recordedClaim = capability.Kind == CompanyCommissionCapabilityKind.Claim
+                    ? await commissions.LoadRecordedCommandAsync(
                         capability,
                         envelope.CommandId,
-                        cancellationToken))
+                        cancellationToken)
+                    : null;
+                if (capability.Kind == CompanyCommissionCapabilityKind.Claim &&
+                    claimAccount == null &&
+                    recordedClaim == null)
                 {
                     return ClaimRequiresAccount();
                 }
@@ -680,7 +683,20 @@ public static class CompanyCommissionEndpoints
                 {
                     return InvalidCommand(exception.Message);
                 }
-                if (command is ClaimCompanyCommissionCommand claim &&
+                if (command is ClaimCompanyCommissionCommand recordedRetry &&
+                    recordedClaim != null)
+                {
+                    // A retry of a committed claim is rebuilt in the form that was
+                    // recorded: the display name seen now may differ, and the fingerprint
+                    // must match the original.
+                    command = await RebuildRecordedClaimAsync(
+                        recordedRetry,
+                        recordedClaim,
+                        capability.CompanyId,
+                        crafterAccounts,
+                        cancellationToken);
+                }
+                else if (command is ClaimCompanyCommissionCommand claim &&
                     claimAccount != null &&
                     claimIdentity != null)
                 {
@@ -693,22 +709,13 @@ public static class CompanyCommissionEndpoints
                             claimAccount.ProfileId,
                             claim.ProvisionalCrafter.LodestoneCharacterId,
                             cancellationToken);
-                    command = claim with
-                    {
-                        ProvisionalCrafter = claim.ProvisionalCrafter == null
-                            ? null
-                            : claim.ProvisionalCrafter with
-                            {
-                                ProvisionalCrafterId = existingCrafterId ??
-                                    claim.ProvisionalCrafter.ProvisionalCrafterId,
-                                ContactMethod = "Discord",
-                                ContactValue = claimIdentity.DisplayNameSnapshot
-                            },
-                        AccountEvidence = new CompanyCommissionClaimAccountEvidence(
+                    command = BindClaimToAccount(
+                        claim,
+                        existingCrafterId,
+                        new CompanyCommissionClaimAccountEvidence(
                             claimAccount.ProfileId,
                             claimIdentity.DiscordUserId,
-                            claimIdentity.DisplayNameSnapshot)
-                    };
+                            claimIdentity.DisplayNameSnapshot));
                 }
                 if ((command is ClaimCompanyCommissionCommand or
                          RedeemCompanyCommissionParticipantRecoveryCommand) &&
@@ -881,6 +888,15 @@ public static class CompanyCommissionEndpoints
                     body!.ParticipantCredential!,
                     timeProvider.GetUtcNow().UtcDateTime,
                     cancellationToken);
+                if (resolution == null)
+                {
+                    return Results.Json(
+                        new MembershipErrorResponse(
+                            "participant_credential_revoked",
+                            "This browser credential was revoked; a new one is required."),
+                        statusCode: StatusCodes.Status409Conflict);
+                }
+
                 var participant = await commissions.LoadParticipantAsync(
                     resolution,
                     cancellationToken);
@@ -1435,6 +1451,61 @@ public static class CompanyCommissionEndpoints
                     ? "An active company membership is required."
                     : "The company membership is not active."),
             statusCode: StatusCodes.Status403Forbidden);
+
+    private static ClaimCompanyCommissionCommand BindClaimToAccount(
+        ClaimCompanyCommissionCommand claim,
+        Guid? existingCrafterId,
+        CompanyCommissionClaimAccountEvidence evidence) =>
+        claim with
+        {
+            ProvisionalCrafter = claim.ProvisionalCrafter == null
+                ? null
+                : claim.ProvisionalCrafter with
+                {
+                    ProvisionalCrafterId = existingCrafterId ??
+                        claim.ProvisionalCrafter.ProvisionalCrafterId,
+                    ContactMethod = "Discord",
+                    ContactValue = evidence.DiscordDisplayNameSnapshot
+                },
+            AccountEvidence = evidence
+        };
+
+    // The recorded form is either the browser command as sent (an anonymous claim) or
+    // the account-bound rewrite with the account evidence the claim committed with. The
+    // crafter is never taken from the record, so a retry carrying a different
+    // provisional crafter still fails as a changed command; it is the browser's own ID
+    // or the account's reused crafter as resolved for this retry. Anything else
+    // replays as sent and the service reports the mismatch.
+    private static async Task<ICompanyCommissionParticipantCommand> RebuildRecordedClaimAsync(
+        ClaimCompanyCommissionCommand claim,
+        RecordedCompanyCommissionCommand recorded,
+        CompanyId companyId,
+        LegacyCrafterAccountResolver crafterAccounts,
+        CancellationToken cancellationToken)
+    {
+        if (HostedCompanyCommissionService.MatchesRecordedFingerprint(claim, recorded) ||
+            recorded.ActiveClaim?.AccountEvidence is not { } evidence)
+        {
+            return claim;
+        }
+
+        var asSent = BindClaimToAccount(claim, null, evidence);
+        if (HostedCompanyCommissionService.MatchesRecordedFingerprint(asSent, recorded) ||
+            claim.ProvisionalCrafter == null)
+        {
+            return asSent;
+        }
+
+        var reused = await crafterAccounts.ResolveClaimantCrafterIdAsync(
+            companyId,
+            evidence.ProfileId,
+            claim.ProvisionalCrafter.LodestoneCharacterId,
+            cancellationToken);
+        var rebuilt = BindClaimToAccount(claim, reused, evidence);
+        return HostedCompanyCommissionService.MatchesRecordedFingerprint(rebuilt, recorded)
+            ? rebuilt
+            : claim;
+    }
 
     private static IResult ClaimRequiresAccount() =>
         Results.Json(

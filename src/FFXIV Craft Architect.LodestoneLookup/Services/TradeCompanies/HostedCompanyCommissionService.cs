@@ -27,6 +27,10 @@ public interface ICompanyCommissionPostCommitSink
         CancellationToken cancellationToken);
 }
 
+public sealed record RecordedCompanyCommissionCommand(
+    string Fingerprint,
+    CompanyCommissionClaim? ActiveClaim);
+
 public sealed partial class HostedCompanyCommissionService(
     ProfileHostedTradeCompanyService companies,
     SqliteProfileHostStore profileHost,
@@ -297,11 +301,21 @@ public sealed partial class HostedCompanyCommissionService(
     public async Task<bool> IsRecordedCommandAsync(
         CompanyCommissionCapabilityResolution capability,
         Guid commandId,
+        CancellationToken cancellationToken = default) =>
+        await LoadRecordedCommandAsync(capability, commandId, cancellationToken) != null;
+
+    /// <summary>
+    /// The recorded fingerprint of this command, with the commission's current claim,
+    /// so a retry can be rebuilt in exactly the form that committed.
+    /// </summary>
+    public async Task<RecordedCompanyCommissionCommand?> LoadRecordedCommandAsync(
+        CompanyCommissionCapabilityResolution capability,
+        Guid commandId,
         CancellationToken cancellationToken = default)
     {
         if (commandId == Guid.Empty)
         {
-            return false;
+            return null;
         }
 
         var ownership = await companies.ResolvePublicationOwnershipAsync(
@@ -311,16 +325,24 @@ public sealed partial class HostedCompanyCommissionService(
             ownership.CompanyId != capability.CompanyId ||
             ownership.OrderId != capability.CommissionId)
         {
-            return false;
+            return null;
         }
 
         var canonical = await companies.LoadPublicOrderAsync(
             ownership,
             capability.PublicBriefId,
             cancellationToken);
-        return canonical?.Order.CompanyCommission?.ProcessedCommands.Any(
-            item => item.CommandId == commandId) == true;
+        var commission = canonical?.Order.CompanyCommission;
+        return commission?.ProcessedCommands.FirstOrDefault(item => item.CommandId == commandId)
+            is { } processed
+            ? new RecordedCompanyCommissionCommand(processed.Fingerprint, commission.ActiveClaim)
+            : null;
     }
+
+    public static bool MatchesRecordedFingerprint(
+        ICompanyCommissionCommand command,
+        RecordedCompanyCommissionCommand recorded) =>
+        string.Equals(CreateFingerprint(command), recorded.Fingerprint, StringComparison.Ordinal);
 
     public Task<CompanyCommissionMutationResult> ExecuteCompanyAsync(
         TradeCompanyAccessContext access,

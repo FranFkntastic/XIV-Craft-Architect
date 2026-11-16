@@ -295,8 +295,9 @@ async function load() {
     }
     if (state.projection.kind === "participant") {
         if (state.capabilities.participantCapability) {
-            state.access = state.store.adoptParticipantSecret(
-                state.capabilities.participantCapability);
+            state.access = adoptParticipantSecret(
+                state.capabilities.participantCapability,
+                state.projection);
         } else if (state.access?.pending) {
             state.store.completeAuthorityExchange(state.access);
             state.access = state.store.load();
@@ -338,6 +339,26 @@ async function load() {
 // has no participant access but the account holds the claim, install a fresh
 // credential silently. Any refusal simply leaves the public view in place.
 async function adoptAccountParticipantAccess() {
+    // Each install can retire another device's credential once the per-claim cap is
+    // reached, so a saved secret is only replaced after the server rejected it.
+    if (state.access?.participantSecret) {
+        try {
+            const saved = await state.client.load(state.access.participantSecret);
+            if (saved?.kind === "participant") {
+                state.access = adoptParticipantSecret(state.access.participantSecret, saved);
+                state.projection = saved;
+                return true;
+            }
+        } catch (caught) {
+            if (caught?.status !== 401 && caught?.status !== 403) {
+                console.warn(
+                    "[Commission] participant_access_check_failed: keeping saved access.",
+                    caught?.code,
+                    caught?.message);
+                return false;
+            }
+        }
+    }
     const accessKeys = [state.account?.accessKey, await readRememberedProfileAccessKey()]
         .filter((key, index, all) => key && all.indexOf(key) === index);
     for (const accessKey of accessKeys) {
@@ -347,7 +368,7 @@ async function adoptAccountParticipantAccess() {
                 participantSecret,
                 accessKey);
             if (projection.kind !== "participant") continue;
-            state.access = state.store.adoptParticipantSecret(participantSecret);
+            state.access = adoptParticipantSecret(participantSecret, projection);
             state.projection = projection;
             replaceParticipantCapabilityFragment(participantSecret);
             state.capabilities = {
@@ -368,6 +389,41 @@ async function adoptAccountParticipantAccess() {
         }
     }
     return false;
+}
+
+// Installs participant access in place of any saved exchange. A pending claim that
+// committed may have been folded onto the account's existing crafter, so its saved
+// membership request follows the committed claim instead of being discarded.
+function adoptParticipantSecret(participantSecret, projection) {
+    const pending = state.access?.pending ?? null;
+    const access = state.store.adoptParticipantSecret(participantSecret);
+    carryMembershipIntent(pending, projection);
+    return access;
+}
+
+function carryMembershipIntent(pending, projection) {
+    const committedCrafterId = projection?.kind === "participant"
+        ? projection.provisionalCrafter?.provisionalCrafterId
+        : null;
+    const intent = state.membershipStore?.load();
+    if (pending?.kind !== "claim" || !committedCrafterId || !intent ||
+        intent.provisionalCrafterId === committedCrafterId ||
+        intent.provisionalCrafterId !== pending.payload?.provisionalCrafter?.provisionalCrafterId) {
+        return;
+    }
+    try {
+        state.membershipStore.save(
+            {
+                companyId: intent.companyId,
+                accountProfileId: intent.accountProfileId,
+                provisionalCrafterId: committedCrafterId
+            },
+            intent.requestNote,
+            intent.state,
+            intent.error);
+    } catch (caught) {
+        console.warn("[Commission] membership_intent_carry_failed:", caught?.code, caught?.message);
+    }
 }
 
 // Discord sign-in returns here with the exact claim intent preserved: continue the
@@ -2047,6 +2103,7 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
             participantCapability: null
         };
         await reloadProjection(successMessage);
+        carryMembershipIntent(access.pending, state.projection);
     } catch (caught) {
         const refreshableConflict = !applied &&
             caught?.status === 409 &&
@@ -2086,6 +2143,7 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
                     participantCapability: null
                 };
                 await reloadProjection(successMessage);
+                carryMembershipIntent(access.pending, state.projection);
                 return;
             }
             if (committed === false) {

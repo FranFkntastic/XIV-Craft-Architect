@@ -121,7 +121,7 @@ internal sealed class DiscordInteractionAccessResolver(
             return null;
         }
 
-        await capabilities.InstallLinkedParticipantAsync(
+        var installed = await capabilities.InstallLinkedParticipantAsync(
             binding.CompanyId,
             binding.CommissionId,
             binding.PublicBriefId,
@@ -130,7 +130,9 @@ internal sealed class DiscordInteractionAccessResolver(
             request.ParticipantCredential,
             timeProvider.GetUtcNow().UtcDateTime,
             cancellationToken);
-        return new DiscordParticipantExchangeResponse(binding.PublicBriefId);
+        return installed == null
+            ? null
+            : new DiscordParticipantExchangeResponse(binding.PublicBriefId);
     }
 
     private async Task<DiscordParticipantAuthority?> ResolveAuthorityAsync(
