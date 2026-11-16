@@ -309,14 +309,42 @@ public partial class TradeOrders
         var provisional = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ProvisionalCrafter;
         _commissionIdentityCrafterId = provisional == null
             ? order.AssignedCrafterId
-            : _crafters.FirstOrDefault(crafter =>
-                    !string.IsNullOrWhiteSpace(provisional.LodestoneCharacterId) &&
-                    string.Equals(
-                        crafter.LodestoneCharacterId,
-                        provisional.LodestoneCharacterId,
-                        StringComparison.Ordinal))
-                ?.Id;
+            : FindExistingCommissionCrafter(provisional)?.Id;
     }
+
+    // The host resolves a claimant's existing company crafter into the provisional
+    // identity, so confirmation updates that crafter instead of creating a second one.
+    private TradeCrafterProfile? FindExistingCommissionCrafter(
+        CompanyCommissionProvisionalCrafter provisional)
+    {
+        var lodestoneCharacterId = provisional.LodestoneCharacterId?.Trim();
+        var reused = _crafters.FirstOrDefault(
+            crafter => crafter.Id == provisional.ProvisionalCrafterId);
+        if (reused != null && IsSameOrUnknownLodestone(reused, lodestoneCharacterId))
+        {
+            return reused;
+        }
+
+        return string.IsNullOrWhiteSpace(lodestoneCharacterId)
+            ? null
+            : _crafters
+                .Where(crafter => string.Equals(
+                    crafter.LodestoneCharacterId?.Trim(),
+                    lodestoneCharacterId,
+                    StringComparison.Ordinal))
+                .OrderBy(crafter => crafter.CreatedAtUtc)
+                .ThenBy(crafter => crafter.Id)
+                .FirstOrDefault();
+    }
+
+    private static bool IsSameOrUnknownLodestone(
+        TradeCrafterProfile crafter,
+        string? lodestoneCharacterId) =>
+        string.IsNullOrWhiteSpace(crafter.LodestoneCharacterId) ||
+        string.Equals(
+            crafter.LodestoneCharacterId.Trim(),
+            lodestoneCharacterId,
+            StringComparison.Ordinal);
 
     private CompanyCommissionOutputProgress? GetSelectedOutputProgress(
         Guid lineId) =>
@@ -886,11 +914,9 @@ public partial class TradeOrders
                     Severity.Error);
                 return null;
             }
-            if (!string.IsNullOrWhiteSpace(existing.LodestoneCharacterId) &&
-                !string.Equals(
-                    existing.LodestoneCharacterId,
-                    provisional.LodestoneCharacterId,
-                    StringComparison.Ordinal))
+            if (!IsSameOrUnknownLodestone(
+                    existing,
+                    provisional.LodestoneCharacterId?.Trim()))
             {
                 Snackbar.Add(
                     "The selected crafter belongs to a different Lodestone character.",
@@ -902,22 +928,15 @@ public partial class TradeOrders
         }
         else
         {
-            var collision = _crafters.FirstOrDefault(
-                item => item.Id == provisional.ProvisionalCrafterId);
-            if (collision != null)
-            {
-                Snackbar.Add(
-                    "The provisional identity collides with an existing company crafter.",
-                    Severity.Error);
-                return null;
-            }
-
-            crafter = new TradeCrafterProfile
-            {
-                Id = provisional.ProvisionalCrafterId,
-                CompanyProfileId = companyProfileId,
-                CreatedAtUtc = DateTime.UtcNow
-            };
+            var existing = FindExistingCommissionCrafter(provisional);
+            crafter = existing != null
+                ? CopyCrafterProfile(existing)
+                : new TradeCrafterProfile
+                {
+                    Id = provisional.ProvisionalCrafterId,
+                    CompanyProfileId = companyProfileId,
+                    CreatedAtUtc = DateTime.UtcNow
+                };
         }
 
         crafter.DisplayName = provisional.CharacterName.Trim();
