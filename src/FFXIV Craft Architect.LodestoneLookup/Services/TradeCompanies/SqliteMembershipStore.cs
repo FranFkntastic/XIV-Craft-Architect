@@ -1866,6 +1866,13 @@ public sealed partial class SqliteMembershipStore(
                     merged_at_utc TEXT NOT NULL,
                     PRIMARY KEY(company_id, loser_crafter_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS company_retirement_receipts (
+                    company_id TEXT PRIMARY KEY,
+                    actor TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    retired_at_utc TEXT NOT NULL
+                );
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken);
             await AddMembershipColumnIfMissingAsync(

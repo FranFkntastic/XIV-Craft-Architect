@@ -221,6 +221,7 @@ builder.Services.AddSingleton(new CompanyCrafterConsolidationOptions
 });
 builder.Services.AddSingleton<CompanyCrafterConsolidationService>();
 builder.Services.AddHostedService<CompanyCrafterConsolidationHostedService>();
+builder.Services.AddSingleton<CompanyRetirementService>();
 builder.Services.AddSingleton<CompanyHubService>();
 builder.Services.AddHostedService<FounderMembershipReconciler>();
 builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();
@@ -562,6 +563,23 @@ static async Task RunProfileHostProvisioningCommandAsync(
                 var consolidation = scope.ServiceProvider
                     .GetRequiredService<CompanyCrafterConsolidationService>();
                 WriteJson(await consolidation.RunAsync(command.DryRun, cancellationToken));
+                break;
+            }
+        case ProfileHostProvisioningAction.RetireCompanies:
+            {
+                var companyIds = (command.CompanyIds ?? [])
+                    .Select(value => CompanyId.TryParse(value, out var parsed)
+                        ? parsed
+                        : throw new InvalidOperationException(
+                            $"'{value}' is not a company ID."))
+                    .ToArray();
+                var retirement = scope.ServiceProvider.GetRequiredService<CompanyRetirementService>();
+                var report = await retirement.RunAsync(companyIds, command.DryRun, cancellationToken);
+                WriteJson(report);
+                if (report.Companies.Any(item => item.Status == "refused"))
+                {
+                    Environment.ExitCode = 2;
+                }
                 break;
             }
         default:

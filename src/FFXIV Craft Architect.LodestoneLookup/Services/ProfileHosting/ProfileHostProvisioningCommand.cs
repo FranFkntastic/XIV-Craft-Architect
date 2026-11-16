@@ -9,7 +9,8 @@ public enum ProfileHostProvisioningAction
     RotateKey,
     DisableProfile,
     ExportProfile,
-    ConsolidateCrafters
+    ConsolidateCrafters,
+    RetireCompanies
 }
 
 public sealed record ProfileHostProvisioningCommand(
@@ -17,7 +18,8 @@ public sealed record ProfileHostProvisioningCommand(
     string? ProfileId,
     string? DisplayName,
     string? SourceDatabasePath = null,
-    bool DryRun = false)
+    bool DryRun = false,
+    IReadOnlyList<string>? CompanyIds = null)
 {
     public static ProfileHostProvisioningCommand? TryParse(string[] args)
     {
@@ -68,6 +70,15 @@ public sealed record ProfileHostProvisioningCommand(
                     null,
                     null,
                     DryRun: args.Length == 3),
+            "retire-company" when args.Skip(2).Any(arg => arg != "--dry-run") =>
+                new ProfileHostProvisioningCommand(
+                    ProfileHostProvisioningAction.RetireCompanies,
+                    null,
+                    null,
+                    DryRun: args.Skip(2).Contains("--dry-run"),
+                    CompanyIds: args.Skip(2).Where(arg => arg != "--dry-run").ToArray()),
+            "retire-company" => throw new InvalidOperationException(
+                "Usage: profile-host retire-company <company-id> [<company-id>...] [--dry-run]"),
             "consolidate-crafters" => throw new InvalidOperationException(
                 "Usage: profile-host consolidate-crafters [--dry-run]"),
             _ => null

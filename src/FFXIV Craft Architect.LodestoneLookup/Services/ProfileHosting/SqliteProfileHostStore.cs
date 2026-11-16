@@ -1811,6 +1811,23 @@ public sealed partial class SqliteProfileHostStore
             objectId,
             ct,
             transaction);
+        if (existing is { Deleted: true } &&
+            await IsRetiredObjectAsync(connection, transaction, profileId, collection, objectId, ct))
+        {
+            // A retired company's records stay tombstoned: stale browser copies get the
+            // tombstone back instead of resurrecting the row.
+            await transaction.RollbackAsync(ct);
+            return new ProfileSyncPutResponse
+            {
+                Success = false,
+                Conflict = true,
+                ServerRevision = currentServerRevision,
+                RemoteObject = existing,
+                ErrorCode = "retired_object",
+                ErrorMessage = "This record belongs to a retired company and cannot be restored."
+            };
+        }
+
         var isCompany = string.Equals(
             collection,
             ProfileSyncCollections.TradeCompanyProfiles,
@@ -2794,6 +2811,15 @@ public sealed partial class SqliteProfileHostStore
                     deleted_at_utc text null,
                     primary key(profile_id, collection, object_id),
                     foreign key(profile_id) references hosted_profiles(id)
+                );
+
+                create table if not exists retired_sync_objects (
+                    profile_id text not null,
+                    collection text not null,
+                    object_id text not null,
+                    company_id text not null,
+                    retired_at_utc text not null,
+                    primary key(profile_id, collection, object_id)
                 );
 
                 create table if not exists profile_revisions (
