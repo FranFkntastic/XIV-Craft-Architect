@@ -55,6 +55,9 @@ jobs:
       VPS_SSH_HOST_KEY: ${{ secrets.VPS_SSH_HOST_KEY }}
       VPS_SSH_PORT: 22
     steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
       - name: Resolve isolated deploy target
         id: target
         shell: bash
@@ -340,9 +343,6 @@ jobs:
             test "${#PROFILE_ACCESS_KEY}" -ge 1
             test "${#PROFILE_ACCESS_KEY}" -le 256
           fi
-
-      - name: Checkout immutable source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Verify source and deployment tooling
         shell: bash
