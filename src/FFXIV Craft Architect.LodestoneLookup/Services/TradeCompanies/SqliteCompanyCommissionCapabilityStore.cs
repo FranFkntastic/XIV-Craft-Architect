@@ -190,7 +190,9 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
     /// them together. Only credentials for a superseded revision and the oldest linked
     /// credentials beyond the per-grant cap are revoked here.
     /// </summary>
-    public async Task<CompanyCommissionCapabilityResolution> InstallLinkedParticipantAsync(
+    // Returns null when this exact credential was installed before and has since been
+    // revoked: a revoked linked credential never comes back.
+    public async Task<CompanyCommissionCapabilityResolution?> InstallLinkedParticipantAsync(
         CompanyId companyId,
         Guid commissionId,
         string publicBriefId,
@@ -298,8 +300,10 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
                 WHERE capability_kind <> 'Claim'
                 DO UPDATE SET
                     public_brief_id = excluded.public_brief_id,
-                    issued_at_utc = excluded.issued_at_utc,
-                    revoked_at_utc = NULL;
+                    issued_at_utc = CASE
+                        WHEN revoked_at_utc IS NULL THEN excluded.issued_at_utc
+                        ELSE issued_at_utc
+                    END;
                 """;
             install.Parameters.AddWithValue("$capabilityId", Guid.NewGuid().ToString("D"));
             install.Parameters.AddWithValue("$companyId", companyId.ToString());
@@ -314,6 +318,35 @@ public sealed class SqliteCompanyCommissionCapabilityStore(CommissionBriefOption
             install.Parameters.AddWithValue("$installedAtUtc", installedAtUtc.ToString("O"));
             install.Parameters.AddWithValue("$linkedSlot", LinkedSlotPrefix + tokenHash);
             await install.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var revoked = connection.CreateCommand())
+        {
+            revoked.Transaction = transaction;
+            revoked.CommandText = """
+                SELECT COUNT(*)
+                FROM company_commission_capabilities
+                WHERE company_id = $companyId
+                  AND commission_id = $commissionId
+                  AND capability_kind = $kind
+                  AND grant_id = $grantId
+                  AND capability_revision = $capabilityRevision
+                  AND linked_slot = $linkedSlot
+                  AND revoked_at_utc IS NOT NULL;
+                """;
+            revoked.Parameters.AddWithValue("$companyId", companyId.ToString());
+            revoked.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+            revoked.Parameters.AddWithValue(
+                "$kind",
+                CompanyCommissionCapabilityKind.Participant.ToString());
+            revoked.Parameters.AddWithValue("$grantId", participantGrantId.ToString("D"));
+            revoked.Parameters.AddWithValue("$capabilityRevision", participantCapabilityRevision);
+            revoked.Parameters.AddWithValue("$linkedSlot", LinkedSlotPrefix + tokenHash);
+            if (Convert.ToInt64(await revoked.ExecuteScalarAsync(cancellationToken)) > 0)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return null;
+            }
         }
 
         await using (var trim = connection.CreateCommand())
