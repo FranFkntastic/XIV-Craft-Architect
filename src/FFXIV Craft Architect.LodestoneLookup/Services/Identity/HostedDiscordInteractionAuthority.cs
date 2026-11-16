@@ -1,3 +1,4 @@
+using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -17,7 +18,8 @@ internal sealed class HostedDiscordInteractionAuthority(
     ProfileHostedTradeCompanyService companies,
     SqliteMembershipStore memberships,
     HostedCompanyCommissionService commissions,
-    SqliteDiscordNotificationStore discordContacts) :
+    SqliteDiscordNotificationStore discordContacts,
+    LegacyCrafterAccountResolver crafterAccounts) :
     IDiscordCanonicalInteractionAuthority
 {
     public async Task<DiscordParticipantAuthority?> ResolveAsync(
@@ -125,14 +127,11 @@ internal sealed class HostedDiscordInteractionAuthority(
                 State: MembershipState.Active,
                 Role: MembershipRole.Owner or MembershipRole.Operator
             };
+        // The claim belongs to the account that made it, member or not. Account
+        // evidence is authoritative; legacy claims fall back to crafter bindings and the
+        // committed Discord claim contact.
         var contactMatches = activeGrant &&
-            membership is { State: MembershipState.Active } &&
-            await discordContacts.HasCommittedClaimContactAsync(
-                  target.CompanyId,
-                  target.CommissionId,
-                  claim!.ClaimId,
-                  target.DiscordUserId,
-                  cancellationToken);
+            await IsClaimantAsync(link, target, claim!, cancellationToken);
         if (!isCompanyOperator && !contactMatches)
         {
             return null;
@@ -149,5 +148,33 @@ internal sealed class HostedDiscordInteractionAuthority(
             publicUrl,
             IsCompanyOperator: isCompanyOperator,
             IsActiveParticipant: contactMatches);
+    }
+
+    private async Task<bool> IsClaimantAsync(
+        DiscordIdentityLink link,
+        DiscordInteractionTarget target,
+        CompanyCommissionClaim claim,
+        CancellationToken cancellationToken)
+    {
+        if (claim.AccountEvidence is { } evidence)
+        {
+            return string.Equals(
+                       evidence.DiscordUserId,
+                       target.DiscordUserId,
+                       StringComparison.Ordinal) ||
+                   evidence.ProfileId == link.ProfileId;
+        }
+
+        return await crafterAccounts.IsClaimOwnedByAccountAsync(
+                   target.CompanyId,
+                   claim,
+                   link.ProfileId,
+                   cancellationToken) ||
+               await discordContacts.HasCommittedClaimContactAsync(
+                   target.CompanyId,
+                   target.CommissionId,
+                   claim.ClaimId,
+                   target.DiscordUserId,
+                   cancellationToken);
     }
 }

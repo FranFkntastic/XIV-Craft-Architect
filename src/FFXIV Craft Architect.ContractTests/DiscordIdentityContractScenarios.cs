@@ -194,8 +194,6 @@ public sealed class DiscordIdentityContractTests
                 collaboration,
                 identities,
                 profiles,
-                companies,
-                memberships,
                 notifications,
                 claimIssuer,
                 resolver,
@@ -262,55 +260,14 @@ public sealed class DiscordIdentityContractTests
                     DiscordUser,
                     "Discord Participant",
                     now.GetUtcNow())).Status);
+            // Commissions are externally claimable: a Discord-linked account that is not
+            // a company member still receives a private claim link.
             var nonMember = await interactions.HandleAsync(
                 ComponentInteraction(
                     interactionId,
                     DiscordUser,
                     $"claim-discord:{actionToken}"));
             using (var response = JsonDocument.Parse(JsonSerializer.Serialize(nonMember)))
-            {
-                Assert.Contains(
-                    "not available to your company membership",
-                    response.RootElement.GetProperty("content").GetString());
-            }
-            Assert.Null(await notifications.LoadPendingClaimContactAsync(
-                companyId,
-                commissionId,
-                publicId,
-                claimCapabilityId,
-                5,
-                now.GetUtcNow()));
-
-            Assert.Equal(
-                MembershipMutationStatus.Applied,
-                (await memberships.RequestAsync(
-                    companyId,
-                    participantProfileId,
-                    "Discord claim access")).Status);
-            var pending = await interactions.HandleAsync(
-                ComponentInteraction(
-                    interactionId,
-                    DiscordUser,
-                    $"claim-discord:{actionToken}"));
-            using (var response = JsonDocument.Parse(JsonSerializer.Serialize(pending)))
-            {
-                Assert.Contains(
-                    "not available to your company membership",
-                    response.RootElement.GetProperty("content").GetString());
-            }
-            Assert.Equal(
-                MembershipMutationStatus.Applied,
-                (await memberships.ApproveAsync(
-                    companyId,
-                    participantProfileId,
-                    Guid.NewGuid())).Status);
-
-            var activeMember = await interactions.HandleAsync(
-                ComponentInteraction(
-                    interactionId,
-                    DiscordUser,
-                    $"claim-discord:{actionToken}"));
-            using (var response = JsonDocument.Parse(JsonSerializer.Serialize(activeMember)))
             {
                 Assert.Equal(64, response.RootElement.GetProperty("flags").GetInt32());
                 var claimUrl = response.RootElement
@@ -338,8 +295,6 @@ public sealed class DiscordIdentityContractTests
                 collaboration,
                 identities,
                 profiles,
-                companies,
-                memberships,
                 notifications,
                 claimIssuer,
                 resolver,
@@ -539,7 +494,13 @@ public sealed class DiscordIdentityContractTests
                 companies,
                 memberships,
                 commissions,
-                notifications);
+                notifications,
+                new LegacyCrafterAccountResolver(
+                    profiles,
+                    memberships,
+                    identities,
+                    notifications,
+                    NullLogger<LegacyCrafterAccountResolver>.Instance));
             var linkedIdentity = await identities.LoadByDiscordUserAsync(DiscordUser);
             var authorized = await authority.ResolveAsync(
                 linkedIdentity!,
@@ -567,8 +528,6 @@ public sealed class DiscordIdentityContractTests
                 collaboration,
                 identities,
                 profiles,
-                companies,
-                memberships,
                 notifications,
                 claimIssuer,
                 canonicalResolver,
@@ -591,24 +550,6 @@ public sealed class DiscordIdentityContractTests
                     .GetProperty("url")
                     .GetString()!).Fragment,
                 StringComparison.Ordinal);
-
-            Assert.Equal(
-                MembershipMutationStatus.Applied,
-                (await memberships.RevokeAsync(
-                    companyId,
-                    participantProfileId,
-                    Guid.NewGuid())).Status);
-            var revoked = await participantInteractions.HandleAsync(
-                ComponentInteraction(
-                    "999999999999999999",
-                    DiscordUser,
-                    $"open-workspace:{actionToken}"));
-            using (var revokedPayload = JsonDocument.Parse(JsonSerializer.Serialize(revoked)))
-            {
-                Assert.Contains(
-                    "not available for this account",
-                    revokedPayload.RootElement.GetProperty("content").GetString());
-            }
 
             var commissionerRoute = await notifications.PutRouteAsync(
                 companyId,
