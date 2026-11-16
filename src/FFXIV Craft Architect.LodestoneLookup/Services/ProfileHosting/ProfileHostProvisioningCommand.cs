@@ -8,14 +8,16 @@ public enum ProfileHostProvisioningAction
     ImportActiveCredentials,
     RotateKey,
     DisableProfile,
-    ExportProfile
+    ExportProfile,
+    ConsolidateCrafters
 }
 
 public sealed record ProfileHostProvisioningCommand(
     ProfileHostProvisioningAction Action,
     string? ProfileId,
     string? DisplayName,
-    string? SourceDatabasePath = null)
+    string? SourceDatabasePath = null,
+    bool DryRun = false)
 {
     public static ProfileHostProvisioningCommand? TryParse(string[] args)
     {
@@ -59,6 +61,15 @@ public sealed record ProfileHostProvisioningCommand(
                 new ProfileHostProvisioningCommand(ProfileHostProvisioningAction.DisableProfile, args[2], null),
             "export-profile" when args.Length == 3 =>
                 new ProfileHostProvisioningCommand(ProfileHostProvisioningAction.ExportProfile, args[2], null),
+            "consolidate-crafters" when args.Length == 2 ||
+                                        args.Length == 3 && args[2] == "--dry-run" =>
+                new ProfileHostProvisioningCommand(
+                    ProfileHostProvisioningAction.ConsolidateCrafters,
+                    null,
+                    null,
+                    DryRun: args.Length == 3),
+            "consolidate-crafters" => throw new InvalidOperationException(
+                "Usage: profile-host consolidate-crafters [--dry-run]"),
             _ => null
         };
     }

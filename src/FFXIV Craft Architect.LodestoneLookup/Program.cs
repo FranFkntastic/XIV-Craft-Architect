@@ -213,6 +213,14 @@ builder.Services.AddSingleton<ProfileHostedTradeCompanyService>();
 builder.Services.AddSingleton<TradeCompanyAuthorization>();
 builder.Services.AddSingleton<MembershipAccessResolver>();
 builder.Services.AddSingleton<LegacyCrafterAccountResolver>();
+builder.Services.AddSingleton(new CompanyCrafterConsolidationOptions
+{
+    Mode = builder.Configuration.GetValue(
+        "TradeCrafterConsolidation:Mode",
+        CompanyCrafterConsolidationMode.Apply)
+});
+builder.Services.AddSingleton<CompanyCrafterConsolidationService>();
+builder.Services.AddHostedService<CompanyCrafterConsolidationHostedService>();
 builder.Services.AddSingleton<CompanyHubService>();
 builder.Services.AddHostedService<FounderMembershipReconciler>();
 builder.Services.AddSingleton<SqliteCompanyCommissionCapabilityStore>();
@@ -547,6 +555,13 @@ static async Task RunProfileHostProvisioningCommandAsync(
                     Profile = profile,
                     Objects = changes.Objects
                 });
+                break;
+            }
+        case ProfileHostProvisioningAction.ConsolidateCrafters:
+            {
+                var consolidation = scope.ServiceProvider
+                    .GetRequiredService<CompanyCrafterConsolidationService>();
+                WriteJson(await consolidation.RunAsync(command.DryRun, cancellationToken));
                 break;
             }
         default:
