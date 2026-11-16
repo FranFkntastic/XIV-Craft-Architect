@@ -60,6 +60,8 @@ public sealed class CompanyRetirementService(
 {
     private const string CompanyCollectionPrefix = "tradeCompany.";
     private static readonly JsonSerializerOptions ReadOptions = ProfileSyncJson.CreateOptions();
+    private readonly CompanyHostProfileResolver hosts = new(profiles);
+
     private static readonly int[] ActivePublicationStates =
     [
         (int)DiscordPublicationState.Open,
@@ -89,10 +91,11 @@ public sealed class CompanyRetirementService(
 
         var requested = companyIds.Distinct().ToArray();
         var live = await profiles.LoadAllLiveObjectsAsync(cancellationToken);
+        var hostProfiles = await hosts.LoadAllAsync(cancellationToken);
         var plans = new List<CompanyPlan>();
         foreach (var companyId in requested)
         {
-            plans.Add(await PlanAsync(companyId, live, cancellationToken));
+            plans.Add(await PlanAsync(companyId, live, hostProfiles, cancellationToken));
         }
 
         // References between companies retired together do not block each other.
@@ -161,52 +164,83 @@ public sealed class CompanyRetirementService(
     private async Task<CompanyPlan> PlanAsync(
         CompanyId companyId,
         IReadOnlyList<HostedSyncObject> live,
+        IReadOnlyDictionary<Guid, CompanyHostProfile> hostProfiles,
         CancellationToken cancellationToken)
     {
         var id = companyId.Value.ToString("D");
         var tombstones = new List<CompanyRetirementObject>();
         var crafterIds = new List<Guid>();
         var notes = new List<string>();
-        Guid? hostProfileId = null;
+        var refusals = new List<string>();
+
+        // Only the company's hosting profile is trusted: generic sync lets any profile
+        // upload rows naming any company. After an interrupted run has already
+        // tombstoned the company row, the profile holding its retirement markers is
+        // the host the rerun resumes in.
+        var retiredProfileIds = await profiles.LoadRetiredProfileIdsAsync(companyId, cancellationToken);
+        string? hostProfileId = null;
+        if (hostProfiles.TryGetValue(companyId.Value, out var host))
+        {
+            if (host.Status == CompanyHostProfileStatus.Resolved)
+            {
+                hostProfileId = host.ProfileId;
+            }
+            else
+            {
+                refusals.Add($"host_profile_ambiguous: profiles {string.Join(", ", host.CandidateProfileIds)} each hold this company row; no row is trusted to retire.");
+            }
+        }
+        else if (retiredProfileIds is [var resumedProfileId])
+        {
+            hostProfileId = resumedProfileId;
+            notes.Add($"resuming an interrupted retirement in host profile {resumedProfileId}.");
+        }
+        else if (retiredProfileIds.Count > 1)
+        {
+            refusals.Add($"host_profile_ambiguous: retired records exist in profiles {string.Join(", ", retiredProfileIds)}.");
+        }
 
         foreach (var item in live)
         {
-            if (item.Collection == ProfileSyncCollections.TradeCompanyProfiles &&
-                string.Equals(item.ObjectId, id, StringComparison.OrdinalIgnoreCase))
+            TradeCrafterProfile? crafter = null;
+            var matches =
+                item.Collection == ProfileSyncCollections.TradeCompanyProfiles &&
+                string.Equals(item.ObjectId, id, StringComparison.OrdinalIgnoreCase) ||
+                item.Collection == ProfileSyncCollections.TradeCrafters &&
+                (crafter = TryRead<TradeCrafterProfile>(item.PayloadJson)) is { } named &&
+                named.CompanyProfileId == companyId.Value ||
+                item.Collection.StartsWith(CompanyCollectionPrefix, StringComparison.Ordinal) &&
+                (item.ObjectId.StartsWith(id + ":", StringComparison.OrdinalIgnoreCase) ||
+                 OwnedByCompany(item.PayloadJson, id));
+            if (!matches)
             {
-                tombstones.Add(ToObject(item));
-                hostProfileId ??= Guid.TryParse(item.ProfileId, out var host) ? host : null;
+                continue;
             }
-            else if (item.Collection == ProfileSyncCollections.TradeCrafters &&
-                     TryRead<TradeCrafterProfile>(item.PayloadJson) is { } crafter &&
-                     crafter.CompanyProfileId == companyId.Value)
+
+            if (!string.Equals(item.ProfileId, hostProfileId, StringComparison.OrdinalIgnoreCase))
             {
-                tombstones.Add(ToObject(item));
-                if (crafter.Id != Guid.Empty && !crafterIds.Contains(crafter.Id))
-                {
-                    crafterIds.Add(crafter.Id);
-                }
+                notes.Add($"{item.Collection} {item.ProfileId}/{item.ObjectId} names this company outside its host profile and is not touched.");
+                continue;
             }
-            else if (item.Collection.StartsWith(CompanyCollectionPrefix, StringComparison.Ordinal) &&
-                     (item.ObjectId.StartsWith(id + ":", StringComparison.OrdinalIgnoreCase) ||
-                      OwnedByCompany(item.PayloadJson, id)))
+
+            tombstones.Add(ToObject(item));
+            if (crafter is { } hosted && hosted.Id != Guid.Empty && !crafterIds.Contains(hosted.Id))
             {
-                tombstones.Add(ToObject(item));
+                crafterIds.Add(hosted.Id);
             }
         }
 
         var satellites = await LoadSatellitesAsync(companyId, cancellationToken);
-        var refusals = new List<string>();
         var alreadyRetired = false;
-        if (tombstones.Count == 0)
+        if (tombstones.Count == 0 && refusals.Count == 0)
         {
             if (satellites.Membership.AlreadyRetired)
             {
                 alreadyRetired = true;
             }
-            else
+            else if (retiredProfileIds.Count == 0)
             {
-                refusals.Add("company_not_found: no live company row, crafter or company record carries this ID.");
+                refusals.Add("company_not_found: no single host profile holds a live company row for this ID.");
             }
         }
 
@@ -220,7 +254,7 @@ public sealed class CompanyRetirementService(
 
         return new CompanyPlan(
             companyId,
-            hostProfileId ?? companyId.Value,
+            Guid.TryParse(hostProfileId, out var actorProfileId) ? actorProfileId : companyId.Value,
             tombstones
                 .OrderBy(item => item.Collection == ProfileSyncCollections.TradeCompanyProfiles)
                 .ThenBy(item => item.Collection, StringComparer.Ordinal)

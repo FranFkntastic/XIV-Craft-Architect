@@ -125,7 +125,11 @@ public sealed record MembershipInvitationConsumptionResult(
 public enum CrafterAccountBindingEvidence
 {
     CommittedDiscordClaim,
-    OperatorConfirmed
+    OperatorConfirmed,
+    // A commissioner confirmed a claim whose crafter was reused by Lodestone ID. It
+    // keeps one crafter per person but proves nothing about who that crafter was, so
+    // it never authorizes legacy claims and yields to stronger evidence.
+    ConfirmedClaimReuse
 }
 
 public enum CrafterAccountBindingMutationStatus
@@ -569,7 +573,9 @@ public sealed partial class SqliteMembershipStore(
             companyId,
             legacyCrafterId,
             cancellationToken);
-        if (existing != null)
+        var replacesReuseBinding = existing is { Evidence: CrafterAccountBindingEvidence.ConfirmedClaimReuse } &&
+            evidence != CrafterAccountBindingEvidence.ConfirmedClaimReuse;
+        if (existing != null && !replacesReuseBinding)
         {
             await transaction.CommitAsync(cancellationToken);
             return new CrafterAccountBindingMutationResult(
@@ -579,7 +585,8 @@ public sealed partial class SqliteMembershipStore(
                 existing);
         }
 
-        if (evidence == CrafterAccountBindingEvidence.CommittedDiscordClaim &&
+        if (evidence is CrafterAccountBindingEvidence.CommittedDiscordClaim
+                or CrafterAccountBindingEvidence.ConfirmedClaimReuse &&
             await IsCrafterAutoBindingSuppressedAsync(
                 connection,
                 transaction,
@@ -603,6 +610,27 @@ public sealed partial class SqliteMembershipStore(
         }
 
         var now = timeProvider.GetUtcNow();
+        if (replacesReuseBinding)
+        {
+            await using (var delete = connection.CreateCommand())
+            {
+                delete.Transaction = transaction;
+                delete.CommandText = """
+                    DELETE FROM company_crafter_account_bindings
+                    WHERE company_id = $companyId AND legacy_crafter_id = $legacyCrafterId;
+                    """;
+                delete.Parameters.AddWithValue("$companyId", companyId.ToString());
+                delete.Parameters.AddWithValue("$legacyCrafterId", legacyCrafterId.ToString("D"));
+                await delete.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await InsertCrafterBindingEventAsync(
+                connection,
+                transaction,
+                existing! with { ActorProfileId = actorProfileId, UpdatedAtUtc = now },
+                "unbound",
+                cancellationToken);
+        }
+
         var binding = new CrafterAccountBinding(
             companyId,
             legacyCrafterId,
@@ -1848,7 +1876,7 @@ public sealed partial class SqliteMembershipStore(
                     company_id TEXT NOT NULL,
                     legacy_crafter_id TEXT NOT NULL,
                     account_profile_id TEXT NOT NULL,
-                    evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('committed_discord_claim', 'operator_confirmed')),
+                    evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('committed_discord_claim', 'operator_confirmed', 'confirmed_claim_reuse')),
                     actor_profile_id TEXT NULL,
                     created_at_utc TEXT NOT NULL,
                     updated_at_utc TEXT NOT NULL,
@@ -1920,6 +1948,7 @@ public sealed partial class SqliteMembershipStore(
                 "notify_progress_status",
                 "INTEGER NULL",
                 cancellationToken);
+            await WidenCrafterBindingEvidenceAsync(connection, cancellationToken);
             await AddEventColumnIfMissingAsync(connection, "role", "TEXT NULL", cancellationToken);
             await AddEventColumnIfMissingAsync(
                 connection,
@@ -1952,6 +1981,57 @@ public sealed partial class SqliteMembershipStore(
         {
             schemaGate.Release();
         }
+    }
+
+    // Databases created before confirmation-derived bindings carry a CHECK that rejects
+    // the new evidence kind. SQLite cannot alter a CHECK, so the table is rebuilt once,
+    // in one transaction, keeping every row.
+    private static async Task WidenCrafterBindingEvidenceAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using (var check = connection.CreateCommand())
+        {
+            check.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'company_crafter_account_bindings';";
+            if (await check.ExecuteScalarAsync(cancellationToken) is not string sql ||
+                sql.Contains("confirmed_claim_reuse", StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await using (var rebuild = connection.CreateCommand())
+        {
+            rebuild.Transaction = transaction;
+            rebuild.CommandText = """
+                CREATE TABLE company_crafter_account_bindings_widened (
+                    company_id TEXT NOT NULL,
+                    legacy_crafter_id TEXT NOT NULL,
+                    account_profile_id TEXT NOT NULL,
+                    evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('committed_discord_claim', 'operator_confirmed', 'confirmed_claim_reuse')),
+                    actor_profile_id TEXT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(company_id, legacy_crafter_id)
+                );
+
+                INSERT INTO company_crafter_account_bindings_widened (
+                    company_id, legacy_crafter_id, account_profile_id, evidence_kind,
+                    actor_profile_id, created_at_utc, updated_at_utc)
+                SELECT company_id, legacy_crafter_id, account_profile_id, evidence_kind,
+                       actor_profile_id, created_at_utc, updated_at_utc
+                FROM company_crafter_account_bindings;
+
+                DROP TABLE company_crafter_account_bindings;
+                ALTER TABLE company_crafter_account_bindings_widened RENAME TO company_crafter_account_bindings;
+
+                CREATE INDEX IF NOT EXISTS ix_company_crafter_bindings_account
+                    ON company_crafter_account_bindings(company_id, account_profile_id);
+                """;
+            await rebuild.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private static async Task AddMembershipColumnIfMissingAsync(
@@ -2175,6 +2255,7 @@ public sealed partial class SqliteMembershipStore(
     {
         CrafterAccountBindingEvidence.CommittedDiscordClaim => "committed_discord_claim",
         CrafterAccountBindingEvidence.OperatorConfirmed => "operator_confirmed",
+        CrafterAccountBindingEvidence.ConfirmedClaimReuse => "confirmed_claim_reuse",
         _ => throw new ArgumentOutOfRangeException(nameof(evidence), evidence, null)
     };
 
@@ -2182,6 +2263,7 @@ public sealed partial class SqliteMembershipStore(
     {
         "committed_discord_claim" => CrafterAccountBindingEvidence.CommittedDiscordClaim,
         "operator_confirmed" => CrafterAccountBindingEvidence.OperatorConfirmed,
+        "confirmed_claim_reuse" => CrafterAccountBindingEvidence.ConfirmedClaimReuse,
         _ => throw new InvalidOperationException($"Unknown crafter account binding evidence '{value}'.")
     };
 
