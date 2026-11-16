@@ -7,8 +7,10 @@ import {
     PortableClaimAccountStore,
     PortableMembershipRequestStore,
     createCommandAuthorization,
+    createParticipantSecret,
     loadPortableCommissionProjection,
     readCapabilityFragment,
+    readRememberedProfileAccessKey,
     replaceClaimCapabilityFragment,
     replaceParticipantCapabilityFragment,
     resolveParticipantPreworkChoices
@@ -257,7 +259,7 @@ async function load() {
             }
         }
     }
-    if (!state.account && state.capabilities.claimCapability) {
+    if (!state.account) {
         try {
             state.signInEnabled = Boolean(
                 (await state.client.loadDiscordSignInStatus()).enabled);
@@ -311,6 +313,12 @@ async function load() {
         };
     }
 
+    if (state.projection.kind !== "participant" &&
+        state.projection.public.isClaimed &&
+        !state.capabilities.recoveryCapability) {
+        await adoptAccountParticipantAccess();
+    }
+
     await refreshMembershipStanding();
     render();
     byId("briefMessage").hidden = true;
@@ -320,8 +328,65 @@ async function load() {
         showNotice(
             "Discord sign-in did not complete",
             discordSignInErrorMessage(signInResult.error));
+    } else if (signInResult?.kind === "signin" && state.account) {
+        void continueClaimAfterSignIn();
     }
     startProjectionWatch();
+}
+
+// The claim belongs to the signed-in account on every device: when this browser
+// has no participant access but the account holds the claim, install a fresh
+// credential silently. Any refusal simply leaves the public view in place.
+async function adoptAccountParticipantAccess() {
+    const accessKeys = [state.account?.accessKey, await readRememberedProfileAccessKey()]
+        .filter((key, index, all) => key && all.indexOf(key) === index);
+    for (const accessKey of accessKeys) {
+        const participantSecret = createParticipantSecret();
+        try {
+            const projection = await state.client.installParticipantAccess(
+                participantSecret,
+                accessKey);
+            if (projection.kind !== "participant") continue;
+            state.access = state.store.adoptParticipantSecret(participantSecret);
+            state.projection = projection;
+            replaceParticipantCapabilityFragment(participantSecret);
+            state.capabilities = {
+                claimCapability: null,
+                recoveryCapability: null,
+                recoveryGrantId: null,
+                bootstrapToken: null,
+                participantCapability: null
+            };
+            return true;
+        } catch (caught) {
+            if (caught?.status !== 401 && caught?.status !== 403) {
+                console.warn(
+                    "[Commission] participant_access_install_failed:",
+                    caught?.code,
+                    caught?.message);
+            }
+        }
+    }
+    return false;
+}
+
+// Discord sign-in returns here with the exact claim intent preserved: continue the
+// saved claim, or open the claim form, without another click.
+async function continueClaimAfterSignIn() {
+    if (state.projection.kind === "participant" ||
+        state.projection.public.isClaimed ||
+        !state.capabilities.claimCapability) {
+        return;
+    }
+    try {
+        if (state.access?.pending?.kind === "claim") {
+            await retryClaim();
+        } else {
+            openClaimForm();
+        }
+    } catch (caught) {
+        showNotice("Claim unavailable", caught.message);
+    }
 }
 
 async function verifyPortableAccount(savedAccount) {
@@ -615,13 +680,11 @@ function resolveNextStep() {
                 }]
             };
         }
-        if (!state.account &&
-            pending?.kind === "claim" &&
-            pending.payload?.verifiedDiscordRequired) {
+        if (!state.account && pending?.kind === "claim") {
             if (state.signInEnabled) {
                 return {
-                    title: "Verify Discord to retry your saved claim",
-                    body: "Your exact claim is still saved. Sign in again, then Craft Architect will retry it without asking you to recreate anything.",
+                    title: "Sign in with Discord to finish your claim",
+                    body: "Your exact claim is still saved. Sign in with Discord and Craft Architect will finish it without asking you to recreate anything.",
                     actions: [{
                         label: "Continue with Discord",
                         primary: true,
@@ -649,27 +712,29 @@ function resolveNextStep() {
         }
         if (!state.account && state.signInEnabled) {
             return {
-                title: "Verify Discord to claim",
-                body: "Discord sign-in proves which account is claiming. You will choose one Lodestone character separately after returning here.",
+                title: "Sign in with Discord to claim",
+                body: "Discord sign-in proves which account is claiming. You will choose one Lodestone character after returning here.",
                 actions: [{
                     label: "Continue with Discord",
                     primary: true,
                     run: startDiscordClaimSignIn
-                }, {
-                    label: "Claim without Discord",
-                    run: () => openClaimForm(true)
                 }]
+            };
+        }
+        if (!state.account) {
+            return {
+                title: "Discord sign-in is unavailable",
+                body: "Claiming needs a Discord sign-in, which is not available right now. Nothing was submitted.",
+                tone: "waiting"
             };
         }
         return {
             title: "Claim this commission",
-            body: state.account
-                ? `${state.account.displayName} is verified through Discord. Choose one exact Lodestone character for commissioner confirmation.`
-                : "Verify one exact Lodestone character, provide a usable contact, and atomically accept the current terms.",
+            body: `${state.account.displayName} is verified through Discord. Choose one exact Lodestone character for commissioner confirmation.`,
             actions: [{
-                label: state.account ? "Choose character" : "Enter crafter details",
+                label: "Choose character",
                 primary: true,
-                run: () => openClaimForm(!state.account)
+                run: () => openClaimForm()
             }]
         };
     }
@@ -686,9 +751,21 @@ function resolveNextStep() {
                 }]
             };
         }
+        if (!state.account && state.signInEnabled) {
+            return {
+                title: "Commission assigned",
+                body: "If this is your commission, sign in with Discord to open your workspace.",
+                tone: "waiting",
+                actions: [{
+                    label: "Continue with Discord",
+                    primary: true,
+                    run: startDiscordClaimSignIn
+                }]
+            };
+        }
         return {
             title: "Commission assigned",
-            body: "This public link remains view-only. The assigned crafter can use their saved browser access, or ask the commissioner for a fresh recovery link.",
+            body: "This commission has an assigned crafter.",
             tone: "blocked"
         };
     }
@@ -773,13 +850,8 @@ function resolveNextStep() {
 }
 
 async function startDiscordClaimSignIn() {
-    const claimCapability = state.capabilities.claimCapability;
-    if (!claimCapability) {
-        throw new CommissionClientError(
-            "This browser no longer holds the claim capability.",
-            "missing-claim-authority");
-    }
-    state.accountStore.beginSignIn(claimCapability);
+    // Without a claim capability this signs in to reach an existing claim.
+    state.accountStore.beginSignIn(state.capabilities.claimCapability ?? null);
     const returnPath = `${window.location.pathname}?id=${encodeURIComponent(state.publicId)}`;
     const authorizationUrl = await state.client.startDiscordSignIn(returnPath);
     window.location.assign(authorizationUrl);
@@ -1381,7 +1453,7 @@ function closeActionForm() {
     byId("nextStepForm").hidden = true;
 }
 
-function openClaimForm(anonymous = false) {
+function openClaimForm() {
     state.selectedLodestone = null;
     const form = element("form", "action-form");
     const grid = element("div", "form-grid");
@@ -1401,24 +1473,6 @@ function openClaimForm(anonymous = false) {
         createField("In-game character", character),
         createField("Home world", world)
     );
-    let contactMethod = null;
-    let contactValue = null;
-    if (anonymous) {
-        contactMethod = createSelect("contactMethod", [
-            ["Discord", "Discord"],
-            ["Email", "Email"],
-            ["Other", "Other usable contact"]
-        ]);
-        contactValue = createInput("text", "contactValue", {
-            required: true,
-            maxLength: 240,
-            autocomplete: "off",
-            placeholder: "How the commissioner can reach you"
-        });
-        grid.append(
-            createField("Contact method", contactMethod),
-            createField("Contact details", contactValue));
-    }
 
     const searchActions = element("div", "inline-actions");
     const search = createButton("Find on Lodestone", async () => {
@@ -1429,7 +1483,7 @@ function openClaimForm(anonymous = false) {
     const preview = element("div");
     const error = element("p", "form-error");
     error.hidden = true;
-    if (!anonymous && state.account) {
+    if (state.account) {
         const account = element("div", "lodestone-preview");
         account.append(
             element("span", null, "✓"),
@@ -1444,15 +1498,13 @@ function openClaimForm(anonymous = false) {
         element(
             "p",
             "form-help",
-            anonymous
-                ? "Lodestone confirms that the selected character exists; the commissioner separately confirms that the contact belongs to that character."
-                : "Discord confirms account ownership and Lodestone confirms that the character exists. The commissioner separately confirms that they belong together."),
+            "Discord confirms account ownership and Lodestone confirms that the character exists. The commissioner separately confirms that they belong together."),
         searchActions,
         error,
         results,
         preview
     );
-    const relationship = buildClaimRelationship(anonymous);
+    const relationship = buildClaimRelationship();
     form.append(relationship.node);
     addFormFooter(form, `Claim terms v${state.projection.public.terms.version}`);
     form.addEventListener("submit", async event => {
@@ -1464,10 +1516,7 @@ function openClaimForm(anonymous = false) {
         }
         try {
             await submitClaim({
-                membershipIntent: relationship.readIntent(),
-                contactMethod: contactMethod?.value ?? null,
-                contactValue: contactValue?.value.trim() ?? null,
-                verifiedDiscordRequired: !anonymous
+                membershipIntent: relationship.readIntent()
             });
         } catch (caught) {
             showNotice("Claim unavailable", caught.message);
@@ -1476,9 +1525,9 @@ function openClaimForm(anonymous = false) {
     showActionForm(form);
 }
 
-function buildClaimRelationship(anonymous) {
+function buildClaimRelationship() {
     const company = state.projection.public.companyDisplayName;
-    const membership = anonymous ? null : state.membership;
+    const membership = state.membership;
     const fieldset = element("fieldset", "claim-relationship");
     fieldset.append(element("legend", null, "Company relationship"));
     const none = { node: fieldset, readIntent: () => null };
@@ -1882,27 +1931,26 @@ async function selectLodestoneCandidate(candidate, target, error) {
 
 async function submitClaim(contact) {
     const selected = state.selectedLodestone;
-    if (contact.verifiedDiscordRequired && !state.account) {
+    if (!state.account) {
         throw new CommissionClientError(
-            "Discord sign-in is no longer available in this browser. Sign in again before claiming.",
+            "Sign in with Discord before claiming.",
             "verified-discord-identity-required");
     }
-    const contactValue = state.account?.displayName ??
-        requiredUserText(contact.contactValue, "Contact details");
+    const contactValue = state.account.displayName;
     const payload = {
         termsVersion: state.projection.public.terms.version,
         provisionalCrafter: {
             provisionalCrafterId: crypto.randomUUID(),
             characterName: selected.displayName,
             homeWorld: selected.worldName,
-            contactMethod: state.account ? "Discord" : contact.contactMethod,
+            contactMethod: "Discord",
             contactValue,
             lodestoneCharacterId: selected.lodestoneCharacterId,
             lodestoneProfileUrl: selected.lodestoneProfileUrl,
             submittedAtUtc: new Date().toISOString()
         },
         existingCrafterId: null,
-        verifiedDiscordRequired: Boolean(state.account)
+        verifiedDiscordRequired: true
     };
     // Saved before the claim so a committed claim can always finish or retry its
     // membership request; the claim itself never waits on membership.
@@ -1931,10 +1979,10 @@ async function retryClaim() {
     if (!access?.pending || access.pending.kind !== "claim") {
         throw new CommissionClientError("No saved claim command is available.", "missing-pending-claim");
     }
-    if (access.pending.payload.verifiedDiscordRequired && !state.account) {
-        throw new CommissionClientError(
-            "This saved claim requires the verified Discord account. Sign in again before retrying.",
-            "verified-discord-identity-required");
+    if (!state.account) {
+        // Claims are account-bound: sign in first, then the same saved claim resumes.
+        await startDiscordClaimSignIn();
+        return;
     }
     await sendAuthorityExchange(
         "claim",
@@ -2003,7 +2051,9 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
         const refreshableConflict = !applied &&
             caught?.status === 409 &&
             ["projection_conflict", "revision_conflict"].includes(caught?.code);
+        // An account-required refusal keeps the exact saved claim for the sign-in retry.
         let refusedClaim = !applied && command === "claim" &&
+            caught?.code !== "claim_requires_account" &&
             caught?.status >= 400 && caught?.status < 500 &&
             ![408, 429].includes(caught.status);
         if (refusedClaim) {
