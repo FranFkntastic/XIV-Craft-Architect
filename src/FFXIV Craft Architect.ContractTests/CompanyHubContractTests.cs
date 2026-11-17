@@ -83,6 +83,33 @@ public sealed class CompanyHubContractTests
         var initial = await operatorClient.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(
             $"/trade/v1/companies/{company.Id:D}/workspace-profile");
         Assert.Null(initial!.CommissionPricingScope);
+        Assert.True(initial.Revision > 0);
+        var margins = new TradeMarginItem[] { new(100, 350000) };
+        using (var savedMargins = await operatorClient.PutAsJsonAsync(
+                   $"/trade/v1/companies/{company.Id:D}/margin-items",
+                   new CompanyMarginItemsUpdateRequest(initial.Revision, true, margins)))
+        {
+            savedMargins.EnsureSuccessStatusCode();
+        }
+        using (var staleMargins = await ownerClient.PutAsJsonAsync(
+                   $"/trade/v1/companies/{company.Id:D}/margin-items",
+                   new CompanyMarginItemsUpdateRequest(initial.Revision, true, [])))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, staleMargins.StatusCode);
+        }
+        foreach (var invalid in new IReadOnlyList<TradeMarginItem>[]
+                 {
+                     [new(0)], [new(100, -1)], [new(100), new(100)],
+                     Enumerable.Range(1, 501).Select(id => new TradeMarginItem(id)).ToArray()
+                 })
+        {
+            using var refused = await operatorClient.PutAsJsonAsync(
+                $"/trade/v1/companies/{company.Id:D}/margin-items",
+                new CompanyMarginItemsUpdateRequest(initial.Revision, true, invalid));
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            var error = await refused.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal("invalid_margin_items", error.GetProperty("error").GetString());
+        }
         var hub = await operatorClient.GetFromJsonAsync<JsonElement>(
             $"/trade/v1/companies/{company.Id:D}/hub");
         var revision = hub.GetProperty("profileRevision").GetInt64();
@@ -103,7 +130,20 @@ public sealed class CompanyHubContractTests
             var profile = await client.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(
                 $"/trade/v1/companies/{company.Id:D}/workspace-profile");
             Assert.Equal(scope, profile!.CommissionPricingScope);
+            Assert.Equal(margins, profile.MarginItems);
         }
+        // A generic snapshot sync is not an explicit margins command, even when it
+        // includes a stale or empty field. It must preserve the server-owned rows.
+        var current = await ownerClient.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(
+            $"/trade/v1/companies/{company.Id:D}/workspace-profile");
+        var generic = await fixture.Profiles.PutObjectAsync(owner.ProfileId.ToString("D"),
+            ProfileSyncCollections.TradeCompanyProfiles, company.Id.ToString("D"),
+            JsonSerializer.Serialize(company, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            current!.Revision, CancellationToken.None);
+        Assert.True(generic.Success);
+        var retained = await operatorClient.GetFromJsonAsync<TradeCompanyWorkspaceProfileResponse>(
+            $"/trade/v1/companies/{company.Id:D}/workspace-profile");
+        Assert.Equal(margins, retained!.MarginItems);
     }
 
     [Fact]
