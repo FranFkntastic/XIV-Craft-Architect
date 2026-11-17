@@ -817,11 +817,6 @@ public sealed class CraftSessionState
             selection.EvidencePenalty,
             currentDecision.CheapestWorldStops,
             selection.WorldStops,
-            currentDecision.CheapestDataCenterTransfers,
-            selection.DataCenterTransfers,
-            currentDecision.StartsFromHomeDataCenter,
-            currentDecision.HomeDataCenter,
-            currentDecision.TravelPriority,
             currentDecision.RepresentativeRoutes,
             selection.ItemDecisions)
         {

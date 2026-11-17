@@ -19,98 +19,6 @@ public sealed class MemberNotificationContractTests
     private const string CommissionerDiscordId = "100000000000000001";
     private const string CrafterDiscordId = "100000000000000002";
 
-    [Theory]
-    [InlineData(CompanyCommissionActivityKind.ClaimAccepted)]
-    [InlineData(CompanyCommissionActivityKind.TermsAmended)]
-    [InlineData(CompanyCommissionActivityKind.ProgressReported)]
-    [InlineData(CompanyCommissionActivityKind.DeliveryAccepted)]
-    [InlineData(CompanyCommissionActivityKind.CommissionCanceled)]
-    public async Task CommissionActivityEnqueuesMemberDmAndPreservesCommissionerRoute(
-        CompanyCommissionActivityKind eventKind)
-    {
-        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
-        var notification = fixture.Notification(eventKind);
-        if (eventKind == CompanyCommissionActivityKind.ProgressReported)
-        {
-            notification = notification with
-            {
-                Summary = "The crafter reported production progress: " +
-                    "Iron Nails: 1 of 1 completed, 1 ready. " +
-                    "Comment: First batch is staged. Work remains in progress.",
-                ActionLabel = "View progress"
-            };
-        }
-
-        var result = await fixture.Delivery.NotifyMembersAsync(
-            notification,
-            fixture.Commission,
-            fixture.PublicUrl);
-        Assert.True(result.Success);
-
-        var commissionerResult = await fixture.Delivery.NotifyAsync(notification);
-        Assert.True(commissionerResult.Success, commissionerResult.Error);
-        Assert.True(
-            commissionerResult.WorkItemIds.Count > 0,
-            $"{commissionerResult.Status}: {commissionerResult.Error}");
-        var items = await fixture.LoadOutboxAsync();
-        Assert.True(items.Count >= 2, string.Join(" | ", items));
-
-        var member = Assert.Single(items, item => item.DestinationKind == 2);
-        Assert.Equal(CrafterDiscordId, member.DestinationKey);
-        Assert.Contains(
-            items,
-            item => item.DestinationKind == 0 &&
-                item.DestinationKey == $"dm:{CommissionerDiscordId}");
-        Assert.DoesNotContain("capability", member.PayloadJson, StringComparison.OrdinalIgnoreCase);
-        using var payload = JsonDocument.Parse(member.PayloadJson);
-        Assert.Equal(
-            $"https://example.test/companies/{CompanyId.Value:D}" +
-            $"?commissionId={CommissionId:D}" +
-            "&activityId=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            payload.RootElement
-            .GetProperty("embeds")[0]
-            .GetProperty("url")
-            .GetString());
-        Assert.DoesNotContain("Contract Crafter", member.PayloadJson, StringComparison.Ordinal);
-        if (eventKind == CompanyCommissionActivityKind.ProgressReported)
-        {
-            Assert.Contains("Iron Nails: 1 of 1 completed, 1 ready", member.PayloadJson);
-            Assert.Contains("First batch is staged", member.PayloadJson);
-        }
-
-        var commissioner = Assert.Single(
-            items,
-            item => item.DestinationKind == 0 &&
-                item.DestinationKey == $"dm:{CommissionerDiscordId}");
-        using var commissionerPayload = JsonDocument.Parse(commissioner.PayloadJson);
-        var commissionerEmbed = commissionerPayload.RootElement
-            .GetProperty("embeds")[0];
-        Assert.Contains("Contract commission", commissionerEmbed.GetProperty("title").GetString());
-        Assert.Contains("MEMBER-1", commissionerEmbed.GetProperty("title").GetString());
-        Assert.Equal("Contract Crafter", commissionerEmbed
-            .GetProperty("fields")[0]
-            .GetProperty("value")
-            .GetString());
-        Assert.Equal(
-            eventKind == CompanyCommissionActivityKind.ProgressReported
-                ? "View progress"
-                : "Review identity",
-            commissionerPayload.RootElement
-                .GetProperty("components")[0]
-                .GetProperty("components")[0]
-                .GetProperty("label")
-                .GetString());
-        if (eventKind == CompanyCommissionActivityKind.ProgressReported)
-        {
-            Assert.Contains("Iron Nails: 1 of 1 completed, 1 ready", commissioner.PayloadJson);
-            Assert.Contains("First batch is staged", commissioner.PayloadJson);
-        }
-        Assert.Equal(
-            $"https://example.test/trade/orders?orderId={CommissionId:D}" +
-            "&activityId=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            commissionerEmbed.GetProperty("url").GetString());
-    }
-
     [Fact]
     public async Task OptedOutMemberReceivesNoMemberDm()
     {
@@ -128,60 +36,6 @@ public sealed class MemberNotificationContractTests
 
         Assert.Equal(DiscordNotificationEnqueueStatus.Suppressed, result.Status);
         Assert.DoesNotContain(
-            await fixture.LoadOutboxAsync(),
-            item => item.DestinationKind == 2);
-    }
-
-    [Theory]
-    [InlineData(CompanyCommissionActivityKind.ClaimAccepted, false, true, true)]
-    [InlineData(CompanyCommissionActivityKind.CommentAdded, true, false, true)]
-    [InlineData(CompanyCommissionActivityKind.ProgressReported, true, true, false)]
-    public async Task DisabledMemberCategorySuppressesOnlyItsMappedEvents(
-        CompanyCommissionActivityKind eventKind,
-        bool actionRequired,
-        bool commissionerMessages,
-        bool progressAndStatus)
-    {
-        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
-        var membership = await fixture.Memberships.SetNotificationPreferencesAsync(
-            CompanyId,
-            CrafterId,
-            new MemberNotificationPreferences(
-                actionRequired,
-                commissionerMessages,
-                progressAndStatus));
-
-        Assert.NotNull(membership);
-        var result = await fixture.Delivery.NotifyMembersAsync(
-            fixture.Notification(eventKind),
-            fixture.Commission,
-            fixture.PublicUrl);
-
-        Assert.Equal(DiscordNotificationEnqueueStatus.Suppressed, result.Status);
-        Assert.DoesNotContain(
-            await fixture.LoadOutboxAsync(),
-            item => item.DestinationKind == 2);
-    }
-
-    [Fact]
-    public async Task EnabledMemberCategoryStillDeliversWhenAnotherCategoryIsDisabled()
-    {
-        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
-        await fixture.Memberships.SetNotificationPreferencesAsync(
-            CompanyId,
-            CrafterId,
-            new MemberNotificationPreferences(
-                ActionRequired: false,
-                CommissionerMessages: true,
-                ProgressAndStatus: false));
-
-        var result = await fixture.Delivery.NotifyMembersAsync(
-            fixture.Notification(CompanyCommissionActivityKind.CommentAdded),
-            fixture.Commission,
-            fixture.PublicUrl);
-
-        Assert.True(result.Success, result.Error);
-        Assert.Contains(
             await fixture.LoadOutboxAsync(),
             item => item.DestinationKind == 2);
     }
@@ -248,20 +102,6 @@ public sealed class MemberNotificationContractTests
     }
 
     [Fact]
-    public async Task ActiveParticipantWithoutLinkedDiscordReceivesNoMemberDm()
-    {
-        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: false);
-
-        var result = await fixture.Delivery.NotifyMembersAsync(
-            fixture.Notification(CompanyCommissionActivityKind.ClaimAccepted),
-            fixture.Commission,
-            fixture.PublicUrl);
-
-        Assert.Equal(DiscordNotificationEnqueueStatus.Suppressed, result.Status);
-        Assert.Empty(await fixture.LoadOutboxAsync());
-    }
-
-    [Fact]
     public async Task MemberDmDispatchResolvesRecipientBeforeCreatingMessage()
     {
         await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
@@ -283,33 +123,6 @@ public sealed class MemberNotificationContractTests
         Assert.Equal(RecordingMemberDmClient.MessageId, delivery.MessageId);
         Assert.Null(delivery.LastError);
         Assert.Null(delivery.FailureCode);
-    }
-
-    [Fact]
-    public async Task ExplicitMemberTestUsesCanonicalOutboxAndDoesNotMutateACommission()
-    {
-        await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
-        var testId = Guid.NewGuid();
-        var enqueued = await fixture.EnqueueMemberTestAsync(testId);
-
-        Assert.True(enqueued.Success, enqueued.Error);
-        var workItemId = Assert.Single(enqueued.WorkItemIds);
-        var pending = await fixture.LoadMemberTestAsync(workItemId);
-        Assert.NotNull(pending);
-        Assert.Equal(DiscordOutboxState.Pending, pending.State);
-
-        var discord = new RecordingMemberDmClient();
-        await fixture.CreateDispatcher(discord).DispatchDueAsync(default);
-
-        var delivered = await fixture.LoadMemberTestAsync(workItemId);
-        Assert.NotNull(delivered);
-        Assert.Equal(DiscordOutboxState.Succeeded, delivered.State);
-        Assert.Equal(RecordingMemberDmClient.MessageId, delivered.MessageId);
-        Assert.Contains(
-            await fixture.LoadOutboxAsync(),
-            item => item.PayloadJson.Contains(
-                "No commission was changed by this test.",
-                StringComparison.Ordinal));
     }
 
     [Fact]

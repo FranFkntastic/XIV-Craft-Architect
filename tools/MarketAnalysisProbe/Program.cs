@@ -156,7 +156,6 @@ internal sealed class MarketAnalysisBenchmark
                     new MarketAnalysisConfig
                     {
                         TravelTolerance = options.RouteTolerance.Value,
-                        TravelPriority = MarketTravelPriority.DataCenterTransfersFirst,
                         EnableSplitWorld = options.IncludeSplitPurchases
                     },
                     options.IncludeSplitPurchases,
@@ -175,8 +174,7 @@ internal sealed class MarketAnalysisBenchmark
                     routeResult.IsComplete ? 1 : 0,
                     routeResult.Decision?.RouteSearchWasTruncated ?? false,
                     routeResult.Decision?.SelectedGilCost,
-                    routeResult.Decision?.SelectedWorldStops,
-                    routeResult.Decision?.SelectedDataCenterTransfers);
+                    routeResult.Decision?.SelectedWorldStops);
             }
             catch (OperationCanceledException) when (routeCancellation.IsCancellationRequested)
             {
@@ -187,7 +185,6 @@ internal sealed class MarketAnalysisBenchmark
                     0,
                     0,
                     false,
-                    null,
                     null,
                     null);
             }
@@ -327,8 +324,7 @@ internal sealed class MarketAnalysisBenchmark
                 $"frontier={run.Procurement.RouteFrontierCount:N0}; complete={run.Procurement.CompleteRouteCount:N0}; " +
                 $"routeTruncated={run.Procurement.RouteSearchWasTruncated}; " +
                 $"gil={run.Procurement.SelectedGilCost?.ToString("N0") ?? "n/a"}; " +
-                $"worlds={run.Procurement.SelectedWorldStops?.ToString() ?? "n/a"}; " +
-                $"transfers={run.Procurement.SelectedDataCenterTransfers?.ToString() ?? "n/a"}");
+                $"worlds={run.Procurement.SelectedWorldStops?.ToString() ?? "n/a"}");
         }
 
         foreach (var item in run.TopRecommendedItems)
@@ -901,8 +897,7 @@ internal sealed record BenchmarkProcurementResult(
     int CompleteRouteCount,
     bool RouteSearchWasTruncated,
     long? SelectedGilCost,
-    int? SelectedWorldStops,
-    int? SelectedDataCenterTransfers);
+    int? SelectedWorldStops);
 
 internal sealed record BenchmarkStageResult(string Name, TimeSpan Elapsed)
 {

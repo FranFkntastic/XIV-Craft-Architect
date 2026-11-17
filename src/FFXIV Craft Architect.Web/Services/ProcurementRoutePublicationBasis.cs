@@ -21,8 +21,6 @@ public sealed record ProcurementRoutePublicationBasis(
     MarketAcquisitionLens Lens,
     bool IncludeSplitPurchases,
     int TravelTolerance,
-    MarketTravelPriority TravelPriority,
-    bool StartFromHomeDataCenter,
     HashSet<MarketWorldKey> BlacklistedWorlds,
     HashSet<MarketItemWorldKey> ExcludedItemWorlds)
 {
@@ -38,8 +36,6 @@ public sealed record ProcurementRoutePublicationBasis(
                string.Equals(SelectedRegion, other.SelectedRegion, StringComparison.Ordinal) &&
                Lens == other.Lens &&
                IncludeSplitPurchases == other.IncludeSplitPurchases &&
-               TravelPriority == other.TravelPriority &&
-               StartFromHomeDataCenter == other.StartFromHomeDataCenter &&
                BlacklistedWorlds.SetEquals(other.BlacklistedWorlds) &&
                ExcludedItemWorlds.SetEquals(other.ExcludedItemWorlds);
     }

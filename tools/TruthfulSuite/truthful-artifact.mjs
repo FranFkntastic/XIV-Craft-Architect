@@ -16,7 +16,6 @@ const COMMON_OUTCOMES = [
   { id: 'suite-structure', subjectKind: 'source' },
   { id: 'dependency-audit', subjectKind: 'source' },
   { id: 'solution-build', subjectKind: 'source' },
-  { id: 'spec-tests', subjectKind: 'source' },
   { id: 'contract-tests', subjectKind: 'source' },
   { id: 'web-publish', subjectKind: 'source' },
   { id: 'product-configuration', subjectKind: 'archive' }

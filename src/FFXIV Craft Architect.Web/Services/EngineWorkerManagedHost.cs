@@ -307,7 +307,6 @@ public static partial class ManagedHost
                 ProcurementConfig = new MarketAnalysisConfig
                 {
                     TravelTolerance = 0,
-                    TravelPriority = MarketTravelPriority.WorldVisitsFirst
                 },
                 ExpectedWorldsByDataCenter = new Dictionary<string, IReadOnlyList<string>>
                 {

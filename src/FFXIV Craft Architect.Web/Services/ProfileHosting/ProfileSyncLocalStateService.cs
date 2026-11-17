@@ -34,8 +34,6 @@ public sealed class ProfileSyncLocalStateService
             "procurement.enable_split_world_purchases",
             "procurement.travel_tolerance",
             "procurement.world_exclusion_duration_minutes",
-            "procurement.start_from_home_data_center",
-            "procurement.travel_priority",
             "ui.glass_surfaces",
             "ui.accent_color",
             "ui.use_split_pane_market_view",

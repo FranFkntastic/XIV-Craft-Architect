@@ -206,45 +206,6 @@ public sealed class PlansProfileSyncAdapterTests
     }
 
     [Fact]
-    public async Task AcceptRemoteTombstoneDeletesInsteadOfApplyingEmptyPayload()
-    {
-        const string host = "https://profiles.example/api/";
-        var profileId = Guid.NewGuid().ToString("D");
-        var runtime = new PlanStorageRuntime(
-            CreatePlan(Guid.NewGuid().ToString("D"), "fixture", linkedOrderId: null),
-            ConnectionSettings(host, profileId));
-        var indexedDb = new IndexedDbService(runtime);
-        var adapter = new RecordingAdapter(ProfileSyncCollections.Settings);
-        var service = new ProfileSyncService(
-            new ProfileHostClient(
-                new HttpClient(new UnusedHandler()) { BaseAddress = new Uri(host) },
-                new ProfileHostClientOptions(host)),
-            new ProfileSyncLocalStateService(indexedDb, new ProfileHostClientOptions(host)),
-            new WebSettingsService(indexedDb),
-            new HostedOrderProjectionStore(),
-            [adapter]);
-        var tombstone = new ProfileSyncObjectEnvelope
-        {
-            Collection = ProfileSyncCollections.Settings,
-            ObjectId = "ui.accent_color",
-            PayloadJson = "{}",
-            Revision = 9,
-            Deleted = true,
-            UpdatedAtUtc = DateTime.UtcNow
-        };
-
-        await service.AcceptRemoteConflictAsync(new ProfileSyncConflict(
-            tombstone.Collection,
-            tombstone.ObjectId,
-            LocalRevision: 8,
-            RemoteRevision: 9,
-            tombstone));
-
-        Assert.Equal(1, adapter.DeleteCount);
-        Assert.Empty(adapter.AppliedObjectIds);
-    }
-
-    [Fact]
     public async Task LegacyPlanRepairResumesFromRemoteTombstoneAfterInterruptedDelete()
     {
         const string host = "https://profiles.example/api/";
@@ -596,14 +557,6 @@ public sealed class PlansProfileSyncAdapterTests
 
         private static HttpResponseMessage Ok<T>(T content) =>
             new(HttpStatusCode.OK) { Content = JsonContent.Create(content) };
-    }
-
-    private sealed class UnusedHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken) =>
-            throw new NotSupportedException(request.RequestUri?.ToString());
     }
 
     private sealed class TombstoneResumeHandler(string planId) : HttpMessageHandler

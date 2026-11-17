@@ -53,7 +53,7 @@
                     </div>
                 </div>
 
-                <p class="pp-tradeoff-footnote">@GetPriorityExplanation() Market evidence 12 hours old or older must be refreshed before CA will use it.</p>
+                <p class="pp-tradeoff-footnote">Market evidence 12 hours old or older must be refreshed before CA will use it.</p>
             </section>
         </MudPopover>
     </div>
@@ -157,7 +157,6 @@
     [Parameter] public bool IsReconciling { get; set; }
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public string? RouteFailure { get; set; }
-    [Parameter] public MarketTravelPriority TravelPriority { get; set; }
     [Parameter] public EventCallback<int> TravelToleranceChanged { get; set; }
     [Parameter] public EventCallback<int> TravelToleranceCommitted { get; set; }
 
@@ -193,7 +192,7 @@
         var tolerance = Math.Clamp(TravelTolerance, 0, 11);
         return tolerance switch
         {
-            0 => "CA applies no gil ceiling. It chooses the eligible route with the least travel under your selected travel priority.",
+            0 => "CA applies no gil ceiling. It chooses the eligible route with the fewest world visits.",
             11 => "CA permits no extra gil. It chooses the cheapest eligible route, using travel and evidence quality only to break cost ties.",
             _ => $"CA may choose a route costing up to {MarketRouteScoring.GetMaximumPremiumRate(tolerance)!.Value:P0} more gil than the cheapest eligible route when that reduces travel."
         };
@@ -220,12 +219,6 @@
             _ => "Less travel within budget"
         };
     }
-
-    private string GetPriorityExplanation() => TravelPriority switch
-    {
-        MarketTravelPriority.WorldVisitsFirst => "World visits are compared before data-center transfers.",
-        _ => "Data-center transfers are compared before individual world visits."
-    };
 
     private bool HasCurrentRouteFrontier() =>
         RouteValidity is ProcurementRoutePublicationValidity.Current or ProcurementRoutePublicationValidity.SelectionChanged &&
@@ -261,10 +254,10 @@
             : $"Positions {option.MinimumTolerance}-{option.MaximumTolerance}";
 
     private static string GetRouteTitle(MarketRouteFrontierOption option) =>
-        $"{GetToleranceRange(option)}: {option.GilCost:N0} gil, {option.WorldStops} world visits, {option.DataCenterTransfers} data-center transfers";
+        $"{GetToleranceRange(option)}: {option.GilCost:N0} gil, {option.WorldStops} world visits";
 
     private static string GetTravelSummary(MarketRouteFrontierOption option) =>
-        $"{option.WorldStops} world{(option.WorldStops == 1 ? string.Empty : "s")} · {option.DataCenterTransfers} transfer{(option.DataCenterTransfers == 1 ? string.Empty : "s")}";
+        $"{option.WorldStops} world{(option.WorldStops == 1 ? string.Empty : "s")}";
 
     private static string GetTrackRowStyle(int tolerance) =>
         $"grid-row: {Math.Clamp(tolerance, 0, 11) + 1};";

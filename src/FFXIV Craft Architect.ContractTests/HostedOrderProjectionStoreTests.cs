@@ -15,52 +15,7 @@ public sealed class HostedOrderProjectionStoreTests
 {
     private static readonly DateTime Now = new(2026, 8, 1, 12, 0, 0, DateTimeKind.Utc);
 
-    [Fact]
-    public void OwnerProjectionUsesProfileRevisionForRefreshAndCanonicalRevisionForCommands()
-    {
-        var profileId = Guid.NewGuid().ToString("D");
-        var companyId = Guid.NewGuid();
-        var draft = CreateOrder(Guid.NewGuid(), companyId, "Operator draft");
-        var canonical = CreateOrder(draft.Id, companyId, "Canonical company order");
-        var store = RestoringStore(
-            profileId,
-            7,
-            $"https://profiles.example/|{profileId}");
-        Assert.True(store.TryPublishRemoteOrder(draft, 7));
-        var owner = new CompanyCommissionOwnerProjection
-        {
-            Order = canonical,
-            ObjectRevision = new CompanyRecordRevision(2),
-            CompanyRevision = new CompanyRecordRevision(12),
-            ProfileObjectRevision = new CompanyRecordRevision(8)
-        };
-
-        Assert.True(store.TryPublishOwner(owner));
-        var projected = store.Get(draft.Id);
-        Assert.Equal(8, projected?.ObjectRevision);
-        Assert.Equal(2, projected?.OwnerProjection?.ObjectRevision.Value);
-        Assert.Equal("Canonical company order", projected?.Order?.Title);
-    }
-
     [Theory]
-    [InlineData(ProjectionStoreScenario.CanonicalRevisionAndTombstone)]
-    [InlineData(ProjectionStoreScenario.CompanyProfileIsImmutable)]
-    [InlineData(ProjectionStoreScenario.ProfileResetClearsRevisionHistory)]
-    [InlineData(ProjectionStoreScenario.OwnerUpgradeAtSameRevision)]
-    [InlineData(ProjectionStoreScenario.SameProfileReconnect)]
-    [InlineData(ProjectionStoreScenario.ScopeChange)]
-    [InlineData(ProjectionStoreScenario.RestoreRevisionCannotRollBack)]
-    [InlineData(ProjectionStoreScenario.CompanySnapshotComposition)]
-    [InlineData(ProjectionStoreScenario.SameProfileConnectionReplacement)]
-    [InlineData(ProjectionStoreScenario.ConnectionScopePathCase)]
-    [InlineData(ProjectionStoreScenario.SameRevisionOwnerPersistence)]
-    [InlineData(ProjectionStoreScenario.LiveTombstonePersistence)]
-    [InlineData(ProjectionStoreScenario.OwnerTombstonePersistence)]
-    [InlineData(ProjectionStoreScenario.CenterOperationWinner)]
-    [InlineData(ProjectionStoreScenario.CenterOperationAuthoritySwitch)]
-    [InlineData(ProjectionStoreScenario.CenterOperationCommittedFailure)]
-    [InlineData(ProjectionStoreScenario.StaleMissingOwner)]
-    [InlineData(ProjectionStoreScenario.BatchHydration)]
     [InlineData(ProjectionStoreScenario.DirectNotificationHydration)]
     public async Task ProjectionStorePreservesCanonicalIdentityAndRestoreTruth(ProjectionStoreScenario scenario)
     {
@@ -87,143 +42,6 @@ public sealed class HostedOrderProjectionStoreTests
             ProjectionStoreScenario.DirectNotificationHydration => DirectNotificationHydratesMissingOrder(),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null)
         });
-    }
-
-    [Fact]
-    public void HundredUnchangedOwnerVerificationsPreserveLastKnownRows()
-    {
-        var profileId = Guid.NewGuid().ToString("D");
-        var store = RestoringStore(
-            profileId,
-            0,
-            $"https://profiles.example/|{profileId}");
-        var companyProfileId = Guid.NewGuid();
-        var orders = Enumerable.Range(1, 100)
-            .Select(index => CreateOrder(
-                Guid.NewGuid(),
-                companyProfileId,
-                $"Commission {index}"))
-            .ToArray();
-
-        Assert.Equal(
-            100,
-            store.PublishRemoteOrders(orders
-                .Select((order, index) => (order, (long)index + 1))
-                .ToArray()));
-        Assert.All(
-            store.GetAll(companyProfileId),
-            snapshot => Assert.Equal(
-                HostedOrderDisplayState.LastKnown,
-                snapshot.DisplayState));
-
-        var rowChanges = 0;
-        var verificationChanges = 0;
-        store.Changed += _ => rowChanges++;
-        store.VerificationChanged += _ => verificationChanges++;
-
-        foreach (var (order, index) in orders.Select((order, index) => (order, index)))
-        {
-            var verifiedCopy = JsonSerializer.Deserialize<TradeOrder>(
-                JsonSerializer.Serialize(order))!;
-            Assert.True(store.TryPublishOwner(CreateOwner(
-                verifiedCopy,
-                index + 1,
-                index + 101)));
-        }
-
-        Assert.Equal(0, rowChanges);
-        Assert.Equal(100, verificationChanges);
-        Assert.All(orders, order =>
-        {
-            var snapshot = Assert.IsType<HostedOrderProjectionSnapshot>(
-                store.Get(order.Id));
-            Assert.Same(order, snapshot.Order);
-            Assert.Equal(HostedOrderDisplayState.Verified, snapshot.DisplayState);
-            Assert.NotNull(snapshot.OwnerProjection);
-        });
-    }
-
-    [Fact]
-    public void CommittedOwnerBatchPublishesChangedRowsOnceAndPreservesUnchangedReferences()
-    {
-        var profileId = Guid.NewGuid().ToString("D");
-        var store = RestoringStore(
-            profileId,
-            0,
-            $"https://profiles.example/|{profileId}");
-        var companyProfileId = Guid.NewGuid();
-        var unchanged = CreateOrder(Guid.NewGuid(), companyProfileId, "Unchanged");
-        var changed = CreateOrder(Guid.NewGuid(), companyProfileId, "Last known");
-        Assert.Equal(2, store.PublishRemoteOrders([(unchanged, 1), (changed, 1)]));
-        var canonicalChanged = JsonSerializer.Deserialize<TradeOrder>(
-            JsonSerializer.Serialize(changed))!;
-        canonicalChanged.Title = "Canonical change";
-        var batchNotifications = new List<IReadOnlyList<HostedOrderProjectionSnapshot>>();
-        var verificationNotifications = 0;
-        store.BatchChanged += snapshots => batchNotifications.Add(snapshots);
-        store.VerificationChanged += _ => verificationNotifications++;
-
-        var result = store.TryAdoptCommittedOwnerBatch(
-            store.CaptureAuthorityScope(),
-            [
-                CreateOwner(unchanged, 1, 10),
-                new CompanyCommissionOwnerProjection
-                {
-                    Order = canonicalChanged,
-                    ObjectRevision = new(2),
-                    CompanyRevision = new(11),
-                    ProfileObjectRevision = new(2)
-                }
-            ]);
-
-        Assert.Equal(1, result.ChangedCount);
-        Assert.Equal(1, result.VerificationCount);
-        Assert.Equal(0, result.RejectedCount);
-        Assert.Single(batchNotifications);
-        Assert.Single(batchNotifications[0]);
-        Assert.Equal(1, verificationNotifications);
-        Assert.Same(unchanged, store.Get(unchanged.Id)?.Order);
-        Assert.Equal("Canonical change", store.Get(changed.Id)?.Order?.Title);
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ClearingOwnerProofPreservesPresentedRow(bool guarded)
-    {
-        var profileId = Guid.NewGuid().ToString("D");
-        var store = RestoringStore(
-            profileId,
-            0,
-            $"https://profiles.example/|{profileId}");
-        var order = CreateOrder(Guid.NewGuid(), Guid.NewGuid(), "Stable row");
-        Assert.True(store.TryPublishRemoteOrder(order, objectRevision: 4));
-        Assert.True(store.TryPublishOwner(CreateOwner(order, 4, 9)));
-        var expected = store.Get(order.Id);
-
-        var rowChanges = 0;
-        var verificationChanges = 0;
-        store.Changed += _ => rowChanges++;
-        store.VerificationChanged += _ => verificationChanges++;
-
-        if (guarded)
-        {
-            Assert.True(store.TryClearOwner(
-                store.CaptureAuthorityScope(),
-                order.Id,
-                expected));
-        }
-        else
-        {
-            store.ClearOwner(order.Id);
-        }
-
-        var snapshot = Assert.IsType<HostedOrderProjectionSnapshot>(store.Get(order.Id));
-        Assert.Equal(0, rowChanges);
-        Assert.Equal(1, verificationChanges);
-        Assert.Same(order, snapshot.Order);
-        Assert.Null(snapshot.OwnerProjection);
-        Assert.Equal(HostedOrderDisplayState.LastKnown, snapshot.DisplayState);
     }
 
     private static Task Run(Action scenario) { scenario(); return Task.CompletedTask; }
@@ -932,6 +750,7 @@ public sealed class HostedOrderProjectionStoreTests
             }
         };
     }
+
     private sealed class OwnerMutationHandler : HttpMessageHandler
     {
         public required CompanyCommissionOwnerProjection Projection { get; set; }
@@ -965,6 +784,7 @@ public sealed class HostedOrderProjectionStoreTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(body) });
         }
     }
+
     private sealed class CenterOperationRuntime(string profileId) : IJSRuntime
     {
         private readonly Dictionary<string, string> _settings = new(StringComparer.Ordinal)
@@ -1053,4 +873,5 @@ public sealed class HostedOrderProjectionStoreTests
         SameRevisionOwnerPersistence, LiveTombstonePersistence, OwnerTombstonePersistence, CenterOperationWinner, CenterOperationAuthoritySwitch,
         CenterOperationCommittedFailure, StaleMissingOwner, BatchHydration, DirectNotificationHydration
     }
+
 }

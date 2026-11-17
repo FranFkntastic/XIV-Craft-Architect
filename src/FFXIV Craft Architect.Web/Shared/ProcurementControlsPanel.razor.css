@@ -71,13 +71,6 @@
     width: 100%;
 }
 
-.pp-origin-note {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    color: #90caf9 !important;
-}
-
 .pp-route-policy-note {
     display: flex;
     align-items: center;

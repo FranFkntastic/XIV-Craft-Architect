@@ -130,30 +130,6 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
                     Lets one item use listings from multiple worlds when that completes the quantity or produces a better route. Travel preference still decides whether the savings justify the extra stops.
                 </MudText>
-
-                <MudSwitch T="bool"
-                           Value="@_procurementStartFromHomeDataCenter"
-                           ValueChanged="OnProcurementOriginChanged"
-                           Label="Start procurement routes from the home data center"
-                           Color="Color.Primary"
-                           Class="mt-4" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    Counts leaving @_defaultDataCenter as a transfer when comparing region-wide routes. It doesn't require a purchase there.
-                </MudText>
-
-                <CompactSelectField Id="options-travel-priority"
-                                    Label="Route travel priority"
-                                    Value="@ProcurementTravelPriorityValue"
-                                    ValueChanged="OnTravelPriorityChanged"
-                                    Options="TravelPriorityOptions"
-                                    Class="options-select mt-4" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    Applied after the selected gil ceiling. It decides whether CA removes transfers or individual world visits first.
-                </MudText>
-
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
-                    These settings determine which market board prices are shown by default.
-                </MudText>
             }
 
             else if (_activePanel == SettingsSection.Integrations)
@@ -911,11 +887,6 @@
         new(nameof(MarketFetchScope.SelectedDataCenter), "Selected data center"),
         new(nameof(MarketFetchScope.EntireRegion), "Entire region")
     ];
-    private static readonly IReadOnlyList<CompactSelectOption> TravelPriorityOptions =
-    [
-        new(nameof(MarketTravelPriority.DataCenterTransfersFirst), "Avoid data-center transfers first"),
-        new(nameof(MarketTravelPriority.WorldVisitsFirst), "Avoid total world visits first")
-    ];
     private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
     [
         new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
@@ -1015,8 +986,6 @@
     private IReadOnlyList<string> _comparisonRegions = Array.Empty<string>();
     private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.EntireRegion;
     private bool _procurementEnableSplitWorldPurchases = true;
-    private bool _procurementStartFromHomeDataCenter;
-    private MarketTravelPriority _procurementTravelPriority = MarketTravelPriority.DataCenterTransfersFirst;
     private bool _isSaving;
 
     private sealed record MarketSettingsSnapshot(
@@ -1026,8 +995,6 @@
         IReadOnlyList<string> ComparisonRegions);
 
     private string DefaultMarketFetchScopeValue => _defaultMarketFetchScope.ToString();
-
-    private string ProcurementTravelPriorityValue => _procurementTravelPriority.ToString();
 
     private string CompanyPaymentContractValue
     {
@@ -1127,11 +1094,6 @@
         _defaultMarketFetchScope = ParseMarketFetchScope(
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
         _procurementEnableSplitWorldPurchases = await Settings.GetAsync("procurement.enable_split_world_purchases", true);
-        _procurementStartFromHomeDataCenter = await Settings.GetAsync("procurement.start_from_home_data_center", false);
-        _procurementTravelPriority = ParseTravelPriority(
-            await Settings.GetAsync(
-                "procurement.travel_priority",
-                nameof(MarketTravelPriority.DataCenterTransfersFirst)));
         _marketMafiosoEnabled = await Settings.GetAsync("marketmafioso.enabled", false);
         _marketMafiosoApiUrl = await Settings.GetAsync(
             "marketmafioso.workshop_host_url",
@@ -1476,47 +1438,6 @@
                 previous,
                 AppState.ProcurementTravelTolerance,
                 AppState.TemporaryWorldBlacklistDurationMinutes);
-            Snackbar.Add($"Route setting was not saved: {exception.Message}", Severity.Error);
-        }
-    }
-
-    private async Task OnProcurementOriginChanged(bool value)
-    {
-        var previous = _procurementStartFromHomeDataCenter;
-        _procurementStartFromHomeDataCenter = value;
-        AppState.SetProcurementHomeDataCenterOrigin(value);
-        try
-        {
-            await Settings.SetAsync("procurement.start_from_home_data_center", value);
-            ScheduleCurrentPlanDerivation();
-        }
-        catch (Exception exception)
-        {
-            _procurementStartFromHomeDataCenter = previous;
-            AppState.SetProcurementHomeDataCenterOrigin(previous);
-            Snackbar.Add($"Route setting was not saved: {exception.Message}", Severity.Error);
-        }
-    }
-
-    private async Task OnTravelPriorityChanged(string value)
-    {
-        if (!Enum.TryParse<MarketTravelPriority>(value, out var parsed) ||
-            parsed == _procurementTravelPriority)
-        {
-            return;
-        }
-        var previous = _procurementTravelPriority;
-        _procurementTravelPriority = parsed;
-        AppState.SetProcurementTravelPriority(parsed);
-        try
-        {
-            await Settings.SetAsync("procurement.travel_priority", parsed.ToString());
-            ScheduleCurrentPlanDerivation();
-        }
-        catch (Exception exception)
-        {
-            _procurementTravelPriority = previous;
-            AppState.SetProcurementTravelPriority(previous);
             Snackbar.Add($"Route setting was not saved: {exception.Message}", Severity.Error);
         }
     }
@@ -2358,13 +2279,6 @@
         return Enum.TryParse<MarketFetchScope>(value, ignoreCase: true, out var scope)
             ? scope
             : MarketFetchScope.EntireRegion;
-    }
-
-    private static MarketTravelPriority ParseTravelPriority(string? value)
-    {
-        return Enum.TryParse<MarketTravelPriority>(value, ignoreCase: true, out var priority)
-            ? priority
-            : MarketTravelPriority.DataCenterTransfersFirst;
     }
 
     private static string? NormalizeOptionalText(string? value)
