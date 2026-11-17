@@ -12,7 +12,6 @@ namespace FFXIV_Craft_Architect.Web.Pages;
 public partial class TradeOrders
 {
     private string _commissionIdentityRejectionReason = string.Empty;
-    private bool _blockRejectedCommissionContact;
     private string _commissionPaymentDecisionReason = string.Empty;
     private string _commissionPaymentObservation = string.Empty;
     private string _commissionPaymentRetractionReason = string.Empty;
@@ -299,7 +298,6 @@ public partial class TradeOrders
     private void PrepareCompanyCommissionEditor(TradeOrder order)
     {
         _commissionIdentityRejectionReason = string.Empty;
-        _blockRejectedCommissionContact = false;
         _commissionPaymentDecisionReason = string.Empty;
         _commissionPaymentObservation = string.Empty;
         _commissionPaymentRetractionReason = string.Empty;
@@ -315,21 +313,21 @@ public partial class TradeOrders
         _commissionTermsRevisionDirty = false;
         _commissionTermsRevisionPaymentDirty = false;
         ResetCommissionTermsRevisionBase();
-        var provisional = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ProvisionalCrafter;
-        _commissionIdentityCrafterId = provisional == null
+        var character = CommissionOperations.GetForOrder(order.Id)?.Order.CompanyCommission?.ClaimantCharacter;
+        _commissionIdentityCrafterId = character == null
             ? order.AssignedCrafterId
-            : FindExistingCommissionCrafter(provisional)?.Id;
+            : FindExistingCommissionCrafter(character)?.Id;
     }
 
-    // The host resolves a claimant's existing company crafter into the provisional
+    // The host resolves a claimant's existing company crafter into the character
     // identity, so confirmation updates that crafter instead of creating a second one.
     private TradeCrafterProfile? FindExistingCommissionCrafter(
-        CompanyCommissionProvisionalCrafter provisional)
+        CompanyCommissionClaimantCharacter character)
     {
-        var lodestoneCharacterId = provisional.LodestoneCharacterId?.Trim();
+        var lodestoneCharacterId = character.LodestoneCharacterId?.Trim();
         var reused = _crafters.FirstOrDefault(
-            crafter => crafter.Id == provisional.ProvisionalCrafterId);
-        if (reused != null && IsSameOrUnknownLodestone(reused, lodestoneCharacterId))
+            crafter => crafter.Id == character.ClaimantCharacterId);
+        if (reused != null && IsExactLodestone(reused, lodestoneCharacterId))
         {
             return reused;
         }
@@ -346,10 +344,10 @@ public partial class TradeOrders
                 .FirstOrDefault();
     }
 
-    private static bool IsSameOrUnknownLodestone(
+    private static bool IsExactLodestone(
         TradeCrafterProfile crafter,
         string? lodestoneCharacterId) =>
-        string.IsNullOrWhiteSpace(crafter.LodestoneCharacterId) ||
+        !string.IsNullOrWhiteSpace(crafter.LodestoneCharacterId) &&
         string.Equals(
             crafter.LodestoneCharacterId.Trim(),
             lodestoneCharacterId,
@@ -416,7 +414,7 @@ public partial class TradeOrders
 
     private IReadOnlyList<CompactSelectOption> GetCommissionCrafterOptions() =>
     [
-        new(string.Empty, "Create from provisional identity"),
+        new(string.Empty, "Create from claimant character"),
         .. _crafters.Select(crafter =>
             new CompactSelectOption(crafter.Id.ToString("D"), crafter.DisplayName))
     ];
@@ -429,13 +427,13 @@ public partial class TradeOrders
         }
 
         var owner = SelectedCommissionOwner;
-        var provisional = owner?.Order.CompanyCommission?.ProvisionalCrafter;
-        if (owner == null || provisional == null)
+        var character = owner?.Order.CompanyCommission?.ClaimantCharacter;
+        if (owner == null || character == null)
         {
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(provisional.LodestoneCharacterId))
+        if (string.IsNullOrWhiteSpace(character.LodestoneCharacterId))
         {
             Snackbar.Add(
                 "Lodestone character existence must be verified before ownership can be confirmed.",
@@ -448,7 +446,7 @@ public partial class TradeOrders
         {
             var crafter = BuildConfirmedCommissionCrafter(
                 owner.Order.CompanyProfileId,
-                provisional);
+                character);
             if (crafter == null)
             {
                 return;
@@ -457,7 +455,7 @@ public partial class TradeOrders
             var result = await CommissionOperations.ConfirmIdentityAsync(
                 owner,
                 crafter,
-                provisional.LodestoneCharacterId);
+                character.LodestoneCharacterId);
             ApplyCommissionResult(result, "Crafter identity confirmed");
             if (result.Success && _companyProfile != null)
             {
@@ -475,8 +473,7 @@ public partial class TradeOrders
         RunCommissionCommandAsync(
             owner => CommissionOperations.RejectClaimAsync(
                 owner,
-                _commissionIdentityRejectionReason,
-                _blockRejectedCommissionContact),
+                _commissionIdentityRejectionReason),
             "Claim rejected and released",
             copyClaimUrl: true);
 
@@ -910,7 +907,7 @@ public partial class TradeOrders
 
     private TradeCrafterProfile? BuildConfirmedCommissionCrafter(
         Guid companyProfileId,
-        CompanyCommissionProvisionalCrafter provisional)
+        CompanyCommissionClaimantCharacter character)
     {
         TradeCrafterProfile crafter;
         if (_commissionIdentityCrafterId is { } selectedId)
@@ -923,9 +920,9 @@ public partial class TradeOrders
                     Severity.Error);
                 return null;
             }
-            if (!IsSameOrUnknownLodestone(
+            if (!IsExactLodestone(
                     existing,
-                    provisional.LodestoneCharacterId?.Trim()))
+                    character.LodestoneCharacterId?.Trim()))
             {
                 Snackbar.Add(
                     "The selected crafter belongs to a different Lodestone character.",
@@ -937,22 +934,21 @@ public partial class TradeOrders
         }
         else
         {
-            var existing = FindExistingCommissionCrafter(provisional);
+            var existing = FindExistingCommissionCrafter(character);
             crafter = existing != null
                 ? CopyCrafterProfile(existing)
                 : new TradeCrafterProfile
                 {
-                    Id = provisional.ProvisionalCrafterId,
+                    Id = character.ClaimantCharacterId,
                     CompanyProfileId = companyProfileId,
                     CreatedAtUtc = DateTime.UtcNow
                 };
         }
 
-        crafter.DisplayName = provisional.CharacterName.Trim();
-        crafter.WorldName = provisional.HomeWorld.Trim();
-        crafter.ContactHandle = provisional.ContactValue.Trim();
-        crafter.LodestoneCharacterId = provisional.LodestoneCharacterId?.Trim();
-        crafter.LodestoneProfileUrl = provisional.LodestoneProfileUrl?.Trim();
+        crafter.DisplayName = character.CharacterName.Trim();
+        crafter.WorldName = character.HomeWorld.Trim();
+        crafter.LodestoneCharacterId = character.LodestoneCharacterId?.Trim();
+        crafter.LodestoneProfileUrl = character.LodestoneProfileUrl?.Trim();
         crafter.LodestoneLastSyncedAtUtc = DateTime.UtcNow;
         crafter.UpdatedAtUtc = DateTime.UtcNow;
         return crafter;
@@ -1006,8 +1002,8 @@ public partial class TradeOrders
 
     private static string FormatCanonicalCommissionClaimant(
         TradeCompanyCommission commission) =>
-        commission.ProvisionalCrafter is { } provisional
-            ? $"{provisional.CharacterName} @ {provisional.HomeWorld}"
+        commission.ClaimantCharacter is { } character
+            ? $"{character.CharacterName} @ {character.HomeWorld}"
             : commission.ActiveClaim == null
                 ? "Open claim slot"
                 : "Confirmed company crafter";
@@ -1077,9 +1073,9 @@ public partial class TradeOrders
             CompanyCommissionActivityKind.ClaimRejected => "Claim rejected",
             CompanyCommissionActivityKind.ClaimReleased => "Claim released",
             CompanyCommissionActivityKind.ClaimRecovered => "Claim access recovered",
-            CompanyCommissionActivityKind.ProvisionalIdentitySubmitted => "Identity submitted",
-            CompanyCommissionActivityKind.ProvisionalIdentityConfirmed => "Identity confirmed",
-            CompanyCommissionActivityKind.ProvisionalIdentityRejected => "Identity rejected",
+            CompanyCommissionActivityKind.ClaimantCharacterSubmitted => "Identity submitted",
+            CompanyCommissionActivityKind.ClaimantCharacterConfirmed => "Identity confirmed",
+            CompanyCommissionActivityKind.ClaimantCharacterRejected => "Identity rejected",
             CompanyCommissionActivityKind.PaymentPolicyChangeRequested => "Payment timing requested",
             CompanyCommissionActivityKind.PaymentPolicyChangeAccepted => "Payment timing accepted",
             CompanyCommissionActivityKind.PaymentPolicyChangeRefused => "Payment timing refused",

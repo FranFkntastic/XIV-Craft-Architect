@@ -139,11 +139,11 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                 "The crafter withdrew after work or an exchange began.",
             CompanyCommissionActivityKind.ClaimRecovered =>
                 "Crafter access to the commission was recovered.",
-            CompanyCommissionActivityKind.ProvisionalIdentitySubmitted =>
+            CompanyCommissionActivityKind.ClaimantCharacterSubmitted =>
                 "The crafter submitted an in-game identity for confirmation.",
-            CompanyCommissionActivityKind.ProvisionalIdentityConfirmed =>
+            CompanyCommissionActivityKind.ClaimantCharacterConfirmed =>
                 "The crafter identity was confirmed.",
-            CompanyCommissionActivityKind.ProvisionalIdentityRejected =>
+            CompanyCommissionActivityKind.ClaimantCharacterRejected =>
                 "The submitted crafter identity was rejected.",
             CompanyCommissionActivityKind.PaymentPolicyChangeRequested =>
                 "The crafter requested different payment terms.",
@@ -348,7 +348,7 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
             CompanyCommissionActivityKind.ClaimAccepted
                 when commission.Gates.Identity == CompanyCommissionClearanceState.Pending =>
                 "Review identity",
-            CompanyCommissionActivityKind.ProvisionalIdentitySubmitted => "Review identity",
+            CompanyCommissionActivityKind.ClaimantCharacterSubmitted => "Review identity",
             CompanyCommissionActivityKind.PaymentPolicyChangeRequested => "Review payment",
             CompanyCommissionActivityKind.CompanyMaterialsReceived => "View order",
             CompanyCommissionActivityKind.DeliveryReadinessDeclared => "Review delivery",

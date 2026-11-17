@@ -60,9 +60,9 @@ const activityLabels = {
     ClaimRejected: "Claim rejected",
     ClaimReleased: "Claim released",
     ClaimRecovered: "Participant access recovered",
-    ProvisionalIdentitySubmitted: "Character submitted",
-    ProvisionalIdentityConfirmed: "Identity confirmed",
-    ProvisionalIdentityRejected: "Identity rejected",
+    ClaimantCharacterSubmitted: "Character submitted",
+    ClaimantCharacterConfirmed: "Identity confirmed",
+    ClaimantCharacterRejected: "Identity rejected",
     PaymentPolicyChangeRequested: "Payment change requested",
     PaymentPolicyChangeAccepted: "Payment change accepted",
     PaymentPolicyChangeRefused: "Payment change refused",
@@ -403,12 +403,12 @@ function adoptParticipantSecret(participantSecret, projection) {
 
 function carryMembershipIntent(pending, projection) {
     const committedCrafterId = projection?.kind === "participant"
-        ? projection.provisionalCrafter?.provisionalCrafterId
+        ? projection.claimantCharacter?.claimantCharacterId
         : null;
     const intent = state.membershipStore?.load();
     if (pending?.kind !== "claim" || !committedCrafterId || !intent ||
-        intent.provisionalCrafterId === committedCrafterId ||
-        intent.provisionalCrafterId !== pending.payload?.provisionalCrafter?.provisionalCrafterId) {
+        intent.claimantCharacterId === committedCrafterId ||
+        intent.claimantCharacterId !== pending.payload?.claimantCharacter?.claimantCharacterId) {
         return;
     }
     try {
@@ -416,7 +416,7 @@ function carryMembershipIntent(pending, projection) {
             {
                 companyId: intent.companyId,
                 accountProfileId: intent.accountProfileId,
-                provisionalCrafterId: committedCrafterId
+                claimantCharacterId: committedCrafterId
             },
             intent.requestNote,
             intent.state,
@@ -534,7 +534,7 @@ async function refreshProjectionFromStream(expectedTag = null, authorityChanged 
 
     state.projection = next;
     render();
-    if (authorityChanged && next.kind === "anonymous") {
+    if (authorityChanged && next.kind === "public") {
         startProjectionWatch();
     }
     return next.projectionTag;
@@ -593,8 +593,8 @@ function render() {
 }
 
 function buildSubtitle(projection) {
-    if (projection.kind === "participant" && projection.provisionalCrafter) {
-        const crafter = projection.provisionalCrafter;
+    if (projection.kind === "participant" && projection.claimantCharacter) {
+        const crafter = projection.claimantCharacter;
         return `${crafter.characterName} · ${crafter.homeWorld} · ${formatDeliveryInstructions(projection.public.terms.deliveryInstructions)}`;
     }
     return formatDeliveryInstructions(projection.public.terms.deliveryInstructions);
@@ -841,7 +841,7 @@ function resolveNextStep() {
     if (brief.gates.identity === "Pending") {
         return {
             title: "Waiting for identity confirmation",
-            body: "Lodestone proves that the character exists; the commissioner must still confirm that the submitted contact and character belong together.",
+            body: "Lodestone proves that the character exists; the commissioner must still confirm that the Discord account and character belong together.",
             tone: "waiting"
         };
     }
@@ -1016,7 +1016,7 @@ function createGate(label, gateState, detail) {
 
 function identityGateDetail(brief) {
     if (brief.gates.identity === "Satisfied") {
-        return "Character existence and contact ownership are confirmed.";
+        return "Character existence and account ownership are confirmed.";
     }
     if (!brief.isClaimed) return "Satisfied after claim and commissioner identity review.";
     return "Lodestone existence is separate from commissioner ownership confirmation.";
@@ -1266,12 +1266,12 @@ function renderAccess() {
                     ? "This private workspace link stays valid while your participant access is active. Keep it private: anyone holding it can act as you."
                     : "Canceled and fulfilled commissions do not accept ordinary participant mutations.")
         );
-        if (projection.provisionalCrafter) {
-            const crafter = projection.provisionalCrafter;
+        if (projection.claimantCharacter) {
+            const crafter = projection.claimantCharacter;
             accessNote.append(element(
                 "small",
                 null,
-                `${crafter.characterName} · ${crafter.homeWorld} · ${crafter.contactMethod}: ${crafter.contactValue}`));
+                `${crafter.characterName} · ${crafter.homeWorld} · Discord: ${projection.claimAccountEvidence?.discordDisplayNameSnapshot ?? "Account not recorded"}`));
         }
         if (projection.claimAccountEvidence) {
             const account = projection.claimAccountEvidence;
@@ -1722,7 +1722,7 @@ async function checkMembershipIntentBinding(intent) {
     if (projection.kind !== "participant") {
         return { ok: false, discard: true, check: "claim-not-held-by-this-browser" };
     }
-    if (projection.provisionalCrafter?.provisionalCrafterId !== intent.provisionalCrafterId) {
+    if (projection.claimantCharacter?.claimantCharacterId !== intent.claimantCharacterId) {
         return { ok: false, discard: true, check: "claim-replaced" };
     }
     if (projection.public.status === "Canceled" || projection.public.requiresManualResolution) {
@@ -1986,26 +1986,28 @@ async function selectLodestoneCandidate(candidate, target, error) {
 }
 
 async function submitClaim(contact) {
+    if (state.projection.public.claimIdentityVersion !== 2) {
+        throw new CommissionClientError(
+            "The commission host is updating its claim format. Your claim has not been submitted; try again when the release finishes.",
+            "claim-identity-version-mismatch");
+    }
     const selected = state.selectedLodestone;
     if (!state.account) {
         throw new CommissionClientError(
             "Sign in with Discord before claiming.",
             "verified-discord-identity-required");
     }
-    const contactValue = state.account.displayName;
     const payload = {
+        claimIdentityVersion: 2,
         termsVersion: state.projection.public.terms.version,
-        provisionalCrafter: {
-            provisionalCrafterId: crypto.randomUUID(),
+        claimantCharacter: {
+            claimantCharacterId: crypto.randomUUID(),
             characterName: selected.displayName,
             homeWorld: selected.worldName,
-            contactMethod: "Discord",
-            contactValue,
             lodestoneCharacterId: selected.lodestoneCharacterId,
             lodestoneProfileUrl: selected.lodestoneProfileUrl,
             submittedAtUtc: new Date().toISOString()
         },
-        existingCrafterId: null,
         verifiedDiscordRequired: true
     };
     // Saved before the claim so a committed claim can always finish or retry its
@@ -2015,7 +2017,7 @@ async function submitClaim(contact) {
             {
                 companyId: contact.membershipIntent.companyId,
                 accountProfileId: contact.membershipIntent.accountProfileId,
-                provisionalCrafterId: payload.provisionalCrafter.provisionalCrafterId
+                claimantCharacterId: payload.claimantCharacter.claimantCharacterId
             },
             contact.membershipIntent.note);
     } else {

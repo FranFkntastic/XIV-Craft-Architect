@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
 
@@ -8,6 +11,87 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
     private static readonly DateTime StartedAt = new(2026, 8, 1, 14, 0, 0, DateTimeKind.Utc);
     private static readonly CompanyCommissionActor Commissioner = new("commissioner", CompanyCommissionActorKind.Commissioner, "Commissioner");
     private static readonly CompanyCommissionActor Crafter = new("crafter", CompanyCommissionActorKind.Crafter, "Crafter");
+
+    // Loss here strands real in-flight claims across host and offline-browser stores;
+    // reconstructing account/grant/review history after deployment is not a safe repair.
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void StoredClaimIdentityUpgradePreservesAuthorityAndLifecycle(bool withAccount, bool stringEnums)
+    {
+        var order = CreateClaimedOrder();
+        var characterId = Guid.NewGuid();
+        var evidence = withAccount
+            ? new CompanyCommissionClaimAccountEvidence(Guid.NewGuid(), "123456789012345678", "Crafter")
+            : null;
+        order.CompanyCommission = order.CompanyCommission! with
+        {
+            ActiveClaim = order.CompanyCommission.ActiveClaim! with
+            {
+                ClaimantCharacterId = characterId,
+                AccountEvidence = evidence
+            },
+            ClaimantCharacter = new(characterId, "Wei Ning", "Siren", "12345678",
+                "https://na.finalfantasyxiv.com/lodestone/character/12345678/", StartedAt),
+            Activity = [new()
+            {
+                EventId = Guid.NewGuid(),
+                CommissionId = order.Id,
+                CommissionRevision = 1,
+                Actor = Commissioner,
+                SourceSurface = CompanyCommissionSourceSurface.TradeArchitect,
+                CreatedAtUtc = StartedAt,
+                Kind = CompanyCommissionActivityKind.ClaimantCharacterConfirmed,
+                TermsVersion = 1,
+                Comment = "Confirmed the claimant's contact and in-game character."
+            }]
+        };
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        if (stringEnums)
+        {
+            options.Converters.Add(new JsonStringEnumConverter());
+        }
+        var stored = JsonNode.Parse(JsonSerializer.Serialize(order, options))!;
+        var commission = stored["companyCommission"]!;
+        var character = commission["claimantCharacter"]!.DeepClone();
+        commission.AsObject().Remove("claimantCharacter");
+        commission["provisionalCrafter"] = character;
+        character["provisionalCrafterId"] = character["claimantCharacterId"]!.DeepClone();
+        character.AsObject().Remove("claimantCharacterId");
+        character["contactMethod"] = "Email";
+        character["contactValue"] = "retired@example.test";
+        var claim = commission["activeClaim"]!;
+        claim["provisionalCrafterId"] = claim["claimantCharacterId"]!.DeepClone();
+        claim.AsObject().Remove("claimantCharacterId");
+        if (stringEnums)
+        {
+            commission["activity"]![0]!["kind"] = "ProvisionalIdentityConfirmed";
+        }
+        commission["activity"]![0]!["comment"] = "Confirmed the claimant's contact and in-game character.";
+
+        var restored = JsonSerializer.Deserialize<TradeOrder>(stored.ToJsonString(), options)!;
+        var upgraded = restored.CompanyCommission!;
+        Assert.Equal(order.CompanyCommission.ActiveClaim, upgraded.ActiveClaim);
+        Assert.Equal(order.CompanyCommission.ClaimantCharacter, upgraded.ClaimantCharacter);
+        Assert.Equal(order.CompanyCommission.ParticipantGrant, upgraded.ParticipantGrant);
+        Assert.Equal(JsonSerializer.Serialize(order.CompanyCommission.Gates, options),
+            JsonSerializer.Serialize(upgraded.Gates, options));
+        Assert.Equal(order.Status, restored.Status);
+        Assert.Equal(CompanyCommissionActivityKind.ClaimantCharacterConfirmed, Assert.Single(upgraded.Activity).Kind);
+        Assert.Equal("Confirmed the claimant's Discord account and in-game character.", Assert.Single(upgraded.Activity).Comment);
+        var rewritten = JsonSerializer.Serialize(restored, options);
+        Assert.DoesNotContain("provisional", rewritten, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("contactMethod", rewritten);
+        Assert.DoesNotContain("contactValue", rewritten);
+        Assert.Equal(rewritten, JsonSerializer.Serialize(JsonSerializer.Deserialize<TradeOrder>(rewritten, options), options));
+        // A pre-account claim remains actionable; the new-claim guard must not apply here.
+        var completedGate = CompanyCommissionCommandWorkflow.Apply(restored,
+            new RecordCompanyCommissionPaymentCommand(Context(restored), "Payment sent"),
+            Commissioner, StartedAt.AddMinutes(1));
+        Assert.Equal(upgraded.ActiveClaim, completedGate.UpdatedOrder.CompanyCommission!.ActiveClaim);
+    }
 
     [Theory]
     [InlineData(GateRevisionScenario.UnchangedBoundFacts)]
@@ -499,8 +583,10 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
             new ClaimCompanyCommissionCommand(
                 Context(order),
                 1,
-                ProvisionalCrafter: null,
-                ExistingCrafterId: crafterId),
+                ClaimantCharacter: new(crafterId, "Wei Ning", "Siren",
+                    "12345678", "https://na.finalfantasyxiv.com/lodestone/character/12345678/", StartedAt),
+                ExistingCrafterId: crafterId,
+                AccountEvidence: new(crafterId, "123456789012345678", "Crafter")),
             Crafter,
             2);
 

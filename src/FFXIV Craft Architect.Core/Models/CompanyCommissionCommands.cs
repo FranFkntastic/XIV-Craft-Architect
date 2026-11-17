@@ -50,7 +50,7 @@ public sealed record OpenCompanyCommissionCommand(
 public sealed record ClaimCompanyCommissionCommand(
     CompanyCommissionCommandContext Context,
     int TermsVersion,
-    CompanyCommissionProvisionalCrafter? ProvisionalCrafter,
+    CompanyCommissionClaimantCharacter? ClaimantCharacter,
     Guid? ExistingCrafterId,
     CompanyCommissionClaimAccountEvidence? AccountEvidence = null) :
     ICompanyCommissionParticipantCommand;
@@ -61,12 +61,11 @@ public sealed record ReleaseCompanyCommissionClaimCommand(
 
 public sealed record RejectCompanyCommissionClaimCommand(
     CompanyCommissionCommandContext Context,
-    string Reason,
-    bool BlockProvisionalContact) : ICompanyCommissionCompanyCommand;
+    string Reason) : ICompanyCommissionCompanyCommand;
 
 public sealed record SubmitCompanyCommissionIdentityCommand(
     CompanyCommissionCommandContext Context,
-    CompanyCommissionProvisionalCrafter ProvisionalCrafter) : ICompanyCommissionParticipantCommand;
+    CompanyCommissionClaimantCharacter ClaimantCharacter) : ICompanyCommissionParticipantCommand;
 
 public sealed record ConfirmCompanyCommissionIdentityCommand(
     CompanyCommissionCommandContext Context,

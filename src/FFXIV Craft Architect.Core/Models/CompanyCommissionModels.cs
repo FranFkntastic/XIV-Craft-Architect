@@ -68,9 +68,9 @@ public enum CompanyCommissionActivityKind
     ClaimRejected,
     ClaimReleased,
     ClaimRecovered,
-    ProvisionalIdentitySubmitted,
-    ProvisionalIdentityConfirmed,
-    ProvisionalIdentityRejected,
+    ClaimantCharacterSubmitted,
+    ClaimantCharacterConfirmed,
+    ClaimantCharacterRejected,
     PaymentPolicyChangeRequested,
     PaymentPolicyChangeAccepted,
     PaymentPolicyChangeRefused,
@@ -173,7 +173,7 @@ public sealed record CompanyCommissionClaim(
     int AcceptedTermsVersion,
     DateTime ClaimedAtUtc,
     Guid? CrafterId,
-    Guid? ProvisionalCrafterId,
+    Guid? ClaimantCharacterId,
     CompanyCommissionClaimAccountEvidence? AccountEvidence = null);
 
 public sealed record CompanyCommissionClaimAccountEvidence(
@@ -181,12 +181,10 @@ public sealed record CompanyCommissionClaimAccountEvidence(
     string DiscordUserId,
     string DiscordDisplayNameSnapshot);
 
-public sealed record CompanyCommissionProvisionalCrafter(
-    Guid ProvisionalCrafterId,
+public sealed record CompanyCommissionClaimantCharacter(
+    Guid ClaimantCharacterId,
     string CharacterName,
     string HomeWorld,
-    string ContactMethod,
-    string ContactValue,
     string? LodestoneCharacterId,
     string? LodestoneProfileUrl,
     DateTime SubmittedAtUtc);
@@ -377,7 +375,7 @@ public sealed record TradeCompanyCommission
     public required CompanyCommissionPublicMetadata PublicMetadata { get; init; }
     public required long ActiveClaimCapabilityRevision { get; init; }
     public CompanyCommissionClaim? ActiveClaim { get; init; }
-    public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
+    public CompanyCommissionClaimantCharacter? ClaimantCharacter { get; init; }
     public CompanyCommissionParticipantGrant? ParticipantGrant { get; init; }
     public CompanyCommissionRecoveryGrant? RecoveryGrant { get; init; }
     public CompanyCommissionManualResolution? ManualResolution { get; init; }
@@ -404,6 +402,7 @@ public sealed record TradeCompanyCommission
 
 public sealed record CompanyCommissionPublicBrief
 {
+    public int ClaimIdentityVersion { get; init; } = 2;
     public required string PublicBriefId { get; init; }
     public required Guid CommissionId { get; init; }
     public required string Title { get; init; }
@@ -472,7 +471,7 @@ public sealed record CompanyCommissionParticipantBrief
     public IReadOnlyList<CompanyCommissionPublicTerms>? PermittedTermsVersions { get; init; }
     public IReadOnlyList<FFXIV_Craft_Architect.Core.Services.CommissionTermsComparison>? TermsComparisons { get; init; }
     public required CompanyCommissionPublicBrief Public { get; init; }
-    public CompanyCommissionProvisionalCrafter? ProvisionalCrafter { get; init; }
+    public CompanyCommissionClaimantCharacter? ClaimantCharacter { get; init; }
     public CompanyCommissionClaimAccountEvidence? ClaimAccountEvidence { get; init; }
     public required long ParticipantCapabilityRevision { get; init; }
     public required CompanyCommissionPaymentClearance Payment { get; init; }

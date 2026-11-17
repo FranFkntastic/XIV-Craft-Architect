@@ -440,7 +440,7 @@
                                @if (SelectedCommissionOwner is { } operationsOwner &&
                                     operationsOwner.Order.CompanyCommission is { } operationsCommission)
                                {
-                                  var operationsProvisional = operationsCommission.ProvisionalCrafter;
+                                  var operationsCharacter = operationsCommission.ClaimantCharacter;
                                   var operationsPaymentRequest = SelectedPaymentPolicyRequest;
                                      @if (operationsCommission.PublicMetadata.IsTestFixture)
                                      {
@@ -628,7 +628,7 @@
                                          </section>
                                      }
 
-                                     @if (operationsProvisional != null &&
+                                     @if (operationsCharacter != null &&
                                           operationsCommission.Gates.Identity.State ==
                                           CompanyCommissionClearanceState.Pending)
                                      {
@@ -645,11 +645,11 @@
                                              <div class="trade-orders-identity-evidence">
                                                  <div>
                                                      <span>Character</span>
-                                                     <strong>@($"{operationsProvisional.CharacterName} @ {operationsProvisional.HomeWorld}")</strong>
+                                                     <strong>@($"{operationsCharacter.CharacterName} @ {operationsCharacter.HomeWorld}")</strong>
                                                      <small>
-                                                         @(string.IsNullOrWhiteSpace(operationsProvisional.LodestoneCharacterId)
+                                                         @(string.IsNullOrWhiteSpace(operationsCharacter.LodestoneCharacterId)
                                                              ? "Lodestone verification missing"
-                                                             : $"Lodestone {operationsProvisional.LodestoneCharacterId}")
+                                                             : $"Lodestone {operationsCharacter.LodestoneCharacterId}")
                                                      </small>
                                                  </div>
                                                  <div>
@@ -662,8 +662,8 @@
                                                      else
                                                      {
                                                          <span>Contact</span>
-                                                         <strong>@operationsProvisional.ContactMethod</strong>
-                                                         <small>@operationsProvisional.ContactValue</small>
+                                                         <strong>Discord account</strong>
+                                                         <small>@(operationsCommission.ActiveClaim?.AccountEvidence?.DiscordDisplayNameSnapshot ?? "Account not recorded")</small>
                                                      }
                                                  </div>
                                              </div>
@@ -676,7 +676,7 @@
                                                                      Disabled="@_isCommissionCommandRunning" />
                                                  <MudButton Variant="Variant.Filled"
                                                             Color="Color.Primary"
-                                                            Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(operationsProvisional.LodestoneCharacterId))"
+                                                            Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(operationsCharacter.LodestoneCharacterId))"
                                                             OnClick="ConfirmCommissionIdentityAsync">
                                                      Confirm + Assign
                                                  </MudButton>
@@ -690,11 +690,6 @@
                                                                Margin="Margin.Dense"
                                                                Immediate="true"
                                                                MaxLength="500" />
-                                                 <MudCheckBox T="bool"
-                                                              @bind-Value="_blockRejectedCommissionContact"
-                                                              Dense="true"
-                                                              Color="Color.Warning"
-                                                              Label="Block this contact from reclaiming" />
                                                  <MudButton Variant="Variant.Outlined"
                                                             Color="Color.Error"
                                                             Disabled="@(_isCommissionCommandRunning || string.IsNullOrWhiteSpace(_commissionIdentityRejectionReason))"
