@@ -1985,7 +1985,7 @@ async function selectLodestoneCandidate(candidate, target, error) {
     }
 }
 
-async function submitClaim(contact) {
+async function submitClaim(request) {
     if (state.projection.public.claimIdentityVersion !== 2) {
         throw new CommissionClientError(
             "The commission host is updating its claim format. Your claim has not been submitted; try again when the release finishes.",
@@ -2012,14 +2012,14 @@ async function submitClaim(contact) {
     };
     // Saved before the claim so a committed claim can always finish or retry its
     // membership request; the claim itself never waits on membership.
-    if (contact.membershipIntent) {
+    if (request.membershipIntent) {
         state.membershipStore.save(
             {
-                companyId: contact.membershipIntent.companyId,
-                accountProfileId: contact.membershipIntent.accountProfileId,
+                companyId: request.membershipIntent.companyId,
+                accountProfileId: request.membershipIntent.accountProfileId,
                 claimantCharacterId: payload.claimantCharacter.claimantCharacterId
             },
-            contact.membershipIntent.note);
+            request.membershipIntent.note);
     } else {
         state.membershipStore.discard();
     }
