@@ -43,15 +43,6 @@ public enum MarketDataAgeSource
     ManualObservation = 5
 }
 
-public sealed record PublishedMarketAnalysisScopeSnapshot(
-    MarketFetchScope Scope,
-    string SelectedDataCenter,
-    string SelectedRegion,
-    IReadOnlyList<string> RequestedDataCenters,
-    MarketAcquisitionLens Lens,
-    long PlanSessionVersion,
-    DateTime PublishedAtUtc);
-
 public enum MarketListingPriceSanity
 {
     Sane = 0,
