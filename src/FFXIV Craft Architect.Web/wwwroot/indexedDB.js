@@ -16,7 +16,7 @@ const ENGINE_DB_VERSION = 1;
 const DB_NAME = LEGACY_DB_NAME;
 // Retained as the public compatibility value while callers move to schemaVersions.
 const DB_VERSION = LEGACY_DB_VERSION;
-const MODULE_REVISION = 30;
+const MODULE_REVISION = 31;
 const APPROXIMATE_MARKET_ENTRY_BYTES = 256 * 1024;
 const STORE_STORAGE_METADATA = 'storageMetadata';
 const STORE_PLANS = 'plans';
@@ -36,6 +36,11 @@ const STORE_ENGINE_SESSION_REVISIONS = 'engineSessionRevisions';
 const STORE_ENGINE_SESSION_COMPONENTS = 'engineSessionComponents';
 const LEGACY_MIGRATION_ID = 'legacy-monolith-v15';
 const STORED_PLAN_SCHEMA_VERSION = 2;
+// Version 2 summaries carry order classification and the leading item names so
+// the plan browser never has to materialize full plans. Older summaries are
+// rebuilt once from plan metadata records (component payloads are not read).
+const PLAN_SUMMARY_VERSION = 2;
+const PLAN_SUMMARY_TOP_ITEM_COUNT = 3;
 const STORED_PLAN_COMPONENT_FIELDS = Object.freeze([
     'planJson',
     'planStateJson',
@@ -833,14 +838,26 @@ async function getTradeStoreDiagnostics() {
 
 function toPlanSummary(planData) {
     const metadata = planData?.storedPlanMetadata ?? planData;
+    const projectItems = Array.isArray(metadata.projectItems) ? metadata.projectItems : [];
     return {
         id: metadata.id,
         name: metadata.name || 'Saved Plan',
         modifiedAt: metadata.modifiedAt,
         savedAt: metadata.savedAt,
         dataCenter: metadata.dataCenter || 'Aether',
-        itemCount: Array.isArray(metadata.projectItems) ? metadata.projectItems.length : 0
+        itemCount: projectItems.length,
+        linkedOrderId: metadata.linkedOrderId || null,
+        sourceOrderId: metadata.sourceOrderId || null,
+        topItems: projectItems
+            .slice(0, PLAN_SUMMARY_TOP_ITEM_COUNT)
+            .filter(item => item && typeof item.name === 'string' && item.name.length > 0)
+            .map(item => ({ id: item.id || 0, name: item.name })),
+        summaryVersion: PLAN_SUMMARY_VERSION
     };
+}
+
+function isCurrentPlanSummary(summary) {
+    return (summary?.summaryVersion || 0) >= PLAN_SUMMARY_VERSION;
 }
 
 function isComponentStoredPlan(record) {
@@ -1124,12 +1141,121 @@ async function loadPlanSummaries() {
 
     let summaries = await readPlanSummaries(database);
     const planCount = await countStoreRecords(database, STORE_PLANS);
-    if (summaries.length >= planCount) {
+    if (summaries.length >= planCount && summaries.every(isCurrentPlanSummary)) {
         return summaries;
     }
 
+    // Idempotent backfill: rewrites every summary from its plan metadata record.
+    // The summaryVersion stamped on each rewritten summary is the completion
+    // marker, so this only reruns if an older module wrote a summary since.
+    const outdated = summaries.filter(summary => !isCurrentPlanSummary(summary)).length;
     await rebuildPlanSummaries(database);
-    return await readPlanSummaries(database);
+    summaries = await readPlanSummaries(database);
+    console.info(
+        `[IndexedDB] Rebuilt ${summaries.length} plan summaries ` +
+        `(${outdated} outdated, ${planCount} plans).`);
+    return summaries;
+}
+
+/**
+ * Patch stored-plan metadata (never component payloads) of an unlinked plan.
+ * Returns false when the plan is missing or linked to an order.
+ */
+async function patchUnlinkedPlanMetadata(planId, metadataPatch) {
+    const patch = metadataPatch || {};
+    for (const field of [...STORED_PLAN_COMPONENT_FIELDS, 'id', 'linkedOrderId']) {
+        if (Object.prototype.hasOwnProperty.call(patch, field)) {
+            throw new Error(`Plan metadata patch cannot change "${field}".`);
+        }
+    }
+
+    const database = await initDB();
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
+            'readwrite');
+        const request = transaction.objectStore(STORE_PLANS).get(planId);
+        let patched = false;
+
+        request.onerror = () => transaction.abort();
+        request.onsuccess = () => {
+            const previous = request.result;
+            if (!previous) {
+                return;
+            }
+            const base = isComponentStoredPlan(previous)
+                ? previous.storedPlanMetadata
+                : previous;
+            if (base.linkedOrderId) {
+                return;
+            }
+            persistStoredPlanSuccessor(
+                transaction,
+                previous,
+                createStoredPlanRecord(
+                    { ...base, ...patch, modifiedAt: new Date().toISOString() },
+                    previous,
+                    new Set()));
+            patched = true;
+        };
+
+        transaction.oncomplete = () => resolve(patched);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
+}
+
+/**
+ * Delete several plans in one transaction. Plans whose linkedOrderId is in
+ * protectedLinkedOrderIds are left untouched and reported as skipped.
+ */
+async function deletePlansBatch(planIds, protectedLinkedOrderIds) {
+    const database = await initDB();
+    const protectedOrders = new Set(
+        (protectedLinkedOrderIds || []).map(id => String(id).toLowerCase()));
+
+    return new Promise((resolve, reject) => {
+        const transaction = database.transaction(
+            [STORE_PLANS, STORE_PLAN_COMPONENTS, STORE_PLAN_SUMMARIES],
+            'readwrite');
+        const store = transaction.objectStore(STORE_PLANS);
+        const componentStore = transaction.objectStore(STORE_PLAN_COMPONENTS);
+        const summaryStore = transaction.objectStore(STORE_PLAN_SUMMARIES);
+        const result = { deletedIds: [], skippedIds: [], missingIds: [] };
+
+        for (const planId of planIds || []) {
+            const request = store.get(planId);
+            request.onerror = () => transaction.abort();
+            request.onsuccess = () => {
+                const record = request.result;
+                if (!record) {
+                    summaryStore.delete(planId);
+                    result.missingIds.push(planId);
+                    return;
+                }
+                const metadata = isComponentStoredPlan(record)
+                    ? record.storedPlanMetadata
+                    : record;
+                if (metadata.linkedOrderId &&
+                    protectedOrders.has(String(metadata.linkedOrderId).toLowerCase())) {
+                    result.skippedIds.push(planId);
+                    return;
+                }
+                for (const componentId of Object.values(record.componentRefs ?? {})) {
+                    if (typeof componentId === 'string') {
+                        componentStore.delete(componentId);
+                    }
+                }
+                store.delete(planId);
+                summaryStore.delete(planId);
+                result.deletedIds.push(planId);
+            };
+        }
+
+        transaction.oncomplete = () => resolve(result);
+        transaction.onerror = (event) => reject(transaction.error || event.target?.error);
+        transaction.onabort = (event) => reject(transaction.error || event.target?.error);
+    });
 }
 
 async function saveStoreRecord(storeName, record) {
@@ -2318,6 +2444,8 @@ window.IndexedDB = {
     loadPlan,
     loadAllPlans,
     loadPlanSummaries,
+    patchUnlinkedPlanMetadata,
+    deletePlansBatch,
     savePlansBatch,
     patchMarketAnalysis,
     patchPlanAndProcurementRoute,

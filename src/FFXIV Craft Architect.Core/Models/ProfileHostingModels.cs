@@ -75,8 +75,8 @@ public sealed class ProfileSyncObjectEnvelope
 
 public sealed class ProfileSyncPlanSnapshot
 {
-    // LinkedOrderId is an additive optional field. Keep the v1 envelope so
-    // cached clients can continue reading ordinary plan updates during rollout.
+    // LinkedOrderId and SourceOrderId are additive optional fields. Keep the v1
+    // envelope so cached clients can continue reading ordinary plan updates during rollout.
     public const int CurrentSchemaVersion = 1;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -98,6 +98,7 @@ public sealed class ProfileSyncPlanSnapshot
     public string? SourcePlanId { get; set; }
     public string? SourcePlanName { get; set; }
     public Guid? LinkedOrderId { get; set; }
+    public Guid? SourceOrderId { get; set; }
 }
 
 public sealed class ProfileSyncPlanProjectItem

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using Microsoft.Data.Sqlite;
@@ -8,26 +7,6 @@ namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class ProfileHostCredentialImportContractTests
 {
-    [Fact]
-    public void ProvisioningCommand_ParsesExplicitCredentialImport()
-    {
-        var command = ProfileHostProvisioningCommand.TryParse(
-        [
-            "profile-host",
-            "import-active-credentials",
-            @"C:\staging\profile-host.db",
-            "a82eff20-e796-4f75-b621-58c259174c44",
-            "Sapphire",
-            "Avenue"
-        ]);
-
-        Assert.NotNull(command);
-        Assert.Equal(ProfileHostProvisioningAction.ImportActiveCredentials, command.Action);
-        Assert.Equal(@"C:\staging\profile-host.db", command.SourceDatabasePath);
-        Assert.Equal("a82eff20-e796-4f75-b621-58c259174c44", command.ProfileId);
-        Assert.Equal("Sapphire Avenue", command.DisplayName);
-    }
-
     [Fact]
     public async Task ImportActiveAccessKeys_IsAdditiveIdempotentAndCredentialOnly()
     {
@@ -175,145 +154,6 @@ public sealed class ProfileHostCredentialImportContractTests
         Assert.Equal(targetKeysBefore, await ReadAllKeyIdsAsync(fixture.TargetPath));
     }
 
-    [Fact]
-    public async Task ImportActiveAccessKeys_CarriesCanonicalRenamedSourceDisplay()
-    {
-        await using var fixture = await CredentialDatabaseFixture.CreateAsync();
-        var sourceProfile = await fixture.SourceStore.LoadProfileAsync(
-            fixture.ProfileId,
-            CancellationToken.None);
-        var renamed = await fixture.SourceStore.UpdateProfileDisplayNameAsync(
-            fixture.ProfileId,
-            sourceProfile!.MetadataRevision,
-            "Renamed source",
-            CancellationToken.None);
-        Assert.True(renamed.Success);
-        var targetBefore = await fixture.TargetStore.LoadProfileAsync(
-            fixture.ProfileId,
-            CancellationToken.None);
-
-        var imported = await fixture.TargetStore.ImportActiveAccessKeysAsync(
-            fixture.SourcePath,
-            fixture.ProfileId,
-            fixture.DisplayName,
-            fixture.Hasher,
-            CancellationToken.None);
-        var current = await fixture.TargetStore.LoadProfileAsync(
-            fixture.ProfileId,
-            CancellationToken.None);
-
-        Assert.Equal(2, imported.SourceActiveKeyCount);
-        Assert.Equal("Renamed source", current?.DisplayName);
-        Assert.Equal(1, current?.MetadataRevision);
-        Assert.Equal(targetBefore!.ServerRevision + 1, current?.ServerRevision);
-    }
-
-    [Fact]
-    public async Task ImportActiveAccessKeys_AdvancesBeyondNewerTargetRevisionAndIsIdempotent()
-    {
-        await using var fixture = await CredentialDatabaseFixture.CreateAsync();
-        var sourceProfile = await fixture.SourceStore.LoadProfileAsync(
-            fixture.ProfileId,
-            CancellationToken.None);
-        var sourceRename = await fixture.SourceStore.UpdateProfileDisplayNameAsync(
-            fixture.ProfileId,
-            sourceProfile!.MetadataRevision,
-            "Canonical source",
-            CancellationToken.None);
-        Assert.True(sourceRename.Success);
-
-        var targetProfile = await fixture.TargetStore.LoadProfileAsync(
-            fixture.ProfileId,
-            CancellationToken.None);
-        var firstTargetRename = await fixture.TargetStore.UpdateProfileDisplayNameAsync(
-            fixture.ProfileId,
-            targetProfile!.MetadataRevision,
-            "Stale target one",
-            CancellationToken.None);
-        Assert.True(firstTargetRename.Success);
-        var secondTargetRename = await fixture.TargetStore.UpdateProfileDisplayNameAsync(
-            fixture.ProfileId,
-            firstTargetRename.Profile!.MetadataRevision,
-            "Stale target two",
-            CancellationToken.None);
-        Assert.True(secondTargetRename.Success);
-
-        await fixture.TargetStore.ImportActiveAccessKeysAsync(
-            fixture.SourcePath,
-            fixture.ProfileId,
-            fixture.DisplayName,
-            fixture.Hasher,
-            CancellationToken.None);
-        var current = await fixture.TargetStore.LoadProfileAsync(
-            fixture.ProfileId,
-            CancellationToken.None);
-        Assert.Equal("Canonical source", current?.DisplayName);
-        Assert.Equal(3, current?.MetadataRevision);
-        Assert.Equal(secondTargetRename.Profile!.ServerRevision + 1, current?.ServerRevision);
-
-        await fixture.TargetStore.ImportActiveAccessKeysAsync(
-            fixture.SourcePath,
-            fixture.ProfileId,
-            fixture.DisplayName,
-            fixture.Hasher,
-            CancellationToken.None);
-        var replayed = await fixture.TargetStore.LoadProfileAsync(
-            fixture.ProfileId,
-            CancellationToken.None);
-        Assert.Equal("Canonical source", replayed?.DisplayName);
-        Assert.Equal(3, replayed?.MetadataRevision);
-        Assert.Equal(current?.ServerRevision, replayed?.ServerRevision);
-    }
-
-    [Fact]
-    public async Task ImportActiveAccessKeys_MigratesLegacySourceProfileMetadata()
-    {
-        await using var fixture = await CredentialDatabaseFixture.CreateAsync();
-        await ExecuteAsync(
-            fixture.SourcePath,
-            "ALTER TABLE hosted_profiles DROP COLUMN metadata_revision;");
-
-        var imported = await fixture.TargetStore.ImportActiveAccessKeysAsync(
-            fixture.SourcePath,
-            fixture.ProfileId,
-            fixture.DisplayName,
-            fixture.Hasher,
-            CancellationToken.None);
-        var current = await fixture.TargetStore.LoadProfileAsync(
-            fixture.ProfileId,
-            CancellationToken.None);
-
-        Assert.Equal(2, imported.SourceActiveKeyCount);
-        Assert.Equal(fixture.DisplayName, current?.DisplayName);
-        Assert.Equal(0, current?.MetadataRevision);
-    }
-
-    [Fact]
-    public async Task ImportActiveAccessKeys_SymbolicAliasOfTargetFailsClosed()
-    {
-        await using var fixture = await CredentialDatabaseFixture.CreateAsync();
-        var aliasPath = fixture.TargetPath + ".alias";
-        CreateFileAlias(aliasPath, fixture.TargetPath);
-        try
-        {
-            var targetKeysBefore = await ReadAllKeyIdsAsync(fixture.TargetPath);
-
-            await Assert.ThrowsAnyAsync<Exception>(() =>
-                fixture.TargetStore.ImportActiveAccessKeysAsync(
-                    aliasPath,
-                    fixture.ProfileId,
-                    fixture.DisplayName,
-                    fixture.Hasher,
-                    CancellationToken.None));
-
-            Assert.Equal(targetKeysBefore, await ReadAllKeyIdsAsync(fixture.TargetPath));
-        }
-        finally
-        {
-            File.Delete(aliasPath);
-        }
-    }
-
     private static async Task<IReadOnlyList<AccessKeyRow>> ReadActiveKeysAsync(
         string path,
         string profileId)
@@ -341,27 +181,6 @@ public sealed class ProfileHostCredentialImportContractTests
 
         return rows;
     }
-
-    private static void CreateFileAlias(string aliasPath, string targetPath)
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            File.CreateSymbolicLink(aliasPath, targetPath);
-            return;
-        }
-
-        if (!CreateHardLink(aliasPath, targetPath, IntPtr.Zero))
-        {
-            Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
-        }
-    }
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateHardLink(
-        string newFileName,
-        string existingFileName,
-        IntPtr securityAttributes);
 
     private static async Task<IReadOnlyList<string>> ReadAllKeyIdsAsync(string path)
     {

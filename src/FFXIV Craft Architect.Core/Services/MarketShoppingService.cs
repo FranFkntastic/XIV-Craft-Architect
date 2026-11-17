@@ -270,7 +270,7 @@ public class MarketShoppingService
             }
         }
 
-        var frontier = ReduceToParetoFrontier(beam, config);
+        var frontier = ReduceToParetoFrontier(beam);
         var cheapestState = frontier
             .OrderBy(state => state.TotalGilCost)
             .ThenBy(state => state.TotalEvidencePenalty)
@@ -305,11 +305,6 @@ public class MarketShoppingService
                 bestState.TotalEvidencePenalty,
                 cheapestState.WorldStops,
                 bestState.WorldStops,
-                cheapestState.GetDataCenterTransfers(config),
-                bestState.GetDataCenterTransfers(config),
-                config.StartFromHomeDataCenter && !string.IsNullOrWhiteSpace(config.HomeDataCenter),
-                config.StartFromHomeDataCenter ? config.HomeDataCenter : null,
-                config.TravelPriority,
                 representativeRoutes,
                 itemDecisions)
             {
@@ -358,7 +353,6 @@ public class MarketShoppingService
                 state.TotalGilCost,
                 state.TotalEvidencePenalty,
                 state.WorldStops,
-                state.GetDataCenterTransfers(config),
                 fixedVendorGilCost,
                 ProcurementRouteExecutionService.CompactResultShoppingPlans(selectedPlans),
                 BuildItemDecisions(state, cheapestEligibleCandidateByPlan)));
@@ -1813,7 +1807,6 @@ public class MarketShoppingService
         var toleranceAnchors = Enumerable.Range(0, 12)
             .SelectMany(tolerance => TakeBestRouteStates(
                     distinctStates,
-                    config,
                     tolerance,
                     cheapestGilCost,
                     count: 4));
@@ -1827,32 +1820,26 @@ public class MarketShoppingService
     }
 
     private static List<ProcurementRouteSearchState> ReduceToParetoFrontier(
-        IEnumerable<ProcurementRouteSearchState> states,
-        MarketAnalysisConfig config)
+        IEnumerable<ProcurementRouteSearchState> states)
     {
         var materialized = states.ToList();
         return materialized
             .Where(candidate => !materialized.Any(other =>
                 !ReferenceEquals(candidate, other) &&
-                Dominates(other, candidate, config)))
+                Dominates(other, candidate)))
             .OrderBy(state => state.TieBreakKey, StringComparer.Ordinal)
             .ToList();
     }
 
     private static bool Dominates(
         ProcurementRouteSearchState left,
-        ProcurementRouteSearchState right,
-        MarketAnalysisConfig config)
+        ProcurementRouteSearchState right)
     {
-        var leftTransfers = left.GetDataCenterTransfers(config);
-        var rightTransfers = right.GetDataCenterTransfers(config);
         var noWorse = left.TotalGilCost <= right.TotalGilCost &&
             left.TotalEvidencePenalty <= right.TotalEvidencePenalty &&
-            leftTransfers <= rightTransfers &&
             left.WorldStops <= right.WorldStops;
         var strictlyBetter = left.TotalGilCost < right.TotalGilCost ||
             left.TotalEvidencePenalty < right.TotalEvidencePenalty ||
-            leftTransfers < rightTransfers ||
             left.WorldStops < right.WorldStops;
         return noWorse && strictlyBetter;
     }
@@ -1868,7 +1855,6 @@ public class MarketShoppingService
             ? 0
             : materialized.Min(state => state.TotalGilCost);
         var comparer = CreateRouteStateComparer(
-            config,
             travelToleranceOverride ?? config.TravelTolerance,
             cheapestGilCost,
             absoluteMaximumGilCost);
@@ -1877,13 +1863,11 @@ public class MarketShoppingService
 
     private static IReadOnlyList<ProcurementRouteSearchState> TakeBestRouteStates(
         IReadOnlyList<ProcurementRouteSearchState> states,
-        MarketAnalysisConfig config,
         int travelTolerance,
         long cheapestGilCost,
         int count)
     {
         var comparer = CreateRouteStateComparer(
-            config,
             travelTolerance,
             cheapestGilCost,
             absoluteMaximumGilCost: null);
@@ -1905,7 +1889,6 @@ public class MarketShoppingService
     }
 
     private static IComparer<ProcurementRouteSearchState> CreateRouteStateComparer(
-        MarketAnalysisConfig config,
         int travelTolerance,
         long cheapestGilCost,
         long? absoluteMaximumGilCost)
@@ -1931,19 +1914,7 @@ public class MarketShoppingService
                 return comparison;
             }
 
-            comparison = config.TravelPriority == MarketTravelPriority.WorldVisitsFirst
-                ? left.WorldStops.CompareTo(right.WorldStops)
-                : left.GetDataCenterTransfers(config).CompareTo(
-                    right.GetDataCenterTransfers(config));
-            if (comparison != 0)
-            {
-                return comparison;
-            }
-
-            comparison = config.TravelPriority == MarketTravelPriority.WorldVisitsFirst
-                ? left.GetDataCenterTransfers(config).CompareTo(
-                    right.GetDataCenterTransfers(config))
-                : left.WorldStops.CompareTo(right.WorldStops);
+            comparison = left.WorldStops.CompareTo(right.WorldStops);
             if (comparison != 0)
             {
                 return comparison;
@@ -1987,8 +1958,7 @@ public class MarketShoppingService
                 tolerance,
                 tolerance,
                 state.TotalGilCost,
-                state.WorldStops,
-                state.GetDataCenterTransfers(config)));
+                state.WorldStops));
             previous = state;
         }
 
@@ -2066,24 +2036,6 @@ public class MarketShoppingService
         public string TieBreakKey { get; }
         public string RouteShapeKey { get; }
         public string MissingChoiceKey { get; }
-
-        public int GetDataCenterTransfers(MarketAnalysisConfig config)
-        {
-            var dataCenterCount = Route.DataCenters.Count;
-            if (dataCenterCount == 0)
-            {
-                return 0;
-            }
-
-            if (!config.StartFromHomeDataCenter || string.IsNullOrWhiteSpace(config.HomeDataCenter))
-            {
-                return Math.Max(0, dataCenterCount - 1);
-            }
-
-            return Route.ContainsDataCenter(config.HomeDataCenter)
-                ? Math.Max(0, dataCenterCount - 1)
-                : dataCenterCount;
-        }
 
         public ProcurementRouteSearchState WithCandidate(int planIndex, MarketPurchaseCandidate candidate)
         {

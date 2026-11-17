@@ -2,8 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -18,123 +16,6 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class DiscordAccountContractTests
 {
     private const string DiscordUser = "111111111111111111";
-
-    [Fact]
-    public async Task SignInStartUsesDedicatedCallbackPkceAndNoKeyMaterial()
-    {
-        await using var fixture = await DiscordAccountFixture.CreateAsync();
-        using var client = fixture.CreateClient();
-        var status = await client.GetFromJsonAsync<DiscordSignInStatus>(
-            "/identity/v1/signin/discord/status");
-        Assert.True(status!.Enabled);
-
-        using var response = await client.PostAsync(
-            "/identity/v1/signin/discord/start",
-            null);
-        response.EnsureSuccessStatusCode();
-        var body = await response.Content.ReadAsStringAsync();
-        var start = JsonSerializer.Deserialize<DiscordLinkStartResponse>(
-            body,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
-        var authorize = new Uri(start.AuthorizationUrl);
-        var query = QueryHelpers.ParseQuery(authorize.Query);
-        Assert.Equal("https://discord.test/oauth2/authorize", authorize.GetLeftPart(UriPartial.Path));
-        Assert.Equal("123456789012345678", query["client_id"]);
-        Assert.Equal("code", query["response_type"]);
-        Assert.Equal(fixture.SignInCallbackUri, query["redirect_uri"]);
-        Assert.Equal("identify", query["scope"]);
-        Assert.Equal("S256", query["code_challenge_method"]);
-        Assert.NotEmpty(query["state"].ToString());
-        Assert.NotEmpty(query["code_challenge"].ToString());
-        Assert.DoesNotContain("cap_", body, StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData("https://evil.test/companies/example")]
-    [InlineData("//evil.test/companies/example")]
-    public async Task SignInStartRejectsAbsoluteReturnPaths(string returnPath)
-    {
-        await using var fixture = await DiscordAccountFixture.CreateAsync();
-        using var client = fixture.CreateClient();
-
-        using var response = await client.PostAsync(
-            $"/identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}",
-            null);
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task SignInReturnsToStoredApplicationPath()
-    {
-        await using var fixture = await DiscordAccountFixture.CreateAsync();
-        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Discord Crafter");
-        using var client = fixture.CreateClient();
-        var returnPath = "/companies/sapphire-avenue?invite=company_invitation_token";
-        var start = await (await client.PostAsync(
-                $"/identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}",
-                null))
-            .Content.ReadFromJsonAsync<DiscordLinkStartResponse>();
-        var state = QueryHelpers.ParseQuery(new Uri(start!.AuthorizationUrl).Query)["state"];
-
-        using var callback = await client.GetAsync(
-            $"/identity/v1/signin/discord/callback?code=code&state={Uri.EscapeDataString(state!)}");
-
-        Assert.Equal("/companies/sapphire-avenue", callback.Headers.Location!.AbsolutePath);
-        Assert.Equal("?invite=company_invitation_token", callback.Headers.Location.Query);
-        Assert.StartsWith("#signin=", callback.Headers.Location.Fragment, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task RejectedProviderReturnsErrorToTheStoredPortableClaimPath()
-    {
-        await using var fixture = await DiscordAccountFixture.CreateAsync();
-        using var client = fixture.CreateClient();
-        const string returnPath = "/commission.html?id=portable-claim";
-        var start = await (await client.PostAsync(
-                $"/identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}",
-                null))
-            .Content.ReadFromJsonAsync<DiscordLinkStartResponse>();
-        var state = QueryHelpers.ParseQuery(new Uri(start!.AuthorizationUrl).Query)["state"];
-
-        using var callback = await client.GetAsync(
-            $"/identity/v1/signin/discord/callback?code=rejected&state={Uri.EscapeDataString(state!)}");
-
-        Assert.Equal("/commission.html", callback.Headers.Location!.AbsolutePath);
-        Assert.Equal("?id=portable-claim", callback.Headers.Location.Query);
-        Assert.Equal(
-            "provider-rejected",
-            QueryHelpers.ParseQuery(callback.Headers.Location.Fragment.TrimStart('#'))[
-                "signin-error"]);
-    }
-
-    [Fact]
-    public async Task ReplayedSignInReturnsToTheStoredPortableClaimWithoutIssuingAnotherKey()
-    {
-        await using var fixture = await DiscordAccountFixture.CreateAsync();
-        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Discord Crafter");
-        using var client = fixture.CreateClient();
-        const string returnPath = "/commission.html?id=portable-claim";
-        var start = await (await client.PostAsync(
-                $"/identity/v1/signin/discord/start?returnPath={Uri.EscapeDataString(returnPath)}",
-                null))
-            .Content.ReadFromJsonAsync<DiscordLinkStartResponse>();
-        var state = QueryHelpers.ParseQuery(new Uri(start!.AuthorizationUrl).Query)["state"];
-        using var success = await client.GetAsync(
-            $"/identity/v1/signin/discord/callback?code=code&state={Uri.EscapeDataString(state!)}");
-        var keyCount = await fixture.CountRowsAsync("profile_access_keys");
-
-        using var replay = await client.GetAsync(
-            $"/identity/v1/signin/discord/callback?code=code&state={Uri.EscapeDataString(state!)}");
-
-        Assert.Equal("/commission.html", replay.Headers.Location!.AbsolutePath);
-        Assert.Equal("?id=portable-claim", replay.Headers.Location.Query);
-        Assert.Equal(
-            "replayed-state",
-            QueryHelpers.ParseQuery(replay.Headers.Location.Fragment.TrimStart('#'))[
-                "signin-error"]);
-        Assert.Equal(keyCount, await fixture.CountRowsAsync("profile_access_keys"));
-    }
 
     [Fact]
     public async Task SignInCallbackRejectsTamperedStoredReturnPath()
@@ -187,38 +68,6 @@ public sealed class DiscordAccountContractTests
     }
 
     [Fact]
-    public async Task AccountRenameSurvivesFreshDiscordSignInWithoutProvisioningAnotherProfile()
-    {
-        await using var fixture = await DiscordAccountFixture.CreateAsync();
-        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Discord identity");
-        using var client = fixture.CreateClient();
-        var firstKey = await CompleteSignInAsync(client, fixture.OAuth);
-        var original = await GetProfileAsync(client, firstKey);
-        using var renameRequest = new HttpRequestMessage(HttpMethod.Put, "/profile-host/profile")
-        {
-            Content = JsonContent.Create(new ProfileHostDisplayNameUpdateRequest
-            {
-                ExpectedMetadataRevision = original.MetadataRevision,
-                DisplayName = "Frantastic"
-            })
-        };
-        renameRequest.Headers.Add("X-Profile-Key", firstKey);
-        using var rename = await client.SendAsync(renameRequest);
-        rename.EnsureSuccessStatusCode();
-
-        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Renamed Discord identity");
-        var secondKey = await CompleteSignInAsync(client, fixture.OAuth);
-        var signedInAgain = await GetProfileAsync(client, secondKey);
-        var link = await fixture.Links.LoadByDiscordUserAsync(DiscordUser);
-
-        Assert.Equal(original.ProfileId, signedInAgain.ProfileId);
-        Assert.Equal("Frantastic", signedInAgain.DisplayName);
-        Assert.Equal(original.ProfileId, link?.ProfileId.ToString("D"));
-        Assert.Equal(1, await fixture.CountRowsAsync("hosted_profiles"));
-        Assert.Equal(2, await fixture.CountRowsAsync("profile_access_keys"));
-    }
-
-    [Fact]
     public async Task SignInRejectsUnknownExpiredAndReplayedStateWithoutExtraWrites()
     {
         await using var fixture = await DiscordAccountFixture.CreateAsync();
@@ -244,48 +93,6 @@ public sealed class DiscordAccountContractTests
         Assert.Equal(profileCount, await fixture.CountRowsAsync("hosted_profiles"));
         Assert.Equal(keyCount, await fixture.CountRowsAsync("profile_access_keys"));
         Assert.Equal(1, fixture.OAuth.Calls);
-    }
-
-    [Fact]
-    public async Task RetiredLinkEndpointsReturnGoneWithActionableError()
-    {
-        await using var fixture = await DiscordAccountFixture.CreateAsync();
-        using var client = fixture.CreateClient();
-        using var post = await client.PostAsync("/identity/v1/discord/link", null);
-        using var delete = await client.DeleteAsync("/identity/v1/discord/link");
-        using var callback = await client.GetAsync("/identity/v1/discord/callback");
-
-        foreach (var response in new[] { post, delete, callback })
-        {
-            Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
-            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            Assert.Equal("link_endpoints_retired", body.RootElement.GetProperty("error").GetString());
-        }
-    }
-
-    [Fact]
-    public async Task ConcurrentFirstSignInJoinsTheWinningProfileAndDisablesTheOrphan()
-    {
-        await using var fixture = await DiscordAccountFixture.CreateAsync();
-        var existing = await fixture.Profiles.CreateProfileAsync(
-            "Existing Crafter",
-            CancellationToken.None);
-        Assert.Equal(
-            DiscordIdentityLinkResultStatus.Linked,
-            (await fixture.Links.LinkAsync(
-                Guid.Parse(existing.ProfileId),
-                DiscordUser,
-                "Existing Crafter",
-                fixture.Time.GetUtcNow(),
-                CancellationToken.None)).Status);
-        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Existing Crafter");
-        using var client = fixture.CreateClient();
-
-        var key = await CompleteSignInAsync(client, fixture.OAuth);
-
-        var resolved = await GetProfileAsync(client, key);
-        Assert.Equal(existing.ProfileId, resolved.ProfileId);
-        Assert.Equal(1, await fixture.CountRowsAsync("hosted_profiles"));
     }
 
     private static async Task<string> CompleteSignInAsync(

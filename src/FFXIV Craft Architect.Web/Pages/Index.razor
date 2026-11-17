@@ -108,7 +108,7 @@
 
     private async Task RefreshSavedPlansListAsync()
     {
-        var summaries = await PlanPersistence.LoadPlanSummariesAsync();
+        var summaries = await PlanPersistence.LoadUnlinkedPlanSummariesAsync();
         _savedPlans = summaries
             .Where(plan => plan.Id != "autosave")
             .ToArray();

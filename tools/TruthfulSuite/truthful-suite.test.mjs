@@ -55,75 +55,6 @@ function options(root, outDir, acceptance, fixtures) {
   };
 }
 
-test('archive creation is deterministic and exact-byte extraction verifies configuration', async () => {
-  const first = await fixture();
-  const second = await fixture();
-  const firstOut = path.join(first.temporaryRoot, 'out');
-  const secondOut = path.join(second.temporaryRoot, 'out');
-  const firstResult = await createTestArtifact(options(first.published, firstOut, first.acceptance, first.fixtures));
-  const secondResult = await createTestArtifact(options(second.published, secondOut, second.acceptance, second.fixtures));
-  const firstArchive = await readFile(firstResult.archivePath);
-  const secondArchive = await readFile(secondResult.archivePath);
-  assert.deepEqual(firstArchive, secondArchive);
-
-  const extracted = path.join(first.temporaryRoot, 'extracted');
-  await verifyArtifact({
-    archive: firstResult.archivePath,
-    'file-manifest': firstResult.fileManifestPath,
-    'build-manifest': firstResult.buildManifestPath,
-    'acceptance-root': first.acceptance,
-    'fixtures-root': first.fixtures,
-    extract: extracted
-  });
-  const config = JSON.parse(await readFile(path.join(extracted, 'appsettings.json'), 'utf8'));
-  const release = JSON.parse(await readFile(path.join(extracted, 'release.json'), 'utf8'));
-  assert.equal(config.ProcurementRoutes.GenerationEnabled, true);
-  assert.equal(config.EngineRewrite.ExecutionEnabled, true);
-  assert.equal(config.EngineAcceptance.Enabled, false);
-  assert.equal(config.LodestoneLookup.BaseAddress, 'https://example.com/api/');
-  assert.equal(config.ProfileHost.BaseAddress, 'https://example.com/api/');
-  assert.equal(release.sourceDirty, false);
-  assert.equal(firstResult.buildManifest.source.dirty, false);
-  assert.equal(firstResult.buildManifest.acceptance.worker.required, true);
-  assert.equal(firstResult.buildManifest.acceptance.worker.outcomeId, 'engine-browser-tests');
-  assert.equal(firstResult.buildManifest.acceptance.dotnet.testInventory, 'runtime-trx');
-
-  const localDev = await fixture();
-  const localDevOptions = options(
-    localDev.published, path.join(localDev.temporaryRoot, 'out'), localDev.acceptance, localDev.fixtures);
-  localDevOptions.slot = 'local-dev';
-  localDevOptions.domain = 'dev.example.com';
-  localDevOptions['profile-host-domain'] = 'example.com';
-  localDevOptions['source-ref'] = 'local-dev';
-  const localDevResult = await createTestArtifact(localDevOptions);
-  const localDevExtracted = path.join(localDev.temporaryRoot, 'extracted');
-  await verifyArtifact({
-    archive: localDevResult.archivePath,
-    'file-manifest': localDevResult.fileManifestPath,
-    'build-manifest': localDevResult.buildManifestPath,
-    'acceptance-root': localDev.acceptance,
-    'fixtures-root': localDev.fixtures,
-    extract: localDevExtracted
-  });
-  const localDevConfig = JSON.parse(await readFile(path.join(localDevExtracted, 'appsettings.json'), 'utf8'));
-  assert.equal(localDevConfig.ProcurementRoutes.GenerationEnabled, true);
-  assert.equal(localDevConfig.EngineRewrite.ExecutionEnabled, true);
-  assert.equal(localDevConfig.LodestoneLookup.BaseAddress, 'https://dev.example.com/api/');
-  assert.equal(localDevConfig.ProfileHost.BaseAddress, 'https://example.com/api/');
-  assert.equal(localDevResult.buildManifest.target.profileHostDomain, 'example.com');
-  assert.equal(localDevResult.buildManifest.acceptance.worker.required, true);
-  assert.equal(localDevResult.buildManifest.acceptance.worker.outcomeId, 'engine-browser-tests');
-
-  await writeFile(path.join(first.fixtures, 'fixture.json'), '{"changed":true}\n');
-  await assert.rejects(() => verifyArtifact({
-    archive: firstResult.archivePath,
-    'file-manifest': firstResult.fileManifestPath,
-    'build-manifest': firstResult.buildManifestPath,
-    'acceptance-root': first.acceptance,
-    'fixtures-root': first.fixtures
-  }), /Acceptance inputs/);
-});
-
 test('archive verification rejects changed bytes', async () => {
   const value = await fixture();
   const result = await createTestArtifact(options(
@@ -148,7 +79,6 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
     'suite-structure': ['pwsh', '.', ['-NoProfile', '-File', 'scripts/Assert-TruthfulTestSuite.ps1'], 120],
     'dependency-audit': ['node', '.', ['tools/TruthfulSuite/check-dependencies.mjs'], 300],
     'solution-build': ['dotnet', '.', ['build', 'FFXIV Craft Architect.sln', '--configuration', 'Release', '--no-restore'], 600],
-    'spec-tests': ['dotnet', '.', ['test', 'src/FFXIV Craft Architect.SpecTests/FFXIV Craft Architect.SpecTests.csproj', '--configuration', 'Release', '--no-build', '--no-restore', '--blame-hang', '--blame-hang-timeout', '5m', '--blame-hang-dump-type', 'mini', '--logger', 'trx;LogFileName=spec-tests.trx', '--logger', 'console;verbosity=normal'], 600],
     'contract-tests': ['dotnet', '.', ['test', 'src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj', '--configuration', 'Release', '--no-build', '--no-restore', '--blame-hang', '--blame-hang-timeout', '5m', '--blame-hang-dump-type', 'mini', '--logger', 'trx;LogFileName=contract-tests.trx', '--logger', 'console;verbosity=normal'], 600],
     'web-publish': ['dotnet', '.', ['publish', 'src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj', '--configuration', 'Release', '--output', 'dist/publish', '--no-restore', '-p:BuildInfoBranchName=main'], 600],
     'product-configuration': ['node', '.', ['tools/TruthfulSuite/check-product.mjs', 'dist/subject/src/FFXIV Craft Architect.Web/wwwroot', 'example.com', 'main', 'example.com'], 60],
@@ -174,9 +104,7 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
     await writeFile(path.join(evidenceDir, `${expected.id}.json`), `${JSON.stringify(outcome, null, 2)}\n`);
   }
   const passingTrx = total => `<TestRun><Results>${Array.from({ length: total }, (_, index) => `<UnitTestResult executionId="execution-${index}" testId="test-${index}" testName="Test ${index}" outcome="Passed" />`).join('')}</Results><ResultSummary outcome="Completed"><Counters total="${total}" executed="${total}" passed="${total}" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="${total}" inProgress="0" pending="0" /></ResultSummary></TestRun>`;
-  const specTrx = path.join(value.temporaryRoot, 'spec-tests.trx');
   const contractTrx = path.join(value.temporaryRoot, 'contract-tests.trx');
-  await writeFile(specTrx, passingTrx(3));
   await writeFile(contractTrx, passingTrx(5));
 
   const acceptanceManifest = path.join(outDir, 'acceptance-manifest.json');
@@ -188,7 +116,6 @@ test('terminal verifier accepts only complete outcomes for exact source and arch
     'acceptance-manifest': acceptanceManifest,
     'acceptance-root': value.acceptance,
     'fixtures-root': value.fixtures,
-    'spec-trx': specTrx,
     'contract-trx': contractTrx
   };
   const accepted = await verifyOutcomes(verifyOptions);

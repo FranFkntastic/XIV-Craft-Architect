@@ -1224,9 +1224,6 @@ public static partial class ManagedHost
                 {
                     TravelTolerance = request.TravelTolerance,
                     EnableSplitWorld = request.IncludeSplitPurchases,
-                    StartFromHomeDataCenter = request.StartFromHomeDataCenter,
-                    HomeDataCenter = request.SelectedDataCenter,
-                    TravelPriority = request.TravelPriority
                 },
                 request.IncludeSplitPurchases,
                 sourcePlans,
@@ -1553,22 +1550,19 @@ public static partial class ManagedHost
             activeItems.Count,
             tolerance,
             MarketRouteScoring.GetToleranceLabel(tolerance),
-            decision?.TravelPriority ?? MarketTravelPriority.DataCenterTransfersFirst,
             session.ActiveContext.MarketFetchScope == MarketFetchScope.EntireRegion,
             decision?.IncludeSplitPurchases,
             (decision?.SelectedGilCost ?? 0) + fixedCost,
             (decision?.CheapestGilCost ?? 0) + fixedCost,
             decision?.PremiumGil ?? 0,
             decision?.SelectedWorldStops ?? 0,
-            decision?.SelectedDataCenterTransfers ?? 0,
             decision?.RouteSearchWasTruncated ?? false,
             decision?.ToleranceSelections.Select(selection =>
                 new WorkerProcurementToleranceProjection(
                     selection.MinimumTolerance,
                     selection.MaximumTolerance,
                     selection.GilCost + selection.FixedAcquisitionGilCost,
-                    selection.WorldStops,
-                    selection.DataCenterTransfers)).ToArray()
+                    selection.WorldStops)).ToArray()
                 ?? Array.Empty<WorkerProcurementToleranceProjection>(),
             worlds,
             overlay?.ShoppingPlans?
@@ -1669,13 +1663,6 @@ public static partial class ManagedHost
                 "No current market evidence is loaded, so Trade cannot produce an executable material quote.";
             warnings.Add(materialQuoteFailureReason);
         }
-        else if (requiresMarketEvidence &&
-                 session.ActiveContext.MarketFetchScope != MarketFetchScope.EntireRegion)
-        {
-            materialQuoteFailureReason =
-                "Trade material quotes require current-region market evidence; reprice the order to refresh that scope.";
-            warnings.Add(materialQuoteFailureReason);
-        }
         else
         {
             var policy = TradeMaterialPricingPolicyNormalizer.Normalize(request.MaterialPricingPolicy);
@@ -1683,10 +1670,7 @@ public static partial class ManagedHost
             {
                 MaxWorldsPerItem = policy.MaximumWorldStops,
                 EnableSplitWorld = policy.AllowSplitPurchases,
-                TravelTolerance = 11,
-                StartFromHomeDataCenter = true,
-                HomeDataCenter = session.ActiveContext.DataCenter ?? plan.DataCenter ?? "Aether",
-                TravelPriority = MarketTravelPriority.DataCenterTransfersFirst
+                TravelTolerance = 11
             };
             var quoteService = new TradeMaterialQuoteService();
             var quotedAtUtc = DateTime.UtcNow;

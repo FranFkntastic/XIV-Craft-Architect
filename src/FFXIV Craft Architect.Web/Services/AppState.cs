@@ -27,9 +27,6 @@ public sealed class AppState
         MarketFetchScope.EntireRegion;
     public bool ProcurementEnableSplitWorldPurchases { get; private set; } = true;
     public int ProcurementTravelTolerance { get; private set; }
-    public bool ProcurementStartFromHomeDataCenter { get; private set; }
-    public MarketTravelPriority ProcurementTravelPriority { get; private set; } =
-        MarketTravelPriority.DataCenterTransfersFirst;
     public int TemporaryWorldBlacklistDurationMinutes { get; private set; } = 60;
     public bool SecretDebugToolsEnabled { get; private set; }
     public bool DeferAutomaticProcurementReconciliationForBenchmark { get; private set; }
@@ -100,28 +97,6 @@ public sealed class AppState
         TemporaryWorldBlacklistDurationMinutes =
             Math.Max(1, temporaryWorldBlacklistDurationMinutes);
         NotifySettingsChanged();
-    }
-
-    public bool SetProcurementHomeDataCenterOrigin(bool enabled)
-    {
-        if (ProcurementStartFromHomeDataCenter == enabled)
-        {
-            return false;
-        }
-        ProcurementStartFromHomeDataCenter = enabled;
-        NotifySettingsChanged();
-        return true;
-    }
-
-    public bool SetProcurementTravelPriority(MarketTravelPriority priority)
-    {
-        if (ProcurementTravelPriority == priority)
-        {
-            return false;
-        }
-        ProcurementTravelPriority = priority;
-        NotifySettingsChanged();
-        return true;
     }
 
     public bool SetSecretDebugToolsEnabled(bool enabled)
@@ -327,4 +302,14 @@ public sealed class StoredPlanSummary
     public DateTime SavedAt { get; set; }
     public string DataCenter { get; set; } = string.Empty;
     public int ItemCount { get; set; }
+    public Guid? LinkedOrderId { get; set; }
+    public Guid? SourceOrderId { get; set; }
+    public List<StoredPlanSummaryItem> TopItems { get; set; } = [];
+    public int SummaryVersion { get; set; }
+}
+
+public sealed class StoredPlanSummaryItem
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
 }

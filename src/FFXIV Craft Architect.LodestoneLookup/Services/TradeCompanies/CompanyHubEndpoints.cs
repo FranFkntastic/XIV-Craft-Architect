@@ -104,6 +104,10 @@ public sealed record CompanyHubPostUpdateRequest(
     bool IsPinned);
 
 public sealed record CompanyHubMutationResponse(long ProfileRevision);
+public sealed record CompanyMarginItemsUpdateRequest(long ExpectedProfileRevision, bool UpdateMarginItems, IReadOnlyList<TradeMarginItem>? MarginItems);
+public sealed record CompanyPolicyUpdateRequest(long ExpectedProfileRevision, string Name,
+    string? Description, string? CommissionContact, TradePaymentPolicy PaymentPolicy,
+    TradeCompanyPricingScope? CommissionPricingScope);
 public sealed record CompanyHubAttentionReadRequest(long OpenedRevision);
 public sealed record CompanyHubAttentionReadResponse(long ReadRevision);
 
@@ -127,6 +131,31 @@ public static class CompanyHubEndpoints
 {
     public static void MapCompanyHubEndpoints(this WebApplication app)
     {
+        app.MapPut("/trade/v1/companies/{slugOrGuid}/margin-items",
+            async (string slugOrGuid, CompanyMarginItemsUpdateRequest body, HttpRequest request,
+                ProfileHostOptions options, MembershipAccessResolver accessResolver,
+                CompanyHubService hubs, CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                return ToMutationResult(await hubs.UpdateMarginItemsAsync(slugOrGuid, account, body, cancellationToken));
+            });
+        app.MapPut("/trade/v1/companies/{slugOrGuid}/policy",
+            async (string slugOrGuid, CompanyPolicyUpdateRequest body, HttpRequest request,
+                ProfileHostOptions options, MembershipAccessResolver accessResolver,
+                CompanyHubService hubs, CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                return ToMutationResult(await hubs.UpdatePolicyAsync(slugOrGuid, account, body, cancellationToken));
+            });
         app.MapGet(
             "/trade/v1/companies/{slugOrGuid}/hub",
             async (
@@ -421,6 +450,66 @@ public sealed class CompanyHubService(
         return new(CompanyHubAttentionReadStatus.Applied, readRevision);
     }
 
+    public async Task<CompanyHubMutationResult> UpdateMarginItemsAsync(
+        string slugOrGuid, MembershipAccount? account, CompanyMarginItemsUpdateRequest body,
+        CancellationToken cancellationToken = default)
+    {
+        var company = await ResolveCompanyAsync(slugOrGuid, cancellationToken);
+        var authorization = await AuthorizeAdministratorAsync(company, account, cancellationToken);
+        if (authorization != null)
+        {
+            return authorization;
+        }
+
+        if (!body.UpdateMarginItems || body.MarginItems == null || body.MarginItems.Count > 500 ||
+            body.MarginItems.Any(item => item == null || item.ItemId <= 0 || item.SalePrice < 0) ||
+            body.MarginItems.Select(item => item.ItemId).Distinct().Count() != body.MarginItems.Count)
+        {
+            return new(CompanyHubMutationStatus.Invalid, ErrorCode: "invalid_margin_items",
+                ErrorMessage: "Use at most 500 distinct positive item ids with non-negative sale prices.");
+        }
+
+        if (body.ExpectedProfileRevision != company!.ObjectRevision)
+        {
+            return RevisionConflict();
+        }
+
+        var updated = CloneProfile(company.Profile);
+        updated.MarginItems = body.MarginItems;
+        updated.UpdatedAtUtc = DateTime.UtcNow;
+        return await SaveProfileAsync(company, updated, body.ExpectedProfileRevision, cancellationToken, updateMarginItems: true);
+    }
+
+    public async Task<CompanyHubMutationResult> UpdatePolicyAsync(
+        string slugOrGuid, MembershipAccount? account, CompanyPolicyUpdateRequest body,
+        CancellationToken cancellationToken = default)
+    {
+        var company = await ResolveCompanyAsync(slugOrGuid, cancellationToken);
+        var authorization = await AuthorizeAdministratorAsync(company, account, cancellationToken);
+        if (authorization != null)
+        {
+            return authorization;
+        }
+        if (body.ExpectedProfileRevision != company!.ObjectRevision)
+        {
+            return RevisionConflict();
+        }
+        if (string.IsNullOrWhiteSpace(body.Name) || body.PaymentPolicy == null ||
+            body.CommissionPricingScope is { IsValid: false })
+        {
+            return new(CompanyHubMutationStatus.Invalid, ErrorMessage: "Invalid company policy or commission pricing scope.");
+        }
+        var updated = CloneProfile(company.Profile);
+        updated.SchemaVersion = TradeCompanyProfile.CurrentSchemaVersion;
+        updated.Name = body.Name.Trim();
+        updated.Description = body.Description;
+        updated.CommissionContact = body.CommissionContact;
+        updated.PaymentPolicy = TradePaymentPolicyNormalizer.Normalize(body.PaymentPolicy);
+        updated.CommissionPricingScope = body.CommissionPricingScope;
+        updated.UpdatedAtUtc = DateTime.UtcNow;
+        return await SaveProfileAsync(company, updated, body.ExpectedProfileRevision, cancellationToken);
+    }
+
     public async Task<CompanyHubMutationResult> UpdateThemeAsync(
         string slugOrGuid,
         MembershipAccount? account,
@@ -547,7 +636,8 @@ public sealed class CompanyHubService(
         HostedCompany company,
         TradeCompanyProfile updated,
         long expectedProfileRevision,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool updateMarginItems = false)
     {
         var result = await profiles.PutObjectAsync(
             company.HostProfileId.ToString("D"),
@@ -556,7 +646,8 @@ public sealed class CompanyHubService(
             JsonSerializer.Serialize(updated, JsonOptions),
             expectedProfileRevision,
             cancellationToken,
-            allowCompanyCollection: true);
+            allowCompanyCollection: true,
+            updateMarginItems: updateMarginItems);
         return result.Success
             ? new CompanyHubMutationResult(
                 CompanyHubMutationStatus.Applied,

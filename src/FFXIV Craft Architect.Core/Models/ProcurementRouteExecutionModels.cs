@@ -63,11 +63,6 @@ public sealed record MarketRouteDecision(
     long SelectedEvidencePenalty,
     int CheapestWorldStops,
     int SelectedWorldStops,
-    int CheapestDataCenterTransfers,
-    int SelectedDataCenterTransfers,
-    bool StartsFromHomeDataCenter,
-    string? HomeDataCenter,
-    MarketTravelPriority TravelPriority = MarketTravelPriority.DataCenterTransfersFirst,
     IReadOnlyList<MarketRouteFrontierOption>? FrontierOptions = null,
     IReadOnlyList<MarketRouteItemDecision>? ItemDecisions = null)
 {
@@ -85,8 +80,6 @@ public sealed record MarketRouteDecision(
 
     public int WorldStopsAvoided => Math.Max(0, CheapestWorldStops - SelectedWorldStops);
 
-    public int DataCenterTransfersAvoided => Math.Max(0, CheapestDataCenterTransfers - SelectedDataCenterTransfers);
-
     public IReadOnlyList<MarketRouteFrontierOption> RepresentativeRoutes =>
         FrontierOptions ?? Array.Empty<MarketRouteFrontierOption>();
 
@@ -101,8 +94,7 @@ public sealed record MarketRouteFrontierOption(
     int MinimumTolerance,
     int MaximumTolerance,
     long GilCost,
-    int WorldStops,
-    int DataCenterTransfers)
+    int WorldStops)
 {
     public int RepresentativeTolerance => (MinimumTolerance + MaximumTolerance) / 2;
 }
@@ -114,7 +106,6 @@ public sealed record MarketRouteToleranceSelection(
     long GilCost,
     long EvidencePenalty,
     int WorldStops,
-    int DataCenterTransfers,
     long FixedAcquisitionGilCost,
     IReadOnlyList<DetailedShoppingPlan> ShoppingPlans,
     IReadOnlyList<MarketRouteItemDecision> ItemDecisions)

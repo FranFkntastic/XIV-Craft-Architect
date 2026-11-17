@@ -213,7 +213,8 @@ public partial class TradeOrders
 
     private async Task CreateRequestedOrderAsync()
     {
-        if (_companyProfile == null || !CanCreateRequestedOrder || _isCreatingRequestedOrder)
+        var companyProfile = _companyProfile;
+        if (companyProfile == null || !CanCreateRequestedOrder || _isCreatingRequestedOrder)
         {
             return;
         }
@@ -231,7 +232,7 @@ public partial class TradeOrders
 
             var outputs = ToRequestedOrderOutputs();
             var draftResult = TradeOrderDraftFactory.CreateFromRequestedOutputs(new TradeRequestedOrderCreateRequest(
-                _companyProfile.Id,
+                companyProfile.Id,
                 _newRequestedOrderCrafterId,
                 _newRequestedOrderTitle,
                 outputs,
@@ -256,7 +257,7 @@ public partial class TradeOrders
                 draftResult.Order,
                 new TradeOrderPricingWorkflowOptions(
                     ForceRefreshMarketData: false,
-                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
+                    MaterialPricingPolicy: companyProfile.MaterialPricingPolicy));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
@@ -273,7 +274,7 @@ public partial class TradeOrders
             pricingResult.UpdatedOrder.PaymentPolicyOverride =
                 TradeOrderWorkflow.ResolvePaymentPolicy(
                     pricingResult.UpdatedOrder,
-                    _companyProfile.PaymentPolicy);
+                    companyProfile.PaymentPolicy);
 
             var saved = await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder);
             if (!saved)
@@ -305,7 +306,8 @@ public partial class TradeOrders
 
     private async Task CreatePendingOrderAsync()
     {
-        if (_companyProfile == null || _pendingImport == null)
+        var companyProfile = _companyProfile;
+        if (companyProfile == null || _pendingImport == null)
         {
             return;
         }
@@ -331,7 +333,7 @@ public partial class TradeOrders
             orderToSave,
             new TradeOrderPricingWorkflowOptions(
                 ForceRefreshMarketData: false,
-                MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
+                MaterialPricingPolicy: companyProfile.MaterialPricingPolicy));
         if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
         {
             if (pricingResult.Status == TradeOrderPricingWorkflowStatus.CompanyPricingScopeRequired)
@@ -348,7 +350,7 @@ public partial class TradeOrders
         pricingResult.UpdatedOrder.PaymentPolicyOverride =
             TradeOrderWorkflow.ResolvePaymentPolicy(
                 pricingResult.UpdatedOrder,
-                _companyProfile.PaymentPolicy);
+                companyProfile.PaymentPolicy);
 
         var saved = await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder);
         if (!saved)

@@ -17,7 +17,7 @@ public class MarketAnalysisConfig
     public int? MaxWorldsPerItem { get; set; }
 
     /// <summary>
-    /// Route-wide tolerance for world and data-center travel.
+    /// Route-wide tolerance for world visits.
     /// 0 minimizes travel; 11 requires the cheapest trustworthy route.
     /// </summary>
     public int TravelTolerance
@@ -30,22 +30,6 @@ public class MarketAnalysisConfig
     /// Whether to enable multi-world split purchases.
     /// </summary>
     public bool EnableSplitWorld { get; set; } = false;
-
-    /// <summary>
-    /// Whether route travel starts from <see cref="HomeDataCenter"/>.
-    /// The origin affects travel comparison but does not require a purchase there.
-    /// </summary>
-    public bool StartFromHomeDataCenter { get; set; }
-
-    /// <summary>
-    /// Optional route origin used when <see cref="StartFromHomeDataCenter"/> is enabled.
-    /// </summary>
-    public string HomeDataCenter { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Determines which travel dimension is minimized first after the gil ceiling is applied.
-    /// </summary>
-    public MarketTravelPriority TravelPriority { get; set; } = MarketTravelPriority.DataCenterTransfersFirst;
 
     /// <summary>
     /// Maximum price multiplier for filtering out fraud/gouging listings.
@@ -63,12 +47,7 @@ public class MarketAnalysisConfig
         {
             MaxWorldsPerItem = settings.Get<int?>("analysis.max_worlds_per_item", null),
             EnableSplitWorld = settings.Get("analysis.enable_split_world", false),
-            TravelTolerance = settings.Get("analysis.travel_tolerance", 0),
-            StartFromHomeDataCenter = settings.Get("analysis.start_from_home_data_center", false),
-            HomeDataCenter = settings.Get("analysis.home_data_center", string.Empty) ?? string.Empty,
-            TravelPriority = settings.Get(
-                "analysis.travel_priority",
-                MarketTravelPriority.DataCenterTransfersFirst)
+            TravelTolerance = settings.Get("analysis.travel_tolerance", 0)
         };
     }
 
@@ -180,12 +159,11 @@ public class MarketPurchaseCandidate
 }
 
 /// <summary>
-/// Worlds and data centers already selected for the route being built.
+/// Worlds already selected for the route being built.
 /// </summary>
 public class MarketRouteState
 {
     private readonly HashSet<MarketWorldKey> _worlds;
-    private readonly HashSet<string> _dataCenters;
 
     public MarketRouteState()
         : this([])
@@ -195,9 +173,6 @@ public class MarketRouteState
     public MarketRouteState(IEnumerable<MarketWorldKey> worlds)
     {
         _worlds = worlds.ToHashSet();
-        _dataCenters = _worlds
-            .Select(w => w.DataCenter)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         CanonicalKey = string.Join(
             ',',
             _worlds
@@ -207,12 +182,10 @@ public class MarketRouteState
     }
 
     public IReadOnlyCollection<MarketWorldKey> Worlds => _worlds;
-    public IReadOnlyCollection<string> DataCenters => _dataCenters;
 
     internal string CanonicalKey { get; }
 
     public bool ContainsWorld(MarketWorldKey world) => _worlds.Contains(world);
-    public bool ContainsDataCenter(string dataCenter) => _dataCenters.Contains(dataCenter);
 }
 
 public sealed class RoutePenaltyBreakdown
@@ -222,50 +195,40 @@ public sealed class RoutePenaltyBreakdown
     public RoutePenaltyBreakdown(
         long gilCost,
         int addedWorldCount,
-        int addedDataCenterCount,
         long routePenalty,
         long costPlusRoutePenalty,
-        int travelTolerance,
-        MarketTravelPriority travelPriority = MarketTravelPriority.DataCenterTransfersFirst)
+        int travelTolerance)
         : this(
             gilCost,
             addedWorldCount,
-            addedDataCenterCount,
             routePenalty,
             0,
             costPlusRoutePenalty,
-            travelTolerance,
-            travelPriority)
+            travelTolerance)
     {
     }
 
     public RoutePenaltyBreakdown(
         long gilCost,
         int addedWorldCount,
-        int addedDataCenterCount,
         long routePenalty,
         long marketEvidencePenalty,
         long costPlusRoutePenalty,
-        int travelTolerance,
-        MarketTravelPriority travelPriority = MarketTravelPriority.DataCenterTransfersFirst)
+        int travelTolerance)
     {
         GilCost = gilCost;
         AddedWorldCount = addedWorldCount;
-        AddedDataCenterCount = addedDataCenterCount;
         RoutePenalty = routePenalty;
         MarketEvidencePenalty = marketEvidencePenalty;
         _costPlusRoutePenalty = costPlusRoutePenalty;
         TravelTolerance = travelTolerance;
-        TravelPriority = travelPriority;
     }
 
     public long GilCost { get; }
     public int AddedWorldCount { get; }
-    public int AddedDataCenterCount { get; }
     public long RoutePenalty { get; }
     public long MarketEvidencePenalty { get; }
     public int TravelTolerance { get; }
-    public MarketTravelPriority TravelPriority { get; }
 
     /// <summary>
     /// Returns the numeric score only when numeric ordering is valid.
@@ -328,20 +291,14 @@ public static class MarketRouteScoring
         ArgumentNullException.ThrowIfNull(config);
 
         var addedWorldCount = candidate.Worlds.Count(w => !currentRoute.ContainsWorld(w));
-        var addedDataCenterCount = candidate.Worlds
-            .Select(w => w.DataCenter)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count(dc => !currentRoute.ContainsDataCenter(dc));
 
         return new RoutePenaltyBreakdown(
             candidate.GilCost,
             addedWorldCount,
-            addedDataCenterCount,
             0,
             candidate.MarketEvidencePenalty,
             candidate.GilCost,
-            config.TravelTolerance,
-            config.TravelPriority);
+            config.TravelTolerance);
     }
 
     public static int CompareCandidates(
@@ -364,13 +321,6 @@ public static class MarketRouteScoring
                 nameof(right));
         }
 
-        if (left.TravelPriority != right.TravelPriority)
-        {
-            throw new ArgumentException(
-                "Route score comparisons require matching travel priorities.",
-                nameof(right));
-        }
-
         var premiumRate = GetMaximumPremiumRate(left.TravelTolerance);
         var cheapestCost = Math.Min(left.GilCost, right.GilCost);
         var leftEligible = IsWithinPremium(left.GilCost, cheapestCost, premiumRate);
@@ -380,20 +330,10 @@ public static class MarketRouteScoring
             return leftEligible ? -1 : 1;
         }
 
-        var firstTravelComparison = left.TravelPriority == MarketTravelPriority.WorldVisitsFirst
-            ? left.AddedWorldCount.CompareTo(right.AddedWorldCount)
-            : left.AddedDataCenterCount.CompareTo(right.AddedDataCenterCount);
-        if (firstTravelComparison != 0)
+        var travelComparison = left.AddedWorldCount.CompareTo(right.AddedWorldCount);
+        if (travelComparison != 0)
         {
-            return firstTravelComparison;
-        }
-
-        var secondTravelComparison = left.TravelPriority == MarketTravelPriority.WorldVisitsFirst
-            ? left.AddedDataCenterCount.CompareTo(right.AddedDataCenterCount)
-            : left.AddedWorldCount.CompareTo(right.AddedWorldCount);
-        if (secondTravelComparison != 0)
-        {
-            return secondTravelComparison;
+            return travelComparison;
         }
 
         var evidenceComparison = left.MarketEvidencePenalty.CompareTo(right.MarketEvidencePenalty);
