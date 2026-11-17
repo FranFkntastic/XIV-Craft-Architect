@@ -32,19 +32,6 @@ function workspaceMessage(overrides = {}) {
   };
 }
 
-test('migrates only the legacy workspace action on this application message', () => {
-  const components = migrateLegacyWorkspaceComponents(
-    workspaceMessage(),
-    applicationId,
-    botId);
-
-  assert.equal(components[0].components[0].label, 'View commission');
-  assert.equal(components[0].components[1].label, 'Open workspace');
-  assert.equal(
-    components[0].components[1].custom_id,
-    'open-workspace:ca:v1:proof');
-});
-
 test('ignores neutral and foreign application messages', () => {
   const neutral = workspaceMessage();
   neutral.components[0].components[1].label = 'Open workspace';

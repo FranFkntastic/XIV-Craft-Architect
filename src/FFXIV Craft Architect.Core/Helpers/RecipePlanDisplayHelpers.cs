@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Globalization;
-
 namespace FFXIV_Craft_Architect.Core.Models;
 
 /// <summary>
@@ -49,25 +45,6 @@ public static class RecipePlanDisplayHelpers
     }
 
     /// <summary>
-    /// Gets the color code/brush name for an acquisition source.
-    /// Returns platform-agnostic color identifiers that UI layers map to their own color system (e.g. CSS colors).
-    /// </summary>
-    public static string GetSourceColorName(AcquisitionSource source)
-    {
-        return source switch
-        {
-            AcquisitionSource.Craft => "White",
-            AcquisitionSource.MarketBuyNq => "LightBlue",
-            AcquisitionSource.MarketBuyHq => "LightGreen",
-            AcquisitionSource.UnknownSource => "Gray",
-            AcquisitionSource.VendorBuy => "LightGreen",
-            AcquisitionSource.VendorSpecialCurrency => "Gold",
-            AcquisitionSource.OnHand => "LightBlue",
-            _ => "White"
-        };
-    }
-
-    /// <summary>
     /// Gets the hex color for an acquisition source (for web/Blazor use).
     /// </summary>
     public static string GetSourceHexColor(AcquisitionSource source)
@@ -82,51 +59,6 @@ public static class RecipePlanDisplayHelpers
             AcquisitionSource.VendorSpecialCurrency => "#ffd700", // Gold
             AcquisitionSource.OnHand => "#8eb9ce",
             _ => "#ffffff"
-        };
-    }
-
-    #endregion
-
-    #region Job Icons
-
-    /// <summary>
-    /// Gets the emoji icon for a crafting job.
-    /// </summary>
-    public static string GetJobIcon(string? job)
-    {
-        return job switch
-        {
-            "Carpenter" => "🪚",
-            "Blacksmith" => "⚒️",
-            "Armorer" => "🛡️",
-            "Goldsmith" => "💍",
-            "Leatherworker" => "🧵",
-            "Weaver" => "🧶",
-            "Alchemist" => "⚗️",
-            "Culinarian" => "🍳",
-            "Company Workshop" => "🏢",
-            "Phase" => "📋",
-            _ => "•"
-        };
-    }
-
-    /// <summary>
-    /// Gets all available crafting jobs with their icons.
-    /// </summary>
-    public static Dictionary<string, string> GetAllJobIcons()
-    {
-        return new Dictionary<string, string>
-        {
-            ["Carpenter"] = "🪚",
-            ["Blacksmith"] = "⚒️",
-            ["Armorer"] = "🛡️",
-            ["Goldsmith"] = "💍",
-            ["Leatherworker"] = "🧵",
-            ["Weaver"] = "🧶",
-            ["Alchemist"] = "⚗️",
-            ["Culinarian"] = "🍳",
-            ["Company Workshop"] = "🏢",
-            ["Phase"] = "📋"
         };
     }
 
@@ -170,117 +102,6 @@ public static class RecipePlanDisplayHelpers
         return $"{price:N0}";
     }
 
-    /// <summary>
-    /// Formats a price range.
-    /// </summary>
-    public static string FormatPriceRange(decimal minPrice, decimal maxPrice)
-    {
-        if (minPrice <= 0 && maxPrice <= 0)
-        {
-            return "-";
-        }
-
-        if (minPrice == maxPrice)
-        {
-            return FormatPrice(minPrice);
-        }
-
-        return $"{FormatPriceCompact(minPrice)} - {FormatPriceCompact(maxPrice)}";
-    }
-
     #endregion
 
-    #region Quantity Formatting
-
-    /// <summary>
-    /// Formats a quantity with the item name.
-    /// </summary>
-    public static string FormatItemQuantity(string name, int quantity)
-    {
-        return $"{name} x{quantity}";
-    }
-
-    #endregion
-
-    #region Tree State Helpers
-
-    /// <summary>
-    /// Calculates the total depth of a node tree (for UI indentation).
-    /// </summary>
-    public static int CalculateMaxDepth(PlanNode node, int currentDepth = 0)
-    {
-        if (node.Children == null || !node.Children.Any())
-        {
-            return currentDepth;
-        }
-
-        var maxChildDepth = currentDepth;
-        foreach (var child in node.Children)
-        {
-            var childDepth = CalculateMaxDepth(child, currentDepth + 1);
-            maxChildDepth = Math.Max(maxChildDepth, childDepth);
-        }
-
-        return maxChildDepth;
-    }
-
-    /// <summary>
-    /// Flattens a node tree into a list for easier iteration.
-    /// </summary>
-    public static List<(PlanNode Node, int Depth)> FlattenNodeTree(List<PlanNode> rootNodes)
-    {
-        var result = new List<(PlanNode Node, int Depth)>();
-
-        foreach (var root in rootNodes)
-        {
-            FlattenNodeRecursive(root, 0, result);
-        }
-
-        return result;
-    }
-
-    private static void FlattenNodeRecursive(PlanNode node, int depth, List<(PlanNode Node, int Depth)> result)
-    {
-        result.Add((node, depth));
-
-        if (node.Children != null)
-        {
-            foreach (var child in node.Children)
-            {
-                FlattenNodeRecursive(child, depth + 1, result);
-            }
-        }
-    }
-
-    #endregion
-
-    #region Analysis Formatting
-
-    /// <summary>
-    /// Formats a savings percentage for display.
-    /// </summary>
-    public static string FormatSavingsPercent(double percent)
-    {
-        if (percent <= 0)
-        {
-            return $"{percent:F1}%";
-        }
-
-        return $"+{percent:F1}%";
-    }
-
-    /// <summary>
-    /// Gets a color indicator for savings (positive/negative).
-    /// </summary>
-    public static string GetSavingsColor(double percent)
-    {
-        return percent switch
-        {
-            > 0 => "#4caf50", // Green (savings)
-            < 0 => "#f44336", // Red (loss)
-            _ => "#888888"    // Gray (neutral)
-        };
-    }
-
-    #endregion
 }

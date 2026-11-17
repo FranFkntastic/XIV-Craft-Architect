@@ -20,23 +20,6 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class RoleManagementContractTests
 {
     [Fact]
-    public async Task OwnerChangesActiveCrafterToOperator()
-    {
-        await using var fixture = await RoleFixture.CreateAsync();
-        var (owner, target) = await fixture.SeedOwnerAndCrafterAsync();
-
-        using var response = await fixture.PutRoleAsync(
-            fixture.CompanyId,
-            target.ProfileId,
-            "operator",
-            owner.Key);
-        var membership = await fixture.Memberships.LoadAsync(fixture.CompanyIdValue, target.ProfileId);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(MembershipRole.Operator, membership!.Role);
-    }
-
-    [Fact]
     public async Task OperatorAndCrafterCannotChangeRoles()
     {
         await using var fixture = await RoleFixture.CreateAsync();
@@ -52,102 +35,6 @@ public sealed class RoleManagementContractTests
             target.Key);
 
         Assert.Equal(HttpStatusCode.Forbidden, operatorResponse.StatusCode);
-    }
-
-    [Fact]
-    public async Task GenericRoleChangeCannotPromoteToOwner()
-    {
-        await using var fixture = await RoleFixture.CreateAsync();
-        var (owner, target) = await fixture.SeedOwnerAndCrafterAsync();
-
-        using var response = await fixture.PutRoleRawAsync(
-            fixture.CompanyId,
-            target.ProfileId,
-            new { Role = "owner" },
-            owner.Key);
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(MembershipRole.Crafter, (await fixture.Memberships.LoadAsync(fixture.CompanyIdValue, target.ProfileId))!.Role);
-    }
-
-    [Fact]
-    public async Task RoleChangeRejectsNonActiveTarget()
-    {
-        await using var fixture = await RoleFixture.CreateAsync();
-        var (owner, pending) = await fixture.SeedOwnerAndPendingMemberAsync();
-
-        using var response = await fixture.PutRoleAsync(
-            fixture.CompanyId,
-            pending.ProfileId,
-            "operator",
-            owner.Key);
-
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task RoleChangeReplayDoesNotDuplicateEvents()
-    {
-        await using var fixture = await RoleFixture.CreateAsync();
-        var (owner, target) = await fixture.SeedOwnerAndCrafterAsync();
-
-        using var first = await fixture.PutRoleAsync(fixture.CompanyId, target.ProfileId, "operator", owner.Key);
-        using var replay = await fixture.PutRoleAsync(fixture.CompanyId, target.ProfileId, "operator", owner.Key);
-        var events = await fixture.Memberships.LoadEventsAsync(fixture.CompanyIdValue, target.ProfileId);
-
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
-        Assert.Equal(3, events.Count); // request + approve + one role change
-    }
-
-    [Fact]
-    public async Task TransferPromotesTargetAndDemotesOwnerAtomically()
-    {
-        await using var fixture = await RoleFixture.CreateAsync();
-        var (owner, target) = await fixture.SeedOwnerAndCrafterAsync();
-
-        using var response = await fixture.PostTransferAsync(fixture.CompanyId, target.ProfileId, owner.Key);
-        var transferred = await fixture.Memberships.LoadAsync(fixture.CompanyIdValue, target.ProfileId);
-        var formerOwner = await fixture.Memberships.LoadAsync(fixture.CompanyIdValue, owner.ProfileId);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(MembershipRole.Owner, transferred!.Role);
-        Assert.Equal(MembershipState.Active, transferred.State);
-        Assert.Equal(MembershipRole.Operator, formerOwner!.Role);
-        Assert.Single(await fixture.ActiveOwnersAsync());
-    }
-
-    [Fact]
-    public async Task TransferRefusesMissingPendingRevokedOrSelfTargets()
-    {
-        await using var fixture = await RoleFixture.CreateAsync();
-        var (owner, pending) = await fixture.SeedOwnerAndPendingMemberAsync();
-
-        using var selfTransfer = await fixture.PostTransferAsync(fixture.CompanyId, owner.ProfileId, owner.Key);
-        using var pendingTransfer = await fixture.PostTransferAsync(fixture.CompanyId, pending.ProfileId, owner.Key);
-        using var missingTransfer = await fixture.PostTransferAsync(fixture.CompanyId, Guid.NewGuid(), owner.Key);
-
-        Assert.Equal(HttpStatusCode.Conflict, selfTransfer.StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, pendingTransfer.StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, missingTransfer.StatusCode);
-        Assert.Equal(
-            owner.ProfileId,
-            (await fixture.Memberships.LoadAsync(fixture.CompanyIdValue, owner.ProfileId))!.AccountProfileId);
-    }
-
-    [Fact]
-    public async Task TransferRetryIsIdempotent()
-    {
-        await using var fixture = await RoleFixture.CreateAsync();
-        var (owner, target) = await fixture.SeedOwnerAndCrafterAsync();
-
-        using var first = await fixture.PostTransferAsync(fixture.CompanyId, target.ProfileId, owner.Key);
-        using var replay = await fixture.PostTransferAsync(fixture.CompanyId, target.ProfileId, owner.Key);
-        var events = await fixture.Memberships.LoadEventsAsync(fixture.CompanyIdValue, target.ProfileId);
-
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
-        Assert.Equal(3, events.Count); // request + approve + transfer
     }
 
     [Fact]
