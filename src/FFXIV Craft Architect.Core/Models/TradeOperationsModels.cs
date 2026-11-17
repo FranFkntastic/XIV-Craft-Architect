@@ -326,6 +326,10 @@ public sealed record TradeMaterialPricingPolicy
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public decimal MaximumConsolidationPremiumPercent { get; init; } = 5m;
     public int MaximumWorldStops { get; init; } = 8;
+
+    // Retired route dimension. Routing ignores it; it is read only so policies and
+    // quotes stored before its retirement keep their original fingerprints.
+    public int? MaximumDataCenterTransfers { get; init; }
     public bool AllowSplitPurchases { get; init; } = true;
     public decimal SafetyAllowancePercent { get; init; } = 10m;
     public decimal MinimumSafetyAllowanceGil { get; init; } = 10_000m;

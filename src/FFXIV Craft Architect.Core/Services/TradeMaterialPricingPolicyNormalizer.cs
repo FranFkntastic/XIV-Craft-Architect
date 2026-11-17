@@ -32,16 +32,23 @@ public static class TradeMaterialPricingPolicyNormalizer
     public static string Fingerprint(TradeMaterialPricingPolicy? policy)
     {
         var value = Normalize(policy);
-        var canonical = string.Join('|',
+        var routeDimensions = value.MaximumDataCenterTransfers is { } legacyTransfers
+            ? new[]
+            {
+                value.MaximumWorldStops.ToString(CultureInfo.InvariantCulture),
+                Math.Clamp(legacyTransfers, 0, 8).ToString(CultureInfo.InvariantCulture)
+            }
+            : [value.MaximumWorldStops.ToString(CultureInfo.InvariantCulture)];
+        var canonical = string.Join('|', [
             value.SchemaVersion.ToString(CultureInfo.InvariantCulture),
             value.MaximumConsolidationPremiumPercent.ToString(CultureInfo.InvariantCulture),
-            value.MaximumWorldStops.ToString(CultureInfo.InvariantCulture),
+            .. routeDimensions,
             value.AllowSplitPurchases ? "1" : "0",
             value.SafetyAllowancePercent.ToString(CultureInfo.InvariantCulture),
             value.MinimumSafetyAllowanceGil.ToString(CultureInfo.InvariantCulture),
             value.MaximumSafetyAllowanceGil.ToString(CultureInfo.InvariantCulture),
             value.QuoteLifetimeMinutes.ToString(CultureInfo.InvariantCulture),
-            value.MaximumEvidenceAgeMinutes.ToString(CultureInfo.InvariantCulture));
+            value.MaximumEvidenceAgeMinutes.ToString(CultureInfo.InvariantCulture)]);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))[..16];
     }
 }
