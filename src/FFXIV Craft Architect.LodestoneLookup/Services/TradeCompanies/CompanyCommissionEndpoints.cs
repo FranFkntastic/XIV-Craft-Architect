@@ -1511,11 +1511,17 @@ public static class CompanyCommissionEndpoints
             evidence.ProfileId,
             claim.ClaimantCharacter.LodestoneCharacterId,
             cancellationToken);
-        var rebuilt = BindClaimToAccount(claim, reused, evidence,
-            recorded.ActiveClaim?.CrafterId == reused && reused.HasValue);
-        return HostedCompanyCommissionService.MatchesRecordedFingerprint(rebuilt, recorded)
-            ? rebuilt
-            : claim;
+        // The claim may have been confirmed after it committed, so the current claim
+        // cannot say which form was recorded; accept whichever form matches.
+        foreach (var confirmed in new[] { false, true })
+        {
+            var rebuilt = BindClaimToAccount(claim, reused, evidence, confirmed && reused.HasValue);
+            if (HostedCompanyCommissionService.MatchesRecordedFingerprint(rebuilt, recorded))
+            {
+                return rebuilt;
+            }
+        }
+        return claim;
     }
 
     private static IResult ClaimRequiresAccount() =>
