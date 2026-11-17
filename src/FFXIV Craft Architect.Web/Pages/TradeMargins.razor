@@ -1,0 +1,434 @@
+@page "/trade/margins"
+@using System.Globalization
+@using Franthropy.Web.Icons
+@using FFXIV_Craft_Architect.Web.Shared.TablePrimitives
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+@using FFXIV_Craft_Architect.Web.Services.ProfileHosting
+@inject TradeOperationsPersistenceService Persistence
+@inject TradeWorkspaceProfileResolver Profiles
+@inject CompanyHubClient Hubs
+@inject ProfileSyncService Sync
+@inject IGarlandService Garland
+@inject TradeMarginCalculator Calculator
+@inject ISettingsService Settings
+@inject AppState AppState
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+@implements IAsyncDisposable
+
+<div class="margins-backdrop @(_glass ? "franthropy-glass-backdrop" : null)">
+<div class="trade-margins-page">
+    <header class="margins-header"><span>@_profile?.Name</span><h1>Margins</h1></header>
+    <div class="@Glass("card")">
+    <div class="margins-toolbar @Glass("toolbar")">
+        <div class="add-item">
+            <input type="search" aria-label="Add item" placeholder="Add item" autocomplete="off"
+                   value="@_search" disabled="@(_rows.Count >= 500)" @oninput="SearchAsync" @onkeydown="SearchKeyAsync"
+                   aria-expanded="@(_matches.Count > 0)" aria-controls="margin-results" />
+            @if (_matches.Count > 0 && _rows.Count < 500)
+            {
+                <div id="margin-results" class="add-results @Glass("dropdown")" role="listbox" aria-label="Items">
+                    @foreach (var match in _matches)
+                    {
+                        <button type="button" role="option" aria-selected="@(match == _matches[_activeMatch])"
+                                @onclick="() => AddAsync(match)">
+                            <ItemIcon IconId="@match.Object.IconId" Name="@match.Object.Name" />
+                            @match.Object.Name
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+        <span class="toolbar-spacer"></span>
+        <button type="button" class="margin-button" disabled="@_busy" @onclick="RefreshAsync">@(_refreshing ? "Refreshing…" : "↻ Refresh prices")</button>
+    </div>
+    <div @ref="_tableWrap" class="margins-table-wrap @Glass("table")">
+        <WebDataTable TItem="MarginRow" TColumnId="Column" Items="@SortedRows" Columns="@Columns"
+                      SortState="@_sort" SortChanged="value => _sort = value" GetRowKey="row => row.ItemId.ToString()">
+            <EmptyContent>No items yet.</EmptyContent>
+        </WebDataTable>
+    </div>
+    <footer class="margins-summary @Glass("footer")">
+        <span><strong>@_rows.Count</strong> @(_rows.Count == 1 ? "item" : "items")</span>
+        @if (_lastCheckedUtc is { } checkedAt) { <span title="@checkedAt.ToLocalTime().ToString("f")">checked @(RelativeAge(checkedAt) == "now" ? "just now" : RelativeAge(checkedAt) + " ago")</span> }
+        <span><strong>@(_profile == null ? "—" : Rate.ToString("N0"))</strong> gil per synth</span>
+        @if (_profile?.CommissionPricingScope is { } scope)
+        {
+            <span><strong>@scope.DataCenter</strong> · @scope.Region</span>
+        }
+    </footer>
+    </div>
+</div>
+</div>
+
+@code {
+    [Parameter, SupplyParameterFromQuery(Name = "company")] public string? Company { get; set; }
+    private TradeCompanyProfile? _profile;
+    private long? _revision;
+    private bool _hosted, _glass = true, _busy, _refreshing, _disposed;
+    private DateTime? _lastCheckedUtc;
+    private readonly CancellationTokenSource _lifetime = new();
+    private Task? _ageLoop;
+    private string _search = "";
+    private int _searchGeneration, _activeMatch;
+    private int? _editingSale;
+    private string? _loadedCompany;
+    private bool _loaded;
+    private List<GarlandSearchResult> _matches = [];
+    private List<MarginRow> _rows = [];
+    private readonly Dictionary<int, string> _itemNames = [];
+    private readonly SemaphoreSlim _gate = new(1);
+    private ElementReference _tableWrap;
+    private IJSObjectReference? _module;
+    private WebTableSortState<Column> _sort = WebTableSortState<Column>.Unsorted;
+    private decimal Rate => _profile == null ? 0 : TradePaymentPolicyNormalizer.Normalize(_profile.PaymentPolicy).LaborGilPerSynth;
+    private string? Glass(string surface) => _glass ? $"franthropy-glass-{surface}" : null;
+    private enum Column { Item, Sale, Materials, Labor, Total, Margin, Percent, Age, Remove }
+    private sealed class MarginRow(int itemId, long? sale)
+    {
+        public int ItemId { get; } = itemId;
+        public long? Sale { get; set; } = sale;
+        public long? SavedSale { get; set; } = sale;
+        public string ItemName { get; set; } = "Item";
+        public TradeMarginCost? Cost { get; set; }
+        public string Name => Cost?.Name ?? ItemName;
+    }
+    // Calculator costs one full root batch; every displayed figure is per unit sold.
+    private static decimal? PerUnit(MarginRow row, decimal? batch) => batch / Math.Max(1, row.Cost?.Units ?? 1);
+    private decimal? Materials(MarginRow row) => PerUnit(row, row.Cost?.Materials);
+    private decimal? Labor(MarginRow row) => PerUnit(row, row.Cost?.Synths * Rate);
+    private decimal? Total(MarginRow row) => Materials(row) is { } materials && Labor(row) is { } labor ? materials + labor : null;
+    private decimal? MarginGil(MarginRow row) => row.Sale is { } sale && Total(row) is { } total ? sale - total : null;
+    private decimal? Percent(MarginRow row) => row.Sale > 0 && MarginGil(row) is { } margin ? margin / row.Sale * 100 : null;
+    private static string Number(decimal? value) => value?.ToString("N0") ?? "—";
+    private string Sign(MarginRow row) => MarginGil(row) < 0 ? "is-loss" : "is-gain";
+    private object? SortValue(MarginRow row) => _sort.Column switch
+    {
+        Column.Item => row.Name, Column.Sale => row.SavedSale, Column.Materials => Materials(row),
+        Column.Labor => Labor(row), Column.Total => Total(row), Column.Margin => row.SavedSale - Total(row),
+        Column.Percent => row.SavedSale > 0 ? (row.SavedSale - Total(row)) / row.SavedSale * 100 : null,
+        Column.Age => row.Cost?.OldestPriceUtc, _ => null
+    };
+    private IReadOnlyList<MarginRow> SortedRows => _sort.Column == null ? _rows :
+        (_sort.Descending ? _rows.OrderBy(row => SortValue(row) == null).ThenByDescending(SortValue)
+            : _rows.OrderBy(row => SortValue(row) == null).ThenBy(SortValue)).ToArray();
+    private IReadOnlyList<WebTableColumn<MarginRow, Column>> Columns =>
+    [
+        new() { Id = Column.Item, Header = "Item", Size = new(268), CellTemplate = row => @<div class="item-cell"><ItemIcon IconId="@(row.Cost?.IconId ?? 0)" Name="@row.Name" /><span title="@row.Name">@row.Name</span></div> },
+new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<input class="sale-input" inputmode="numeric" maxlength="19" aria-label="@(row.Name + " sale price")" value="@(_editingSale == row.ItemId ? row.Sale?.ToString(CultureInfo.InvariantCulture) : row.Sale?.ToString("N0", CultureInfo.InvariantCulture))" @onfocus="() => _editingSale = row.ItemId" @onblur="() => _editingSale = null" @oninput="e => PreviewSale(row, e)" @onchange="() => SaveSaleAsync(row)" /> },
+        new() { Id = Column.Materials, Header = "Materials", Size = new(150), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@if (row.Cost?.Issue is { } issue) { <span class="missing">@issue</span> } else if (row.Cost?.Missing.Count > 0) { <span class="missing">@string.Join(", ", row.Cost.Missing) unpriced</span> } else { @Number(Materials(row)) }</span> },
+        new() { Id = Column.Labor, Header = "Labor", Size = new(100), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span>@Number(Labor(row))<span class="sub">@(row.Cost?.Synths is { } synths ? row.Cost.Units > 1 ? $"{synths:N0} synths per {row.Cost.Units}" : $"{synths:N0} synths" : "")</span></span> },
+        WebTableColumn<MarginRow, Column>.Text(Column.Total, "Total cost", row => Number(Total(row)), 116, alignEnd: true, headerCssClass: "is-align-end"),
+        new() { Id = Column.Margin, Header = "Margin", Size = new(110), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@Number(MarginGil(row))</span> },
+        new() { Id = Column.Percent, Header = "Margin %", Size = new(84), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellCssClassSelector = Sign, CellTemplate = row => @<span>@(Percent(row) is { } percent ? $"{percent:N1}%" : "—")</span> },
+        new() { Id = Column.Age, Header = "Prices", Size = new(74, 50), HeaderCssClass = "is-align-end", CellCssClass = "is-align-end", CellTemplate = row => @<span class="age @(row.Cost?.UnknownPriceAge == true || row.Cost?.OldestPriceUtc <= DateTime.UtcNow.AddDays(-1) ? "is-stale" : null)" title="@AgeTitle(row)">@Age(row)</span> },
+        new() { Id = Column.Remove, Header = "", Size = new(44, 44), Sortable = false, CellTemplate = row => @<button type="button" class="remove-btn" aria-label="@("Remove " + row.Name)" @onclick="() => RemoveAsync(row)">×</button> }
+    ];
+    private static string Age(MarginRow row)
+    {
+        if (row.Cost?.UnknownPriceAge == true) return "?";
+        if (row.Cost?.OldestPriceUtc is not { } time) return "—";
+        return RelativeAge(time);
+    }
+    private static string AgeTitle(MarginRow row) => row.Cost?.UnknownPriceAge == true ? "Price age unknown" :
+        row.Cost?.OldestPriceUtc is { } time ? $"Oldest material price: {time.ToLocalTime():f}" : "Oldest material price";
+    private static string RelativeAge(DateTime time)
+    {
+        var age = DateTime.UtcNow - time;
+        return age.TotalDays >= 1 ? $"{(int)age.TotalDays} d" : age.TotalHours >= 1 ? $"{(int)age.TotalHours} h" : age.TotalMinutes >= 1 ? $"{(int)age.TotalMinutes} min" : "now";
+    }
+    protected override void OnInitialized()
+    {
+        AppState.OnStateChanged += OnStateChanged;
+        _ageLoop = UpdateAgesAsync();
+    }
+    private async Task UpdateAgesAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_lifetime.Token))
+                await InvokeAsync(() => { if (!_disposed) StateHasChanged(); });
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { ReportError(ex); }
+    }
+    private void ReportError(Exception ex)
+    {
+        if (_disposed) return;
+        Snackbar.Add(ex is CompanyHubRequestException { ErrorCode: "invalid_margin_items" }
+            ? "Could not save margin items. Use at most 500 distinct items with non-negative sale prices."
+            : $"Margins: {ex.Message}", Severity.Error);
+    }
+    protected override Task OnParametersSetAsync() => !_loaded || Company != _loadedCompany ? LoadAsync() : Task.CompletedTask;
+    private void OnStateChanged(AppStateChange change)
+    {
+        if (change.HasScope(AppStateChangeScope.Settings) || change.HasScope(AppStateChangeScope.TradeOperationsData))
+            _ = ReloadSafelyAsync();
+    }
+    private async Task ReloadSafelyAsync()
+    {
+        try { if (!_disposed) await InvokeAsync(LoadAsync); }
+        catch (Exception ex) { ReportError(ex); }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                var module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/trade-margins.js");
+                if (_disposed) { await ReleaseModuleAsync(module); return; }
+                _module = module;
+                await module.InvokeVoidAsync("attach", _tableWrap);
+            }
+            catch (Exception ex) { ReportError(ex); }
+        }
+    }
+    private async Task LoadAsync()
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (_disposed) return;
+            _glass = await Settings.GetAsync("ui.glass_surfaces", true);
+            var selected = await TradeCompanyContext.ResolveAsync(Persistence, Hubs, Company);
+            var resolved = await Profiles.ResolveAsync(selected.Id);
+            var previous = _profile;
+            var scopeChanged = previous?.Id != resolved.Profile.Id ||
+                previous?.CommissionPricingScope != resolved.Profile.CommissionPricingScope;
+            if (scopeChanged) _lastCheckedUtc = null;
+            var unchanged = !scopeChanged && _revision == resolved.HostedRevision &&
+                (previous?.MarginItems ?? []).SequenceEqual(resolved.Profile.MarginItems ?? []);
+            var previousRows = _rows.ToDictionary(row => row.ItemId);
+            _profile = resolved.Profile;
+            _revision = resolved.HostedRevision;
+            _hosted = resolved.IsHosted;
+            if (!unchanged) RebuildRows(previousRows, scopeChanged, preserveEdit: previous?.Id == _profile.Id);
+            _loaded = true;
+            _loadedCompany = null;
+            if (Company != null) { Company = null; Navigation.NavigateTo("trade/margins", replace: true); }
+            await CalculateAsync(false, onlyMissing: true);
+        }
+        catch (Exception ex) { ReportError(ex); }
+        finally { _gate.Release(); if (!_disposed) StateHasChanged(); }
+    }
+    private void RebuildRows(Dictionary<int, MarginRow> previousRows, bool scopeChanged, bool preserveEdit = true)
+    {
+        _rows = (_profile?.MarginItems ?? []).DistinctBy(item => item.ItemId).Select(item =>
+        {
+            previousRows.TryGetValue(item.ItemId, out var prior);
+            return new MarginRow(item.ItemId, item.SalePrice)
+            {
+                Sale = preserveEdit && _editingSale == item.ItemId && prior != null ? prior.Sale : item.SalePrice,
+                ItemName = prior?.Name ?? _itemNames.GetValueOrDefault(item.ItemId, "Item"),
+                Cost = scopeChanged ? null : prior?.Cost
+            };
+        }).ToList();
+    }
+    private async Task CalculateAsync(bool refresh, bool onlyMissing = false)
+    {
+        if (_disposed || (onlyMissing && _rows.All(row => row.Cost != null && row.Cost.Issue is not ("Pricing failed" or "Item data unavailable")))) return;
+        _busy = true;
+        _refreshing = refresh;
+        StateHasChanged();
+        try
+        {
+            foreach (var row in _rows)
+            {
+                if (_disposed) return;
+                if (onlyMissing && row.Cost != null && row.Cost.Issue is not ("Pricing failed" or "Item data unavailable")) continue;
+                try
+                {
+                    row.Cost = await Calculator.CalculateAsync(row.ItemId, _profile?.CommissionPricingScope, refresh, _lifetime.Token);
+                    if (row.Cost.Name == "Item unavailable" && row.ItemName != "Item")
+                        row.Cost = row.Cost with { Name = row.ItemName };
+                    row.ItemName = row.Cost.Name;
+                }
+                catch (Exception ex)
+                {
+                    if (!_disposed && row.ItemName == "Item")
+                    {
+                        try { row.ItemName = (await Garland.GetItemAsync(row.ItemId, _lifetime.Token))?.Name ?? "Item"; }
+                        catch (Exception) { /* Preserve the original pricing failure if name lookup also fails. */ }
+                    }
+                    row.Cost = new(row.Name, row.Cost?.IconId ?? 0, null, null, null, [], "Pricing failed");
+                    ReportError(ex);
+                }
+                if (!_disposed) StateHasChanged();
+            }
+            if (refresh && !_disposed) _lastCheckedUtc = DateTime.UtcNow;
+        }
+        finally { _busy = false; _refreshing = false; }
+    }
+    private async Task RefreshAsync()
+    {
+        if (_busy) return;
+        await _gate.WaitAsync();
+        try { if (!_disposed) await CalculateAsync(true); }
+        catch (Exception ex) { ReportError(ex); }
+        finally { _gate.Release(); }
+    }
+    private async Task SearchAsync(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? "";
+        var generation = ++_searchGeneration;
+        _matches = [];
+        if (_search.Trim().Length < 2) return;
+        try
+        {
+            var matches = await Garland.SearchAsync(_search);
+            if (!_disposed && generation == _searchGeneration)
+            {
+                _activeMatch = 0;
+                _matches = matches.Where(item => item.Type == "item" && _rows.All(row => row.ItemId != item.Id)).Take(6).ToList();
+            }
+        }
+        catch (Exception ex) { if (generation == _searchGeneration) ReportError(ex); }
+    }
+    private async Task SearchKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") { ++_searchGeneration; _matches = []; }
+        if (_matches.Count == 0) return;
+        if (e.Key == "ArrowDown") _activeMatch = (_activeMatch + 1) % _matches.Count;
+        if (e.Key == "ArrowUp") _activeMatch = (_activeMatch + _matches.Count - 1) % _matches.Count;
+        if (e.Key == "Enter") await AddAsync(_matches[_activeMatch]);
+    }
+    private async Task SaveItemsAsync(Func<IReadOnlyList<TradeMarginItem>, IReadOnlyList<TradeMarginItem>> edit)
+    {
+        if (_disposed) return;
+        if (_profile == null) throw new InvalidOperationException("Company is unavailable.");
+        // Rebase only this item edit onto the latest profile; retry one concurrent hosted write.
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var current = await Profiles.ResolveAsync(_profile.Id);
+            current.Profile.MarginItems = edit(current.Profile.MarginItems ?? []);
+            try
+            {
+                if (current.IsHosted)
+                    _revision = await Hubs.UpdateWorkspaceProfileAsync(current.Profile, current.HostedRevision!.Value, updateMarginItems: true);
+                else
+                {
+                    if (!await Persistence.SaveCompanyProfileAsync(current.Profile)) throw new InvalidOperationException("Could not save company.");
+                    // Persistence has succeeded; sync failure must not roll the displayed value back.
+                    try { await Sync.QueueLocalSaveAsync(ProfileSyncCollections.TradeCompanyProfiles, current.Profile.Id.ToString("D")); }
+                    catch (Exception ex) { ReportError(ex); }
+                }
+                var scopeChanged = _profile.CommissionPricingScope != current.Profile.CommissionPricingScope;
+                _profile = current.Profile;
+                RebuildRows(_rows.ToDictionary(row => row.ItemId), scopeChanged);
+                await CalculateAsync(false, onlyMissing: true);
+                return;
+            }
+            catch (CompanyHubRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Conflict && attempt == 0) { }
+        }
+    }
+    private async Task AddAsync(GarlandSearchResult item)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (_profile == null || _rows.Count >= 500 || _rows.Any(row => row.ItemId == item.Id)) return;
+            _itemNames[item.Id] = item.Object.Name;
+            await SaveItemsAsync(items =>
+            {
+                if (items.Any(existing => existing.ItemId == item.Id)) return items;
+                if (items.Count >= 500) throw new InvalidOperationException("Margins supports at most 500 items.");
+                return items.Append(new TradeMarginItem(item.Id)).ToArray();
+            });
+            var added = _rows.FirstOrDefault(row => row.ItemId == item.Id);
+            if (added != null) added.ItemName = item.Object.Name;
+            ++_searchGeneration; _search = ""; _matches = [];
+        }
+        catch (Exception ex) { ReportError(ex); }
+        finally { _gate.Release(); }
+    }
+    private static void PreviewSale(MarginRow row, ChangeEventArgs e)
+    {
+        var text = new string((e.Value?.ToString() ?? "").Where(char.IsAsciiDigit).ToArray());
+        row.Sale = long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var value) && value >= 0 ? value : null;
+    }
+    private async Task SaveSaleAsync(MarginRow row)
+    {
+        var sale = row.Sale;
+        await _gate.WaitAsync();
+        try
+        {
+            await SaveItemsAsync(items => items.Select(item => item.ItemId == row.ItemId ? item with { SalePrice = sale } : item).ToArray());
+        }
+        catch (Exception ex)
+        {
+            row.Sale = row.SavedSale;
+            var displayed = _rows.FirstOrDefault(item => item.ItemId == row.ItemId);
+            if (displayed != null) displayed.Sale = displayed.SavedSale;
+            ReportError(ex);
+        }
+        finally { _gate.Release(); }
+    }
+    private async Task RemoveAsync(MarginRow row)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            var companyId = _profile?.Id;
+            var removed = new TradeMarginItem(row.ItemId, row.SavedSale);
+            await SaveItemsAsync(items => items.Where(item => item.ItemId != row.ItemId).ToArray());
+            if (!_disposed) Snackbar.Add($"Removed {row.Name}.", Severity.Normal, options =>
+            {
+                options.Action = "Undo";
+                options.Onclick = async _ => await UndoRemoveAsync(companyId, removed);
+            });
+        }
+        catch (Exception ex) { ReportError(ex); }
+        finally { _gate.Release(); }
+    }
+    private async Task UndoRemoveAsync(Guid? companyId, TradeMarginItem removed)
+    {
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                await _gate.WaitAsync();
+                try
+                {
+                    if (_disposed) return;
+                    if (_profile?.Id != companyId) throw new InvalidOperationException("The active company changed; the item was not restored.");
+                    await SaveItemsAsync(items =>
+                    {
+                        if (items.Any(item => item.ItemId == removed.ItemId)) return items;
+                        if (items.Count >= 500) throw new InvalidOperationException("Margins supports at most 500 items.");
+                        return items.Append(removed).ToArray();
+                    });
+                }
+                finally { _gate.Release(); if (!_disposed) StateHasChanged(); }
+            });
+        }
+        catch (Exception ex) { ReportError(ex); }
+    }
+    private async ValueTask ReleaseModuleAsync(IJSObjectReference module)
+    {
+        try { await module.InvokeVoidAsync("detach", _tableWrap); }
+        catch (JSDisconnectedException) { }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+        catch (JSException ex) { ReportError(ex); }
+        finally
+        {
+            try { await module.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
+            catch (OperationCanceledException) { }
+            catch (ObjectDisposedException) { }
+            catch (JSException ex) { ReportError(ex); }
+        }
+    }
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        AppState.OnStateChanged -= OnStateChanged;
+        _lifetime.Cancel();
+        if (_ageLoop != null) await _ageLoop;
+        if (_module is { } module) { _module = null; await ReleaseModuleAsync(module); }
+        _lifetime.Dispose();
+    }
+}

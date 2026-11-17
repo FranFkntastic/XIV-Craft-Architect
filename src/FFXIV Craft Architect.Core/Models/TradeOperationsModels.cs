@@ -29,6 +29,8 @@ public sealed class TradeCompanyDiscordInstallationBinding
     public DateTime? HealthCheckedAtUtc { get; set; }
 }
 
+public sealed record TradeMarginItem(int ItemId, long? SalePrice = null);
+
 public sealed class TradeCompanyProfile
 {
     public const int CurrentSchemaVersion = 4;
@@ -45,6 +47,7 @@ public sealed class TradeCompanyProfile
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;
     public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.LegacyDefault;
     public TradeCompanyPricingScope? CommissionPricingScope { get; set; }
+    public IReadOnlyList<TradeMarginItem> MarginItems { get; set; } = [];
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 

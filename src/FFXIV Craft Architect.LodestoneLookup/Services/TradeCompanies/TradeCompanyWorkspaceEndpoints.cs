@@ -11,7 +11,9 @@ public sealed record TradeCompanyWorkspaceProfileResponse(
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     TradeCompanyPricingScope? CommissionPricingScope = null,
-    string? Description = null);
+    string? Description = null,
+    IReadOnlyList<TradeMarginItem>? MarginItems = null,
+    long Revision = 0);
 
 public sealed record TradeCompanyOrderAdoptionRequest(
     CompanyRecordRevision SourceRevision,
@@ -51,9 +53,8 @@ public static class TradeCompanyWorkspaceEndpoints
                     return Results.Unauthorized();
                 }
 
-                var profile = await companies.LoadCompanyProfileAsync(
-                    access,
-                    cancellationToken);
+                var snapshot = await companies.LoadCompanyProfileSnapshotAsync(access, cancellationToken);
+                var profile = snapshot?.Profile;
                 return profile == null
                     ? Results.NotFound()
                     : Results.Ok(new TradeCompanyWorkspaceProfileResponse(
@@ -64,7 +65,9 @@ public static class TradeCompanyWorkspaceEndpoints
                         profile.CreatedAtUtc,
                         profile.UpdatedAtUtc,
                         profile.CommissionPricingScope,
-                        profile.Description));
+                        profile.Description,
+                        profile.MarginItems,
+                        snapshot!.Value.Revision));
             });
 
         companies.MapPost(

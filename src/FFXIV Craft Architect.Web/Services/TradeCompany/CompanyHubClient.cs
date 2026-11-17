@@ -95,6 +95,51 @@ public sealed class CompanyHubClient(
                 "The selected company workspace returned an empty profile.");
     }
 
+    public async Task<TradeCompanyWorkspaceProfile?> TryLoadWorkspaceProfileAsync(
+        Guid companyId, CancellationToken cancellationToken = default)
+    {
+        var connection = await localState.LoadConnectionSettingsAsync();
+        if (!connection.IsConfigured)
+        {
+            return null;
+        }
+
+        using var response = await SendAsync(HttpMethod.Get,
+            $"trade/v1/companies/{companyId:D}/workspace-profile", null, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        var profile = await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Company workspace returned an empty response.");
+        if (profile.Revision <= 0)
+        {
+            throw new InvalidOperationException("Company workspace requires an updated helper.");
+        }
+
+        return profile;
+    }
+
+    public async Task<long> UpdateWorkspaceProfileAsync(TradeCompanyProfile profile, long expectedRevision,
+        CancellationToken cancellationToken = default, bool updateMarginItems = false)
+    {
+        if (!updateMarginItems)
+        {
+            throw new InvalidOperationException("Margin updates must be explicit.");
+        }
+
+        using var response = await SendAsync(HttpMethod.Put,
+            $"trade/v1/companies/{profile.Id:D}/margin-items",
+            new { ExpectedProfileRevision = expectedRevision, UpdateMarginItems = true, profile.MarginItems }, cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        var result = await response.Content.ReadFromJsonAsync<MarginItemsUpdateResponse>(JsonOptions, cancellationToken);
+        return result?.ProfileRevision ?? throw new InvalidOperationException("Company update returned an empty response.");
+    }
+
+    private sealed record MarginItemsUpdateResponse(long ProfileRevision);
+
     public async Task UpdatePolicyAsync(TradeCompanyProfile profile, long expectedProfileRevision,
         CancellationToken cancellationToken = default)
     {
@@ -543,7 +588,9 @@ public sealed record TradeCompanyWorkspaceProfile(
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     TradeCompanyPricingScope? CommissionPricingScope = null,
-    string? Description = null)
+    string? Description = null,
+    IReadOnlyList<TradeMarginItem>? MarginItems = null,
+    long Revision = 0)
 {
     public TradeCompanyProfile ToTransientProfile() => new()
     {
@@ -553,6 +600,7 @@ public sealed record TradeCompanyWorkspaceProfile(
         PaymentPolicy = PaymentPolicy,
         CommissionPricingScope = CommissionPricingScope,
         Description = Description,
+        MarginItems = MarginItems ?? [],
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,
         CreatedAtUtc = CreatedAtUtc,

@@ -580,6 +580,20 @@ public sealed partial class ProfileHostedTradeCompanyService(
         return new CompanyRecordRevision(profile.ServerRevision);
     }
 
+    public async Task<(TradeCompanyProfile Profile, long Revision)?> LoadCompanyProfileSnapshotAsync(
+        TradeCompanyAccessContext access, CancellationToken cancellationToken = default)
+    {
+        var stored = await profiles.LoadObjectAsync(RequireHostProfile(access),
+            ProfileSyncCollections.TradeCompanyProfiles, access.CompanyId.ToString(), cancellationToken);
+        if (stored is not { Deleted: false })
+        {
+            return null;
+        }
+
+        var profile = JsonSerializer.Deserialize<TradeCompanyProfile>(stored.PayloadJson, JsonOptions);
+        return profile?.Id == access.CompanyId.Value ? (profile, stored.Revision) : null;
+    }
+
     public async Task<TradeCompanyProfile?> LoadCompanyProfileAsync(
         TradeCompanyAccessContext access,
         CancellationToken cancellationToken = default) =>
