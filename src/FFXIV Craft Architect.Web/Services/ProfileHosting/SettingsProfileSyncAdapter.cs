@@ -41,6 +41,11 @@ public sealed class SettingsProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task ApplyRemoteObjectAsync(ProfileSyncObjectEnvelope envelope, CancellationToken ct)
     {
+        if (IgnoreUnsyncedKey(envelope.ObjectId))
+        {
+            return;
+        }
+
         await _settings.ApplyHostedSettingAsync(
             envelope.ObjectId,
             envelope.PayloadJson,
@@ -49,6 +54,26 @@ public sealed class SettingsProfileSyncAdapter : IProfileSyncCollectionAdapter
 
     public async Task DeleteLocalObjectAsync(string objectId, CancellationToken ct)
     {
+        if (IgnoreUnsyncedKey(objectId))
+        {
+            return;
+        }
+
         await _settings.ApplyHostedSettingAsync(objectId, "null", ct);
+    }
+
+    // A hosted profile keeps rows for settings that later stopped syncing (retired or made
+    // browser-local). They must never be applied, but one stale row must not fail the whole
+    // replay either — that withholds every order's details behind the restore banner.
+    private static bool IgnoreUnsyncedKey(string key)
+    {
+        if (ProfileSyncLocalStateService.IsSyncedSetting(key))
+        {
+            return false;
+        }
+
+        Console.Error.WriteLine(
+            $"[ProfileSync] Ignored hosted setting '{key}': it is not synced by this version.");
+        return true;
     }
 }
