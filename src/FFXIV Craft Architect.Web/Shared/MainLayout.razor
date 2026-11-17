@@ -406,11 +406,6 @@
             var procurementEnableSplits = await Settings.GetAsync("procurement.enable_split_world_purchases", true);
             var procurementTravelTolerance = await Settings.GetAsync("procurement.travel_tolerance", 0);
             var procurementExclusionDuration = await Settings.GetAsync("procurement.world_exclusion_duration_minutes", 60);
-            var procurementStartFromHome = await Settings.GetAsync("procurement.start_from_home_data_center", false);
-            var procurementTravelPriority = ParseTravelPriority(
-                await Settings.GetAsync(
-                    "procurement.travel_priority",
-                    nameof(MarketTravelPriority.DataCenterTransfersFirst)));
 
             AppState.SetSecretDebugToolsEnabled(secretDebugToolsEnabled);
             AppState.SetBenchmarkRouteDeferral(
@@ -424,8 +419,6 @@
                 procurementEnableSplits,
                 procurementTravelTolerance,
                 procurementExclusionDuration);
-            AppState.SetProcurementHomeDataCenterOrigin(procurementStartFromHome);
-            AppState.SetProcurementTravelPriority(procurementTravelPriority);
         }
         catch { /* Ignore settings load errors */ }
     }
@@ -549,7 +542,7 @@
     
     private async Task RefreshSavedPlansListAsync()
     {
-        var summaries = await PlanPersistence.LoadPlanSummariesAsync();
+        var summaries = await PlanPersistence.LoadUnlinkedPlanSummariesAsync();
         AppState.ReplaceSavedPlans(summaries.Where(p => p.Id != "autosave"));
     }
 
@@ -1019,10 +1012,4 @@
             : MarketFetchScope.EntireRegion;
     }
 
-    private static MarketTravelPriority ParseTravelPriority(string? value)
-    {
-        return Enum.TryParse<MarketTravelPriority>(value, ignoreCase: true, out var priority)
-            ? priority
-            : MarketTravelPriority.DataCenterTransfersFirst;
-    }
 }

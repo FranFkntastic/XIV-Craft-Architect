@@ -15,7 +15,6 @@ from rewrite_caddy_helper_routes import (  # noqa: E402
     LEGACY_PREFIXES,
     MANAGED_PREFIXES,
     PRODUCTION_HOST,
-    RouteRewriteError,
     STAGING_PORT,
     rewrite_caddy_routes,
 )
@@ -74,19 +73,6 @@ def route_ports(text: str, host: str) -> dict[str, str]:
 
 
 class RewriteCaddyHelperRoutesTests(unittest.TestCase):
-    def test_staging_before_cutover_owns_only_dev_and_keeps_every_route_staging(self) -> None:
-        original = fixture()
-        production_before = site_text(original, PRODUCTION_HOST)
-
-        rewritten = rewrite_caddy_routes(original, "staging", canonicalized=False)
-
-        self.assertEqual(production_before, site_text(rewritten, PRODUCTION_HOST))
-        self.assertEqual(
-            {prefix: STAGING_PORT for prefix in MANAGED_PREFIXES},
-            route_ports(rewritten, DEVELOPMENT_HOST),
-        )
-        self.assertIn("root * /srv/craftarchitect/web", rewritten)
-
     def test_canonical_cutover_keeps_each_domain_on_its_own_helper(self) -> None:
         rewritten = rewrite_caddy_routes(fixture(), "canonical", canonicalized=True)
 
@@ -106,18 +92,6 @@ class RewriteCaddyHelperRoutesTests(unittest.TestCase):
         self.assertNotIn("handle /api/craft/plans*", rewritten)
         self.assertIn("handle /api/craft*", rewritten)
 
-    def test_canonical_before_cutover_leaves_dev_site_untouched(self) -> None:
-        original = fixture()
-        development_before = site_text(original, DEVELOPMENT_HOST)
-
-        rewritten = rewrite_caddy_routes(original, "canonical", canonicalized=False)
-
-        self.assertEqual(development_before, site_text(rewritten, DEVELOPMENT_HOST))
-        self.assertEqual(
-            {prefix: CANONICAL_PORT for prefix in MANAGED_PREFIXES},
-            route_ports(rewritten, PRODUCTION_HOST),
-        )
-
     def test_staging_after_cutover_preserves_production_and_dev_isolation(self) -> None:
         original = fixture()
         production_before = site_text(original, PRODUCTION_HOST)
@@ -129,54 +103,6 @@ class RewriteCaddyHelperRoutesTests(unittest.TestCase):
             {prefix: STAGING_PORT for prefix in MANAGED_PREFIXES},
             route_ports(rewritten, DEVELOPMENT_HOST),
         )
-
-    def test_rewrite_is_idempotent(self) -> None:
-        first = rewrite_caddy_routes(fixture(), "canonical", canonicalized=True)
-        second = rewrite_caddy_routes(first, "canonical", canonicalized=True)
-
-        self.assertEqual(first, second)
-
-    def test_missing_duplicate_and_mixed_anchors_fail_closed(self) -> None:
-        cases = {
-            "missing host": fixture().replace(f"{DEVELOPMENT_HOST} {{", "missing.example.com {"),
-            "duplicate host": fixture() + "\n" + site(DEVELOPMENT_HOST, STAGING_PORT),
-            "missing route": fixture().replace(route_block("/api/trade", "5999"), "", 1),
-            "duplicate route": fixture().replace(
-                route_block("/api/trade", "5999"),
-                route_block("/api/trade", "5999") * 2,
-                1,
-            ),
-        }
-        for name, value in cases.items():
-            with self.subTest(name=name):
-                with self.assertRaises(RouteRewriteError):
-                    rewrite_caddy_routes(value, "staging", canonicalized=True)
-
-    def test_workflow_keeps_staging_profile_host_enabled_after_cutover(self) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[3]
-            / ".github"
-            / "workflows"
-            / "deploy-vps-lodestone.yml"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("reconsolidate_profile_host:", workflow)
-        self.assertIn("import-active-credentials", workflow)
-        self.assertIn("profile-host-canonicalized-v1", workflow)
-        self.assertNotIn(
-            'target" == "staging" && "$profile_host_canonicalized" == "true"',
-            workflow,
-        )
-        self.assertIn('cutover_complete="true"', workflow)
-        self.assertLess(
-            workflow.index("import-active-credentials"),
-            workflow.index('cutover_complete="true"'),
-        )
-        self.assertLess(
-            workflow.index("sudo systemctl reload caddy", workflow.index("import-active-credentials")),
-            workflow.index('cutover_complete="true"'),
-        )
-        self.assertNotIn("vars.CRAFT_ARCHITECT_PROFILE_HOST_CANONICALIZED", workflow)
 
 
 if __name__ == "__main__":

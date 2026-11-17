@@ -48,8 +48,8 @@ public enum CraftSettingsKey
     // 12 was the retired procurement scope duplicate. Preserve later wire values.
     ProcurementEnableSplitWorldPurchases = 13,
     ProcurementTravelTolerance = 14,
-    ProcurementWorldExclusionDurationMinutes = 15,
-    ProcurementStartFromHomeDataCenter = 16
+    ProcurementWorldExclusionDurationMinutes = 15
+    // 16 was the retired home-data-center route origin. Do not reuse it.
 }
 
 public enum CraftOperationWorkflow
@@ -192,7 +192,6 @@ public static class CraftSettingsKeyMap
         ["procurement.enable_split_world_purchases"] = CraftSettingsKey.ProcurementEnableSplitWorldPurchases,
         ["procurement.travel_tolerance"] = CraftSettingsKey.ProcurementTravelTolerance,
         ["procurement.world_exclusion_duration_minutes"] = CraftSettingsKey.ProcurementWorldExclusionDurationMinutes,
-        ["procurement.start_from_home_data_center"] = CraftSettingsKey.ProcurementStartFromHomeDataCenter,
         ["Market.Region"] = CraftSettingsKey.Region,
         ["Market.DefaultDataCenter"] = CraftSettingsKey.DefaultDataCenter,
         ["Market.DefaultSearchScope"] = CraftSettingsKey.DefaultMarketFetchScope,

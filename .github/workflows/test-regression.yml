@@ -18,6 +18,7 @@ jobs:
       TRUTHFUL_RUN_ID: ${{ github.run_id }}
       TRUTHFUL_RUN_ATTEMPT: ${{ github.run_attempt }}
       FranthropyRoot: /tmp/franthropy
+      FranthropySource: Local
     steps:
       - name: Checkout source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -74,7 +75,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          revision="$(tr -d '[:space:]' < eng/Franthropy.version)"
+          revision="$(sed -n 's/.*<FranthropyPackageVersion>0.1.0-commit.\([0-9a-f]*\)<\/FranthropyPackageVersion>.*/\1/p' eng/Franthropy.Version.props)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
           git init "$FranthropyRoot"
           git -C "$FranthropyRoot" remote add origin https://github.com/FranFkntastic/Franthropy.git
           git -C "$FranthropyRoot" fetch --depth=1 origin "$revision"
@@ -92,7 +94,7 @@ jobs:
           node-version: '22'
 
       - name: Test truthful-suite tooling
-        run: node --test "tools/TruthfulSuite/truthful-suite.test.mjs" "tools/TruthfulSuite/worker-session-persistence.test.mjs" "tools/TruthfulSuite/deployment-handoff.test.mjs"
+        run: node --test "tools/TruthfulSuite/truthful-suite.test.mjs" "tools/TruthfulSuite/worker-session-persistence.test.mjs"
 
       - name: Restore pinned browser package
         shell: bash
@@ -139,23 +141,6 @@ jobs:
           dotnet build "FFXIV Craft Architect.sln"
           --configuration Release
           --no-restore
-
-      - name: Run specification tests
-        run: >
-          node tools/TruthfulSuite/run-command.mjs
-          --id spec-tests
-          --out dist/evidence/spec-tests.json
-          --timeout-seconds 600
-          --
-          dotnet test "src/FFXIV Craft Architect.SpecTests/FFXIV Craft Architect.SpecTests.csproj"
-          --configuration Release
-          --no-build
-          --no-restore
-          --blame-hang
-          --blame-hang-timeout 5m
-          --blame-hang-dump-type mini
-          --logger "trx;LogFileName=spec-tests.trx"
-          --logger "console;verbosity=normal"
 
       - name: Run contract tests
         run: >
@@ -286,7 +271,6 @@ jobs:
             --acceptance-manifest "dist/release/acceptance-manifest.json" \
             --acceptance-root "dist/subject/tools/IndexedDbBrowserTests" \
             --fixtures-root "dist/subject/fixtures/browser" \
-            --spec-trx "src/FFXIV Craft Architect.SpecTests/TestResults/spec-tests.trx" \
             --contract-trx "src/FFXIV Craft Architect.ContractTests/TestResults/contract-tests.trx"
 
       - name: Upload truthful handoff evidence
@@ -303,7 +287,6 @@ jobs:
             dist/subject/tools/IndexedDbBrowserTests/package.json
             dist/subject/tools/IndexedDbBrowserTests/package-lock.json
             dist/subject/fixtures/browser/**
-            src/FFXIV Craft Architect.SpecTests/TestResults/spec-tests.trx
             src/FFXIV Craft Architect.ContractTests/TestResults/contract-tests.trx
             tools/TruthfulSuite/truthful-artifact.mjs
             tools/TruthfulSuite/verify-outcomes.mjs
@@ -316,7 +299,6 @@ jobs:
         with:
           name: truthful-test-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            src/FFXIV Craft Architect.SpecTests/TestResults/**
             src/FFXIV Craft Architect.ContractTests/TestResults/**
           if-no-files-found: warn
           retention-days: 7

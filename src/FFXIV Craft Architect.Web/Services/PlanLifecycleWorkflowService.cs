@@ -372,10 +372,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                 string.Equals(procurement.SelectedDataCenter, selectedDataCenter, StringComparison.OrdinalIgnoreCase) &&
                 procurement.TravelTolerance == _settings.ProcurementTravelTolerance &&
                 (procurement.IncludeSplitPurchases is null ||
-                 procurement.IncludeSplitPurchases == _settings.ProcurementEnableSplitWorldPurchases) &&
-                procurement.TravelPriority == _settings.ProcurementTravelPriority &&
-                procurement.RouteDecision?.StartsFromHomeDataCenter ==
-                    _settings.ProcurementStartFromHomeDataCenter;
+                 procurement.IncludeSplitPurchases == _settings.ProcurementEnableSplitWorldPurchases);
 
             if (routeIsCurrent)
             {
@@ -399,9 +396,7 @@ public sealed class PlanLifecycleWorkflowService : IDisposable
                             procurementRegion,
                             market?.Lens ?? MarketAcquisitionLens.MinimumUpfrontCost,
                             _settings.ProcurementTravelTolerance,
-                            _settings.ProcurementEnableSplitWorldPurchases,
-                            _settings.ProcurementStartFromHomeDataCenter,
-                            _settings.ProcurementTravelPriority),
+                            _settings.ProcurementEnableSplitWorldPurchases),
                         cancellationToken,
                         reportStatus,
                         operationId);

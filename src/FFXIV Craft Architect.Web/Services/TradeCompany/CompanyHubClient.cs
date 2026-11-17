@@ -148,6 +148,22 @@ public sealed class CompanyHubClient(
             ?? throw new InvalidOperationException("The company workspace update returned an empty response.");
     }
 
+    public async Task UpdatePolicyAsync(TradeCompanyProfile profile, long expectedProfileRevision,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(HttpMethod.Put, $"trade/v1/companies/{profile.Id:D}/policy",
+            new
+            {
+                ExpectedProfileRevision = expectedProfileRevision,
+                profile.Name,
+                profile.Description,
+                profile.CommissionContact,
+                profile.PaymentPolicy,
+                profile.CommissionPricingScope
+            }, cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+    }
+
     public async Task RequestMembershipAsync(string companyId, string? note, CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(

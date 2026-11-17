@@ -35,9 +35,7 @@
             RouteValidity="@(_route?.HasRoute == true ? ProcurementRoutePublicationValidity.Current : ProcurementRoutePublicationValidity.None)"
             IsReconciling="_isAnalyzing"
             RouteFailure="@_routeFailure"
-            TravelPriority="_travelPriority"
             EnableSplitWorldPurchases="_includeSplitPurchases"
-            StartFromHomeDataCenter="_startFromHomeDataCenter"
             TemporaryWorldBlacklistDurationMinutes="_worldExclusionDurationMinutes"
             ActiveTemporaryExclusionCount="@ActiveTemporaryExclusionCount"
             RouteGenerationEnabled="@(!HasActiveWorkerOperation)"
@@ -89,9 +87,6 @@
     private long _projectionRefreshRevision = -1;
     private string _procurementRegion = "North America";
     private bool _includeSplitPurchases = true;
-    private bool _startFromHomeDataCenter;
-    private MarketTravelPriority _travelPriority =
-        MarketTravelPriority.DataCenterTransfersFirst;
     private int _travelTolerance;
     private int _worldExclusionDurationMinutes = 60;
     private bool _isLoading = true;
@@ -158,19 +153,9 @@
             await Settings.GetAsync("procurement.travel_tolerance", 0),
             0,
             11);
-        _startFromHomeDataCenter = await Settings.GetAsync(
-            "procurement.start_from_home_data_center",
-            false);
         _worldExclusionDurationMinutes = await Settings.GetAsync(
             "procurement.world_exclusion_duration_minutes",
             60);
-        var storedPriority = await Settings.GetAsync(
-            "procurement.travel_priority",
-            nameof(MarketTravelPriority.DataCenterTransfersFirst));
-        if (!Enum.TryParse(storedPriority, ignoreCase: true, out _travelPriority))
-        {
-            _travelPriority = MarketTravelPriority.DataCenterTransfersFirst;
-        }
 
         try
         {
@@ -242,7 +227,6 @@
 
         _procurementRegion = _route.SelectedRegion;
         _travelTolerance = _route.TravelTolerance;
-        _travelPriority = _route.TravelPriority;
         if (_route.IncludeSplitPurchases.HasValue)
         {
             _includeSplitPurchases = _route.IncludeSplitPurchases.Value;
@@ -304,8 +288,6 @@
             _route.Lens,
             _travelTolerance,
             _includeSplitPurchases,
-            _startFromHomeDataCenter,
-            _travelPriority,
             _excludedWorlds,
             _excludedItemWorlds);
     }
@@ -371,12 +353,6 @@
         await Settings.SetAsync(
             "procurement.enable_split_world_purchases",
             _includeSplitPurchases);
-        await Settings.SetAsync(
-            "procurement.start_from_home_data_center",
-            _startFromHomeDataCenter);
-        await Settings.SetAsync(
-            "procurement.travel_priority",
-            _travelPriority.ToString());
         await Settings.SetAsync(
             "procurement.travel_tolerance",
             _travelTolerance);

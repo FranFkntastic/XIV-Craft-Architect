@@ -131,30 +131,6 @@
                 <MudText Typo="Typo.caption" Color="Color.Secondary">
                     Lets one item use listings from multiple worlds when that completes the quantity or produces a better route. Travel preference still decides whether the savings justify the extra stops.
                 </MudText>
-
-                <MudSwitch T="bool"
-                           Value="@_procurementStartFromHomeDataCenter"
-                           ValueChanged="OnProcurementOriginChanged"
-                           Label="Start procurement routes from the home data center"
-                           Color="Color.Primary"
-                           Class="mt-4" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    Counts leaving @_defaultDataCenter as a transfer when comparing region-wide routes. It doesn't require a purchase there.
-                </MudText>
-
-                <CompactSelectField Id="options-travel-priority"
-                                    Label="Route travel priority"
-                                    Value="@ProcurementTravelPriorityValue"
-                                    ValueChanged="OnTravelPriorityChanged"
-                                    Options="TravelPriorityOptions"
-                                    Class="options-select mt-4" />
-                <MudText Typo="Typo.caption" Color="Color.Secondary">
-                    Applied after the selected gil ceiling. It decides whether CA removes transfers or individual world visits first.
-                </MudText>
-
-                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-4">
-                    These settings determine which market board prices are shown by default.
-                </MudText>
             }
 
             else if (_activePanel == SettingsSection.Integrations)
@@ -448,7 +424,6 @@
                     </MudText>
                     <MudNumericField T="decimal" @bind-Value="_materialMaximumPremiumPercent" Label="Maximum consolidation premium" Min="0m" Max="100m" Adornment="Adornment.End" AdornmentText="%" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudNumericField T="int" @bind-Value="_materialMaximumWorldStops" Label="Maximum world stops" Min="1" Max="32" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
-                    <MudNumericField T="int" @bind-Value="_materialMaximumDataCenterTransfers" Label="Maximum data-center transfers" Min="0" Max="8" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudCheckBox T="bool" @bind-Value="_materialAllowSplitPurchases" Label="Allow split purchases" Color="Color.Primary" Class="my-2" />
                     <MudNumericField T="decimal" @bind-Value="_materialSafetyAllowancePercent" Label="Shopping allowance" Min="0m" Max="100m" Adornment="Adornment.End" AdornmentText="%" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
                     <MudNumericField T="decimal" @bind-Value="_materialMinimumAllowanceGil" Label="Minimum shopping allowance" Min="0m" Adornment="Adornment.End" AdornmentText="gil" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
@@ -929,11 +904,6 @@
         new(nameof(MarketFetchScope.SelectedDataCenter), "Selected data center"),
         new(nameof(MarketFetchScope.EntireRegion), "Entire region")
     ];
-    private static readonly IReadOnlyList<CompactSelectOption> TravelPriorityOptions =
-    [
-        new(nameof(MarketTravelPriority.DataCenterTransfersFirst), "Avoid data-center transfers first"),
-        new(nameof(MarketTravelPriority.WorldVisitsFirst), "Avoid total world visits first")
-    ];
     private readonly ElementReference[] _tabElements = new ElementReference[AllSettingsSections.Count];
     private SettingsSection _activePanel = SettingsSection.MarketAndRoutes;
     private bool _canAdministerCompany;
@@ -1027,8 +997,6 @@
     private IReadOnlyList<string> _comparisonRegions = Array.Empty<string>();
     private MarketFetchScope _defaultMarketFetchScope = MarketFetchScope.EntireRegion;
     private bool _procurementEnableSplitWorldPurchases = true;
-    private bool _procurementStartFromHomeDataCenter;
-    private MarketTravelPriority _procurementTravelPriority = MarketTravelPriority.DataCenterTransfersFirst;
     private bool _isSaving;
 
     private sealed record MarketSettingsSnapshot(
@@ -1039,7 +1007,6 @@
 
     private string DefaultMarketFetchScopeValue => _defaultMarketFetchScope.ToString();
 
-    private string ProcurementTravelPriorityValue => _procurementTravelPriority.ToString();
 
 
     private static CompactSelectOption ToSelectOption(string value) => new(value, value);
@@ -1080,7 +1047,6 @@
     private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
     private decimal _materialMaximumPremiumPercent = 5m;
     private int _materialMaximumWorldStops = 8;
-    private int _materialMaximumDataCenterTransfers = 2;
     private bool _materialAllowSplitPurchases = true;
     private decimal _materialSafetyAllowancePercent = 10m;
     private decimal _materialMinimumAllowanceGil = 10_000m;
@@ -1138,11 +1104,6 @@
         _defaultMarketFetchScope = ParseMarketFetchScope(
             await Settings.GetAsync("market.default_search_scope", nameof(MarketFetchScope.EntireRegion)));
         _procurementEnableSplitWorldPurchases = await Settings.GetAsync("procurement.enable_split_world_purchases", true);
-        _procurementStartFromHomeDataCenter = await Settings.GetAsync("procurement.start_from_home_data_center", false);
-        _procurementTravelPriority = ParseTravelPriority(
-            await Settings.GetAsync(
-                "procurement.travel_priority",
-                nameof(MarketTravelPriority.DataCenterTransfersFirst)));
         _marketMafiosoEnabled = await Settings.GetAsync("marketmafioso.enabled", false);
         _marketMafiosoApiUrl = await Settings.GetAsync(
             "marketmafioso.workshop_host_url",
@@ -1491,47 +1452,6 @@
         }
     }
 
-    private async Task OnProcurementOriginChanged(bool value)
-    {
-        var previous = _procurementStartFromHomeDataCenter;
-        _procurementStartFromHomeDataCenter = value;
-        AppState.SetProcurementHomeDataCenterOrigin(value);
-        try
-        {
-            await Settings.SetAsync("procurement.start_from_home_data_center", value);
-            ScheduleCurrentPlanDerivation();
-        }
-        catch (Exception exception)
-        {
-            _procurementStartFromHomeDataCenter = previous;
-            AppState.SetProcurementHomeDataCenterOrigin(previous);
-            Snackbar.Add($"Route setting was not saved: {exception.Message}", Severity.Error);
-        }
-    }
-
-    private async Task OnTravelPriorityChanged(string value)
-    {
-        if (!Enum.TryParse<MarketTravelPriority>(value, out var parsed) ||
-            parsed == _procurementTravelPriority)
-        {
-            return;
-        }
-        var previous = _procurementTravelPriority;
-        _procurementTravelPriority = parsed;
-        AppState.SetProcurementTravelPriority(parsed);
-        try
-        {
-            await Settings.SetAsync("procurement.travel_priority", parsed.ToString());
-            ScheduleCurrentPlanDerivation();
-        }
-        catch (Exception exception)
-        {
-            _procurementTravelPriority = previous;
-            AppState.SetProcurementTravelPriority(previous);
-            Snackbar.Add($"Route setting was not saved: {exception.Message}", Severity.Error);
-        }
-    }
-
     private void ScheduleCurrentPlanDerivation()
     {
         if (WorkerProjections.Shell.HasSession)
@@ -1660,7 +1580,6 @@
         var materialPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(profile.MaterialPricingPolicy);
         _materialMaximumPremiumPercent = materialPolicy.MaximumConsolidationPremiumPercent;
         _materialMaximumWorldStops = materialPolicy.MaximumWorldStops;
-        _materialMaximumDataCenterTransfers = materialPolicy.MaximumDataCenterTransfers;
         _materialAllowSplitPurchases = materialPolicy.AllowSplitPurchases;
         _materialSafetyAllowancePercent = materialPolicy.SafetyAllowancePercent;
         _materialMinimumAllowanceGil = materialPolicy.MinimumSafetyAllowanceGil;
@@ -1714,7 +1633,6 @@
         {
             MaximumConsolidationPremiumPercent = _materialMaximumPremiumPercent,
             MaximumWorldStops = _materialMaximumWorldStops,
-            MaximumDataCenterTransfers = _materialMaximumDataCenterTransfers,
             AllowSplitPurchases = _materialAllowSplitPurchases,
             SafetyAllowancePercent = _materialSafetyAllowancePercent,
             MinimumSafetyAllowanceGil = _materialMinimumAllowanceGil,
@@ -2033,7 +1951,9 @@
                     : new TradeCompanyPricingScope(
                         _companyPricingRegion,
                         NormalizeOptionalText(_companyPricingDataCenter),
-                        MarketFetchScope.EntireRegion);
+                        string.IsNullOrWhiteSpace(_companyPricingDataCenter)
+                            ? MarketFetchScope.EntireRegion
+                            : MarketFetchScope.SelectedDataCenter);
                 var companySaved = await SaveCompanyProfileAsync(_companyProfile);
                 if (!companySaved)
                 {
@@ -2404,13 +2324,6 @@
         return Enum.TryParse<MarketFetchScope>(value, ignoreCase: true, out var scope)
             ? scope
             : MarketFetchScope.EntireRegion;
-    }
-
-    private static MarketTravelPriority ParseTravelPriority(string? value)
-    {
-        return Enum.TryParse<MarketTravelPriority>(value, ignoreCase: true, out var priority)
-            ? priority
-            : MarketTravelPriority.DataCenterTransfersFirst;
     }
 
     private static string? NormalizeOptionalText(string? value)

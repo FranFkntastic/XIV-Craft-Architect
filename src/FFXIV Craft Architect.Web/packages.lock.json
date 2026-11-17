@@ -2,6 +2,17 @@
   "version": 1,
   "dependencies": {
     "net8.0": {
+      "Franthropy.Web": {
+        "type": "Direct",
+        "requested": "[0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89, 0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89]",
+        "resolved": "0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89",
+        "contentHash": "SVbQctoHPqgXoz8bT4sC6k/E6BL10uaoMCd8E+8SQuYFhWjHdCHloJibQSs7SQfjMgokH4pxgmVk+73wnmVQIw==",
+        "dependencies": {
+          "Franthropy.FFXIV": "0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89",
+          "Franthropy.Filtering": "0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89",
+          "Microsoft.AspNetCore.Components.Web": "8.0.28"
+        }
+      },
       "Microsoft.AspNetCore.Components.WebAssembly": {
         "type": "Direct",
         "requested": "[8.0.28, )",
@@ -43,6 +54,19 @@
           "Microsoft.AspNetCore.Components.Web": "8.0.0",
           "Microsoft.Extensions.Localization": "8.0.0"
         }
+      },
+      "Franthropy.FFXIV": {
+        "type": "Transitive",
+        "resolved": "0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89",
+        "contentHash": "6B2ndts3FZIsARrH7LkdvWgw06/b9lQRqOHV8X3PQs18fu77YDlo2Peo+bW5B0DsYOexwOEj188tfTTs+aD3oA==",
+        "dependencies": {
+          "Franthropy.Filtering": "0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89"
+        }
+      },
+      "Franthropy.Filtering": {
+        "type": "Transitive",
+        "resolved": "0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89",
+        "contentHash": "7vP9YuVkWcH7QHcJU8Nt485LvR+eFi+oMPIMwMzGaN+Mn5ivyj5LhGb8MMQYC5qW0k6qIJgenSjwIA+YQfao9Q=="
       },
       "Microsoft.AspNetCore.Authorization": {
         "type": "Transitive",
@@ -304,27 +328,10 @@
         "resolved": "8.0.5",
         "contentHash": "0f1B50Ss7rqxXiaBJyzUu9bWFOO2/zSlifZ/UNMdiIpDYe4cY4LQQicP4nirK1OS31I43rn062UIJ1Q9bpmHpg=="
       },
-      "franthropy.ffxiv": {
-        "type": "Project",
-        "dependencies": {
-          "Franthropy.Filtering": "[0.1.0, )"
-        }
-      },
-      "franthropy.filtering": {
-        "type": "Project"
-      },
-      "franthropy.web": {
-        "type": "Project",
-        "dependencies": {
-          "Franthropy.FFXIV": "[0.1.0, )",
-          "Franthropy.Filtering": "[0.1.0, )",
-          "Microsoft.AspNetCore.Components.Web": "[8.0.28, )"
-        }
-      },
       "Gooseworks.FFXIVCraftArchitect.Core": {
         "type": "Project",
         "dependencies": {
-          "Franthropy.FFXIV": "[0.1.0, )",
+          "Franthropy.FFXIV": "[0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89, 0.1.0-commit.6278e907fb30629d1a34719827a1b671761cde89]",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[8.0.0, )",
           "Microsoft.Extensions.Http": "[8.0.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[8.0.0, )",

@@ -33,12 +33,6 @@ public enum MarketDataQualityBucket
     Missing
 }
 
-public enum MarketTravelPriority
-{
-    DataCenterTransfersFirst,
-    WorldVisitsFirst
-}
-
 public enum MarketDataAgeSource
 {
     UniversalisWorldUpload = 0,
@@ -48,15 +42,6 @@ public enum MarketDataAgeSource
     MarketMafiosoObservation = 4,
     ManualObservation = 5
 }
-
-public sealed record PublishedMarketAnalysisScopeSnapshot(
-    MarketFetchScope Scope,
-    string SelectedDataCenter,
-    string SelectedRegion,
-    IReadOnlyList<string> RequestedDataCenters,
-    MarketAcquisitionLens Lens,
-    long PlanSessionVersion,
-    DateTime PublishedAtUtc);
 
 public enum MarketListingPriceSanity
 {

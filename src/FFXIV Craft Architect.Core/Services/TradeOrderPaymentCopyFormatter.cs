@@ -135,7 +135,7 @@ public static class TradeOrderPaymentCopyFormatter
                 ? $"locked {FormatTimestamp(quote.LockedAtUtc!.Value)}"
                 : $"expires {FormatTimestamp(quote.ExpiresAtUtc)}";
             builder.AppendLine(
-                $"Route quote: {quote.WorldStops:N0} worlds; {quote.DataCenterTransfers:N0} data-center transfers; {quoteState}; policy {quote.PolicyFingerprint}");
+                $"Route quote: {quote.WorldStops:N0} worlds; {quoteState}; policy {quote.PolicyFingerprint}");
         }
         builder.AppendLine();
         builder.AppendLine("Outputs:");

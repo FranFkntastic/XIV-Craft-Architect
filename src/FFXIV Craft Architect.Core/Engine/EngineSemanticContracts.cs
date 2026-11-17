@@ -68,7 +68,6 @@ public sealed record EngineRouteSemanticSnapshot(
     IReadOnlyList<EngineRouteItemSnapshot> OrderedItems,
     long SelectedGilCost,
     int SelectedWorldStops,
-    int SelectedDataCenterTransfers,
     bool IsComplete,
     EngineRouteDecisionSnapshot? Decision,
     string ActiveProcurementItemsHash = "",
@@ -110,11 +109,6 @@ public sealed record EngineRouteDecisionSnapshot(
     long SelectedEvidencePenalty,
     int CheapestWorldStops,
     int SelectedWorldStops,
-    int CheapestDataCenterTransfers,
-    int SelectedDataCenterTransfers,
-    bool StartsFromHomeDataCenter,
-    string? HomeDataCenter,
-    MarketTravelPriority TravelPriority,
     long FixedAcquisitionGilCost,
     bool RouteSearchWasTruncated,
     IReadOnlyList<EngineRouteFrontierOptionSnapshot> FrontierOptions,
@@ -126,8 +120,7 @@ public sealed record EngineRouteFrontierOptionSnapshot(
     int MinimumTolerance,
     int MaximumTolerance,
     long GilCost,
-    int WorldStops,
-    int DataCenterTransfers);
+    int WorldStops);
 
 public sealed record EngineRouteItemDecisionSnapshot(
     int Order,

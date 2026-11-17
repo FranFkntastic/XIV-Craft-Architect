@@ -29,6 +29,8 @@ public sealed class TradeCompanyDiscordInstallationBinding
     public DateTime? HealthCheckedAtUtc { get; set; }
 }
 
+public sealed record TradeMarginItem(int ItemId, long? SalePrice = null);
+
 public sealed class TradeCompanyProfile
 {
     public const int CurrentSchemaVersion = 5;
@@ -65,8 +67,6 @@ public sealed class TradeCompanyProfile
         };
     }
 }
-
-public sealed record TradeMarginItem(int ItemId, long? SalePrice = null);
 
 public sealed record TradeCompanyUpdate
 {
@@ -326,7 +326,10 @@ public sealed record TradeMaterialPricingPolicy
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public decimal MaximumConsolidationPremiumPercent { get; init; } = 5m;
     public int MaximumWorldStops { get; init; } = 8;
-    public int MaximumDataCenterTransfers { get; init; } = 2;
+
+    // Retired route dimension. Routing ignores it; it is read only so policies and
+    // quotes stored before its retirement keep their original fingerprints.
+    public int? MaximumDataCenterTransfers { get; init; }
     public bool AllowSplitPurchases { get; init; } = true;
     public decimal SafetyAllowancePercent { get; init; } = 10m;
     public decimal MinimumSafetyAllowanceGil { get; init; } = 10_000m;
@@ -365,7 +368,6 @@ public sealed record TradeMaterialQuote
     public required decimal SafetyAllowance { get; init; }
     public required decimal MaterialReimbursement { get; init; }
     public required int WorldStops { get; init; }
-    public required int DataCenterTransfers { get; init; }
     public IReadOnlyList<TradeMaterialQuoteLine> Lines { get; init; } = [];
 
     [JsonIgnore]

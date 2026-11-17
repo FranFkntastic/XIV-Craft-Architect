@@ -87,7 +87,7 @@ public partial class TradeOrders
             : quote.IsExpired(DateTime.UtcNow)
                 ? $"expired {quote.ExpiresAtUtc.ToLocalTime():g}"
                 : $"valid until {quote.ExpiresAtUtc.ToLocalTime():g}";
-        return $"{quote.WorldStops:N0} worlds · {quote.DataCenterTransfers:N0} transfers · {state} · policy {quote.PolicyFingerprint}";
+        return $"{quote.WorldStops:N0} worlds · {state} · policy {quote.PolicyFingerprint}";
     }
 
     private static string FormatDeliveryHandoffMethod(CompanyCommissionDeliveryHandoffMethod method) =>

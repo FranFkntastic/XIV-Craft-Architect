@@ -46,20 +46,3 @@ public class Ingredient
     /// </summary>
     public bool IsCrafted { get; set; }
 }
-
-/// <summary>
-/// Represents a flattened crafting tree node for UI display.
-/// This is what gets shown in the TreeView.
-/// </summary>
-public class RecipeTreeNode
-{
-    public string Name { get; set; } = string.Empty;
-    public int ItemId { get; set; }
-    public int NeededQuantity { get; set; }
-    public int OwnedQuantity { get; set; }
-    public int ToBuyQuantity => System.Math.Max(0, NeededQuantity - OwnedQuantity);
-    public long UnitPrice { get; set; }
-    public long TotalCost => ToBuyQuantity * UnitPrice;
-    public List<RecipeTreeNode> Children { get; set; } = new();
-    public bool IsRawMaterial => Children.Count == 0;
-}

@@ -39,12 +39,6 @@ public enum EngineComputationStatus
     Failed = 3
 }
 
-public enum EngineExecutionTransportKind
-{
-    InProcess = 1,
-    BrowserWorker = 2
-}
-
 public sealed record EngineBasisIdentity(string Kind, string Version, string Hash)
 {
     public static EngineBasisIdentity Empty(string kind, string version = "1") => new(kind, version, string.Empty);
@@ -106,11 +100,6 @@ public sealed record EngineProgress(
     int CompletedWorkUnits,
     int TotalWorkUnits,
     string Message);
-
-public sealed record EngineExecutionTransportCapability(
-    EngineExecutionTransportKind Kind,
-    bool IsSupported,
-    string? UnsupportedReason = null);
 
 public sealed record EngineComputationResult(
     string ContractVersion,

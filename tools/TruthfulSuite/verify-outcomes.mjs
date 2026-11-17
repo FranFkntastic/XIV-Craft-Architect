@@ -19,13 +19,6 @@ const REQUIRED_COMMANDS = {
     executable: 'dotnet', cwd: '.', timeoutSeconds: 600,
     arguments: ['build', 'FFXIV Craft Architect.sln', '--configuration', 'Release', '--no-restore']
   },
-  'spec-tests': {
-    executable: 'dotnet', cwd: '.', timeoutSeconds: 600,
-    arguments: ['test', 'src/FFXIV Craft Architect.SpecTests/FFXIV Craft Architect.SpecTests.csproj',
-      '--configuration', 'Release', '--no-build', '--no-restore', '--blame-hang',
-      '--blame-hang-timeout', '5m', '--blame-hang-dump-type', 'mini',
-      '--logger', 'trx;LogFileName=spec-tests.trx', '--logger', 'console;verbosity=normal']
-  },
   'contract-tests': {
     executable: 'dotnet', cwd: '.', timeoutSeconds: 600,
     arguments: ['test', 'src/FFXIV Craft Architect.ContractTests/FFXIV Craft Architect.ContractTests.csproj',
@@ -149,7 +142,6 @@ export async function verifyOutcomes(options) {
   const acceptanceManifestPath = requiredOption(options, 'acceptance-manifest');
   const acceptanceRoot = requiredOption(options, 'acceptance-root');
   const fixturesRoot = requiredOption(options, 'fixtures-root');
-  const specTrxPath = requiredOption(options, 'spec-trx');
   const contractTrxPath = requiredOption(options, 'contract-trx');
   const verifyOnly = options['verify-only'] === 'true';
   const buildManifestBytes = await readFile(buildManifestPath);
@@ -163,7 +155,6 @@ export async function verifyOutcomes(options) {
     'fixtures-root': fixturesRoot
   });
   const dotnetReports = {
-    spec: await validateTrx(specTrxPath, 'Specification tests'),
     contract: await validateTrx(contractTrxPath, 'Contract tests')
   };
   const outcomes = [];

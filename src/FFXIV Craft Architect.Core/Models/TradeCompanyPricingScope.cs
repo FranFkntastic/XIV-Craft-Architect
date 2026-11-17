@@ -10,7 +10,8 @@ public sealed record TradeCompanyPricingScope(
         MarketFetchScopeResolver.GetRegions().Contains(Region, StringComparer.OrdinalIgnoreCase) &&
         (string.IsNullOrWhiteSpace(DataCenter) ||
          MarketFetchScopeResolver.IsDataCenterInRegion(DataCenter, Region)) &&
-        MarketFetchScope == MarketFetchScope.EntireRegion;
+        (MarketFetchScope == MarketFetchScope.EntireRegion ||
+         MarketFetchScope == MarketFetchScope.SelectedDataCenter && !string.IsNullOrWhiteSpace(DataCenter));
 
     [System.Text.Json.Serialization.JsonIgnore]
     public string EffectiveDataCenter =>

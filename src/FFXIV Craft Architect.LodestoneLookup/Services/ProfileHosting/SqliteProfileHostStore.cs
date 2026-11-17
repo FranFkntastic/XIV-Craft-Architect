@@ -1767,7 +1767,8 @@ public sealed partial class SqliteProfileHostStore
         long expectedRevision,
         CancellationToken ct,
         bool allowCompanyCollection = false,
-        long? expectedServerRevision = null)
+        long? expectedServerRevision = null,
+        bool updateMarginItems = false)
     {
         if (!allowCompanyCollection)
         {
@@ -1841,6 +1842,16 @@ public sealed partial class SqliteProfileHostStore
                 // rather than clearing it when an older client edits another setting.
                 var nodeOptions = new System.Text.Json.Nodes.JsonNodeOptions { PropertyNameCaseInsensitive = true };
                 var incoming = System.Text.Json.Nodes.JsonNode.Parse(payloadJson, nodeOptions);
+                // Only the explicit company margins command owns this field. Generic
+                // profile sync, including older clients, cannot clear or replace it.
+                if (!updateMarginItems && existing != null && incoming is System.Text.Json.Nodes.JsonObject marginObject)
+                {
+                    var previousMargins =
+                        System.Text.Json.Nodes.JsonNode.Parse(existing.PayloadJson, nodeOptions)?["marginItems"];
+                    marginObject["marginItems"] = previousMargins?.DeepClone() ??
+                        new System.Text.Json.Nodes.JsonArray();
+                    payloadJson = marginObject.ToJsonString();
+                }
                 if (existing != null && incoming is System.Text.Json.Nodes.JsonObject incomingObject &&
                     !incomingObject.ContainsKey("commissionPricingScope"))
                 {
@@ -1853,6 +1864,19 @@ public sealed partial class SqliteProfileHostStore
                 }
                 var company = JsonSerializer.Deserialize<TradeCompanyProfile>(
                     payloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                var marginItems = company?.MarginItems ?? [];
+                if (marginItems.Count > 500 ||
+                    marginItems.Any(item => item == null || item.ItemId <= 0 || item.SalePrice < 0) ||
+                    marginItems.Select(item => item.ItemId).Distinct().Count() != marginItems.Count)
+                {
+                    await transaction.RollbackAsync(ct);
+                    return new ProfileSyncPutResponse
+                    {
+                        Success = false,
+                        ErrorCode = "invalid_margin_items",
+                        ErrorMessage = "Use at most 500 distinct positive item ids with non-negative sale prices."
+                    };
+                }
                 if (company?.CommissionPricingScope is { IsValid: false })
                 {
                     throw new JsonException("Invalid commission pricing scope.");

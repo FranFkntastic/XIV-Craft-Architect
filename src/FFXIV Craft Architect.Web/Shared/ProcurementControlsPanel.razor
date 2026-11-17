@@ -30,7 +30,6 @@
                                             IsReconciling="IsReconciling"
                                             RouteFailure="RouteFailure"
                                             Disabled="@(!RouteGenerationEnabled)"
-                                            TravelPriority="TravelPriority"
                                             TravelToleranceChanged="OnProcurementTravelToleranceChanged"
                                             TravelToleranceCommitted="OnProcurementTravelToleranceCommitted" />
                 <p id="procurement-travel-help">@GetTravelPreferenceHelp()</p>
@@ -40,15 +39,6 @@
                         <span>@(EnableSplitWorldPurchases ? "Split purchases allowed" : "Single-world purchases only")</span>
                         <small>Set in Settings</small>
                     </p>
-                    <p class="pp-route-policy-note">
-                        <MudIcon Icon="@Icons.Material.Filled.Sort" Size="Size.Small" />
-                        <span>@GetTravelPriorityLabel()</span>
-                        <small>Set in Settings</small>
-                    </p>
-                    @if (StartFromHomeDataCenter)
-                    {
-                        <p class="pp-origin-note"><MudIcon Icon="@Icons.Material.Filled.Home" Size="Size.Small" /> <span>Starts from @SelectedDataCenter</span></p>
-                    }
                 </div>
             </div>
 
@@ -128,9 +118,7 @@
     [Parameter] public ProcurementRoutePublicationValidity RouteValidity { get; set; }
     [Parameter] public bool IsReconciling { get; set; }
     [Parameter] public string? RouteFailure { get; set; }
-    [Parameter] public MarketTravelPriority TravelPriority { get; set; }
     [Parameter] public bool EnableSplitWorldPurchases { get; set; }
-    [Parameter] public bool StartFromHomeDataCenter { get; set; }
     [Parameter] public int TemporaryWorldBlacklistDurationMinutes { get; set; } = 60;
     [Parameter] public int ActiveTemporaryExclusionCount { get; set; }
     [Parameter] public bool IsAnalyzing { get; set; }
@@ -178,23 +166,11 @@
         var premium = MarketRouteScoring.GetMaximumPremiumRate(tolerance);
         return tolerance switch
         {
-            0 => $"Position 0 of 11. No gil ceiling; {GetTravelPriorityAction()}.",
+            0 => "Position 0 of 11. No gil ceiling; minimize world visits.",
             11 => "Position 11 of 11. No extra gil; choose the cheapest eligible route.",
             _ => $"Position {tolerance} of 11. Routes may cost up to {premium!.Value:P0} more gil than the cheapest eligible route."
         };
     }
-
-    private string GetTravelPriorityAction() => TravelPriority switch
-    {
-        MarketTravelPriority.WorldVisitsFirst => "minimize world visits, then data-center transfers",
-        _ => "minimize data-center transfers, then world visits"
-    };
-
-    private string GetTravelPriorityLabel() => TravelPriority switch
-    {
-        MarketTravelPriority.WorldVisitsFirst => "World visits ranked before transfers",
-        _ => "Data-center transfers ranked before world visits"
-    };
 
     private Task OnTemporaryWorldBlacklistDurationValueChanged(string value) =>
         int.TryParse(value, out var minutes)

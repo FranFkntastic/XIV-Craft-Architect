@@ -1,0 +1,58 @@
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2">
+            Overwrite '@SelectedPlanName' with the current plan, or save it as a new plan?
+        </MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text"
+                   Color="Color.Secondary"
+                   OnClick="Cancel">
+            Cancel
+        </MudButton>
+        @if (!string.IsNullOrWhiteSpace(CurrentPlanName))
+        {
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Secondary"
+                       OnClick="() => Choose(SavePlanChoice.UpdateCurrent)">
+                Update '@CurrentPlanName'
+            </MudButton>
+        }
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Primary"
+                   OnClick="() => Choose(SavePlanChoice.SaveAsNew)">
+            Save As New
+        </MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   OnClick="() => Choose(SavePlanChoice.OverwriteSelected)">
+            Overwrite
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; } = null!;
+
+    [Parameter] public string SelectedPlanName { get; set; } = string.Empty;
+
+    /// <summary>When set, offers updating the currently loaded plan instead.</summary>
+    [Parameter] public string? CurrentPlanName { get; set; }
+
+    private void Choose(SavePlanChoice choice)
+    {
+        MudDialog.Close(DialogResult.Ok(choice));
+    }
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+
+    public enum SavePlanChoice
+    {
+        OverwriteSelected,
+        UpdateCurrent,
+        SaveAsNew
+    }
+}

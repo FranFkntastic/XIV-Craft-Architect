@@ -18,7 +18,6 @@ public sealed class TradeMaterialQuoteService
         var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
         return $"No complete executable route fits company policy and current listing evidence " +
                $"({policy.MaximumWorldStops} worlds, " +
-               $"{policy.MaximumDataCenterTransfers} data-center transfers, " +
                $"{policy.MaximumConsolidationPremiumPercent:N0}% consolidation premium, " +
                $"listings at most {policy.MaximumEvidenceAgeMinutes:N0} minutes old).";
     }
@@ -88,9 +87,8 @@ public sealed class TradeMaterialQuoteService
         var selections = decision.ToleranceSelections
             .Where(candidate => candidate.GilCost <= maximumCost)
             .Where(candidate => candidate.WorldStops <= policy.MaximumWorldStops)
-            .Where(candidate => candidate.DataCenterTransfers <= policy.MaximumDataCenterTransfers)
-            .OrderBy(candidate => candidate.DataCenterTransfers)
-            .ThenBy(candidate => candidate.WorldStops)
+            .OrderBy(candidate => candidate.WorldStops)
+            .ThenBy(candidate => candidate.EvidencePenalty)
             .ThenBy(candidate => candidate.GilCost)
             .ThenBy(candidate => candidate.SelectionKey, StringComparer.Ordinal)
             .ToArray();
@@ -190,7 +188,6 @@ public sealed class TradeMaterialQuoteService
             SafetyAllowance = allowance,
             MaterialReimbursement = routeCash + allowance,
             WorldStops = selection.WorldStops,
-            DataCenterTransfers = selection.DataCenterTransfers,
             Lines = lines
         };
         return new TradeMaterialQuoteResult(quote, payrollLines, null);
