@@ -313,9 +313,11 @@ public static class CompanyCommissionCommandWorkflow
             command.TermsVersion == commission.CurrentTermsVersion,
             "The claim terms version is stale.");
         RequireCurrentMaterialQuote(commission, nowUtc);
+        // A company member claims as their own confirmed crafter record; everyone else
+        // names one exact Lodestone character for the commissioner to confirm.
         Require(
-            command.ClaimantCharacter != null,
-            "claimant_character_required: A claim requires one exact Lodestone character.");
+            command.ClaimantCharacter != null || command.ExistingCrafterId.HasValue,
+            "claimant_character_required: A claim requires a confirmed company crafter or one exact Lodestone character.");
         if (command.ExistingCrafterId == Guid.Empty)
         {
             throw new InvalidOperationException("The existing crafter identity is invalid.");
@@ -338,14 +340,17 @@ public static class CompanyCommissionCommandWorkflow
             identityState,
             nowUtc,
             assignedCrafterId.HasValue ? "existing-company-crafter" : null);
-        gates = gates with
+        if (command.ClaimantCharacter != null)
         {
-            Identity = gates.Identity with
+            gates = gates with
             {
-                LodestoneCharacterId = command.ClaimantCharacter!.LodestoneCharacterId,
-                CharacterVerifiedAtUtc = nowUtc
-            }
-        };
+                Identity = gates.Identity with
+                {
+                    LodestoneCharacterId = command.ClaimantCharacter.LodestoneCharacterId,
+                    CharacterVerifiedAtUtc = nowUtc
+                }
+            };
+        }
         var updated = Copy(source);
         updated.Status = TradeOrderStatus.Assigned;
         updated.AssignedCrafterId = assignedCrafterId;
