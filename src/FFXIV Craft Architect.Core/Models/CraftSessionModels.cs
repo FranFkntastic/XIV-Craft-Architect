@@ -49,6 +49,7 @@ public enum CraftSettingsKey
     ProcurementEnableSplitWorldPurchases = 13,
     ProcurementTravelTolerance = 14,
     ProcurementWorldExclusionDurationMinutes = 15
+    // 16 was the retired home-data-center route origin. Do not reuse it.
 }
 
 public enum CraftOperationWorkflow
