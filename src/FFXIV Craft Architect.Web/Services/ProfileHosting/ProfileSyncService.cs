@@ -550,7 +550,7 @@ public sealed class ProfileSyncService
         }
         catch (Exception ex)
         {
-            var failure = ClassifyFailure(ex);
+            var failure = ClassifyAndReportFailure(ex, "Foreground sync", profileId);
             SetStatus(new ProfileSyncStatus(
                 true,
                 false,
@@ -853,7 +853,7 @@ public sealed class ProfileSyncService
             }
             catch (Exception exception)
             {
-                var failure = ClassifyFailure(exception);
+                var failure = ClassifyAndReportFailure(exception, "Background replay", profileId);
                 SetStatus(CurrentStatus with
                 {
                     Stage = ProfileSyncStage.Failed,
@@ -1168,6 +1168,27 @@ public sealed class ProfileSyncService
         }
 
         return _hostedOrders.PublishRemoteOrders(projections);
+    }
+
+    private static ProfileSyncFailure ClassifyAndReportFailure(
+        Exception exception,
+        string phase,
+        string? profileId)
+    {
+        var failure = ClassifyFailure(exception);
+        // Restore failures withhold order details behind a generic banner, so the console is
+        // the only place the actual reason survives. Name the root cause, not the wrapper.
+        var root = exception is AggregateException aggregate
+            ? aggregate.Flatten().InnerException ?? exception
+            : exception;
+        Console.Error.WriteLine(
+            $"[ProfileSync] {phase} failed for profile {profileId ?? "(none)"} as {failure}: {root.GetType().Name}: {root.Message}");
+        if (failure == ProfileSyncFailure.Unverifiable)
+        {
+            Console.Error.WriteLine($"[ProfileSync] {root}");
+        }
+
+        return failure;
     }
 
     private static ProfileSyncFailure ClassifyFailure(Exception exception) =>
