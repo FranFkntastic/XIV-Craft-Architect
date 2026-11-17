@@ -192,7 +192,7 @@
         var tolerance = Math.Clamp(TravelTolerance, 0, 11);
         return tolerance switch
         {
-            0 => "CA applies no gil ceiling. It chooses the eligible route with the least travel under your selected travel priority.",
+            0 => "CA applies no gil ceiling. It chooses the eligible route with the fewest world visits.",
             11 => "CA permits no extra gil. It chooses the cheapest eligible route, using travel and evidence quality only to break cost ties.",
             _ => $"CA may choose a route costing up to {MarketRouteScoring.GetMaximumPremiumRate(tolerance)!.Value:P0} more gil than the cheapest eligible route when that reduces travel."
         };
