@@ -781,10 +781,10 @@
             }
 
             if (rows.FirstOrDefault(row => row.Id == CurrentPlanId) is { } current &&
-                moved.Contains(current.Id) &&
-                current.DisplayName != current.Summary.Name)
+                moved.FirstOrDefault(plan => plan.Id == current.Id) is { } currentMove &&
+                currentMove.Name != current.Summary.Name)
             {
-                await WorkerSession.MutatePlanIdentityAsync(current.Id, current.DisplayName);
+                await WorkerSession.MutatePlanIdentityAsync(current.Id, currentMove.Name);
             }
 
             _selected.Clear();

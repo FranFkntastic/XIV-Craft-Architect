@@ -89,6 +89,9 @@ public sealed class PlanBrowserCatalog
     /// <summary>Null when Trade orders loaded; otherwise why they did not.</summary>
     public string? OrdersError { get; init; }
 
+    /// <summary>Plan names that attribute a plan to an order by name alone.</summary>
+    public IReadOnlySet<string> OrderPlanNames { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
     public static PlanBrowserCatalog Empty { get; } = new() { Rows = [] };
 
     /// <summary>
@@ -117,8 +120,31 @@ public sealed class PlanBrowserCatalog
         return new PlanBrowserCatalog
         {
             Rows = rows,
-            OrdersError = ordersError
+            OrdersError = ordersError,
+            OrderPlanNames = orderIdsByPlanName.Keys.ToHashSet(StringComparer.Ordinal)
         };
+    }
+
+    /// <summary>
+    /// The name a fork keeps once detached to My plans. Its base name is reused
+    /// unless an order claims it, because a plan named like an order is
+    /// attributed back to that order on the next load.
+    /// </summary>
+    public static string ChooseDetachedName(string forkName, IReadOnlySet<string> orderPlanNames)
+    {
+        var baseName = StripForkSuffix(forkName);
+        if (baseName.Length == 0)
+        {
+            baseName = forkName.Trim();
+        }
+
+        var candidate = baseName;
+        for (var copy = 1; orderPlanNames.Contains(candidate.Trim()); copy++)
+        {
+            candidate = copy == 1 ? $"{baseName} (my copy)" : $"{baseName} (my copy {copy})";
+        }
+
+        return candidate;
     }
 
     public static bool IsForkName(string name) =>
@@ -303,6 +329,8 @@ public sealed class PlanBrowserCatalog
     }
 }
 
+public sealed record PlanBrowserMovedPlan(string Id, string Name);
+
 public sealed record PlanBrowserDeleteResult(
     IReadOnlyList<string> DeletedIds,
     IReadOnlyList<string> SkippedIds,
@@ -376,10 +404,11 @@ public sealed class PlanBrowserService
         return new PlanBrowserDeleteResult(result.DeletedIds, result.SkippedIds, result.MissingIds);
     }
 
-    /// <summary>Moves "local changes" forks to My plans. Returns the ids that moved.</summary>
-    public async Task<IReadOnlyList<string>> MoveToMyPlansAsync(IEnumerable<PlanBrowserRow> forks)
+    /// <summary>Moves "local changes" forks to My plans. Returns each moved plan and its stored name.</summary>
+    public async Task<IReadOnlyList<PlanBrowserMovedPlan>> MoveToMyPlansAsync(IEnumerable<PlanBrowserRow> forks)
     {
-        var moved = new List<string>();
+        var orderPlanNames = (await LoadAsync()).OrderPlanNames;
+        var moved = new List<PlanBrowserMovedPlan>();
         foreach (var row in forks)
         {
             if (row.Kind != PlanBrowserPlanKind.Fork || row.Summary.LinkedOrderId.HasValue)
@@ -387,12 +416,13 @@ public sealed class PlanBrowserService
                 continue;
             }
 
-            var renamedTo = PlanBrowserCatalog.IsForkName(row.Summary.Name)
-                ? row.DisplayName
-                : null;
+            var name = PlanBrowserCatalog.ChooseDetachedName(row.Summary.Name, orderPlanNames);
+            var renamedTo = string.Equals(name, row.Summary.Name, StringComparison.Ordinal)
+                ? null
+                : name;
             if (await _plans.DetachFromSourceOrderAsync(row.Id, renamedTo))
             {
-                moved.Add(row.Id);
+                moved.Add(new PlanBrowserMovedPlan(row.Id, name));
             }
         }
 
