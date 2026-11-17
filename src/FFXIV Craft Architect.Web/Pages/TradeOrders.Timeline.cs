@@ -172,7 +172,7 @@ public partial class TradeOrders
         {
             CompanyCommissionActivityKind.ClaimRejected or
             CompanyCommissionActivityKind.ClaimReleased or
-            CompanyCommissionActivityKind.ProvisionalIdentityRejected or
+            CompanyCommissionActivityKind.ClaimantCharacterRejected or
             CompanyCommissionActivityKind.PaymentPolicyChangeRefused or
             CompanyCommissionActivityKind.PaymentAttestationRetracted or
             CompanyCommissionActivityKind.DeliveryReadinessWithdrawn or

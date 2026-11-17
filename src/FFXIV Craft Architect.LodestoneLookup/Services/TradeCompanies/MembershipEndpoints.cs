@@ -15,7 +15,15 @@ public sealed record OwnershipTransferBody(
     string? FormerOwnerRole);
 public sealed record MembershipInvitationIssueBody(
     Guid? LegacyCrafterId,
-    DateTimeOffset? ExpiresAtUtc);
+    DateTimeOffset? ExpiresAtUtc,
+    bool SendOnDiscord = false);
+public sealed record MembershipInvitationDeliveryBody(string Token);
+public sealed record MembershipInvitationRecipientResponse(
+    Guid LegacyCrafterId,
+    string DiscordDisplayName);
+public sealed record MembershipInvitationRecipientsResponse(
+    string? UnavailableCode,
+    IReadOnlyList<MembershipInvitationRecipientResponse> Recipients);
 public sealed record MembershipInvitationResponse(
     Guid InvitationId,
     string CompanyId,
@@ -25,7 +33,10 @@ public sealed record MembershipInvitationResponse(
     DateTimeOffset IssuedAtUtc,
     DateTimeOffset ExpiresAtUtc,
     string State,
-    string? Token);
+    string? Token,
+    string? DiscordDelivery = null,
+    string? DiscordRecipientName = null,
+    string? DiscordDeliveryCode = null);
 
 public sealed record MembershipResponse(
     string CompanyId,
@@ -368,7 +379,7 @@ public static class MembershipEndpoints
                 {
                     return Results.BadRequest(new MembershipErrorResponse(
                         "invalid_crafter_binding",
-                        "Choose a company member and a legacy crafter from this company."));
+                        "Choose a company member and a contractor record from this company."));
                 }
 
                 var result = await memberships.BindCrafterAsync(
@@ -389,7 +400,7 @@ public static class MembershipEndpoints
                                 result.Binding.CreatedAtUtc)),
                     _ => Results.Conflict(new MembershipErrorResponse(
                         "crafter_already_connected",
-                        "That legacy crafter history is already connected to another account."))
+                        "That contractor record is already connected to another account."))
                 };
             });
 
@@ -437,6 +448,7 @@ public static class MembershipEndpoints
                 ProfileHostedTradeCompanyService companyService,
                 SqliteMembershipStore memberships,
                 LegacyCrafterAccountResolver crafterAccounts,
+                MembershipInvitationDiscordDelivery discordDelivery,
                 CancellationToken cancellationToken) =>
             {
                 var authorization = await AuthorizeCompanyAdministratorAsync(
@@ -460,11 +472,17 @@ public static class MembershipEndpoints
                         "invalid_invitation_seat",
                         "Choose a crafter from this company or invite without existing history."));
                 }
+                // A record bound to an account that is not a member (a contractor who claimed
+                // with Discord) stays invitable; consumption only admits that bound account.
                 if (body.LegacyCrafterId.HasValue &&
                     (await memberships.LoadCrafterBindingsAsync(
                         authorization.CompanyId,
-                        cancellationToken)).Any(binding =>
-                            binding.LegacyCrafterId == body.LegacyCrafterId.Value))
+                        cancellationToken)).FirstOrDefault(binding =>
+                            binding.LegacyCrafterId == body.LegacyCrafterId.Value) is { } seatBinding &&
+                    await memberships.LoadForAccountAsync(
+                        authorization.CompanyId,
+                        seatBinding.AccountProfileId,
+                        cancellationToken) is { State: MembershipState.Active or MembershipState.Pending })
                 {
                     return Results.Conflict(new MembershipErrorResponse(
                         "invitation_seat_already_connected",
@@ -494,7 +512,105 @@ public static class MembershipEndpoints
                     invitation.CompanyId,
                     invitation.LegacyCrafterId,
                     cancellationToken);
-                return Results.Ok(ToInvitationResponse(invitation, company!.Name, legacyName));
+                if (!body.SendOnDiscord)
+                {
+                    return Results.Ok(ToInvitationResponse(invitation, company!.Name, legacyName));
+                }
+                var delivery = await discordDelivery.DeliverAsync(
+                    invitation,
+                    company!.Name,
+                    legacyName,
+                    cancellationToken);
+                return Results.Ok(ToInvitationResponse(invitation, company.Name, legacyName, delivery));
+            });
+
+        companies.MapGet(
+            "/{companyId}/membership-invitations/discord-recipients",
+            async (
+                string companyId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                MembershipInvitationDiscordDelivery discordDelivery,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeCompanyAdministratorAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+                var recipients = await discordDelivery.LoadRecipientsAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                return Results.Ok(new MembershipInvitationRecipientsResponse(
+                    await discordDelivery.ResolveUnavailableCodeAsync(
+                        authorization.CompanyId,
+                        cancellationToken),
+                    recipients
+                        .Select(item => new MembershipInvitationRecipientResponse(
+                            item.LegacyCrafterId,
+                            item.DisplayName))
+                        .ToArray()));
+            });
+
+        // Retries the Discord delivery of an invitation for the operator still holding its
+        // link. The token proves that; the recipient is resolved again on the host.
+        companies.MapPost(
+            "/{companyId}/membership-invitations/{invitationId:guid}/discord-delivery",
+            async (
+                string companyId,
+                Guid invitationId,
+                MembershipInvitationDeliveryBody body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                SqliteMembershipStore memberships,
+                LegacyCrafterAccountResolver crafterAccounts,
+                MembershipInvitationDiscordDelivery discordDelivery,
+                CancellationToken cancellationToken) =>
+            {
+                var authorization = await AuthorizeCompanyAdministratorAsync(
+                    companyId,
+                    request,
+                    options,
+                    accessResolver,
+                    companyService,
+                    cancellationToken);
+                if (authorization.Error != null)
+                {
+                    return authorization.Error;
+                }
+                var invitation = await memberships.LoadInvitationForTokenAsync(
+                    authorization.CompanyId,
+                    invitationId,
+                    body.Token,
+                    cancellationToken);
+                if (invitation == null)
+                {
+                    return Results.NotFound();
+                }
+                var company = await companyService.LoadPublicCompanyProfileAsync(
+                    authorization.CompanyId,
+                    cancellationToken);
+                var legacyName = await ResolveLegacyCrafterNameAsync(
+                    crafterAccounts,
+                    invitation.CompanyId,
+                    invitation.LegacyCrafterId,
+                    cancellationToken);
+                var delivery = await discordDelivery.DeliverAsync(
+                    invitation,
+                    company!.Name,
+                    legacyName,
+                    cancellationToken);
+                return Results.Ok(ToInvitationResponse(invitation, company.Name, legacyName, delivery));
             });
 
         companies.MapGet(
@@ -598,7 +714,7 @@ public static class MembershipEndpoints
                 return company == null
                     ? Results.NotFound()
                     : Results.Ok(ToInvitationResponse(
-                        invitation,
+                        invitation with { DiscordDelivery = null },
                         company.Name,
                         await ResolveLegacyCrafterNameAsync(
                             crafterAccounts,
@@ -1315,7 +1431,8 @@ public static class MembershipEndpoints
     private static MembershipInvitationResponse ToInvitationResponse(
         CompanyMembershipInvitation invitation,
         string companyName,
-        string? legacyCrafterName) =>
+        string? legacyCrafterName,
+        MembershipInvitationDeliveryResult? delivery = null) =>
         new(
             invitation.InvitationId,
             invitation.CompanyId.ToString(),
@@ -1325,7 +1442,12 @@ public static class MembershipEndpoints
             invitation.IssuedAtUtc,
             invitation.ExpiresAtUtc,
             invitation.State.ToString().ToLowerInvariant(),
-            invitation.Token);
+            invitation.Token,
+            delivery == null
+                ? invitation.DiscordDelivery?.State
+                : delivery.Sent ? "sent" : "failed",
+            delivery?.RecipientName ?? invitation.DiscordDelivery?.RecipientName,
+            delivery?.Code ?? invitation.DiscordDelivery?.Code);
 
     private static async Task<string?> ResolveLegacyCrafterNameAsync(
         LegacyCrafterAccountResolver crafterAccounts,

@@ -289,6 +289,7 @@ public sealed class TradeOrder
     public DateTime? CraftPlanSavedAtUtc { get; set; }
     public TradeOrderCraftPlanLinkKind CraftPlanLinkKind { get; set; } = TradeOrderCraftPlanLinkKind.Unknown;
     public TradeCommissionPublication? CommissionPublication { get; set; }
+    [JsonConverter(typeof(FFXIV_Craft_Architect.Core.Services.StoredCommissionUpgradeConverter))]
     public TradeCompanyCommission? CompanyCommission { get; set; }
     public string? RemoteId { get; set; }
     public TradeSyncState SyncState { get; set; } = TradeSyncState.LocalOnly;

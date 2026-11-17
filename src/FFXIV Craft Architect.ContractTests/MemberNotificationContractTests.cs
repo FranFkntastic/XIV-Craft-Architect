@@ -130,7 +130,7 @@ public sealed class MemberNotificationContractTests
     {
         await using var fixture = await NotificationFixture.CreateAsync(linkDiscord: true);
         var notification = fixture.Notification(
-            CompanyCommissionActivityKind.ProvisionalIdentitySubmitted) with
+            CompanyCommissionActivityKind.ClaimantCharacterSubmitted) with
         {
             ActivityUrl = new Uri(
                 $"https://example.test/trade/orders?orderId={CommissionId:D}" +

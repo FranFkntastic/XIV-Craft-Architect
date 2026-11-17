@@ -211,6 +211,10 @@ public static class CompanyCommissionEndpoints
                 var identity = await identities.LoadByProfileAsync(
                     account.ProfileId,
                     cancellationToken);
+                if (identity == null)
+                {
+                    return ClaimRequiresAccount();
+                }
 
                 var command = new ClaimCompanyCommissionCommand(
                     new CompanyCommissionCommandContext(
@@ -701,13 +705,13 @@ public static class CompanyCommissionEndpoints
                     claimIdentity != null)
                 {
                     // One crafter per person per company: reuse the account's existing
-                    // company crafter instead of the browser-minted provisional ID.
-                    var existingCrafterId = claim.ProvisionalCrafter == null
-                        ? null
-                        : await crafterAccounts.ResolveClaimantCrafterIdAsync(
+                    // company crafter instead of the browser-minted character ID.
+                    var (existingCrafterId, confirmed) = await ResolveExactClaimCrafterAsync(
                             capability.CompanyId,
                             claimAccount.ProfileId,
-                            claim.ProvisionalCrafter.LodestoneCharacterId,
+                            claim.ClaimantCharacter?.LodestoneCharacterId,
+                            crafterAccounts,
+                            memberships,
                             cancellationToken);
                     command = BindClaimToAccount(
                         claim,
@@ -715,7 +719,8 @@ public static class CompanyCommissionEndpoints
                         new CompanyCommissionClaimAccountEvidence(
                             claimAccount.ProfileId,
                             claimIdentity.DiscordUserId,
-                            claimIdentity.DisplayNameSnapshot));
+                            claimIdentity.DisplayNameSnapshot),
+                        confirmed);
                 }
                 if ((command is ClaimCompanyCommissionCommand or
                          RedeemCompanyCommissionParticipantRecoveryCommand) &&
@@ -1150,17 +1155,23 @@ public static class CompanyCommissionEndpoints
         {
             case "claim":
                 {
+                    if (!body.TryGetProperty("claimIdentityVersion", out var version) ||
+                        !version.TryGetInt32(out var identityVersion) || identityVersion != 2)
+                    {
+                        throw new JsonException(
+                            "claim_identity_version_mismatch: This claim page uses a retired identity format. Reload the page after the release finishes; no claim was submitted.");
+                    }
                     var payload = Deserialize<ClaimPayload>(body);
-                    var provisional = payload.ProvisionalCrafter == null
+                    var character = payload.ClaimantCharacter == null
                         ? null
-                        : SanitizeProvisionalCrafter(
-                            payload.ProvisionalCrafter);
+                        : SanitizeClaimantCharacter(
+                            payload.ClaimantCharacter);
                     return (
                         new ClaimCompanyCommissionCommand(
                             context,
                             payload.TermsVersion,
-                            provisional,
-                            payload.ExistingCrafterId),
+                            character,
+                            ExistingCrafterId: null),
                         payload.NewParticipantCredential);
                 }
             case "redeem-participant-recovery":
@@ -1180,10 +1191,10 @@ public static class CompanyCommissionEndpoints
                     null);
             case "submit-identity":
                 {
-                    var provisional = SanitizeProvisionalCrafter(
-                        Deserialize<IdentityPayload>(body).ProvisionalCrafter);
+                    var character = SanitizeClaimantCharacter(
+                        Deserialize<IdentityPayload>(body).ClaimantCharacter);
                     return (
-                        new SubmitCompanyCommissionIdentityCommand(context, provisional),
+                        new SubmitCompanyCommissionIdentityCommand(context, character),
                         null);
                 }
             case "request-payment-policy-change":
@@ -1316,29 +1327,25 @@ public static class CompanyCommissionEndpoints
     private static bool IsValidParticipantCredential(string? credential) =>
         SqliteCompanyCommissionCapabilityStore.IsValidCapability(credential);
 
-    private static CompanyCommissionProvisionalCrafter SanitizeProvisionalCrafter(
-        CompanyCommissionProvisionalCrafter supplied)
+    private static CompanyCommissionClaimantCharacter SanitizeClaimantCharacter(
+        CompanyCommissionClaimantCharacter supplied)
     {
-        if (supplied.ProvisionalCrafterId == Guid.Empty ||
+        if (supplied.ClaimantCharacterId == Guid.Empty ||
             !IsBounded(supplied.CharacterName, 64) ||
             !IsBounded(supplied.HomeWorld, 64) ||
-            !IsBounded(supplied.ContactMethod, 32) ||
-            !IsBounded(supplied.ContactValue, 256) ||
             supplied.SubmittedAtUtc == default ||
             !IsLodestoneCandidate(
                 supplied.LodestoneCharacterId,
                 supplied.LodestoneProfileUrl))
         {
             throw new JsonException(
-                "The provisional crafter identity or Lodestone evidence is invalid.");
+                "The claimant character identity or Lodestone evidence is invalid.");
         }
 
         return supplied with
         {
             CharacterName = supplied.CharacterName.Trim(),
             HomeWorld = supplied.HomeWorld.Trim(),
-            ContactMethod = supplied.ContactMethod.Trim(),
-            ContactValue = supplied.ContactValue.Trim(),
             LodestoneCharacterId = supplied.LodestoneCharacterId!.Trim(),
             LodestoneProfileUrl = supplied.LodestoneProfileUrl!.Trim(),
             SubmittedAtUtc = supplied.SubmittedAtUtc.ToUniversalTime()
@@ -1427,7 +1434,11 @@ public static class CompanyCommissionEndpoints
     private static IResult InvalidCommand(string message) =>
         Results.BadRequest(new
         {
-            error = "invalid_command",
+            error = message.StartsWith("claim_identity_version_mismatch:", StringComparison.Ordinal)
+                ? "claim_identity_version_mismatch"
+                : message.StartsWith("claimant_character_selection_required:", StringComparison.Ordinal)
+                    ? "claimant_character_selection_required"
+                    : "invalid_command",
             message
         });
 
@@ -1443,25 +1454,24 @@ public static class CompanyCommissionEndpoints
     private static ClaimCompanyCommissionCommand BindClaimToAccount(
         ClaimCompanyCommissionCommand claim,
         Guid? existingCrafterId,
-        CompanyCommissionClaimAccountEvidence evidence) =>
+        CompanyCommissionClaimAccountEvidence evidence,
+        bool confirmed = false) =>
         claim with
         {
-            ProvisionalCrafter = claim.ProvisionalCrafter == null
+            ExistingCrafterId = confirmed ? existingCrafterId : null,
+            ClaimantCharacter = claim.ClaimantCharacter == null
                 ? null
-                : claim.ProvisionalCrafter with
+                : claim.ClaimantCharacter with
                 {
-                    ProvisionalCrafterId = existingCrafterId ??
-                        claim.ProvisionalCrafter.ProvisionalCrafterId,
-                    ContactMethod = "Discord",
-                    ContactValue = evidence.DiscordDisplayNameSnapshot
+                    ClaimantCharacterId = existingCrafterId ??
+                        claim.ClaimantCharacter.ClaimantCharacterId
                 },
             AccountEvidence = evidence
         };
 
-    // The recorded form is either the browser command as sent (an anonymous claim) or
-    // the account-bound rewrite with the account evidence the claim committed with. The
+    // Rebuild the account-bound command with the evidence it committed with. The
     // crafter is never taken from the record, so a retry carrying a different
-    // provisional crafter still fails as a changed command; it is the browser's own ID
+    // claimant character still fails as a changed command; it is the browser's own ID
     // or the account's reused crafter as resolved for this retry. Anything else
     // replays as sent and the service reports the mismatch.
     private static async Task<ICompanyCommissionParticipantCommand> RebuildRecordedClaimAsync(
@@ -1479,7 +1489,7 @@ public static class CompanyCommissionEndpoints
 
         var asSent = BindClaimToAccount(claim, null, evidence);
         if (HostedCompanyCommissionService.MatchesRecordedFingerprint(asSent, recorded) ||
-            claim.ProvisionalCrafter == null)
+            claim.ClaimantCharacter == null)
         {
             return asSent;
         }
@@ -1487,12 +1497,19 @@ public static class CompanyCommissionEndpoints
         var reused = await crafterAccounts.ResolveClaimantCrafterIdAsync(
             companyId,
             evidence.ProfileId,
-            claim.ProvisionalCrafter.LodestoneCharacterId,
+            claim.ClaimantCharacter.LodestoneCharacterId,
             cancellationToken);
-        var rebuilt = BindClaimToAccount(claim, reused, evidence);
-        return HostedCompanyCommissionService.MatchesRecordedFingerprint(rebuilt, recorded)
-            ? rebuilt
-            : claim;
+        // The claim may have been confirmed after it committed, so the current claim
+        // cannot say which form was recorded; accept whichever form matches.
+        foreach (var confirmed in new[] { false, true })
+        {
+            var rebuilt = BindClaimToAccount(claim, reused, evidence, confirmed && reused.HasValue);
+            if (HostedCompanyCommissionService.MatchesRecordedFingerprint(rebuilt, recorded))
+            {
+                return rebuilt;
+            }
+        }
+        return claim;
     }
 
     private static IResult ClaimRequiresAccount() =>
@@ -1501,6 +1518,37 @@ public static class CompanyCommissionEndpoints
                 "claim_requires_account",
                 "Sign in with Discord to claim this commission."),
             statusCode: StatusCodes.Status401Unauthorized);
+
+    private static async Task<(Guid? CrafterId, bool Confirmed)> ResolveExactClaimCrafterAsync(
+        CompanyId companyId,
+        Guid accountProfileId,
+        string? lodestoneCharacterId,
+        LegacyCrafterAccountResolver crafters,
+        SqliteMembershipStore memberships,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(lodestoneCharacterId))
+        {
+            return (null, false);
+        }
+        var bindings = await memberships.LoadCrafterBindingsAsync(companyId, cancellationToken);
+        var matches = (await crafters.LoadCompanyCraftersAsync(companyId, cancellationToken))
+            .Where(row => string.Equals(row.Crafter.LodestoneCharacterId?.Trim(),
+                lodestoneCharacterId.Trim(), StringComparison.Ordinal))
+            .Where(row => !bindings.Any(binding => binding.LegacyCrafterId == row.Crafter.Id &&
+                binding.AccountProfileId != accountProfileId))
+            .OrderByDescending(row => bindings.Any(binding =>
+                binding.LegacyCrafterId == row.Crafter.Id && binding.AccountProfileId == accountProfileId))
+            .ThenBy(row => row.Crafter.CreatedAtUtc)
+            .ThenBy(row => row.Crafter.Id);
+        var match = matches.FirstOrDefault();
+        return match == null
+            ? (null, false)
+            : (match.Crafter.Id, bindings.Any(binding =>
+                binding.LegacyCrafterId == match.Crafter.Id &&
+                binding.AccountProfileId == accountProfileId &&
+                binding.Evidence == CrafterAccountBindingEvidence.ConfirmedClaimReuse));
+    }
 
     private static IResult ClaimSlotTaken() =>
         Results.Conflict(new MembershipErrorResponse(
@@ -1574,8 +1622,7 @@ public static class CompanyCommissionEndpoints
 
     private sealed record ClaimPayload(
         int TermsVersion,
-        CompanyCommissionProvisionalCrafter? ProvisionalCrafter,
-        Guid? ExistingCrafterId,
+        CompanyCommissionClaimantCharacter? ClaimantCharacter,
         string NewParticipantCredential);
 
     private sealed record RecoveryPayload(
@@ -1585,7 +1632,7 @@ public static class CompanyCommissionEndpoints
     private sealed record ReasonPayload(string Reason);
 
     private sealed record IdentityPayload(
-        CompanyCommissionProvisionalCrafter ProvisionalCrafter);
+        CompanyCommissionClaimantCharacter ClaimantCharacter);
 
     private sealed record PaymentPolicyPayload(
         CompanyCommissionPaymentSchedule RequestedSchedule,

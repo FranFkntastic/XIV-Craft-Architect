@@ -564,6 +564,14 @@ public sealed partial class HostedCompanyCommissionService(
         }
         catch (InvalidOperationException exception)
         {
+            logger.LogWarning(exception,
+                "Commission command {CommandType} refused for company {CompanyId}, commission {CommissionId}.",
+                command.GetType().Name, context.CompanyId, context.CommissionId);
+            if (command is ClaimCompanyCommissionCommand { AccountEvidence: null })
+            {
+                return Rejected("claim_requires_verified_discord_account",
+                    "A new claim requires verified Discord account evidence.", snapshot.Order);
+            }
             return Rejected("command_rejected", exception.Message, snapshot.Order);
         }
 

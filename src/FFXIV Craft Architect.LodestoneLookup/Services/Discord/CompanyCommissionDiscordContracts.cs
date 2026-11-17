@@ -388,7 +388,7 @@ public static class CompanyCommissionNotificationPolicy
         {
             CompanyCommissionActivityKind.ProgressReported or
             CompanyCommissionActivityKind.CommentAdded or
-            CompanyCommissionActivityKind.ProvisionalIdentityConfirmed or
+            CompanyCommissionActivityKind.ClaimantCharacterConfirmed or
             CompanyCommissionActivityKind.PaymentPolicyChangeAccepted or
             CompanyCommissionActivityKind.PaymentPolicyChangeRefused or
             CompanyCommissionActivityKind.TermsAcknowledged or
@@ -415,7 +415,7 @@ public static class CompanyCommissionNotificationPolicy
 
             CompanyCommissionActivityKind.ClaimAccepted or
             CompanyCommissionActivityKind.ClaimRecovered or
-            CompanyCommissionActivityKind.ProvisionalIdentitySubmitted or
+            CompanyCommissionActivityKind.ClaimantCharacterSubmitted or
             CompanyCommissionActivityKind.PaymentPolicyChangeRequested or
             CompanyCommissionActivityKind.CompanyMaterialsReceived or
             CompanyCommissionActivityKind.DeliveryReadinessDeclared or
@@ -424,7 +424,7 @@ public static class CompanyCommissionNotificationPolicy
 
             CompanyCommissionActivityKind.ClaimRejected or
             CompanyCommissionActivityKind.ClaimReleased or
-            CompanyCommissionActivityKind.ProvisionalIdentityRejected or
+            CompanyCommissionActivityKind.ClaimantCharacterRejected or
             CompanyCommissionActivityKind.DeliveryReturnedToWork or
             CompanyCommissionActivityKind.CommissionCanceled or
             CompanyCommissionActivityKind.CommissionPublicationRevoked or

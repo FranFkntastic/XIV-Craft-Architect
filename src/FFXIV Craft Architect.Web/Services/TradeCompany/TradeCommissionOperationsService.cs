@@ -542,7 +542,6 @@ public sealed class TradeCommissionOperationsService(
     public Task<TradeCommissionOperatorResult> RejectClaimAsync(
         CompanyCommissionOwnerProjection current,
         string reason,
-        bool blockProvisionalContact,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(reason))
@@ -553,11 +552,10 @@ public sealed class TradeCommissionOperationsService(
         return ExecuteAsync(
             current,
             "reject-claim",
-            new { Reason = reason.Trim(), blockProvisionalContact },
+            new { Reason = reason.Trim() },
             context => new RejectCompanyCommissionClaimCommand(
                 context,
-                reason.Trim(),
-                blockProvisionalContact),
+                reason.Trim()),
             cancellationToken);
     }
 
