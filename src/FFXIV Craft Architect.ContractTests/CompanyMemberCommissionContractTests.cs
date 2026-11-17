@@ -91,6 +91,87 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task AnonymousPortableClaimRequiresAnAccount()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var capability = await fixture.IssueClaimCapabilityAsync();
+
+        using var response = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken);
+        var error = await response.Content.ReadFromJsonAsync<MembershipErrorResponse>();
+        var publicBrief = await fixture.LoadPublicBriefAsync();
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal("claim_requires_account", error!.Error);
+        Assert.False(publicBrief!.IsClaimed);
+    }
+
+    [Fact]
+    public async Task ForeignAccountsCannotTakeClaimantParticipantAccess()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.CreateAccountAsync("Contractor");
+        var otherMember = await fixture.AddActiveMemberAsync("Other member");
+        var capability = await fixture.IssueClaimCapabilityAsync();
+        using var claimed = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            claimant);
+        claimed.EnsureSuccessStatusCode();
+
+        using var other = await fixture.InstallParticipantAccessAsync(
+            otherMember,
+            new string('o', 43));
+        using var owner = await fixture.InstallParticipantAccessAsync(
+            fixture.Owner,
+            new string('w', 43));
+        using var anonymous = await fixture.InstallParticipantAccessAsync(
+            null,
+            new string('n', 43));
+
+        Assert.Equal(HttpStatusCode.Forbidden, other.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, owner.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+    }
+
+    [Fact]
+    public async Task LegacyClaimParticipantAccessHonorsOnlyThisCompanysCrafterBinding()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var member = await fixture.AddActiveMemberAsync("Legacy claimant");
+        var returning = await fixture.CreateAccountAsync("Returning contractor");
+        using var claimed = await fixture.ClaimAsync(member);
+        claimed.EnsureSuccessStatusCode();
+        var legacyCrafterId = await fixture.ConvertClaimToLegacyCrafterAsync(
+            removeAccountEvidence: true);
+        Assert.Equal(
+            CrafterAccountBindingMutationStatus.Applied,
+            (await fixture.Memberships.BindCrafterAsync(
+                new CompanyId(Guid.NewGuid()),
+                legacyCrafterId,
+                returning.ProfileId,
+                CrafterAccountBindingEvidence.OperatorConfirmed,
+                Guid.NewGuid())).Status);
+
+        using var crossCompany = await fixture.InstallParticipantAccessAsync(
+            returning,
+            new string('x', 43));
+        Assert.Equal(
+            CrafterAccountBindingMutationStatus.Applied,
+            (await fixture.Memberships.BindCrafterAsync(
+                new CompanyId(fixture.Company.Id),
+                legacyCrafterId,
+                returning.ProfileId,
+                CrafterAccountBindingEvidence.OperatorConfirmed,
+                fixture.Owner.ProfileId)).Status);
+        using var sameCompany = await fixture.InstallParticipantAccessAsync(
+            returning,
+            new string('y', 43));
+
+        Assert.Equal(HttpStatusCode.Forbidden, crossCompany.StatusCode);
+        Assert.True(sameCompany.IsSuccessStatusCode, await sameCompany.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task ConcurrentMemberClaimsCommitExactlyOneClaimant()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -542,6 +623,56 @@ public sealed class CompanyMemberCommissionContractTests
             return order.CompanyCommission!.ActiveClaim!.CrafterId!.Value;
         }
 
+        public async Task<Guid> ConvertClaimToLegacyCrafterAsync(
+            bool removeAccountEvidence = false)
+        {
+            var legacyCrafter = new TradeCrafterProfile
+            {
+                Id = Guid.NewGuid(),
+                CompanyProfileId = Company.Id,
+                DisplayName = "Returning crafter legacy record",
+                WorldName = "Siren",
+                LodestoneCharacterId = "49131404"
+            };
+            var crafterPut = await Profiles.PutObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeCrafters,
+                legacyCrafter.Id.ToString("D"),
+                JsonSerializer.Serialize(legacyCrafter, JsonOptions),
+                expectedRevision: 0,
+                ct: CancellationToken.None);
+            Assert.True(crafterPut.Success);
+
+            var envelope = await Profiles.LoadObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                CancellationToken.None);
+            var order = JsonSerializer.Deserialize<TradeOrder>(
+                envelope!.PayloadJson,
+                JsonOptions)!;
+            order.AssignedCrafterId = legacyCrafter.Id;
+            order.CompanyCommission = order.CompanyCommission! with
+            {
+                ActiveClaim = order.CompanyCommission.ActiveClaim! with
+                {
+                    CrafterId = legacyCrafter.Id,
+                    AccountEvidence = removeAccountEvidence
+                        ? null
+                        : order.CompanyCommission.ActiveClaim.AccountEvidence
+                }
+            };
+            var orderPut = await Profiles.PutObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                JsonSerializer.Serialize(order, JsonOptions),
+                expectedRevision: envelope.Revision,
+                ct: CancellationToken.None);
+            Assert.True(orderPut.Success);
+            return legacyCrafter.Id;
+        }
+
         public Task<HttpResponseMessage> LoadOwnerCommissionAsync(Account account)
         {
             var client = CreateClient(account.Key);
@@ -666,6 +797,18 @@ public sealed class CompanyMemberCommissionContractTests
             return await client.PostAsJsonAsync(
                 $"/trade/v1/companies/{Company.Id:D}/commissions/{Order.Id:D}/commands/cancel",
                 command);
+        }
+
+        public Task<HttpResponseMessage> InstallParticipantAccessAsync(
+            Account? account,
+            string participantCredential)
+        {
+            var client = account == null
+                ? application.CreateClient()
+                : CreateClient(account.Key);
+            return client.PostAsJsonAsync(
+                $"/xivdata/commission-briefs/{Order.CommissionPublication!.PublicId}/participant-access",
+                new CompanyCommissionParticipantAccessRequest(participantCredential));
         }
 
         public Task RevokeParticipantCapabilitiesAsync() =>
