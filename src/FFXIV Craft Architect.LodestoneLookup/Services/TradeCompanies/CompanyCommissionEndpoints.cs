@@ -322,6 +322,7 @@ public static class CompanyCommissionEndpoints
                 ProfileHostedTradeCompanyService companyService,
                 HostedCompanyCommissionService commissions,
                 SqliteCompanyCommissionCapabilityStore capabilities,
+                LegacyCrafterAccountResolver crafterAccounts,
                 TimeProvider timeProvider,
                 CancellationToken cancellationToken) =>
             {
@@ -426,6 +427,13 @@ public static class CompanyCommissionEndpoints
                     TimeSpan.FromSeconds(15));
                 var committedCancellationToken = committedWork.Token;
                 var now = timeProvider.GetUtcNow().UtcDateTime;
+                if (command is ConfirmCompanyCommissionIdentityCommand)
+                {
+                    await crafterAccounts.BindConfirmedClaimCrafterAsync(
+                        canonical.CompanyId,
+                        canonical.ActiveClaim,
+                        committedCancellationToken);
+                }
                 if (command is ResetCompanyCommissionParticipantRecoveryCommand)
                 {
                     var recovery = canonical.RecoveryGrant
@@ -630,6 +638,21 @@ public static class CompanyCommissionEndpoints
                     return Results.Unauthorized();
                 }
 
+                // Claims are account-bound. A retry of a claim that already committed
+                // replays exactly as recorded, so in-flight claims keep their outcome.
+                var recordedClaim = capability.Kind == CompanyCommissionCapabilityKind.Claim
+                    ? await commissions.LoadRecordedCommandAsync(
+                        capability,
+                        envelope.CommandId,
+                        cancellationToken)
+                    : null;
+                if (capability.Kind == CompanyCommissionCapabilityKind.Claim &&
+                    claimAccount == null &&
+                    recordedClaim == null)
+                {
+                    return ClaimRequiresAccount();
+                }
+
                 var context = await commissions.CreateCapabilityCommandContextAsync(
                     capability,
                     envelope.ExpectedProjectionRevision,
@@ -660,24 +683,39 @@ public static class CompanyCommissionEndpoints
                 {
                     return InvalidCommand(exception.Message);
                 }
-                if (command is ClaimCompanyCommissionCommand claim &&
+                if (command is ClaimCompanyCommissionCommand recordedRetry &&
+                    recordedClaim != null)
+                {
+                    // A retry of a committed claim is rebuilt in the form that was
+                    // recorded: the display name seen now may differ, and the fingerprint
+                    // must match the original.
+                    command = await RebuildRecordedClaimAsync(
+                        recordedRetry,
+                        recordedClaim,
+                        capability.CompanyId,
+                        crafterAccounts,
+                        cancellationToken);
+                }
+                else if (command is ClaimCompanyCommissionCommand claim &&
                     claimAccount != null &&
                     claimIdentity != null)
                 {
-                    command = claim with
-                    {
-                        ProvisionalCrafter = claim.ProvisionalCrafter == null
-                            ? null
-                            : claim.ProvisionalCrafter with
-                            {
-                                ContactMethod = "Discord",
-                                ContactValue = claimIdentity.DisplayNameSnapshot
-                            },
-                        AccountEvidence = new CompanyCommissionClaimAccountEvidence(
+                    // One crafter per person per company: reuse the account's existing
+                    // company crafter instead of the browser-minted provisional ID.
+                    var existingCrafterId = claim.ProvisionalCrafter == null
+                        ? null
+                        : await crafterAccounts.ResolveClaimantCrafterIdAsync(
+                            capability.CompanyId,
+                            claimAccount.ProfileId,
+                            claim.ProvisionalCrafter.LodestoneCharacterId,
+                            cancellationToken);
+                    command = BindClaimToAccount(
+                        claim,
+                        existingCrafterId,
+                        new CompanyCommissionClaimAccountEvidence(
                             claimAccount.ProfileId,
                             claimIdentity.DiscordUserId,
-                            claimIdentity.DisplayNameSnapshot)
-                    };
+                            claimIdentity.DisplayNameSnapshot));
                 }
                 if ((command is ClaimCompanyCommissionCommand or
                          RedeemCompanyCommissionParticipantRecoveryCommand) &&
@@ -763,7 +801,117 @@ public static class CompanyCommissionEndpoints
                     ? CanonicalCommissionConflict()
                     : Results.Ok(participantProjection);
             });
+
+        // Participant authority belongs to the claiming account on any device: an
+        // authenticated owner installs a fresh browser-generated credential for the
+        // live grant without a bearer link or company membership.
+        app.MapPost(
+            "/xivdata/commission-briefs/{publicId}/participant-access",
+            async (
+                string publicId,
+                CompanyCommissionParticipantAccessRequest body,
+                HttpRequest request,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                LegacyCrafterAccountResolver crafterAccounts,
+                SqliteCompanyCommissionCapabilityStore capabilities,
+                HostedCompanyCommissionService commissions,
+                TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                if (string.IsNullOrWhiteSpace(publicId) ||
+                    publicId.Length > SqliteCompanyCommissionCapabilityStore
+                        .MaximumPublicBriefIdLength)
+                {
+                    return Results.NotFound();
+                }
+                if (!IsValidParticipantCredential(body?.ParticipantCredential))
+                {
+                    return InvalidCommand(
+                        "A bounded browser-generated participant credential is required.");
+                }
+
+                var account = await accessResolver.ResolveAccountAsync(
+                    request,
+                    cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                var ownership = await companyService.ResolvePublicationOwnershipAsync(
+                    publicId,
+                    cancellationToken);
+                if (ownership == null)
+                {
+                    return Results.NotFound();
+                }
+                var canonical = await companyService.LoadPublicOrderAsync(
+                    ownership,
+                    publicId,
+                    cancellationToken);
+                var order = canonical?.Order;
+                var commission = order?.CompanyCommission;
+                if (order == null ||
+                    commission == null ||
+                    commission.CompanyId != ownership.CompanyId ||
+                    commission.CommissionId != ownership.OrderId ||
+                    !string.Equals(
+                        commission.PublicMetadata.PublicBriefId,
+                        publicId,
+                        StringComparison.Ordinal))
+                {
+                    return MissingCanonicalCommission();
+                }
+
+                var activeClaim = commission.ActiveClaim;
+                if (activeClaim == null ||
+                    commission.ParticipantGrant is not { RevokedAtUtc: null } grant ||
+                    grant.ClaimId != activeClaim.ClaimId ||
+                    order.Status == TradeOrderStatus.Canceled ||
+                    commission.PublicMetadata.ViewState !=
+                        CompanyCommissionPublicViewState.Published ||
+                    !await crafterAccounts.IsClaimOwnedByAccountAsync(
+                        ownership.CompanyId,
+                        activeClaim,
+                        account.ProfileId,
+                        cancellationToken))
+                {
+                    return ParticipantAccessDenied();
+                }
+
+                var resolution = await capabilities.InstallLinkedParticipantAsync(
+                    ownership.CompanyId,
+                    ownership.OrderId,
+                    publicId,
+                    grant.GrantId,
+                    grant.CapabilityRevision,
+                    body!.ParticipantCredential!,
+                    timeProvider.GetUtcNow().UtcDateTime,
+                    cancellationToken);
+                if (resolution == null)
+                {
+                    return Results.Json(
+                        new MembershipErrorResponse(
+                            "participant_credential_revoked",
+                            "This browser credential was revoked; a new one is required."),
+                        statusCode: StatusCodes.Status409Conflict);
+                }
+
+                var participant = await commissions.LoadParticipantAsync(
+                    resolution,
+                    cancellationToken);
+                return participant == null
+                    ? CanonicalCommissionConflict()
+                    : Results.Ok(participant);
+            });
     }
+
+    private static IResult ParticipantAccessDenied() =>
+        Results.Json(
+            new MembershipErrorResponse(
+                "participant_access_denied",
+                "This account does not hold the commission claim."),
+            statusCode: StatusCodes.Status403Forbidden);
 
     private static async Task<IResult> ExecuteMembershipParticipantAsync(
         string publicId,
@@ -1292,6 +1440,68 @@ public static class CompanyCommissionEndpoints
                     : "The company membership is not active."),
             statusCode: StatusCodes.Status403Forbidden);
 
+    private static ClaimCompanyCommissionCommand BindClaimToAccount(
+        ClaimCompanyCommissionCommand claim,
+        Guid? existingCrafterId,
+        CompanyCommissionClaimAccountEvidence evidence) =>
+        claim with
+        {
+            ProvisionalCrafter = claim.ProvisionalCrafter == null
+                ? null
+                : claim.ProvisionalCrafter with
+                {
+                    ProvisionalCrafterId = existingCrafterId ??
+                        claim.ProvisionalCrafter.ProvisionalCrafterId,
+                    ContactMethod = "Discord",
+                    ContactValue = evidence.DiscordDisplayNameSnapshot
+                },
+            AccountEvidence = evidence
+        };
+
+    // The recorded form is either the browser command as sent (an anonymous claim) or
+    // the account-bound rewrite with the account evidence the claim committed with. The
+    // crafter is never taken from the record, so a retry carrying a different
+    // provisional crafter still fails as a changed command; it is the browser's own ID
+    // or the account's reused crafter as resolved for this retry. Anything else
+    // replays as sent and the service reports the mismatch.
+    private static async Task<ICompanyCommissionParticipantCommand> RebuildRecordedClaimAsync(
+        ClaimCompanyCommissionCommand claim,
+        RecordedCompanyCommissionCommand recorded,
+        CompanyId companyId,
+        LegacyCrafterAccountResolver crafterAccounts,
+        CancellationToken cancellationToken)
+    {
+        if (HostedCompanyCommissionService.MatchesRecordedFingerprint(claim, recorded) ||
+            recorded.ActiveClaim?.AccountEvidence is not { } evidence)
+        {
+            return claim;
+        }
+
+        var asSent = BindClaimToAccount(claim, null, evidence);
+        if (HostedCompanyCommissionService.MatchesRecordedFingerprint(asSent, recorded) ||
+            claim.ProvisionalCrafter == null)
+        {
+            return asSent;
+        }
+
+        var reused = await crafterAccounts.ResolveClaimantCrafterIdAsync(
+            companyId,
+            evidence.ProfileId,
+            claim.ProvisionalCrafter.LodestoneCharacterId,
+            cancellationToken);
+        var rebuilt = BindClaimToAccount(claim, reused, evidence);
+        return HostedCompanyCommissionService.MatchesRecordedFingerprint(rebuilt, recorded)
+            ? rebuilt
+            : claim;
+    }
+
+    private static IResult ClaimRequiresAccount() =>
+        Results.Json(
+            new MembershipErrorResponse(
+                "claim_requires_account",
+                "Sign in with Discord to claim this commission."),
+            statusCode: StatusCodes.Status401Unauthorized);
+
     private static IResult ClaimSlotTaken() =>
         Results.Conflict(new MembershipErrorResponse(
             "claim_slot_taken",
@@ -1397,3 +1607,5 @@ public static class CompanyCommissionEndpoints
 
     private sealed record OptionalCommentPayload(string? Comment);
 }
+
+public sealed record CompanyCommissionParticipantAccessRequest(string? ParticipantCredential);

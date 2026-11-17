@@ -8,14 +8,18 @@ public enum ProfileHostProvisioningAction
     ImportActiveCredentials,
     RotateKey,
     DisableProfile,
-    ExportProfile
+    ExportProfile,
+    ConsolidateCrafters,
+    RetireCompanies
 }
 
 public sealed record ProfileHostProvisioningCommand(
     ProfileHostProvisioningAction Action,
     string? ProfileId,
     string? DisplayName,
-    string? SourceDatabasePath = null)
+    string? SourceDatabasePath = null,
+    bool DryRun = false,
+    IReadOnlyList<string>? CompanyIds = null)
 {
     public static ProfileHostProvisioningCommand? TryParse(string[] args)
     {
@@ -59,6 +63,24 @@ public sealed record ProfileHostProvisioningCommand(
                 new ProfileHostProvisioningCommand(ProfileHostProvisioningAction.DisableProfile, args[2], null),
             "export-profile" when args.Length == 3 =>
                 new ProfileHostProvisioningCommand(ProfileHostProvisioningAction.ExportProfile, args[2], null),
+            "consolidate-crafters" when args.Length == 2 ||
+                                        args.Length == 3 && args[2] == "--dry-run" =>
+                new ProfileHostProvisioningCommand(
+                    ProfileHostProvisioningAction.ConsolidateCrafters,
+                    null,
+                    null,
+                    DryRun: args.Length == 3),
+            "retire-company" when args.Skip(2).Any(arg => arg != "--dry-run") =>
+                new ProfileHostProvisioningCommand(
+                    ProfileHostProvisioningAction.RetireCompanies,
+                    null,
+                    null,
+                    DryRun: args.Skip(2).Contains("--dry-run"),
+                    CompanyIds: args.Skip(2).Where(arg => arg != "--dry-run").ToArray()),
+            "retire-company" => throw new InvalidOperationException(
+                "Usage: profile-host retire-company <company-id> [<company-id>...] [--dry-run]"),
+            "consolidate-crafters" => throw new InvalidOperationException(
+                "Usage: profile-host consolidate-crafters [--dry-run]"),
             _ => null
         };
     }

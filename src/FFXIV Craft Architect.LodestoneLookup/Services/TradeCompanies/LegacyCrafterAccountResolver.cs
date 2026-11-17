@@ -12,15 +12,24 @@ public sealed record LegacyCrafterCandidate(
     string? WorldName,
     string? LodestoneCharacterId);
 
+public sealed record HostedCompanyCrafter(
+    string HostProfileId,
+    TradeCrafterProfile Crafter,
+    long Revision,
+    string PayloadJson);
+
 public sealed record LegacyCrafterAccountScope(
     Guid AccountProfileId,
     IReadOnlySet<Guid> AuthorizedCrafterIds)
 {
     public bool Owns(CompanyCommissionClaim? claim) =>
         claim != null &&
-        ((claim.CrafterId.HasValue && AuthorizedCrafterIds.Contains(claim.CrafterId.Value)) ||
-         (claim.ProvisionalCrafterId.HasValue &&
-          AuthorizedCrafterIds.Contains(claim.ProvisionalCrafterId.Value)));
+        AccountProfileId != Guid.Empty &&
+        (claim.AccountEvidence is { } evidence
+            ? evidence.ProfileId == AccountProfileId
+            : (claim.CrafterId.HasValue && AuthorizedCrafterIds.Contains(claim.CrafterId.Value)) ||
+              (claim.ProvisionalCrafterId.HasValue &&
+               AuthorizedCrafterIds.Contains(claim.ProvisionalCrafterId.Value)));
 }
 
 public sealed class LegacyCrafterAccountResolver(
@@ -32,6 +41,8 @@ public sealed class LegacyCrafterAccountResolver(
 {
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
+
+    private readonly CompanyHostProfileResolver hosts = new(profiles);
 
     public async Task DiscoverCommittedDiscordBindingsAsync(
         CompanyId companyId,
@@ -124,12 +135,81 @@ public sealed class LegacyCrafterAccountResolver(
         }
     }
 
+    /// <summary>
+    /// Binds the crafter a commissioner just confirmed for an account-bound claim to the
+    /// claiming account, so later claims by that person reuse the same crafter. The
+    /// binding only prevents duplicate crafters: the crafter may have been matched by a
+    /// public Lodestone ID, so it never authorizes the crafter's legacy claims. Existing
+    /// bindings to another account and operator unbind suppressions are respected.
+    /// </summary>
+    public async Task BindConfirmedClaimCrafterAsync(
+        CompanyId companyId,
+        CompanyCommissionClaim? claim,
+        CancellationToken cancellationToken = default)
+    {
+        if (claim?.AccountEvidence is not { } evidence ||
+            evidence.ProfileId == Guid.Empty ||
+            claim.CrafterId is not { } crafterId ||
+            crafterId == Guid.Empty ||
+            crafterId == evidence.ProfileId)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await memberships.BindCrafterAsync(
+                companyId,
+                crafterId,
+                evidence.ProfileId,
+                CrafterAccountBindingEvidence.ConfirmedClaimReuse,
+                actorProfileId: null,
+                cancellationToken);
+            if (result.Status == CrafterAccountBindingMutationStatus.Conflict)
+            {
+                logger.LogWarning(
+                    "Confirmed claim crafter {LegacyCrafterId} in company {CompanyId} is bound to account {BoundAccountProfileId}; claiming account {AccountProfileId} was not bound.",
+                    crafterId,
+                    companyId,
+                    result.Binding?.AccountProfileId,
+                    evidence.ProfileId);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Binding confirmed claim crafter {LegacyCrafterId} in company {CompanyId} to account {AccountProfileId} failed after the commission committed.",
+                crafterId,
+                companyId,
+                evidence.ProfileId);
+        }
+    }
+
+    /// <summary>
+    /// A claim belongs to the account that made it. Authenticated claims carry that
+    /// account as committed evidence, which is authoritative; crafter bindings only
+    /// decide ownership for legacy claims that predate account evidence.
+    /// </summary>
     public async Task<bool> IsClaimOwnedByAccountAsync(
         CompanyId companyId,
         CompanyCommissionClaim? claim,
         Guid accountProfileId,
         CancellationToken cancellationToken = default)
     {
+        if (claim == null || accountProfileId == Guid.Empty)
+        {
+            return false;
+        }
+        if (claim.AccountEvidence is { } evidence)
+        {
+            return evidence.ProfileId == accountProfileId;
+        }
+
         var scope = await ResolveScopeAsync(
             companyId,
             accountProfileId,
@@ -156,7 +236,8 @@ public sealed class LegacyCrafterAccountResolver(
             authorized.UnionWith((await memberships.LoadCrafterBindingsAsync(
                     companyId,
                     cancellationToken))
-                .Where(item => item.AccountProfileId == accountProfileId)
+                .Where(item => item.AccountProfileId == accountProfileId &&
+                    AuthorizesLegacyClaims(item.Evidence))
                 .Select(item => item.LegacyCrafterId));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -231,6 +312,91 @@ public sealed class LegacyCrafterAccountResolver(
             .ToArray();
     }
 
+    /// <summary>
+    /// Resolves the claiming account's existing crafter in this company so one person
+    /// keeps one crafter identity. Preference: a crafter bound to the account for the
+    /// same Lodestone character, then the account's only bound crafter that has no
+    /// Lodestone character yet, then an unbound or same-account company crafter with the
+    /// exact Lodestone character. A crafter bound to another account is never reused.
+    /// </summary>
+    public async Task<Guid?> ResolveClaimantCrafterIdAsync(
+        CompanyId companyId,
+        Guid accountProfileId,
+        string? lodestoneCharacterId,
+        CancellationToken cancellationToken = default)
+    {
+        if (accountProfileId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var crafters = await LoadCompanyCraftersAsync(companyId, cancellationToken);
+        if (crafters.Count == 0)
+        {
+            return null;
+        }
+        var bindings = (await memberships.LoadCrafterBindingsAsync(companyId, cancellationToken))
+            .ToDictionary(item => item.LegacyCrafterId, item => item.AccountProfileId);
+        var lodestone = NormalizeLodestoneId(lodestoneCharacterId);
+        var ordered = crafters
+            .OrderBy(item => item.Crafter.CreatedAtUtc)
+            .ThenBy(item => item.Crafter.Id)
+            .ToArray();
+        var bound = ordered
+            .Where(item => bindings.TryGetValue(item.Crafter.Id, out var owner) &&
+                owner == accountProfileId)
+            .ToArray();
+        if (lodestone != null &&
+            bound.FirstOrDefault(item =>
+                NormalizeLodestoneId(item.Crafter.LodestoneCharacterId) == lodestone) is { } boundMatch)
+        {
+            return boundMatch.Crafter.Id;
+        }
+        var boundWithoutCharacter = bound
+            .Where(item => NormalizeLodestoneId(item.Crafter.LodestoneCharacterId) == null)
+            .ToArray();
+        if (boundWithoutCharacter.Length == 1)
+        {
+            return boundWithoutCharacter[0].Crafter.Id;
+        }
+        if (lodestone == null)
+        {
+            return null;
+        }
+
+        return ordered.FirstOrDefault(item =>
+                NormalizeLodestoneId(item.Crafter.LodestoneCharacterId) == lodestone &&
+                (!bindings.TryGetValue(item.Crafter.Id, out var owner) ||
+                 owner == accountProfileId))
+            ?.Crafter.Id;
+    }
+
+    /// <summary>
+    /// Loads every live company crafter row from the company's single hosting profile,
+    /// with the sync revision needed to update or tombstone it.
+    /// </summary>
+    public async Task<IReadOnlyList<HostedCompanyCrafter>> LoadCompanyCraftersAsync(
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        var hostProfileId = await ResolveCompanyHostProfileIdAsync(
+            companyId,
+            cancellationToken);
+        return hostProfileId == null
+            ? []
+            : await hosts.LoadCraftersAsync(hostProfileId, companyId, cancellationToken);
+    }
+
+    // Only evidence that ties the account to the person behind the crafter's history
+    // (a committed Discord claim contact or an operator's explicit bind) can authorize
+    // claims that predate account evidence.
+    public static bool AuthorizesLegacyClaims(CrafterAccountBindingEvidence evidence) =>
+        evidence is CrafterAccountBindingEvidence.CommittedDiscordClaim
+            or CrafterAccountBindingEvidence.OperatorConfirmed;
+
+    public static string? NormalizeLodestoneId(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     public async Task<bool> IsCompanyCrafterAsync(
         CompanyId companyId,
         Guid legacyCrafterId,
@@ -280,35 +446,9 @@ public sealed class LegacyCrafterAccountResolver(
 
     private async Task<string?> ResolveCompanyHostProfileIdAsync(
         CompanyId companyId,
-        CancellationToken cancellationToken)
-    {
-        var hosted = await profiles.LoadObjectsAsync(
-            ProfileSyncCollections.TradeCompanyProfiles,
-            cancellationToken);
-        var matches = new List<string>();
-        foreach (var item in hosted)
-        {
-            try
-            {
-                var company = JsonSerializer.Deserialize<TradeCompanyProfile>(
-                    item.Object.PayloadJson,
-                    JsonOptions);
-                if (company?.Id == companyId.Value &&
-                    string.Equals(
-                        item.Object.ObjectId,
-                        companyId.Value.ToString("D"),
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    matches.Add(item.ProfileId);
-                }
-            }
-            catch (JsonException)
-            {
-            }
-        }
-
-        return matches.Distinct(StringComparer.OrdinalIgnoreCase).Take(2).ToArray() is [var only]
-            ? only
+        CancellationToken cancellationToken) =>
+        await hosts.ResolveAsync(companyId, cancellationToken) is
+        { Status: CompanyHostProfileStatus.Resolved, ProfileId: { } hostProfileId }
+            ? hostProfileId
             : null;
-    }
 }
