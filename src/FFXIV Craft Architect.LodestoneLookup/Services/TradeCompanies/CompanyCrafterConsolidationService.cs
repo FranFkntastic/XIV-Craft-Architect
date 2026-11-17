@@ -475,15 +475,19 @@ public sealed class CompanyCrafterConsolidationService(
 
         if (node["companyCommission"] is JsonObject commission)
         {
+            var beforeUpgrade = commission.ToJsonString();
+            FFXIV_Craft_Architect.Core.Services.TradeCompanyCommissionMigrationService
+                .UpgradeStoredClaimIdentity(commission);
+            changed |= beforeUpgrade != commission.ToJsonString();
             if (commission["activeClaim"] is JsonObject claim)
             {
                 changed |= Repoint(claim, "crafterId", map);
-                changed |= Repoint(claim, "provisionalCrafterId", map);
+                changed |= Repoint(claim, "claimantCharacterId", map);
             }
 
-            if (commission["provisionalCrafter"] is JsonObject provisional)
+            if (commission["claimantCharacter"] is JsonObject character)
             {
-                changed |= Repoint(provisional, "provisionalCrafterId", map);
+                changed |= Repoint(character, "claimantCharacterId", map);
             }
         }
 

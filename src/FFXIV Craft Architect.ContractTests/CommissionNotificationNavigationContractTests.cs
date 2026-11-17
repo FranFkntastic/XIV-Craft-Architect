@@ -60,7 +60,7 @@ public sealed class CommissionNotificationNavigationContractTests
 
     [Theory]
     [InlineData(CompanyCommissionActivityKind.ClaimResolutionRequired, "Review claim")]
-    [InlineData(CompanyCommissionActivityKind.ProvisionalIdentitySubmitted, "Review identity")]
+    [InlineData(CompanyCommissionActivityKind.ClaimantCharacterSubmitted, "Review identity")]
     [InlineData(CompanyCommissionActivityKind.PaymentPolicyChangeRequested, "Review payment")]
     [InlineData(CompanyCommissionActivityKind.CompanyMaterialsReceived, "View order")]
     [InlineData(CompanyCommissionActivityKind.ProgressReported, "View progress")]

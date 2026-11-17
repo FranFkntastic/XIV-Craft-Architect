@@ -1,12 +1,56 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using FFXIV_Craft_Architect.Core.Models;
 
 namespace FFXIV_Craft_Architect.Core.Services;
 
 public static class TradeCompanyCommissionMigrationService
 {
+    // Stored-data upgrade, not a supported wire format. Do not infer account evidence:
+    // pre-account claims retain their grants, character, review and completion state.
+    public static void UpgradeStoredClaimIdentity(JsonNode? node)
+    {
+        if (node is JsonObject record)
+        {
+            foreach (var property in record.ToArray())
+            {
+                var name = property.Key;
+                if (name.Equals("contactMethod", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("contactValue", StringComparison.OrdinalIgnoreCase))
+                {
+                    record.Remove(name);
+                    continue;
+                }
+                var renamed = name
+                    .Replace("provisionalCrafter", "claimantCharacter", StringComparison.Ordinal)
+                    .Replace("ProvisionalCrafter", "ClaimantCharacter", StringComparison.Ordinal);
+                if (renamed != name)
+                {
+                    record.Remove(name);
+                    record[renamed] = property.Value;
+                }
+                UpgradeStoredClaimIdentity(property.Value);
+                if (property.Value is JsonValue scalar && scalar.TryGetValue<string>(out var text))
+                {
+                    record[renamed] = text
+                        .Replace("ProvisionalIdentity", "ClaimantCharacter", StringComparison.Ordinal)
+                        .Replace("provisional crafter identity", "claimant character", StringComparison.Ordinal)
+                        .Replace("provisional identity", "claimant character", StringComparison.Ordinal)
+                        .Replace("claimant's contact and in-game character", "claimant's account and in-game character", StringComparison.Ordinal);
+                }
+            }
+        }
+        else if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                UpgradeStoredClaimIdentity(item);
+            }
+        }
+    }
+
     public static CompanyCommissionTermsVersion CreateDraftTerms(
         TradeOrder source,
         CommissionBriefDocument brief,

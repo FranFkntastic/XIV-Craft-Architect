@@ -169,8 +169,7 @@ public sealed class CompanyMemberCommissionContractTests
         Assert.Equal(claimant.DiscordUserId, claim.AccountEvidence?.DiscordUserId);
         Assert.Equal("Portable crafter", claim.AccountEvidence?.DiscordDisplayNameSnapshot);
         Assert.Equal(claim.AccountEvidence, projection!.ClaimAccountEvidence);
-        Assert.Equal("Discord", projection.ProvisionalCrafter?.ContactMethod);
-        Assert.Equal("Portable crafter", projection.ProvisionalCrafter?.ContactValue);
+        Assert.Equal("Wei Ning", projection.ClaimantCharacter?.CharacterName);
         Assert.True(captured);
     }
 
@@ -183,7 +182,7 @@ public sealed class CompanyMemberCommissionContractTests
         var initial = await fixture.LoadPublicBriefAsync();
         var commandId = Guid.NewGuid();
         var participantCredential = new string('r', 43);
-        var provisionalCrafterId = Guid.NewGuid();
+        var claimantCharacterId = Guid.NewGuid();
         var submittedAtUtc = DateTime.UtcNow;
 
         using var first = await fixture.ClaimPortableAsync(
@@ -192,7 +191,7 @@ public sealed class CompanyMemberCommissionContractTests
             commandId: commandId,
             expectedProjectionRevision: initial!.ProjectionRevision,
             participantCredential: participantCredential,
-            provisionalCrafterId: provisionalCrafterId,
+            claimantCharacterId: claimantCharacterId,
             submittedAtUtc: submittedAtUtc);
         using var replay = await fixture.ClaimPortableAsync(
             capability.PlaintextToken,
@@ -200,7 +199,7 @@ public sealed class CompanyMemberCommissionContractTests
             commandId: commandId,
             expectedProjectionRevision: initial.ProjectionRevision,
             participantCredential: participantCredential,
-            provisionalCrafterId: provisionalCrafterId,
+            claimantCharacterId: claimantCharacterId,
             submittedAtUtc: submittedAtUtc);
         using var mismatchedReplay = await fixture.ClaimPortableAsync(
             capability.PlaintextToken,
@@ -208,7 +207,7 @@ public sealed class CompanyMemberCommissionContractTests
             commandId: commandId,
             expectedProjectionRevision: initial.ProjectionRevision,
             participantCredential: participantCredential,
-            provisionalCrafterId: Guid.NewGuid(),
+            claimantCharacterId: Guid.NewGuid(),
             submittedAtUtc: submittedAtUtc);
         var canonical = await fixture.LoadCanonicalOrderAsync();
         var accepted = canonical.CompanyCommission!.Activity
@@ -232,7 +231,7 @@ public sealed class CompanyMemberCommissionContractTests
         var initial = await fixture.LoadPublicBriefAsync();
         var commandId = Guid.NewGuid();
         var participantCredential = new string('f', 43);
-        var provisionalCrafterId = Guid.NewGuid();
+        var claimantCharacterId = Guid.NewGuid();
         var submittedAtUtc = DateTime.UtcNow;
 
         using var stale = await fixture.ClaimPortableAsync(
@@ -241,7 +240,7 @@ public sealed class CompanyMemberCommissionContractTests
             commandId: commandId,
             expectedProjectionRevision: initial!.ProjectionRevision + 1,
             participantCredential: participantCredential,
-            provisionalCrafterId: provisionalCrafterId,
+            claimantCharacterId: claimantCharacterId,
             submittedAtUtc: submittedAtUtc);
         Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
         Assert.False((await fixture.LoadPublicBriefAsync())!.IsClaimed);
@@ -252,7 +251,7 @@ public sealed class CompanyMemberCommissionContractTests
             commandId: commandId,
             expectedProjectionRevision: initial.ProjectionRevision,
             participantCredential: participantCredential,
-            provisionalCrafterId: provisionalCrafterId,
+            claimantCharacterId: claimantCharacterId,
             submittedAtUtc: submittedAtUtc);
         var canonical = await fixture.LoadCanonicalOrderAsync();
 
@@ -1194,7 +1193,7 @@ public sealed class CompanyMemberCommissionContractTests
             Guid? commandId = null,
             long? expectedProjectionRevision = null,
             string? participantCredential = null,
-            Guid? provisionalCrafterId = null,
+            Guid? claimantCharacterId = null,
             DateTime? submittedAtUtc = null)
         {
             var client = application.CreateClient();
@@ -1217,12 +1216,11 @@ public sealed class CompanyMemberCommissionContractTests
                     Command = JsonSerializer.SerializeToElement(new
                     {
                         termsVersion = 1,
-                        provisionalCrafter = new CompanyCommissionProvisionalCrafter(
-                            provisionalCrafterId ?? Guid.NewGuid(),
+                        claimIdentityVersion = 2,
+                        claimantCharacter = new CompanyCommissionClaimantCharacter(
+                            claimantCharacterId ?? Guid.NewGuid(),
                             "Wei Ning",
                             "Siren",
-                            "Email",
-                            "portable@example.test",
                             "12345678",
                             "https://na.finalfantasyxiv.com/lodestone/character/12345678/",
                             submittedAtUtc ?? DateTime.UtcNow),

@@ -149,7 +149,7 @@ public sealed class CompanyCommissionDraftSpecificationTests
                 new ClaimCompanyCommissionCommand(
                     Context(unavailablePublished),
                     unavailablePublished.CompanyCommission.CurrentTermsVersion,
-                    ProvisionalCrafter: null,
+                    ClaimantCharacter: null,
                     ExistingCrafterId: Guid.Parse("55555555-5555-5555-5555-555555555555")),
                 new CompanyCommissionActor(
                     "crafter",

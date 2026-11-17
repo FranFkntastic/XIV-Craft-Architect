@@ -40,7 +40,7 @@ function commissionFor(index, orderId) {
   const commissionId = guid(1000 + index);
   const claim = group === 0 ? null : {
     claimId: guid(2000 + index), acceptedTermsVersion: 1, claimedAtUtc: fixedNow,
-    crafterId: guid(3000 + index), provisionalCrafterId: null,
+    crafterId: guid(3000 + index), claimantCharacterId: null,
     accountEvidence: { profileId, discordUserId: `sock-${index}`, discordDisplayNameSnapshot: `Sock ${index}` }
   };
   const satisfied = 2;

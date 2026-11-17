@@ -881,12 +881,10 @@ public sealed class DiscordIdentityContractTests
                     createdAtUtc,
                     crafterId,
                     null),
-                ProvisionalCrafter = new CompanyCommissionProvisionalCrafter(
+                ClaimantCharacter = new CompanyCommissionClaimantCharacter(
                     Guid.NewGuid(),
-                    "Provisional crafter",
+                    "Claimant character",
                     "Siren",
-                    "Discord",
-                    "participant",
                     null,
                     null,
                     createdAtUtc),

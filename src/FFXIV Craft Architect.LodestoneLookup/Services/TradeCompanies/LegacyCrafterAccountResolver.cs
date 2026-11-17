@@ -28,8 +28,8 @@ public sealed record LegacyCrafterAccountScope(
         (claim.AccountEvidence is { } evidence
             ? evidence.ProfileId == AccountProfileId
             : (claim.CrafterId.HasValue && AuthorizedCrafterIds.Contains(claim.CrafterId.Value)) ||
-              (claim.ProvisionalCrafterId.HasValue &&
-               AuthorizedCrafterIds.Contains(claim.ProvisionalCrafterId.Value)));
+              (claim.ClaimantCharacterId.HasValue &&
+               AuthorizedCrafterIds.Contains(claim.ClaimantCharacterId.Value)));
 }
 
 public sealed class LegacyCrafterAccountResolver(
@@ -110,7 +110,7 @@ public sealed class LegacyCrafterAccountResolver(
                 continue;
             }
 
-            foreach (var legacyCrafterId in new[] { claim.CrafterId, claim.ProvisionalCrafterId }
+            foreach (var legacyCrafterId in new[] { claim.CrafterId, claim.ClaimantCharacterId }
                          .Where(id => id.HasValue && legacyIds.Contains(id.Value))
                          .Select(id => id!.Value)
                          .Distinct())

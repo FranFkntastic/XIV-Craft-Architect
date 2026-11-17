@@ -119,7 +119,7 @@ test('the original shared claim link resumes only locally saved participant acce
       calls.push(secret ?? null);
       return secret === participantSecret
         ? participantProjection
-        : { kind: 'anonymous', public: { isClaimed: true } };
+        : { kind: 'public', public: { isClaimed: true } };
     }
   };
 
@@ -138,7 +138,7 @@ test('the original shared claim link resumes only locally saved participant acce
     { claimCapability: claimSecret, participantCapability: null },
     null);
   assert.deepEqual(calls, [null]);
-  assert.equal(otherHolder.projection.kind, 'anonymous');
+  assert.equal(otherHolder.projection.kind, 'public');
 });
 
 test('Discord sign-in return restores the exact claim and saves account authority', () => {

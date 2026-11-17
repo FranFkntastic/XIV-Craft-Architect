@@ -77,7 +77,7 @@ public static class CompanyCommissionProjectionService
             TermsComparisons = permitted.Where(t => t.Version > floor)
                 .Select(t => CompanyCommissionTermsComparison.Between(permitted, t.Version - 1, t.Version)).ToArray(),
             Public = CreatePublicBrief(order, companyDisplayName),
-            ProvisionalCrafter = commission.ProvisionalCrafter,
+            ClaimantCharacter = commission.ClaimantCharacter,
             ClaimAccountEvidence = commission.ActiveClaim?.AccountEvidence,
             ParticipantCapabilityRevision = commission.ParticipantGrant?.CapabilityRevision ?? 0,
             Payment = commission.Gates.Payment,

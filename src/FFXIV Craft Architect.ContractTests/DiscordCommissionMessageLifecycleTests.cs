@@ -1187,7 +1187,7 @@ public sealed class DiscordCommissionMessageLifecycleTests
             .Select(button => button.GetProperty("label").GetString())
             .ToArray();
         Assert.Contains("View commission", buttons);
-        Assert.Equal(expectsClaimButton, buttons.Contains("Claim commission"));
+        Assert.DoesNotContain("Claim commission", buttons);
         Assert.Equal(expectsClaimButton, buttons.Contains("Claim with Discord"));
         Assert.Equal(
             expectsWorkspaceButton,
