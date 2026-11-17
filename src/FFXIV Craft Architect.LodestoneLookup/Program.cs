@@ -260,6 +260,7 @@ builder.Services.AddHttpClient<IDiscordApiClient, DiscordApiClient>((services, c
         UriKind.Absolute);
     client.Timeout = TimeSpan.FromSeconds(15);
 });
+builder.Services.AddScoped<MembershipInvitationDiscordDelivery>();
 builder.Services.AddHostedService<DiscordOutboxDispatcher>();
 builder.Services.AddHostedService<DiscordNotificationOutboxDispatcher>();
 

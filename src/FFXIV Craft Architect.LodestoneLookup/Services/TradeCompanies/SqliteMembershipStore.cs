@@ -116,7 +116,26 @@ public sealed record CompanyMembershipInvitation(
     DateTimeOffset? ConsumedAtUtc,
     Guid? ConsumedByProfileId,
     MembershipInvitationState State,
-    string? Token = null);
+    string? Token = null,
+    MembershipInvitationDeliveryState? DiscordDelivery = null);
+
+/// <summary>
+/// The last Discord delivery attempt of an invitation. State is "sending", "sent" or
+/// "failed"; Code is the delivery outcome code, and RecipientName is the host-verified
+/// Discord display name the invitation was addressed to.
+/// </summary>
+public sealed record MembershipInvitationDeliveryState(
+    string State,
+    string? RecipientName,
+    string? Code);
+
+public enum MembershipInvitationDeliveryClaimStatus
+{
+    Claimed,
+    AlreadySent,
+    InProgress,
+    Unavailable
+}
 
 public sealed record MembershipInvitationConsumptionResult(
     MembershipInvitationConsumptionStatus Status,
@@ -358,7 +377,8 @@ public sealed partial class SqliteMembershipStore(
         command.CommandText = """
             SELECT invitation_id, company_id, legacy_crafter_id, issued_by_profile_id,
                    issued_at_utc, expires_at_utc, revoked_at_utc, revoked_by_profile_id,
-                   consumed_at_utc, consumed_by_profile_id
+                   consumed_at_utc, consumed_by_profile_id,
+                   discord_delivery_state, discord_recipient_name, discord_delivery_code
             FROM company_membership_invitations
             WHERE company_id = $companyId
             ORDER BY issued_at_utc DESC;
@@ -387,7 +407,8 @@ public sealed partial class SqliteMembershipStore(
         command.CommandText = """
             SELECT invitation_id, company_id, legacy_crafter_id, issued_by_profile_id,
                    issued_at_utc, expires_at_utc, revoked_at_utc, revoked_by_profile_id,
-                   consumed_at_utc, consumed_by_profile_id
+                   consumed_at_utc, consumed_by_profile_id,
+                   discord_delivery_state, discord_recipient_name, discord_delivery_code
             FROM company_membership_invitations
             WHERE token_hash = $tokenHash;
             """;
@@ -437,6 +458,129 @@ public sealed partial class SqliteMembershipStore(
         }
         await transaction.CommitAsync(cancellationToken);
         return changed;
+    }
+
+    /// <summary>
+    /// Loads an invitation by id for a holder of its token. The token is compared by hash,
+    /// so only whoever was handed the link at issue time can address the invitation by id.
+    /// </summary>
+    public async Task<CompanyMembershipInvitation?> LoadInvitationForTokenAsync(
+        CompanyId companyId,
+        Guid invitationId,
+        string token,
+        CancellationToken cancellationToken = default)
+    {
+        var invitation = await LoadInvitationAsync(token, cancellationToken);
+        return invitation != null &&
+            invitation.InvitationId == invitationId &&
+            invitation.CompanyId == companyId
+                ? invitation with { Token = token }
+                : null;
+    }
+
+    /// <summary>
+    /// Claims the invitation's Discord delivery for one attempt. A sent invitation is never
+    /// sent again, and an attempt younger than the stale window blocks a concurrent one.
+    /// </summary>
+    public async Task<MembershipInvitationDeliveryClaimStatus> ClaimInvitationDeliveryAsync(
+        CompanyId companyId,
+        Guid invitationId,
+        TimeSpan staleAfter,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        string? state;
+        string? updatedAt;
+        await using (var load = connection.CreateCommand())
+        {
+            load.Transaction = transaction;
+            load.CommandText = """
+                SELECT discord_delivery_state, discord_delivery_updated_at_utc,
+                       revoked_at_utc, consumed_at_utc, expires_at_utc
+                FROM company_membership_invitations
+                WHERE invitation_id = $invitationId AND company_id = $companyId;
+                """;
+            load.Parameters.AddWithValue("$invitationId", invitationId.ToString("D"));
+            load.Parameters.AddWithValue("$companyId", companyId.ToString());
+            await using var reader = await load.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken) ||
+                !reader.IsDBNull(2) ||
+                !reader.IsDBNull(3) ||
+                DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture) <= now)
+            {
+                return MembershipInvitationDeliveryClaimStatus.Unavailable;
+            }
+            state = reader.IsDBNull(0) ? null : reader.GetString(0);
+            updatedAt = reader.IsDBNull(1) ? null : reader.GetString(1);
+        }
+
+        if (state == "sent")
+        {
+            return MembershipInvitationDeliveryClaimStatus.AlreadySent;
+        }
+        if (state == "sending" &&
+            updatedAt != null &&
+            DateTimeOffset.Parse(updatedAt, CultureInfo.InvariantCulture) + staleAfter > now)
+        {
+            return MembershipInvitationDeliveryClaimStatus.InProgress;
+        }
+
+        await using (var claim = connection.CreateCommand())
+        {
+            claim.Transaction = transaction;
+            claim.CommandText = """
+                UPDATE company_membership_invitations
+                SET discord_delivery_state = 'sending',
+                    discord_delivery_code = NULL,
+                    discord_delivery_updated_at_utc = $now
+                WHERE invitation_id = $invitationId AND company_id = $companyId;
+                """;
+            claim.Parameters.AddWithValue("$now", now.ToString("O"));
+            claim.Parameters.AddWithValue("$invitationId", invitationId.ToString("D"));
+            claim.Parameters.AddWithValue("$companyId", companyId.ToString());
+            await claim.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return MembershipInvitationDeliveryClaimStatus.Claimed;
+    }
+
+    public async Task RecordInvitationDeliveryAsync(
+        CompanyId companyId,
+        Guid invitationId,
+        bool sent,
+        string code,
+        string? recipientDiscordUserId,
+        string? recipientName,
+        string? messageId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE company_membership_invitations
+            SET discord_delivery_state = $state,
+                discord_delivery_code = $code,
+                discord_recipient_user_id = $recipientUserId,
+                discord_recipient_name = $recipientName,
+                discord_message_id = $messageId,
+                discord_delivery_updated_at_utc = $now
+            WHERE invitation_id = $invitationId AND company_id = $companyId;
+            """;
+        command.Parameters.AddWithValue("$state", sent ? "sent" : "failed");
+        command.Parameters.AddWithValue("$code", code);
+        command.Parameters.AddWithValue("$recipientUserId", recipientDiscordUserId ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$recipientName", recipientName ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$messageId", messageId ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("$now", timeProvider.GetUtcNow().ToString("O"));
+        command.Parameters.AddWithValue("$invitationId", invitationId.ToString("D"));
+        command.Parameters.AddWithValue("$companyId", companyId.ToString());
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<MembershipInvitationConsumptionResult> ConsumeInvitationAsync(
@@ -1644,7 +1788,8 @@ public sealed partial class SqliteMembershipStore(
         command.CommandText = """
             SELECT invitation_id, company_id, legacy_crafter_id, issued_by_profile_id,
                    issued_at_utc, expires_at_utc, revoked_at_utc, revoked_by_profile_id,
-                   consumed_at_utc, consumed_by_profile_id
+                   consumed_at_utc, consumed_by_profile_id,
+                   discord_delivery_state, discord_recipient_name, discord_delivery_code
             FROM company_membership_invitations
             WHERE token_hash = $tokenHash;
             """;
@@ -1924,6 +2069,18 @@ public sealed partial class SqliteMembershipStore(
                 "INTEGER NULL",
                 cancellationToken);
             await WidenCrafterBindingEvidenceAsync(connection, cancellationToken);
+            foreach (var column in new[]
+                     {
+                         "discord_delivery_state",
+                         "discord_recipient_user_id",
+                         "discord_recipient_name",
+                         "discord_delivery_code",
+                         "discord_message_id",
+                         "discord_delivery_updated_at_utc"
+                     })
+            {
+                await AddInvitationColumnIfMissingAsync(connection, column, cancellationToken);
+            }
             await AddEventColumnIfMissingAsync(connection, "role", "TEXT NULL", cancellationToken);
             await AddEventColumnIfMissingAsync(
                 connection,
@@ -2035,6 +2192,29 @@ public sealed partial class SqliteMembershipStore(
             alter.CommandText = $"ALTER TABLE company_memberships ADD COLUMN {column} {definition};";
             await alter.ExecuteNonQueryAsync(cancellationToken);
         }
+    }
+
+    private static async Task AddInvitationColumnIfMissingAsync(
+        SqliteConnection connection,
+        string columnName,
+        CancellationToken cancellationToken)
+    {
+        await using (var inspect = connection.CreateCommand())
+        {
+            inspect.CommandText = "PRAGMA table_info(company_membership_invitations);";
+            await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE company_membership_invitations ADD COLUMN {columnName} TEXT NULL;";
+        await alter.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task AddEventColumnIfMissingAsync(
@@ -2288,7 +2468,13 @@ public sealed partial class SqliteMembershipStore(
             reader.IsDBNull(7) ? null : Guid.Parse(reader.GetString(7)),
             consumedAt,
             reader.IsDBNull(9) ? null : Guid.Parse(reader.GetString(9)),
-            state);
+            state,
+            DiscordDelivery: reader.IsDBNull(10)
+                ? null
+                : new MembershipInvitationDeliveryState(
+                    reader.GetString(10),
+                    reader.IsDBNull(11) ? null : reader.GetString(11),
+                    reader.IsDBNull(12) ? null : reader.GetString(12)));
     }
 
     private static string HashToken(string token) =>
