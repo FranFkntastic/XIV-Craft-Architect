@@ -69,6 +69,52 @@ public sealed class ProfileHostCredentialImportContractTests
         Assert.False(targetSignal.Changed.IsCompleted);
     }
 
+    [Fact]
+    public async Task ImportActiveAccessKeys_MalformedBatchWritesNothing()
+    {
+        await using var fixture = await CredentialDatabaseFixture.CreateAsync();
+        var sourceRows = await ReadActiveKeysAsync(fixture.SourcePath, fixture.ProfileId);
+        await ExecuteAsync(
+            fixture.SourcePath,
+            "UPDATE profile_access_keys SET key_hash = 'not-a-supported-hash' WHERE id = $id;",
+            ("$id", sourceRows[1].Id));
+        var targetKeysBefore = await ReadAllKeyIdsAsync(fixture.TargetPath);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.TargetStore.ImportActiveAccessKeysAsync(
+                fixture.SourcePath,
+                fixture.ProfileId,
+                fixture.DisplayName,
+                fixture.Hasher,
+                CancellationToken.None));
+
+        Assert.Equal(targetKeysBefore, await ReadAllKeyIdsAsync(fixture.TargetPath));
+    }
+
+    [Fact]
+    public async Task ImportActiveAccessKeys_TargetKeyConflictRollsBackWholeBatch()
+    {
+        await using var fixture = await CredentialDatabaseFixture.CreateAsync();
+        var sourceRows = await ReadActiveKeysAsync(fixture.SourcePath, fixture.ProfileId);
+        var targetRows = await ReadActiveKeysAsync(fixture.TargetPath, fixture.ProfileId);
+        await ExecuteAsync(
+            fixture.SourcePath,
+            "UPDATE profile_access_keys SET id = $targetId WHERE id = $sourceId;",
+            ("$targetId", targetRows[0].Id),
+            ("$sourceId", sourceRows[1].Id));
+        var targetKeysBefore = await ReadAllKeyIdsAsync(fixture.TargetPath);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            fixture.TargetStore.ImportActiveAccessKeysAsync(
+                fixture.SourcePath,
+                fixture.ProfileId,
+                fixture.DisplayName,
+                fixture.Hasher,
+                CancellationToken.None));
+
+        Assert.Equal(targetKeysBefore, await ReadAllKeyIdsAsync(fixture.TargetPath));
+    }
+
     [Theory]
     [InlineData("same-database")]
     [InlineData("source-disabled")]
@@ -179,6 +225,22 @@ public sealed class ProfileHostCredentialImportContractTests
         }
 
         return string.Join("\n", state);
+    }
+
+    private static async Task ExecuteAsync(
+        string path,
+        string sql,
+        params (string Name, object Value)[] parameters)
+    {
+        await using var connection = await OpenAsync(path);
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        foreach (var parameter in parameters)
+        {
+            command.Parameters.AddWithValue(parameter.Name, parameter.Value);
+        }
+
+        await command.ExecuteNonQueryAsync();
     }
 
     private static async Task<SqliteConnection> OpenAsync(string path)

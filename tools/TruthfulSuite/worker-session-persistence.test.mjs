@@ -81,6 +81,27 @@ test('a genuinely stale edit is rejected, never converted into a successful shel
   assert.equal(f.state().durable.storedPlan.quantity, 4);
 });
 
+test('a rejected mutation restores the committed plan before returning its actual error', async () => {
+  const f = fixture({ rejectMutation: true });
+  const result = await f.send('mutate-procurement', 95);
+  assert.equal(result.accepted, false);
+  assert.equal(result.message, 'Route unavailable');
+  assert.equal(result.revision, 97);
+  assert.equal(result.projection.quantity, 4);
+  assert.equal(f.state().managed.quantity, 4);
+  assert.equal(f.state().durable.storedPlan.quantity, 4);
+  assert.equal(f.state().durable.revision, 97);
+});
+
+test('a failed commit fences all subsequent reads until the transport replaces the Worker', async () => {
+  const f = fixture({ commit: async () => { throw new Error('disk full'); } });
+  await assert.rejects(f.send('mutate-project-items', 95, { quantity: 5 }), /disk full/);
+  await assert.rejects(f.send('shell', 96), /disk full/);
+  assert.deepEqual(f.calls, ['shell', 'mutate-project-items']);
+  assert.equal(f.state().durable.revision, 95);
+  assert.equal(f.state().durable.storedPlan.quantity, 4);
+});
+
 test('a rejected replacement cannot strand its candidate as the active plan', async () => {
   const f = fixture({ rejectReplacement: true });
   const result = await f.send('replace', 95, { storedPlan: { quantity: 99 } });

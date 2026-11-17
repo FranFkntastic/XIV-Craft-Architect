@@ -75,62 +75,6 @@ public sealed class HostedOrderSyncCoordinatorTests
         Assert.Equal(0, runtime.SaveTradeOrderCount);
     }
 
-    private static bool NeedsOwnerAdoption(HostedOrderProjectionSnapshot snapshot) =>
-        (bool)InvokePolicy(nameof(NeedsOwnerAdoption), snapshot)!;
-
-    private static bool ShouldDeferOwnerAuthorizationRetry(
-        DateTime retryAfterUtc,
-        DateTime nowUtc) =>
-        (bool)InvokePolicy(
-            nameof(ShouldDeferOwnerAuthorizationRetry),
-            retryAfterUtc,
-            nowUtc)!;
-
-    private static void ValidateOwnerProjection(
-        HostedOrderProjectionSnapshot expected,
-        CompanyCommissionOwnerProjection projection) =>
-        InvokePolicy(nameof(ValidateOwnerProjection), expected, projection);
-
-    private static long ResolveSyncStartRevision(
-        long persistedRevision,
-        long? replayAfterRevision) =>
-        (long)InvokeSyncPolicy(
-            nameof(ResolveSyncStartRevision),
-            persistedRevision,
-            replayAfterRevision)!;
-
-    private static object? InvokePolicy(string name, params object[] arguments)
-    {
-        var method = typeof(HostedOrderSyncCoordinator).GetMethod(
-            name,
-            BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingMethodException(typeof(HostedOrderSyncCoordinator).FullName, name);
-        try
-        {
-            return method.Invoke(null, arguments);
-        }
-        catch (TargetInvocationException exception) when (exception.InnerException != null)
-        {
-            throw exception.InnerException;
-        }
-    }
-
-    private static object? InvokeSyncPolicy(string name, params object?[] arguments)
-    {
-        var method = typeof(ProfileSyncService).GetMethod(
-            name,
-            BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingMethodException(typeof(ProfileSyncService).FullName, name);
-        try
-        {
-            return method.Invoke(null, arguments);
-        }
-        catch (TargetInvocationException exception) when (exception.InnerException != null)
-        {
-            throw exception.InnerException;
-        }
-    }
-
     private static void SetField<T>(
         HostedOrderSyncCoordinator coordinator,
         string name,
@@ -153,18 +97,6 @@ public sealed class HostedOrderSyncCoordinatorTests
             ?? throw new MissingFieldException(typeof(HostedOrderSyncCoordinator).FullName, name);
         return (T)field.GetValue(coordinator)!;
     }
-
-    private static CompanyCommissionOwnerProjection Projection(
-        TradeOrder order,
-        long objectRevision,
-        long companyRevision) =>
-        new()
-        {
-            Order = order,
-            ObjectRevision = new CompanyRecordRevision(objectRevision),
-            CompanyRevision = new CompanyRecordRevision(companyRevision),
-            ProfileObjectRevision = new CompanyRecordRevision(objectRevision)
-        };
 
     private static async Task SeedOrderRevisionAsync(
         ProfileSyncLocalStateService localState,
@@ -251,71 +183,6 @@ public sealed class HostedOrderSyncCoordinatorTests
         }
     }
 
-    private sealed class PriorityOwnerHandler : HttpMessageHandler
-    {
-        private readonly IReadOnlyDictionary<Guid, CompanyCommissionOwnerProjection> _projections;
-        private readonly List<Guid> _orderIds = [];
-        private int _requestCount;
-
-        public PriorityOwnerHandler(IEnumerable<TradeOrder> orders)
-        {
-            _projections = orders.ToDictionary(
-                order => order.CompanyCommission!.CommissionId,
-                order => Projection(order, 1, 1));
-        }
-
-        public IReadOnlyList<Guid> OrderIds
-        {
-            get
-            {
-                lock (_orderIds)
-                {
-                    return _orderIds.ToArray();
-                }
-            }
-        }
-
-        public IReadOnlyList<Guid> FirstBatch { get; private set; } = [];
-        public int RequestCount => Volatile.Read(ref _requestCount);
-
-        public TaskCompletionSource FirstEntered { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource ReleaseFirst { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            Assert.EndsWith("/owner-comparison", request.RequestUri!.AbsolutePath);
-            var comparison = (await request.Content!
-                .ReadFromJsonAsync<CompanyCommissionOwnerComparisonRequest>(
-                    cancellationToken: cancellationToken))!;
-            lock (_orderIds)
-            {
-                _orderIds.AddRange(comparison.Items.Select(item => item.OrderId));
-            }
-            if (Interlocked.Increment(ref _requestCount) == 1)
-            {
-                FirstBatch = comparison.Items.Select(item => item.OrderId).ToArray();
-                FirstEntered.TrySetResult();
-                await ReleaseFirst.Task.WaitAsync(cancellationToken);
-            }
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = JsonContent.Create(new CompanyCommissionOwnerComparisonResponse
-                {
-                    CompanyId = _projections.Values.First().Order.CompanyCommission!.CompanyId,
-                    CompanyRevision = new(1),
-                    VerifiedAtUtc = DateTime.UtcNow,
-                    Items = comparison.Items.Select(item => Acknowledgement(
-                        _projections[item.CommissionId].Order,
-                        item)).ToArray()
-                })
-            };
-        }
-    }
-
     private sealed class InvalidComparisonHandler : HttpMessageHandler
     {
         public TaskCompletionSource Returned { get; } =
@@ -346,107 +213,6 @@ public sealed class HostedOrderSyncCoordinatorTests
             };
         }
     }
-
-    private sealed class CompanyConcurrencyHandler : HttpMessageHandler
-    {
-        private readonly IReadOnlyDictionary<Guid, TradeOrder> _orders;
-        private readonly TaskCompletionSource _release =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _concurrency;
-        private int _maximumConcurrency;
-        private int _requestCount;
-
-        public CompanyConcurrencyHandler(IEnumerable<TradeOrder> orders)
-        {
-            _orders = orders.ToDictionary(
-                order => order.CompanyCommission!.CommissionId);
-        }
-
-        public int RequestCount => Volatile.Read(ref _requestCount);
-        public int MaximumConcurrency => Volatile.Read(ref _maximumConcurrency);
-        public TaskCompletionSource AllReturned { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            var comparison = (await request.Content!
-                .ReadFromJsonAsync<CompanyCommissionOwnerComparisonRequest>(
-                    cancellationToken: cancellationToken))!;
-            var concurrency = Interlocked.Increment(ref _concurrency);
-            UpdateMaximumConcurrency(concurrency);
-            if (concurrency == 4)
-            {
-                _release.TrySetResult();
-            }
-            await _release.Task.WaitAsync(cancellationToken);
-            var order = _orders[comparison.Items[0].CommissionId];
-            var response = ComparisonResponse(order, comparison.Items);
-            Interlocked.Decrement(ref _concurrency);
-            if (Interlocked.Increment(ref _requestCount) == 5)
-            {
-                AllReturned.TrySetResult();
-            }
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = JsonContent.Create(response)
-            };
-        }
-
-        private void UpdateMaximumConcurrency(int concurrency)
-        {
-            var current = Volatile.Read(ref _maximumConcurrency);
-            while (concurrency > current)
-            {
-                var observed = Interlocked.CompareExchange(
-                    ref _maximumConcurrency,
-                    concurrency,
-                    current);
-                if (observed == current)
-                {
-                    return;
-                }
-                current = observed;
-            }
-        }
-    }
-
-    private static CompanyCommissionOwnerComparisonResponse ComparisonResponse(
-        TradeOrder order,
-        IReadOnlyList<CompanyCommissionOwnerComparisonItem> items,
-        long objectRevision = 1) =>
-        new()
-        {
-            CompanyId = order.CompanyCommission!.CompanyId,
-            CompanyRevision = new(1),
-            VerifiedAtUtc = DateTime.UtcNow,
-            Items = items.Select(item => Acknowledgement(
-                order,
-                item,
-                objectRevision)).ToArray()
-        };
-
-    private static CompanyCommissionOwnerComparisonResult Acknowledgement(
-        TradeOrder order,
-        CompanyCommissionOwnerComparisonItem item,
-        long objectRevision = 1) =>
-        new()
-        {
-            OrderId = item.OrderId,
-            CommissionId = item.CommissionId,
-            Status = CompanyCommissionOwnerComparisonStatus.Unchanged,
-            Receipt = new CompanyCommissionOwnerReceipt
-            {
-                OrderId = item.OrderId,
-                CompanyId = order.CompanyCommission!.CompanyId,
-                CommissionId = item.CommissionId,
-                ProfileObjectRevision = item.ProfileObjectRevision,
-                ObjectRevision = new(objectRevision),
-                CompanyRevision = new(1),
-                VerifiedAtUtc = DateTime.UtcNow
-            }
-        };
 
     private sealed class OwnerAdoptionRuntime(string profileId) : IJSRuntime
     {

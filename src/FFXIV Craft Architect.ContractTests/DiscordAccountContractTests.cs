@@ -18,6 +18,22 @@ public sealed class DiscordAccountContractTests
     private const string DiscordUser = "111111111111111111";
 
     [Fact]
+    public async Task SignInCallbackRejectsTamperedStoredReturnPath()
+    {
+        await using var fixture = await DiscordAccountFixture.CreateAsync();
+        fixture.OAuth.Identity = new DiscordOAuthIdentity(DiscordUser, "Discord Crafter");
+        using var client = fixture.CreateClient();
+        var state = await StartSignInAsync(client, fixture.OAuth);
+        await fixture.TamperReturnPathAsync("//evil.test/stolen");
+
+        using var callback = await client.GetAsync(
+            $"/identity/v1/signin/discord/callback?code=code&state={Uri.EscapeDataString(state)}");
+
+        Assert.Equal("/", callback.Headers.Location!.AbsolutePath);
+        Assert.Equal("app.test", callback.Headers.Location.Host);
+    }
+
+    [Fact]
     public async Task SignInProvisionsThenReusesHostedProfileAndIssuesOrdinaryKeys()
     {
         await using var fixture = await DiscordAccountFixture.CreateAsync();

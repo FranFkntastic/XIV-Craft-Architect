@@ -559,14 +559,6 @@ public sealed class PlansProfileSyncAdapterTests
             new(HttpStatusCode.OK) { Content = JsonContent.Create(content) };
     }
 
-    private sealed class UnusedHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken) =>
-            throw new NotSupportedException(request.RequestUri?.ToString());
-    }
-
     private sealed class TombstoneResumeHandler(string planId) : HttpMessageHandler
     {
         public int PutCount { get; private set; }

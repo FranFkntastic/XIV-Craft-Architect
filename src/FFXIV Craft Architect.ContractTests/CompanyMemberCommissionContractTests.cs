@@ -76,6 +76,21 @@ public sealed class CompanyMemberCommissionContractTests
     }
 
     [Fact]
+    public async Task PortableClaimWithRejectedAccountKeyDoesNotFallBackToAnonymous()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var capability = await fixture.IssueClaimCapabilityAsync();
+
+        using var response = await fixture.ClaimPortableAsync(
+            capability.PlaintextToken,
+            accessKey: "cap_invalid_portable_claim_account_key_1234567890");
+        var publicBrief = await fixture.LoadPublicBriefAsync();
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.False(publicBrief!.IsClaimed);
+    }
+
+    [Fact]
     public async Task ConcurrentMemberClaimsCommitExactlyOneClaimant()
     {
         await using var fixture = await MemberCommissionFixture.CreateAsync();
@@ -521,84 +536,10 @@ public sealed class CompanyMemberCommissionContractTests
             return issued.PlaintextToken;
         }
 
-        public async Task<Guid> LoadActiveClaimIdAsync()
-        {
-            var order = await LoadCanonicalOrderAsync();
-            return order.CompanyCommission!.ActiveClaim!.ClaimId;
-        }
-
-        public async Task<string?> LoadClaimActorDisplayNameAsync(Guid claimId)
-        {
-            var order = await LoadCanonicalOrderAsync();
-            return order.CompanyCommission!.Activity
-                .Single(item => item.CommandId == claimId)
-                .Actor.DisplayName;
-        }
-
-        public async Task<string?> ResolveClaimNotificationActorDisplayNameAsync(Guid claimId)
-        {
-            var order = await LoadCanonicalOrderAsync();
-            var commission = order.CompanyCommission!;
-            var activity = commission.Activity.Single(item => item.CommandId == claimId);
-            return await DiscordCompanyCommissionPostCommitSink.ResolveActorDisplayNameAsync(
-                commission,
-                activity,
-                Notifications,
-                Identities,
-                Profiles,
-                TimeProvider.System);
-        }
-
         public async Task<Guid> LoadActiveCrafterIdAsync()
         {
             var order = await LoadCanonicalOrderAsync();
             return order.CompanyCommission!.ActiveClaim!.CrafterId!.Value;
-        }
-
-        public async Task<Guid> ConvertClaimToLegacyCrafterAsync()
-        {
-            var legacyCrafter = new TradeCrafterProfile
-            {
-                Id = Guid.NewGuid(),
-                CompanyProfileId = Company.Id,
-                DisplayName = "Returning crafter legacy record",
-                WorldName = "Siren",
-                LodestoneCharacterId = "49131404"
-            };
-            var crafterPut = await Profiles.PutObjectAsync(
-                Owner.ProfileId.ToString("D"),
-                ProfileSyncCollections.TradeCrafters,
-                legacyCrafter.Id.ToString("D"),
-                JsonSerializer.Serialize(legacyCrafter, JsonOptions),
-                expectedRevision: 0,
-                ct: CancellationToken.None);
-            Assert.True(crafterPut.Success);
-
-            var envelope = await Profiles.LoadObjectAsync(
-                Owner.ProfileId.ToString("D"),
-                ProfileSyncCollections.TradeOrders,
-                Order.Id.ToString("D"),
-                CancellationToken.None);
-            var order = JsonSerializer.Deserialize<TradeOrder>(
-                envelope!.PayloadJson,
-                JsonOptions)!;
-            order.AssignedCrafterId = legacyCrafter.Id;
-            order.CompanyCommission = order.CompanyCommission! with
-            {
-                ActiveClaim = order.CompanyCommission.ActiveClaim! with
-                {
-                    CrafterId = legacyCrafter.Id
-                }
-            };
-            var orderPut = await Profiles.PutObjectAsync(
-                Owner.ProfileId.ToString("D"),
-                ProfileSyncCollections.TradeOrders,
-                Order.Id.ToString("D"),
-                JsonSerializer.Serialize(order, JsonOptions),
-                expectedRevision: envelope.Revision,
-                ct: CancellationToken.None);
-            Assert.True(orderPut.Success);
-            return legacyCrafter.Id;
         }
 
         public Task<HttpResponseMessage> LoadOwnerCommissionAsync(Account account)
@@ -618,93 +559,10 @@ public sealed class CompanyMemberCommissionContractTests
                 new CompanyCommissionOwnerComparisonRequest { Items = items });
         }
 
-        public CompanyCommissionOwnerComparisonItem ComparisonItem(
-            CompanyCommissionOwnerProjection projection,
-            bool includeReceipt) =>
-            new()
-            {
-                OrderId = projection.Order.Id,
-                CommissionId = projection.Order.CompanyCommission!.CommissionId,
-                ProfileObjectRevision = projection.ProfileObjectRevision ??
-                    projection.ObjectRevision,
-                ObjectRevision = includeReceipt
-                    ? projection.ObjectRevision
-                    : CompanyRecordRevision.None,
-                CompanyRevision = includeReceipt
-                    ? projection.CompanyRevision
-                    : CompanyRecordRevision.None
-            };
-
-        public async Task ChangeCanonicalOrderTitleAsync(string title)
-        {
-            var envelope = await Profiles.LoadObjectAsync(
-                Owner.ProfileId.ToString("D"),
-                ProfileSyncCollections.TradeOrders,
-                Order.Id.ToString("D"),
-                CancellationToken.None);
-            var order = JsonSerializer.Deserialize<TradeOrder>(
-                envelope!.PayloadJson,
-                JsonOptions)!;
-            order.Title = title;
-            var put = await Profiles.PutObjectAsync(
-                Owner.ProfileId.ToString("D"),
-                ProfileSyncCollections.TradeOrders,
-                Order.Id.ToString("D"),
-                JsonSerializer.Serialize(order, JsonOptions),
-                envelope.Revision,
-                CancellationToken.None);
-            Assert.True(put.Success);
-        }
-
-        public async Task AdvanceUnrelatedCompanyRevisionAsync()
-        {
-            var crafter = new TradeCrafterProfile
-            {
-                Id = Guid.NewGuid(),
-                CompanyProfileId = Company.Id,
-                DisplayName = "Unrelated revision",
-                WorldName = "Siren"
-            };
-            var put = await Profiles.PutObjectAsync(
-                Owner.ProfileId.ToString("D"),
-                ProfileSyncCollections.TradeCrafters,
-                crafter.Id.ToString("D"),
-                JsonSerializer.Serialize(crafter, JsonOptions),
-                expectedRevision: 0,
-                ct: CancellationToken.None);
-            Assert.True(put.Success);
-        }
-
         public Task<HttpResponseMessage> LoadNotificationOwnerCommissionAsync(Account account)
         {
             var client = CreateClient(account.Key);
             return client.GetAsync($"/trade/v1/commissions/{Order.Id:D}/owner");
-        }
-
-        public Task<HttpResponseMessage> LoadMembershipsAsync(Account account)
-        {
-            var client = CreateClient(account.Key);
-            return client.GetAsync("/trade/v1/memberships");
-        }
-
-        public Task<HttpResponseMessage> LoadCompanyHubAsync(Account account)
-        {
-            var client = CreateClient(account.Key);
-            return client.GetAsync($"/trade/v1/companies/{Company.Id:D}/hub");
-        }
-
-        public Task<HttpResponseMessage> PostCompanyUpdateAsync(Account account)
-        {
-            var client = CreateClient(account.Key);
-            return client.PostAsJsonAsync(
-                $"/trade/v1/companies/{Company.Id:D}/hub/updates",
-                new
-                {
-                    ExpectedProfileRevision = 1,
-                    Title = "Commissioner update",
-                    Body = "Delegated operator mutation proof.",
-                    IsPinned = false
-                });
         }
 
         public async Task ConfigureCommissionerRouteAsync(

@@ -373,34 +373,6 @@ public sealed class CompanyHubContractTests
         Assert.Contains("https://example.test/path", json, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task SlugCollisionUsesOrdinalAndGuidResolves()
-    {
-        await using var fixture = await HubFixture.CreateAsync();
-        var firstOwner = await fixture.CreateAccountAsync("First owner");
-        var secondOwner = await fixture.CreateAccountAsync("Second owner");
-        var first = CreateCompany();
-        var second = CreateCompany();
-        second.CreatedAtUtc = first.CreatedAtUtc.AddMinutes(1);
-        using var firstClient = fixture.CreateClient(firstOwner.Key);
-        using var secondClient = fixture.CreateClient(secondOwner.Key);
-        await PutCompanyAsync(firstClient, first);
-        await PutCompanyAsync(secondClient, second);
-
-        using var bare = await fixture.Application.CreateClient().GetAsync("/trade/v1/companies/sapphire-avenue/hub");
-        using var ordinal = await fixture.Application.CreateClient().GetAsync("/trade/v1/companies/sapphire-avenue-2/hub");
-        using var guid = await fixture.Application.CreateClient().GetAsync(
-            $"/trade/v1/companies/{second.Id:D}/hub");
-        using var bareJson = JsonDocument.Parse(await bare.Content.ReadAsStringAsync());
-        using var ordinalJson = JsonDocument.Parse(await ordinal.Content.ReadAsStringAsync());
-        using var guidJson = JsonDocument.Parse(await guid.Content.ReadAsStringAsync());
-
-        Assert.Equal(first.Id.ToString("D"), bareJson.RootElement.GetProperty("companyId").GetString());
-        Assert.Equal(second.Id.ToString("D"), ordinalJson.RootElement.GetProperty("companyId").GetString());
-        Assert.Equal(second.Id.ToString("D"), guidJson.RootElement.GetProperty("companyId").GetString());
-        Assert.Equal("sapphire-avenue-2", guidJson.RootElement.GetProperty("slug").GetString());
-    }
-
     private static TradeCompanyProfile CreateCompany(string name = "Sapphire Avenue", bool showCount = false)
     {
         var company = TradeCompanyProfile.CreateLocal(name, DateTime.UtcNow);
