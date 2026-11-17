@@ -69,6 +69,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
         {
             commission["activity"]![0]!["kind"] = "ProvisionalIdentityConfirmed";
         }
+        commission["activity"]![0]!["comment"] = "Confirmed the claimant's contact and in-game character.";
 
         var restored = JsonSerializer.Deserialize<TradeOrder>(stored.ToJsonString(), options)!;
         var upgraded = restored.CompanyCommission!;
@@ -79,6 +80,7 @@ public sealed class CompanyCommissionGateRevisionSpecificationTests
             JsonSerializer.Serialize(upgraded.Gates, options));
         Assert.Equal(order.Status, restored.Status);
         Assert.Equal(CompanyCommissionActivityKind.ClaimantCharacterConfirmed, Assert.Single(upgraded.Activity).Kind);
+        Assert.Equal("Confirmed the claimant's Discord account and in-game character.", Assert.Single(upgraded.Activity).Comment);
         var rewritten = JsonSerializer.Serialize(restored, options);
         Assert.DoesNotContain("provisional", rewritten, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("contactMethod", rewritten);

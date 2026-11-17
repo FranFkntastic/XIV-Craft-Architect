@@ -10,6 +10,15 @@ public static class TradeCompanyCommissionMigrationService
 {
     // Stored-data upgrade, not a supported wire format. Do not infer account evidence:
     // pre-account claims retain their grants, character, review and completion state.
+    private static readonly IReadOnlyDictionary<string, string> RetiredActivitySentences =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Submitted a provisional crafter identity for commissioner review."] =
+                "Submitted a claimant character identity for commissioner review.",
+            ["Confirmed the claimant's contact and in-game character."] =
+                "Confirmed the claimant's Discord account and in-game character."
+        };
+
     public static void UpgradeStoredClaimIdentity(JsonNode? node)
     {
         if (node is JsonObject record)
@@ -32,13 +41,20 @@ public static class TradeCompanyCommissionMigrationService
                     record[renamed] = property.Value;
                 }
                 UpgradeStoredClaimIdentity(property.Value);
+                // Only the retired activity kinds and the two system-written activity
+                // sentences are rewritten; operator and crafter free text is never touched.
                 if (property.Value is JsonValue scalar && scalar.TryGetValue<string>(out var text))
                 {
-                    record[renamed] = text
-                        .Replace("ProvisionalIdentity", "ClaimantCharacter", StringComparison.Ordinal)
-                        .Replace("provisional crafter identity", "claimant character", StringComparison.Ordinal)
-                        .Replace("provisional identity", "claimant character", StringComparison.Ordinal)
-                        .Replace("claimant's contact and in-game character", "claimant's account and in-game character", StringComparison.Ordinal);
+                    if (name.Equals("kind", StringComparison.OrdinalIgnoreCase) &&
+                        text.StartsWith("ProvisionalIdentity", StringComparison.Ordinal))
+                    {
+                        record[renamed] = "ClaimantCharacter" + text["ProvisionalIdentity".Length..];
+                    }
+                    else if (name.Equals("comment", StringComparison.OrdinalIgnoreCase) &&
+                             RetiredActivitySentences.TryGetValue(text, out var sentence))
+                    {
+                        record[renamed] = sentence;
+                    }
                 }
             }
         }

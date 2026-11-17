@@ -2008,7 +2008,6 @@ async function submitClaim(contact) {
             lodestoneProfileUrl: selected.lodestoneProfileUrl,
             submittedAtUtc: new Date().toISOString()
         },
-        existingCrafterId: null,
         verifiedDiscordRequired: true
     };
     // Saved before the claim so a committed claim can always finish or retry its

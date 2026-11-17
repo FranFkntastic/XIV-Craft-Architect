@@ -1171,7 +1171,7 @@ public static class CompanyCommissionEndpoints
                             context,
                             payload.TermsVersion,
                             character,
-                            payload.ExistingCrafterId),
+                            ExistingCrafterId: null),
                         payload.NewParticipantCredential);
                 }
             case "redeem-participant-recovery":
@@ -1629,7 +1629,6 @@ public static class CompanyCommissionEndpoints
     private sealed record ClaimPayload(
         int TermsVersion,
         CompanyCommissionClaimantCharacter? ClaimantCharacter,
-        Guid? ExistingCrafterId,
         string NewParticipantCredential);
 
     private sealed record RecoveryPayload(
