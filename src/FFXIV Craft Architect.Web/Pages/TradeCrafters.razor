@@ -483,7 +483,7 @@
                                    Open="@(_drawer == WorkforceDrawerKind.Invite)"
                                    CompanyId="@_hostedCompanyId"
                                    PreselectedRecordId="_invitePreselect"
-                                   AvailableRecords="AvailableRecords"
+                                   AvailableRecords="InvitableRecords"
                                    Invitations="@(_hosted?.Invitations ?? [])"
                                    OnClose="CloseDrawer"
                                    OnChanged="RefreshHostedAsync" />
@@ -564,6 +564,13 @@
         .OrderBy(candidate => candidate.DisplayName, StringComparer.OrdinalIgnoreCase)
         .ToArray();
 
+    // Contractor records can be invited even when a non-member account is already bound to
+    // them (a Discord claimant); only a member's own records are excluded.
+    private IReadOnlyList<LegacyCrafterCandidate> InvitableRecords => (_hosted?.Migration?.LegacyCrafters ?? [])
+        .Where(candidate => !_rows.Any(row => row.IsMemberSide && row.RecordIds.Contains(candidate.LegacyCrafterId)))
+        .OrderBy(candidate => candidate.DisplayName, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
     private IReadOnlyDictionary<Guid, string> RecordNames
     {
         get
@@ -600,7 +607,7 @@
         else if (row.RecordIds.Count > 0)
         {
             var recordId = row.RecordIds[0];
-            if (_isAdmin && row.Relationship == CompanyWorkforceRelationship.Contractor && AvailableRecords.Any(candidate => candidate.LegacyCrafterId == recordId))
+            if (_isAdmin && row.Relationship == CompanyWorkforceRelationship.Contractor && InvitableRecords.Any(candidate => candidate.LegacyCrafterId == recordId))
             {
                 <button type="button" class="workforce-button is-small is-blue" @onclick="() => OpenInvite(recordId)">Invite to join</button>
             }

@@ -359,15 +359,43 @@ public sealed class CompanyHubClient(
         string companyId,
         Guid? legacyCrafterId,
         DateTimeOffset expiresAtUtc,
+        bool sendOnDiscord = false,
         CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
             $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-invitations",
-            new { LegacyCrafterId = legacyCrafterId, ExpiresAtUtc = expiresAtUtc },
+            new { LegacyCrafterId = legacyCrafterId, ExpiresAtUtc = expiresAtUtc, SendOnDiscord = sendOnDiscord },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
         return (await response.Content.ReadFromJsonAsync<CompanyMembershipInvitation>(JsonOptions, cancellationToken))!;
+    }
+
+    /// <summary>Retries the Discord delivery of an invitation this client still holds the link for.</summary>
+    public async Task<CompanyMembershipInvitation> SendMembershipInvitationOnDiscordAsync(
+        CompanyMembershipInvitation invitation,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"trade/v1/companies/{Uri.EscapeDataString(invitation.CompanyId)}/membership-invitations/{invitation.InvitationId:D}/discord-delivery",
+            new { invitation.Token },
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<CompanyMembershipInvitation>(JsonOptions, cancellationToken))!;
+    }
+
+    public async Task<MembershipInvitationRecipients> LoadMembershipInvitationRecipientsAsync(
+        string companyId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/membership-invitations/discord-recipients",
+            null,
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<MembershipInvitationRecipients>(JsonOptions, cancellationToken))!;
     }
 
     public async Task RevokeMembershipInvitationAsync(
@@ -671,7 +699,17 @@ public sealed record CompanyMembershipInvitation(
     DateTimeOffset IssuedAtUtc,
     DateTimeOffset ExpiresAtUtc,
     string State,
-    string? Token);
+    string? Token,
+    string? DiscordDelivery = null,
+    string? DiscordRecipientName = null,
+    string? DiscordDeliveryCode = null)
+{
+    public bool SentOnDiscord => DiscordDelivery == "sent";
+}
+public sealed record MembershipInvitationRecipient(Guid LegacyCrafterId, string DiscordDisplayName);
+public sealed record MembershipInvitationRecipients(
+    string? UnavailableCode,
+    IReadOnlyList<MembershipInvitationRecipient> Recipients);
 public sealed record CompanyMembershipNotifications(
     string CompanyId,
     bool ActionRequired,
