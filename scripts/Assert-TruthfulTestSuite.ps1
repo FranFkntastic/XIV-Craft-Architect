@@ -5,7 +5,6 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $legacyProject = Join-Path $root 'src/FFXIV Craft Architect.Tests/FFXIV Craft Architect.Tests.csproj'
 $testProjects = @(
-    Join-Path $root 'src/FFXIV Craft Architect.SpecTests'
     Join-Path $root 'src/FFXIV Craft Architect.ContractTests'
 )
 
@@ -70,12 +69,6 @@ foreach ($file in $sourceFiles) {
 $methodCount = $factCount + $theoryCount
 if ($methodCount -eq 0) {
     $violations += 'No test methods were discovered.'
-}
-$specProject = Get-Content -LiteralPath (Join-Path $testProjects[0] 'FFXIV Craft Architect.SpecTests.csproj') -Raw
-foreach ($forbiddenReference in @('FFXIV Craft Architect.Web', 'FFXIV Craft Architect.LodestoneLookup', 'MarketAnalysisProbe', 'Moq', 'bunit')) {
-    if ($specProject -match [regex]::Escape($forbiddenReference)) {
-        $violations += "SpecTests references forbidden dependency: $forbiddenReference"
-    }
 }
 
 if ($violations.Count -gt 0) {

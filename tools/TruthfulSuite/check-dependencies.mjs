@@ -32,7 +32,6 @@ const expectedProjects = [
   'src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj',
   'src/FFXIV Craft Architect.LocalLauncher/FFXIV Craft Architect.LocalLauncher.csproj',
   'src/FFXIV Craft Architect.LodestoneLookup/FFXIV Craft Architect.LodestoneLookup.csproj',
-  'src/FFXIV Craft Architect.SpecTests/FFXIV Craft Architect.SpecTests.csproj',
   'src/FFXIV Craft Architect.Web/FFXIV Craft Architect.Web.csproj'
 ];
 const actualProjects = (dotnetReport.projects ?? [])
@@ -40,7 +39,7 @@ const actualProjects = (dotnetReport.projects ?? [])
   .map(projectPath => expectedProjects.find(expected => projectPath?.endsWith(`/${expected}`)) ?? projectPath)
   .sort();
 if (JSON.stringify(actualProjects) !== JSON.stringify(expectedProjects)) {
-  throw new Error('NuGet audit did not inspect all six solution projects.');
+  throw new Error('NuGet audit did not inspect all five solution projects.');
 }
 const nugetVulnerabilities = collectVulnerabilities(dotnetReport);
 if (nugetVulnerabilities.length > 0) {
