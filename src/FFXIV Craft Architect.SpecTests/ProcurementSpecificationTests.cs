@@ -265,7 +265,7 @@ public sealed class ProcurementSpecificationTests
 
         static string SelectionIdentity(MarketRouteToleranceSelection selection) =>
             $"{selection.MinimumTolerance}-{selection.MaximumTolerance}:" +
-            $"{selection.GilCost}:{selection.WorldStops}:{selection.DataCenterTransfers}:" +
+            $"{selection.GilCost}:{selection.WorldStops}:" +
             selection.SelectionKey;
     }
 

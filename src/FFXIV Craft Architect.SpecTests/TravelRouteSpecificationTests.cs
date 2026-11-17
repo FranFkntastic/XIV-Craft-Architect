@@ -26,7 +26,7 @@ public sealed class TravelRouteSpecificationTests
     public void TwoPercentPremiumIncludesExactBoundaryButExcludesNextGil()
     {
         var route = new MarketRouteState();
-        var config = SpecificationFixtures.Config(10, MarketTravelPriority.WorldVisitsFirst);
+        var config = SpecificationFixtures.Config(10);
         var cheapest = new MarketPurchaseCandidate(
             100,
             [new("Aether", "Faerie"), new("Aether", "Siren")]);
@@ -38,28 +38,16 @@ public sealed class TravelRouteSpecificationTests
     }
 
     [Fact]
-    public void WorldVisitsFirstPrefersOneNewWorldOverAvoidingTransfer()
+    public void FewerWorldStopsWinsAcrossDataCenters()
     {
         var current = new MarketRouteState([new("Aether", "Siren")]);
         var oneWorldWithTransfer = new MarketPurchaseCandidate(100, [new("Crystal", "Balmung")]);
         var twoWorldsWithoutTransfer = new MarketPurchaseCandidate(
             100,
             [new("Aether", "Faerie"), new("Aether", "Gilgamesh")]);
-        var config = SpecificationFixtures.Config(0, MarketTravelPriority.WorldVisitsFirst);
+        var config = SpecificationFixtures.Config(0);
 
         Assert.True(MarketRouteScoring.CompareCandidates(oneWorldWithTransfer, twoWorldsWithoutTransfer, current, config) < 0);
     }
 
-    [Fact]
-    public void DataCenterTransfersFirstPrefersTwoLocalWorldsOverTransfer()
-    {
-        var current = new MarketRouteState([new("Aether", "Siren")]);
-        var oneWorldWithTransfer = new MarketPurchaseCandidate(100, [new("Crystal", "Balmung")]);
-        var twoWorldsWithoutTransfer = new MarketPurchaseCandidate(
-            100,
-            [new("Aether", "Faerie"), new("Aether", "Gilgamesh")]);
-        var config = SpecificationFixtures.Config(0, MarketTravelPriority.DataCenterTransfersFirst);
-
-        Assert.True(MarketRouteScoring.CompareCandidates(twoWorldsWithoutTransfer, oneWorldWithTransfer, current, config) < 0);
-    }
 }

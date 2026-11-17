@@ -7,11 +7,9 @@ internal static class SpecificationFixtures
 {
     public static MarketAnalysisConfig Config(
         int tolerance = 11,
-        MarketTravelPriority priority = MarketTravelPriority.WorldVisitsFirst,
         bool enableSplitWorld = false) => new()
         {
             TravelTolerance = tolerance,
-            TravelPriority = priority,
             EnableSplitWorld = enableSplitWorld,
             MaxWorldsPerItem = 8,
             MaxPriceMultiplier = 2.5m

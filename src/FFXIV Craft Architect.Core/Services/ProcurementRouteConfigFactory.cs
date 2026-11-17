@@ -14,12 +14,7 @@ public static class ProcurementRouteConfigFactory
             MaxWorldsPerItem = source.MaxWorldsPerItem,
             TravelTolerance = source.TravelTolerance,
             EnableSplitWorld = source.EnableSplitWorld,
-            MaxPriceMultiplier = source.MaxPriceMultiplier,
-            StartFromHomeDataCenter = source.StartFromHomeDataCenter,
-            HomeDataCenter = source.StartFromHomeDataCenter
-                ? request.SelectedDataCenter
-                : string.Empty,
-            TravelPriority = source.TravelPriority
+            MaxPriceMultiplier = source.MaxPriceMultiplier
         };
     }
 }

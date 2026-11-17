@@ -7,7 +7,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
 {
     private const string InputSchemaVersion = "1";
     private const string AnalysisOutputSchemaVersion = "10";
-    private const string RouteOutputSchemaVersion = "12";
+    private const string RouteOutputSchemaVersion = "13";
     private static readonly JsonSerializerOptions InputJsonOptions = EngineJsonSerializerOptions.CreateWire();
 
     public ReferenceEnginePreparedInput PrepareInput(EngineRequestEnvelope request)
@@ -105,7 +105,6 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
             orderedItems,
             result.RouteDecision?.SelectedGilCost ?? orderedItems.Sum(item => item.TotalGil),
             result.RouteDecision?.SelectedWorldStops ?? stops.Length,
-            result.RouteDecision?.SelectedDataCenterTransfers ?? 0,
             result.IsComplete,
             CaptureRouteDecision(result.RouteDecision),
             EngineCanonicalHash.Compute(result.ActiveProcurementItems, InputJsonOptions),
@@ -199,11 +198,6 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                 decision.SelectedEvidencePenalty,
                 decision.CheapestWorldStops,
                 decision.SelectedWorldStops,
-                decision.CheapestDataCenterTransfers,
-                decision.SelectedDataCenterTransfers,
-                decision.StartsFromHomeDataCenter,
-                decision.HomeDataCenter,
-                decision.TravelPriority,
                 decision.FixedAcquisitionGilCost,
                 decision.RouteSearchWasTruncated,
                 decision.RepresentativeRoutes
@@ -212,8 +206,7 @@ public sealed class ReferenceEngineSemanticSnapshotProvider : IReferenceEngineSe
                         option.MinimumTolerance,
                         option.MaximumTolerance,
                         option.GilCost,
-                        option.WorldStops,
-                        option.DataCenterTransfers))
+                        option.WorldStops))
                     .ToArray(),
                 decision.ItemPremiums
                     .Select((item, order) => new EngineRouteItemDecisionSnapshot(

@@ -377,9 +377,7 @@ public sealed class WorkerSessionContractTests
                 "North America",
                 MarketAcquisitionLens.MinimumUpfrontCost,
                 TravelTolerance: 0,
-                IncludeSplitPurchases: true,
-                StartFromHomeDataCenter: false,
-                MarketTravelPriority.DataCenterTransfersFirst),
+                IncludeSplitPurchases: true),
             procurementOperationId);
         Assert.Equal((true, 4L), (generatedRoute.Accepted, generatedRoute.Revision));
         var generatedMutation =
@@ -574,7 +572,7 @@ public sealed class WorkerSessionContractTests
         var generated = await SendAsync(WorkerSessionCommandKinds.ProcurementRun, revision,
             new WorkerProcurementRequest(MarketFetchScope.SelectedDataCenter,
                 "Aether", "North America", MarketAcquisitionLens.MinimumUpfrontCost,
-                0, true, false, MarketTravelPriority.DataCenterTransfersFirst), operationId);
+                0, true), operationId);
         Assert.True(generated.Accepted, generated.Message);
         Assert.Equal(revision + 1, generated.Revision);
         var mutation = generated.Projection.Deserialize<WorkerSessionMutationProjection>(WireOptions)!;

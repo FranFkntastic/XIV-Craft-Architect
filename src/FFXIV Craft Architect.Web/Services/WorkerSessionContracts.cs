@@ -447,8 +447,6 @@ public sealed record WorkerProcurementRequest(
     MarketAcquisitionLens Lens,
     int TravelTolerance,
     bool IncludeSplitPurchases,
-    bool StartFromHomeDataCenter,
-    MarketTravelPriority TravelPriority,
     IReadOnlySet<MarketWorldKey>? ExcludedWorlds = null,
     IReadOnlySet<MarketItemWorldKey>? ExcludedItemWorlds = null);
 
@@ -479,14 +477,12 @@ public sealed record WorkerProcurementProjection(
     int ActiveItemCount,
     int TravelTolerance,
     string TravelToleranceLabel,
-    MarketTravelPriority TravelPriority,
     bool SearchesEntireRegion,
     bool? IncludeSplitPurchases,
     long SelectedGilCost,
     long CheapestGilCost,
     long PremiumGil,
     int WorldStops,
-    int DataCenterTransfers,
     bool RouteSearchWasTruncated,
     IReadOnlyList<WorkerProcurementToleranceProjection> ToleranceOptions,
     IReadOnlyList<WorkerProcurementWorldProjection> Worlds,
@@ -498,8 +494,7 @@ public sealed record WorkerProcurementToleranceProjection(
     int MinimumTolerance,
     int MaximumTolerance,
     long GilCost,
-    int WorldStops,
-    int DataCenterTransfers);
+    int WorldStops);
 
 public sealed record WorkerProcurementWorldProjection(
     string DataCenter,
