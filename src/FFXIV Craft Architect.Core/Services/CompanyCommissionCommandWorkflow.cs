@@ -111,7 +111,7 @@ public static class CompanyCommissionCommandWorkflow
             nextCommission.ClearedToWork &&
             (commission.ActiveClaim == null || !commission.ClearedToWork))
         {
-            RequireCurrentMaterialQuote(nextCommission, nowUtc);
+            ValidateRequiredMaterialQuote(nextCommission);
             var updated = Copy(transition.UpdatedOrder);
             updated.CompanyCommission = LockMaterialQuoteIfCleared(nextCommission, nowUtc);
             transition = transition with { UpdatedOrder = updated };
@@ -249,6 +249,7 @@ public static class CompanyCommissionCommandWorkflow
                     .Append(terms)
                     .OrderBy(item => item.Version)
                     .ToArray(),
+                ClaimPriceReview = null,
                 ParticipantAcknowledgedTermsVersion = null,
                 PaymentPolicyChangeRequest = null,
                 Gates = commission.Gates with
@@ -312,7 +313,7 @@ public static class CompanyCommissionCommandWorkflow
         Require(
             command.TermsVersion == commission.CurrentTermsVersion,
             "The claim terms version is stale.");
-        RequireCurrentMaterialQuote(commission, nowUtc);
+        ValidateRequiredMaterialQuote(commission);
         // A company member claims as their own confirmed crafter record; everyone else
         // names one exact Lodestone character for the commissioner to confirm.
         Require(
@@ -356,6 +357,7 @@ public static class CompanyCommissionCommandWorkflow
         updated.AssignedCrafterId = assignedCrafterId;
         var claimed = commission with
         {
+            ClaimPriceReview = null,
             ActiveClaim = new CompanyCommissionClaim(
                 claimId,
                 commission.CurrentTermsVersion,
@@ -926,7 +928,7 @@ public static class CompanyCommissionCommandWorkflow
         DateTime nowUtc,
         CompanyCommissionActor actor)
     {
-        RequireCanWork(source, commission, nowUtc);
+        RequireCanWork(source, commission);
         var reported = command.Outputs.ToDictionary(item => item.LineId);
         Require(
             reported.Count == command.Outputs.Count &&
@@ -1056,7 +1058,7 @@ public static class CompanyCommissionCommandWorkflow
         DeclareCompanyCommissionReadinessCommand command,
         DateTime nowUtc)
     {
-        RequireCanWork(source, commission, nowUtc);
+        RequireCanWork(source, commission);
         Require(
             commission.OutputProgress.All(item => item.CompletedQuantity == item.RequiredQuantity),
             "Every output must be complete before delivery can be declared.");
@@ -1591,23 +1593,20 @@ public static class CompanyCommissionCommandWorkflow
 
     private static void RequireCanWork(
         TradeOrder source,
-        TradeCompanyCommission commission,
-        DateTime nowUtc)
+        TradeCompanyCommission commission)
     {
         Require(
             !TradeOrderStatusWorkflow.IsArchived(source.Status),
             "Completed or canceled commissions cannot accept participant work updates.");
         RequireClaim(commission);
         Require(commission.ClearedToWork, "Every applicable pre-work gate must be satisfied.");
-        RequireCurrentMaterialQuote(commission, nowUtc);
+        ValidateRequiredMaterialQuote(commission);
         Require(
             commission.ParticipantAcknowledgedTermsVersion == commission.CurrentTermsVersion,
             "The participant must acknowledge the current terms before work can continue.");
     }
 
-    private static void RequireCurrentMaterialQuote(
-        TradeCompanyCommission commission,
-        DateTime nowUtc)
+    private static void ValidateRequiredMaterialQuote(TradeCompanyCommission commission)
     {
         var terms = commission.CurrentTerms;
         if (!terms.Materials.Any(item =>
@@ -1621,10 +1620,9 @@ public static class CompanyCommissionCommandWorkflow
         if (quote == null)
         {
             throw new InvalidOperationException(
-                "The material quote must be refreshed before work can begin.");
+                "Crafter-procured materials require a material quote before work can begin.");
         }
         ValidateTerms(terms, commission.CompanyId, workPackage: null);
-        Require(!quote.IsExpired(nowUtc), "The material quote expired and must be refreshed before work can begin.");
     }
 
     private static TradeCompanyCommission LockMaterialQuoteIfCleared(
@@ -1642,7 +1640,6 @@ public static class CompanyCommissionCommandWorkflow
         {
             return commission;
         }
-        Require(!quote.IsExpired(nowUtc), "The material quote expired and must be refreshed before work can begin.");
         var lockedTerms = current with
         {
             PricingEvidence = current.PricingEvidence with
@@ -1766,6 +1763,7 @@ public static class CompanyCommissionCommandWorkflow
             terms.Payment.Total >= 0 &&
             terms.Payment.MaterialReimbursement >= 0 &&
             terms.Payment.MaterialAdjustment >= 0 &&
+            terms.Payment.MaterialAdjustmentPercent is not (< 0 or > 100) &&
             terms.Payment.CraftLabor >= 0 &&
             terms.Payment.CraftSynthCount >= 0 &&
             terms.Payment.GilPerSynth >= 0,

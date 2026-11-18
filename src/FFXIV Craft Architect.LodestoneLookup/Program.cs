@@ -58,6 +58,7 @@ builder.Services.AddSingleton<IMarketCacheService>(services =>
     new JsonFileMarketCacheService(
         services.GetRequiredService<UniversalisService>(),
         craftAppraisalOptions.CacheDirectory));
+builder.Services.AddSingleton<ClaimMaterialPricing>();
 builder.Services.AddSingleton<CraftAppraisalPlanStore>();
 builder.Services.AddSingleton<IHostedCraftAppraisalCoordinator, HostedCraftAppraisalCoordinator>();
 builder.Services.AddSingleton(_ => new ProfileHostOptions

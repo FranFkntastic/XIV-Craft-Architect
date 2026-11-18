@@ -122,7 +122,7 @@ public sealed class TradePaymentCalculator
         }
 
         var percent = policy.LegacyCommissionPercent ?? policy.MaterialValueBonusPercent;
-        var commission = RoundGil(estimatedProcurementTotal * percent / 100m);
+        var commission = MaterialValueBonus(estimatedProcurementTotal, percent);
 
         return new TradePaymentContractBreakdown(
             TradePaymentContractMode.LegacyCommission,
@@ -177,8 +177,7 @@ public sealed class TradePaymentCalculator
             .ToArray();
         var craftLaborTotal = RoundGil(lines.Sum(line => line.LaborTotal));
         var synthCount = lines.Sum(line => line.CraftCount);
-        var materialBonus = RoundGil(
-            estimatedProcurementTotal * policy.MaterialValueBonusPercent / 100m);
+        var materialBonus = MaterialValueBonus(estimatedProcurementTotal, policy.MaterialValueBonusPercent);
         var warnings = lines
             .SelectMany(line => line.Warnings)
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
@@ -233,6 +232,17 @@ public sealed class TradePaymentCalculator
             CraftLaborLines: [],
             Warnings: [warning]);
     }
+
+    public static (decimal Cash, decimal Allowance) CrafterShare(TradeMaterialQuote? quote,
+        IReadOnlySet<(int ItemId, bool RequiresHq)> reimbursable)
+    {
+        var cash = quote?.Lines.Where(line => reimbursable.Contains((line.ItemId, line.RequiresHq)))
+            .Sum(line => line.CashRequired) ?? 0m;
+        return (cash, quote is { RouteCashRequired: > 0 } ? RoundGil(quote.SafetyAllowance * cash / quote.RouteCashRequired) : 0m);
+    }
+
+    public static decimal MaterialValueBonus(decimal estimatedProcurementTotal, decimal percent) =>
+        RoundGil(RoundGil(estimatedProcurementTotal) * percent / 100m);
 
     private static decimal RoundGil(decimal value)
     {

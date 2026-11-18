@@ -21,11 +21,15 @@ public sealed record StoredPlanRuntimeState(
             new StoredPlanRuntimeState(CurrentSchemaVersion, nodes));
     }
 
-    public static void Apply(CraftingPlan plan, string? payload)
+    public static void Apply(CraftingPlan plan, string? payload, bool requireComplete = false)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (string.IsNullOrWhiteSpace(payload))
         {
+            if (requireComplete)
+            {
+                throw new InvalidOperationException("Stored acquisition choices are missing.");
+            }
             return;
         }
 
@@ -41,6 +45,20 @@ public sealed record StoredPlanRuntimeState(
             .Where(node => !string.IsNullOrWhiteSpace(node.NodeId))
             .GroupBy(node => node.NodeId, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
+        if (requireComplete)
+        {
+            var nodes = new List<StoredPlanNodeRuntimeState>();
+            foreach (var root in plan.RootItems)
+            {
+                CaptureNode(root, nodes);
+            }
+            if (nodes.Count != byNodeId.Count || nodes.Count != state.Nodes.Count ||
+                nodes.Select(n => n.NodeId).Distinct(StringComparer.Ordinal).Count() != nodes.Count ||
+                nodes.Any(n => !byNodeId.TryGetValue(n.NodeId, out var stored) || n.ItemId != stored.ItemId))
+            {
+                throw new InvalidOperationException("Stored acquisition choices do not cover the exact plan nodes.");
+            }
+        }
         foreach (var root in plan.RootItems)
         {
             ApplyNode(root, byNodeId);

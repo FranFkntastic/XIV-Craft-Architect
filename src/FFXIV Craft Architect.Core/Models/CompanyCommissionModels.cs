@@ -143,7 +143,9 @@ public sealed record CompanyCommissionPaymentTerms(
     decimal Total,
     string? CustomTerms = null,
     int CraftSynthCount = 0,
-    decimal GilPerSynth = 0);
+    decimal GilPerSynth = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    decimal? MaterialAdjustmentPercent = null);
 
 public sealed record CompanyCommissionPricingEvidence(
     string CostBasis,
@@ -175,6 +177,12 @@ public sealed record CompanyCommissionClaim(
     Guid? CrafterId,
     Guid? ClaimantCharacterId,
     CompanyCommissionClaimAccountEvidence? AccountEvidence = null);
+
+public sealed record CompanyCommissionClaimPriceReview(Guid ProfileId, int TermsVersion, Guid? ClaimCommandId = null)
+{
+    public bool IsRetry(Guid? account, Guid commandId, int? offeredVersion) =>
+        ProfileId == account && ClaimCommandId == commandId && offeredVersion == TermsVersion - 1;
+}
 
 public sealed record CompanyCommissionClaimAccountEvidence(
     Guid ProfileId,
@@ -375,6 +383,8 @@ public sealed record TradeCompanyCommission
     public required CompanyCommissionPublicMetadata PublicMetadata { get; init; }
     public required long ActiveClaimCapabilityRevision { get; init; }
     public CompanyCommissionClaim? ActiveClaim { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public CompanyCommissionClaimPriceReview? ClaimPriceReview { get; init; }
     public CompanyCommissionClaimantCharacter? ClaimantCharacter { get; init; }
     public CompanyCommissionParticipantGrant? ParticipantGrant { get; init; }
     public CompanyCommissionRecoveryGrant? RecoveryGrant { get; init; }

@@ -684,7 +684,9 @@ public static class CompanyCommissionEndpoints
                     envelope.ExpectedProjectionRevision,
                     envelope.CommandId,
                     envelope.ProtocolVersion,
-                    cancellationToken);
+                    cancellationToken,
+                    claimAccount?.ProfileId,
+                    ReadClaimTermsVersion(envelope.Command));
                 if (context == null)
                 {
                     return Results.Conflict(new
@@ -1078,7 +1080,8 @@ public static class CompanyCommissionEndpoints
                     "commission_not_open",
                     "Only an open, published commission can be claimed."));
             }
-            if ((commission.Activity.LastOrDefault()?.CommissionRevision ?? 0) !=
+            if (commission.ClaimPriceReview?.IsRetry(account.ProfileId, envelope.CommandId, ReadClaimTermsVersion(envelope.Command)) != true &&
+                (commission.Activity.LastOrDefault()?.CommissionRevision ?? 0) !=
                 envelope.ExpectedProjectionRevision)
             {
                 return Results.Conflict(new
@@ -1159,6 +1162,7 @@ public static class CompanyCommissionEndpoints
         if (!mutation.Success)
         {
             if (mutation.Status == CompanyCommissionMutationStatus.Conflict &&
+                mutation.ErrorCode != "claim_price_changed" &&
                 (await commissions.LoadPublishedAsync(
                     ownership,
                     publicId,
@@ -1897,6 +1901,8 @@ public static class CompanyCommissionEndpoints
     private static IResult ToCommandError(CompanyCommissionMutationResult mutation) =>
         mutation.Status switch
         {
+            CompanyCommissionMutationStatus.Conflict when mutation.ErrorCode == "claim_price_changed" =>
+                ClaimPriceChanged(mutation),
             CompanyCommissionMutationStatus.Conflict => Results.Conflict(new
             {
                 error = mutation.ErrorCode,
@@ -1914,6 +1920,28 @@ public static class CompanyCommissionEndpoints
                 message = mutation.ErrorMessage
             })
         };
+
+    private static int? ReadClaimTermsVersion(JsonElement command) =>
+        command.ValueKind == JsonValueKind.Object && command.TryGetProperty("termsVersion", out var value) &&
+        value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var version) ? version : null;
+
+    internal static IResult ClaimPriceChanged(CompanyCommissionMutationResult mutation)
+    {
+        var commission = mutation.Order!.CompanyCommission!;
+        var terms = commission.CurrentTerms;
+        var previous = commission.TermsVersions.Single(t => t.Version == terms.Version - 1).Payment.Total;
+        return Results.Conflict(new
+        {
+            error = mutation.ErrorCode,
+            code = mutation.ErrorCode,
+            message = mutation.ErrorMessage,
+            previousPayment = previous,
+            currentPayment = terms.Payment.Total,
+            changePercent = previous == 0 ? (decimal?)null : (terms.Payment.Total - previous) / previous * 100m,
+            termsVersion = terms.Version,
+            projectionRevision = mutation.Activity!.CommissionRevision
+        });
+    }
 
     private static TradeCommissionOwnerCommandResponse ToOwnerResponse(
         CompanyCommissionMutationResult mutation,

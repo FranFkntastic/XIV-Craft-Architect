@@ -20,7 +20,8 @@ public sealed record CommissionBriefPayment(
     decimal MaterialBonus,
     decimal CraftLabor,
     decimal Total,
-    decimal MaterialAdjustmentPercent = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    decimal? MaterialAdjustmentPercent = null,
     int CraftSynthCount = 0,
     decimal GilPerSynth = 0,
     CompanyCommissionPaymentSchedule Schedule = CompanyCommissionPaymentSchedule.Advance,
