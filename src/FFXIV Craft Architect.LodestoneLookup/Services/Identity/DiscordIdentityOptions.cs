@@ -15,7 +15,7 @@ public sealed class DiscordIdentityOptions
         "https://discord.com/api/v10/oauth2/token";
     public string UserEndpoint { get; init; } =
         "https://discord.com/api/v10/users/@me";
-    public TimeSpan StateLifetime { get; init; } = TimeSpan.FromMinutes(5);
+    public TimeSpan StateLifetime { get; init; } = TimeSpan.FromMinutes(15);
     public TimeSpan ParticipantBootstrapLifetime { get; init; } = TimeSpan.FromMinutes(5);
 
     public void Validate()
