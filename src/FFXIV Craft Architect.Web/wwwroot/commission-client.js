@@ -1358,7 +1358,10 @@ function adaptParticipantActivity(value) {
         actorDisplayName: optionalText(value.actorDisplayName),
         sourceSurface: requiredEnum(value.sourceSurface, enumMaps.sourceSurface, "Activity source"),
         createdAtUtc: requiredDate(value.createdAtUtc, "Activity time"),
-        kind: requiredEnum(value.kind, enumMaps.activityKind, "Activity kind"),
+        kind: Number.isSafeInteger(value.kind) && value.kind >= enumMaps.activityKind.length ||
+            typeof value.kind === "string" && value.kind && !enumMaps.activityKind.includes(value.kind)
+            ? "CommissionActivity"
+            : requiredEnum(value.kind, enumMaps.activityKind, "Activity kind"),
         termsVersion: requiredInteger(value.termsVersion, "Activity terms version", 1),
         comment: optionalText(value.comment)
     };

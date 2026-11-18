@@ -149,6 +149,20 @@ jobs:
           --output dist/publish
           "-p:BuildInfoBranchName=$BUILD_SOURCE_REF"
 
+      - name: Stamp commission asset URLs before hashing the release
+        shell: bash
+        env:
+          COMMISSION_RELEASE: ${{ steps.target.outputs.commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        working-directory: dist/publish/wwwroot
+        run: |
+          set -euo pipefail
+          for asset in commission.html commission.js; do
+            grep -q '__COMMISSION_RELEASE__' "$asset"
+            sed -i "s/__COMMISSION_RELEASE__/$COMMISSION_RELEASE/g" "$asset"
+            # A precompressed copy from publish would still reference the unstamped URLs.
+            rm -f -- "$asset.br" "$asset.gz"
+          done
+
       - name: Apply target configuration and create immutable artifact
         id: artifact
         shell: bash
