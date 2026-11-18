@@ -14,7 +14,9 @@ from rewrite_caddy_helper_routes import (  # noqa: E402
     DEVELOPMENT_HOST,
     LEGACY_PREFIXES,
     MANAGED_PREFIXES,
+    PRE_JOIN_PREFIXES,
     PRODUCTION_HOST,
+    RouteRewriteError,
     STAGING_PORT,
     rewrite_caddy_routes,
 )
@@ -65,7 +67,7 @@ def site_text(text: str, host: str) -> str:
 def route_ports(text: str, host: str) -> dict[str, str]:
     current = site_text(text, host)
     matches = re.findall(
-        r"handle (/api/[^* ]+)\* \{.*?reverse_proxy 127\.0\.0\.1:(\d+).*?\}",
+        r"handle (/[^* ]+)\* \{.*?reverse_proxy 127\.0\.0\.1:(\d+).*?\}",
         current,
         flags=re.DOTALL,
     )
@@ -73,6 +75,21 @@ def route_ports(text: str, host: str) -> dict[str, str]:
 
 
 class RewriteCaddyHelperRoutesTests(unittest.TestCase):
+    def test_deployed_routes_gain_exact_join_proxy_once(self) -> None:
+        original = site(PRODUCTION_HOST, "5128", PRE_JOIN_PREFIXES) + site(
+            DEVELOPMENT_HOST, "5129", PRE_JOIN_PREFIXES
+        )
+        rewritten = rewrite_caddy_routes(original, "canonical", canonicalized=True)
+        for host, port in ((PRODUCTION_HOST, "5128"), (DEVELOPMENT_HOST, "5129")):
+            block = site_text(rewritten, host)
+            self.assertIn(f"handle /join/* {{\n\t\treverse_proxy 127.0.0.1:{port}\n\t}}", block)
+            self.assertEqual(len(PRE_JOIN_PREFIXES), block.count("uri strip_prefix /api"))
+        self.assertEqual(rewritten, rewrite_caddy_routes(rewritten, "canonical", True))
+
+        mixed = site(PRODUCTION_HOST, "5128", (*LEGACY_PREFIXES, "/join/"))
+        with self.assertRaises(RouteRewriteError):
+            rewrite_caddy_routes(mixed, "canonical", False)
+
     def test_canonical_cutover_keeps_each_domain_on_its_own_helper(self) -> None:
         rewritten = rewrite_caddy_routes(fixture(), "canonical", canonicalized=True)
 
