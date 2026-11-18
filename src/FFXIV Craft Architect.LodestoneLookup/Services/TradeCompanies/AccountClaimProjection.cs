@@ -224,8 +224,8 @@ public sealed class AccountClaimProjectionService(
                 .ToHashSet();
             var bindable = crafterIds.Any(crafterId =>
                 context.Candidates.Contains(crafterId) &&
-                bindings.FirstOrDefault(binding => binding.LegacyCrafterId == crafterId) is null or
-                    { Evidence: CrafterAccountBindingEvidence.ConfirmedClaimReuse });
+                bindings.FirstOrDefault(binding => binding.LegacyCrafterId == crafterId)
+                    is null or { Evidence: CrafterAccountBindingEvidence.ConfirmedClaimReuse });
             if (!bindable)
             {
                 return [];
