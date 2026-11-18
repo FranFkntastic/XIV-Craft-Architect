@@ -1011,7 +1011,7 @@
                                     <div class="trade-orders-payment-table">
                                         <div class="trade-orders-payment-table-title">
                                             <span>Payment Breakdown</span>
-                                            <span>@FormatMaterialQuoteProvenance(materialQuote)</span>
+                                            <span>@(showAgreed && materialQuote == null ? "Published terms without a route quote" : FormatMaterialQuoteProvenance(materialQuote))</span>
                                         </div>
                                         <div class="trade-orders-payment-breakdown-header">
                                             <span>Line</span>

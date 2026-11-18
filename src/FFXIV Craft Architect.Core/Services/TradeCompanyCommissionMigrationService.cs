@@ -307,6 +307,25 @@ public static class TradeCompanyCommissionMigrationService
                     existingCopy.Status is TradeOrderStatus.Assigned or TradeOrderStatus.InProgress)
                 {
                     existingCopy.Status = TradeOrderStatus.AwaitingDelivery;
+                    var readiness = new CompanyCommissionActivityEvent
+                    {
+                        EventId = CreateDeterministicGuid(source.Id, "schema-v2-readiness"),
+                        CommissionId = source.Id,
+                        CommissionRevision = checked((existing.Activity.LastOrDefault()?.CommissionRevision ?? 0) + 1),
+                        Actor = new("hosted-migration", CompanyCommissionActorKind.Migration, "Hosted migration"),
+                        SourceSurface = CompanyCommissionSourceSurface.HostedMigration,
+                        CreatedAtUtc = migratedAtUtc,
+                        Kind = CompanyCommissionActivityKind.DeliveryReadinessDeclared,
+                        TermsVersion = existing.CurrentTermsVersion,
+                        Comment = $"Migration moved this commission from {source.Status} to AwaitingDelivery because all outputs were complete.",
+                        MigrationProvenance = "commission-schema-v2"
+                    };
+                    migratedExisting = migratedExisting with
+                    {
+                        Activity = [.. existing.Activity, readiness],
+                        UpdatedAtUtc = migratedAtUtc
+                    };
+                    existingCopy.CompanyCommission = migratedExisting;
                 }
                 existingCopy.UpdatedAtUtc = migratedAtUtc;
             }

@@ -156,7 +156,12 @@ public sealed record CompanyCommissionPricingEvidence(
     DateTime CapturedAtUtc,
     TradeMaterialQuote? MaterialQuote = null,
     IReadOnlyList<string>? Warnings = null,
-    string? MaterialQuoteFailureReason = null);
+    string? MaterialQuoteFailureReason = null)
+{
+    // Publications and amendments with crafter materials now require the ProcurementRoute basis.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsPreRoutePricing => MaterialQuote == null && CostBasis != nameof(CommissionCostBasis.ProcurementRoute);
+}
 
 public sealed record CompanyCommissionTermsVersion
 {

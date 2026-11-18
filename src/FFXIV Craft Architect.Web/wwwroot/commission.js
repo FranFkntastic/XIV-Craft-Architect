@@ -14,7 +14,7 @@ import {
     replaceClaimCapabilityFragment,
     replaceParticipantCapabilityFragment,
     resolveParticipantPreworkChoices
-} from "./commission-client.js";
+} from "./commission-client.js?v=__COMMISSION_RELEASE__";
 
 const byId = id => document.getElementById(id);
 const formatNumber = value => Number(value).toLocaleString();

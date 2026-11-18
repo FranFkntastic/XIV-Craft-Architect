@@ -23,13 +23,26 @@ public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
     string Name,
     string? Description,
     string? CommissionContact,
-    TradePaymentPolicy PaymentPolicy,
-    TradeMaterialPricingPolicy MaterialPricingPolicy,
+    WorkspacePaymentPolicyUpdate? PaymentPolicy,
+    TradeMaterialPricingPolicy? MaterialPricingPolicy = null,
     TradeCompanyPricingScope? CommissionPricingScope = null,
     bool UpdateCommissionPricingScope = false,
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
     bool UpdateMarginItems = false,
     bool? FreelancerOpenCommissions = null);
+
+// Unlike the domain policy, the wire shape must distinguish omission from an explicit zero.
+public sealed record WorkspacePaymentPolicyUpdate(
+    TradePaymentContractMode ActiveContract,
+    decimal? MaterialValueBonusPercent,
+    decimal LaborGilPerSynth,
+    LegacyTradeLaborStandard? LaborStandard)
+{
+    public TradePaymentPolicy ToPolicy() => new(ActiveContract, MaterialValueBonusPercent ?? 0, LaborGilPerSynth)
+    {
+        LegacyLaborStandard = LaborStandard
+    };
+}
 
 public sealed record TradeCompanyWorkspaceProfileUpdateResponse(long Revision);
 
@@ -135,14 +148,15 @@ public static class TradeCompanyWorkspaceEndpoints
                     body.Name,
                     body.Description,
                     body.CommissionContact,
-                    body.PaymentPolicy,
+                    body.PaymentPolicy?.ToPolicy(),
                     body.MaterialPricingPolicy,
                     cancellationToken,
                     body.CommissionPricingScope,
                     body.UpdateCommissionPricingScope,
                     body.MarginItems,
                     body.UpdateMarginItems,
-                    body.FreelancerOpenCommissions);
+                    body.FreelancerOpenCommissions,
+                    preserveMaterialValueBonus: body.PaymentPolicy?.MaterialValueBonusPercent == null);
                 return result.Status switch
                 {
                     CompanyHubMutationStatus.Applied => Results.Ok(

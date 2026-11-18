@@ -1878,6 +1878,30 @@ public sealed partial class SqliteProfileHostStore
                         payloadJson = incomingObject.ToJsonString();
                     }
                 }
+                if (existing != null && incoming is System.Text.Json.Nodes.JsonObject profile)
+                {
+                    var previous = System.Text.Json.Nodes.JsonNode.Parse(existing.PayloadJson, nodeOptions);
+                    foreach (var field in new[] { "materialPricingPolicy", "paymentPolicy" })
+                    {
+                        if (!profile.ContainsKey(field) && previous?[field] is { } stored)
+                        {
+                            profile[field] = stored.DeepClone();
+                        }
+                    }
+                    if (profile["paymentPolicy"] is System.Text.Json.Nodes.JsonObject policy &&
+                        !policy.ContainsKey("materialValueBonusPercent") &&
+                        previous?["paymentPolicy"]?["materialValueBonusPercent"] is { } bonus)
+                    {
+                        policy["materialValueBonusPercent"] = bonus.DeepClone();
+                    }
+                    if (profile["paymentPolicy"] is System.Text.Json.Nodes.JsonObject mergedPolicy &&
+                        mergedPolicy.ContainsKey("materialValueBonusPercent"))
+                    {
+                        // The explicit bonus, even zero, supersedes the retired percent.
+                        mergedPolicy.Remove("LegacyCommissionPercent");
+                    }
+                    payloadJson = profile.ToJsonString();
+                }
                 var company = JsonSerializer.Deserialize<TradeCompanyProfile>(
                     payloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
                 var marginItems = company?.MarginItems ?? [];
