@@ -347,6 +347,48 @@ public sealed partial class CompanyHubService
                 .ToArray());
     }
 
+    /// <summary>
+    /// D8/K3: whether the account may claim this company's open commissions straight from
+    /// the hub. Members (and the hosting owner) always may. A freelancer may only while
+    /// bound to a crafter in the company, the company lets freelancers see its open
+    /// commissions, and the membership was not denied or revoked. Mirrors exactly who the
+    /// hub lists open commissions to, and is evaluated again on every claim attempt.
+    /// </summary>
+    public async Task<bool> CanClaimOpenCommissionsAsync(
+        MembershipAccount account,
+        CompanyId companyId,
+        CancellationToken cancellationToken = default)
+    {
+        var company = (await LoadCompaniesAsync(cancellationToken))
+            .SingleOrDefault(item => item.Profile.Id == companyId.Value);
+        if (company == null)
+        {
+            return false;
+        }
+        if (company.HostProfileId == account.ProfileId)
+        {
+            return true;
+        }
+
+        var membership = await memberships.LoadForAccountAsync(
+            companyId,
+            account.ProfileId,
+            cancellationToken);
+        if (membership is { State: MembershipState.Active })
+        {
+            return true;
+        }
+        if (membership is { State: MembershipState.Denied or MembershipState.Revoked } ||
+            !company.Profile.FreelancerOpenCommissions)
+        {
+            return false;
+        }
+        return (await memberships.LoadCrafterBindingsForAccountAsync(
+                account.ProfileId,
+                cancellationToken))
+            .Any(binding => binding.CompanyId == companyId);
+    }
+
     // K6: finished work stays as "Awaiting payment" until the company settles it, then
     // leaves the list. Cancelled commissions never appear.
     private static string? ResolveWorkStatus(TradeOrder order, CompanyHubCommissionResponse projection)

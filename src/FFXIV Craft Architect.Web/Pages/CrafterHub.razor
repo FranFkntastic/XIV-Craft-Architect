@@ -112,7 +112,14 @@
                     {
                         <div class="row">
                             <div class="row-copy">
-                                <h3>@open.Commission.Title</h3>
+                                @if (string.IsNullOrWhiteSpace(open.PublicUrl))
+                                {
+                                    <h3>@open.Commission.Title</h3>
+                                }
+                                else
+                                {
+                                    <h3><a class="brief-link" href="@open.PublicUrl">@open.Commission.Title</a></h3>
+                                }
                                 <div class="meta">
                                     <span class="co">@open.CompanyName</span> · @OutputSummary(open.Commission)
                                     @if (!string.IsNullOrWhiteSpace(open.MaterialsLabel))
@@ -125,7 +132,7 @@
                                 <span class="gil">@open.Commission.Payment.Total.ToString("N0") gil</span>
                                 @if (!string.IsNullOrWhiteSpace(open.PublicUrl))
                                 {
-                                    <a class="button small" href="@open.PublicUrl">View</a>
+                                    <a class="button small primary" href="@ClaimUrl(open)">Claim</a>
                                 }
                             </div>
                         </div>
@@ -429,6 +436,12 @@
             Navigation.NavigateTo(open.PublicUrl);
         }
     }
+
+    // The hub only lists open commissions the account may claim (members, and freelancers
+    // the company shares them with), so the claim page takes the signed-in account as
+    // its authority; the host re-checks eligibility when the claim is sent.
+    private static string ClaimUrl(CrafterHubOpenCommission open) =>
+        $"{open.PublicUrl}&claim=account";
 
     // Members work claims in their company's in-app workspace; freelancers cannot see
     // that page and work from the commission page instead.

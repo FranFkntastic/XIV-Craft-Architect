@@ -164,6 +164,23 @@ export class CommissionBriefApiClient {
             }));
     }
 
+    // Whether the signed-in account may claim this commission without a claim link
+    // (company members, and freelancers the company shares open commissions with).
+    async loadAccountClaimStanding(accessKey) {
+        const key = requiredCapability(accessKey, "Account access key");
+        const result = requiredObject(await adaptResponse(await this.fetch(
+            `${this.briefPath}/account-claim`,
+            {
+                headers: {
+                    "Accept": "application/json",
+                    "X-Profile-Key": key
+                },
+                cache: "no-store",
+                redirect: "error"
+            })), "Account claim standing");
+        return { eligible: requiredBoolean(result.eligible, "Account claim eligibility") };
+    }
+
     async loadMembershipStanding(accessKey) {
         const key = requiredCapability(accessKey, "Account access key");
         const result = requiredObject(await adaptResponse(await this.fetch(

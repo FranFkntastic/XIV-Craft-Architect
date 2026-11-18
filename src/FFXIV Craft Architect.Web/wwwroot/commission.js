@@ -51,7 +51,9 @@ const state = {
     selectedLodestone: null,
     membershipStore: null,
     membership: null,
-    claimReceipt: null
+    claimReceipt: null,
+    accountClaimRequested: false,
+    accountClaim: false
 };
 
 const activityLabels = {
@@ -213,6 +215,8 @@ async function load() {
     }
 
     state.publicId = publicId;
+    state.accountClaimRequested =
+        new URLSearchParams(window.location.search).get("claim") === "account";
     state.accountStore = new PortableClaimAccountStore(publicId);
     state.membershipStore = new PortableMembershipRequestStore(publicId);
     const signInResult = state.accountStore.completeSignIn();
@@ -259,6 +263,7 @@ async function load() {
             }
         }
     }
+    await resolveAccountClaim();
     if (!state.account) {
         try {
             state.signInEnabled = Boolean(
@@ -333,6 +338,42 @@ async function load() {
         void continueClaimAfterSignIn();
     }
     startProjectionWatch();
+}
+
+// Opened from the Crafter hub (`?claim=account`): the signed-in account is the claim
+// authority instead of a claim link. The page offers the claim only when the host says
+// this account may claim; the claim command re-checks eligibility itself.
+async function resolveAccountClaim() {
+    state.accountClaim = false;
+    if (!state.accountClaimRequested ||
+        state.capabilities.claimCapability ||
+        state.capabilities.recoveryCapability ||
+        state.capabilities.bootstrapToken) {
+        return;
+    }
+    if (!state.account) {
+        const accessKey = await readRememberedProfileAccessKey();
+        if (accessKey) {
+            try {
+                state.account = await verifyPortableAccount({ accessKey });
+            } catch (caught) {
+                console.warn(
+                    "[Commission] account_claim_identity_unavailable:",
+                    caught?.code,
+                    caught?.message);
+            }
+        }
+    }
+    if (!state.account) return;
+    try {
+        state.accountClaim = (await state.client.loadAccountClaimStanding(
+            state.account.accessKey)).eligible;
+    } catch (caught) {
+        console.warn(
+            "[Commission] account_claim_standing_unavailable:",
+            caught?.code,
+            caught?.message);
+    }
 }
 
 // The claim belongs to the signed-in account on every device: when this browser
@@ -431,7 +472,7 @@ function carryMembershipIntent(pending, projection) {
 async function continueClaimAfterSignIn() {
     if (state.projection.kind === "participant" ||
         state.projection.public.isClaimed ||
-        !state.capabilities.claimCapability) {
+        !canClaim()) {
         return;
     }
     try {
@@ -717,7 +758,7 @@ function resolveNextStep() {
         };
     }
     if (!brief.isClaimed) {
-        if (!state.capabilities.claimCapability) {
+        if (!canClaim()) {
             return {
                 title: "Open for one crafter",
                 body: "This stable public link is view-only. Use the company's claim link to reserve the commission.",
@@ -908,7 +949,8 @@ function resolveNextStep() {
 async function startDiscordClaimSignIn() {
     // Without a claim capability this signs in to reach an existing claim.
     state.accountStore.beginSignIn(state.capabilities.claimCapability ?? null);
-    const returnPath = `${window.location.pathname}?id=${encodeURIComponent(state.publicId)}`;
+    const returnPath = `${window.location.pathname}?id=${encodeURIComponent(state.publicId)}` +
+        (state.accountClaimRequested ? "&claim=account" : "");
     const authorizationUrl = await state.client.startDiscordSignIn(returnPath);
     window.location.assign(authorizationUrl);
 }
@@ -1297,10 +1339,15 @@ function renderAccess() {
         return;
     }
 
-    if (state.capabilities.claimCapability) {
+    if (canClaim()) {
         setText("accessState", "Can claim");
         accessNote.append(
-            element("strong", null, "This link lets you claim the commission."),
+            element(
+                "strong",
+                null,
+                state.capabilities.claimCapability
+                    ? "This link lets you claim the commission."
+                    : "Your account can claim this commission."),
             element("small", null, "After claiming, you'll receive a private workspace link to manage your work."));
         return;
     }
@@ -1642,7 +1689,7 @@ async function refreshMembershipStanding() {
         !projection ||
         projection.kind === "participant" ||
         projection.public.isClaimed ||
-        !state.capabilities?.claimCapability) {
+        !canClaim()) {
         return;
     }
     try {
@@ -2066,8 +2113,14 @@ async function recoverAccess() {
         "Participant access restored. Your private workspace link is ready; keep it private.");
 }
 
+// A claim link, or the signed-in account when opened from the Crafter hub.
+function canClaim() {
+    return Boolean(state.capabilities?.claimCapability || state.accountClaim);
+}
+
 async function sendAuthorityExchange(command, access, authority, successMessage) {
-    if (!authority) {
+    const accountClaim = command === "claim" && !authority && state.accountClaim && state.account;
+    if (!authority && !accountClaim) {
         showNotice(
             "Authority missing",
             "The URL fragment no longer contains the required claim or recovery capability. Ask the commissioner for a fresh link.");
@@ -2095,6 +2148,7 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
             },
             authorization);
         applied = true;
+        state.accountClaim = false;
         state.store.completeAuthorityExchange(access);
         replaceParticipantCapabilityFragment(access.participantSecret);
         state.capabilities = {
@@ -2135,6 +2189,7 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
             }
             if (committed === true) {
                 console.warn("[Commission] claim_refused_but_committed:", caught.code);
+                state.accountClaim = false;
                 state.store.completeAuthorityExchange(access);
                 replaceParticipantCapabilityFragment(access.participantSecret);
                 state.capabilities = {
