@@ -27,6 +27,19 @@ public sealed class PersistenceContractTests
         Assert.Equal(0m, reloaded.CommissionPercent);
         Assert.Equal(TradePaymentContractMode.LegacyCommission, reloaded.ActivePaymentContract);
     }
+    [Fact]
+    public void HistoricalPaymentWithoutRateKeepsItsTotalAndDoesNotAcquireAZeroRate()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        const string legacy = """{"schedule":0,"contractLabel":"Commission","materialReimbursement":100,"materialAdjustment":1,"craftLabor":0,"total":101}""";
+        var payment = JsonSerializer.Deserialize<CompanyCommissionPaymentTerms>(legacy, options)!;
+        Assert.Null(payment.MaterialAdjustmentPercent);
+        Assert.Equal(101m, payment.Total);
+        Assert.False(JsonSerializer.SerializeToElement(payment, options).TryGetProperty("materialAdjustmentPercent", out _));
+        var agreedZero = payment with { MaterialAdjustment = 0, Total = 100, MaterialAdjustmentPercent = 0 };
+        Assert.Equal(agreedZero, JsonSerializer.Deserialize<CompanyCommissionPaymentTerms>(JsonSerializer.Serialize(agreedZero, options), options));
+    }
+
     private sealed class JsonRoundTripPayrollStore : ITradePayrollDraftStore
     {
         private string json = "[]";

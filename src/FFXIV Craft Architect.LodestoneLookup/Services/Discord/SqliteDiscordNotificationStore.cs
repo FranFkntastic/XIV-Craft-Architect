@@ -131,6 +131,9 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
                     UNIQUE(company_id, commission_id, discord_user_id)
                 );
 
+                CREATE INDEX IF NOT EXISTS ix_discord_claim_contacts_user
+                    ON discord_claim_contacts(discord_user_id, company_id);
+
                 CREATE TABLE IF NOT EXISTS discord_pending_claim_contacts (
                     interaction_id TEXT PRIMARY KEY,
                     company_id TEXT NOT NULL,
@@ -675,6 +678,39 @@ public sealed class SqliteDiscordNotificationStore(DiscordCommissionOptions opti
         command.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
         command.Parameters.AddWithValue("$claimId", claimId.ToString("D"));
         return await command.ExecuteScalarAsync(cancellationToken) as string;
+    }
+
+    /// <summary>
+    /// Companies where this Discord user committed a claim contact. It only says where
+    /// committed Discord discovery may find the user's claims; canonical ownership decides.
+    /// </summary>
+    internal async Task<IReadOnlyList<CompanyId>> LoadClaimContactCompaniesAsync(
+        string discordUserId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(discordUserId))
+        {
+            return [];
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT DISTINCT company_id
+            FROM discord_claim_contacts
+            WHERE discord_user_id = $discordUserId;
+            """;
+        command.Parameters.AddWithValue("$discordUserId", discordUserId);
+        var companies = new List<CompanyId>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (Guid.TryParse(reader.GetString(0), out var companyId) && companyId != Guid.Empty)
+            {
+                companies.Add(new CompanyId(companyId));
+            }
+        }
+        return companies;
     }
 
     internal async Task<DiscordNotificationEnqueueResult> EnqueueMemberAsync(

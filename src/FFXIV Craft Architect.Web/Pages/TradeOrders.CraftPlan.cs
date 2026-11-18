@@ -83,7 +83,8 @@ public partial class TradeOrders
             var pricingResult = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
                 orderToSave,
                 new TradeOrderPricingWorkflowOptions(
-                    ForceRefreshMarketData: false));
+                    ForceRefreshMarketData: false,
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (rollbackPlan != null)
@@ -102,7 +103,7 @@ public partial class TradeOrders
             }
 
             orderToSave = pricingResult.UpdatedOrder;
-            var saved = _selectedOrder.CompanyCommission == null
+            var saved = !HasCanonicalCommission
                 ? await SaveOrderAndNotifyAsync(orderToSave)
                 : await UpdateCanonicalDraftAsync(
                     orderToSave,
@@ -130,7 +131,7 @@ public partial class TradeOrders
                 return;
             }
 
-            if (_selectedOrder.CompanyCommission == null)
+            if (!HasCanonicalCommission)
             {
                 await LoadAsync();
                 if (string.IsNullOrWhiteSpace(_loadError) &&
@@ -170,7 +171,7 @@ public partial class TradeOrders
             return;
         }
 
-        if (_selectedOrder.CompanyCommission != null)
+        if (HasCanonicalCommission)
         {
             Snackbar.Add(
                 "Published commission details are projection-driven. Use commission operations to revise terms.",
@@ -343,14 +344,15 @@ public partial class TradeOrders
             var result = await TradeOrderPricingWorkflow.RebuildAndPriceAsync(
                 _selectedOrder,
                 new TradeOrderPricingWorkflowOptions(
-                    ForceRefreshMarketData: false));
+                    ForceRefreshMarketData: false,
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
             if (!result.HasUpdatedOrder || result.UpdatedOrder == null)
             {
                 Snackbar.Add(result.Message, ToSnackbarSeverity(result.MessageLevel));
                 return;
             }
 
-            var saved = _selectedOrder.CompanyCommission == null
+            var saved = !HasCanonicalCommission
                 ? await SaveOrderAndNotifyAsync(result.UpdatedOrder)
                 : await UpdateCanonicalDraftAsync(
                     result.UpdatedOrder,
@@ -367,7 +369,7 @@ public partial class TradeOrders
                 return;
             }
 
-            if (_selectedOrder.CompanyCommission == null)
+            if (!HasCanonicalCommission)
             {
                 await LoadAsync();
                 if (string.IsNullOrWhiteSpace(_loadError))
@@ -567,7 +569,8 @@ public partial class TradeOrders
             pricingResult = await TradeOrderPricingWorkflow.RepriceAsync(
                 _selectedOrder,
                 new TradeOrderPricingWorkflowOptions(
-                    ForceRefreshMarketData: true));
+                    ForceRefreshMarketData: true,
+                    MaterialPricingPolicy: _companyProfile?.MaterialPricingPolicy));
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (rollbackPlan != null && pricingResult.ActivePlanFence is { } failedFence)
@@ -582,7 +585,7 @@ public partial class TradeOrders
                 return;
             }
 
-            var saved = _selectedOrder.CompanyCommission == null
+            var saved = !HasCanonicalCommission
                 ? await SaveOrderAndNotifyAsync(pricingResult.UpdatedOrder)
                 : await UpdateCanonicalDraftAsync(
                     pricingResult.UpdatedOrder,
@@ -604,11 +607,17 @@ public partial class TradeOrders
                         rollbackPlan,
                         failedSaveFence);
                 }
-                Snackbar.Add("Order pricing updated, but failed to save it to the order.", Severity.Error);
+                var quoteFailureReason =
+                    pricingResult.UpdatedOrder.SourceSnapshot.MaterialQuoteFailureReason;
+                Snackbar.Add(
+                    string.IsNullOrWhiteSpace(quoteFailureReason)
+                        ? "Order pricing updated, but failed to save it to the order."
+                        : $"Order pricing could not be saved. {quoteFailureReason}",
+                    Severity.Error);
                 return;
             }
 
-            if (_selectedOrder.CompanyCommission == null)
+            if (!HasCanonicalCommission)
             {
                 await LoadAsync();
                 if (string.IsNullOrWhiteSpace(_loadError) &&
@@ -617,6 +626,9 @@ public partial class TradeOrders
                     _activeOpsTab = activeOpsTab;
                 }
             }
+
+            ClearLiveProcurementSnapshot();
+            await EnsureLiveProcurementSnapshotAsync();
 
             Snackbar.Add(
                 pricingResult.Message,

@@ -44,14 +44,127 @@ public partial class TradeOrders
         }
 
         var workPackage = GetSelectedOrderPricingWorkPackage();
+        var terms = (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission)?.CurrentTerms;
+        var historicalPricing = HasAgreedPaymentTerms && terms?.PricingEvidence.IsPreRoutePricing == true;
         var summary = TradeCommissionPaymentSummary.FromOrder(
             workPackage,
             GetSelectedOrderResponsibilityProjection(),
-            GetOrderEffectivePaymentPolicy(workPackage));
-        return !IsEditingCommissionTermsRevision &&
-            (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission)?.CurrentTerms.Payment is { } payment
-                ? TradeOrderPaymentDisplayFormatter.ApplyCanonicalPayment(summary, payment)
-                : summary;
+            GetOrderEffectivePaymentPolicy(workPackage),
+            requireMaterialRouteQuote: !historicalPricing);
+        if (!IsEditingCommissionTermsRevision &&
+            (SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission)?.CurrentTerms.Payment is { } canonicalPayment)
+        {
+            summary = TradeOrderPaymentDisplayFormatter.ApplyCanonicalPayment(summary, canonicalPayment);
+            if (historicalPricing)
+            {
+                // Today's live route (or its failure) cannot change agreed pre-quote terms.
+                return summary;
+            }
+        }
+        return ReconcileVisibleQuoteWarnings(
+            summary,
+            GetVisibleLiveProcurementSnapshot(),
+            savedQuoteUnavailable: workPackage.SourceSnapshot.MaterialQuote == null,
+            workPackage.SourceSnapshot.MaterialQuoteFailureReason);
+    }
+
+    private static TradeCommissionPaymentSummary ReconcileVisibleQuoteWarnings(
+        TradeCommissionPaymentSummary summary,
+        WorkerTradeProjection? live,
+        bool savedQuoteUnavailable,
+        string? savedQuoteFailureReason)
+    {
+        if (live == null)
+        {
+            return summary;
+        }
+
+        var warnings = summary.Warnings
+            .Where(warning => !IsIrrelevantMarketWarningForSelectedSource(
+                warning,
+                live.MaterialLines))
+            .ToList();
+        var liveQuoteFailureReason = ResolveLiveQuoteFailureReason(live);
+        if (savedQuoteUnavailable &&
+            live.MaterialQuote == null &&
+            !string.IsNullOrWhiteSpace(liveQuoteFailureReason))
+        {
+            warnings.RemoveAll(warning => string.Equals(
+                warning,
+                "Executable material quote is unavailable.",
+                StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(savedQuoteFailureReason))
+            {
+                warnings.RemoveAll(warning => string.Equals(
+                    warning,
+                    savedQuoteFailureReason,
+                    StringComparison.OrdinalIgnoreCase));
+            }
+            if (!warnings.Contains(
+                    liveQuoteFailureReason,
+                    StringComparer.OrdinalIgnoreCase))
+            {
+                warnings.Add(liveQuoteFailureReason);
+            }
+        }
+
+        return summary with
+        {
+            Warnings = warnings
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+        };
+    }
+
+    private static string? ResolveLiveQuoteFailureReason(WorkerTradeProjection live)
+    {
+        if (!string.IsNullOrWhiteSpace(live.MaterialQuoteFailureReason))
+        {
+            return live.MaterialQuoteFailureReason;
+        }
+
+        return live.Warnings.FirstOrDefault(warning =>
+            warning.StartsWith("Trade cannot quote ", StringComparison.OrdinalIgnoreCase) ||
+            warning.StartsWith("No current market evidence is loaded", StringComparison.OrdinalIgnoreCase) ||
+            warning.StartsWith("Trade material quotes require current-region market evidence", StringComparison.OrdinalIgnoreCase) ||
+            warning.StartsWith("No complete executable route fits company policy", StringComparison.OrdinalIgnoreCase) ||
+            warning.StartsWith("Trade material quote is incomplete", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsIrrelevantMarketWarningForSelectedSource(
+        string warning,
+        IReadOnlyList<CommissionPayrollInputLine> materials)
+    {
+        var describesMarketEvidence =
+            warning.Contains("market data", StringComparison.OrdinalIgnoreCase) ||
+            warning.Contains("market evidence", StringComparison.OrdinalIgnoreCase) ||
+            warning.Contains("market-analysis", StringComparison.OrdinalIgnoreCase);
+        if (!describesMarketEvidence)
+        {
+            return false;
+        }
+
+        var matchingNames = materials
+            .Select(material => material.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(name => warning.StartsWith(
+                $"{name} uses ",
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return matchingNames.Length == 1 && materials
+            .Where(material => string.Equals(
+                material.Name,
+                matchingNames[0],
+                StringComparison.OrdinalIgnoreCase))
+            .All(material =>
+                string.Equals(
+                    material.EvidenceSource,
+                    "Vendor price",
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    material.EvidenceSource,
+                    TradeOrderWorkflow.OnHandEvidenceSource,
+                    StringComparison.OrdinalIgnoreCase));
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetSelectedOrderProcurementRows()
@@ -78,7 +191,7 @@ public partial class TradeOrders
         }
 
         var commission = SelectedCanonicalCommission ?? _selectedOrder.CompanyCommission;
-        return commission?.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published
+        return commission != null
             ? CreateCanonicalTermsWorkPackage(_selectedOrder, commission.CurrentTerms)
             : _selectedOrder;
     }
@@ -510,6 +623,7 @@ public partial class TradeOrders
         try
         {
             var snapshot = await WorkerSession.GetTradeProjectionAsync(
+                materialPricingPolicy: _companyProfile?.MaterialPricingPolicy,
                 cancellationToken: cancellationToken);
             if (requestId != _liveProcurementRefreshRequestId)
             {
@@ -568,7 +682,9 @@ public partial class TradeOrders
         return new LiveProcurementKey(
             _selectedOrder.Id,
             WorkerProjections.Shell.PlanId ?? string.Empty,
-            WorkerProjections.Shell.Revision);
+            WorkerProjections.Shell.Revision,
+            TradeMaterialPricingPolicyNormalizer.Fingerprint(
+                _companyProfile?.MaterialPricingPolicy));
     }
 
     private IReadOnlyList<TradeOrderProcurementRow> GetOrderedProcurementRows(IReadOnlyList<TradeOrderProcurementRow> rows)
@@ -1166,7 +1282,8 @@ public partial class TradeOrders
             return false;
         }
 
-        var live = await WorkerSession.GetTradeProjectionAsync();
+        var live = await WorkerSession.GetTradeProjectionAsync(
+            materialPricingPolicy: _companyProfile?.MaterialPricingPolicy);
         if (live == null || !live.HasPlan)
         {
             Snackbar.Add("Linked craft plan could not be loaded.", Severity.Warning);
@@ -1215,7 +1332,8 @@ public partial class TradeOrders
                 new WorkerAcquisitionMutation(row.ItemId, source, MustBeHq: null),
                 source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq
                     ? [row.ItemId]
-                    : null);
+                    : null,
+                _companyProfile?.MaterialPricingPolicy);
             if (!pricingResult.HasUpdatedOrder || pricingResult.UpdatedOrder == null)
             {
                 if (pricingResult.ActivePlanFence is { } failedFence)
@@ -1281,6 +1399,9 @@ public partial class TradeOrders
                 SelectOrderAfterReload(orderToSave.Id, "Source changed, but the order could not be loaded.");
             }
         }
+
+        ClearLiveProcurementSnapshot();
+        await EnsureLiveProcurementSnapshotAsync();
 
         if (showSuccess)
         {

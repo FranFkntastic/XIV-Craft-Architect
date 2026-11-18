@@ -169,12 +169,14 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
                 "The commission is cleared for work.",
             CompanyCommissionActivityKind.ProgressReported =>
                 BuildProgressChangedFact(activity, commission),
+            CompanyCommissionActivityKind.DeliveryHandoffRecorded =>
+                BuildDeliveryHandoffChangedFact(activity),
             CompanyCommissionActivityKind.CommentAdded =>
                 DiscordProjectionSanitizer.Text(
                     activity.Comment ?? "A commission comment was added.",
                     4096),
             CompanyCommissionActivityKind.DeliveryReadinessDeclared =>
-                "The crafter marked the full commission ready for delivery.",
+                "The crafter completed the full commission for delivery review.",
             CompanyCommissionActivityKind.DeliveryReadinessWithdrawn =>
                 "The crafter withdrew delivery readiness.",
             CompanyCommissionActivityKind.DeliveryReturnedToWork =>
@@ -285,8 +287,7 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
             {
                 details.Add(
                     $"{DiscordProjectionSanitizer.Text(output.Name, 64)}: " +
-                    $"{quantity.CompletedQuantity:N0} of {output.RequiredQuantity:N0} completed, " +
-                    $"{quantity.ReadyQuantity:N0} ready");
+                    $"{quantity.CompletedQuantity:N0} of {output.RequiredQuantity:N0} completed");
             }
         }
 
@@ -312,6 +313,32 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
         return changedFact;
     }
 
+    private static string BuildDeliveryHandoffChangedFact(
+        CompanyCommissionActivityEvent activity)
+    {
+        var handoff = string.IsNullOrWhiteSpace(activity.PayloadJson)
+            ? null
+            : JsonSerializer.Deserialize<CompanyCommissionDeliveryHandoff>(activity.PayloadJson);
+        if (handoff == null)
+        {
+            return "The crafter sent the completed commission for delivery review.";
+        }
+
+        var method = handoff.Method switch
+        {
+            CompanyCommissionDeliveryHandoffMethod.Mail => "by mail",
+            CompanyCommissionDeliveryHandoffMethod.CompanyRepresentative => "through a company representative",
+            _ => "through another handoff"
+        };
+        var recipient = string.IsNullOrWhiteSpace(handoff.Recipient)
+            ? string.Empty
+            : $" Recipient: {DiscordProjectionSanitizer.Text(handoff.Recipient, 200)}.";
+        var note = string.IsNullOrWhiteSpace(handoff.Note)
+            ? string.Empty
+            : $" Note: {DiscordProjectionSanitizer.Text(handoff.Note, 800)}";
+        return $"The crafter sent the completed commission for delivery review {method}.{recipient}{note}";
+    }
+
     internal static string ResolveActionLabel(
         CompanyCommissionActivityKind eventKind,
         CompanyCommissionPublicBrief commission) =>
@@ -325,6 +352,7 @@ public sealed class DiscordCompanyCommissionPostCommitSink(
             CompanyCommissionActivityKind.PaymentPolicyChangeRequested => "Review payment",
             CompanyCommissionActivityKind.CompanyMaterialsReceived => "View order",
             CompanyCommissionActivityKind.DeliveryReadinessDeclared => "Review delivery",
+            CompanyCommissionActivityKind.DeliveryHandoffRecorded => "Review delivery",
             CompanyCommissionActivityKind.ProgressReported => "View progress",
             CompanyCommissionActivityKind.CommentAdded => "View comment",
             _ => "View order"

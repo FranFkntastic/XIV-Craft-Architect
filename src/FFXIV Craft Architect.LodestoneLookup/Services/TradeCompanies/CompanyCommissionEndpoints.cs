@@ -37,6 +37,8 @@ public sealed record IssueCompanyCommissionClaimLinkRequest(
 
 public sealed record IssueCompanyCommissionClaimLinkResponse(string ClaimUrl);
 
+public sealed record CompanyCommissionAccountClaimStanding(bool Eligible);
+
 public static class CompanyCommissionEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions =
@@ -557,6 +559,7 @@ public static class CompanyCommissionEndpoints
                  ProfileHostedTradeCompanyService companyService,
                  SqliteMembershipStore memberships,
                  LegacyCrafterAccountResolver crafterAccounts,
+                 CompanyHubService hubs,
                  TimeProvider timeProvider,
                 CancellationToken cancellationToken) =>
             {
@@ -588,6 +591,25 @@ public static class CompanyCommissionEndpoints
                 if (!SqliteCompanyCommissionCapabilityStore.IsValidCapability(
                         plaintextCapability))
                 {
+                    if (capabilityKind == CompanyCommissionCapabilityKind.Claim &&
+                        !string.IsNullOrWhiteSpace(request.Headers["X-Profile-Key"].ToString()))
+                    {
+                        return await ExecuteAccountClaimAsync(
+                            publicId,
+                            envelope,
+                            request,
+                            accessResolver,
+                            companyService,
+                            hubs,
+                            memberships,
+                            crafterAccounts,
+                            identities,
+                            claimContacts,
+                            capabilities,
+                            commissions,
+                            timeProvider,
+                            cancellationToken);
+                    }
                     return await ExecuteMembershipParticipantAsync(
                         publicId,
                         route,
@@ -662,7 +684,9 @@ public static class CompanyCommissionEndpoints
                     envelope.ExpectedProjectionRevision,
                     envelope.CommandId,
                     envelope.ProtocolVersion,
-                    cancellationToken);
+                    cancellationToken,
+                    claimAccount?.ProfileId,
+                    ReadClaimTermsVersion(envelope.Command));
                 if (context == null)
                 {
                     return Results.Conflict(new
@@ -910,6 +934,278 @@ public static class CompanyCommissionEndpoints
                     ? CanonicalCommissionConflict()
                     : Results.Ok(participant);
             });
+
+        // Lets the claim page offer an account claim only to accounts the claim command
+        // would accept. Advisory; the command re-checks everything itself.
+        app.MapGet(
+            "/xivdata/commission-briefs/{publicId}/account-claim",
+            async (
+                string publicId,
+                HttpRequest request,
+                MembershipAccessResolver accessResolver,
+                ProfileHostedTradeCompanyService companyService,
+                CompanyHubService hubs,
+                CancellationToken cancellationToken) =>
+            {
+                if (string.IsNullOrWhiteSpace(publicId) ||
+                    publicId.Length > SqliteCompanyCommissionCapabilityStore
+                        .MaximumPublicBriefIdLength)
+                {
+                    return Results.NotFound();
+                }
+                var account = await accessResolver.ResolveAccountAsync(
+                    request,
+                    cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+                var ownership = await companyService.ResolvePublicationOwnershipAsync(
+                    publicId,
+                    cancellationToken);
+                if (ownership == null)
+                {
+                    return Results.NotFound();
+                }
+                return Results.Ok(new CompanyCommissionAccountClaimStanding(
+                    await hubs.CanClaimOpenCommissionsAsync(
+                        account,
+                        ownership.CompanyId,
+                        cancellationToken)));
+            });
+    }
+
+    // D8/K3: an account the Crafter hub shows this open commission to claims it with the
+    // signed-in account as the authority instead of a claim link. Eligibility is checked
+    // again on every attempt, so a direct call is refused once the account is no longer
+    // a member or the company stops sharing open commissions with freelancers. The claim
+    // itself is the same account-bound claim a link produces: Lodestone character,
+    // account evidence, crafter reuse, and a device participant credential.
+    private static async Task<IResult> ExecuteAccountClaimAsync(
+        string publicId,
+        PublicCompanyCommissionCommandEnvelope envelope,
+        HttpRequest request,
+        MembershipAccessResolver accessResolver,
+        ProfileHostedTradeCompanyService companyService,
+        CompanyHubService hubs,
+        SqliteMembershipStore memberships,
+        LegacyCrafterAccountResolver crafterAccounts,
+        SqliteDiscordIdentityStore identities,
+        DiscordClaimContactCommitter claimContacts,
+        SqliteCompanyCommissionCapabilityStore capabilities,
+        HostedCompanyCommissionService commissions,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+        if (account == null)
+        {
+            return ClaimRequiresAccount();
+        }
+        var identity = await identities.LoadByProfileAsync(account.ProfileId, cancellationToken);
+        if (identity == null)
+        {
+            return Results.Json(
+                new
+                {
+                    error = "verified_discord_identity_required",
+                    message = "Sign in with a Discord-linked account before making a verified claim."
+                },
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+        if (envelope.CommandId == Guid.Empty ||
+            envelope.ProtocolVersion != CompanyCommissionProtocol.Version1)
+        {
+            return InvalidCommand("The claim command identity or protocol is invalid.");
+        }
+
+        var ownership = await companyService.ResolvePublicationOwnershipAsync(
+            publicId,
+            cancellationToken);
+        if (ownership == null)
+        {
+            return Results.NotFound();
+        }
+        var snapshot = await commissions.LoadPublishedAsync(
+            ownership,
+            publicId,
+            cancellationToken);
+        var commission = snapshot?.Order.CompanyCommission;
+        if (snapshot == null ||
+            commission == null ||
+            !string.Equals(
+                commission.PublicMetadata.PublicBriefId,
+                publicId,
+                StringComparison.Ordinal))
+        {
+            return MissingCanonicalCommission();
+        }
+
+        // A retry of a claim that already committed replays as recorded, but only for the
+        // account that made it.
+        var recordedClaim = commission.ProcessedCommands
+            .FirstOrDefault(item => item.CommandId == envelope.CommandId) is { } processed
+            ? new RecordedCompanyCommissionCommand(processed.Fingerprint, commission.ActiveClaim)
+            : null;
+        if (recordedClaim != null)
+        {
+            if (recordedClaim.ActiveClaim?.AccountEvidence?.ProfileId != account.ProfileId)
+            {
+                return ParticipantAccessDenied();
+            }
+        }
+        else
+        {
+            if (!await hubs.CanClaimOpenCommissionsAsync(
+                    account,
+                    ownership.CompanyId,
+                    cancellationToken))
+            {
+                return Results.Json(
+                    new MembershipErrorResponse(
+                        "account_claim_not_allowed",
+                        "This account cannot claim this company's commissions. Use the company's claim link."),
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+            if (commission.ActiveClaim != null)
+            {
+                return ClaimSlotTaken();
+            }
+            if (snapshot.Order.Status != TradeOrderStatus.ReadyToAssign ||
+                commission.PublicMetadata.ViewState !=
+                    CompanyCommissionPublicViewState.Published ||
+                commission.PublicMetadata.IsTestFixture)
+            {
+                return Results.Conflict(new MembershipErrorResponse(
+                    "commission_not_open",
+                    "Only an open, published commission can be claimed."));
+            }
+            if (commission.ClaimPriceReview?.IsRetry(account.ProfileId, envelope.CommandId, ReadClaimTermsVersion(envelope.Command)) != true &&
+                (commission.Activity.LastOrDefault()?.CommissionRevision ?? 0) !=
+                envelope.ExpectedProjectionRevision)
+            {
+                return Results.Conflict(new
+                {
+                    error = "projection_conflict",
+                    message =
+                        "The canonical commission changed before the public command was applied."
+                });
+            }
+        }
+
+        ICompanyCommissionParticipantCommand parsed;
+        string? newParticipantCredential;
+        try
+        {
+            (parsed, newParticipantCredential) = DeserializeParticipantCommand(
+                "claim",
+                envelope.Command,
+                new CompanyCommissionCommandContext(
+                    ownership.CompanyId,
+                    ownership.OrderId,
+                    snapshot.Envelope.RecordRevision,
+                    snapshot.CompanyRevision,
+                    envelope.CommandId,
+                    envelope.ProtocolVersion));
+        }
+        catch (JsonException exception)
+        {
+            return InvalidCommand(exception.Message);
+        }
+        if (parsed is not ClaimCompanyCommissionCommand claim)
+        {
+            return InvalidCommand("The public command route is not supported.");
+        }
+        if (!IsValidParticipantCredential(newParticipantCredential))
+        {
+            return InvalidCommand(
+                "A bounded browser-generated participant credential is required.");
+        }
+
+        if (recordedClaim != null)
+        {
+            claim = (ClaimCompanyCommissionCommand)await RebuildRecordedClaimAsync(
+                claim,
+                recordedClaim,
+                ownership.CompanyId,
+                crafterAccounts,
+                memberships,
+                cancellationToken);
+        }
+        else
+        {
+            // One crafter per person per company: reuse the account's existing company
+            // crafter instead of the browser-minted character ID.
+            var (existingCrafterId, confirmed) = await ResolveExactClaimCrafterAsync(
+                ownership.CompanyId,
+                account.ProfileId,
+                claim.ClaimantCharacter?.LodestoneCharacterId,
+                crafterAccounts,
+                memberships,
+                cancellationToken);
+            claim = BindClaimToAccount(
+                claim,
+                existingCrafterId,
+                new CompanyCommissionClaimAccountEvidence(
+                    account.ProfileId,
+                    identity.DiscordUserId,
+                    identity.DisplayNameSnapshot),
+                confirmed);
+        }
+
+        var mutation = await commissions.ExecuteAccountClaimAsync(
+            ownership,
+            publicId,
+            account.ProfileId,
+            claim,
+            cancellationToken);
+        if (!mutation.Success)
+        {
+            if (mutation.Status == CompanyCommissionMutationStatus.Conflict &&
+                mutation.ErrorCode != "claim_price_changed" &&
+                (await commissions.LoadPublishedAsync(
+                    ownership,
+                    publicId,
+                    cancellationToken))?.Order.CompanyCommission?.ActiveClaim != null)
+            {
+                return ClaimSlotTaken();
+            }
+            return ToCommandError(mutation);
+        }
+
+        var participant = mutation.Order?.CompanyCommission?.ParticipantGrant
+            ?? throw new InvalidOperationException(
+                "The account claim did not create an active participant grant.");
+        using var committedWork = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var committedCancellationToken = committedWork.Token;
+        await claimContacts.CaptureMemberAsync(
+            account.ProfileId,
+            identities,
+            mutation,
+            committedCancellationToken);
+        var resolution = await capabilities.InstallLinkedParticipantAsync(
+            ownership.CompanyId,
+            ownership.OrderId,
+            publicId,
+            participant.GrantId,
+            participant.CapabilityRevision,
+            newParticipantCredential!,
+            timeProvider.GetUtcNow().UtcDateTime,
+            committedCancellationToken);
+        if (resolution == null)
+        {
+            return Results.Json(
+                new MembershipErrorResponse(
+                    "participant_credential_revoked",
+                    "This browser credential was revoked; a new one is required."),
+                statusCode: StatusCodes.Status409Conflict);
+        }
+        var projection = await commissions.LoadParticipantAsync(
+            resolution,
+            committedCancellationToken);
+        return projection == null
+            ? CanonicalCommissionConflict()
+            : Results.Ok(projection);
     }
 
     private static IResult ParticipantAccessDenied() =>
@@ -980,6 +1276,10 @@ public static class CompanyCommissionEndpoints
             return MissingCanonicalCommission();
         }
 
+        // Settlement attestations are made and retracted after delivery is accepted.
+        var settlementAfterDelivery =
+            route is "confirm-settlement-received" or "retract-settlement" &&
+            snapshot.Order.Status == TradeOrderStatus.Completed;
         var activeClaim = commission.ActiveClaim;
         var participantIsLive =
             activeClaim != null &&
@@ -990,7 +1290,7 @@ public static class CompanyCommissionEndpoints
                 cancellationToken) &&
             commission.ParticipantGrant is { RevokedAtUtc: null } participant &&
             participant.ClaimId == activeClaim.ClaimId &&
-            snapshot.Order.Status != TradeOrderStatus.Canceled &&
+            (!TradeOrderStatusWorkflow.IsArchived(snapshot.Order.Status) || settlementAfterDelivery) &&
             commission.PublicMetadata.ViewState == CompanyCommissionPublicViewState.Published;
         if (!participantIsLive)
         {
@@ -1263,6 +1563,17 @@ public static class CompanyCommissionEndpoints
                             payload.Comment),
                         null);
                 }
+            case "record-delivery-handoff":
+                {
+                    var payload = Deserialize<DeliveryHandoffPayload>(body);
+                    return (
+                        new RecordCompanyCommissionDeliveryHandoffCommand(
+                            context,
+                            payload.Method,
+                            payload.Recipient,
+                            payload.Note),
+                        null);
+                }
             case "add-comment":
                 return (
                     new AddCompanyCommissionCommentCommand(
@@ -1302,6 +1613,7 @@ public static class CompanyCommissionEndpoints
             "retract-settlement" or
             "acknowledge-company-materials" or
             "report-progress" or
+            "record-delivery-handoff" or
             "add-comment" or
             "declare-readiness" or
             "withdraw-readiness" =>
@@ -1588,6 +1900,8 @@ public static class CompanyCommissionEndpoints
     private static IResult ToCommandError(CompanyCommissionMutationResult mutation) =>
         mutation.Status switch
         {
+            CompanyCommissionMutationStatus.Conflict when mutation.ErrorCode == "claim_price_changed" =>
+                ClaimPriceChanged(mutation),
             CompanyCommissionMutationStatus.Conflict => Results.Conflict(new
             {
                 error = mutation.ErrorCode,
@@ -1605,6 +1919,28 @@ public static class CompanyCommissionEndpoints
                 message = mutation.ErrorMessage
             })
         };
+
+    private static int? ReadClaimTermsVersion(JsonElement command) =>
+        command.ValueKind == JsonValueKind.Object && command.TryGetProperty("termsVersion", out var value) &&
+        value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var version) ? version : null;
+
+    internal static IResult ClaimPriceChanged(CompanyCommissionMutationResult mutation)
+    {
+        var commission = mutation.Order!.CompanyCommission!;
+        var terms = commission.CurrentTerms;
+        var previous = commission.TermsVersions.Single(t => t.Version == terms.Version - 1).Payment.Total;
+        return Results.Conflict(new
+        {
+            error = mutation.ErrorCode,
+            code = mutation.ErrorCode,
+            message = mutation.ErrorMessage,
+            previousPayment = previous,
+            currentPayment = terms.Payment.Total,
+            changePercent = previous == 0 ? (decimal?)null : (terms.Payment.Total - previous) / previous * 100m,
+            termsVersion = terms.Version,
+            projectionRevision = mutation.Activity!.CommissionRevision
+        });
+    }
 
     private static TradeCommissionOwnerCommandResponse ToOwnerResponse(
         CompanyCommissionMutationResult mutation,
@@ -1664,6 +2000,11 @@ public static class CompanyCommissionEndpoints
     private sealed record ProgressPayload(
         IReadOnlyList<CompanyCommissionProgressQuantity> Outputs,
         string? Comment);
+
+    private sealed record DeliveryHandoffPayload(
+        CompanyCommissionDeliveryHandoffMethod Method,
+        string? Recipient,
+        string? Note);
 
     private sealed record CommentPayload(string Comment);
 

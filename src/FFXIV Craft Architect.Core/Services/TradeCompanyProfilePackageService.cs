@@ -37,8 +37,11 @@ public sealed class TradeCompanyProfilePackageService
         importedProfile.Description = sourceProfile.Description;
         importedProfile.CommissionContact = sourceProfile.CommissionContact;
         importedProfile.PaymentPolicy = NormalizePaymentPolicy(sourceProfile.PaymentPolicy);
+        importedProfile.MaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
+            sourceProfile.MaterialPricingPolicy);
         importedProfile.CommissionPricingScope = sourceProfile.CommissionPricingScope;
-        importedProfile.MarginItems = sourceProfile.MarginItems ?? [];
+        importedProfile.MarginItems = (sourceProfile.MarginItems ?? []).ToArray();
+        importedProfile.FreelancerOpenCommissions = sourceProfile.FreelancerOpenCommissions;
 
         var importedCrafters = package.Crafters
             .Select(crafter => ImportCrafter(crafter, importedProfile.Id, importedAtUtc))
@@ -85,8 +88,11 @@ public sealed class TradeCompanyProfilePackageService
             RemoteId = profile.RemoteId,
             SyncState = profile.SyncState,
             PaymentPolicy = NormalizePaymentPolicy(profile.PaymentPolicy),
+            MaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
+                profile.MaterialPricingPolicy),
             CommissionPricingScope = profile.CommissionPricingScope,
-            MarginItems = profile.MarginItems ?? [],
+            MarginItems = (profile.MarginItems ?? []).ToArray(),
+            FreelancerOpenCommissions = profile.FreelancerOpenCommissions,
             CreatedAtUtc = profile.CreatedAtUtc,
             UpdatedAtUtc = profile.UpdatedAtUtc
         };
@@ -95,7 +101,7 @@ public sealed class TradeCompanyProfilePackageService
     private static TradePaymentPolicy NormalizePaymentPolicy(TradePaymentPolicy? policy)
     {
         return TradePaymentPolicyNormalizer.Normalize(
-            policy ?? TradePaymentPolicy.LegacyDefault);
+            policy ?? TradePaymentPolicy.Default);
     }
 
     private static TradeCrafterProfile CopyCrafter(TradeCrafterProfile crafter)

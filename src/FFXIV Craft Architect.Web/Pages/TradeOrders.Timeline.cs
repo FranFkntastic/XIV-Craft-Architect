@@ -24,7 +24,9 @@ public partial class TradeOrders
         var canonical = activity.Select(item => new CommissionTimelineItem(
             item.EventId,
             item.CreatedAtUtc,
-            FormatCommissionActivity(item.Kind),
+            item.Kind == CompanyCommissionActivityKind.CommentAdded
+                ? FormatCommentTitle(item)
+                : FormatCommissionActivity(item.Kind),
             item.Comment ?? FormatCommissionActivityDetail(item.Kind),
             item.Visibility == CompanyCommissionActivityVisibility.CompanyOnly
                 ? CommissionTimelineVisibility.CompanyOnly
@@ -190,6 +192,14 @@ public partial class TradeOrders
             _ => CommissionTimelineImportance.Milestone
         };
 
+    // Shared comments are the conversation with the crafter; company-only ones are notes.
+    private static string FormatCommentTitle(CompanyCommissionActivityEvent item) =>
+        item.Visibility == CompanyCommissionActivityVisibility.CompanyOnly
+            ? "Company note"
+            : item.Actor.Kind == CompanyCommissionActorKind.Crafter
+                ? "Message from crafter"
+                : "Message to crafter";
+
     private static string FormatTimelineVisibility(CommissionTimelineVisibility visibility) =>
         visibility switch
         {
@@ -225,7 +235,7 @@ public partial class TradeOrders
                     _timelineComposerVisibility ==
                     CommissionTimelineVisibility.CompanyOnly
                         ? "Company note added"
-                        : "Crafter update posted");
+                        : "Message sent");
                 if (result.Success)
                 {
                     _timelineComment = string.Empty;
@@ -286,6 +296,8 @@ public partial class TradeOrders
                 "The one active claim slot was reserved.",
             CompanyCommissionActivityKind.TermsAmended =>
                 "The commissioner created a new immutable terms version.",
+            CompanyCommissionActivityKind.DeliveryHandoffRecorded =>
+                "The crafter recorded where the completed project was sent for commissioner review.",
             CompanyCommissionActivityKind.PaymentSentRecorded =>
                 "The commissioner marked the current-terms payment sent.",
             CompanyCommissionActivityKind.PaymentReceivedConfirmed =>

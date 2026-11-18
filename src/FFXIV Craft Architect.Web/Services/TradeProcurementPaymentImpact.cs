@@ -9,7 +9,7 @@ public static class TradeProcurementPaymentImpact
     public static IReadOnlyDictionary<(int ItemId, bool RequiresHq), decimal?> CalculateAll(
         WorkerTradeProjection snapshot,
         IReadOnlyDictionary<(int ItemId, bool RequiresHq), CommissionMaterialResponsibility> responsibilities,
-        bool requireRecordedCash = false)
+        bool requireQuotedCash = false)
     {
         var impacts = snapshot.AcquisitionRows
             .Select(row => (row.ItemId, row.MustBeHq)).Distinct()
@@ -62,6 +62,9 @@ public static class TradeProcurementPaymentImpact
         var frontierGroups = occurrences.Where(node => node.IsActiveProcurement && !node.IsSuppressed && node.Quantity > 0)
             .GroupBy(node => (node.ItemId, node.MustBeHq))
             .ToDictionary(group => group.Key, group => group.ToArray());
+        var quoteLines = snapshot.MaterialQuote?.Lines
+            .GroupBy(line => (line.ItemId, line.RequiresHq))
+            .ToDictionary(group => group.Key, group => group.ToArray());
         var materialLines = snapshot.MaterialLines.GroupBy(line => (line.ItemId, line.RequiresHq))
             .ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var (key, peers) in frontierGroups)
@@ -77,8 +80,14 @@ public static class TradeProcurementPaymentImpact
             else if (peers.All(node => node.Source == source) &&
                 source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq or AcquisitionSource.VendorBuy)
             {
-                // Accepted terms without cash itemization must not use live reference prices.
-                if (!requireRecordedCash &&
+                // Quote age does not change the recorded purchase cost.
+                if (quoteLines != null && quoteLines.TryGetValue(key, out var quotes) &&
+                    quotes.Length == 1 && quotes[0].RequiredQuantity == quantity)
+                {
+                    cash = quotes[0].CashRequired;
+                }
+                else if (quoteLines == null && !requireQuotedCash &&
+                    string.IsNullOrWhiteSpace(snapshot.MaterialQuoteFailureReason) &&
                     materialLines.TryGetValue(key, out var lines) && lines.Length == 1 &&
                     lines[0].Quantity == quantity && TradeOrderWorkflow.IsResolvedMaterialEvidence(
                         lines[0].UnitCost, lines[0].UnitCost * quantity, lines[0].EvidenceSource))

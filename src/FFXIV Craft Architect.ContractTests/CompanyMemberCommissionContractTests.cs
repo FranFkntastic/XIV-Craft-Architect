@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
@@ -15,6 +16,162 @@ namespace FFXIV_Craft_Architect.ContractTests;
 
 public sealed class CompanyMemberCommissionContractTests
 {
+    [Fact]
+    public void V1PublishedMaterialPaymentSurvivesMigrationAndSettlement()
+    {
+        var order = MemberCommissionFixture.CreateOrder(Guid.NewGuid());
+        var commission = order.CompanyCommission!;
+        var now = commission.CreatedAtUtc;
+        var terms = commission.CurrentTerms with
+        {
+            Materials = [new(Guid.NewGuid(), 42, "Ingredient", 2, false, CommissionMaterialResponsibility.Crafter, 75, 150)],
+            Payment = commission.CurrentTerms.Payment with { MaterialReimbursement = 150, Total = 1150 },
+            PricingEvidence = new("MarketRecommendation", "World", "Cactuar", now)
+        };
+        order.CompanyCommission = commission with { SchemaVersion = 1, TermsVersions = [terms] };
+        order = TradeCompanyCommissionMigrationService.ConvertLegacyOrder(order, null, commission.CompanyId, 0, now, null);
+        Assert.Equal(2, order.CompanyCommission!.SchemaVersion);
+        var crafter = new CompanyCommissionActor("crafter", CompanyCommissionActorKind.Crafter);
+        var owner = terms.CreatedBy;
+        CompanyCommissionCommandContext Context() => new(commission.CompanyId, order.Id, new(1), new(1), Guid.NewGuid(), 1);
+        void Apply(ICompanyCommissionCommand command, CompanyCommissionActor actor) =>
+            order = CompanyCommissionCommandWorkflow.Apply(order, command, actor, now).UpdatedOrder;
+
+        Apply(new ClaimCompanyCommissionCommand(Context(), 1, null, Guid.NewGuid(),
+            new(Guid.NewGuid(), "123456789012345678", "Crafter")), crafter);
+        Assert.True(order.CompanyCommission!.ClearedToWork);
+        var output = Assert.Single(terms.Outputs);
+        Apply(new ReportCompanyCommissionProgressCommand(Context(), [new(output.LineId, output.ItemId, 2, 2)]), crafter);
+        Assert.True(order.CompanyCommission!.DeliveryReadiness.IsReady);
+        Apply(new AcceptCompanyCommissionDeliveryCommand(Context()), owner);
+        Apply(new RecordCompanyCommissionSettlementCommand(Context(), "Paid agreed amount"), owner);
+        Apply(new ConfirmCompanyCommissionSettlementReceivedCommand(Context(), 1, "Received"), crafter);
+        Assert.Equal(CompanyCommissionSettlementState.Satisfied, order.CompanyCommission!.SettlementState);
+        Assert.Equal(terms.Payment, order.CompanyCommission.CurrentTerms.Payment);
+        Assert.Null(order.CompanyCommission.CurrentTerms.PricingEvidence.MaterialQuote);
+    }
+
+    [Fact]
+    public void MixedDraftCanBePublishedAndResponsibilityReversedInARevision()
+    {
+        var company = Guid.NewGuid();
+        var order = MemberCommissionFixture.CreateOrder(company);
+        var commission = order.CompanyCommission!;
+        var now = commission.CreatedAtUtc;
+        var actor = commission.CurrentTerms.CreatedBy;
+        order.CompanyCommission = commission with
+        {
+            PublicMetadata = commission.PublicMetadata with { ViewState = CompanyCommissionPublicViewState.Draft }
+        };
+        var policy = new TradeMaterialPricingPolicy();
+        order.CraftPlanId = "mixed";
+        order.SourceSnapshot = new()
+        {
+            RootItems = [new(100, "Output", 2, false, 0)],
+            PlanSessionVersion = 1,
+            MarketAnalysisVersion = 1,
+            MaterialQuote = new()
+            {
+                CompanyProfileId = company,
+                SourcePlanId = "mixed",
+                PlanSessionVersion = 1,
+                MarketAnalysisVersion = 1,
+                PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(policy),
+                AppliedPolicy = policy,
+                RouteSelectionKey = "full-route",
+                QuotedAtUtc = now,
+                ExpiresAtUtc = now.AddHours(1),
+                RouteCashRequired = 300,
+                SafetyAllowance = 30,
+                MaterialReimbursement = 330,
+                WorldStops = 1,
+                Lines = [new(1, "A", 1, false, 100, ["Siren"], now), new(2, "B", 1, false, 200, ["Siren"], now)]
+            }
+        };
+        var brief = new CommissionBriefDocument
+        {
+            Title = order.Title,
+            Reference = commission.Reference,
+            Outputs = [new(100, "Output", 2, false)],
+            CrafterMaterials = [new(1, "A", 1, false, 100, 100)],
+            CompanyMaterials = [new(2, "B", 1, false, 200, 200)],
+            Payment = new("Commission", 110, 0, 0, 110),
+            Evidence = new("ProcurementRoute", "DC", "Aether", now)
+        };
+        CompanyCommissionDraftWorkPackage Package() => new([new(100, "Output", 2, false, 0)],
+            order.SourceSnapshot, order.CraftPlanId, null, null, order.CraftPlanLinkKind);
+        CompanyCommissionCommandContext Context() => new(new(company), order.Id, new(1), new(1), Guid.NewGuid(), 1);
+        var draft = TradeCompanyCommissionMigrationService.CreateDraftTerms(order, brief, commission.CurrentTerms, now);
+        order = CompanyCommissionCommandWorkflow.Apply(order, new UpdateCompanyCommissionDraftCommand(Context(), draft, Package()), actor, now).UpdatedOrder;
+        order = TradeCompanyCommissionMigrationService.BindPublishedBrief(order, new()
+        {
+            Ownership = order.CommissionPublication!.Ownership,
+            PublicId = order.CommissionPublication.PublicId,
+            Version = 1,
+            PublishedAtUtc = now,
+            Brief = brief
+        }, now);
+        var published = order.CompanyCommission!.CurrentTerms;
+        Assert.Equal(1, Assert.Single(published.PricingEvidence.MaterialQuote!.Lines).ItemId);
+        Assert.Equal(110, published.Payment.MaterialReimbursement);
+        (brief.CrafterMaterials, brief.CompanyMaterials) = (brief.CompanyMaterials, brief.CrafterMaterials);
+        brief.Payment = brief.Payment with { MaterialReimbursement = 220, Total = 220 };
+        var revised = TradeCompanyCommissionMigrationService.CreateTermsRevision(order, brief, 2, "Swap materials", now);
+        order = CompanyCommissionCommandWorkflow.Apply(order, new AmendCompanyCommissionTermsCommand(Context(), revised, "Swap materials", Package()), actor, now).UpdatedOrder;
+        var final = order.CompanyCommission!.CurrentTerms;
+        Assert.Equal(2, Assert.Single(final.PricingEvidence.MaterialQuote!.Lines).ItemId);
+        Assert.Equal(220, final.PricingEvidence.MaterialQuote.MaterialReimbursement);
+        Assert.Equal(220, final.Payment.Total);
+    }
+
+    [Fact]
+    public async Task OnHandStockKeepsItsBonusValueWithoutAddingPurchaseCash()
+    {
+        var plan = new CraftingPlan
+        {
+            RootItems =
+            [
+                new() { ItemId = 1, Name = "Stock", Source = AcquisitionSource.OnHand, Quantity = 2, CanBuyFromVendor = true, VendorPrice = 50 },
+                new() { ItemId = 2, Name = "Purchase", Source = AcquisitionSource.VendorBuy, Quantity = 3, CanBuyFromVendor = true, VendorPrice = 10 }
+            ]
+        };
+        var demand = new RecipeDemandProjectionService().Build(plan, null);
+        var rows = demand.ActiveProcurementDemand;
+        var basis = new CommissionCostBasisResolver().BuildSelectedSourceLines(rows, []);
+        var result = await new TradeMaterialQuoteService().PriceAsync(new MarketShoppingService(null!), [],
+            demand.ToSelectedProcurementMaterialAggregates(), rows.ToDictionary(r => (r.ItemId, r.MustBeHq), r => r.Source),
+            new() { MinimumSafetyAllowanceGil = 0, SafetyAllowancePercent = 0 }, DateTime.UtcNow, basis);
+        Assert.True(result.IsComplete, result.FailureReason);
+        Assert.Equal(0, Assert.Single(result.Quote!.Lines, line => line.ItemId == 1).CashRequired);
+        var order = MemberCommissionFixture.CreateOrder(Guid.NewGuid());
+        order.SourceSnapshot.MaterialQuote = result.Quote;
+        order.SourceSnapshot.Materials = result.MaterialLines.Select(line => new TradeOrderMaterialSnapshot(
+            line.ItemId, line.Name, line.Quantity, line.RequiresHq, line.UnitCost, line.Quantity * line.UnitCost, line.EvidenceSource)).ToArray();
+        order.SourceSnapshot.CraftLabor = [new("craft", 100, "Output", 1, 1)];
+        var payment = TradeCommissionPaymentSummary.FromOrder(order, null);
+        Assert.True(payment.Active.IsAvailable);
+        Assert.Equal(13, payment.CommissionAmount);
+        Assert.Equal(100, payment.OnHandMaterialValueTotal);
+        Assert.Equal(30, payment.MaterialReimbursementTotal);
+        Assert.Equal(130, payment.EstimatedProcurementTotal);
+    }
+
+    [Fact]
+    public void StoredPaymentModeControlsLegacyPercentConversion()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        foreach (var (mode, expected) in new[] { (0, 20m), (1, 0m) })
+        {
+            var policy = JsonSerializer.Deserialize<TradePaymentPolicy>(
+                $$"""{"activeContract":{{mode}},"LegacyCommissionPercent":20,"laborGilPerSynth":200}""", options)!;
+            var normalized = TradePaymentPolicyNormalizer.Normalize(policy);
+            Assert.Equal(expected, normalized.MaterialValueBonusPercent);
+            Assert.Null(normalized.LegacyCommissionPercent);
+            Assert.Equal(normalized, TradePaymentPolicyNormalizer.Normalize(normalized));
+        }
+        Assert.Equal(TradePaymentPolicy.Default, TradePaymentPolicyNormalizer.Normalize(TradePaymentPolicy.Default));
+    }
+
     [Fact]
     public async Task PublicBriefUsesPublicationProfileWhenOrderIdentityIsDuplicated()
     {
@@ -35,7 +192,7 @@ public sealed class CompanyMemberCommissionContractTests
         var initial = await fixture.LoadPublicBriefAsync();
         var commandId = Guid.NewGuid();
         var participantCredential = new string('r', 43);
-        var claimantCharacterId = Guid.NewGuid();
+        var provisionalCrafterId = Guid.NewGuid();
         var submittedAtUtc = DateTime.UtcNow;
 
         using var first = await fixture.ClaimPortableAsync(
@@ -44,7 +201,7 @@ public sealed class CompanyMemberCommissionContractTests
             commandId: commandId,
             expectedProjectionRevision: initial!.ProjectionRevision,
             participantCredential: participantCredential,
-            claimantCharacterId: claimantCharacterId,
+            provisionalCrafterId: provisionalCrafterId,
             submittedAtUtc: submittedAtUtc);
         using var replay = await fixture.ClaimPortableAsync(
             capability.PlaintextToken,
@@ -52,7 +209,7 @@ public sealed class CompanyMemberCommissionContractTests
             commandId: commandId,
             expectedProjectionRevision: initial.ProjectionRevision,
             participantCredential: participantCredential,
-            claimantCharacterId: claimantCharacterId,
+            provisionalCrafterId: provisionalCrafterId,
             submittedAtUtc: submittedAtUtc);
         using var mismatchedReplay = await fixture.ClaimPortableAsync(
             capability.PlaintextToken,
@@ -60,7 +217,7 @@ public sealed class CompanyMemberCommissionContractTests
             commandId: commandId,
             expectedProjectionRevision: initial.ProjectionRevision,
             participantCredential: participantCredential,
-            claimantCharacterId: Guid.NewGuid(),
+            provisionalCrafterId: Guid.NewGuid(),
             submittedAtUtc: submittedAtUtc);
         var canonical = await fixture.LoadCanonicalOrderAsync();
         var accepted = canonical.CompanyCommission!.Activity
@@ -244,6 +401,47 @@ public sealed class CompanyMemberCommissionContractTests
 
         Assert.Equal(HttpStatusCode.Forbidden, otherResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, ownerResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task OnlyTheClaimantAccountCanConfirmFinalPaymentAfterDelivery()
+    {
+        await using var fixture = await MemberCommissionFixture.CreateAsync();
+        var claimant = await fixture.AddActiveMemberAsync("Claimant");
+        var other = await fixture.AddActiveMemberAsync("Other member");
+        using var claimed = await fixture.ClaimAsync(claimant);
+        claimed.EnsureSuccessStatusCode();
+        var projection = (await claimed.Content.ReadFromJsonAsync<CompanyCommissionParticipantBrief>())!;
+        await fixture.MarkDeliveredWithSettlementPendingAsync();
+
+        using var otherResponse = await fixture.ConfirmSettlementAsync(
+            other,
+            projection.Public.ProjectionRevision);
+        using var ownerResponse = await fixture.ConfirmSettlementAsync(
+            fixture.Owner,
+            projection.Public.ProjectionRevision);
+
+        Assert.Equal(HttpStatusCode.Forbidden, otherResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, ownerResponse.StatusCode);
+        Assert.Null((await fixture.LoadCanonicalOrderAsync())
+            .CompanyCommission!.SettlementPayment.CrafterReceived);
+
+        using var claimantResponse = await fixture.ConfirmSettlementAsync(
+            claimant,
+            projection.Public.ProjectionRevision);
+
+        Assert.Equal(HttpStatusCode.OK, claimantResponse.StatusCode);
+        Assert.NotNull((await fixture.LoadCanonicalOrderAsync())
+            .CompanyCommission!.SettlementPayment.CrafterReceived);
+        var revision = (await fixture.LoadPublicBriefAsync())!.ProjectionRevision;
+        foreach (var outsider in new[] { other, fixture.Owner })
+        {
+            using var denied = await fixture.ConfirmSettlementAsync(outsider, revision, retract: true);
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        }
+        using var retracted = await fixture.ConfirmSettlementAsync(claimant, revision, retract: true);
+        Assert.Equal(HttpStatusCode.OK, retracted.StatusCode);
+        Assert.Null((await fixture.LoadCanonicalOrderAsync()).CompanyCommission!.SettlementPayment.CrafterReceived);
     }
 
     [Fact]
@@ -528,7 +726,7 @@ public sealed class CompanyMemberCommissionContractTests
             Guid? commandId = null,
             long? expectedProjectionRevision = null,
             string? participantCredential = null,
-            Guid? claimantCharacterId = null,
+            Guid? provisionalCrafterId = null,
             DateTime? submittedAtUtc = null)
         {
             var client = application.CreateClient();
@@ -553,7 +751,7 @@ public sealed class CompanyMemberCommissionContractTests
                         termsVersion = 1,
                         claimIdentityVersion = 2,
                         claimantCharacter = new CompanyCommissionClaimantCharacter(
-                            claimantCharacterId ?? Guid.NewGuid(),
+                            provisionalCrafterId ?? Guid.NewGuid(),
                             "Wei Ning",
                             "Siren",
                             "12345678",
@@ -590,6 +788,51 @@ public sealed class CompanyMemberCommissionContractTests
             string capability,
             long projectionRevision) =>
             PostProgressAsync(application.CreateClient(), capability, projectionRevision);
+
+        public async Task MarkDeliveredWithSettlementPendingAsync()
+        {
+            var envelope = await Profiles.LoadObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                CancellationToken.None);
+            var order = JsonSerializer.Deserialize<TradeOrder>(
+                envelope!.PayloadJson,
+                JsonOptions)!;
+            order.Status = TradeOrderStatus.Completed;
+            order.CompanyCommission = order.CompanyCommission! with
+            {
+                SettlementState = CompanyCommissionSettlementState.Pending
+            };
+            var orderPut = await Profiles.PutObjectAsync(
+                Owner.ProfileId.ToString("D"),
+                ProfileSyncCollections.TradeOrders,
+                Order.Id.ToString("D"),
+                JsonSerializer.Serialize(order, JsonOptions),
+                expectedRevision: envelope.Revision,
+                ct: CancellationToken.None);
+            Assert.True(orderPut.Success);
+        }
+
+        public Task<HttpResponseMessage> ConfirmSettlementAsync(
+            Account account,
+            long projectionRevision,
+            bool retract = false) =>
+            CreateClient(account.Key).PostAsJsonAsync(
+                $"/xivdata/commission-briefs/{Order.CommissionPublication!.PublicId}/commands/{(retract ? "retract-settlement" : "confirm-settlement-received")}",
+                new PublicCompanyCommissionCommandEnvelope
+                {
+                    ProtocolVersion = CompanyCommissionProtocol.Version1,
+                    PublicBriefId = Order.CommissionPublication.PublicId,
+                    ExpectedProjectionRevision = projectionRevision,
+                    CommandId = Guid.NewGuid(),
+                    Command = JsonSerializer.SerializeToElement(new
+                    {
+                        termsVersion = 1,
+                        note = "Received by mail",
+                        reason = "Receipt entered in error"
+                    })
+                });
 
         public async Task<string> IssueParticipantCapabilityAsync()
         {
@@ -904,7 +1147,7 @@ public sealed class CompanyMemberCommissionContractTests
                 });
         }
 
-        private static TradeOrder CreateOrder(Guid companyId)
+        public static TradeOrder CreateOrder(Guid companyId)
         {
             var now = DateTime.UtcNow;
             var orderId = Guid.NewGuid();
@@ -974,6 +1217,269 @@ public sealed class CompanyMemberCommissionContractTests
                     SettlementState = CompanyCommissionSettlementState.NotDue
                 }
             };
+        }
+    }
+
+    [Theory]
+    [InlineData(1050, true, false, true)]
+    [InlineData(950, true, false, false)]
+    [InlineData(1051, true, true, false)]
+    [InlineData(949, true, true, true)]
+    [InlineData(2000, false, false, true)]
+    [InlineData(-1, true, false, false)]
+    [InlineData(1010, true, false, false, true)]
+    public async Task ClaimRefreshCommitsOnlyTheAcceptedPayment(int listingPrice, bool knownRate, bool conflict, bool useLink, bool mixed = false)
+    {
+        // A sealed single-listing route exercises the real optimizer and CAS without a market server or an account key.
+        var root = Directory.CreateTempSubdirectory("claim-pricing-");
+        try
+        {
+            var profiles = new SqliteProfileHostStore(new ProfileHostOptions { Enabled = true, DatabasePath = Path.Combine(root.FullName, "profiles.db") });
+            var host = await profiles.CreateProfileAsync("Offline fixture", default);
+            var company = TradeCompanyProfile.CreateLocal("Offline company", DateTime.UtcNow);
+            var order = MemberCommissionFixture.CreateOrder(company.Id);
+            var commission = order.CompanyCommission!;
+            var terms = commission.CurrentTerms;
+            var now = DateTime.UtcNow;
+            var policy = new TradeMaterialPricingPolicy { SafetyAllowancePercent = mixed ? 10 : 0, MinimumSafetyAllowanceGil = 0 };
+            var plan = new CraftingPlan
+            {
+                RootItems = [new PlanNode
+            {
+                ItemId = 100, Name = "Market item", Quantity = 1, Source = AcquisitionSource.MarketBuyNq,
+                CanBuyFromMarket = true, SourceReason = AcquisitionSourceReason.UserSelected
+            }]
+            };
+            var provided = new CompanyCommissionMaterialTerm(Guid.NewGuid(), 101, "Company stock", 2, false,
+                CommissionMaterialResponsibility.Provided, 50, 100);
+            if (mixed)
+            {
+                plan.RootItems.Add(new PlanNode
+                {
+                    ItemId = 101,
+                    Name = provided.Name,
+                    Quantity = 2,
+                    Source = AcquisitionSource.VendorBuy,
+                    VendorPrice = 75,
+                    CanBuyFromVendor = true,
+                    SourceReason = AcquisitionSourceReason.UserSelected
+                });
+            }
+            var id = plan.Id.ToString();
+            var old = new TradeMaterialQuote
+            {
+                CompanyProfileId = company.Id,
+                SourcePlanId = id,
+                PlanSessionVersion = 1,
+                MarketAnalysisVersion = 1,
+                PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(policy),
+                AppliedPolicy = policy,
+                RouteSelectionKey = "old",
+                QuotedAtUtc = now.AddHours(-2),
+                ExpiresAtUtc = now.AddHours(-1),
+                RouteCashRequired = 1000,
+                SafetyAllowance = mixed ? 100 : 0,
+                MaterialReimbursement = mixed ? 1100 : 1000,
+                WorldStops = 0,
+                Lines = [new(100, "Market item", 1, false, 1000, ["Siren (Aether)"], null)]
+            };
+            terms = terms with
+            {
+                Payment = new(CompanyCommissionPaymentSchedule.OnDelivery, "Commission", 1000, 100, 0, 1100,
+                    MaterialAdjustmentPercent: knownRate ? 10 : null),
+                Materials = [new(Guid.NewGuid(), 100, "Market item", 1, false, CommissionMaterialResponsibility.Crafter, 1000, 1000)],
+                PricingEvidence = new("ProcurementRoute", "DC", "Aether", old.QuotedAtUtc, old)
+            };
+            if (mixed)
+            {
+                terms = terms with
+                {
+                    Materials = [.. terms.Materials, provided],
+                    Payment = terms.Payment with { MaterialAdjustment = 110, MaterialReimbursement = 1100, Total = 1210 }
+                };
+            }
+            order.CompanyCommission = commission with { TermsVersions = [terms] };
+            order.CraftPlanId = id;
+            order.CraftPlanSavedAtUtc = now;
+            order.SourceSnapshot = new()
+            {
+                RootItems = terms.Outputs.Select(o => new TradeOrderRootItemSnapshot(o.ItemId, o.Name, o.RequiredQuantity, o.MustBeHq, 0)).ToArray(),
+                SourcePlanId = id,
+                PlanSessionVersion = 1,
+                MarketAnalysisVersion = 1,
+                MaterialQuote = old,
+                Region = "North America",
+                DataCenter = "Aether",
+                MarketFetchScope = MarketFetchScope.SelectedDataCenter,
+                RequestedDataCenters = ["Aether"]
+            };
+            async Task Put(string collection, string key, object value) =>
+                Assert.True((await profiles.PutObjectAsync(host.ProfileId, collection, key, JsonSerializer.Serialize(value), 0, default)).Success);
+            await Put(ProfileSyncCollections.TradeCompanyProfiles, company.Id.ToString(), company);
+            await Put(ProfileSyncCollections.TradeOrders, order.Id.ToString(), order);
+            await Put(ProfileSyncCollections.Plans, id, new ProfileSyncPlanSnapshot
+            {
+                Id = id,
+                LinkedOrderId = order.Id,
+                SavedAt = now,
+                PlanJson = JsonSerializer.Serialize(plan),
+                PlanStateJson = StoredPlanRuntimeState.Capture(plan)
+            });
+            var companies = new ProfileHostedTradeCompanyService(profiles, new ProfileAccessKeyHasher());
+            var profile = Guid.Parse(host.ProfileId);
+            var access = new TradeCompanyAccessContext(new(company.Id), profile, TradeCompanyRole.Owner, profile);
+            var ownership = order.CommissionPublication!.Ownership!;
+            var publicId = order.CommissionPublication.PublicId;
+            Assert.True((await companies.PutRecordAsync(access, TradeCompanyRecordKinds.Publication, publicId,
+                JsonSerializer.Serialize(ownership), CompanyRecordRevision.None, "fixture-publication")).Success);
+            using var http = new HttpClient(new OfflineListing(listingPrice));
+            var universalis = new UniversalisService(http);
+            universalis.SeedWorldData(new() { WorldIdToName = { [57] = "Siren" }, DataCenterToWorlds = { ["Aether"] = ["Siren"] } });
+            var clock = new ClaimClock();
+            var pricing = new ClaimMaterialPricing(profiles, new JsonFileMarketCacheService(universalis, root.FullName), universalis, clock);
+            var log = new PricingLog();
+            var service = new HostedCompanyCommissionService(companies, profiles, clock, [], log, pricing);
+            var snapshot = (await service.LoadOwnerAsync(access, order.Id))!;
+            var claim = new ClaimCompanyCommissionCommand(new(new(company.Id), order.Id, snapshot.Envelope.RecordRevision,
+                snapshot.CompanyRevision, Guid.NewGuid(), 1), 1, null, Guid.NewGuid(), new(Guid.NewGuid(), "123456789012345678", "Offline"));
+            Task<CompanyCommissionMutationResult> Submit(ClaimCompanyCommissionCommand candidate) => useLink
+                ? service.ExecuteCapabilityAsync(new(new(company.Id), order.Id, publicId, CompanyCommissionCapabilityKind.Claim, null, 1), candidate)
+                : service.ExecuteAccountClaimAsync(ownership, publicId, candidate.AccountEvidence!.ProfileId, candidate);
+            CompanyCommissionMutationResult result;
+            if (listingPrice == 1050)
+            {
+                var rival = claim with
+                {
+                    Context = claim.Context with { CommandId = Guid.NewGuid() },
+                    AccountEvidence = new(Guid.NewGuid(), "123456789012345679", "Other crafter")
+                };
+                var race = await Task.WhenAll(Submit(claim), Submit(rival));
+                result = Assert.Single(race, r => r.Success);
+                claim = race[0].Success ? claim : rival;
+            }
+            else
+            {
+                result = await Submit(claim);
+            }
+            var refreshed = knownRate && listingPrice > 0;
+            if (refreshed)
+            {
+                Assert.True(log.Warning == null, log.Warning);
+            }
+            else
+            {
+                Assert.Contains(knownRate ? "Market data incomplete" : "rate is unknown", log.Warning);
+            }
+            if (conflict)
+            {
+                Assert.Equal("claim_price_changed", result.ErrorCode);
+                Assert.Null(result.Order!.CompanyCommission!.ActiveClaim);
+                var response = CompanyCommissionEndpoints.ClaimPriceChanged(result);
+                Assert.Equal(409, ((Microsoft.AspNetCore.Http.IStatusCodeHttpResult)response).StatusCode);
+                var body = JsonSerializer.SerializeToElement(((Microsoft.AspNetCore.Http.IValueHttpResult)response).Value);
+                Assert.Equal("claim_price_changed", body.GetProperty("code").GetString());
+                Assert.Equal(1100m, body.GetProperty("previousPayment").GetDecimal());
+                Assert.Equal(result.Order.CompanyCommission.CurrentTerms.Payment.Total, body.GetProperty("currentPayment").GetDecimal());
+                Assert.Equal(2, body.GetProperty("termsVersion").GetInt32());
+                if (useLink)
+                {
+                    var capability = new CompanyCommissionCapabilityResolution(new(company.Id), order.Id,
+                        publicId, CompanyCommissionCapabilityKind.Claim, null, 1);
+                    Assert.NotNull(await service.CreateCapabilityCommandContextAsync(capability, 0, claim.Context.CommandId, 1,
+                        claimAccountId: claim.AccountEvidence!.ProfileId, claimTermsVersion: 1));
+                    Assert.Null(await service.CreateCapabilityCommandContextAsync(capability, 0, claim.Context.CommandId, 1,
+                        claimAccountId: claim.AccountEvidence.ProfileId, claimTermsVersion: 2));
+                }
+                var retry = await Submit(claim);
+                Assert.Equal("claim_price_changed", retry.ErrorCode);
+                Assert.Null(retry.Order!.CompanyCommission!.ActiveClaim);
+                var repeatedResponse = CompanyCommissionEndpoints.ClaimPriceChanged(retry);
+                Assert.Equal(409, ((Microsoft.AspNetCore.Http.IStatusCodeHttpResult)repeatedResponse).StatusCode);
+                Assert.Equal(body.GetRawText(), JsonSerializer.Serialize(((Microsoft.AspNetCore.Http.IValueHttpResult)repeatedResponse).Value));
+                clock.Offset = TimeSpan.FromDays(1); // Even a delayed confirmation accepts the price shown.
+                snapshot = (await service.LoadOwnerAsync(access, order.Id))!;
+                claim = claim with
+                {
+                    TermsVersion = 2,
+                    Context = claim.Context with
+                    {
+                        ExpectedObjectRevision = snapshot.Envelope.RecordRevision,
+                        ExpectedCompanyRevision = snapshot.CompanyRevision
+                    }
+                };
+                result = await Submit(claim);
+            }
+            Assert.Equal(CompanyCommissionMutationStatus.Applied, result.Status);
+            Assert.Equal(CompanyCommissionMutationStatus.Replayed, (await Submit(claim)).Status);
+            var final = (await service.LoadOwnerAsync(access, order.Id))!.Order.CompanyCommission!;
+            Assert.Equal(refreshed ? 2 : 1, final.ActiveClaim!.AcceptedTermsVersion);
+            Assert.Equal(final.CurrentTermsVersion, final.ParticipantAcknowledgedTermsVersion);
+            if (mixed)
+            {
+                Assert.Equal(provided, Assert.Single(final.CurrentTerms.Materials, m => m.Responsibility == CommissionMaterialResponsibility.Provided));
+                var quote = final.CurrentTerms.PricingEvidence.MaterialQuote!;
+                Assert.Equal(100, Assert.Single(quote.Lines).ItemId);
+                Assert.Equal(101, quote.SafetyAllowance);
+                Assert.Equal(1111, quote.MaterialReimbursement);
+                Assert.Equal(quote.MaterialReimbursement, final.CurrentTerms.Payment.MaterialReimbursement);
+                Assert.Equal(111, final.CurrentTerms.Payment.MaterialAdjustment);
+                Assert.Equal(1222, final.CurrentTerms.Payment.Total);
+            }
+            else
+            {
+                Assert.Equal(refreshed ? listingPrice + decimal.Round(listingPrice / 10m, 0, MidpointRounding.AwayFromZero) : 1100m, final.CurrentTerms.Payment.Total);
+            }
+            Assert.Equal(refreshed ? 1 : 0, final.Activity.Count(e => e.Kind == CompanyCommissionActivityKind.TermsAmended &&
+                e.Actor.Kind == CompanyCommissionActorKind.System && e.Visibility == CompanyCommissionActivityVisibility.Shared));
+            Assert.Single(final.Activity, e => e.Kind == CompanyCommissionActivityKind.ClaimAccepted);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            root.Delete(true);
+        }
+    }
+
+    private sealed class ClaimClock : TimeProvider
+    {
+        public TimeSpan Offset { get; set; }
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UtcNow + Offset;
+    }
+
+    private sealed class PricingLog : Microsoft.Extensions.Logging.ILogger<HostedCompanyCommissionService>
+    {
+        public string? Warning { get; private set; }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level, Microsoft.Extensions.Logging.EventId id,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter) => Warning = formatter(state, exception);
+    }
+
+    private sealed class OfflineListing(int price) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (price < 0)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            }
+            var timestamp = DateTimeOffset.UtcNow;
+            var ids = Uri.UnescapeDataString(request.RequestUri!.Segments[^1]).Split(',').Select(int.Parse).ToArray();
+            object Listing(int id) => new
+            {
+                itemID = id,
+                dcName = "Aether",
+                lastUploadTime = timestamp.ToUnixTimeMilliseconds(),
+                worldUploadTimes = new Dictionary<int, long> { [57] = timestamp.ToUnixTimeMilliseconds() },
+                averagePrice = price,
+                averagePriceNQ = price,
+                listings = new[] { new { worldName = "Siren", pricePerUnit = price, quantity = id == 101 ? 2 : 1,
+                    total = price * (id == 101 ? 2 : 1), retainerName = "Fixture", lastReviewTime = timestamp.ToUnixTimeSeconds() } }
+            };
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(ids.Length == 1 ? Listing(ids[0]) : new { items = ids.ToDictionary(id => id, Listing) })
+            });
         }
     }
 

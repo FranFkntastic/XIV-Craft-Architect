@@ -840,7 +840,7 @@ public partial class TradeOrders
                 paymentTiming.Schedule,
                 paymentTiming.CustomTerms),
             Evidence = new CommissionBriefEvidence(
-                FormatCommissionCostBasis(source),
+                source.CostBasis?.ToString() ?? "Unspecified",
                 FormatCommissionMarketScope(source),
                 FormatCommissionLocation(source),
                 evidenceCapturedAt)
@@ -914,7 +914,7 @@ public partial class TradeOrders
                 terms.Payment.MaterialAdjustment,
                 terms.Payment.CraftLabor,
                 terms.Payment.Total,
-                MaterialAdjustmentPercent: 0m,
+                MaterialAdjustmentPercent: terms.Payment.MaterialAdjustmentPercent,
                 terms.Payment.CraftSynthCount,
                 terms.Payment.GilPerSynth,
                 terms.Payment.Schedule,
@@ -980,14 +980,6 @@ public partial class TradeOrders
         return resolved;
     }
 
-    private static string FormatCommissionCostBasis(TradeOrderSourceSnapshot source) =>
-        source.CostBasis switch
-        {
-            CommissionCostBasis.MarketRecommendation => "Market recommendation",
-            CommissionCostBasis.SelectedAcquisitionSources => "Selected acquisition sources",
-            _ => "Selected acquisition sources"
-        };
-
     private static string FormatCommissionMarketScope(TradeOrderSourceSnapshot source) =>
         source.MarketFetchScope switch
         {
@@ -998,8 +990,8 @@ public partial class TradeOrders
 
     private static string FormatCommissionPaymentContract(TradePaymentContractMode contract) =>
         contract == TradePaymentContractMode.LaborStandard
-            ? "Labor standard"
-            : "Legacy commission";
+            ? "Labor + material-value bonus"
+            : "Agreed payment terms";
 
     private static string FormatCommissionLocation(TradeOrderSourceSnapshot source)
     {

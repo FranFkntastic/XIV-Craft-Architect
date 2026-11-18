@@ -8,6 +8,14 @@ public static class TradePaymentPolicyNormalizer
     {
         ArgumentNullException.ThrowIfNull(policy);
 
+        var materialValueBonusPercent = policy.MaterialValueBonusPercent;
+        if (materialValueBonusPercent == 0 &&
+            policy.ActiveContract == TradePaymentContractMode.LegacyCommission &&
+            policy.LegacyCommissionPercent.HasValue)
+        {
+            materialValueBonusPercent = policy.LegacyCommissionPercent.Value;
+        }
+
         var laborGilPerSynth = policy.LaborGilPerSynth;
         if (laborGilPerSynth == 0 &&
             policy.LegacyLaborStandard is
@@ -28,6 +36,9 @@ public static class TradePaymentPolicyNormalizer
 
         return policy with
         {
+            ActiveContract = TradePaymentContractMode.LaborStandard,
+            MaterialValueBonusPercent = materialValueBonusPercent,
+            LegacyCommissionPercent = null,
             LaborGilPerSynth = laborGilPerSynth,
             LegacyLaborStandard = null
         };

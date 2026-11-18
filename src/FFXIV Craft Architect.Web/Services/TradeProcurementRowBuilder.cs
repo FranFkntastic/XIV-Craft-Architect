@@ -96,9 +96,12 @@ public static class TradeProcurementRowBuilder
             }
         }
         // The cost cell and subtree attribution consume the same recovered evidence.
-        var paymentSnapshot = snapshot with { MaterialLines = lines.Values.ToArray() };
+        var paymentSnapshot = useRecordedPayment
+            ? snapshot with { MaterialQuote = order.SourceSnapshot.MaterialQuote, MaterialQuoteFailureReason = null }
+            : snapshot;
+        paymentSnapshot = paymentSnapshot with { MaterialLines = lines.Values.ToArray() };
         var impacts = TradeProcurementPaymentImpact.CalculateAll(paymentSnapshot, responsibilities,
-            requireRecordedCash: useRecordedPayment);
+            requireQuotedCash: useRecordedPayment);
 
         return snapshot.AcquisitionRows
             .Select(row => ToTradeRow(row, lines, retainedEvidence, responsibilities) with

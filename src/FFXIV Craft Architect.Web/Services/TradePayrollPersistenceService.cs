@@ -77,9 +77,9 @@ public sealed class TradePayrollPersistenceService
             SourcePlanName = string.IsNullOrWhiteSpace(sourcePlanName) ? "Active craft plan" : sourcePlanName,
             AssignedCrafterId = assignedCrafterId,
             AssignedCrafterDisplayName = assignedCrafterDisplayName,
-            ActivePaymentContract = paymentPolicy?.ActiveContract ?? TradePaymentContractMode.LegacyCommission,
-            CommissionPercent = paymentPolicy?.LegacyCommissionPercent
-                ?? CommissionPayoutPolicy.Default.CommissionPercent,
+            ActivePaymentContract = paymentPolicy?.ActiveContract ?? TradePaymentContractMode.LaborStandard,
+            CommissionPercent = paymentPolicy?.MaterialValueBonusPercent
+                ?? TradePaymentPolicy.DefaultMaterialValueBonusPercent,
             LaborGilPerSynth = paymentPolicy?.LaborGilPerSynth > 0
                 ? paymentPolicy.LaborGilPerSynth
                 : TradePaymentPolicy.DefaultLaborGilPerSynth,

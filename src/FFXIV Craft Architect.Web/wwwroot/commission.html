@@ -14,7 +14,7 @@
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Company Commission — FFXIV Craft Architect">
     <meta name="twitter:description" content="Review the requested outputs, responsibilities, delivery status, and payment terms for this company commission.">
-    <link rel="stylesheet" href="commission.css">
+    <link rel="stylesheet" href="commission.css?v=__COMMISSION_RELEASE__">
 </head>
 <body>
     <header class="brief-topbar">
@@ -74,11 +74,30 @@
                             <span>Output</span>
                             <span>Required</span>
                             <span>Completed</span>
-                            <span>Ready</span>
                         </div>
                         <div id="outputs"></div>
                         <div class="section-actions" id="progressActions" hidden>
                             <button class="button primary" type="submit">Save progress</button>
+                        </div>
+                    </form>
+                </section>
+
+                <section class="brief-section messages" id="messages" aria-labelledby="messagesTitle" hidden>
+                    <div class="brief-section-head">
+                        <h2 id="messagesTitle">Messages</h2>
+                        <span id="messagesWith"></span>
+                    </div>
+                    <ol class="message-thread" id="messageThread" role="log" aria-labelledby="messagesTitle" tabindex="0"></ol>
+                    <form class="message-compose" id="commentForm">
+                        <label class="sr-only" for="commentText">Message</label>
+                        <textarea id="commentText"
+                                  rows="3"
+                                  maxlength="1000"
+                                  aria-keyshortcuts="Control+Enter Meta+Enter"
+                                  placeholder="Message the commissioner…"></textarea>
+                        <div class="message-compose-actions">
+                            <span class="message-count" id="commentCount" aria-hidden="true">0 / 1000</span>
+                            <button class="button primary" type="submit" title="Send (Ctrl+Enter)">Send</button>
                         </div>
                     </form>
                 </section>
@@ -114,19 +133,6 @@
                     </div>
                 </section>
 
-                <section class="brief-section">
-                    <div class="brief-section-head">
-                        <h2>Operational update</h2>
-                        <span>Visible to crafter and commissioner</span>
-                    </div>
-                    <form class="comment-form" id="commentForm">
-                        <label class="sr-only" for="commentText">Operational update</label>
-                        <textarea id="commentText"
-                                  maxlength="1000"
-                                  placeholder="Add a concise delivery, material, or scheduling update…"></textarea>
-                        <button class="button" type="submit">Post update</button>
-                    </form>
-                </section>
             </div>
 
             <aside class="brief-side">
@@ -178,6 +184,6 @@
     </main>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="commission.js"></script>
+    <script type="module" src="commission.js?v=__COMMISSION_RELEASE__"></script>
 </body>
 </html>

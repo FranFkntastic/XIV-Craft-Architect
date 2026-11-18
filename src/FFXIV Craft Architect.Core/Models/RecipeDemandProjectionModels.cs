@@ -36,6 +36,35 @@ public sealed record RecipeDemandProjection(
             useSelectedSourceUnitPrice: true);
     }
 
+    public IReadOnlyList<MaterialAggregate> ToSelectedProcurementMaterialAggregates()
+    {
+        return ActiveProcurementDemand
+            .Where(row => row.Quantity > 0)
+            .GroupBy(row => (row.ItemId, row.MustBeHq, row.Source))
+            .Select(group =>
+            {
+                var primary = group.First();
+                return new MaterialAggregate
+                {
+                    ItemId = primary.ItemId,
+                    Name = primary.ItemName,
+                    IconId = primary.IconId,
+                    TotalQuantity = group.Sum(row => row.Quantity),
+                    UnitPrice = ResolveAggregateUnitPrice(primary, useSelectedSourceUnitPrice: true),
+                    RequiresHq = primary.MustBeHq,
+                    Sources = group.Select(row => new MaterialSource
+                    {
+                        ParentItemName = row.ParentItemName ?? "Direct",
+                        Quantity = row.Quantity,
+                        IsCrafted = false
+                    }).ToList()
+                };
+            })
+            .OrderBy(item => item.Name)
+            .ThenBy(item => item.RequiresHq)
+            .ToList();
+    }
+
     private static IReadOnlyList<MaterialAggregate> ToMaterialAggregates(
         IReadOnlyList<RecipeDemandRow> rows,
         bool useCraftedSourceFlag,

@@ -1,6 +1,7 @@
 @page "/account/workspaces"
 @inject IDialogService DialogService
 @inject NavigationManager Navigation
+@inject TradeOperationsPersistenceService TradeOperationsPersistence
 
 <MudProgressLinear Indeterminate="true" aria-label="Opening workspace settings" />
 
@@ -14,9 +15,11 @@
             return;
         }
         _opened = true;
+        var selectedWorkspaceId = await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
         var parameters = new DialogParameters
         {
-            [nameof(SettingsDialog.InitialSection)] = SettingsSection.Workspace
+            [nameof(SettingsDialog.InitialSection)] = SettingsSection.Workspace,
+            [nameof(SettingsDialog.InitialWorkspaceCompanyId)] = selectedWorkspaceId?.ToString("D")
         };
         var options = new DialogOptions
         {

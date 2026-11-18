@@ -14,6 +14,7 @@ public class UniversalisService : IUniversalisService
 
     private const string UniversalisMarketUrl = "https://universalis.app/market/{0}";
     private readonly UniversalisBulkClient bulkClient;
+    private readonly Lazy<UniversalisBulkClient> listingsClient;
     private readonly ILogger<UniversalisService>? logger;
     private readonly PackagedWorldDirectoryService packagedWorldDirectory;
     private WorldData? worldDataCache;
@@ -25,6 +26,8 @@ public class UniversalisService : IUniversalisService
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         bulkClient = new UniversalisBulkClient(httpClient);
+        listingsClient = new(() => new UniversalisBulkClient(httpClient,
+            options: new UniversalisBulkClientOptions { MaxConcurrentRequests = 4 }));
         this.logger = logger;
         this.packagedWorldDirectory = packagedWorldDirectory ?? new PackagedWorldDirectoryService();
     }
@@ -75,7 +78,8 @@ public class UniversalisService : IUniversalisService
         string worldOrDc,
         IEnumerable<int> itemIds,
         bool useParallel = true,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        int? historyEntriesPerItem = null)
     {
         var ids = itemIds.Distinct().ToArray();
         if (ids.Length == 0)
@@ -94,12 +98,14 @@ public class UniversalisService : IUniversalisService
             worldOrDc,
             useParallel);
 
-        var result = await bulkClient.FetchAsync<UniversalisResponse>(
+        var client = historyEntriesPerItem == 0 ? listingsClient.Value : bulkClient;
+        var result = await client.FetchAsync<UniversalisResponse>(
             new UniversalisBulkRequest
             {
                 WorldOrDataCenter = worldOrDc,
                 ItemIds = ids.Select(itemId => (uint)itemId).ToArray(),
                 UseParallelRequests = useParallel,
+                HistoryEntriesPerItem = historyEntriesPerItem,
             },
             cancellationToken: ct).ConfigureAwait(false);
 

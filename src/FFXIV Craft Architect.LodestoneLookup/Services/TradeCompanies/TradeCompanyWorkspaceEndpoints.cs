@@ -4,16 +4,47 @@ using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 public sealed record TradeCompanyWorkspaceProfileResponse(
+    int SchemaVersion,
     Guid Id,
     string Name,
+    string? Description,
     string? CommissionContact,
     TradePaymentPolicy PaymentPolicy,
+    TradeMaterialPricingPolicy MaterialPricingPolicy,
+    long Revision,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     TradeCompanyPricingScope? CommissionPricingScope = null,
-    string? Description = null,
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
-    long Revision = 0);
+    bool FreelancerOpenCommissions = true);
+
+public sealed record TradeCompanyWorkspaceProfileUpdateRequest(
+    long ExpectedRevision,
+    string Name,
+    string? Description,
+    string? CommissionContact,
+    WorkspacePaymentPolicyUpdate? PaymentPolicy,
+    TradeMaterialPricingPolicy? MaterialPricingPolicy = null,
+    TradeCompanyPricingScope? CommissionPricingScope = null,
+    bool UpdateCommissionPricingScope = false,
+    IReadOnlyList<TradeMarginItem>? MarginItems = null,
+    bool UpdateMarginItems = false,
+    bool? FreelancerOpenCommissions = null);
+
+// Unlike the domain policy, the wire shape must distinguish omission from an explicit zero.
+public sealed record WorkspacePaymentPolicyUpdate(
+    TradePaymentContractMode ActiveContract,
+    decimal? MaterialValueBonusPercent,
+    decimal LaborGilPerSynth,
+    LegacyTradeLaborStandard? LaborStandard)
+{
+    public TradePaymentPolicy ToPolicy() => new(ActiveContract, MaterialValueBonusPercent ?? 0, LaborGilPerSynth)
+    {
+        LegacyLaborStandard = LaborStandard
+    };
+}
+
+public sealed record TradeCompanyWorkspaceProfileUpdateResponse(long Revision);
 
 public sealed record TradeCompanyOrderAdoptionRequest(
     CompanyRecordRevision SourceRevision,
@@ -53,21 +84,95 @@ public static class TradeCompanyWorkspaceEndpoints
                     return Results.Unauthorized();
                 }
 
-                var snapshot = await companies.LoadCompanyProfileSnapshotAsync(access, cancellationToken);
-                var profile = snapshot?.Profile;
-                return profile == null
+                var snapshot = await companies.LoadCompanyProfileSnapshotAsync(
+                    access,
+                    cancellationToken);
+                return snapshot == null
                     ? Results.NotFound()
                     : Results.Ok(new TradeCompanyWorkspaceProfileResponse(
-                        profile.Id,
-                        profile.Name,
-                        profile.CommissionContact,
-                        profile.PaymentPolicy,
-                        profile.CreatedAtUtc,
-                        profile.UpdatedAtUtc,
-                        profile.CommissionPricingScope,
-                        profile.Description,
-                        profile.MarginItems,
-                        snapshot!.Value.Revision));
+                        1,
+                        snapshot.Profile.Id,
+                        snapshot.Profile.Name,
+                        snapshot.Profile.Description,
+                        snapshot.Profile.CommissionContact,
+                        snapshot.Profile.PaymentPolicy,
+                        snapshot.Profile.MaterialPricingPolicy,
+                        snapshot.Revision.Value,
+                        snapshot.Profile.CreatedAtUtc,
+                        snapshot.Profile.UpdatedAtUtc,
+                        snapshot.Profile.CommissionPricingScope,
+                        snapshot.Profile.MarginItems,
+                        snapshot.Profile.FreelancerOpenCommissions));
+            });
+
+        companies.MapPut(
+            "/workspace-profile",
+            async (
+                string companyId,
+                TradeCompanyWorkspaceProfileUpdateRequest body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                TradeCompanyAuthorization authorization,
+                ProfileHostedTradeCompanyService companies,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var access = await authorization.ResolveAsync(request, companyId, cancellationToken);
+                if (access == null)
+                {
+                    return Results.Unauthorized();
+                }
+                if (body.ExpectedRevision < 0 ||
+                    string.IsNullOrWhiteSpace(body.Name) ||
+                    body.Name.Trim().Length > 160 ||
+                    body.Description?.Length > 4_000 ||
+                    body.CommissionContact?.Length > 240 ||
+                    body.CommissionPricingScope is { IsValid: false })
+                {
+                    return Results.BadRequest(new { error = "invalid_company_name" });
+                }
+                if (body.MarginItems is { } items &&
+                    (items.Count > 500 || items.Any(item => item == null || item.ItemId <= 0 || item.SalePrice < 0) ||
+                     items.Select(item => item.ItemId).Distinct().Count() != items.Count))
+                {
+                    return Results.BadRequest(new { error = "invalid_margin_items" });
+                }
+
+                var result = await companies.UpdateCompanyProfileAsync(
+                    access,
+                    new CompanyRecordRevision(body.ExpectedRevision),
+                    body.Name,
+                    body.Description,
+                    body.CommissionContact,
+                    body.PaymentPolicy?.ToPolicy(),
+                    body.MaterialPricingPolicy,
+                    cancellationToken,
+                    body.CommissionPricingScope,
+                    body.UpdateCommissionPricingScope,
+                    body.MarginItems,
+                    body.UpdateMarginItems,
+                    body.FreelancerOpenCommissions,
+                    preserveMaterialValueBonus: body.PaymentPolicy?.MaterialValueBonusPercent == null);
+                return result.Status switch
+                {
+                    CompanyHubMutationStatus.Applied => Results.Ok(
+                        new TradeCompanyWorkspaceProfileUpdateResponse(result.ProfileRevision!.Value)),
+                    CompanyHubMutationStatus.Conflict => Results.Conflict(new
+                    {
+                        error = result.ErrorCode ?? "company_profile_revision_conflict",
+                        message = result.ErrorMessage ?? "The company policy changed before this save completed."
+                    }),
+                    CompanyHubMutationStatus.NotFound => Results.NotFound(),
+                    _ => Results.BadRequest(new
+                    {
+                        error = result.ErrorCode ?? "company_profile_update_failed",
+                        message = result.ErrorMessage ?? "The company policy could not be saved."
+                    })
+                };
             });
 
         companies.MapPost(

@@ -142,7 +142,7 @@ public static class TradeCompanyCommissionMigrationService
         ArgumentNullException.ThrowIfNull(publishedBrief);
         if (source.CompanyCommission == null)
         {
-            return ConvertLegacyOrder(
+            var converted = ConvertLegacyOrder(
                 source,
                 publishedBrief,
                 publishedBrief.Ownership?.CompanyId ??
@@ -151,6 +151,11 @@ public static class TradeCompanyCommissionMigrationService
                 initialCommissionRevision: 0,
                 boundAtUtc,
                 companyPaymentPolicy: null);
+            CompanyCommissionCommandWorkflow.ValidateTerms(
+                converted.CompanyCommission!.CurrentTerms,
+                converted.CompanyCommission.CompanyId,
+                workPackage: null);
+            return converted;
         }
 
         var canonicalCompanyId = publishedBrief.Ownership?.CompanyId ??
@@ -175,6 +180,10 @@ public static class TradeCompanyCommissionMigrationService
             CompanyCommissionActorKind.System,
             "Hosted publication");
         var terms = commission.CurrentTerms;
+        CompanyCommissionCommandWorkflow.ValidateTerms(
+            terms,
+            canonicalCompanyId,
+            workPackage: null);
         RequireCanonicalBriefMatchesCurrentTerms(copy, publishedBrief.Brief);
         var companyMaterials = terms.Materials
             .Where(item =>
@@ -263,7 +272,7 @@ public static class TradeCompanyCommissionMigrationService
 
         if (source.CompanyCommission is { } existing)
         {
-            if (existing.SchemaVersion != TradeCompanyCommission.CurrentSchemaVersion ||
+            if (existing.SchemaVersion is < 1 or > TradeCompanyCommission.CurrentSchemaVersion ||
                 existing.CommissionId != source.Id ||
                 existing.CompanyId.Value != source.CompanyProfileId)
             {
@@ -272,28 +281,76 @@ public static class TradeCompanyCommissionMigrationService
             }
 
             var existingCopy = TradeOrderWorkflow.CopyOrder(source);
+            var migratedExisting = existing;
+            if (existing.SchemaVersion < TradeCompanyCommission.CurrentSchemaVersion)
+            {
+                var normalizedProgress = existing.OutputProgress
+                    .Select(progress => progress with { ReadyQuantity = progress.CompletedQuantity })
+                    .ToArray();
+                var allOutputsComplete = existing.CurrentTerms.Outputs.Count > 0 &&
+                    existing.CurrentTerms.Outputs.All(output => normalizedProgress.Any(progress =>
+                        progress.LineId == output.LineId &&
+                        progress.CompletedQuantity >= output.RequiredQuantity));
+                migratedExisting = existing with
+                {
+                    SchemaVersion = TradeCompanyCommission.CurrentSchemaVersion,
+                    OutputProgress = normalizedProgress,
+                    DeliveryReadiness = allOutputsComplete
+                        ? new CompanyCommissionDeliveryReadiness(
+                            true,
+                            existing.DeliveryReadiness.DeclaredAtUtc ?? migratedAtUtc)
+                        : existing.DeliveryReadiness
+                };
+                existingCopy.CompanyCommission = migratedExisting;
+                if (allOutputsComplete &&
+                    existing.ActiveClaim != null &&
+                    existingCopy.Status is TradeOrderStatus.Assigned or TradeOrderStatus.InProgress)
+                {
+                    existingCopy.Status = TradeOrderStatus.AwaitingDelivery;
+                    var readiness = new CompanyCommissionActivityEvent
+                    {
+                        EventId = CreateDeterministicGuid(source.Id, "schema-v2-readiness"),
+                        CommissionId = source.Id,
+                        CommissionRevision = checked((existing.Activity.LastOrDefault()?.CommissionRevision ?? 0) + 1),
+                        Actor = new("hosted-migration", CompanyCommissionActorKind.Migration, "Hosted migration"),
+                        SourceSurface = CompanyCommissionSourceSurface.HostedMigration,
+                        CreatedAtUtc = migratedAtUtc,
+                        Kind = CompanyCommissionActivityKind.DeliveryReadinessDeclared,
+                        TermsVersion = existing.CurrentTermsVersion,
+                        Comment = $"Migration moved this commission from {source.Status} to AwaitingDelivery because all outputs were complete.",
+                        MigrationProvenance = "commission-schema-v2"
+                    };
+                    migratedExisting = migratedExisting with
+                    {
+                        Activity = [.. existing.Activity, readiness],
+                        UpdatedAtUtc = migratedAtUtc
+                    };
+                    existingCopy.CompanyCommission = migratedExisting;
+                }
+                existingCopy.UpdatedAtUtc = migratedAtUtc;
+            }
             if (!RequiresAssignedClaimRepair(existingCopy))
             {
                 return existingCopy;
             }
 
             var claimId = CreateDeterministicGuid(source.Id, "legacy-assigned-claim");
-            existingCopy.CompanyCommission = existing with
+            existingCopy.CompanyCommission = migratedExisting with
             {
                 UpdatedAtUtc = migratedAtUtc,
                 ActiveClaim = new CompanyCommissionClaim(
                     claimId,
-                    existing.CurrentTermsVersion,
+                    migratedExisting.CurrentTermsVersion,
                     migratedAtUtc,
                     source.AssignedCrafterId,
                     null),
                 ParticipantGrant = new CompanyCommissionParticipantGrant(
                     CreateDeterministicGuid(source.Id, "legacy-participant-grant"),
                     claimId,
-                    existing.CurrentTermsVersion,
+                    migratedExisting.CurrentTermsVersion,
                     1,
                     migratedAtUtc),
-                ParticipantAcknowledgedTermsVersion = existing.CurrentTermsVersion
+                ParticipantAcknowledgedTermsVersion = migratedExisting.CurrentTermsVersion
             };
             existingCopy.UpdatedAtUtc = migratedAtUtc;
             return existingCopy;
@@ -513,8 +570,33 @@ public static class TradeCompanyCommissionMigrationService
             : TradeCommissionPaymentSummary.FromOrder(
                 order,
                 draft: null,
-                authoringPolicy).Active;
+                authoringPolicy,
+                requireMaterialRouteQuote: false).Active;
         var evidence = brief?.Evidence;
+        var snapshotFailureReason = order.SourceSnapshot.MaterialQuoteFailureReason;
+        var materialQuoteFailureReason = order.SourceSnapshot.MaterialQuote == null
+            ? snapshotFailureReason
+            : null;
+        var pricingWarnings = (order.SourceSnapshot.Warnings ?? [])
+            .Where(warning => !string.IsNullOrWhiteSpace(warning))
+            .Where(warning => order.SourceSnapshot.MaterialQuote == null ||
+                string.IsNullOrWhiteSpace(snapshotFailureReason) ||
+                !string.Equals(
+                    warning,
+                    snapshotFailureReason,
+                    StringComparison.OrdinalIgnoreCase))
+            .Where(warning => !IsIrrelevantMarketWarningForSelectedSource(
+                warning,
+                order.SourceSnapshot.Materials))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (!string.IsNullOrWhiteSpace(materialQuoteFailureReason) &&
+            !pricingWarnings.Contains(
+                materialQuoteFailureReason,
+                StringComparer.OrdinalIgnoreCase))
+        {
+            pricingWarnings.Add(materialQuoteFailureReason);
+        }
 
         return new CompanyCommissionTermsVersion
         {
@@ -525,26 +607,52 @@ public static class TradeCompanyCommissionMigrationService
             Materials = materials,
             Payment = new CompanyCommissionPaymentTerms(
                 payment?.Schedule ?? order.PaymentSchedule,
-                payment?.ContractLabel ?? (authoringPayment?.Contract == TradePaymentContractMode.LaborStandard
-                    ? "Labor standard"
-                    : "Legacy commission"),
+                payment?.ContractLabel ?? "Labor + material-value bonus",
                 payment?.MaterialReimbursement ?? authoringPayment?.MaterialReimbursementTotal ?? 0,
                 payment?.MaterialBonus ?? authoringPayment?.CommissionAmount ?? 0,
                 payment?.CraftLabor ?? authoringPayment?.CraftLaborTotal ?? 0,
                 payment?.Total ?? authoringPayment?.Total ?? 0,
                 CustomTerms: payment?.CustomTerms ?? order.CustomPaymentTerms,
                 CraftSynthCount: payment?.CraftSynthCount ?? authoringPayment?.CraftSynthCount ?? 0,
-                GilPerSynth: payment?.GilPerSynth ?? authoringPayment?.GilPerSynth ?? 0),
+                GilPerSynth: payment?.GilPerSynth ?? authoringPayment?.GilPerSynth ?? 0,
+                MaterialAdjustmentPercent: payment?.MaterialAdjustmentPercent ?? authoringPayment?.CommissionPercent),
             DeliveryInstructions = brief?.DeliveryInstructions ?? string.Empty,
             PricingEvidence = new CompanyCommissionPricingEvidence(
                 evidence?.CostBasis ?? order.SourceSnapshot.CostBasis?.ToString() ?? "Unspecified",
                 evidence?.MarketScope ?? order.SourceSnapshot.MarketFetchScope?.ToString() ?? "Unspecified",
                 evidence?.Location ?? ResolveLocation(order.SourceSnapshot),
-                evidence?.CapturedAtUtc ?? order.SourceSnapshot.ImportedAtUtc),
+                evidence?.CapturedAtUtc ?? order.SourceSnapshot.ImportedAtUtc,
+                order.SourceSnapshot.MaterialQuote is { } fullQuote
+                    ? TradePaymentCalculator.ProjectCrafterQuote(fullQuote, materials
+                        .Where(m => m.Responsibility == CommissionMaterialResponsibility.Crafter)
+                        .Select(m => (m.ItemId, m.RequiresHq)).ToHashSet())
+                    : null,
+                pricingWarnings,
+                materialQuoteFailureReason),
             ContactInstructions = brief?.Contact ?? string.Empty,
             ChangeSummary = "Converted from the canonical hosted Trade order."
         };
 
+    }
+
+    private static bool IsIrrelevantMarketWarningForSelectedSource(
+        string warning,
+        IReadOnlyList<TradeOrderMaterialSnapshot> materials)
+    {
+        var describesMarketEvidence =
+            warning.Contains("market data", StringComparison.OrdinalIgnoreCase) ||
+            warning.Contains("market evidence", StringComparison.OrdinalIgnoreCase) ||
+            warning.Contains("market-analysis", StringComparison.OrdinalIgnoreCase);
+        return describesMarketEvidence && materials.Any(material =>
+            warning.Contains(material.Name, StringComparison.OrdinalIgnoreCase) &&
+            (string.Equals(
+                 material.EvidenceSource,
+                 "Vendor price",
+                 StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(
+                 material.EvidenceSource,
+                 TradeOrderWorkflow.OnHandEvidenceSource,
+                 StringComparison.OrdinalIgnoreCase)));
     }
 
     private static CompanyCommissionTermsVersion PreserveCurrentLineIdentity(
@@ -612,6 +720,8 @@ public static class TradeCompanyCommissionMigrationService
             string.Equals(payment.ContractLabel, terms.Payment.ContractLabel, StringComparison.Ordinal) &&
             payment.MaterialReimbursement == terms.Payment.MaterialReimbursement &&
             payment.MaterialBonus == terms.Payment.MaterialAdjustment &&
+            (terms.Payment.MaterialAdjustmentPercent == null ||
+             payment.MaterialAdjustmentPercent == terms.Payment.MaterialAdjustmentPercent) &&
             payment.CraftLabor == terms.Payment.CraftLabor &&
             payment.Total == terms.Payment.Total &&
             payment.CraftSynthCount == terms.Payment.CraftSynthCount &&

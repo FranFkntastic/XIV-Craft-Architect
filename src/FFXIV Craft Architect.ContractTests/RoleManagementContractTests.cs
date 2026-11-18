@@ -84,8 +84,40 @@ public sealed class RoleManagementContractTests
         // Owner cannot transfer to self — proves role authority moved.
         using (var refused = await fixture.PostTransferAsync(fixture.CompanyId, target.ProfileId, target.Key))
         {
-            Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
         }
+    }
+
+    [Fact]
+    public async Task GenericRoleChangeCannotPromoteToOwner()
+    {
+        await using var fixture = await RoleFixture.CreateAsync();
+        var (owner, target) = await fixture.SeedOwnerAndCrafterAsync();
+
+        using var response = await fixture.PutRoleRawAsync(
+            fixture.CompanyId,
+            target.ProfileId,
+            new { Role = "owner" },
+            owner.Key);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(MembershipRole.Crafter, (await fixture.Memberships.LoadAsync(fixture.CompanyIdValue, target.ProfileId))!.Role);
+    }
+
+
+    [Fact]
+    public async Task RoleChangeRejectsNonActiveTarget()
+    {
+        await using var fixture = await RoleFixture.CreateAsync();
+        var (owner, pending) = await fixture.SeedOwnerAndPendingMemberAsync();
+
+        using var response = await fixture.PutRoleAsync(
+            fixture.CompanyId,
+            pending.ProfileId,
+            "operator",
+            owner.Key);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
 
     private sealed class RoleFixture : IAsyncDisposable
@@ -168,9 +200,17 @@ public sealed class RoleManagementContractTests
             string key)
         {
             using var client = CreateClient(key);
+            using var previewResponse = await client.GetAsync(
+                $"/trade/v1/companies/{companyId}/ownership-transfer/preview/{targetProfileId:D}");
+            if (!previewResponse.IsSuccessStatusCode)
+            {
+                return new HttpResponseMessage(previewResponse.StatusCode);
+            }
+            var preview = (await previewResponse.Content.ReadFromJsonAsync<CompanyOwnershipTransferPreview>())!;
             return await client.PostAsJsonAsync(
                 $"/trade/v1/companies/{companyId}/ownership-transfer",
-                new { TargetAccountProfileId = targetProfileId });
+                new CompanyOwnershipTransferBody(
+                    targetProfileId, "operator", Guid.NewGuid(), preview.ScopeFingerprint));
         }
 
         public async Task<HttpResponseMessage> GetAsync(string path, string key)

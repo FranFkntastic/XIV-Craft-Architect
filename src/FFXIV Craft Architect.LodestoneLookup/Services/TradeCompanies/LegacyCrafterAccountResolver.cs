@@ -288,7 +288,7 @@ public sealed class LegacyCrafterAccountResolver(
                     matches.Add(new LegacyCrafterCandidate(
                         crafter.Id,
                         string.IsNullOrWhiteSpace(crafter.DisplayName)
-                            ? "Unnamed contractor"
+                            ? "Unnamed freelancer"
                             : crafter.DisplayName.Trim(),
                         string.IsNullOrWhiteSpace(crafter.WorldName)
                             ? null

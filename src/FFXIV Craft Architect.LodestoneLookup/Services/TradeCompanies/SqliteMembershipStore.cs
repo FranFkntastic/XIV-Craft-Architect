@@ -205,6 +205,98 @@ public sealed partial class SqliteMembershipStore(
     private readonly SemaphoreSlim schemaGate = new(1, 1);
     private bool schemaReady;
 
+    public async Task<bool> ProjectOwnershipTransferAsync(
+        Guid transferId,
+        CompanyId companyId,
+        Guid sourceProfileId,
+        Guid targetProfileId,
+        PreviousOwnerDisposition sourceDisposition,
+        CancellationToken cancellationToken = default)
+    {
+        RequireIdentity(companyId, sourceProfileId);
+        if (transferId == Guid.Empty || targetProfileId == Guid.Empty || sourceProfileId == targetProfileId)
+        {
+            throw new ArgumentException("A valid ownership transfer identity is required.");
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
+            IsolationLevel.Serializable,
+            cancellationToken);
+        await using (var replay = connection.CreateCommand())
+        {
+            replay.Transaction = transaction;
+            replay.CommandText = "SELECT company_id, source_profile_id, target_profile_id, source_disposition FROM membership_ownership_transfers WHERE transfer_id = $id;";
+            replay.Parameters.AddWithValue("$id", transferId.ToString("D"));
+            await using var reader = await replay.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                var matches = reader.GetString(0) == companyId.ToString() &&
+                              reader.GetString(1) == sourceProfileId.ToString("D") &&
+                              reader.GetString(2) == targetProfileId.ToString("D") &&
+                              reader.GetString(3) == sourceDisposition.ToString().ToLowerInvariant();
+                await transaction.CommitAsync(cancellationToken);
+                return matches;
+            }
+        }
+
+        var target = await LoadAsync(connection, transaction, companyId, targetProfileId, cancellationToken);
+        if (target == null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
+        var source = await LoadAsync(connection, transaction, companyId, sourceProfileId, cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        var targetOwner = target with
+        {
+            Role = MembershipRole.Owner,
+            State = MembershipState.Active,
+            DecidedAtUtc = now,
+            DecidedByProfileId = sourceProfileId
+        };
+        var sourceProjected = (source ?? new CompanyMembership(
+            companyId,
+            sourceProfileId,
+            MembershipRole.Owner,
+            MembershipState.Active,
+            now,
+            now,
+            sourceProfileId,
+            null)) with
+        {
+            Role = sourceDisposition == PreviousOwnerDisposition.Operator
+                ? MembershipRole.Operator
+                : MembershipRole.Owner,
+            State = sourceDisposition == PreviousOwnerDisposition.Operator
+                ? MembershipState.Active
+                : MembershipState.Revoked,
+            DecidedAtUtc = now,
+            DecidedByProfileId = sourceProfileId
+        };
+
+        await UpsertMembershipAsync(connection, transaction, targetOwner, cancellationToken);
+        await UpsertMembershipAsync(connection, transaction, sourceProjected, cancellationToken);
+        await InsertEventAsync(connection, transaction, target?.State, targetOwner, sourceProfileId, now, "Ownership transferred to this member.", cancellationToken);
+        await InsertEventAsync(connection, transaction, source?.State, sourceProjected, sourceProfileId, now, "Ownership transferred to another member.", cancellationToken);
+        await using (var record = connection.CreateCommand())
+        {
+            record.Transaction = transaction;
+            record.CommandText = "INSERT INTO membership_ownership_transfers(transfer_id,company_id,source_profile_id,target_profile_id,source_disposition,projected_at_utc) VALUES($id,$company,$source,$target,$disposition,$at);";
+            record.Parameters.AddWithValue("$id", transferId.ToString("D"));
+            record.Parameters.AddWithValue("$company", companyId.ToString());
+            record.Parameters.AddWithValue("$source", sourceProfileId.ToString("D"));
+            record.Parameters.AddWithValue("$target", targetProfileId.ToString("D"));
+            record.Parameters.AddWithValue("$disposition", sourceDisposition.ToString().ToLowerInvariant());
+            record.Parameters.AddWithValue("$at", now.ToString("O"));
+            await record.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
     public async Task<CompanyMembershipInvitation> IssueInvitationAsync(
         CompanyId companyId,
         Guid issuedByProfileId,
@@ -491,25 +583,57 @@ public sealed partial class SqliteMembershipStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task<MembershipInvitationConsumptionResult> ConsumeInvitationAsync(
+    public Task<MembershipInvitationConsumptionResult> ConsumeInvitationAsync(
         string token,
         Guid accountProfileId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        !IsValidInvitationToken(token) || accountProfileId == Guid.Empty
+            ? Task.FromResult(new MembershipInvitationConsumptionResult(
+                MembershipInvitationConsumptionStatus.Unavailable))
+            : ConsumeInvitationCoreAsync(
+                (connection, transaction, ct) => LoadInvitationAsync(
+                    connection,
+                    transaction,
+                    HashToken(token),
+                    ct),
+                accountProfileId,
+                cancellationToken);
+
+    /// <summary>
+    /// Accepts an invitation that was delivered on Discord to this account's linked
+    /// Discord user. The host-recorded recipient stands in for the link token, so the
+    /// invitee can accept from the Crafter hub without the original message.
+    /// </summary>
+    public Task<MembershipInvitationConsumptionResult> ConsumeInvitationForRecipientAsync(
+        Guid invitationId,
+        Guid accountProfileId,
+        string discordUserId,
+        CancellationToken cancellationToken = default) =>
+        invitationId == Guid.Empty || accountProfileId == Guid.Empty ||
+        string.IsNullOrWhiteSpace(discordUserId)
+            ? Task.FromResult(new MembershipInvitationConsumptionResult(
+                MembershipInvitationConsumptionStatus.Unavailable))
+            : ConsumeInvitationCoreAsync(
+                (connection, transaction, ct) => LoadRecipientInvitationAsync(
+                    connection,
+                    transaction,
+                    invitationId,
+                    discordUserId,
+                    ct),
+                accountProfileId,
+                cancellationToken);
+
+    private async Task<MembershipInvitationConsumptionResult> ConsumeInvitationCoreAsync(
+        Func<SqliteConnection, SqliteTransaction, CancellationToken, Task<CompanyMembershipInvitation?>> load,
+        Guid accountProfileId,
+        CancellationToken cancellationToken)
     {
-        if (!IsValidInvitationToken(token) || accountProfileId == Guid.Empty)
-        {
-            return new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.Unavailable);
-        }
         await using var connection = await OpenAsync(cancellationToken);
         await EnsureSchemaAsync(connection, cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
-        var invitation = await LoadInvitationAsync(
-            connection,
-            transaction,
-            HashToken(token),
-            cancellationToken);
+        var invitation = await load(connection, transaction, cancellationToken);
         var now = timeProvider.GetUtcNow();
         if (invitation == null || invitation.RevokedAtUtc != null || invitation.ExpiresAtUtc <= now)
         {
@@ -1184,132 +1308,6 @@ public sealed partial class SqliteMembershipStore(
         return new MembershipRoleMutationResult(MembershipRoleMutationStatus.Applied, updated);
     }
 
-    public async Task<MembershipRoleMutationResult> TransferOwnershipAsync(
-        CompanyId companyId,
-        Guid targetProfileId,
-        Guid actorProfileId,
-        MembershipRole formerOwnerRole = MembershipRole.Operator,
-        CancellationToken cancellationToken = default)
-    {
-        RequireIdentity(companyId, targetProfileId);
-        RequireActor(actorProfileId);
-        if (formerOwnerRole is not (MembershipRole.Operator or MembershipRole.Crafter))
-        {
-            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.ForbiddenRole);
-        }
-
-        await using var connection = await OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
-            IsolationLevel.Serializable,
-            cancellationToken);
-        var actor = await LoadAsync(connection, transaction, companyId, actorProfileId, cancellationToken);
-        var target = await LoadAsync(connection, transaction, companyId, targetProfileId, cancellationToken);
-
-        // Replay: a prior transfer completed and this request repeats it.
-        // Verified by audit evidence, not role shapes alone — a random operator
-        // requesting ownership must stay Forbidden.
-        if (actor is { State: MembershipState.Active, Role: MembershipRole.Crafter or MembershipRole.Operator } &&
-            target is { State: MembershipState.Active, Role: MembershipRole.Owner })
-        {
-            var transferEvidence = await HasOwnershipTransferEventAsync(
-                connection,
-                transaction,
-                companyId,
-                actorProfileId,
-                cancellationToken);
-            if (transferEvidence)
-            {
-                await transaction.CommitAsync(cancellationToken);
-                return new MembershipRoleMutationResult(MembershipRoleMutationStatus.Replayed, target);
-            }
-        }
-        if (actor is not { State: MembershipState.Active, Role: MembershipRole.Owner })
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.NotAuthorized);
-        }
-        if (target == null)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.NotFound);
-        }
-        if (target.State != MembershipState.Active ||
-            target.Role == MembershipRole.Owner ||
-            target.AccountProfileId == actorProfileId)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.InvalidState);
-        }
-        if (await CountActiveOwnersExcludingAsync(connection, transaction, companyId, excludeNone: true, cancellationToken) > 1)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return new MembershipRoleMutationResult(MembershipRoleMutationStatus.InvalidState);
-        }
-
-        var now = timeProvider.GetUtcNow();
-        await using (var promote = connection.CreateCommand())
-        {
-            promote.Transaction = transaction;
-            promote.CommandText = """
-                UPDATE company_memberships
-                SET role = 'owner'
-                WHERE company_id = $companyId AND account_profile_id = $accountProfileId;
-                """;
-            AddMembershipIdentity(promote, companyId, targetProfileId);
-            await promote.ExecuteNonQueryAsync(cancellationToken);
-        }
-        await using (var demote = connection.CreateCommand())
-        {
-            demote.Transaction = transaction;
-            demote.CommandText = """
-                UPDATE company_memberships
-                SET role = $role
-                WHERE company_id = $companyId AND account_profile_id = $actorProfileId;
-                """;
-            demote.Parameters.AddWithValue("$role", ToStorage(formerOwnerRole));
-            demote.Parameters.AddWithValue("$companyId", companyId.ToString());
-            demote.Parameters.AddWithValue("$actorProfileId", actorProfileId.ToString("D"));
-            if (await demote.ExecuteNonQueryAsync(cancellationToken) != 1)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                return new MembershipRoleMutationResult(MembershipRoleMutationStatus.InvalidState);
-            }
-        }
-
-        await InsertRoleEventAsync(
-            connection,
-            transaction,
-            companyId,
-            targetProfileId,
-            target.Role,
-            MembershipRole.Owner,
-            actorProfileId,
-            now,
-            "ownership_transfer",
-            cancellationToken);
-        await InsertRoleEventAsync(
-            connection,
-            transaction,
-            companyId,
-            actorProfileId,
-            MembershipRole.Owner,
-            formerOwnerRole,
-            actorProfileId,
-            now,
-            "ownership_transfer",
-            cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-
-        var promotedTarget = target with
-        {
-            Role = MembershipRole.Owner,
-            DecidedAtUtc = now,
-            DecidedByProfileId = actorProfileId
-        };
-        return new MembershipRoleMutationResult(MembershipRoleMutationStatus.Applied, promotedTarget);
-    }
-
     public async Task<CompanyMembership?> LoadAsync(
         CompanyId companyId,
         Guid accountProfileId,
@@ -1982,6 +1980,15 @@ public sealed partial class SqliteMembershipStore(
                 CREATE INDEX IF NOT EXISTS ix_membership_events_company_account
                     ON membership_events(company_id, account_profile_id, created_at_utc);
 
+                CREATE TABLE IF NOT EXISTS membership_ownership_transfers (
+                    transfer_id TEXT PRIMARY KEY,
+                    company_id TEXT NOT NULL,
+                    source_profile_id TEXT NOT NULL,
+                    target_profile_id TEXT NOT NULL,
+                    source_disposition TEXT NOT NULL CHECK(source_disposition IN ('operator', 'revoked')),
+                    projected_at_utc TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS company_membership_invitations (
                     invitation_id TEXT PRIMARY KEY,
                     token_hash TEXT NOT NULL UNIQUE,
@@ -2065,6 +2072,32 @@ public sealed partial class SqliteMembershipStore(
                     PRIMARY KEY(company_id, loser_crafter_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS account_commission_claims (
+                    account_profile_id TEXT NOT NULL,
+                    company_id TEXT NOT NULL,
+                    commission_id TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
+                    claimed_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(account_profile_id, company_id, commission_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_account_commission_claims_commission
+                    ON account_commission_claims(company_id, commission_id);
+
+                CREATE TABLE IF NOT EXISTS account_commission_claim_marks (
+                    company_id TEXT NOT NULL,
+                    commission_id TEXT NOT NULL,
+                    projected_at_utc TEXT NOT NULL,
+                    commission_revision INTEGER NULL,
+                    PRIMARY KEY(company_id, commission_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS account_commission_claim_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS company_retirement_receipts (
                     company_id TEXT PRIMARY KEY,
                     actor TEXT NOT NULL,
@@ -2091,6 +2124,11 @@ public sealed partial class SqliteMembershipStore(
             await AddMembershipColumnIfMissingAsync(
                 connection,
                 "notify_progress_status",
+                "INTEGER NULL",
+                cancellationToken);
+            await AddClaimMarkColumnIfMissingAsync(
+                connection,
+                "commission_revision",
                 "INTEGER NULL",
                 cancellationToken);
             await WidenCrafterBindingEvidenceAsync(connection, cancellationToken);
@@ -2217,6 +2255,30 @@ public sealed partial class SqliteMembershipStore(
             alter.CommandText = $"ALTER TABLE company_memberships ADD COLUMN {column} {definition};";
             await alter.ExecuteNonQueryAsync(cancellationToken);
         }
+    }
+
+    private static async Task AddClaimMarkColumnIfMissingAsync(
+        SqliteConnection connection,
+        string columnName,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        await using (var inspect = connection.CreateCommand())
+        {
+            inspect.CommandText = "PRAGMA table_info(account_commission_claim_marks);";
+            await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE account_commission_claim_marks ADD COLUMN {columnName} {definition};";
+        await alter.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task AddInvitationColumnIfMissingAsync(
@@ -2572,91 +2634,6 @@ public sealed partial class SqliteMembershipStore(
                 throw new InvalidOperationException($"Test role setup failed: expected {expected}, got {actual}.");
             }
         }
-    }
-
-    private static async Task<bool> HasOwnershipTransferEventAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        CompanyId companyId,
-        Guid accountProfileId,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            SELECT 1
-            FROM membership_events
-            WHERE company_id = $companyId
-              AND account_profile_id = $accountProfileId
-              AND reason LIKE 'ownership_transfer:%'
-            LIMIT 1;
-            """;
-        command.Parameters.AddWithValue("$companyId", companyId.ToString());
-        command.Parameters.AddWithValue("$accountProfileId", accountProfileId.ToString("D"));
-        return await command.ExecuteScalarAsync(cancellationToken) != null;
-    }
-
-    private static async Task<long> CountActiveOwnersExcludingAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        CompanyId companyId,
-        bool excludeNone,
-        CancellationToken cancellationToken)
-    {
-        // excludeNone is retained for call-site readability; the transfer path
-        // counts every active owner because the actor has not been demoted yet.
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            SELECT COUNT(*)
-            FROM company_memberships
-            WHERE company_id = $companyId AND role = 'owner' AND state = 'active';
-            """;
-        command.Parameters.AddWithValue("$companyId", companyId.ToString());
-        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-    }
-
-    private static async Task InsertRoleEventAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        CompanyId companyId,
-        Guid accountProfileId,
-        MembershipRole fromRole,
-        MembershipRole toRole,
-        Guid actorProfileId,
-        DateTimeOffset createdAtUtc,
-        string reason,
-        CancellationToken cancellationToken)
-    {
-        const int MaximumReasonLength = 500;
-        var reasonText = $"{reason}:{ToStorage(fromRole)}->{ToStorage(toRole)}";
-        if (reasonText.Length > MaximumReasonLength)
-        {
-            // keep the head (action + from->to fit in practice); the check constraint
-            // on membership_events.reason rejects longer values, so truncate.
-            reasonText = reasonText[..MaximumReasonLength];
-        }
-
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            INSERT INTO membership_events (
-                event_id, company_id, account_profile_id, from_state, to_state,
-                actor_profile_id, created_at_utc, role, decided_at_utc,
-                decided_by_profile_id, reason)
-            VALUES (
-                $eventId, $companyId, $accountProfileId, 'active', 'active',
-                $actorProfileId, $createdAtUtc, $role, $createdAtUtc,
-                $actorProfileId, $reason);
-            """;
-        command.Parameters.AddWithValue("$eventId", Guid.NewGuid().ToString("D"));
-        command.Parameters.AddWithValue("$companyId", companyId.ToString());
-        command.Parameters.AddWithValue("$accountProfileId", accountProfileId.ToString("D"));
-        command.Parameters.AddWithValue("$actorProfileId", actorProfileId.ToString("D"));
-        command.Parameters.AddWithValue("$createdAtUtc", createdAtUtc.ToString("O"));
-        command.Parameters.AddWithValue("$role", ToStorage(toRole));
-        command.Parameters.AddWithValue("$reason", reasonText);
-        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static string? NormalizeNote(string? note)

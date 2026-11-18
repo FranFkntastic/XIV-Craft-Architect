@@ -36,8 +36,10 @@ public sealed partial class HostedCompanyCommissionService(
     SqliteProfileHostStore profileHost,
     TimeProvider timeProvider,
     IEnumerable<ICompanyCommissionPostCommitSink> postCommitSinks,
-    ILogger<HostedCompanyCommissionService> logger)
+    ILogger<HostedCompanyCommissionService> logger,
+    ClaimMaterialPricing? claimPricing = null)
 {
+    private const decimal ClaimPriceChangeThresholdPercent = 5m;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async Task<HostedCompanyCommissionSnapshot?> LoadOwnerAsync(
@@ -237,7 +239,9 @@ public sealed partial class HostedCompanyCommissionService(
         long expectedProjectionRevision,
         Guid commandId,
         int protocolVersion,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? claimAccountId = null,
+        int? claimTermsVersion = null)
     {
         if (commandId == Guid.Empty ||
             expectedProjectionRevision < 0 ||
@@ -279,6 +283,8 @@ public sealed partial class HostedCompanyCommissionService(
             item => item.CommandId == commandId);
         if (!IsCapabilityAuthorized(capability, commission, recordedReplay) ||
             !recordedReplay &&
+            !(capability.Kind == CompanyCommissionCapabilityKind.Claim &&
+              commission.ClaimPriceReview?.IsRetry(claimAccountId, commandId, claimTermsVersion) == true) &&
             (commission.Activity.LastOrDefault()?.CommissionRevision ?? 0) !=
             expectedProjectionRevision)
         {
@@ -480,6 +486,70 @@ public sealed partial class HostedCompanyCommissionService(
             cancellationToken);
     }
 
+    /// <summary>
+    /// The canonical commission behind a published brief, loaded with the publication's
+    /// own access rather than a caller's company role.
+    /// </summary>
+    public async Task<HostedCompanyCommissionSnapshot?> LoadPublishedAsync(
+        TradeCompanyPublicationOwnership ownership,
+        string publicBriefId,
+        CancellationToken cancellationToken = default)
+    {
+        var access = await companies.ResolvePublicAccessAsync(
+            ownership,
+            publicBriefId,
+            cancellationToken);
+        return access == null
+            ? null
+            : await LoadOwnerAsync(access, ownership.OrderId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Commits a claim whose authority is the signed-in account instead of a claim link.
+    /// The caller has already checked that the account may claim this company's open
+    /// commissions; the command must carry that account's evidence.
+    /// </summary>
+    public async Task<CompanyCommissionMutationResult> ExecuteAccountClaimAsync(
+        TradeCompanyPublicationOwnership ownership,
+        string publicBriefId,
+        Guid accountProfileId,
+        ClaimCompanyCommissionCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (accountProfileId == Guid.Empty ||
+            command.AccountEvidence?.ProfileId != accountProfileId ||
+            command.Context.CompanyId != ownership.CompanyId ||
+            command.Context.CommissionId != ownership.OrderId)
+        {
+            return Unauthorized();
+        }
+
+        var access = await companies.ResolvePublicAccessAsync(
+            ownership,
+            publicBriefId,
+            cancellationToken);
+        if (access == null)
+        {
+            return Unauthorized();
+        }
+
+        var actor = new CompanyCommissionActor(
+            $"account-profile:{accountProfileId:D}",
+            CompanyCommissionActorKind.Crafter);
+        return await ExecuteAuthenticatedAsync(
+            access,
+            command,
+            actor,
+            CompanyCommissionSourceSurface.PublicBrief,
+            order => CompanyCommissionCommandWorkflow.Apply(
+                order,
+                command,
+                actor,
+                timeProvider.GetUtcNow().UtcDateTime),
+            cancellationToken);
+    }
+
     private async Task<CompanyCommissionMutationResult> ExecuteAuthenticatedAsync(
         TradeCompanyAccessContext access,
         ICompanyCommissionCommand command,
@@ -521,7 +591,7 @@ public sealed partial class HostedCompanyCommissionService(
                 ErrorMessage: "The canonical company commission was not found.");
         }
 
-        var replay = ResolveReplay(snapshot, context, fingerprint);
+        var replay = ResolvePriceReview(snapshot, command) ?? ResolveReplay(snapshot, context, fingerprint);
         if (replay != null)
         {
             if (replay.Status == CompanyCommissionMutationStatus.Replayed &&
@@ -576,6 +646,73 @@ public sealed partial class HostedCompanyCommissionService(
         }
 
         var now = timeProvider.GetUtcNow().UtcDateTime;
+        CompanyCommissionActivityEvent? refreshActivity = null;
+        var priceConflict = false;
+        var activityCommandId = context.CommandId;
+        var activityFingerprint = fingerprint;
+        var published = snapshot.Order.CompanyCommission!;
+        var currentTerms = published.CurrentTerms;
+        if (command is ClaimCompanyCommissionCommand { AccountEvidence: { } account } claim &&
+            currentTerms.PricingEvidence.MaterialQuote?.IsExpired(now) == true &&
+            !(published.ClaimPriceReview is { } review &&
+              review.ProfileId == account.ProfileId && review.TermsVersion == claim.TermsVersion))
+        {
+            // The original transition above validated authority, claimability and named terms.
+            // Keep its result as the fallback; all speculative changes stay off the stored order.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(12));
+            try
+            {
+                var pricing = claimPricing ?? throw new InvalidOperationException("Claim pricing is unavailable.");
+                var revision = await pricing.PriceAsync(access, snapshot.Order, context, timeout.Token).WaitAsync(timeout.Token);
+                now = timeProvider.GetUtcNow().UtcDateTime;
+                var system = new CompanyCommissionActor("claim-pricing", CompanyCommissionActorKind.System, "Automatic pricing");
+                var amended = CompanyCommissionCommandWorkflow.Apply(snapshot.Order, revision, system, now);
+                var amendedOrder = amended.UpdatedOrder;
+                var amendedCommission = amendedOrder.CompanyCommission!;
+                var difference = Math.Abs(revision.Terms.Payment.Total - currentTerms.Payment.Total);
+                if (difference > currentTerms.Payment.Total * ClaimPriceChangeThresholdPercent / 100m)
+                {
+                    activityFingerprint = CreateFingerprint(revision);
+                    amendedOrder.CompanyCommission = amendedCommission with
+                    {
+                        ClaimPriceReview = new(account.ProfileId, revision.Terms.Version, context.CommandId)
+                    };
+                    application = amended;
+                    actor = system;
+                    sourceSurface = CompanyCommissionSourceSurface.System;
+                    activityCommandId = revision.Context.CommandId;
+                    priceConflict = true;
+                }
+                else
+                {
+                    var eventEntry = new CompanyCommissionActivityEvent
+                    {
+                        EventId = Guid.NewGuid(),
+                        CommandId = revision.Context.CommandId,
+                        CommissionId = context.CommissionId,
+                        CommissionRevision = checked((amendedCommission.Activity.LastOrDefault()?.CommissionRevision ?? 0) + 1),
+                        Actor = system,
+                        SourceSurface = CompanyCommissionSourceSurface.System,
+                        CreatedAtUtc = now,
+                        Kind = amended.ActivityKind,
+                        Visibility = amended.Visibility,
+                        TermsVersion = revision.Terms.Version,
+                        Comment = amended.Comment
+                    };
+                    amendedOrder.CompanyCommission = amendedCommission with { Activity = amendedCommission.Activity.Append(eventEntry).ToArray() };
+                    amendedOrder.History = amendedOrder.History.Append(ProjectCompatibilityHistory(amendedOrder, eventEntry)).ToArray();
+                    application = CompanyCommissionCommandWorkflow.Apply(amendedOrder, claim with { TermsVersion = revision.Terms.Version }, actor, now);
+                    refreshActivity = eventEntry;
+                }
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(ex, "Claim pricing unchanged for commission {PublicId}, company {CompanyId}: {Reason}",
+                    published.PublicMetadata.PublicBriefId, context.CompanyId,
+                    timeout.IsCancellationRequested ? "Refresh timed out" : ex.Message);
+            }
+        }
         var updated = application.UpdatedOrder;
         ValidateTransition(snapshot.Order, updated, access.CompanyId);
         var commission = updated.CompanyCommission!;
@@ -584,7 +721,7 @@ public sealed partial class HostedCompanyCommissionService(
         var activity = new CompanyCommissionActivityEvent
         {
             EventId = Guid.NewGuid(),
-            CommandId = context.CommandId,
+            CommandId = activityCommandId,
             CommissionId = context.CommissionId,
             CommissionRevision = nextCommissionRevision,
             Actor = actor,
@@ -602,8 +739,8 @@ public sealed partial class HostedCompanyCommissionService(
             Activity = commission.Activity.Append(activity).ToArray(),
             ProcessedCommands = commission.ProcessedCommands
                 .Append(new CompanyCommissionProcessedCommand(
-                    context.CommandId,
-                    fingerprint,
+                    activityCommandId,
+                    activityFingerprint,
                     activity.EventId,
                     now))
                 .ToArray()
@@ -622,7 +759,7 @@ public sealed partial class HostedCompanyCommissionService(
             updated.Id.ToString("D"),
             JsonSerializer.Serialize(updated, JsonOptions),
             context.ExpectedObjectRevision,
-            $"commission-command:{context.CommandId:D}",
+            $"commission-command:{activityCommandId:D}",
             cancellationToken,
             linkedPlanPublication.CompanyRevision ?? context.ExpectedCompanyRevision);
         if (mutation.Success)
@@ -643,8 +780,12 @@ public sealed partial class HostedCompanyCommissionService(
                 activity,
                 ObjectRevision: committed.Envelope.RecordRevision,
                 CompanyRevision: committed.CompanyRevision);
+            if (refreshActivity != null)
+            {
+                await NotifyPostCommitAsync(canonicalAccess, committed, refreshActivity, cancellationToken);
+            }
             await NotifyPostCommitAsync(canonicalAccess, committed, activity, cancellationToken);
-            return result;
+            return priceConflict ? PriceChanged(result) : result;
         }
 
         var current = requireCompanyOperator
@@ -652,14 +793,14 @@ public sealed partial class HostedCompanyCommissionService(
             : await LoadMemberAsync(access, context.CommissionId, cancellationToken);
         var replayAfterConflict = current == null
             ? null
-            : ResolveReplay(current, context, fingerprint);
+            : ResolvePriceReview(current, command) ?? ResolveReplay(current, context, fingerprint);
         if (replayAfterConflict != null)
         {
-            await NotifyPostCommitAsync(
-                canonicalAccess,
-                current!,
-                replayAfterConflict.Activity!,
-                cancellationToken);
+            if (replayAfterConflict.Status == CompanyCommissionMutationStatus.Replayed &&
+                replayAfterConflict.Activity is { } replayActivity)
+            {
+                await NotifyPostCommitAsync(canonicalAccess, current!, replayActivity, cancellationToken);
+            }
             return replayAfterConflict;
         }
 
@@ -941,6 +1082,29 @@ public sealed partial class HostedCompanyCommissionService(
     private sealed class LinkedPlanCommandPublication
     {
         public CompanyRecordRevision? CompanyRevision { get; set; }
+    }
+
+    private static CompanyCommissionMutationResult PriceChanged(CompanyCommissionMutationResult result) => result with
+    {
+        Status = CompanyCommissionMutationStatus.Conflict,
+        ErrorCode = "claim_price_changed",
+        ErrorMessage = "Material prices changed. Review the refreshed payment before claiming."
+    };
+
+    private static CompanyCommissionMutationResult? ResolvePriceReview(
+        HostedCompanyCommissionSnapshot snapshot, ICompanyCommissionCommand command)
+    {
+        var commission = snapshot.Order.CompanyCommission!;
+        if (command is not ClaimCompanyCommissionCommand claim ||
+            commission.ClaimPriceReview is not { } review || review.TermsVersion != commission.CurrentTermsVersion ||
+            !review.IsRetry(claim.AccountEvidence?.ProfileId, claim.Context.CommandId, claim.TermsVersion))
+        {
+            return null;
+        }
+        var activity = commission.Activity.Single(e => e.TermsVersion == review.TermsVersion &&
+            e.Kind == CompanyCommissionActivityKind.TermsAmended && e.Actor.Kind == CompanyCommissionActorKind.System);
+        return PriceChanged(new(CompanyCommissionMutationStatus.Conflict, snapshot.Order, activity,
+            ObjectRevision: snapshot.Envelope.RecordRevision, CompanyRevision: snapshot.CompanyRevision));
     }
 
     private static CompanyCommissionMutationResult? ResolveReplay(

@@ -3,7 +3,9 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using FFXIV_Craft_Architect.Core.Models;
 using FFXIV_Craft_Architect.Core.Services;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.CommissionBriefs;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
+using FFXIV_Craft_Architect.LodestoneLookup.Services.Identity;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -33,7 +35,6 @@ public sealed record CompanyHubOutputResponse(
     string Name,
     int Quantity,
     int CompletedQuantity,
-    int ReadyQuantity,
     int AcceptedQuantity);
 
 public sealed record CompanyHubPaymentResponse(string Schedule, string Label, decimal Total);
@@ -67,9 +68,10 @@ public sealed record CompanyHubCommissionResponse(
     string State,
     bool CanWork,
     bool CanReportProgress,
-    bool CanDeclareReadiness,
     string? WorkBlockedReason,
-    CompanyHubCommissionAttentionResponse? UnreadCommissionerUpdate = null);
+    CompanyHubCommissionAttentionResponse? UnreadCommissionerUpdate = null,
+    string? SheetUrl = null,
+    bool AwaitingSettlementConfirmation = false);
 
 public sealed record CompanyHubRosterMemberResponse(
     Guid AccountProfileId,
@@ -109,7 +111,7 @@ public sealed record CompanyHubMutationResponse(long ProfileRevision);
 public sealed record CompanyMarginItemsUpdateRequest(long ExpectedProfileRevision, bool UpdateMarginItems, IReadOnlyList<TradeMarginItem>? MarginItems);
 public sealed record CompanyPolicyUpdateRequest(long ExpectedProfileRevision, string Name,
     string? Description, string? CommissionContact, TradePaymentPolicy PaymentPolicy,
-    TradeCompanyPricingScope? CommissionPricingScope);
+    TradeCompanyPricingScope? CommissionPricingScope, bool? FreelancerOpenCommissions = null);
 public sealed record CompanyHubAttentionReadRequest(long OpenedRevision);
 public sealed record CompanyHubAttentionReadResponse(long ReadRevision);
 
@@ -297,12 +299,15 @@ public sealed record CompanyHubAttentionReadResult(
     CompanyHubAttentionReadStatus Status,
     long? ReadRevision = null);
 
-public sealed class CompanyHubService(
+public sealed partial class CompanyHubService(
     SqliteProfileHostStore profiles,
     SqliteMembershipStore memberships,
     MembershipAccessResolver accessResolver,
     LegacyCrafterAccountResolver crafterAccounts,
     ProfileHostChangeSignal changes,
+    SqliteDiscordIdentityStore identities,
+    SqliteDiscordNotificationStore notifications,
+    CommissionBriefOptions briefOptions,
     TimeProvider timeProvider)
 {
     private const int MaximumDisplayNameLength = 120;
@@ -418,15 +423,8 @@ public sealed class CompanyHubService(
             return new(CompanyHubAttentionReadStatus.NotFound);
         }
         var companyId = new CompanyId(company.Profile.Id);
-        var membership = await memberships.LoadForAccountAsync(
-            companyId,
-            account.ProfileId,
-            cancellationToken);
-        if (membership is not { State: MembershipState.Active } &&
-            account.ProfileId != company.HostProfileId)
-        {
-            return new(CompanyHubAttentionReadStatus.Forbidden);
-        }
+        // Unread state belongs to whoever owns the claim, member or freelancer; the
+        // canonical claim-ownership check below is the only authority.
         var order = (await LoadOrdersAsync(company, cancellationToken))
             .SingleOrDefault(candidate => candidate.Id == commissionId);
         if (order == null ||
@@ -508,8 +506,17 @@ public sealed class CompanyHubService(
         updated.CommissionContact = body.CommissionContact;
         updated.PaymentPolicy = TradePaymentPolicyNormalizer.Normalize(body.PaymentPolicy);
         updated.CommissionPricingScope = body.CommissionPricingScope;
+        if (body.FreelancerOpenCommissions is { } freelancers)
+        {
+            updated.FreelancerOpenCommissions = freelancers;
+        }
         updated.UpdatedAtUtc = DateTime.UtcNow;
-        return await SaveProfileAsync(company, updated, body.ExpectedProfileRevision, cancellationToken);
+        return await SaveProfileAsync(
+            company,
+            updated,
+            body.ExpectedProfileRevision,
+            cancellationToken,
+            updateFreelancerOpenCommissions: body.FreelancerOpenCommissions.HasValue);
     }
 
     public async Task<CompanyHubMutationResult> UpdateThemeAsync(
@@ -639,7 +646,8 @@ public sealed class CompanyHubService(
         TradeCompanyProfile updated,
         long expectedProfileRevision,
         CancellationToken cancellationToken,
-        bool updateMarginItems = false)
+        bool updateMarginItems = false,
+        bool updateFreelancerOpenCommissions = false)
     {
         var result = await profiles.PutObjectAsync(
             company.HostProfileId.ToString("D"),
@@ -649,7 +657,8 @@ public sealed class CompanyHubService(
             expectedProfileRevision,
             cancellationToken,
             allowCompanyCollection: true,
-            updateMarginItems: updateMarginItems);
+            updateMarginItems: updateMarginItems,
+            updateFreelancerOpenCommissions: updateFreelancerOpenCommissions);
         return result.Success
             ? new CompanyHubMutationResult(
                 CompanyHubMutationStatus.Applied,
@@ -918,7 +927,16 @@ public sealed class CompanyHubService(
                     "The commissioner updated this commission."),
                 latest.CreatedAtUtc);
         }
-        return ProjectCommission(order) with { UnreadCommissionerUpdate = attention };
+        var projection = ProjectCommission(order);
+        return projection with
+        {
+            UnreadCommissionerUpdate = attention,
+            SheetUrl = BuildPublicUrl(projection.PublicBriefId),
+            AwaitingSettlementConfirmation =
+                order.Status == TradeOrderStatus.Completed &&
+                commission.SettlementState == CompanyCommissionSettlementState.Pending &&
+                commission.SettlementPayment.CrafterReceived == null
+        };
     }
 
     private static CompanyHubCommissionResponse ProjectCommission(TradeOrder order)
@@ -929,10 +947,9 @@ public sealed class CompanyHubService(
         var canWork = commission.ActiveClaim != null &&
             commission.ClearedToWork &&
             commission.ParticipantAcknowledgedTermsVersion == commission.CurrentTermsVersion;
-        var allOutputsReady = terms.Outputs.All(output =>
+        var allOutputsComplete = terms.Outputs.All(output =>
             progressByLine.TryGetValue(output.LineId, out var progress) &&
-            progress.CompletedQuantity >= output.RequiredQuantity &&
-            progress.ReadyQuantity >= output.RequiredQuantity);
+            progress.CompletedQuantity >= output.RequiredQuantity);
         return new CompanyHubCommissionResponse(
             order.Id.ToString("D"),
             ClampText(order.Title, 240, "Untitled commission"),
@@ -952,7 +969,6 @@ public sealed class CompanyHubService(
                     ClampText(output.Name, 240, "Unknown item"),
                     Math.Max(0, output.RequiredQuantity),
                     Math.Max(0, progress?.CompletedQuantity ?? 0),
-                    Math.Max(0, progress?.ReadyQuantity ?? 0),
                     Math.Max(0, progress?.AcceptedQuantity ?? 0));
             }).ToArray(),
             new CompanyHubPaymentResponse(
@@ -962,8 +978,7 @@ public sealed class CompanyHubService(
             commission.SettlementState.ToString().ToLowerInvariant(),
             order.Status.ToString().ToLowerInvariant(),
             canWork,
-            canWork && !commission.DeliveryReadiness.IsReady && !allOutputsReady,
-            canWork && !commission.DeliveryReadiness.IsReady && allOutputsReady,
+            canWork && (!allOutputsComplete || order.Status == TradeOrderStatus.InProgress),
             WorkBlockedReason(commission),
             null);
     }

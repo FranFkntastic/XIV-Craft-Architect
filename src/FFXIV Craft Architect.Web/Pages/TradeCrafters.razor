@@ -11,6 +11,7 @@
 @inject ISnackbar Snackbar
 @using FFXIV_Craft_Architect.Web.Services.TradeCompany
 @inject CompanyHubClient CompanyHubs
+@inject TradeWorkspaceProfileResolver WorkspaceProfiles
 @implements IDisposable
 
 <div class="trade-crafters-page">
@@ -53,7 +54,7 @@
                 }
                 @if (CanEditRecords)
                 {
-                    <button type="button" class="workforce-button is-primary" @onclick="OpenNewRecord">Add contractor</button>
+                    <button type="button" class="workforce-button is-primary" @onclick="OpenNewRecord">Add freelancer</button>
                 }
             </div>
         </header>
@@ -72,7 +73,7 @@
                             class="@(_filter == filter ? "is-active" : null)"
                             aria-pressed="@(_filter == filter ? "true" : "false")"
                             @onclick="() => _filter = filter">
-                        @filter @_rows.Count(row => row.Matches(filter))
+                        @FilterLabel(filter) @_rows.Count(row => row.Matches(filter))
                     </button>
                 }
             </div>
@@ -153,7 +154,7 @@
                     {
                         <tr>
                             <td colspan="6" class="workforce-empty">
-                                @(_rows.Count == 0 ? "No members or contractors yet." : "No one matches this search.")
+                                @(_rows.Count == 0 ? "No members or freelancers yet." : "No one matches this search.")
                             </td>
                         </tr>
                     }
@@ -161,17 +162,21 @@
             </table>
         </div>
         <div class="workforce-summary">
-            <span><strong>@_rows.Count(row => row.AccountProfileId.HasValue && row.Access == CompanyWorkforceAccess.Active)</strong> authenticated members</span>
-            <span><strong>@_rows.Count(row => !row.IsMemberSide)</strong> external contractors</span>
+            @{
+                var authenticatedMembers = _rows.Count(row => row.AccountProfileId.HasValue && row.Access == CompanyWorkforceAccess.Active);
+                var externalFreelancers = _rows.Count(row => !row.IsMemberSide);
+            }
+            <span><strong>@authenticatedMembers</strong> @(authenticatedMembers == 1 ? "authenticated member" : "authenticated members")</span>
+            <span><strong>@externalFreelancers</strong> @(externalFreelancers == 1 ? "external freelancer" : "external freelancers")</span>
             @if (_isAdmin)
             {
-                <span><strong>@RequestedRows.Count</strong> pending requests</span>
+                <span><strong>@RequestedRows.Count</strong> @(RequestedRows.Count == 1 ? "pending request" : "pending requests")</span>
             }
         </div>
 
         <WorkforceDrawer Open="@(_drawer == WorkforceDrawerKind.Record && (_selectedCrafter != null || CanEditRecords))"
                          OnClose="CloseDrawer"
-                         Title="@(_selectedCrafter?.DisplayName ?? "Add contractor")"
+                         Title="@(_selectedCrafter?.DisplayName ?? "Add freelancer")"
                          Eyebrow="@(_selectedCrafter == null ? "Company workforce" : RecordEyebrow(_selectedCrafter.Id))"
                          Wide="@(_selectedCrafter != null)">
             <ChildContent>
@@ -339,10 +344,10 @@
                 {
                     <button type="button"
                             class="workforce-button is-primary"
-                            aria-label="Create contractor"
+                            aria-label="Create freelancer"
                             disabled="@string.IsNullOrWhiteSpace(_newCrafterName)"
                             @onclick="CreateCrafterAsync">
-                        Create contractor
+                        Create freelancer
                     </button>
                 }
                 else if (_selectedCrafter != null && CanEditRecords)
@@ -352,7 +357,7 @@
                             class="workforce-button is-primary"
                             disabled="@string.IsNullOrWhiteSpace(_detailName)"
                             @onclick="SaveSelectedCrafterAsync">
-                        Save contractor
+                        Save freelancer
                     </button>
                 }
             </Actions>
@@ -439,7 +444,7 @@
                                     class="workforce-button is-primary"
                                     disabled="@_lodestoneIsBusy"
                                     @onclick="CreateCrafterFromLodestoneAsync">
-                                Add as contractor
+                                Add as freelancer
                             </button>
                         }
                         else
@@ -458,6 +463,8 @@
 
         @if (_isAdmin && _hostedCompanyId != null)
         {
+            @* One drawer instance per company: an in-flight multi-step action or unsubmitted selection
+               must never resume against a different company after a switch. Keys stay unique per sibling. *@
             <WorkforceMemberDrawer @key="@($"member:{_hostedCompanyId}")"
                                    CompanyId="@_hostedCompanyId"
                                    ViewerRole="@(_hub?.Standing.Role ?? string.Empty)"
@@ -468,16 +475,16 @@
                                    OnChanged="RefreshHostedAsync"
                                    OnOpenRecord="OpenRecord"
                                    OnOpenOrder="OpenOrderAssignment" />
-            <WorkforceRequestsDrawer Open="@(_drawer == WorkforceDrawerKind.Requests)"
-                                     @key="@($"requests:{_hostedCompanyId}")"
+            <WorkforceRequestsDrawer @key="@($"requests:{_hostedCompanyId}")"
+                                     Open="@(_drawer == WorkforceDrawerKind.Requests)"
                                      CompanyId="@_hostedCompanyId"
                                      Requests="RequestedRows"
                                      AvailableRecords="AvailableRecords"
                                      RecordNames="RecordNames"
                                      OnClose="CloseDrawer"
                                      OnChanged="RefreshHostedAsync" />
-            <WorkforceInviteDrawer Open="@(_drawer == WorkforceDrawerKind.Invite)"
-                                   @key="@($"invite:{_hostedCompanyId}")"
+            <WorkforceInviteDrawer @key="@($"invite:{_hostedCompanyId}")"
+                                   Open="@(_drawer == WorkforceDrawerKind.Invite)"
                                    CompanyId="@_hostedCompanyId"
                                    PreselectedRecordId="_invitePreselect"
                                    AvailableRecords="InvitableRecords"
@@ -497,6 +504,13 @@
     private CompanyWorkforceHostedFacts? _hosted;
     private IReadOnlyList<CompanyWorkforceRow> _rows = [];
     private CompanyWorkforceFilter _filter = CompanyWorkforceFilter.Everyone;
+
+    private static string FilterLabel(CompanyWorkforceFilter filter) => filter switch
+    {
+        CompanyWorkforceFilter.Members => "Members",
+        CompanyWorkforceFilter.Contractors => "Freelancers",
+        _ => "Everyone"
+    };
     private string _search = string.Empty;
     private WorkforceDrawerKind _drawer;
     private string? _memberRowKey;
@@ -663,7 +677,7 @@
     private string RecordEyebrow(Guid recordId)
     {
         var row = _rows.FirstOrDefault(candidate => candidate.RecordIds.Contains(recordId));
-        return row?.Member != null ? $"Character profile · {row.DisplayName}" : "Contractor";
+        return row?.Member != null ? $"Character profile · {row.DisplayName}" : "Freelancer";
     }
 
     private void OpenDrawer(WorkforceDrawerKind drawer) => _drawer = drawer;
@@ -705,7 +719,7 @@
         var crafter = _crafters.FirstOrDefault(candidate => candidate.Id == recordId);
         if (crafter == null)
         {
-            Snackbar.Add("That contractor record is not available in this workspace yet.", Severity.Warning);
+            Snackbar.Add("That freelancer record is not available in this workspace yet.", Severity.Warning);
             return;
         }
 
@@ -984,9 +998,10 @@
                 await migrationTask));
     }
 
-    // A company is hosted when the host answered for it, when it is the hub's transient copy,
-    // or when this connection has synced its company profile. Local-only companies (never
-    // synced, or no Profile Hosting connection) stay fully editable offline.
+    // A company is hosted when the host answered for it, when it is the hub transient copy, or
+    // when dev host-first workspace resolution says so. If the host is unreachable, synced
+    // company-profile provenance decides; unknown provenance fails closed. Local-only
+    // companies (never hosted, or no Profile Hosting connection) stay fully editable.
     private async Task<bool> IsHostedCompanyAsync(TradeCompanyProfile profile, CompanyHubProjection? hub)
     {
         if (hub != null ||
@@ -994,6 +1009,18 @@
             !string.IsNullOrWhiteSpace(profile.RemoteId))
         {
             return true;
+        }
+
+        try
+        {
+            // Dev's canonical host-first resolution: the host's workspace profile decides.
+            return (await WorkspaceProfiles.ResolveAsync(profile.Id)).IsHosted;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.Text.Json.JsonException)
+        {
+            Console.Error.WriteLine(
+                $"[TradeCrafters] Host workspace profile unavailable for company {profile.Id:D}; " +
+                $"falling back to local sync provenance. {ex.GetType().Name}: {ex.Message}");
         }
 
         try
@@ -1056,7 +1083,7 @@
 
         if (string.IsNullOrWhiteSpace(_newCrafterName))
         {
-            Snackbar.Add("Contractor display name is required.", Severity.Warning);
+            Snackbar.Add("Freelancer display name is required.", Severity.Warning);
             return;
         }
 
@@ -1075,19 +1102,19 @@
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
-            Snackbar.Add("Failed to save contractor.", Severity.Error);
+            Snackbar.Add("Failed to save freelancer.", Severity.Error);
             return;
         }
 
         _newCrafterName = string.Empty;
         await ReloadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
-            !SelectCrafterAfterReload(crafter.Id, "Contractor was saved, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafter.Id, "Freelancer was saved, but it could not be loaded."))
         {
             return;
         }
 
-        Snackbar.Add("Contractor added", Severity.Success);
+        Snackbar.Add("Freelancer added", Severity.Success);
     }
 
     private async Task SearchLodestoneAsync()
@@ -1169,20 +1196,20 @@
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
-            Snackbar.Add("Failed to save Lodestone contractor.", Severity.Error);
+            Snackbar.Add("Failed to save Lodestone freelancer.", Severity.Error);
             return;
         }
 
         await ReloadAsync();
         if (_loadError != null ||
-            !SelectCrafterAfterReload(crafter.Id, "Contractor imported, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafter.Id, "Freelancer imported, but it could not be loaded."))
         {
             return;
         }
 
         _lodestoneTarget = null;
         _drawer = WorkforceDrawerKind.Record;
-        Snackbar.Add("Contractor imported from Lodestone", Severity.Success);
+        Snackbar.Add("Freelancer imported from Lodestone", Severity.Success);
     }
 
     private async Task UpdateSelectedCrafterFromLodestoneAsync()
@@ -1204,20 +1231,20 @@
         var saved = await SaveCrafterAsync(crafter);
         if (!saved)
         {
-            Snackbar.Add("Failed to update contractor from Lodestone.", Severity.Error);
+            Snackbar.Add("Failed to update freelancer from Lodestone.", Severity.Error);
             return;
         }
 
         await ReloadAsync();
         if (_loadError != null ||
-            !SelectCrafterAfterReload(crafter.Id, "Contractor updated, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafter.Id, "Freelancer updated, but it could not be loaded."))
         {
             return;
         }
 
         _lodestoneTarget = null;
         _drawer = WorkforceDrawerKind.Record;
-        Snackbar.Add("Contractor updated from Lodestone", Severity.Success);
+        Snackbar.Add("Freelancer updated from Lodestone", Severity.Success);
     }
 
     private void SelectCrafter(TradeCrafterProfile crafter)
@@ -1290,18 +1317,18 @@
         var saved = await SaveCrafterAsync(crafterToSave);
         if (!saved)
         {
-            Snackbar.Add("Failed to save contractor.", Severity.Error);
+            Snackbar.Add("Failed to save freelancer.", Severity.Error);
             return;
         }
 
         await ReloadAsync();
         if (!string.IsNullOrWhiteSpace(_loadError) ||
-            !SelectCrafterAfterReload(crafterId, "Contractor was saved, but it could not be loaded."))
+            !SelectCrafterAfterReload(crafterId, "Freelancer was saved, but it could not be loaded."))
         {
             return;
         }
 
-        Snackbar.Add("Contractor saved", Severity.Success);
+        Snackbar.Add("Freelancer saved", Severity.Success);
     }
 
     private int GetJobLevel(TradeCraftingJob job)
@@ -1438,7 +1465,7 @@
             TradeOrderStatus.ReadyToAssign => "Ready to Assign",
             TradeOrderStatus.Assigned => "Assigned",
             TradeOrderStatus.InProgress => "Crafting",
-            TradeOrderStatus.AwaitingDelivery => "Ready for Delivery",
+            TradeOrderStatus.AwaitingDelivery => "Awaiting Delivery Review",
             TradeOrderStatus.ResolutionRequired => "Resolution Required",
             _ => status.ToString()
         };

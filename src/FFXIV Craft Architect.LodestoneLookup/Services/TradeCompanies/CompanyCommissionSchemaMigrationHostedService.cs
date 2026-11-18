@@ -81,19 +81,19 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
                 hosted.Object.PayloadJson,
                 JsonOptions);
         }
-        catch (JsonException)
+        catch (JsonException exception)
         {
-            logger.LogError(
-                "Company commission migration skipped unreadable hosted order {OrderId}.",
-                hosted.Object.ObjectId);
+            logger.LogWarning(exception,
+                "Company commission migration skipped unreadable hosted order {OrderId}: {Reason}",
+                hosted.Object.ObjectId, exception.Message);
             return;
         }
         if (order == null ||
             order.Id == Guid.Empty ||
             order.CompanyProfileId == Guid.Empty)
         {
-            logger.LogError(
-                "Company commission migration skipped invalid hosted order {OrderId}.",
+            logger.LogWarning(
+                "Company commission migration skipped order {OrderId}: missing order or company identity.",
                 hosted.Object.ObjectId);
             return;
         }
@@ -169,16 +169,15 @@ public sealed class CompanyCommissionSchemaMigrationHostedService(
                 exception.Message,
                 timeProvider.GetUtcNow().UtcDateTime);
             diagnostics.Record(diagnostic);
-            logger.LogError(
-                exception,
-                "Company commission migration failed for company {CompanyId}, order {OrderId}.",
-                companyId,
-                order.Id);
+            logger.LogWarning(exception,
+                "Company commission migration failed for company {CompanyId}, order {OrderId}: {Reason}",
+                companyId, order.Id, exception.Message);
         }
     }
 
     internal static bool RequiresMigration(TradeOrder order) =>
         order.CompanyCommission == null
             ? order.AuthoringSchemaVersion < TradeOrder.CurrentAuthoringSchemaVersion
-            : TradeCompanyCommissionMigrationService.RequiresAssignedClaimRepair(order);
+            : order.CompanyCommission.SchemaVersion != TradeCompanyCommission.CurrentSchemaVersion ||
+              TradeCompanyCommissionMigrationService.RequiresAssignedClaimRepair(order);
 }

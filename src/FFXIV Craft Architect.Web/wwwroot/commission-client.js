@@ -63,16 +63,19 @@ const enumMaps = {
         "SettlementPaymentAttestationRetracted",
         "DraftUpdated",
         "ClaimResolutionRequired",
-        "CommissionReopened"
+        "CommissionReopened",
+        "DeliveryHandoffRecorded"
     ]
 };
 
 export class CommissionClientError extends Error {
-    constructor(message, code = "unknown", status = 0) {
+    constructor(message, code = "unknown", status = 0, details = null) {
         super(message);
         this.name = "CommissionClientError";
         this.code = code;
         this.status = status;
+        // The refusal body as sent, for coded errors that carry data (claim_price_changed).
+        this.details = details;
     }
 }
 
@@ -162,6 +165,23 @@ export class CommissionBriefApiClient {
                 cache: "no-store",
                 redirect: "error"
             }));
+    }
+
+    // Whether the signed-in account may claim this commission without a claim link
+    // (company members, and freelancers the company shares open commissions with).
+    async loadAccountClaimStanding(accessKey) {
+        const key = requiredCapability(accessKey, "Account access key");
+        const result = requiredObject(await adaptResponse(await this.fetch(
+            `${this.briefPath}/account-claim`,
+            {
+                headers: {
+                    "Accept": "application/json",
+                    "X-Profile-Key": key
+                },
+                cache: "no-store",
+                redirect: "error"
+            })), "Account claim standing");
+        return { eligible: requiredBoolean(result.eligible, "Account claim eligibility") };
     }
 
     async loadMembershipStanding(accessKey) {
@@ -948,10 +968,19 @@ export async function loadPortableCommissionProjection(
             caught instanceof CommissionClientError &&
             caught.status === 401 &&
             Boolean(loadSecret && access?.pending);
-        if (!pendingAuthorityIsNotInstalled) throw caught;
+        // A saved participant credential the host rejects belongs to a claim that ended
+        // (released, replaced, or revoked); this browser falls back to the public view.
+        const savedParticipantWasRevoked =
+            caught instanceof CommissionClientError &&
+            caught.status === 401 &&
+            !hasAuthorityFragment &&
+            !access?.pending &&
+            Boolean(loadSecret && loadSecret === access?.participantSecret);
+        if (!pendingAuthorityIsNotInstalled && !savedParticipantWasRevoked) throw caught;
         return {
             projection: await client.load(),
-            participantCapability
+            participantCapability,
+            discardSavedAccess: savedParticipantWasRevoked
         };
     }
 }
@@ -1130,10 +1159,20 @@ async function adaptResponse(response) {
         return payload;
     }
 
-    const code = optionalText(payload?.errorCode ?? payload?.error ?? payload?.code) ??
+    const code = optionalText(payload?.errorCode) ??
+        optionalText(payload?.error) ??
+        optionalText(payload?.code) ??
+        optionalText(payload?.error?.code) ??
         statusCode(response.status);
-    const message = optionalText(payload?.errorMessage ?? payload?.message) ?? statusMessage(response.status);
-    throw new CommissionClientError(message, code, response.status);
+    const message = optionalText(payload?.errorMessage) ??
+        optionalText(payload?.message) ??
+        optionalText(payload?.error?.message) ??
+        statusMessage(response.status);
+    throw new CommissionClientError(
+        message,
+        code,
+        response.status,
+        payload && typeof payload === "object" ? payload : null);
 }
 
 function adaptPublicBrief(source) {
@@ -1270,7 +1309,7 @@ function adaptPublicGates(value) {
 function adaptPublicProgress(value) {
     const requiredQuantity = requiredInteger(value.requiredQuantity, "Required quantity", 1);
     const completedQuantity = requiredInteger(value.completedQuantity, "Completed quantity", 0);
-    const readyQuantity = requiredInteger(value.readyQuantity, "Ready quantity", 0);
+    const readyQuantity = requiredInteger(value.readyQuantity, "Compatibility delivery quantity", 0);
     const acceptedQuantity = requiredInteger(value.acceptedQuantity, "Accepted quantity", 0);
     if (completedQuantity > requiredQuantity ||
         readyQuantity > completedQuantity ||
@@ -1319,7 +1358,10 @@ function adaptParticipantActivity(value) {
         actorDisplayName: optionalText(value.actorDisplayName),
         sourceSurface: requiredEnum(value.sourceSurface, enumMaps.sourceSurface, "Activity source"),
         createdAtUtc: requiredDate(value.createdAtUtc, "Activity time"),
-        kind: requiredEnum(value.kind, enumMaps.activityKind, "Activity kind"),
+        kind: Number.isSafeInteger(value.kind) && value.kind >= enumMaps.activityKind.length ||
+            typeof value.kind === "string" && value.kind && !enumMaps.activityKind.includes(value.kind)
+            ? "CommissionActivity"
+            : requiredEnum(value.kind, enumMaps.activityKind, "Activity kind"),
         termsVersion: requiredInteger(value.termsVersion, "Activity terms version", 1),
         comment: optionalText(value.comment)
     };

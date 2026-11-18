@@ -8,11 +8,13 @@ namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
 
 public sealed record MembershipRequestBody(string? RequestNote);
 public sealed record MembershipTransitionBody(string? Reason);
+public sealed record CompanyOwnershipTransferBody(
+    Guid TargetProfileId,
+    string PreviousOwnerDisposition,
+    Guid IdempotencyKey,
+    string ExpectedScopeFingerprint);
 public sealed record LegacyCrafterBindingBody(Guid AccountProfileId);
 public sealed record MembershipRoleUpdateBody(string Role);
-public sealed record OwnershipTransferBody(
-    Guid TargetAccountProfileId,
-    string? FormerOwnerRole);
 public sealed record MembershipInvitationIssueBody(
     Guid? LegacyCrafterId,
     DateTimeOffset? ExpiresAtUtc,
@@ -50,6 +52,17 @@ public sealed record MembershipResponse(
     bool HasMembership);
 
 public sealed record MembershipErrorResponse(string Error, string Message);
+public sealed record CompanyOwnershipTransferReceiptResponse(
+    Guid TransferId,
+    Guid IdempotencyKey,
+    string CompanyId,
+    Guid SourceProfileId,
+    Guid TargetProfileId,
+    string PreviousOwnerDisposition,
+    string ScopeFingerprint,
+    CompanyOwnershipTransferCounts Counts,
+    DateTimeOffset CommittedAtUtc,
+    DateTimeOffset? MembershipProjectedAtUtc);
 public sealed record MembershipNotificationPreferenceBody(
     bool ActionRequired,
     bool CommissionerMessages,
@@ -77,7 +90,8 @@ public sealed record CompanyMemberResponse(
     string State,
     DateTimeOffset RequestedAtUtc,
     DateTimeOffset? DecidedAtUtc,
-    bool DiscordLinked);
+    bool DiscordLinked,
+    bool CanReceiveOwnership);
 public sealed record LegacyCrafterCandidateResponse(
     Guid LegacyCrafterId,
     string DisplayName,
@@ -226,6 +240,16 @@ public static class MembershipEndpoints
                 var current = await memberships.LoadForCompanyAsync(
                     authorization.CompanyId,
                     cancellationToken);
+                var viewerProfileId = authorization.Account!.ProfileId;
+                var hosted = await profiles.FindObjectAsync(
+                    ProfileSyncCollections.TradeCompanyProfiles,
+                    authorization.CompanyId.ToString(),
+                    cancellationToken);
+                var viewerIsCanonicalHost = hosted != null &&
+                    string.Equals(
+                        hosted.ProfileId,
+                        viewerProfileId.ToString("D"),
+                        StringComparison.OrdinalIgnoreCase);
                 var response = new List<CompanyMemberResponse>(current.Count);
                 foreach (var membership in current)
                 {
@@ -243,10 +267,87 @@ public static class MembershipEndpoints
                             membership.DecidedAtUtc,
                             await identities.LoadByProfileAsync(
                                 membership.AccountProfileId,
-                                cancellationToken) != null));
+                                cancellationToken) != null,
+                            viewerIsCanonicalHost &&
+                                membership.State == MembershipState.Active &&
+                                membership.AccountProfileId != viewerProfileId));
                     }
                 }
                 return Results.Ok(response);
+            });
+
+        companies.MapGet(
+            "/{companyId}/ownership-transfer/preview/{targetProfileId:guid}",
+            async (
+                string companyId,
+                Guid targetProfileId,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                CompanyOwnershipTransferService transfers,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                if (!CompanyId.TryParse(companyId, out var parsed))
+                {
+                    return Results.NotFound();
+                }
+
+                return ToOwnershipTransferResult(await transfers.PreviewAsync(
+                    parsed, account.ProfileId, targetProfileId, cancellationToken));
+            });
+
+        companies.MapPost(
+            "/{companyId}/ownership-transfer",
+            async (
+                string companyId,
+                CompanyOwnershipTransferBody body,
+                HttpRequest request,
+                ProfileHostOptions options,
+                MembershipAccessResolver accessResolver,
+                CompanyOwnershipTransferService transfers,
+                CancellationToken cancellationToken) =>
+            {
+                if (!options.Enabled)
+                {
+                    return Results.NotFound();
+                }
+
+                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
+                if (account == null)
+                {
+                    return Results.Unauthorized();
+                }
+
+                if (!CompanyId.TryParse(companyId, out var parsed))
+                {
+                    return Results.NotFound();
+                }
+
+                if (!Enum.TryParse<PreviousOwnerDisposition>(body.PreviousOwnerDisposition, true, out var disposition))
+                {
+                    return Results.BadRequest(new MembershipErrorResponse(
+                        "invalid_previous_owner_disposition",
+                        "Choose whether the previous owner remains an Operator or is revoked."));
+                }
+                return ToOwnershipTransferResult(await transfers.TransferAsync(
+                    parsed,
+                    account.ProfileId,
+                    body.TargetProfileId,
+                    disposition,
+                    body.IdempotencyKey,
+                    body.ExpectedScopeFingerprint,
+                    cancellationToken));
             });
 
         companies.MapGet(
@@ -380,7 +481,7 @@ public static class MembershipEndpoints
                 {
                     return Results.BadRequest(new MembershipErrorResponse(
                         "invalid_crafter_binding",
-                        "Choose a company member and a contractor record from this company."));
+                        "Choose a company member and a freelancer record from this company."));
                 }
 
                 var result = await memberships.BindCrafterAsync(
@@ -401,7 +502,7 @@ public static class MembershipEndpoints
                                 result.Binding.CreatedAtUtc)),
                     _ => Results.Conflict(new MembershipErrorResponse(
                         "crafter_already_connected",
-                        "That contractor record is already connected to another account."))
+                        "That freelancer record is already connected to another account."))
                 };
             });
 
@@ -835,67 +936,6 @@ public static class MembershipEndpoints
                     _ => Results.Conflict(new MembershipErrorResponse(
                         "membership_not_active",
                         "The member is not an active non-owner membership."))
-                };
-            });
-
-        companies.MapPost(
-            "/{companyId}/ownership-transfer",
-            async (
-                string companyId,
-                OwnershipTransferBody body,
-                HttpRequest request,
-                ProfileHostOptions options,
-                MembershipAccessResolver accessResolver,
-                ProfileHostedTradeCompanyService companyService,
-                SqliteMembershipStore memberships,
-                CancellationToken cancellationToken) =>
-            {
-                if (!options.Enabled)
-                {
-                    return Results.NotFound();
-                }
-                var account = await accessResolver.ResolveAccountAsync(request, cancellationToken);
-                if (account == null)
-                {
-                    return Results.Unauthorized();
-                }
-                if (!CompanyId.TryParse(companyId, out var parsedCompanyId) ||
-                    await companyService.LoadPublicCompanyProfileAsync(parsedCompanyId, cancellationToken) == null)
-                {
-                    return Results.NotFound();
-                }
-
-                MembershipRole formerOwnerRole = MembershipRole.Operator;
-                if (!string.IsNullOrWhiteSpace(body.FormerOwnerRole))
-                {
-                    if (!Enum.TryParse<MembershipRole>(body.FormerOwnerRole, ignoreCase: true, out var parsedFormer) ||
-                        parsedFormer is not (MembershipRole.Operator or MembershipRole.Crafter))
-                    {
-                        return Results.BadRequest(new MembershipErrorResponse(
-                            "invalid_membership_role",
-                            "Former owner role must be 'operator' or 'crafter'."));
-                    }
-                    formerOwnerRole = parsedFormer;
-                }
-
-                var result = await memberships.TransferOwnershipAsync(
-                    parsedCompanyId,
-                    body.TargetAccountProfileId,
-                    account.ProfileId,
-                    formerOwnerRole,
-                    cancellationToken);
-                return result.Status switch
-                {
-                    MembershipRoleMutationStatus.Applied or MembershipRoleMutationStatus.Replayed => Results.Ok(
-                        ToResponse(result.Membership!)),
-                    MembershipRoleMutationStatus.NotFound => Results.NotFound(),
-                    MembershipRoleMutationStatus.NotAuthorized => Results.StatusCode(StatusCodes.Status403Forbidden),
-                    MembershipRoleMutationStatus.ForbiddenRole => Results.BadRequest(new MembershipErrorResponse(
-                        "invalid_membership_role",
-                        "Former owner role must be 'operator' or 'crafter'.")),
-                    _ => Results.Conflict(new MembershipErrorResponse(
-                        "ownership_transfer_unavailable",
-                        "Ownership requires a single active owner and a different active member to receive it."))
                 };
             });
 
@@ -1428,6 +1468,33 @@ public static class MembershipEndpoints
             membership.DecidedByProfileId,
             membership.RequestNote,
             true);
+
+    private static IResult ToOwnershipTransferResult(CompanyOwnershipTransferResult result) =>
+        result.Status switch
+        {
+            CompanyOwnershipTransferStatus.Applied or CompanyOwnershipTransferStatus.Replayed =>
+                Results.Ok(result.Receipt == null
+                    ? (object?)result.Preview
+                    : new CompanyOwnershipTransferReceiptResponse(
+                        result.Receipt.TransferId,
+                        result.Receipt.IdempotencyKey,
+                        result.Receipt.CompanyId.ToString(),
+                        result.Receipt.SourceProfileId,
+                        result.Receipt.TargetProfileId,
+                        result.Receipt.PreviousOwnerDisposition.ToString().ToLowerInvariant(),
+                        result.Receipt.ScopeFingerprint,
+                        result.Receipt.Counts,
+                        result.Receipt.CommittedAtUtc,
+                        result.Receipt.MembershipProjectedAtUtc)),
+            CompanyOwnershipTransferStatus.NotFound => Results.NotFound(),
+            CompanyOwnershipTransferStatus.Forbidden => Results.Json(
+                new MembershipErrorResponse("ownership_transfer_forbidden", result.Error ?? "Ownership transfer is not allowed."),
+                statusCode: StatusCodes.Status403Forbidden),
+            CompanyOwnershipTransferStatus.InvalidTarget => Results.BadRequest(
+                new MembershipErrorResponse("invalid_ownership_transfer_target", result.Error ?? "Choose an active company member.")),
+            _ => Results.Conflict(
+                new MembershipErrorResponse("ownership_transfer_conflict", result.Error ?? "The company changed before ownership could be transferred."))
+        };
 
     private static MembershipInvitationResponse ToInvitationResponse(
         CompanyMembershipInvitation invitation,

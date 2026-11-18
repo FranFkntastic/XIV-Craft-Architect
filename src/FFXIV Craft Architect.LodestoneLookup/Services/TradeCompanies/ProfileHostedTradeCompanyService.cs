@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 using FFXIV_Craft_Architect.LodestoneLookup.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.TradeCompanies;
@@ -580,20 +581,6 @@ public sealed partial class ProfileHostedTradeCompanyService(
         return new CompanyRecordRevision(profile.ServerRevision);
     }
 
-    public async Task<(TradeCompanyProfile Profile, long Revision)?> LoadCompanyProfileSnapshotAsync(
-        TradeCompanyAccessContext access, CancellationToken cancellationToken = default)
-    {
-        var stored = await profiles.LoadObjectAsync(RequireHostProfile(access),
-            ProfileSyncCollections.TradeCompanyProfiles, access.CompanyId.ToString(), cancellationToken);
-        if (stored is not { Deleted: false })
-        {
-            return null;
-        }
-
-        var profile = JsonSerializer.Deserialize<TradeCompanyProfile>(stored.PayloadJson, JsonOptions);
-        return profile?.Id == access.CompanyId.Value ? (profile, stored.Revision) : null;
-    }
-
     public async Task<TradeCompanyProfile?> LoadCompanyProfileAsync(
         TradeCompanyAccessContext access,
         CancellationToken cancellationToken = default) =>
@@ -601,6 +588,115 @@ public sealed partial class ProfileHostedTradeCompanyService(
             RequireHostProfile(access),
             access.CompanyId,
             cancellationToken);
+
+    public async Task<TradeCompanyProfileSnapshot?> LoadCompanyProfileSnapshotAsync(
+        TradeCompanyAccessContext access,
+        CancellationToken cancellationToken = default)
+    {
+        var stored = await profiles.LoadObjectAsync(
+            RequireHostProfile(access),
+            ProfileSyncCollections.TradeCompanyProfiles,
+            access.CompanyId.ToString(),
+            cancellationToken);
+        if (stored is not { Deleted: false })
+        {
+            return null;
+        }
+
+        try
+        {
+            var profile = JsonSerializer.Deserialize<TradeCompanyProfile>(stored.PayloadJson, JsonOptions);
+            return profile?.Id == access.CompanyId.Value
+                ? new TradeCompanyProfileSnapshot(profile, new CompanyRecordRevision(stored.Revision))
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    public async Task<CompanyHubMutationResult> UpdateCompanyProfileAsync(
+        TradeCompanyAccessContext access,
+        CompanyRecordRevision expectedRevision,
+        string name,
+        string? description,
+        string? commissionContact,
+        TradePaymentPolicy? paymentPolicy,
+        TradeMaterialPricingPolicy? materialPricingPolicy,
+        CancellationToken cancellationToken = default,
+        TradeCompanyPricingScope? commissionPricingScope = null,
+        bool updateCommissionPricingScope = false,
+        IReadOnlyList<TradeMarginItem>? marginItems = null,
+        bool updateMarginItems = false,
+        bool? freelancerOpenCommissions = null,
+        bool preserveMaterialValueBonus = false)
+    {
+        var snapshot = await LoadCompanyProfileSnapshotAsync(access, cancellationToken);
+        if (snapshot == null)
+        {
+            return new CompanyHubMutationResult(CompanyHubMutationStatus.NotFound);
+        }
+        if (snapshot.Revision != expectedRevision)
+        {
+            return new CompanyHubMutationResult(
+                CompanyHubMutationStatus.Conflict,
+                snapshot.Revision.Value,
+                "company_profile_revision_conflict",
+                "The company profile changed before the update completed.");
+        }
+
+        var updated = JsonSerializer.Deserialize<TradeCompanyProfile>(
+            JsonSerializer.Serialize(snapshot.Profile, JsonOptions),
+            JsonOptions)
+            ?? throw new InvalidOperationException("The company profile could not be copied.");
+        updated.Name = name.Trim();
+        updated.Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+        updated.CommissionContact = string.IsNullOrWhiteSpace(commissionContact) ? null : commissionContact.Trim();
+        var storedPolicy = TradePaymentPolicyNormalizer.Normalize(updated.PaymentPolicy);
+        updated.PaymentPolicy = TradePaymentPolicyNormalizer.Normalize(
+            preserveMaterialValueBonus && paymentPolicy != null
+                ? paymentPolicy with { MaterialValueBonusPercent = storedPolicy.MaterialValueBonusPercent, LegacyCommissionPercent = null }
+                : paymentPolicy ?? storedPolicy);
+        updated.MaterialPricingPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(
+            materialPricingPolicy ?? updated.MaterialPricingPolicy);
+        updated.SchemaVersion = TradeCompanyProfile.CurrentSchemaVersion;
+        if (updateCommissionPricingScope)
+        {
+            updated.CommissionPricingScope = commissionPricingScope;
+        }
+        if (updateMarginItems)
+        {
+            updated.MarginItems = marginItems ?? [];
+        }
+        if (freelancerOpenCommissions is { } freelancers)
+        {
+            updated.FreelancerOpenCommissions = freelancers;
+        }
+        updated.UpdatedAtUtc = DateTime.UtcNow;
+        updated.SyncState = TradeSyncState.Synced;
+
+        var put = await profiles.PutObjectAsync(
+            RequireHostProfile(access),
+            ProfileSyncCollections.TradeCompanyProfiles,
+            access.CompanyId.ToString(),
+            JsonSerializer.Serialize(updated, JsonOptions),
+            expectedRevision.Value,
+            cancellationToken,
+            allowCompanyCollection: true,
+            updateMarginItems: updateMarginItems,
+            updateFreelancerOpenCommissions: freelancerOpenCommissions.HasValue);
+        var appliedRevision = put.Object?.Revision ?? put.RemoteObject?.Revision;
+        return put.Success && appliedRevision.HasValue
+            ? new CompanyHubMutationResult(
+                CompanyHubMutationStatus.Applied,
+                appliedRevision.Value)
+            : new CompanyHubMutationResult(
+                put.Conflict ? CompanyHubMutationStatus.Conflict : CompanyHubMutationStatus.Invalid,
+                put.Object?.Revision,
+                put.ErrorCode,
+                put.ErrorMessage);
+    }
 
     public async Task<(TradeCompanyRecordEnvelope Envelope, TradeOrder Order)?> LoadPublicOrderAsync(
         TradeCompanyPublicationOwnership ownership,
@@ -866,3 +962,7 @@ public sealed partial class ProfileHostedTradeCompanyService(
     private static TradeCompanyMutationResult Rejected(string code, string message) =>
         new(TradeCompanyMutationStatus.Rejected, null, ErrorCode: code, ErrorMessage: message);
 }
+
+public sealed record TradeCompanyProfileSnapshot(
+    TradeCompanyProfile Profile,
+    CompanyRecordRevision Revision);

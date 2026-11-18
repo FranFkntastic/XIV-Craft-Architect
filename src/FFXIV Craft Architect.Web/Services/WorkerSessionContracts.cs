@@ -147,7 +147,9 @@ public sealed record WorkerSessionOperationProjection(
     bool IsActive,
     string StatusMessage);
 
-public sealed record WorkerTradeProjectionRequest(bool IncludeCraftLabor = false);
+public sealed record WorkerTradeProjectionRequest(
+    bool IncludeCraftLabor = false,
+    TradeMaterialPricingPolicy? MaterialPricingPolicy = null);
 
 public sealed record WorkerTradeProjection(
     long Revision,
@@ -168,6 +170,8 @@ public sealed record WorkerTradeProjection(
     IReadOnlyList<WorkerAcquisitionRowProjection> AcquisitionRows,
     IReadOnlyList<TradeOrderCraftLaborSnapshot> CraftLabor,
     IReadOnlyList<string> Warnings,
+    TradeMaterialQuote? MaterialQuote = null,
+    string? MaterialQuoteFailureReason = null,
     IReadOnlyList<WorkerPlanOccurrence>? PlanOccurrences = null);
 
 // Occurrence identity, not presentation strings, defines acquisition ancestry.

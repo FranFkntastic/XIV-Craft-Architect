@@ -205,7 +205,7 @@ public static class CommissionBriefEndpoints
                 HttpContext context,
                 string publicId,
                 CommissionBriefOptions options,
-                SqliteCommissionBriefStore store,
+                ProfileHostedTradeCompanyService companies,
                 MembershipAccessResolver accessResolver,
                 SqliteMembershipStore memberships,
                 SqliteDiscordIdentityStore identities,
@@ -223,13 +223,15 @@ public static class CommissionBriefEndpoints
                     return Results.Unauthorized();
                 }
 
-                var brief = await store.LoadAsync(publicId, ct);
-                if (brief?.Ownership == null)
+                // The host's canonical publication record names the owning company,
+                // not the brief-store snapshot taken at publish time.
+                var ownership = await companies.ResolvePublicationOwnershipAsync(publicId, ct);
+                if (ownership == null)
                 {
                     return Results.NotFound();
                 }
 
-                var companyId = brief.Ownership.CompanyId;
+                var companyId = ownership.CompanyId;
                 var access = await accessResolver.ResolveCompanyAccessAsync(account, companyId, ct);
                 var membership = await memberships.LoadForAccountAsync(companyId, account.ProfileId, ct);
                 var hasDiscordIdentity =
@@ -429,13 +431,16 @@ public static class CommissionBriefEndpoints
                     }
                 }
 
+                // Exercise the complete binding/terms validation before exposing a public brief.
+                // In particular, legacy orders are not covered by the canonical-terms check above.
+                // An already-committed publication (an idempotent retry after a lost response) is
+                // returned below without rebinding, so it must not be re-validated here: its terms
+                // may have moved on, or a crafter may already hold the claim.
                 var committedPublication = alreadyBound &&
                     order.CompanyCommission?.PublicMetadata.ViewState ==
                     CompanyCommissionPublicViewState.Published;
                 if (!committedPublication)
                 {
-                    // Exercise the complete binding/terms validation before exposing a public brief.
-                    // In particular, legacy orders are not covered by the canonical-terms check above.
                     try
                     {
                         var candidate = new PublishedCommissionBrief
@@ -470,8 +475,8 @@ public static class CommissionBriefEndpoints
                             message = exception.Message
                         });
                     }
-
                 }
+
                 PublishedCommissionBrief published;
                 try
                 {
@@ -578,6 +583,8 @@ public static class CommissionBriefEndpoints
                     {
                         if (!alreadyBound)
                         {
+                            // Only roll back a brief this request created; a retry must never
+                            // discard a publication the order already references.
                             await store.DiscardCompanyOwnedAsync(published.PublicId, ownership, CancellationToken.None);
                         }
                         loggerFactory.CreateLogger(nameof(CommissionBriefEndpoints)).LogWarning(

@@ -14,11 +14,24 @@ public sealed class TradePaymentCalculator
         var laborInputs = request.CraftLabor ?? [];
         ValidateInputs(materials, laborInputs, policy);
         var estimatedProcurementTotal = RoundGil(materials.Sum(material => material.UnitCost * material.Quantity));
-        var materialReimbursementTotal = RoundGil(materials
-            .Where(material =>
-                material.Responsibility == CommissionMaterialResponsibility.Crafter &&
-                !material.IsOnHand)
-            .Sum(material => material.UnitCost * material.Quantity));
+        var materialQuoteAvailable = !request.RequireMaterialRouteQuote ||
+            request.MaterialRouteCashRequired.HasValue;
+        var materialQuoteUnavailableReason = string.IsNullOrWhiteSpace(
+            request.MaterialRouteUnavailableReason)
+            ? "Executable material quote is unavailable."
+            : request.MaterialRouteUnavailableReason.Trim();
+        var routeCashReimbursement = request.MaterialRouteCashRequired.HasValue
+            ? RoundGil(Math.Max(0m, request.MaterialRouteCashRequired.Value))
+            : request.RequireMaterialRouteQuote
+                ? 0m
+                : RoundGil(materials
+                    .Where(material =>
+                        material.Responsibility == CommissionMaterialResponsibility.Crafter &&
+                        !material.IsOnHand)
+                    .Sum(material => material.UnitCost * material.Quantity));
+        var materialReimbursementTotal = routeCashReimbursement > 0
+            ? routeCashReimbursement + RoundGil(Math.Max(0m, request.MaterialSafetyAllowance))
+            : 0m;
         var providedMaterialTotal = RoundGil(materials
             .Where(material => material.Responsibility == CommissionMaterialResponsibility.Provided)
             .Sum(material => material.UnitCost * material.Quantity));
@@ -31,11 +44,16 @@ public sealed class TradePaymentCalculator
         var legacy = BuildLegacy(
             policy,
             materialReimbursementTotal,
-            estimatedProcurementTotal);
+            estimatedProcurementTotal,
+            materialQuoteAvailable,
+            materialQuoteUnavailableReason);
         var labor = BuildLaborStandard(
             policy,
             laborInputs,
-            materialReimbursementTotal);
+            materialReimbursementTotal,
+            estimatedProcurementTotal,
+            materialQuoteAvailable,
+            materialQuoteUnavailableReason);
         var active = policy.ActiveContract == TradePaymentContractMode.LaborStandard
             ? labor
             : legacy;
@@ -67,9 +85,10 @@ public sealed class TradePaymentCalculator
         IReadOnlyList<TradeCraftLaborInput> laborInputs,
         TradePaymentPolicy policy)
     {
-        if (policy.LegacyCommissionPercent is < 0 or > 100)
+        if (policy.MaterialValueBonusPercent is < 0 or > 100 ||
+            policy.LegacyCommissionPercent is < 0 or > 100)
         {
-            throw new ArgumentOutOfRangeException(nameof(policy), "Legacy commission percent must be between 0 and 100.");
+            throw new ArgumentOutOfRangeException(nameof(policy), "Material value bonus percent must be between 0 and 100.");
         }
 
         if (policy.LaborGilPerSynth <= 0)
@@ -91,10 +110,19 @@ public sealed class TradePaymentCalculator
     private static TradePaymentContractBreakdown BuildLegacy(
         TradePaymentPolicy policy,
         decimal materialReimbursementTotal,
-        decimal estimatedProcurementTotal)
+        decimal estimatedProcurementTotal,
+        bool materialQuoteAvailable,
+        string materialQuoteUnavailableReason)
     {
-        var percent = policy.LegacyCommissionPercent;
-        var commission = RoundGil(estimatedProcurementTotal * percent / 100m);
+        if (!materialQuoteAvailable)
+        {
+            return UnavailableContract(
+                TradePaymentContractMode.LegacyCommission,
+                materialQuoteUnavailableReason);
+        }
+
+        var percent = policy.LegacyCommissionPercent ?? policy.MaterialValueBonusPercent;
+        var commission = MaterialValueBonus(estimatedProcurementTotal, percent);
 
         return new TradePaymentContractBreakdown(
             TradePaymentContractMode.LegacyCommission,
@@ -113,8 +141,18 @@ public sealed class TradePaymentCalculator
     private static TradePaymentContractBreakdown BuildLaborStandard(
         TradePaymentPolicy policy,
         IReadOnlyList<TradeCraftLaborInput> laborInputs,
-        decimal materialReimbursementTotal)
+        decimal materialReimbursementTotal,
+        decimal estimatedProcurementTotal,
+        bool materialQuoteAvailable,
+        string materialQuoteUnavailableReason)
     {
+        if (!materialQuoteAvailable)
+        {
+            return UnavailableContract(
+                TradePaymentContractMode.LaborStandard,
+                materialQuoteUnavailableReason);
+        }
+
         var activeInputs = laborInputs.Where(input => input.CraftCount > 0).ToArray();
         if (activeInputs.Length == 0)
         {
@@ -139,6 +177,7 @@ public sealed class TradePaymentCalculator
             .ToArray();
         var craftLaborTotal = RoundGil(lines.Sum(line => line.LaborTotal));
         var synthCount = lines.Sum(line => line.CraftCount);
+        var materialBonus = MaterialValueBonus(estimatedProcurementTotal, policy.MaterialValueBonusPercent);
         var warnings = lines
             .SelectMany(line => line.Warnings)
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
@@ -150,12 +189,12 @@ public sealed class TradePaymentCalculator
             TradePaymentContractMode.LaborStandard,
             IsAvailable: true,
             materialReimbursementTotal,
-            CommissionPercent: 0m,
-            CommissionAmount: 0m,
+            policy.MaterialValueBonusPercent,
+            materialBonus,
             craftLaborTotal,
             synthCount,
             gilPerSynth,
-            materialReimbursementTotal + craftLaborTotal,
+            materialReimbursementTotal + materialBonus + craftLaborTotal,
             lines,
             warnings);
     }
@@ -175,6 +214,54 @@ public sealed class TradePaymentCalculator
             CraftLaborLines: [],
             Warnings: [warning]);
     }
+
+    private static TradePaymentContractBreakdown UnavailableContract(
+        TradePaymentContractMode contract,
+        string warning)
+    {
+        return new TradePaymentContractBreakdown(
+            contract,
+            IsAvailable: false,
+            MaterialReimbursementTotal: 0m,
+            CommissionPercent: 0m,
+            CommissionAmount: 0m,
+            CraftLaborTotal: 0m,
+            CraftSynthCount: 0,
+            GilPerSynth: 0m,
+            Total: 0m,
+            CraftLaborLines: [],
+            Warnings: [warning]);
+    }
+
+    public static (decimal Cash, decimal Allowance) CrafterShare(TradeMaterialQuote? quote,
+        IReadOnlySet<(int ItemId, bool RequiresHq)> reimbursable)
+    {
+        var cash = quote?.Lines.Where(line => reimbursable.Contains((line.ItemId, line.RequiresHq)))
+            .Sum(line => line.CashRequired) ?? 0m;
+        return (cash, quote is { RouteCashRequired: > 0 } ? RoundGil(quote.SafetyAllowance * cash / quote.RouteCashRequired) : 0m);
+    }
+
+    public static TradeMaterialQuote ProjectCrafterQuote(TradeMaterialQuote quote,
+        IReadOnlySet<(int ItemId, bool RequiresHq)> crafter)
+    {
+        if (quote.Lines.Any(line => line.CashRequired < 0 || line.RequiredQuantity <= 0) ||
+            quote.SafetyAllowance < 0 || quote.RouteCashRequired != quote.Lines.Sum(line => line.CashRequired) ||
+            quote.MaterialReimbursement != quote.RouteCashRequired + quote.SafetyAllowance)
+        {
+            throw new InvalidOperationException("The source quote does not reconcile to its purchase lines.");
+        }
+        var (cash, allowance) = CrafterShare(quote, crafter);
+        return quote with
+        {
+            Lines = quote.Lines.Where(line => crafter.Contains((line.ItemId, line.RequiresHq))).ToArray(),
+            RouteCashRequired = cash,
+            SafetyAllowance = allowance,
+            MaterialReimbursement = cash + allowance
+        };
+    }
+
+    public static decimal MaterialValueBonus(decimal estimatedProcurementTotal, decimal percent) =>
+        RoundGil(RoundGil(estimatedProcurementTotal) * percent / 100m);
 
     private static decimal RoundGil(decimal value)
     {

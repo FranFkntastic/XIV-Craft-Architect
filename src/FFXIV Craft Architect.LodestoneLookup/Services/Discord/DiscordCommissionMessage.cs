@@ -1,5 +1,6 @@
 using System.Globalization;
 using FFXIV_Craft_Architect.Core.Models;
+using FFXIV_Craft_Architect.Core.Services;
 
 namespace FFXIV_Craft_Architect.LodestoneLookup.Services.Discord;
 
@@ -244,7 +245,7 @@ public static class DiscordCommissionMessage
             _ => "payment in advance"
         };
         return $"**{FormatGil(payment.Total)} total**\n" +
-            $"{payment.ContractLabel}; {schedule}\n" +
+            $"{CompanyCommissionPaymentDisplayFormatter.FormatContractLabel(payment.ContractLabel)}; {schedule}\n" +
             string.Join(" + ", components);
     }
 
@@ -258,7 +259,7 @@ public static class DiscordCommissionMessage
     }
 
     private static string EvidenceSummary(CommissionBriefEvidence evidence) =>
-        $"{evidence.CostBasis}\n" +
+        $"{CommissionCostBasisDisplay.Format(evidence.CostBasis)}\n" +
         $"{evidence.MarketScope} • {evidence.Location}\n" +
         $"Captured <t:{new DateTimeOffset(evidence.CapturedAtUtc.ToUniversalTime()).ToUnixTimeSeconds()}:R>";
 

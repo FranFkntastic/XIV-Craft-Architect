@@ -58,6 +58,7 @@ builder.Services.AddSingleton<IMarketCacheService>(services =>
     new JsonFileMarketCacheService(
         services.GetRequiredService<UniversalisService>(),
         craftAppraisalOptions.CacheDirectory));
+builder.Services.AddSingleton<ClaimMaterialPricing>();
 builder.Services.AddSingleton<CraftAppraisalPlanStore>();
 builder.Services.AddSingleton<IHostedCraftAppraisalCoordinator, HostedCraftAppraisalCoordinator>();
 builder.Services.AddSingleton(_ => new ProfileHostOptions
@@ -104,6 +105,8 @@ builder.Services.AddSingleton<SqliteMembershipStore>();
 builder.Services.AddSingleton<ITradeCompanyFounderBinder>(services =>
     services.GetRequiredService<SqliteMembershipStore>());
 builder.Services.AddSingleton<SqliteProfileHostStore>();
+builder.Services.AddSingleton<CompanyOwnershipTransferService>();
+builder.Services.AddHostedService<CompanyOwnershipTransferReconciler>();
 builder.Services.AddHostedService<ProfileHostDeepArchiveService>();
 var profileDatabasePath = builder.Configuration["ProfileHost:DatabasePath"]
     ?? Path.Combine(AppContext.BaseDirectory, "profile-host.db");
@@ -230,6 +233,11 @@ builder.Services.AddSingleton<
 builder.Services.AddSingleton<
     ICompanyCommissionPostCommitSink,
     CommissionProjectionChangePostCommitSink>();
+builder.Services.AddSingleton<AccountClaimProjectionService>();
+builder.Services.AddHostedService<AccountClaimProjectionBackfillHostedService>();
+builder.Services.AddSingleton<
+    ICompanyCommissionPostCommitSink,
+    AccountClaimProjectionPostCommitSink>();
 builder.Services.AddSingleton<CompanyCommissionMigrationDiagnostics>();
 builder.Services.AddHostedService<CompanyCommissionSchemaMigrationHostedService>();
 builder.Services.AddSingleton<DiscordRequestVerifier>();
@@ -388,6 +396,7 @@ app.MapCompanyCommissionBriefEndpoints();
 app.MapCompanyCommissionEndpoints();
 app.MapMembershipEndpoints();
 app.MapCompanyHubEndpoints();
+app.MapCrafterHubEndpoints();
 app.MapTradeCompanyWorkspaceEndpoints();
 app.MapDiscordCommissionEndpoints();
 app.MapDiscordCollaborationEndpoints();
@@ -562,6 +571,13 @@ static async Task RunProfileHostProvisioningCommandAsync(
                 var consolidation = scope.ServiceProvider
                     .GetRequiredService<CompanyCrafterConsolidationService>();
                 WriteJson(await consolidation.RunAsync(command.DryRun, cancellationToken));
+                break;
+            }
+        case ProfileHostProvisioningAction.RebuildClaimLookup:
+            {
+                var projection = scope.ServiceProvider
+                    .GetRequiredService<AccountClaimProjectionService>();
+                WriteJson(await projection.RebuildAsync(command.DryRun, cancellationToken));
                 break;
             }
         case ProfileHostProvisioningAction.RetireCompanies:

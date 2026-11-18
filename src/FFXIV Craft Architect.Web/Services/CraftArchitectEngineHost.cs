@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FFXIV_Craft_Architect.Core.Engine;
+using FFXIV_Craft_Architect.Core.Models;
 using Microsoft.JSInterop;
 
 namespace FFXIV_Craft_Architect.Web.Services;
@@ -345,11 +346,12 @@ public sealed class CraftArchitectEngineHost : IAsyncDisposable
     public Task<WorkerSessionResultEnvelope> GetTradeProjectionAsync(
         long expectedRevision,
         bool includeCraftLabor,
+        TradeMaterialPricingPolicy? materialPricingPolicy = null,
         CancellationToken cancellationToken = default) =>
         EnqueueSessionCommandAsync(
             WorkerSessionCommandKinds.TradeProjection,
             expectedRevision,
-            new WorkerTradeProjectionRequest(includeCraftLabor),
+            new WorkerTradeProjectionRequest(includeCraftLabor, materialPricingPolicy),
             includeCraftLabor
                 ? EngineCommandPriority.UserRequestedDerivation
                 : EngineCommandPriority.Interactive,

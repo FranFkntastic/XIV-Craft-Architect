@@ -59,12 +59,19 @@ public static class CompanyCommissionTermsComparison
             Add(p.Component, Money(p.Before), Money(p.After));
         }
 
-        Add("Payment timing", a.Schedule.ToString(), b.Schedule.ToString());
+        Add("Payment timing", ScheduleLabel(a.Schedule), ScheduleLabel(b.Schedule));
         Add("Custom payment terms", a.CustomTerms, b.CustomTerms);
         Add("Payment contract", a.ContractLabel, b.ContractLabel);
         Add("Labor calculation", $"{a.CraftSynthCount} × {Money(a.GilPerSynth)}", $"{b.CraftSynthCount} × {Money(b.GilPerSynth)}");
         Add("Delivery instructions", before.DeliveryInstructions, after.DeliveryInstructions);
         Add("Contact instructions", before.ContactInstructions, after.ContactInstructions);
+        static string ScheduleLabel(CompanyCommissionPaymentSchedule schedule) => schedule switch
+        {
+            CompanyCommissionPaymentSchedule.Advance => "Advance payment",
+            CompanyCommissionPaymentSchedule.OnDelivery => "Payment on delivery",
+            CompanyCommissionPaymentSchedule.Custom => "Custom timing",
+            _ => schedule.ToString()
+        };
         // Compare portable recorded provenance, not operational quote-lock/clearance metadata.
         static object Provenance(CompanyCommissionPricingEvidence evidence) =>
             (evidence.CostBasis, evidence.MarketScope, evidence.Location, evidence.CapturedAtUtc);

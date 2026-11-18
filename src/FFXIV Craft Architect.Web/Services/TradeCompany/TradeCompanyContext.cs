@@ -31,14 +31,14 @@ public static class TradeCompanyContext
         {
             throw new InvalidOperationException("The selected company workspace is unavailable to this account.");
         }
-        if (local == null)
+        if (hub != null || local == null)
         {
-            var hosted = await hubs.LoadWorkspaceProfileAsync(companyId.Value);
-            if (hosted.Id != companyId.Value)
+            var resolved = await new TradeWorkspaceProfileResolver(persistence, hubs).ResolveAsync(companyId.Value);
+            if (resolved.Profile.Id != companyId.Value)
             {
                 throw new InvalidOperationException("The selected company workspace returned a different company identity.");
             }
-            local = hosted.ToTransientProfile();
+            local = resolved.Profile;
         }
 
         await persistence.SelectWorkspaceCompanyAsync(companyId.Value);

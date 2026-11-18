@@ -4,7 +4,8 @@ using FFXIV_Craft_Architect.Core.Services;
 namespace FFXIV_Craft_Architect.Web.Services;
 
 public sealed record TradeOrderPricingWorkflowOptions(
-    bool ForceRefreshMarketData);
+    bool ForceRefreshMarketData,
+    TradeMaterialPricingPolicy? MaterialPricingPolicy = null);
 
 public sealed record TradeOrderPricingWorkflowResult(
     TradeOrderPricingWorkflowStatus Status,
@@ -165,7 +166,8 @@ public sealed class TradeOrderPricingWorkflowService
                 operation,
                 workerOperation,
                 savedAt,
-                useCurrentSettingsContext: true);
+                useCurrentSettingsContext: true,
+                materialPricingPolicy: options.MaterialPricingPolicy);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
@@ -268,6 +270,7 @@ public sealed class TradeOrderPricingWorkflowService
                 workerOperation,
                 DateTime.UtcNow,
                 useCurrentSettingsContext: true,
+                materialPricingPolicy: options.MaterialPricingPolicy,
                 initialWarnings: string.IsNullOrWhiteSpace(_projections.Shell.RestoreWarning)
                     ? []
                     : [_projections.Shell.RestoreWarning]);
@@ -309,6 +312,7 @@ public sealed class TradeOrderPricingWorkflowService
         TradeOrder order,
         WorkerAcquisitionMutation mutation,
         IReadOnlyCollection<int>? marketItemIdsToRefresh,
+        TradeMaterialPricingPolicy? materialPricingPolicy = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(order);
@@ -361,7 +365,8 @@ public sealed class TradeOrderPricingWorkflowService
                 operation,
                 workerOperation,
                 DateTime.UtcNow,
-                useCurrentSettingsContext: false);
+                useCurrentSettingsContext: false,
+                materialPricingPolicy: materialPricingPolicy);
         }
         catch (Exception ex) when (operation.ShouldReportError(ex))
         {
@@ -422,6 +427,7 @@ public sealed class TradeOrderPricingWorkflowService
         WorkerSessionOperationLease workerOperation,
         DateTime refreshedAt,
         bool useCurrentSettingsContext,
+        TradeMaterialPricingPolicy? materialPricingPolicy = null,
         IReadOnlyList<string>? initialWarnings = null)
     {
         var pricingScope = await LoadPricingScopeAsync(order, operation.Token);
@@ -461,6 +467,7 @@ public sealed class TradeOrderPricingWorkflowService
         operation.ReportStatus("Calculating the order payment...", progress: 90);
         source = await _worker.GetTradeProjectionAsync(
             includeCraftLabor: true,
+            materialPricingPolicy: materialPricingPolicy,
             cancellationToken: operation.Token)
             ?? throw new InvalidOperationException(
                 "The Worker did not publish Trade pricing evidence.");
@@ -480,7 +487,7 @@ public sealed class TradeOrderPricingWorkflowService
         order.SourceSnapshot.SourcePlanId = order.CraftPlanId;
         order.SourceSnapshot.SourcePlanName =
             order.CraftPlanName ?? TradeOrderWorkflow.CreateGeneratedCraftPlanName(order);
-        order.SourceSnapshot.CostBasis = CommissionCostBasis.SelectedAcquisitionSources;
+        order.SourceSnapshot.CostBasis = CommissionCostBasis.ProcurementRoute;
         order.SourceSnapshot.MarketFetchScope = source.MarketFetchScope;
         order.SourceSnapshot.Region = source.SelectedRegion;
         order.SourceSnapshot.DataCenter = source.SelectedDataCenter;
@@ -489,6 +496,17 @@ public sealed class TradeOrderPricingWorkflowService
         order.SourceSnapshot.MarketAnalysisVersion = source.MarketAnalysisVersion;
         order.SourceSnapshot.Materials = materials;
         order.SourceSnapshot.CraftLabor = source.CraftLabor;
+        order.SourceSnapshot.MaterialQuote = source.MaterialQuote is null
+            ? null
+            : source.MaterialQuote with
+            {
+                CompanyProfileId = order.CompanyProfileId,
+                SourcePlanId = source.PlanId,
+                PlanSessionVersion = source.PlanSessionVersion,
+                MarketAnalysisVersion = source.MarketAnalysisVersion
+            };
+        order.SourceSnapshot.MaterialQuoteFailureReason =
+            source.MaterialQuote is null ? source.MaterialQuoteFailureReason : null;
         order.SourceSnapshot.Warnings = warnings
             .Where(warning => !string.IsNullOrWhiteSpace(warning))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -535,7 +553,8 @@ public sealed class TradeOrderPricingWorkflowService
                 operationId: workerOperation.OperationId);
         }
 
-        var complete = pricedCount == source.ActiveProcurementItems.Count &&
+        var complete = source.MaterialQuote != null &&
+            pricedCount == source.ActiveProcurementItems.Count &&
             derivation.MarketPublished &&
             derivation.ProcurementPublished;
         var message = complete
@@ -572,21 +591,11 @@ public sealed class TradeOrderPricingWorkflowService
     private async Task<TradeCompanyPricingScope?> LoadPricingScopeAsync(
         TradeOrder order, CancellationToken cancellationToken)
     {
-        if (_profileSync.CurrentStatus.IsConnected)
-        {
-            try
-            {
-                var profile = await _companyHub.LoadWorkspaceProfileAsync(order.CompanyProfileId, cancellationToken);
-                return profile.CommissionPricingScope;
-            }
-            catch (TradeCompany.CompanyHubRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                // Signed in, but this company is not hosted (e.g. an imported package): use the local profile.
-            }
-        }
-
-        var profiles = await _companies.LoadCompanyProfilesAsync();
-        return profiles.FirstOrDefault(profile => profile.Id == order.CompanyProfileId)?.CommissionPricingScope;
+        // Same hosted-then-local resolution the Orders page uses, so an unhosted company
+        // still prices from its own scope while profile sync is connected.
+        var resolved = await new TradeCompany.TradeWorkspaceProfileResolver(_companies, _companyHub)
+            .ResolveAsync(order.CompanyProfileId, cancellationToken);
+        return resolved.Profile?.CommissionPricingScope;
     }
 
     private static TradeOrderPricingWorkflowResult PricingScopeRequired() =>

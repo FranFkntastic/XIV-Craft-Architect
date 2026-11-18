@@ -135,11 +135,6 @@ public partial class TradeOrders
         _isChangingProcurementSource ||
         _isCommissionCommandRunning;
 
-    private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
-    [
-        new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
-        new(nameof(TradePaymentContractMode.LaborStandard), "Labor standard")
-    ];
     private static readonly IReadOnlyList<CompactSelectOption> MaterialResponsibilityOptions =
     [
         new(nameof(CommissionMaterialResponsibility.Crafter), "Crafter"),
@@ -196,11 +191,6 @@ public partial class TradeOrders
 
     private static Guid? ParseNullableGuid(string value) =>
         Guid.TryParse(value, out var parsed) ? parsed : null;
-
-    private Task SetSelectedOrderPaymentContractValueAsync(string value) =>
-        Enum.TryParse<TradePaymentContractMode>(value, out var contract)
-            ? SetSelectedOrderPaymentContractAsync(contract)
-            : Task.CompletedTask;
 
     private Task SetSelectedOrderPaymentScheduleValueAsync(string value) =>
         Enum.TryParse<CompanyCommissionPaymentSchedule>(value, out var schedule)
@@ -450,6 +440,16 @@ public partial class TradeOrders
             _loadError = null;
             if ((await TradeOperationsPersistence.LoadCompanyProfilesAsync()).Count == 0)
             {
+                // Accounts confirmed to operate no company belong on the Crafter hub, so
+                // never start a Discord sign-in on the way out. An unconfirmed answer
+                // (host unreachable) keeps the sign-in path, which surfaces the error.
+                if (!await TradeAccess.CanOperateAsync() && TradeAccess.IsSettled)
+                {
+                    NavigationManager.NavigateTo(
+                        FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.HubRoute,
+                        replace: true);
+                    return;
+                }
                 var settings = await ProfileSyncLocalState.LoadConnectionSettingsAsync();
                 var signedIn = settings.IsConfigured &&
                     (await DiscordIdentityClient.GetStatusAsync(settings.HostUrl!, settings.AccessKey!)).Linked;
@@ -525,7 +525,6 @@ public partial class TradeOrders
 
     private async Task<TradeCompanyProfile> ResolveSelectedWorkspaceProfileAsync()
     {
-        var profiles = await TradeOperationsPersistence.LoadCompanyProfilesAsync();
         var selectedWorkspaceId =
             await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
         if (!selectedWorkspaceId.HasValue)
@@ -533,27 +532,18 @@ public partial class TradeOrders
             return await TradeOperationsPersistence.GetOrCreateActiveCompanyProfileAsync();
         }
 
-        return await ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value, profiles);
+        return await ResolveWorkspaceProfileAsync(selectedWorkspaceId.Value);
     }
 
-    private async Task<TradeCompanyProfile> ResolveWorkspaceProfileAsync(
-        Guid workspaceId,
-        IReadOnlyList<TradeCompanyProfile>? profiles = null)
+    private async Task<TradeCompanyProfile> ResolveWorkspaceProfileAsync(Guid workspaceId)
     {
-        profiles ??= await TradeOperationsPersistence.LoadCompanyProfilesAsync();
-        var local = profiles.FirstOrDefault(profile => profile.Id == workspaceId);
-        if (local != null)
-        {
-            return local;
-        }
-
-        var hosted = await CompanyHubs.LoadWorkspaceProfileAsync(workspaceId);
-        if (hosted.Id != workspaceId)
+        var resolved = await WorkspaceProfiles.ResolveAsync(workspaceId);
+        if (resolved.Profile.Id != workspaceId)
         {
             throw new InvalidOperationException(
                 "The selected company workspace returned a different company identity.");
         }
-        return hosted.ToTransientProfile();
+        return resolved.Profile;
     }
 
     private void OnHostedOrderProjectionChanged(HostedOrderProjectionSnapshot snapshot)
@@ -675,7 +665,8 @@ public partial class TradeOrders
             return;
         }
 
-        var source = await WorkerSession.GetTradeProjectionAsync();
+        var source = await WorkerSession.GetTradeProjectionAsync(
+            materialPricingPolicy: _companyProfile.MaterialPricingPolicy);
         if (source == null)
         {
             Snackbar.Add("The active Worker plan is unavailable.", Severity.Warning);

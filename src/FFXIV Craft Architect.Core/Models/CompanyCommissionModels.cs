@@ -102,7 +102,10 @@ public enum CompanyCommissionActivityKind
     SettlementPaymentAttestationRetracted,
     DraftUpdated,
     ClaimResolutionRequired,
-    CommissionReopened
+    CommissionReopened,
+
+    // Stored and sent by number: new kinds go at the end, never in the middle.
+    DeliveryHandoffRecorded
 }
 
 public enum CompanyCommissionActivityVisibility
@@ -142,13 +145,23 @@ public sealed record CompanyCommissionPaymentTerms(
     decimal Total,
     string? CustomTerms = null,
     int CraftSynthCount = 0,
-    decimal GilPerSynth = 0);
+    decimal GilPerSynth = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    decimal? MaterialAdjustmentPercent = null);
 
 public sealed record CompanyCommissionPricingEvidence(
     string CostBasis,
     string MarketScope,
     string Location,
-    DateTime CapturedAtUtc);
+    DateTime CapturedAtUtc,
+    TradeMaterialQuote? MaterialQuote = null,
+    IReadOnlyList<string>? Warnings = null,
+    string? MaterialQuoteFailureReason = null)
+{
+    // Publications and amendments with crafter materials now require the ProcurementRoute basis.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsPreRoutePricing => MaterialQuote == null && CostBasis != nameof(CommissionCostBasis.ProcurementRoute);
+}
 
 public sealed record CompanyCommissionTermsVersion
 {
@@ -171,6 +184,12 @@ public sealed record CompanyCommissionClaim(
     Guid? CrafterId,
     Guid? ClaimantCharacterId,
     CompanyCommissionClaimAccountEvidence? AccountEvidence = null);
+
+public sealed record CompanyCommissionClaimPriceReview(Guid ProfileId, int TermsVersion, Guid? ClaimCommandId = null)
+{
+    public bool IsRetry(Guid? account, Guid commandId, int? offeredVersion) =>
+        ProfileId == account && ClaimCommandId == commandId && offeredVersion == TermsVersion - 1;
+}
 
 public sealed record CompanyCommissionClaimAccountEvidence(
     Guid ProfileId,
@@ -298,6 +317,22 @@ public sealed record CompanyCommissionDeliveryReadiness(
     DateTime? WithdrawnAtUtc = null,
     string? LastReason = null);
 
+public enum CompanyCommissionDeliveryHandoffMethod
+{
+    Mail,
+    CompanyRepresentative,
+    Other
+}
+
+public sealed record CompanyCommissionDeliveryHandoff(
+    Guid HandoffId,
+    CompanyCommissionDeliveryHandoffMethod Method,
+    DateTime RecordedAtUtc,
+    CompanyCommissionActor RecordedBy,
+    int TermsVersion,
+    string? Recipient = null,
+    string? Note = null);
+
 public sealed record CompanyCommissionActivityEvent
 {
     public required Guid EventId { get; init; }
@@ -341,7 +376,7 @@ public sealed record CompanyCommissionProcessedCommand(
 
 public sealed record TradeCompanyCommission
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
     public required Guid CommissionId { get; init; }
@@ -355,6 +390,8 @@ public sealed record TradeCompanyCommission
     public required CompanyCommissionPublicMetadata PublicMetadata { get; init; }
     public required long ActiveClaimCapabilityRevision { get; init; }
     public CompanyCommissionClaim? ActiveClaim { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public CompanyCommissionClaimPriceReview? ClaimPriceReview { get; init; }
     public CompanyCommissionClaimantCharacter? ClaimantCharacter { get; init; }
     public CompanyCommissionParticipantGrant? ParticipantGrant { get; init; }
     public CompanyCommissionRecoveryGrant? RecoveryGrant { get; init; }
@@ -364,6 +401,7 @@ public sealed record TradeCompanyCommission
     public required CompanyCommissionGateState Gates { get; init; }
     public IReadOnlyList<CompanyCommissionOutputProgress> OutputProgress { get; init; } = [];
     public required CompanyCommissionDeliveryReadiness DeliveryReadiness { get; init; }
+    public IReadOnlyList<CompanyCommissionDeliveryHandoff> DeliveryHandoffs { get; init; } = [];
     public required CompanyCommissionSettlementState SettlementState { get; init; }
     public CompanyCommissionSettlementConfirmation SettlementPayment { get; init; } = new();
     public IReadOnlyList<CompanyCommissionActivityEvent> Activity { get; init; } = [];
@@ -397,6 +435,7 @@ public sealed record CompanyCommissionPublicBrief
     public bool RequiresManualResolution { get; init; }
     public IReadOnlyList<CompanyCommissionPublicOutputProgress> OutputProgress { get; init; } = [];
     public required CompanyCommissionPublicDeliveryReadiness DeliveryReadiness { get; init; }
+    public CompanyCommissionDeliveryHandoff? LatestDeliveryHandoff { get; init; }
     public required CompanyCommissionSettlementState SettlementState { get; init; }
     public required bool Closed { get; init; }
     public required long ProjectionRevision { get; init; }

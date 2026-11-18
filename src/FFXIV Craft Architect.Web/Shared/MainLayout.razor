@@ -4,6 +4,7 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
 @inject NavigationManager NavigationManager
 @inject AppState AppState
 @inject ISettingsService Settings
@@ -21,6 +22,8 @@
 @inject RecipeCalculationService RecipeService
 @inject UniversalisService UniversalisService
 @inject NativePlanImportClassifier NativePlanImportClassifier
+@inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject TradeWorkspaceAccessService TradeAccess
 @inject ILogger<MainLayout> Logger
 @implements IDisposable
 
@@ -81,7 +84,7 @@
                 <MudMenuItem OnClick="@(() => NavigateTo(""))" Icon="@Icons.Material.Filled.Build">
                     FFXIV Craft Architect
                 </MudMenuItem>
-                <MudMenuItem OnClick="@(() => NavigateTo("trade/orders"))" Icon="@Icons.Material.Filled.Payments">
+                <MudMenuItem OnClick="OpenTradeArchitectAsync" Icon="@Icons.Material.Filled.Payments">
                     FFXIV Trade Architect
                 </MudMenuItem>
             </ChildContent>
@@ -91,24 +94,33 @@
         <MudButtonGroup Size="Size.Small" Style="margin-right: 24px;">
             @if (IsTradeMode)
             {
-                <MudButton OnClick="@(() => NavigateTo("trade/orders"))"
-                           Color="@GetTabColor("orders")"
-                           Variant="@GetTabVariant("orders")"
-                           Style="@GetTabStyle("orders")">
-                    Orders
+                <MudButton OnClick="@(() => NavigateTo(TradeWorkspaceAccessService.HubRoute))"
+                           Color="@GetTabColor("hub")"
+                           Variant="@GetTabVariant("hub")"
+                           Style="@GetTabStyle("hub")">
+                    Hub
                 </MudButton>
-                <MudButton OnClick="@(() => NavigateTo("trade/crafters"))"
-                           Color="@GetTabColor("crafters")"
-                           Variant="@GetTabVariant("crafters")"
-                           Style="@GetTabStyle("crafters")">
-                    Crafters
-                </MudButton>
-                <MudButton OnClick="@(() => NavigateTo("trade/margins"))"
-                           Color="@GetTabColor("margins")"
-                           Variant="@GetTabVariant("margins")"
-                           Style="@GetTabStyle("margins")">
-                    Margins
-                </MudButton>
+                @if (TradeAccess.CanOperate == true)
+                {
+                    <MudButton OnClick="@(() => NavigateTo("trade/orders"))"
+                               Color="@GetTabColor("orders")"
+                               Variant="@GetTabVariant("orders")"
+                               Style="@GetTabStyle("orders")">
+                        Orders
+                    </MudButton>
+                    <MudButton OnClick="@(() => NavigateTo("trade/crafters"))"
+                               Color="@GetTabColor("crafters")"
+                               Variant="@GetTabVariant("crafters")"
+                               Style="@GetTabStyle("crafters")">
+                        Crafters
+                    </MudButton>
+                    <MudButton OnClick="@(() => NavigateTo("trade/margins"))"
+                               Color="@GetTabColor("margins")"
+                               Variant="@GetTabVariant("margins")"
+                               Style="@GetTabStyle("margins")">
+                        Margins
+                    </MudButton>
+                }
             }
             else
             {
@@ -135,10 +147,6 @@
                 </MudButton>
             }
         </MudButtonGroup>
-        @if (IsTradeMode)
-        {
-            <TradeCompanySwitcher HubLinkOnly="true" />
-        }
         
         <!-- Menu Bar using MudMenu -->
         <div style="display: flex; gap: 4px; flex-shrink: 0;">
@@ -279,6 +287,11 @@
     private string _activeTab = "market";
     private bool _disposed = false;
     private bool _resetMainScrollAfterRender;
+    // A bare launch whose synced "Open the app to" preference may still be on its way.
+    private bool _startLandingPending;
+    private CancellationTokenSource? _startLandingRetry;
+    private DateTime _startLandingUntilUtc;
+    private static readonly TimeSpan StartLandingWindow = TimeSpan.FromSeconds(30);
     private bool _debugToolsMenuOpen;
     private bool IsDebugToolsAvailable => AppState.SecretDebugToolsEnabled;
     private bool IsTradeMode => IsTradeRoute(NavigationManager.Uri);
@@ -303,6 +316,7 @@
         AppState.OnStateChanged += OnAppStateChanged;
         WebSettings.PortableSettingsApplied += OnPortableSettingsApplied;
         WorkerProjections.Changed += OnWorkerProjectionChanged;
+        TradeAccess.Changed += OnTradeAccessChanged;
     }
     
     protected override void OnAfterRender(bool firstRender)
@@ -328,6 +342,7 @@
 
         if (firstRender)
         {
+            _ = InvokeAsync(ApplyStartWorkspaceAsync);
             await StartupInitialization.InitializeAsync(new StartupInitializationSteps(
                 LoadSettingsAsync: _ => LoadSettingsAsync(),
                 BootstrapEngineSessionAsync: BootstrapEngineSessionAsync,
@@ -364,12 +379,54 @@
     private void OnWorkerProjectionChanged() =>
         _ = InvokeAsync(StateHasChanged);
 
-    private void OnPortableSettingsApplied() =>
+    private void OnPortableSettingsApplied()
+    {
         _ = InvokeAsync(async () =>
         {
             await LoadSettingsAsync();
             StateHasChanged();
         });
+        if (_startLandingPending && DateTime.UtcNow > _startLandingUntilUtc)
+        {
+            _startLandingPending = false;
+        }
+        if (_startLandingPending)
+        {
+            ScheduleStartLandingRetry();
+        }
+    }
+
+    // Account settings arrive one key at a time; wait for the batch to settle, then try
+    // the start landing once more.
+    private void ScheduleStartLandingRetry()
+    {
+        _startLandingRetry?.Cancel();
+        var retry = _startLandingRetry = new CancellationTokenSource();
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(300), retry.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            if (!_startLandingPending || _disposed)
+            {
+                return;
+            }
+            _startLandingPending = false;
+            try
+            {
+                await TryApplyStartLandingAsync();
+            }
+            catch (Exception exception)
+            {
+                Logger.LogWarning(exception, "Synced start workspace preference could not be applied.");
+            }
+        });
+    }
 
     private void OnAppStateChanged(AppStateChange change)
     {
@@ -440,11 +497,82 @@
             : [legacyComparisonRegion];
     }
 
+    // "Open the app to" applies only to a bare app launch; deep links keep their target.
+    private async Task ApplyStartWorkspaceAsync()
+    {
+        try
+        {
+            _startLandingPending = IsBareLaunch(NavigationManager.Uri);
+            _startLandingUntilUtc = DateTime.UtcNow + StartLandingWindow;
+            if (await TryApplyStartLandingAsync())
+            {
+                return;
+            }
+            await RefreshTradeAccessAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(exception, "Start workspace preference could not be applied.");
+        }
+    }
+
+    private async Task<bool> TryApplyStartLandingAsync()
+    {
+        if (!IsBareLaunch(NavigationManager.Uri) || !await TradeAccess.OpensToTradeAsync())
+        {
+            return false;
+        }
+        var landing = await TradeAccess.ResolveLandingAsync();
+        if (!IsBareLaunch(NavigationManager.Uri))
+        {
+            return false;
+        }
+        _startLandingPending = false;
+        NavigationManager.NavigateTo(landing, replace: true);
+        return true;
+    }
+
+    private bool IsBareLaunch(string uri) =>
+        NavigationManager.ToBaseRelativePath(uri).Length == 0;
+
+    private async Task OpenTradeArchitectAsync()
+    {
+        NavigateTo(await TradeAccess.ResolveLandingAsync());
+    }
+
+    private void OnTradeAccessChanged() =>
+        _ = InvokeAsync(RefreshTradeAccessAsync);
+
+    // Operations pages do not apply to accounts that operate no company; send those
+    // visits (old bookmarks, pasted links) to the Crafter hub instead.
+    private async Task RefreshTradeAccessAsync()
+    {
+        if (_disposed || !IsTradeMode)
+        {
+            return;
+        }
+        var canOperate = await TradeAccess.CanOperateAsync();
+        // Only a confirmed answer moves someone off an operations page; a host blip
+        // never does.
+        if (!canOperate && TradeAccess.IsSettled && _activeTab is "orders" or "crafters" or "margins")
+        {
+            NavigationManager.NavigateTo(TradeWorkspaceAccessService.HubRoute, replace: true);
+            return;
+        }
+        StateHasChanged();
+    }
+
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         if (_disposed) return;
         
         UpdateActiveTab(e.Location);
+        if (!IsBareLaunch(e.Location))
+        {
+            // Once the user is somewhere, a late preference never moves them.
+            _startLandingPending = false;
+        }
+        _ = InvokeAsync(RefreshTradeAccessAsync);
         _resetMainScrollAfterRender = true;
         _ = InvokeAsync(StateHasChanged);
     }
@@ -452,7 +580,9 @@
     private void UpdateActiveTab(string uri)
     {
         var uriLower = uri.ToLowerInvariant();
-        if (IsTradeRoute(uri) && uriLower.Contains("/trade/orders"))
+        if (IsTradeRoute(uri) && (uriLower.Contains("/trade/hub") || IsCompanyRoute(uri)))
+            _activeTab = "hub";
+        else if (IsTradeRoute(uri) && uriLower.Contains("/trade/orders"))
             _activeTab = "orders";
         else if (IsTradeRoute(uri) && uriLower.Contains("/trade/margins"))
             _activeTab = "margins";
@@ -502,10 +632,21 @@
         NavigationManager.NavigateTo(string.IsNullOrEmpty(page) ? "./" : page);
     }
 
+    // Company pages (/companies/{slug}) are part of Trade Architect: members work
+    // commissions there, and everyone reaches them from the Crafter hub.
     private bool IsTradeRoute(string uri)
     {
         var relativePath = NavigationManager.ToBaseRelativePath(uri).TrimStart('/');
-        return relativePath.StartsWith("trade", StringComparison.OrdinalIgnoreCase);
+        return relativePath.StartsWith("trade", StringComparison.OrdinalIgnoreCase) ||
+            IsCompanyRoute(uri);
+    }
+
+    private bool IsCompanyRoute(string uri)
+    {
+        var relativePath = NavigationManager.ToBaseRelativePath(uri).TrimStart('/');
+        return relativePath.Equals("companies", StringComparison.OrdinalIgnoreCase) ||
+            relativePath.StartsWith("companies/", StringComparison.OrdinalIgnoreCase) ||
+            relativePath.StartsWith("companies?", StringComparison.OrdinalIgnoreCase);
     }
 
     private string GetWorkspaceTitle()
@@ -979,9 +1120,11 @@
     
     private async Task OpenSettingsAsync(SettingsSection section)
     {
+        var selectedWorkspaceId = await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
         var parameters = new DialogParameters
         {
-            [nameof(SettingsDialog.InitialSection)] = section
+            [nameof(SettingsDialog.InitialSection)] = section,
+            [nameof(SettingsDialog.InitialWorkspaceCompanyId)] = selectedWorkspaceId?.ToString("D")
         };
         var options = new DialogOptions { CloseOnEscapeKey = false, MaxWidth = MaxWidth.ExtraLarge, FullWidth = true };
         var dialog = DialogService.Show<SettingsDialog>("Settings", parameters, options);
@@ -997,6 +1140,9 @@
             AppState.OnStateChanged -= OnAppStateChanged;
             WebSettings.PortableSettingsApplied -= OnPortableSettingsApplied;
             WorkerProjections.Changed -= OnWorkerProjectionChanged;
+            TradeAccess.Changed -= OnTradeAccessChanged;
+            _startLandingRetry?.Cancel();
+            _startLandingRetry?.Dispose();
             
             _disposed = true;
         }

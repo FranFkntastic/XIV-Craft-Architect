@@ -818,7 +818,7 @@ public sealed class DiscordIdentityContractTests
                     null),
                 ClaimantCharacter = new CompanyCommissionClaimantCharacter(
                     Guid.NewGuid(),
-                    "Claimant character",
+                    "Provisional crafter",
                     "Siren",
                     null,
                     null,

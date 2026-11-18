@@ -24,13 +24,15 @@ public static class TradeOrderPaymentDisplayFormatter
             MaterialReimbursementTotal = payment.MaterialReimbursement,
             CommissionAmount = payment.MaterialAdjustment,
             TotalPayment = payment.Total,
-            Active = breakdown
+            Active = breakdown,
+            LaborStandard = breakdown with { Contract = TradePaymentContractMode.LaborStandard }
         };
     }
 
     public static string FormatMaterialPaymentImpact(
         TradeCommissionPaymentMaterial material,
-        bool requireRecordedCash = false)
+        TradeMaterialQuote? quote = null,
+        bool requireQuotedCash = false)
     {
         ArgumentNullException.ThrowIfNull(material);
 
@@ -39,7 +41,16 @@ public static class TradeOrderPaymentDisplayFormatter
             return FormatGilAllowZero(0);
         }
 
-        if (requireRecordedCash)
+        if (quote != null)
+        {
+            var lines = quote.Lines.Where(line => line.ItemId == material.ItemId &&
+                line.RequiresHq == material.RequiresHq).ToArray();
+            return lines.Length == 1 && lines[0].RequiredQuantity == material.Quantity
+                ? FormatGilAllowZero(lines[0].CashRequired)
+                : "Impact unavailable";
+        }
+
+        if (requireQuotedCash)
         {
             return "Not itemized in terms";
         }

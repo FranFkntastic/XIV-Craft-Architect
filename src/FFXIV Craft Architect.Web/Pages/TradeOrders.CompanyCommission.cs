@@ -79,6 +79,7 @@ public partial class TradeOrders
                 SelectedCommissionOwner);
 
     private bool HasCanonicalCommission =>
+        SelectedCanonicalCommission != null ||
         _selectedOrder?.CompanyCommission != null;
 
     private bool IsSelectedCanonicalOwnerMissing =>
@@ -171,7 +172,8 @@ public partial class TradeOrders
         _showCommissionTermsRevision = true;
         _commissionTermsRevisionWorkPackage = CreateCanonicalTermsWorkPackage(
             owner.Order,
-            commission.CurrentTerms);
+            commission.CurrentTerms,
+            forRevision: true);
         _commissionTermsRevisionBrief = BuildCanonicalCommissionBrief(
             owner.Order,
             commission);
@@ -188,7 +190,8 @@ public partial class TradeOrders
 
     private static TradeOrder CreateCanonicalTermsWorkPackage(
         TradeOrder source,
-        CompanyCommissionTermsVersion terms)
+        CompanyCommissionTermsVersion terms,
+        bool forRevision = false)
     {
         var copy = TradeOrderWorkflow.CopyOrder(source);
         copy.SourceSnapshot.RootItems = terms.Outputs.Select(output =>
@@ -206,7 +209,9 @@ public partial class TradeOrders
                 material.RequiresHq,
                 material.UnitCost,
                 material.TotalCost,
-                terms.PricingEvidence.CostBasis,
+                source.SourceSnapshot.Materials.FirstOrDefault(item =>
+                    item.ItemId == material.ItemId && item.RequiresHq == material.RequiresHq)?.EvidenceSource
+                    ?? terms.PricingEvidence.CostBasis,
                 $"Canonical terms v{terms.Version}",
                 terms.PricingEvidence.CapturedAtUtc)).ToArray();
         copy.SourceSnapshot.CraftLabor = terms.Payment.CraftSynthCount <= 0
@@ -220,6 +225,17 @@ public partial class TradeOrders
                     terms.Outputs.Sum(output => output.RequiredQuantity),
                     terms.Payment.CraftSynthCount)
             ];
+        if (!forRevision || terms.PricingEvidence.MaterialQuote == null || copy.SourceSnapshot.MaterialQuote == null)
+        {
+            copy.SourceSnapshot.MaterialQuote = terms.PricingEvidence.MaterialQuote;
+        }
+        copy.SourceSnapshot.MaterialQuoteFailureReason =
+            terms.PricingEvidence.MaterialQuoteFailureReason;
+        copy.SourceSnapshot.Warnings = terms.PricingEvidence.Warnings?.ToArray() ?? [];
+        if (terms.PricingEvidence.MaterialQuote != null)
+        {
+            copy.SourceSnapshot.CostBasis = CommissionCostBasis.ProcurementRoute;
+        }
         copy.PaymentSchedule = terms.Payment.Schedule;
         copy.CustomPaymentTerms = terms.Payment.CustomTerms;
         return copy;
@@ -739,7 +755,7 @@ public partial class TradeOrders
             owner => CommissionOperations.AddCommentAsync(
                 owner,
                 _commissionSharedComment),
-            "Shared commission comment added");
+            "Message sent");
 
     private Task RecoverCommissionParticipantAsync() =>
         RunCommissionCommandAsync(
@@ -1080,15 +1096,16 @@ public partial class TradeOrders
             CompanyCommissionActivityKind.CompanyMaterialsReceived => "Materials received",
             CompanyCommissionActivityKind.WorkClearanceAchieved => "Cleared to work",
             CompanyCommissionActivityKind.ProgressReported => "Progress updated",
+            CompanyCommissionActivityKind.DeliveryHandoffRecorded => "Sent for delivery review",
             CompanyCommissionActivityKind.DeliveryReadinessWithdrawn => "Delivery readiness withdrawn",
-            CompanyCommissionActivityKind.DeliveryReadinessDeclared => "Ready for delivery",
+            CompanyCommissionActivityKind.DeliveryReadinessDeclared => "Sent for delivery review",
             CompanyCommissionActivityKind.DeliveryReturnedToWork => "Returned to work",
             CompanyCommissionActivityKind.DeliveryAccepted => "Delivery accepted",
             CompanyCommissionActivityKind.SettlementRecorded => "Settlement recorded",
             CompanyCommissionActivityKind.SettlementPaymentSentRecorded => "Final payment sent",
             CompanyCommissionActivityKind.SettlementPaymentReceivedConfirmed => "Final payment receipt confirmed",
             CompanyCommissionActivityKind.SettlementPaymentAttestationRetracted => "Final-payment confirmation retracted",
-            CompanyCommissionActivityKind.CommentAdded => "Comment",
+            CompanyCommissionActivityKind.CommentAdded => "Message",
             CompanyCommissionActivityKind.CommissionCanceled => "Commission canceled",
             CompanyCommissionActivityKind.ClaimResolutionRequired => "Company resolution required",
             CompanyCommissionActivityKind.CommissionReopened => "Commission reopened",

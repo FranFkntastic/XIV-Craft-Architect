@@ -1768,7 +1768,8 @@ public sealed partial class SqliteProfileHostStore
         CancellationToken ct,
         bool allowCompanyCollection = false,
         long? expectedServerRevision = null,
-        bool updateMarginItems = false)
+        bool updateMarginItems = false,
+        bool updateFreelancerOpenCommissions = false)
     {
         if (!allowCompanyCollection)
         {
@@ -1852,6 +1853,21 @@ public sealed partial class SqliteProfileHostStore
                         new System.Text.Json.Nodes.JsonArray();
                     payloadJson = marginObject.ToJsonString();
                 }
+                // Only the explicit company settings commands own the freelancer
+                // visibility switch. Whole-profile sync, including older clients that
+                // never knew the field, carries the stored value forward.
+                if (!updateFreelancerOpenCommissions && existing != null &&
+                    incoming is System.Text.Json.Nodes.JsonObject freelancerObject)
+                {
+                    var previousFreelancers =
+                        System.Text.Json.Nodes.JsonNode.Parse(existing.PayloadJson, nodeOptions)?["freelancerOpenCommissions"];
+                    freelancerObject.Remove("freelancerOpenCommissions");
+                    if (previousFreelancers != null)
+                    {
+                        freelancerObject["freelancerOpenCommissions"] = previousFreelancers.DeepClone();
+                    }
+                    payloadJson = freelancerObject.ToJsonString();
+                }
                 if (existing != null && incoming is System.Text.Json.Nodes.JsonObject incomingObject &&
                     !incomingObject.ContainsKey("commissionPricingScope"))
                 {
@@ -1861,6 +1877,30 @@ public sealed partial class SqliteProfileHostStore
                         incomingObject["commissionPricingScope"] = previousScope.DeepClone();
                         payloadJson = incomingObject.ToJsonString();
                     }
+                }
+                if (existing != null && incoming is System.Text.Json.Nodes.JsonObject profile)
+                {
+                    var previous = System.Text.Json.Nodes.JsonNode.Parse(existing.PayloadJson, nodeOptions);
+                    foreach (var field in new[] { "materialPricingPolicy", "paymentPolicy" })
+                    {
+                        if (!profile.ContainsKey(field) && previous?[field] is { } stored)
+                        {
+                            profile[field] = stored.DeepClone();
+                        }
+                    }
+                    if (profile["paymentPolicy"] is System.Text.Json.Nodes.JsonObject policy &&
+                        !policy.ContainsKey("materialValueBonusPercent") &&
+                        previous?["paymentPolicy"]?["materialValueBonusPercent"] is { } bonus)
+                    {
+                        policy["materialValueBonusPercent"] = bonus.DeepClone();
+                    }
+                    if (profile["paymentPolicy"] is System.Text.Json.Nodes.JsonObject mergedPolicy &&
+                        mergedPolicy.ContainsKey("materialValueBonusPercent"))
+                    {
+                        // The explicit bonus, even zero, supersedes the retired percent.
+                        mergedPolicy.Remove("LegacyCommissionPercent");
+                    }
+                    payloadJson = profile.ToJsonString();
                 }
                 var company = JsonSerializer.Deserialize<TradeCompanyProfile>(
                     payloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -2867,6 +2907,24 @@ public sealed partial class SqliteProfileHostStore
 
                 create index if not exists ix_deep_archived_trade_orders_profile_archived
                 on deep_archived_trade_orders(profile_id, archived_at_utc desc);
+
+                create table if not exists company_ownership_transfers (
+                    transfer_id text primary key,
+                    idempotency_key text not null unique,
+                    company_id text not null,
+                    source_profile_id text not null,
+                    target_profile_id text not null,
+                    previous_owner_disposition text not null,
+                    scope_fingerprint text not null,
+                    counts_json text not null,
+                    committed_at_utc text not null,
+                    membership_projected_at_utc text null,
+                    foreign key(source_profile_id) references hosted_profiles(id),
+                    foreign key(target_profile_id) references hosted_profiles(id)
+                );
+
+                create index if not exists ix_company_ownership_transfers_company
+                on company_ownership_transfers(company_id, committed_at_utc desc);
 
                 insert into profile_revisions (profile_id, revision)
                 select p.id, coalesce(max(o.revision), 0)

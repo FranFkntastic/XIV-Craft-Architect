@@ -10,6 +10,7 @@
 @inject ProfileSyncService Sync
 @inject IGarlandService Garland
 @inject TradeMarginCalculator Calculator
+@inject TradeMarginQuickPass QuickPass
 @inject ISettingsService Settings
 @inject AppState AppState
 @inject NavigationManager Navigation
@@ -231,36 +232,79 @@ new() { Id = Column.Sale, Header = "Sale price", Size = new(132), HeaderCssClass
     {
         if (_disposed || (onlyMissing && _rows.All(row => row.Cost != null && row.Cost.Issue is not ("Pricing failed" or "Item data unavailable")))) return;
         _busy = true;
-        _refreshing = refresh;
+        _refreshing = true;
         StateHasChanged();
         try
         {
+            var plans = new Dictionary<int, TradeMarginCalculator.PreparedRow>();
+            var scope = _profile?.CommissionPricingScope;
+            var pending = new Dictionary<int, MarginRow>();
+            var ct = _lifetime.Token;
             foreach (var row in _rows)
             {
                 if (_disposed) return;
                 if (onlyMissing && row.Cost != null && row.Cost.Issue is not ("Pricing failed" or "Item data unavailable")) continue;
                 try
                 {
-                    row.Cost = await Calculator.CalculateAsync(row.ItemId, _profile?.CommissionPricingScope, refresh, _lifetime.Token);
-                    if (row.Cost.Name == "Item unavailable" && row.ItemName != "Item")
-                        row.Cost = row.Cost with { Name = row.ItemName };
-                    row.ItemName = row.Cost.Name;
+                    plans[row.ItemId] = await Calculator.PrepareAsync(row.ItemId, scope, ct);
+                    pending.Add(row.ItemId, row);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ct.IsCancellationRequested)
                 {
-                    if (!_disposed && row.ItemName == "Item")
-                    {
-                        try { row.ItemName = (await Garland.GetItemAsync(row.ItemId, _lifetime.Token))?.Name ?? "Item"; }
-                        catch (Exception) { /* Preserve the original pricing failure if name lookup also fails. */ }
-                    }
-                    row.Cost = new(row.Name, row.Cost?.IconId ?? 0, null, null, null, [], "Pricing failed");
-                    ReportError(ex);
+                    await ShowPricingFailureAsync(row, ex, ct);
                 }
-                if (!_disposed) StateHasChanged();
+            }
+            using var quickLifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var quick = scope is { IsValid: true } ? QuickPass.RunAsync(plans, scope, refresh, (id, cost) =>
+            {
+                if (_disposed || !pending.TryGetValue(id, out var row)) return;
+                row.Cost = cost;
+                row.ItemName = cost.Name;
+                StateHasChanged();
+            }, quickLifetime.Token) : Task.CompletedTask;
+            try
+            {
+                // All row/scope replacement is serialized by _gate. Retiring the row from
+                // pending before yielding prevents a late preview from replacing its full cost.
+                foreach (var (id, plan) in plans)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var row = pending[id];
+                    try
+                    {
+                        var full = await Calculator.CalculateFullAsync(plan, scope, refresh, ct);
+                        ct.ThrowIfCancellationRequested();
+                        row.Cost = full.Name == "Item unavailable" && row.ItemName != "Item"
+                            ? full with { Name = row.ItemName } : full;
+                        row.ItemName = row.Cost.Name;
+                    }
+                    catch (Exception ex) when (!ct.IsCancellationRequested)
+                    {
+                        await ShowPricingFailureAsync(row, ex, ct);
+                    }
+                    pending.Remove(id);
+                    if (!_disposed) StateHasChanged();
+                }
+            }
+            finally
+            {
+                quickLifetime.Cancel();
+                try { await quick; } catch (OperationCanceledException) when (quickLifetime.IsCancellationRequested) { }
             }
             if (refresh && !_disposed) _lastCheckedUtc = DateTime.UtcNow;
         }
         finally { _busy = false; _refreshing = false; }
+    }
+    private async Task ShowPricingFailureAsync(MarginRow row, Exception error, CancellationToken ct)
+    {
+        if (row.ItemName == "Item")
+        {
+            try { row.ItemName = (await Garland.GetItemAsync(row.ItemId, ct))?.Name ?? "Item"; }
+            catch (Exception) when (!ct.IsCancellationRequested) { /* Preserve the pricing error. */ }
+        }
+        ct.ThrowIfCancellationRequested();
+        row.Cost = new(row.Name, row.Cost?.IconId ?? 0, null, null, null, [], "Pricing failed");
+        ReportError(error);
     }
     private async Task RefreshAsync()
     {

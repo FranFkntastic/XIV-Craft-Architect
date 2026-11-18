@@ -1,0 +1,513 @@
+using FFXIV_Craft_Architect.Core.Models;
+
+namespace FFXIV_Craft_Architect.Core.Services;
+
+public sealed record TradeMaterialQuoteResult(
+    TradeMaterialQuote? Quote,
+    IReadOnlyList<CommissionPayrollInputLine> MaterialLines,
+    string? FailureReason)
+{
+    public bool IsComplete => Quote != null && string.IsNullOrWhiteSpace(FailureReason);
+}
+
+public sealed class TradeMaterialQuoteService
+{
+    public async Task<TradeMaterialQuoteResult> PriceAsync(
+        MarketShoppingService shopping,
+        IReadOnlyList<DetailedShoppingPlan> plans,
+        IReadOnlyList<MaterialAggregate> demand,
+        IReadOnlyDictionary<(int ItemId, bool RequiresHq), AcquisitionSource> sources,
+        TradeMaterialPricingPolicy policy,
+        DateTime now,
+        IReadOnlyList<CommissionPayrollInputLine> selectedSourceLines,
+        CancellationToken ct = default)
+    {
+        var stock = demand.Where(item => sources.GetValueOrDefault((item.ItemId, item.RequiresHq)) == AcquisitionSource.OnHand).ToArray();
+        var purchases = demand.Except(stock).ToArray();
+        var references = selectedSourceLines.Where(line => line.EvidenceSource == TradeOrderWorkflow.OnHandEvidenceSource)
+            .ToDictionary(line => (line.ItemId, line.RequiresHq));
+        if (stock.Any(item => !references.TryGetValue((item.ItemId, item.RequiresHq), out var line) ||
+            line.Quantity != item.TotalQuantity))
+        {
+            return Failure("On-hand quantities do not match the selected-source material evidence.");
+        }
+
+        var stockLines = stock.Select(item => references[(item.ItemId, item.RequiresHq)]).ToArray();
+        var stockCoverage = stock.Select(item => new TradeMaterialQuoteLine(
+            item.ItemId, item.Name, item.TotalQuantity, item.RequiresHq, 0, [], null)).ToArray();
+        if (stock.Length > 0 && purchases.Length == 0)
+        {
+            var normalized = TradeMaterialPricingPolicyNormalizer.Normalize(policy);
+            return new(new TradeMaterialQuote
+            {
+                RouteSelectionKey = "on-hand",
+                WorldStops = 0,
+                RouteCashRequired = 0,
+                MaterialReimbursement = 0,
+                SafetyAllowance = 0,
+                Lines = stockCoverage,
+                AppliedPolicy = normalized,
+                PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(normalized),
+                QuotedAtUtc = now,
+                ExpiresAtUtc = now.AddMinutes(normalized.QuoteLifetimeMinutes)
+            }, stockLines, null);
+        }
+
+        var input = PrepareOptimizationInput(plans, purchases, sources, policy, now);
+        var optimization = await shopping.OptimizeProcurementRouteWithDecisionAsync(
+            input, new MarketAnalysisConfig
+            {
+                MaxWorldsPerItem = policy.MaximumWorldStops,
+                EnableSplitWorld = policy.AllowSplitPurchases,
+                TravelTolerance = 11
+            }, includeSplitPurchases: policy.AllowSplitPurchases,
+            executionOptions: MarketAnalysisExecutionOptions.Synchronous, ct: ct);
+        var result = Build(optimization, purchases, policy, now);
+        return result.Quote is { } quote && stock.Length > 0
+            ? new(quote with { Lines = [.. quote.Lines, .. stockCoverage] }, [.. result.MaterialLines, .. stockLines], null)
+            : result;
+    }
+
+    public static string DescribeNoExecutableRoute(
+        TradeMaterialPricingPolicy? requestedPolicy)
+    {
+        var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
+        return $"No complete executable route fits company policy and current listing evidence " +
+               $"({policy.MaximumWorldStops} worlds, " +
+               $"{policy.MaximumConsolidationPremiumPercent:N0}% consolidation premium, " +
+               $"listings at most {policy.MaximumEvidenceAgeMinutes:N0} minutes old).";
+    }
+
+    public IReadOnlyList<DetailedShoppingPlan> PrepareOptimizationInput(
+        IReadOnlyList<DetailedShoppingPlan> plans,
+        TradeMaterialPricingPolicy? requestedPolicy,
+        DateTime quotedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(plans);
+
+        var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
+        return plans
+            .Select(plan => FilterToFreshEvidence(plan, policy, quotedAtUtc))
+            .ToArray();
+    }
+
+    public IReadOnlyList<DetailedShoppingPlan> PrepareOptimizationInput(
+        IReadOnlyList<DetailedShoppingPlan> plans,
+        IReadOnlyList<MaterialAggregate> demand,
+        IReadOnlyDictionary<(int ItemId, bool RequiresHq), AcquisitionSource> selectedSources,
+        TradeMaterialPricingPolicy? requestedPolicy,
+        DateTime quotedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(plans);
+        ArgumentNullException.ThrowIfNull(demand);
+        ArgumentNullException.ThrowIfNull(selectedSources);
+
+        var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
+        return demand.Select(item =>
+            {
+                var key = (item.ItemId, item.RequiresHq);
+                var source = selectedSources.GetValueOrDefault(key, AcquisitionSource.UnknownSource);
+                var plan = plans.FirstOrDefault(candidate => candidate.ItemId == item.ItemId);
+                return source switch
+                {
+                    AcquisitionSource.VendorBuy => BuildVendorPlan(item),
+                    AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq when plan != null =>
+                        FilterToFreshEvidence(
+                            CloneForDemand(plan, item),
+                            policy,
+                            quotedAtUtc),
+                    _ => BuildUnsupportedPlan(item, source)
+                };
+            })
+            .ToArray();
+    }
+
+    public TradeMaterialQuoteResult Build(
+        ProcurementRouteOptimizationResult optimization,
+        IReadOnlyList<MaterialAggregate> demand,
+        TradeMaterialPricingPolicy? requestedPolicy,
+        DateTime quotedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(optimization);
+        ArgumentNullException.ThrowIfNull(demand);
+
+        var policy = TradeMaterialPricingPolicyNormalizer.Normalize(requestedPolicy);
+        var decision = optimization.Decision;
+        if (!optimization.IsComplete || decision == null)
+        {
+            return Failure(DescribeNoExecutableRoute(policy));
+        }
+
+        var maximumCost = decision.CheapestGilCost *
+            (1m + policy.MaximumConsolidationPremiumPercent / 100m);
+        var selections = decision.ToleranceSelections
+            .Where(candidate => candidate.GilCost <= maximumCost)
+            .Where(candidate => candidate.WorldStops <= policy.MaximumWorldStops)
+            .OrderBy(candidate => candidate.WorldStops)
+            .ThenBy(candidate => candidate.EvidencePenalty)
+            .ThenBy(candidate => candidate.GilCost)
+            .ThenBy(candidate => candidate.SelectionKey, StringComparer.Ordinal)
+            .ToArray();
+        if (selections.Length == 0)
+        {
+            return Failure(DescribeNoExecutableRoute(policy));
+        }
+
+        var demandByItem = demand
+            .Where(row => row.TotalQuantity > 0)
+            .GroupBy(row => (row.ItemId, row.RequiresHq))
+            .ToDictionary(group => group.Key, group => group.Sum(row => row.TotalQuantity));
+        foreach (var selection in selections)
+        {
+            var result = TryBuildSelection(
+                selection,
+                demandByItem,
+                policy,
+                quotedAtUtc);
+            if (result.IsComplete)
+            {
+                return result;
+            }
+        }
+
+        return Failure(
+            "No complete route within company policy uses sufficiently fresh listing evidence.");
+    }
+
+    private static TradeMaterialQuoteResult TryBuildSelection(
+        MarketRouteToleranceSelection selection,
+        IReadOnlyDictionary<(int ItemId, bool RequiresHq), int> demandByItem,
+        TradeMaterialPricingPolicy policy,
+        DateTime quotedAtUtc)
+    {
+        var lines = new List<TradeMaterialQuoteLine>();
+        var payrollLines = new List<CommissionPayrollInputLine>();
+        foreach (var plan in selection.ShoppingPlans)
+        {
+            var requiresHq = plan.HqQuantityNeeded > 0;
+            var required = demandByItem.GetValueOrDefault((plan.ItemId, requiresHq));
+            if (required <= 0)
+            {
+                required = Math.Max(plan.QuantityNeeded, plan.HqQuantityNeeded);
+            }
+
+            if (!TryReadSelectedPurchase(plan, quotedAtUtc, policy, out var cash, out var worlds, out var oldestEvidence))
+            {
+                return Failure($"The selected route for {plan.Name} is incomplete or uses stale market evidence.");
+            }
+
+            var unitCost = required > 0 ? cash / required : 0m;
+            lines.Add(new TradeMaterialQuoteLine(
+                plan.ItemId,
+                plan.Name,
+                required,
+                requiresHq,
+                cash,
+                worlds,
+                oldestEvidence));
+            payrollLines.Add(new CommissionPayrollInputLine(
+                plan.ItemId,
+                plan.Name,
+                required,
+                unitCost,
+                requiresHq,
+                CommissionMaterialResponsibility.Crafter,
+                "Procurement route",
+                $"Whole-listing cash for the company-policy route across {string.Join(", ", worlds)}.",
+                oldestEvidence,
+                []));
+        }
+
+        if (lines.Count != demandByItem.Count)
+        {
+            return Failure("The selected procurement route does not cover every active material requirement.");
+        }
+
+        var routeCash = lines.Sum(line => line.CashRequired);
+        if (routeCash != selection.GilCost)
+        {
+            return Failure("The selected route cash does not reconcile to its listing-level purchases.");
+        }
+
+        var allowance = Math.Clamp(
+            Math.Round(routeCash * policy.SafetyAllowancePercent / 100m, 0, MidpointRounding.AwayFromZero),
+            policy.MinimumSafetyAllowanceGil,
+            policy.MaximumSafetyAllowanceGil);
+        var quote = new TradeMaterialQuote
+        {
+            RouteSelectionKey = selection.SelectionKey,
+            PolicyFingerprint = TradeMaterialPricingPolicyNormalizer.Fingerprint(policy),
+            AppliedPolicy = policy,
+            QuotedAtUtc = quotedAtUtc,
+            ExpiresAtUtc = quotedAtUtc.AddMinutes(policy.QuoteLifetimeMinutes),
+            RouteCashRequired = routeCash,
+            SafetyAllowance = allowance,
+            MaterialReimbursement = routeCash + allowance,
+            WorldStops = selection.WorldStops,
+            Lines = lines
+        };
+        return new TradeMaterialQuoteResult(quote, payrollLines, null);
+    }
+
+    private static bool TryReadSelectedPurchase(
+        DetailedShoppingPlan plan,
+        DateTime quotedAtUtc,
+        TradeMaterialPricingPolicy policy,
+        out decimal cash,
+        out IReadOnlyList<string> worlds,
+        out DateTime? oldestEvidence)
+    {
+        cash = 0;
+        worlds = [];
+        oldestEvidence = null;
+        if (plan.RecommendedWorld?.WorldName == MarketShoppingConstants.VendorWorldName)
+        {
+            cash = plan.RecommendedWorld.TotalCost;
+            worlds = [MarketShoppingConstants.VendorWorldName];
+            return cash >= 0;
+        }
+
+        var selectedWorlds = new List<WorldShoppingSummary>();
+        if (plan.CoverageSet?.AllCandidates.FirstOrDefault(candidate => candidate.IsDefaultEligible) is { } coverage)
+        {
+            cash = coverage.CashOutCost;
+            foreach (var world in coverage.Worlds)
+            {
+                var selected = plan.WorldOptions.FirstOrDefault(option =>
+                    string.Equals(option.DataCenter, world.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(option.WorldName, world.WorldName, StringComparison.OrdinalIgnoreCase));
+                if (selected == null)
+                {
+                    return false;
+                }
+                selectedWorlds.Add(selected);
+            }
+        }
+        else if (plan.RecommendedSplit is { Count: > 0 })
+        {
+            cash = plan.RecommendedSplit.Sum(part => (decimal)part.TotalCost);
+            foreach (var part in plan.RecommendedSplit)
+            {
+                var selected = plan.WorldOptions.FirstOrDefault(option =>
+                    string.Equals(option.DataCenter, part.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(option.WorldName, part.WorldName, StringComparison.OrdinalIgnoreCase));
+                if (selected == null)
+                {
+                    return false;
+                }
+                selectedWorlds.Add(selected);
+            }
+        }
+        else if (plan.RecommendedWorld != null)
+        {
+            cash = plan.RecommendedWorld.TotalCost;
+            selectedWorlds.Add(plan.RecommendedWorld);
+        }
+        else
+        {
+            return false;
+        }
+
+        worlds = selectedWorlds
+            .Select(world => $"{world.WorldName} ({world.DataCenter})")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(world => world, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var timestamps = selectedWorlds
+            .Select(world => world.MarketUploadedAtUtc)
+            .Where(timestamp => timestamp.HasValue)
+            .Select(timestamp => timestamp!.Value)
+            .ToArray();
+        if (timestamps.Length != selectedWorlds.Count)
+        {
+            return false;
+        }
+        oldestEvidence = timestamps.Min();
+        return cash >= 0 && IsFresh(oldestEvidence.Value, quotedAtUtc, policy);
+    }
+
+    private static DetailedShoppingPlan FilterToFreshEvidence(
+        DetailedShoppingPlan plan,
+        TradeMaterialPricingPolicy policy,
+        DateTime quotedAtUtc)
+    {
+        if (string.Equals(
+                plan.RecommendedWorld?.WorldName,
+                MarketShoppingConstants.VendorWorldName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return plan;
+        }
+
+        var worldOptions = plan.WorldOptions
+            .Where(world => world.MarketUploadedAtUtc is { } uploadedAt &&
+                            IsFresh(uploadedAt, quotedAtUtc, policy))
+            .ToList();
+        var freshWorlds = worldOptions
+            .Select(world => (DataCenter: world.DataCenter, WorldName: world.WorldName))
+            .ToHashSet(WorldKeyComparer.Instance);
+        var recommendedWorld = plan.RecommendedWorld is { } recommended &&
+                               freshWorlds.Contains((recommended.DataCenter, recommended.WorldName))
+            ? recommended
+            : null;
+        var recommendedSplit = plan.RecommendedSplit is { Count: > 0 } split &&
+                               split.All(part => freshWorlds.Contains((part.DataCenter, part.WorldName)))
+            ? split.ToList()
+            : null;
+
+        return new DetailedShoppingPlan
+        {
+            ItemId = plan.ItemId,
+            Name = plan.Name,
+            IconId = plan.IconId,
+            QuantityNeeded = plan.QuantityNeeded,
+            HqQuantityNeeded = plan.HqQuantityNeeded,
+            DCAveragePrice = plan.DCAveragePrice,
+            WorldOptions = worldOptions,
+            RecommendedWorld = recommendedWorld,
+            RecommendedSplit = recommendedSplit,
+            CoverageSet = FilterCoverageSet(plan.CoverageSet, freshWorlds),
+            Error = plan.Error,
+            MarketDataWarning = plan.MarketDataWarning,
+            HQAveragePrice = plan.HQAveragePrice,
+            Vendors = plan.Vendors.ToList()
+        };
+    }
+
+    private static DetailedShoppingPlan BuildVendorPlan(
+        MaterialAggregate demand)
+    {
+        var cash = (long)Math.Round(
+            demand.TotalQuantity * demand.UnitPrice,
+            0,
+            MidpointRounding.AwayFromZero);
+        var vendor = new WorldShoppingSummary
+        {
+            WorldName = MarketShoppingConstants.VendorWorldName,
+            WorldId = 0,
+            TotalCost = cash,
+            AveragePricePerUnit = demand.UnitPrice,
+            ListingsUsed = 1,
+            TotalQuantityPurchased = demand.TotalQuantity,
+            HasSufficientStock = true,
+            Classification = WorldClassification.Standard,
+            Listings =
+            [
+                new ShoppingListingEntry
+                {
+                    Quantity = demand.TotalQuantity,
+                    PricePerUnit = (long)demand.UnitPrice,
+                    RetainerName = MarketShoppingConstants.VendorWorldName,
+                    IsUnderAverage = true,
+                    NeededFromStack = demand.TotalQuantity
+                }
+            ]
+        };
+        return new DetailedShoppingPlan
+        {
+            ItemId = demand.ItemId,
+            Name = demand.Name,
+            IconId = demand.IconId,
+            QuantityNeeded = demand.RequiresHq ? 0 : demand.TotalQuantity,
+            HqQuantityNeeded = demand.RequiresHq ? demand.TotalQuantity : 0,
+            DCAveragePrice = demand.UnitPrice,
+            WorldOptions = [],
+            RecommendedWorld = vendor,
+            RecommendedSplit = null
+        };
+    }
+
+    private static DetailedShoppingPlan CloneForDemand(
+        DetailedShoppingPlan source,
+        MaterialAggregate demand) =>
+        new()
+        {
+            ItemId = source.ItemId,
+            Name = source.Name,
+            IconId = source.IconId,
+            QuantityNeeded = demand.TotalQuantity,
+            HqQuantityNeeded = demand.RequiresHq ? demand.TotalQuantity : 0,
+            DCAveragePrice = source.DCAveragePrice,
+            WorldOptions = source.WorldOptions.ToList(),
+            RecommendedWorld = source.RecommendedWorld,
+            CoverageSet = source.CoverageSet,
+            Error = source.Error,
+            MarketDataWarning = source.MarketDataWarning,
+            HQAveragePrice = source.HQAveragePrice,
+            Vendors = source.Vendors.ToList(),
+            RecommendedSplit = source.RecommendedSplit?.ToList()
+        };
+
+    private static DetailedShoppingPlan BuildUnsupportedPlan(
+        MaterialAggregate demand,
+        AcquisitionSource source) =>
+        new()
+        {
+            ItemId = demand.ItemId,
+            Name = demand.Name,
+            IconId = demand.IconId,
+            QuantityNeeded = demand.RequiresHq ? 0 : demand.TotalQuantity,
+            HqQuantityNeeded = demand.RequiresHq ? demand.TotalQuantity : 0,
+            Error = $"Selected acquisition source {source} cannot be quoted as purchase cash."
+        };
+
+    private static MarketCoverageSet? FilterCoverageSet(
+        MarketCoverageSet? source,
+        IReadOnlySet<(string DataCenter, string WorldName)> freshWorlds)
+    {
+        if (source is null)
+        {
+            return null;
+        }
+
+        var candidates = source.AllCandidates
+            .Where(candidate =>
+                candidate.Worlds.Count > 0 &&
+                candidate.Worlds.All(world => freshWorlds.Contains((world.DataCenter, world.WorldName))) &&
+                candidate.Listings.All(listing => freshWorlds.Contains((listing.DataCenter, listing.WorldName))))
+            .ToArray();
+        MarketCoverageOption? Keep(MarketCoverageOption? candidate) =>
+            candidate is not null &&
+            candidates.Any(allowed => string.Equals(
+                allowed.CandidateId,
+                candidate.CandidateId,
+                StringComparison.Ordinal))
+                ? candidate
+                : null;
+
+        return new MarketCoverageSet(
+            source.ItemId,
+            source.ItemName,
+            source.QuantityNeeded,
+            Keep(source.SingleWorld),
+            Keep(source.CompactSplit),
+            Keep(source.WideSplit),
+            Keep(source.CheapestObserved),
+            candidates);
+    }
+
+    private static bool IsFresh(
+        DateTime uploadedAtUtc,
+        DateTime quotedAtUtc,
+        TradeMaterialPricingPolicy policy) =>
+        quotedAtUtc - uploadedAtUtc <= TimeSpan.FromMinutes(policy.MaximumEvidenceAgeMinutes);
+
+    private sealed class WorldKeyComparer : IEqualityComparer<(string DataCenter, string WorldName)>
+    {
+        public static WorldKeyComparer Instance { get; } = new();
+
+        public bool Equals(
+            (string DataCenter, string WorldName) left,
+            (string DataCenter, string WorldName) right) =>
+            string.Equals(left.DataCenter, right.DataCenter, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(left.WorldName, right.WorldName, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string DataCenter, string WorldName) value) =>
+            HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(value.DataCenter),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(value.WorldName));
+    }
+
+    private static TradeMaterialQuoteResult Failure(string reason) =>
+        new(null, [], reason);
+}

@@ -397,7 +397,7 @@ public partial class TradeOrders
 
         if (order.Status == TradeOrderStatus.AwaitingDelivery)
         {
-            return "Ready for delivery";
+            return "Awaiting delivery review";
         }
 
         if (order.Status == TradeOrderStatus.InProgress)
@@ -786,7 +786,7 @@ public partial class TradeOrders
             TradeCommissionOperationsPresentation.ResolutionAttention => "Manual resolution",
             TradeCommissionOperationsPresentation.ClaimAttention => "Claim / Identity Review",
             TradeCommissionOperationsPresentation.PreWorkAttention => "Needs prerequisites",
-            TradeCommissionOperationsPresentation.DeliveryAttention => "Ready for delivery",
+            TradeCommissionOperationsPresentation.DeliveryAttention => "Awaiting delivery review",
             TradeCommissionOperationsPresentation.WorkAttention => "Crafting",
             _ => "Open"
         };

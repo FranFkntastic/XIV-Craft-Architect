@@ -6,7 +6,7 @@ using FFXIV_Craft_Architect.Web.Services.ProfileHosting;
 
 namespace FFXIV_Craft_Architect.Web.Services.TradeCompany;
 
-public sealed class CompanyHubClient(
+public sealed partial class CompanyHubClient(
     HttpClient http,
     ProfileSyncLocalStateService localState,
     ProfileHostClient profileHostClient)
@@ -82,63 +82,72 @@ public sealed class CompanyHubClient(
         Guid companyId,
         CancellationToken cancellationToken = default)
     {
+        return await TryLoadWorkspaceProfileAsync(companyId, cancellationToken)
+            ?? throw new InvalidOperationException(
+                "The selected hosted company workspace is unavailable.");
+    }
+
+    public async Task<TradeCompanyWorkspaceProfile?> TryLoadWorkspaceProfileAsync(
+        Guid companyId,
+        CancellationToken cancellationToken = default)
+    {
         using var response = await SendAsync(
             HttpMethod.Get,
             $"trade/v1/companies/{companyId:D}/workspace-profile",
             null,
             cancellationToken);
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Unauthorized)
+        {
+            return null;
+        }
         await EnsureHubSuccessAsync(response, cancellationToken);
-        return await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(
+        var profile = await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(
             JsonOptions,
             cancellationToken)
             ?? throw new InvalidOperationException(
                 "The selected company workspace returned an empty profile.");
-    }
-
-    public async Task<TradeCompanyWorkspaceProfile?> TryLoadWorkspaceProfileAsync(
-        Guid companyId, CancellationToken cancellationToken = default)
-    {
-        var connection = await localState.LoadConnectionSettingsAsync();
-        if (!connection.IsConfigured)
+        if (profile.SchemaVersion != 1 ||
+            profile.Revision <= 0 ||
+            profile.PaymentPolicy == null ||
+            profile.MaterialPricingPolicy == null)
         {
-            return null;
+            throw new InvalidOperationException(
+                "The selected company workspace returned an incompatible pricing policy projection.");
         }
-
-        using var response = await SendAsync(HttpMethod.Get,
-            $"trade/v1/companies/{companyId:D}/workspace-profile", null, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-
-        await EnsureHubSuccessAsync(response, cancellationToken);
-        var profile = await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfile>(JsonOptions, cancellationToken)
-            ?? throw new InvalidOperationException("Company workspace returned an empty response.");
-        if (profile.Revision <= 0)
-        {
-            throw new InvalidOperationException("Company workspace requires an updated helper.");
-        }
-
         return profile;
     }
 
-    public async Task<long> UpdateWorkspaceProfileAsync(TradeCompanyProfile profile, long expectedRevision,
-        CancellationToken cancellationToken = default, bool updateMarginItems = false)
+    public async Task<long> UpdateWorkspaceProfileAsync(
+        TradeCompanyProfile profile,
+        long expectedRevision,
+        CancellationToken cancellationToken = default,
+        bool updateMarginItems = false)
     {
-        if (!updateMarginItems)
-        {
-            throw new InvalidOperationException("Margin updates must be explicit.");
-        }
-
-        using var response = await SendAsync(HttpMethod.Put,
-            $"trade/v1/companies/{profile.Id:D}/margin-items",
-            new { ExpectedProfileRevision = expectedRevision, UpdateMarginItems = true, profile.MarginItems }, cancellationToken);
+        using var response = await SendAsync(
+            HttpMethod.Put,
+            $"trade/v1/companies/{profile.Id:D}/workspace-profile",
+            new
+            {
+                ExpectedRevision = expectedRevision,
+                profile.Name,
+                profile.Description,
+                profile.CommissionContact,
+                profile.PaymentPolicy,
+                profile.MaterialPricingPolicy,
+                profile.CommissionPricingScope,
+                UpdateCommissionPricingScope = true,
+                MarginItems = updateMarginItems ? profile.MarginItems : null,
+                UpdateMarginItems = updateMarginItems,
+                profile.FreelancerOpenCommissions
+            },
+            cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
-        var result = await response.Content.ReadFromJsonAsync<MarginItemsUpdateResponse>(JsonOptions, cancellationToken);
-        return result?.ProfileRevision ?? throw new InvalidOperationException("Company update returned an empty response.");
+        var result = await response.Content.ReadFromJsonAsync<TradeCompanyWorkspaceProfileUpdate>(
+            JsonOptions,
+            cancellationToken);
+        return result?.Revision
+            ?? throw new InvalidOperationException("The company workspace update returned an empty response.");
     }
-
-    private sealed record MarginItemsUpdateResponse(long ProfileRevision);
 
     public async Task UpdatePolicyAsync(TradeCompanyProfile profile, long expectedProfileRevision,
         CancellationToken cancellationToken = default)
@@ -317,20 +326,49 @@ public sealed class CompanyHubClient(
             cancellationToken))!.ReadRevision;
     }
 
-    public async Task ReportProgressAsync(CompanyHubCommission commission, CancellationToken cancellationToken = default)
+    public async Task ReportProgressAsync(
+        CompanyHubCommission commission,
+        IReadOnlyDictionary<Guid, int> completedQuantities,
+        CancellationToken cancellationToken = default)
     {
         var outputs = commission.Outputs.Select(output => new
         {
             output.LineId,
             output.ItemId,
-            CompletedQuantity = output.Quantity,
-            ReadyQuantity = output.Quantity
+            CompletedQuantity = Math.Clamp(
+                completedQuantities.GetValueOrDefault(output.LineId, output.CompletedQuantity),
+                output.CompletedQuantity,
+                output.Quantity),
+            ReadyQuantity = Math.Clamp(
+                completedQuantities.GetValueOrDefault(output.LineId, output.CompletedQuantity),
+                output.CompletedQuantity,
+                output.Quantity)
         });
         await SendParticipantCommandAsync(commission, "report-progress", new { Outputs = outputs, Comment = (string?)null }, cancellationToken);
     }
 
-    public async Task DeclareReadinessAsync(CompanyHubCommission commission, CancellationToken cancellationToken = default) =>
-        await SendParticipantCommandAsync(commission, "declare-readiness", new { Comment = (string?)null }, cancellationToken);
+    public async Task RecordDeliveryHandoffAsync(
+        CompanyHubCommission commission,
+        CompanyCommissionDeliveryHandoffMethod method,
+        string? recipient,
+        string? note,
+        CancellationToken cancellationToken = default) =>
+        await SendParticipantCommandAsync(
+            commission,
+            "record-delivery-handoff",
+            new { Method = method, Recipient = recipient, Note = note },
+            cancellationToken);
+
+    // Final-payment receipt for the signed-in claimant's own delivered commission.
+    public async Task ConfirmSettlementReceivedAsync(
+        CompanyHubCommission commission,
+        string note,
+        CancellationToken cancellationToken = default) =>
+        await SendParticipantCommandAsync(
+            commission,
+            "confirm-settlement-received",
+            new { commission.TermsVersion, Note = note },
+            cancellationToken);
 
     public async Task<IReadOnlyList<CompanyMember>> LoadCompanyMembersAsync(string companyId, CancellationToken cancellationToken = default) =>
         await GetListAsync<CompanyMember>($"trade/v1/companies/{Uri.EscapeDataString(companyId)}/memberships", cancellationToken);
@@ -448,18 +486,41 @@ public sealed class CompanyHubClient(
         await EnsureHubSuccessAsync(response, cancellationToken);
     }
 
-    public async Task TransferOwnershipAsync(
+    public async Task<CompanyOwnershipTransferPreview> PreviewOwnershipTransferAsync(
         string companyId,
-        Guid targetAccountProfileId,
-        string formerOwnerRole = "operator",
+        Guid targetProfileId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/ownership-transfer/preview/{targetProfileId:D}",
+            null,
+            cancellationToken);
+        await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<CompanyOwnershipTransferPreview>(JsonOptions, cancellationToken))!;
+    }
+
+    public async Task<CompanyOwnershipTransferReceipt> TransferOwnershipAsync(
+        string companyId,
+        Guid targetProfileId,
+        string previousOwnerDisposition,
+        Guid idempotencyKey,
+        string expectedScopeFingerprint,
         CancellationToken cancellationToken = default)
     {
         using var response = await SendAsync(
             HttpMethod.Post,
             $"trade/v1/companies/{Uri.EscapeDataString(companyId)}/ownership-transfer",
-            new { TargetAccountProfileId = targetAccountProfileId, FormerOwnerRole = formerOwnerRole },
+            new
+            {
+                TargetProfileId = targetProfileId,
+                PreviousOwnerDisposition = previousOwnerDisposition,
+                IdempotencyKey = idempotencyKey,
+                ExpectedScopeFingerprint = expectedScopeFingerprint
+            },
             cancellationToken);
         await EnsureHubSuccessAsync(response, cancellationToken);
+        return (await response.Content.ReadFromJsonAsync<CompanyOwnershipTransferReceipt>(JsonOptions, cancellationToken))!;
     }
 
     public async Task<LegacyCrafterMigration> LoadLegacyCrafterMigrationAsync(
@@ -609,32 +670,39 @@ public sealed record CompanyHubProjection(
     int? PendingMembershipRequestCount);
 
 public sealed record TradeCompanyWorkspaceProfile(
+    int SchemaVersion,
     Guid Id,
     string Name,
+    string? Description,
     string? CommissionContact,
-    TradePaymentPolicy PaymentPolicy,
+    TradePaymentPolicy? PaymentPolicy,
+    TradeMaterialPricingPolicy? MaterialPricingPolicy,
+    long Revision,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
     TradeCompanyPricingScope? CommissionPricingScope = null,
-    string? Description = null,
     IReadOnlyList<TradeMarginItem>? MarginItems = null,
-    long Revision = 0)
+    bool FreelancerOpenCommissions = true)
 {
     public TradeCompanyProfile ToTransientProfile() => new()
     {
         Id = Id,
         Name = Name,
-        CommissionContact = CommissionContact,
-        PaymentPolicy = PaymentPolicy,
-        CommissionPricingScope = CommissionPricingScope,
         Description = Description,
+        CommissionContact = CommissionContact,
+        PaymentPolicy = PaymentPolicy!,
+        MaterialPricingPolicy = MaterialPricingPolicy!,
+        CommissionPricingScope = CommissionPricingScope,
         MarginItems = MarginItems ?? [],
+        FreelancerOpenCommissions = FreelancerOpenCommissions,
         RemoteId = Id.ToString("D"),
         SyncState = TradeSyncState.Synced,
         CreatedAtUtc = CreatedAtUtc,
         UpdatedAtUtc = UpdatedAtUtc
     };
 }
+
+public sealed record TradeCompanyWorkspaceProfileUpdate(long Revision);
 
 public sealed record CompanyHubTheme(
     string Accent,
@@ -644,10 +712,10 @@ public sealed record CompanyHubTheme(
     string? About,
     bool ShowOpenCommissionCount);
 public sealed record CompanyHubStanding(string State, string? Role);
-public sealed record CompanyHubOutput(Guid LineId, int ItemId, string Name, int Quantity, int CompletedQuantity, int ReadyQuantity, int AcceptedQuantity);
+public sealed record CompanyHubOutput(Guid LineId, int ItemId, string Name, int Quantity, int CompletedQuantity, int AcceptedQuantity);
 public sealed record CompanyHubPayment(string Schedule, string Label, decimal Total);
 public sealed record CompanyHubUpdate(Guid Id, string Title, string Body, string AuthorDisplayName, DateTime PublishedAtUtc, DateTime? EditedAtUtc, bool IsPinned);
-public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State, bool CanWork, bool CanReportProgress, bool CanDeclareReadiness, string? WorkBlockedReason, CompanyHubCommissionAttention? UnreadCommissionerUpdate);
+public sealed record CompanyHubCommission(string CommissionId, string Title, string Reference, int TermsVersion, string DeliveryInstructions, string? PublicBriefId, long ProjectionRevision, IReadOnlyList<CompanyHubOutput> Outputs, CompanyHubPayment Payment, string SettlementState, string State, bool CanWork, bool CanReportProgress, string? WorkBlockedReason, CompanyHubCommissionAttention? UnreadCommissionerUpdate, string? SheetUrl = null, bool AwaitingSettlementConfirmation = false);
 public sealed record CompanyHubCommissionAttention(Guid EventId, long Revision, string Text, DateTime CreatedAtUtc);
 public sealed record CompanyHubAttentionRead(long ReadRevision);
 public sealed record CompanyHubRosterMember(Guid AccountProfileId, string DisplayName, string Role);
@@ -688,7 +756,10 @@ public sealed record MemberNotificationTestDelivery(
     int AttemptCount,
     string? MessageId,
     string? Error);
-public sealed record CompanyMember(Guid AccountProfileId, string DisplayName, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, bool DiscordLinked);
+public sealed record CompanyMember(Guid AccountProfileId, string DisplayName, string Role, string State, DateTimeOffset RequestedAtUtc, DateTimeOffset? DecidedAtUtc, bool DiscordLinked, bool CanReceiveOwnership);
+public sealed record CompanyOwnershipTransferCounts(int CompanyProfiles, int Orders, int Crafters, int Publications, int PayrollDrafts, int LinkedPlans, int DeepArchivedOrders, int Collisions, int TargetOnlyObjects);
+public sealed record CompanyOwnershipTransferPreview(string CompanyId, Guid SourceProfileId, Guid TargetProfileId, string TargetDisplayName, string ScopeFingerprint, CompanyOwnershipTransferCounts Counts);
+public sealed record CompanyOwnershipTransferReceipt(Guid TransferId, Guid IdempotencyKey, string CompanyId, Guid SourceProfileId, Guid TargetProfileId, string PreviousOwnerDisposition, string ScopeFingerprint, CompanyOwnershipTransferCounts Counts, DateTimeOffset CommittedAtUtc, DateTimeOffset? MembershipProjectedAtUtc);
 public sealed record LegacyCrafterMigration(
     IReadOnlyList<LegacyCrafterCandidate> LegacyCrafters,
     IReadOnlyList<LegacyCrafterBinding> Bindings);

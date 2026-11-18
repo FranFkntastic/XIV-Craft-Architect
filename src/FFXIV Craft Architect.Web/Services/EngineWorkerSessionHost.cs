@@ -1607,16 +1607,14 @@ public static partial class ManagedHost
                 Array.Empty<MaterialAggregate>(),
                 Array.Empty<WorkerAcquisitionRowProjection>(),
                 Array.Empty<TradeOrderCraftLaborSnapshot>(),
-                Array.Empty<string>());
+                Array.Empty<string>(),
+                null);
         }
 
         var recipeLayer = new WorkerRecipeLayerWorkflow(_canonicalSession);
         var demand = recipeLayer.BuildDemandProjection(plan);
         var activeDemand = demand.ActiveProcurementDemand
             .Where(row => row.Quantity > 0)
-            .ToArray();
-        var activeItems = demand.ToActiveProcurementMaterialAggregates()
-            .Where(item => item.TotalQuantity > 0)
             .ToArray();
         var evidence = session.BorrowMarketEvidence();
         var acquisition = CaptureAcquisitionProjection(new WorkerSessionCommandEnvelope(
@@ -1626,18 +1624,62 @@ public static partial class ManagedHost
             JsonSerializer.SerializeToElement(
                 new WorkerAcquisitionProjectionRequest("All"),
                 WireJsonOptions)));
-        var materialLines = ApplyOnHandReferenceValues(
+        var selectedDemandGroups = activeDemand
+            .GroupBy(row => (row.ItemId, row.MustBeHq))
+            .ToArray();
+        var conflictingSelections = selectedDemandGroups
+            .Where(group => group.Select(row => row.Source).Distinct().Count() != 1)
+            .ToArray();
+        var selectedSources = selectedDemandGroups
+            .Where(group => group.Select(row => row.Source).Distinct().Count() == 1)
+            .ToDictionary(group => group.Key, group => group.First().Source);
+        var activeItems = demand.ToSelectedProcurementMaterialAggregates()
+            .Where(item => item.TotalQuantity > 0)
+            .ToArray();
+        var requiresMarketEvidence = selectedSources.Values.Any(source =>
+            source is AcquisitionSource.MarketBuyNq or AcquisitionSource.MarketBuyHq);
+        var warnings = new List<string>();
+        TradeMaterialQuote? materialQuote = null;
+        string? materialQuoteFailureReason = null;
+        IReadOnlyList<CommissionPayrollInputLine> materialLines =
             new CommissionCostBasisResolver().BuildSelectedSourceLines(
                 activeDemand,
                 evidence.ItemAnalyses,
-                evidence.ShoppingPlans ?? Array.Empty<DetailedShoppingPlan>()),
-            acquisition.Rows);
-
-        var warnings = new List<string>();
-        if (evidence.ItemAnalyses.Count == 0)
+                evidence.ShoppingPlans);
+        if (conflictingSelections.Length > 0)
         {
-            warnings.Add(
-                "No market-analysis evidence is loaded. Payment uses plan prices where available and may be incomplete.");
+            foreach (var conflict in conflictingSelections)
+            {
+                var warning =
+                    $"Trade cannot quote {conflict.First().ItemName}: active demand mixes multiple acquisition sources for the same quality.";
+                warnings.Add(warning);
+                materialQuoteFailureReason ??= warning;
+            }
+        }
+        else if (requiresMarketEvidence &&
+                 (evidence.ItemAnalyses.Count == 0 || evidence.ShoppingPlans is not { Count: > 0 }))
+        {
+            materialQuoteFailureReason =
+                "No current market evidence is loaded, so Trade cannot produce an executable material quote.";
+            warnings.Add(materialQuoteFailureReason);
+        }
+        else
+        {
+            var policy = TradeMaterialPricingPolicyNormalizer.Normalize(request.MaterialPricingPolicy);
+            var quoteResult = await new TradeMaterialQuoteService().PriceAsync(
+                new MarketShoppingService(SessionMarketCache), evidence.ShoppingPlans ?? [],
+                activeItems, selectedSources, policy, DateTime.UtcNow, materialLines);
+            if (quoteResult.IsComplete)
+            {
+                materialQuote = quoteResult.Quote;
+                materialLines = ApplyOnHandReferenceValues(quoteResult.MaterialLines, acquisition.Rows);
+            }
+            else
+            {
+                materialQuoteFailureReason =
+                    quoteResult.FailureReason ?? "Trade material quote is incomplete.";
+                warnings.Add(materialQuoteFailureReason);
+            }
         }
         warnings.AddRange(materialLines.SelectMany(line => line.Warnings));
 
@@ -1719,6 +1761,8 @@ public static partial class ManagedHost
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(warning => warning, StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
+            materialQuote,
+            materialQuoteFailureReason,
             demand.AllPlanDemand.Select(occurrence => new WorkerPlanOccurrence(
                 occurrence.NodeId,
                 occurrence.ParentNodeId,

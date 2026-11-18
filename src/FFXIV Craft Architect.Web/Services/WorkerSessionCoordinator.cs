@@ -488,6 +488,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
 
     public async Task<WorkerTradeProjection?> GetTradeProjectionAsync(
         bool includeCraftLabor = false,
+        TradeMaterialPricingPolicy? materialPricingPolicy = null,
         CancellationToken cancellationToken = default)
     {
         if (!IsEnabled)
@@ -498,6 +499,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
         var result = await _engineHost.GetTradeProjectionAsync(
             _projections.Shell.Revision,
             includeCraftLabor,
+            materialPricingPolicy,
             cancellationToken);
         if (string.Equals(
                 result.RejectionCode,
@@ -508,6 +510,7 @@ public sealed class WorkerSessionCoordinator : IAsyncDisposable
             result = await _engineHost.GetTradeProjectionAsync(
                 _projections.Shell.Revision,
                 includeCraftLabor,
+                materialPricingPolicy,
                 cancellationToken);
         }
 

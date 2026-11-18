@@ -38,6 +38,8 @@ public sealed class ProfileSyncLocalStateService
             "ui.accent_color",
             "ui.use_split_pane_market_view",
             "ui.trade_orders_ops_pane_width",
+            "ui.start_workspace",
+            "ui.trade_start_page",
             "planning.default_recommendation_mode"
         ],
         StringComparer.Ordinal);

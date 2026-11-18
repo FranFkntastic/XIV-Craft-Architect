@@ -13,7 +13,7 @@ public sealed class TradePayrollWorkflowDraft
     public Guid? AssignedCrafterId { get; set; }
     public string? AssignedCrafterDisplayName { get; set; }
     public decimal CommissionPercent { get; set; } = CommissionPayoutPolicy.Default.CommissionPercent;
-    public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LegacyCommission;
+    public TradePaymentContractMode ActivePaymentContract { get; set; } = TradePaymentContractMode.LaborStandard;
     public decimal LaborGilPerSynth { get; set; } = TradePaymentPolicy.DefaultLaborGilPerSynth;
     public IReadOnlyList<TradePayrollResponsibilityLine> Responsibilities { get; set; } = Array.Empty<TradePayrollResponsibilityLine>();
     public string? RemoteId { get; set; }
@@ -58,7 +58,8 @@ public sealed record TradeCommissionPaymentSummary(
     public static TradeCommissionPaymentSummary FromOrder(
         TradeOrder order,
         TradePayrollWorkflowDraft? draft,
-        TradePaymentPolicy? effectivePolicy = null)
+        TradePaymentPolicy? effectivePolicy = null,
+        bool requireMaterialRouteQuote = true)
     {
         ArgumentNullException.ThrowIfNull(order);
 
@@ -93,8 +94,8 @@ public sealed record TradeCommissionPaymentSummary(
         var policy = effectivePolicy != null
             ? TradePaymentPolicyNormalizer.Normalize(effectivePolicy)
             : TradePaymentPolicyNormalizer.Normalize(new TradePaymentPolicy(
-                draft?.ActivePaymentContract ?? TradePaymentContractMode.LegacyCommission,
-                draft?.CommissionPercent ?? CommissionPayoutPolicy.Default.CommissionPercent,
+                draft?.ActivePaymentContract ?? TradePaymentContractMode.LaborStandard,
+                draft?.CommissionPercent ?? TradePaymentPolicy.DefaultMaterialValueBonusPercent,
                 draft?.LaborGilPerSynth > 0
                     ? draft.LaborGilPerSynth
                     : TradePaymentPolicy.DefaultLaborGilPerSynth));
@@ -121,11 +122,36 @@ public sealed record TradeCommissionPaymentSummary(
                 labor.CraftCount,
                 labor.Warnings ?? Array.Empty<string>()))
             .ToArray();
+        var quote = sourceSnapshot.MaterialQuote;
+        var requiresMaterialQuote = materials.Any(material =>
+            material.Responsibility == CommissionMaterialResponsibility.Crafter &&
+            !material.IsOnHand);
+        var (quotedCrafterCash, appliedAllowance) = TradePaymentCalculator.CrafterShare(quote,
+            materials.Where(m => m.Responsibility == CommissionMaterialResponsibility.Crafter && !m.IsOnHand)
+                .Select(m => (m.ItemId, m.RequiresHq)).ToHashSet());
         var comparison = new TradePaymentCalculator().Calculate(new TradePaymentCalculationRequest(
             paymentMaterials,
             laborInputs,
             policy,
-            sourceSnapshot.Warnings ?? Array.Empty<string>()));
+            (sourceSnapshot.Warnings ?? Array.Empty<string>())
+                .Where(warning => sourceSnapshot.MaterialQuote == null ||
+                    string.IsNullOrWhiteSpace(sourceSnapshot.MaterialQuoteFailureReason) ||
+                    !string.Equals(
+                        warning,
+                        sourceSnapshot.MaterialQuoteFailureReason,
+                        StringComparison.OrdinalIgnoreCase))
+                .Concat(sourceSnapshot.MaterialQuote != null ||
+                        string.IsNullOrWhiteSpace(sourceSnapshot.MaterialQuoteFailureReason)
+                    ? []
+                    : [sourceSnapshot.MaterialQuoteFailureReason])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            appliedAllowance,
+            quote is null ? null : quotedCrafterCash,
+            RequireMaterialRouteQuote: requireMaterialRouteQuote && requiresMaterialQuote,
+            MaterialRouteUnavailableReason: sourceSnapshot.MaterialQuote == null
+                ? sourceSnapshot.MaterialQuoteFailureReason
+                : null));
 
         return new TradeCommissionPaymentSummary(
             materials,

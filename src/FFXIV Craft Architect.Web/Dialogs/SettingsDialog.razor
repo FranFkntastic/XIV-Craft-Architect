@@ -14,6 +14,7 @@
 @inject ProfileHostClient ProfileHostClient
 @inject ProfileSyncLocalStateService ProfileSyncLocalState
 @inject ProfileSyncService ProfileSync
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService TradeAccess
 @inject HostedOrderSyncCoordinator HostedOrderSync
 @inject MarketMafiosoAcquisitionWorkflowService MarketMafiosoAcquisitionWorkflow
 @inject MarketMafiosoIntegrationState MarketMafiosoIntegrationState
@@ -28,6 +29,7 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject FFXIV_Craft_Architect.Web.Services.TradeCompany.CompanyHubClient CompanyHubClient
+@inject FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceProfileResolver WorkspaceProfiles
 
 <MudDialog Class="settings-dialog"
            Style="width: min(1120px, calc(100vw - 32px)); max-width: 1120px;"
@@ -60,7 +62,22 @@
             <section class="settings-content"
                      id="@GetPanelId(_activePanel)"
                      aria-labelledby="@GetTabId(_activePanel)">
-            @if (_activePanel == SettingsSection.Profile)
+            @if (_activePanel == SettingsSection.General)
+            {
+                <CompactSelectField Id="general-start-workspace"
+                                    Label="Open the app to"
+                                    Value="@_startWorkspace"
+                                    ValueChanged="OnStartWorkspaceChanged"
+                                    Options="StartWorkspaceOptions"
+                                    Class="options-select my-3" />
+                <CompactSelectField Id="general-trade-start-page"
+                                    Label="Open Trade Architect to"
+                                    Value="@_tradeStartPage"
+                                    ValueChanged="OnTradeStartPageChanged"
+                                    Options="TradeStartPageOptions"
+                                    Class="options-select my-3" />
+            }
+            else if (_activePanel == SettingsSection.Profile)
             {
                 <AccountSettingsPanel Section="AccountSettingsSection.Profile" />
             }
@@ -309,16 +326,21 @@
                                 </MudText>
                                 <MudText Typo="Typo.subtitle2">@_companyName</MudText>
                             </div>
-                            <MudButton Variant="Variant.Text"
-                                       Color="Color.Secondary"
-                                       Size="Size.Small"
-                                       StartIcon="@Icons.Material.Filled.CloudSync"
-                                       OnClick="@(() => SelectTab(SettingsSection.AccessAndDevices))">
-                                Browser sync
-                            </MudButton>
+                            @if (!_companyProfileIsHosted)
+                            {
+                                <MudButton Variant="Variant.Text"
+                                           Color="Color.Secondary"
+                                           Size="Size.Small"
+                                           StartIcon="@Icons.Material.Filled.CloudSync"
+                                           OnClick="@(() => SelectTab(SettingsSection.AccessAndDevices))">
+                                    Browser sync
+                                </MudButton>
+                            }
                         </div>
                         <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
-                            Company settings, crafters, orders, and payroll history travel with the connected browser profile.
+                            @(_companyProfileIsHosted
+                                ? "Company policy is shared from the selected hosted Trade workspace."
+                                : "Company settings, crafters, orders, and payroll history travel with the connected browser profile.")
                         </MudText>
                     </MudPaper>
 
@@ -378,6 +400,12 @@
                                   Immediate="true"
                                   MaxLength="240"
                                   Class="my-2" />
+                    <MudSwitch T="bool"
+                               @bind-Value="_companyFreelancerOpenCommissions"
+                               Label="Freelancers see open commissions"
+                               Color="Color.Primary"
+                               Disabled="@(!_canAdministerCompany || _companyIsBusy)"
+                               Class="my-2" />
 
                     @if (ProfileSync.CurrentStatus.IsConnected)
                     {
@@ -389,15 +417,10 @@
 
                     <MudDivider Class="my-4" />
 
-                    <CompactSelectField Id="options-payment-contract"
-                                        Label="Default payment contract"
-                                        @bind-Value="CompanyPaymentContractValue"
-                                        Options="PaymentContractOptions"
-                                        Class="options-select my-2" />
                     <MudNumericField T="decimal"
                                      id="legacy-material-commission-percent"
-                                     @bind-Value="_companyLegacyCommissionPercent"
-                                     Label="Legacy material commission percent"
+                                     @bind-Value="_companyMaterialValueBonusPercent"
+                                     Label="Material value bonus"
                                      Variant="Variant.Outlined"
                                      Margin="Margin.Dense"
                                      HideSpinButtons="true"
@@ -417,37 +440,53 @@
                                      AdornmentText="gil"
                                      Class="my-2" />
 
-                    <MudDivider Class="my-4" />
-
-                    <MudText Typo="Typo.subtitle2" Class="mb-2">Manual company backup</MudText>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
-                        Export the active company settings and crafter roster for recovery or an offline handoff. Orders and payroll history are carried by browser-profile sync instead of being duplicated in this file.
+                    <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2">Material pricing</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2 d-block">
+                        Trade quotes one executable current-region shopping route. These limits define what this company considers reasonable procurement.
                     </MudText>
-                    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                        <MudButton Variant="Variant.Outlined"
-                                   Color="Color.Secondary"
-                                   StartIcon="@Icons.Material.Filled.Download"
-                                   OnClick="ExportCompanyProfileAsync"
-                                   Disabled="_companyIsBusy">
-                            Export Company
-                        </MudButton>
-                        <InputFile id="tradeCompanyPackageInput"
-                                   OnChange="ImportCompanyProfileAsync"
-                                   accept=".tradeprofile,.json"
-                                   style="display: none;" />
-                        <label for="tradeCompanyPackageInput" style="display: inline-block; cursor: pointer;">
+                    <MudNumericField T="decimal" @bind-Value="_materialMaximumPremiumPercent" Label="Maximum consolidation premium" Min="0m" Max="100m" Adornment="Adornment.End" AdornmentText="%" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="int" @bind-Value="_materialMaximumWorldStops" Label="Maximum world stops" Min="1" Max="32" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudCheckBox T="bool" @bind-Value="_materialAllowSplitPurchases" Label="Allow split purchases" Color="Color.Primary" Class="my-2" />
+                    <MudNumericField T="decimal" @bind-Value="_materialSafetyAllowancePercent" Label="Shopping allowance" Min="0m" Max="100m" Adornment="Adornment.End" AdornmentText="%" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="decimal" @bind-Value="_materialMinimumAllowanceGil" Label="Minimum shopping allowance" Min="0m" Adornment="Adornment.End" AdornmentText="gil" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="decimal" @bind-Value="_materialMaximumAllowanceGil" Label="Maximum shopping allowance" Min="0m" Adornment="Adornment.End" AdornmentText="gil" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="int" @bind-Value="_materialQuoteLifetimeMinutes" Label="Open quote lifetime" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+                    <MudNumericField T="int" @bind-Value="_materialMaximumEvidenceAgeMinutes" Label="Maximum selected-route evidence age" Min="5" Max="1440" Adornment="Adornment.End" AdornmentText="minutes" Variant="Variant.Outlined" Margin="Margin.Dense" HideSpinButtons="true" Class="my-2" />
+
+                    @if (!_companyProfileIsHosted)
+                    {
+                        <MudDivider Class="my-4" />
+
+                        <MudText Typo="Typo.subtitle2" Class="mb-2">Manual company backup</MudText>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3 d-block">
+                            Export the active company settings and crafter roster for recovery or an offline handoff. Orders and payroll history are carried by browser-profile sync instead of being duplicated in this file.
+                        </MudText>
+                        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
                             <MudButton Variant="Variant.Outlined"
                                        Color="Color.Secondary"
-                                       StartIcon="@Icons.Material.Filled.UploadFile"
-                                       Disabled="_companyIsBusy"
-                                       Style="pointer-events: none;">
-                                Import Company
+                                       StartIcon="@Icons.Material.Filled.Download"
+                                       OnClick="ExportCompanyProfileAsync"
+                                       Disabled="_companyIsBusy">
+                                Export Company
                             </MudButton>
-                        </label>
-                    </div>
-                    <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
-                        Active roster: @_companyCrafterCount.ToString("N0") crafters
-                    </MudText>
+                            <InputFile id="tradeCompanyPackageInput"
+                                       OnChange="ImportCompanyProfileAsync"
+                                       accept=".tradeprofile,.json"
+                                       style="display: none;" />
+                            <label for="tradeCompanyPackageInput" style="display: inline-block; cursor: pointer;">
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Secondary"
+                                           StartIcon="@Icons.Material.Filled.UploadFile"
+                                           Disabled="_companyIsBusy"
+                                           Style="pointer-events: none;">
+                                    Import Company
+                                </MudButton>
+                            </label>
+                        </div>
+                        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-2 d-block">
+                            Active roster: @_companyCrafterCount.ToString("N0") crafters
+                        </MudText>
+                    }
                     @if (_companyIsBusy)
                     {
                         <MudProgressLinear Indeterminate="true" Class="mt-4" />
@@ -853,6 +892,7 @@
 
     private static readonly IReadOnlyList<SettingsNavItem> AllSettingsSections =
     [
+        new(SettingsSection.General, "General", Icons.Material.Filled.Tune),
         new(SettingsSection.Profile, "Profile", Icons.Material.Filled.Person),
         new(SettingsSection.Workspace, "Workspace", Icons.Material.Filled.BusinessCenter),
         new(SettingsSection.AccessAndDevices, "Access & devices", Icons.Material.Filled.Devices),
@@ -887,16 +927,10 @@
         new(nameof(MarketFetchScope.SelectedDataCenter), "Selected data center"),
         new(nameof(MarketFetchScope.EntireRegion), "Entire region")
     ];
-    private static readonly IReadOnlyList<CompactSelectOption> PaymentContractOptions =
-    [
-        new(nameof(TradePaymentContractMode.LegacyCommission), "Legacy commission"),
-        new(nameof(TradePaymentContractMode.LaborStandard), "Labor standard")
-    ];
     private readonly ElementReference[] _tabElements = new ElementReference[AllSettingsSections.Count];
     private SettingsSection _activePanel = SettingsSection.MarketAndRoutes;
     private bool _canAdministerCompany;
     private bool _initialWorkspaceCompanyConsumed;
-    private long _companyPolicyRevision;
 
     private sealed record RolePermissionRow(
         string Capability,
@@ -926,6 +960,22 @@
 
     private static string GetTabId(SettingsSection panel) => $"settings-nav-{panel.ToString().ToLowerInvariant()}";
     private static string GetPanelId(SettingsSection panel) => $"settings-section-{panel.ToString().ToLowerInvariant()}";
+
+    private async Task OnStartWorkspaceChanged(string value)
+    {
+        _startWorkspace = value;
+        await Settings.SetAsync(
+            FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.StartWorkspaceKey,
+            value);
+    }
+
+    private async Task OnTradeStartPageChanged(string value)
+    {
+        _tradeStartPage = value;
+        await Settings.SetAsync(
+            FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.TradeStartPageKey,
+            value);
+    }
 
     private async Task SetGlassAsync(bool value)
     {
@@ -996,17 +1046,7 @@
 
     private string DefaultMarketFetchScopeValue => _defaultMarketFetchScope.ToString();
 
-    private string CompanyPaymentContractValue
-    {
-        get => _companyPaymentContract.ToString();
-        set
-        {
-            if (Enum.TryParse<TradePaymentContractMode>(value, out var parsed))
-            {
-                _companyPaymentContract = parsed;
-            }
-        }
-    }
+
 
     private static CompactSelectOption ToSelectOption(string value) => new(value, value);
     private string _marketMafiosoApiUrl = string.Empty;
@@ -1024,6 +1064,24 @@
     private string _companyName = string.Empty;
     private string? _companyDescription;
     private string? _companyCommissionContact;
+    private bool _companyFreelancerOpenCommissions = true;
+    private string _startWorkspace = "craft";
+    private string _tradeStartPage = "hub";
+    private bool _canOperateTrade;
+    private static readonly IReadOnlyList<CompactSelectOption> StartWorkspaceOptions =
+    [
+        new("craft", "Craft Architect"),
+        new("trade", "Trade Architect")
+    ];
+    private IReadOnlyList<CompactSelectOption> TradeStartPageOptions => _canOperateTrade
+        ?
+        [
+            new("hub", "Crafter hub"),
+            new("orders", "Orders"),
+            new("crafters", "Crafters"),
+            new("margins", "Margins")
+        ]
+        : [new("hub", "Crafter hub")];
     private string _companyPricingRegion = string.Empty;
     private string _companyPricingDataCenter = string.Empty;
     private IReadOnlyList<CompactSelectOption> CompanyPricingRegionOptions =>
@@ -1039,10 +1097,19 @@
     private int _companyCrafterCount;
     private string? _companyLoadError;
     private bool _companyIsBusy;
+    private bool _companyProfileIsHosted;
+    private long? _companyProfileRevision;
     private CompanyDiscordNotificationRouteEditor? _companyNotificationRouteEditor;
-    private TradePaymentContractMode _companyPaymentContract = TradePaymentContractMode.LegacyCommission;
-    private decimal _companyLegacyCommissionPercent = CommissionPayoutPolicy.Default.CommissionPercent;
+    private decimal _companyMaterialValueBonusPercent = TradePaymentPolicy.DefaultMaterialValueBonusPercent;
     private decimal _companyLaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth;
+    private decimal _materialMaximumPremiumPercent = 5m;
+    private int _materialMaximumWorldStops = 8;
+    private bool _materialAllowSplitPurchases = true;
+    private decimal _materialSafetyAllowancePercent = 10m;
+    private decimal _materialMinimumAllowanceGil = 10_000m;
+    private decimal _materialMaximumAllowanceGil = 250_000m;
+    private int _materialQuoteLifetimeMinutes = 30;
+    private int _materialMaximumEvidenceAgeMinutes = 120;
     private string? _persistedCompanyFingerprint;
     private string? _profileHostProfileName;
     private bool _profileHostIsBusy;
@@ -1073,6 +1140,18 @@
     protected override async Task OnInitializedAsync()
     {
         _activePanel = InitialSection;
+        _startWorkspace = await Settings.GetAsync(
+            FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.StartWorkspaceKey,
+            "craft") == "trade" ? "trade" : "craft";
+        _tradeStartPage = await Settings.GetAsync(
+            FFXIV_Craft_Architect.Web.Services.TradeCompany.TradeWorkspaceAccessService.TradeStartPageKey,
+            "hub") ?? "hub";
+        _canOperateTrade = await TradeAccess.CanOperateAsync();
+        if (!_canOperateTrade)
+        {
+            // A stored page this account cannot open still lands on the hub.
+            _tradeStartPage = "hub";
+        }
         _defaultDataCenter = await Settings.GetAsync("market.default_datacenter", "Aether") ?? "Aether";
         _selectedRegion = await Settings.GetAsync("market.region", "North America") ?? "North America";
         _comparisonRegions = await LoadComparisonRegionsAsync();
@@ -1119,6 +1198,7 @@
     private async Task OnWorkspaceCompanyChangedAsync(string companyId)
     {
         _initialWorkspaceCompanyConsumed = true;
+        InitialWorkspaceCompanyId = companyId;
         await LoadCompanyProfileAsync();
         await RefreshCompanyAdministrationAccessAsync();
         if (_companyProfile == null ||
@@ -1135,7 +1215,7 @@
         {
             return;
         }
-        if (!ProfileSync.CurrentStatus.IsConnected)
+        if (!_companyProfileIsHosted)
         {
             // Local-only companies have no hosted roles; the local user owns the data.
             _canAdministerCompany = true;
@@ -1144,7 +1224,6 @@
         try
         {
             var hub = await CompanyHubClient.LoadAsync(_companyProfile.Id.ToString("D"));
-            _companyPolicyRevision = hub?.ProfileRevision ?? 0;
             _canAdministerCompany = hub?.Kind == "hub" &&
                 string.Equals(hub.Standing.State, "active", StringComparison.OrdinalIgnoreCase) &&
                 hub.Standing.Role is "owner" or "operator";
@@ -1483,24 +1562,37 @@
         try
         {
             await ProfileSync.SyncNowAsync();
-            _companyProfile = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
-            if (ProfileSync.CurrentStatus.IsConnected)
+            _companyProfileIsHosted = false;
+            _companyProfileRevision = null;
+            var requestedWorkspaceId = !_initialWorkspaceCompanyConsumed && Guid.TryParse(InitialWorkspaceCompanyId, out var parsedWorkspaceId)
+                ? parsedWorkspaceId
+                : await TradeOperationsPersistence.LoadSelectedWorkspaceCompanyIdAsync();
+            if (requestedWorkspaceId.HasValue)
             {
-                var companyId = !_initialWorkspaceCompanyConsumed && Guid.TryParse(InitialWorkspaceCompanyId, out var requestedCompanyId)
-                    ? requestedCompanyId
-                    : _companyProfile?.Id;
-                if (companyId.HasValue)
-                {
-                    _companyProfile = (await CompanyHubClient.LoadWorkspaceProfileAsync(companyId.Value)).ToTransientProfile();
-                }
+                var resolved = await WorkspaceProfiles.ResolveAsync(requestedWorkspaceId.Value);
+                _companyProfile = resolved.Profile;
+                _companyProfileIsHosted = resolved.IsHosted;
+                _companyProfileRevision = resolved.HostedRevision;
+            }
+            else
+            {
+                _companyProfile = await TradeOperationsPersistence.LoadActiveCompanyProfileAsync();
+            }
+            if (_companyProfileIsHosted && requestedWorkspaceId.HasValue)
+            {
+                _companyCrafterCount = (await CompanyHubClient.LoadCompanyMembersAsync(
+                    requestedWorkspaceId.Value.ToString("D"))).Count;
             }
             if (_companyProfile == null)
             {
                 _companyCrafterCount = 0;
                 return;
             }
-            var crafters = await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id);
-            _companyCrafterCount = crafters.Count;
+            if (!_companyProfileIsHosted)
+            {
+                var crafters = await TradeOperationsPersistence.LoadCraftersAsync(_companyProfile.Id);
+                _companyCrafterCount = crafters.Count;
+            }
             ApplyCompanyProfileFields(_companyProfile);
         }
         catch (Exception ex)
@@ -1517,13 +1609,18 @@
 
     private async Task<bool> SaveCompanyProfileAsync(TradeCompanyProfile profile)
     {
-        if (ProfileSync.CurrentStatus.IsConnected)
+        if (_companyProfileIsHosted)
         {
-            await CompanyHubClient.UpdatePolicyAsync(profile, _companyPolicyRevision);
-            await ProfileSync.SyncNowAsync();
-            await RefreshCompanyAdministrationAccessAsync();
+            if (!_companyProfileRevision.HasValue)
+            {
+                throw new InvalidOperationException("The hosted company policy revision is unavailable.");
+            }
+            _companyProfileRevision = await CompanyHubClient.UpdateWorkspaceProfileAsync(
+                profile,
+                _companyProfileRevision.Value);
             return true;
         }
+
         var latest = (await TradeOperationsPersistence.LoadCompanyProfilesAsync()).SingleOrDefault(item => item.Id == profile.Id)
             ?? throw new InvalidOperationException("The company is no longer available.");
         profile.MarginItems = latest.MarginItems;
@@ -1543,13 +1640,22 @@
         _companyName = profile.Name;
         _companyDescription = profile.Description;
         _companyCommissionContact = profile.CommissionContact;
+        _companyFreelancerOpenCommissions = profile.FreelancerOpenCommissions;
         _companyPricingRegion = profile.CommissionPricingScope?.Region ?? string.Empty;
         _companyPricingDataCenter = profile.CommissionPricingScope?.DataCenter ?? string.Empty;
         var policy = TradePaymentPolicyNormalizer.Normalize(
-            profile.PaymentPolicy ?? TradePaymentPolicy.LegacyDefault);
-        _companyPaymentContract = policy.ActiveContract;
-        _companyLegacyCommissionPercent = policy.LegacyCommissionPercent;
+            profile.PaymentPolicy ?? TradePaymentPolicy.Default);
+        _companyMaterialValueBonusPercent = policy.MaterialValueBonusPercent;
         _companyLaborGilPerSynth = policy.LaborGilPerSynth;
+        var materialPolicy = TradeMaterialPricingPolicyNormalizer.Normalize(profile.MaterialPricingPolicy);
+        _materialMaximumPremiumPercent = materialPolicy.MaximumConsolidationPremiumPercent;
+        _materialMaximumWorldStops = materialPolicy.MaximumWorldStops;
+        _materialAllowSplitPurchases = materialPolicy.AllowSplitPurchases;
+        _materialSafetyAllowancePercent = materialPolicy.SafetyAllowancePercent;
+        _materialMinimumAllowanceGil = materialPolicy.MinimumSafetyAllowanceGil;
+        _materialMaximumAllowanceGil = materialPolicy.MaximumSafetyAllowanceGil;
+        _materialQuoteLifetimeMinutes = materialPolicy.QuoteLifetimeMinutes;
+        _materialMaximumEvidenceAgeMinutes = materialPolicy.MaximumEvidenceAgeMinutes;
         _persistedCompanyFingerprint = BuildCompanyFingerprint();
     }
 
@@ -1566,17 +1672,18 @@
         _companyName.Trim(),
         NormalizeOptionalText(_companyDescription) ?? string.Empty,
         NormalizeOptionalText(_companyCommissionContact) ?? string.Empty,
+        _companyFreelancerOpenCommissions.ToString(),
         _companyPricingRegion,
         _companyPricingDataCenter,
-        _companyPaymentContract.ToString(),
-        _companyLegacyCommissionPercent.ToString(CultureInfo.InvariantCulture),
-        _companyLaborGilPerSynth.ToString(CultureInfo.InvariantCulture));
+        _companyMaterialValueBonusPercent.ToString(CultureInfo.InvariantCulture),
+        _companyLaborGilPerSynth.ToString(CultureInfo.InvariantCulture),
+        TradeMaterialPricingPolicyNormalizer.Fingerprint(BuildCompanyMaterialPricingPolicy()));
 
     private TradePaymentPolicy? BuildCompanyPaymentPolicy()
     {
-        if (_companyLegacyCommissionPercent < 0 || _companyLegacyCommissionPercent > 100)
+        if (_companyMaterialValueBonusPercent < 0 || _companyMaterialValueBonusPercent > 100)
         {
-            Snackbar.Add("Legacy material commission percent must be between 0 and 100.", Severity.Error);
+            Snackbar.Add("Material value bonus must be between 0 and 100 percent.", Severity.Error);
             return null;
         }
 
@@ -1587,10 +1694,23 @@
         }
 
         return new TradePaymentPolicy(
-            _companyPaymentContract,
-            _companyLegacyCommissionPercent,
+            TradePaymentContractMode.LaborStandard,
+            _companyMaterialValueBonusPercent,
             _companyLaborGilPerSynth);
     }
+
+    private TradeMaterialPricingPolicy BuildCompanyMaterialPricingPolicy() =>
+        TradeMaterialPricingPolicyNormalizer.Normalize(new TradeMaterialPricingPolicy
+        {
+            MaximumConsolidationPremiumPercent = _materialMaximumPremiumPercent,
+            MaximumWorldStops = _materialMaximumWorldStops,
+            AllowSplitPurchases = _materialAllowSplitPurchases,
+            SafetyAllowancePercent = _materialSafetyAllowancePercent,
+            MinimumSafetyAllowanceGil = _materialMinimumAllowanceGil,
+            MaximumSafetyAllowanceGil = _materialMaximumAllowanceGil,
+            QuoteLifetimeMinutes = _materialQuoteLifetimeMinutes,
+            MaximumEvidenceAgeMinutes = _materialMaximumEvidenceAgeMinutes
+        });
 
     private async Task ExportCompanyProfileAsync()
     {
@@ -1895,12 +2015,9 @@
                 _companyProfile.Name = _companyName.Trim();
                 _companyProfile.Description = NormalizeOptionalText(_companyDescription);
                 _companyProfile.CommissionContact = NormalizeOptionalText(_companyCommissionContact);
+                _companyProfile.FreelancerOpenCommissions = _companyFreelancerOpenCommissions;
                 _companyProfile.PaymentPolicy = paymentPolicy;
-                if (!_canAdministerCompany)
-                {
-                    Snackbar.Add("Only Owners and Operators can edit company policy.", Severity.Warning);
-                    return;
-                }
+                _companyProfile.MaterialPricingPolicy = BuildCompanyMaterialPricingPolicy();
                 _companyProfile.CommissionPricingScope = string.IsNullOrWhiteSpace(_companyPricingRegion)
                     ? null
                     : new TradeCompanyPricingScope(

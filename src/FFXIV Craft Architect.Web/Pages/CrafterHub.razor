@@ -1,0 +1,636 @@
+@page "/trade/hub"
+@using FFXIV_Craft_Architect.Core.Models
+@using FFXIV_Craft_Architect.Web.Services.ProfileHosting
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
+@inject CompanyHubClient HubClient
+@inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject TradeWorkspaceAccessService TradeAccess
+@inject ProfileSyncService ProfileSync
+@inject ProfileSyncLocalStateService LocalState
+@inject DiscordIdentityClient DiscordIdentityClient
+@inject ProfileHostClient ProfileHostClient
+@inject IDialogService DialogService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+<PageTitle>Crafter hub</PageTitle>
+
+<main class="crafter-hub">
+    <div class="hub-head">
+        <h1>Crafter hub</h1>
+        <div class="spacer"></div>
+        @if (Companies.Count > 0)
+        {
+            <div class="chips">
+                <button type="button" class="chip @(_filter == null ? "active" : null)" @onclick="@(() => SetFilter(null))">All companies</button>
+                @foreach (var company in Companies)
+                {
+                    <button type="button" class="chip @(_filter == company.CompanyId ? "active" : null)" @onclick="@(() => SetFilter(company.CompanyId))">@company.DisplayName</button>
+                }
+            </div>
+        }
+    </div>
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else if (!_signedIn)
+    {
+        <div class="hub-grid">
+            <div class="hub-col">
+                <section class="card">
+                    <div class="card-head"><h2>My work</h2></div>
+                    <div class="row">
+                        <div class="meta">Sign in to see your work.</div>
+                        <div class="right">@SignInButton</div>
+                    </div>
+                </section>
+            </div>
+            <div class="hub-col">
+                <section class="card">
+                    <div class="card-head"><h2>Companies</h2></div>
+                    <div class="row co-row">
+                        <div class="meta">Sign in to see your companies.</div>
+                        <div class="right">@SignInButton</div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="hub-grid">
+            <div class="hub-col">
+                <section class="card">
+                    <div class="card-head"><h2>My work</h2><span class="count">@MyWork.Count active</span></div>
+                    @if (MyWork.Count == 0)
+                    {
+                        <div class="empty">Nothing claimed yet.</div>
+                    }
+                    @foreach (var work in MyWork)
+                    {
+                        var unread = work.Commission.UnreadCommissionerUpdate != null;
+                        var confirmPayment = work.Commission.AwaitingSettlementConfirmation;
+                        <div class="row">
+                            <div class="row-copy">
+                                <h3>@work.Commission.Title</h3>
+                                <div class="meta"><span class="co">@work.CompanyName</span> · @work.Commission.Reference · @OutputSummary(work.Commission)</div>
+                            </div>
+                            <div class="right">
+                                @if (work.IsFreelance && IsFreelancerIn(work.CompanyId))
+                                {
+                                    <span class="badge freelancer" title="@FreelancerTitle">Freelancer</span>
+                                }
+                                <div class="state"><span class="dot @StatusTone(work.Status)"></span>@(confirmPayment ? $"Confirm {work.Commission.Payment.Total:N0} gil received" : StatusLabel(work.Status))</div>
+                                @if (unread)
+                                {
+                                    <span class="unread" title="Commissioner update">1</span>
+                                }
+                                @if (WorkspaceTarget(work) != null)
+                                {
+                                    <button type="button" class="button small @(unread || confirmPayment ? "primary" : null)" disabled="@_busy" @onclick="@(() => OpenWorkAsync(work))">@(confirmPayment ? "Confirm payment" : "Open workspace")</button>
+                                }
+                            </div>
+                        </div>
+                    }
+                </section>
+
+                <section class="card">
+                    <div class="card-head">
+                        <h2>Open commissions</h2><span class="count">@OpenCommissions.Count available</span>
+                        @if (_hub?.CanOperate == true)
+                        {
+                            <a href="trade/orders">View all orders ›</a>
+                        }
+                    </div>
+                    @if (OpenCommissions.Count == 0)
+                    {
+                        <div class="empty">No open commissions.</div>
+                    }
+                    @foreach (var open in OpenCommissions)
+                    {
+                        <div class="row">
+                            <div class="row-copy">
+                                @if (string.IsNullOrWhiteSpace(open.PublicUrl))
+                                {
+                                    <h3>@open.Commission.Title</h3>
+                                }
+                                else
+                                {
+                                    <h3><a class="brief-link" href="@open.PublicUrl">@open.Commission.Title</a></h3>
+                                }
+                                <div class="meta">
+                                    <span class="co">@open.CompanyName</span> · @OutputSummary(open.Commission)
+                                    @if (!string.IsNullOrWhiteSpace(open.MaterialsLabel))
+                                    {
+                                        <text> · @open.MaterialsLabel</text>
+                                    }
+                                </div>
+                            </div>
+                            <div class="right">
+                                <span class="gil">@open.Commission.Payment.Total.ToString("N0") gil</span>
+                                @if (!string.IsNullOrWhiteSpace(open.PublicUrl))
+                                {
+                                    <a class="button small primary" href="@ClaimUrl(open)">Claim</a>
+                                }
+                            </div>
+                        </div>
+                    }
+                </section>
+            </div>
+
+            <div class="hub-col">
+                <section class="card">
+                    <div class="card-head"><h2>Companies</h2><span class="count">@Companies.Count</span></div>
+                    @if (Companies.Count == 0)
+                    {
+                        <div class="row co-row">
+                            @if (_creatingCompany)
+                            {
+                                <input class="company-name" maxlength="160" placeholder="Company name" @bind="_newCompanyName" @bind:event="oninput" @onkeydown="OnCompanyNameKeyAsync" />
+                                <div class="right">
+                                    <button type="button" class="button small quiet" @onclick="@(() => _creatingCompany = false)">Cancel</button>
+                                    <button type="button" class="button small primary" disabled="@(_busy || string.IsNullOrWhiteSpace(_newCompanyName))" @onclick="CreateCompanyAsync">Create</button>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="who-line"><div class="meta">Not part of a company yet.</div></div>
+                                <div class="right">
+                                    <button type="button" class="button small primary" @onclick="@(() => _creatingCompany = true)">Create company</button>
+                                </div>
+                            }
+                        </div>
+                    }
+                    @foreach (var company in Companies)
+                    {
+                        <div class="row co-row">
+                            <div class="who-line">
+                                <div class="avatar" style="background: @AccentColor(company.Accent)">@Initial(company.DisplayName)</div>
+                                <div class="co-copy">
+                                    <strong>@company.DisplayName</strong>
+                                    <span class="badges">
+                                        @if (company.Role is "owner" or "operator")
+                                        {
+                                            <span class="badge operator">@(company.Role == "owner" ? "Owner" : "Operator")</span>
+                                        }
+                                        else if (company.Role == "member")
+                                        {
+                                            <span class="badge member">Member</span>
+                                        }
+                                        @if (company.IsFreelancer)
+                                        {
+                                            <span class="badge freelancer" title="@FreelancerTitle">Freelancer</span>
+                                        }
+                                        @if (company.MembershipRequested)
+                                        {
+                                            <span class="badge pending">Membership requested</span>
+                                        }
+                                        @if (company.InvitationId != null)
+                                        {
+                                            <span class="badge">Invitation</span>
+                                        }
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="right">
+                                @if (company.Role is "owner" or "operator")
+                                {
+                                    <a class="button small quiet" href="@CompanyPageUrl(company)">Manage</a>
+                                }
+                                else if (company.InvitationId is { } invitationId)
+                                {
+                                    <button type="button" class="button small quiet" disabled="@_busy" @onclick="@(() => DeclineInvitationAsync(invitationId))">Decline</button>
+                                    <button type="button" class="button small primary" disabled="@_busy" @onclick="@(() => AcceptInvitationAsync(company, invitationId))">Join</button>
+                                }
+                                else if (company.CanRequestMembership)
+                                {
+                                    <button type="button" class="button small quiet" disabled="@_busy" @onclick="@(() => RequestMembershipAsync(company))">Request membership</button>
+                                }
+                                else
+                                {
+                                    <a class="button small quiet" href="@CompanyPageUrl(company)">Company page</a>
+                                }
+                            </div>
+                        </div>
+                    }
+                </section>
+
+                @if (Updates.Count > 0)
+                {
+                    <section class="card feed">
+                        <div class="card-head">
+                            <h2>Updates</h2>
+                            @if (NewUpdateCount > 0)
+                            {
+                                <span class="count">@NewUpdateCount new</span>
+                            }
+                        </div>
+                        @foreach (var update in Updates)
+                        {
+                            <div class="row">
+                                <div class="row-copy">
+                                    <div class="meta">
+                                        <span class="co">@update.CompanyName</span> · @(update.Kind == "commissioner" ? "commissioner" : "company post") · @RelativeTime(update.CreatedAtUtc)
+                                        @if (!string.IsNullOrWhiteSpace(update.CommissionTitle))
+                                        {
+                                            <text> · @update.CommissionTitle</text>
+                                        }
+                                    </div>
+                                    <p>@update.Text</p>
+                                </div>
+                            </div>
+                        }
+                    </section>
+                }
+            </div>
+        </div>
+    }
+</main>
+
+@code {
+    private const string FreelancerTitle = "Works per commission. Not a member of this company.";
+
+    [SupplyParameterFromQuery(Name = "company")] public string? CompanyQuery { get; set; }
+    [SupplyParameterFromQuery(Name = "commissionId")] public string? CommissionIdQuery { get; set; }
+
+    private CrafterHubProjection? _hub;
+    private string? _filter;
+    private bool _loading = true;
+    private bool _signedIn;
+    private bool _discordSignIn;
+    private bool _accountOpen;
+    private bool _busy;
+    private bool _creatingCompany;
+    private string _newCompanyName = string.Empty;
+    private string? _appliedDeepLink;
+
+    private IReadOnlyList<CrafterHubCompany> Companies => _hub?.Companies ?? [];
+    private IReadOnlyList<CrafterHubWork> MyWork => Filtered(_hub?.MyWork, item => item.CompanyId);
+    private IReadOnlyList<CrafterHubOpenCommission> OpenCommissions => Filtered(_hub?.OpenCommissions, item => item.CompanyId);
+    private IReadOnlyList<CrafterHubUpdate> Updates => Filtered(_hub?.Updates, item => item.CompanyId);
+    private int NewUpdateCount => Updates.Count(item => item.IsNew);
+
+    private RenderFragment SignInButton => __builder =>
+    {
+        if (_discordSignIn)
+        {
+            <button type="button" class="button small primary" disabled="@_busy" @onclick="SignInWithDiscordAsync">Sign in with Discord</button>
+        }
+        else
+        {
+            <button type="button" class="button small primary" disabled="@_accountOpen" @onclick="OpenAccountAsync">Connect account</button>
+        }
+    };
+
+    protected override void OnInitialized()
+    {
+        ProfileSync.ConnectionChanged += OnConnectionChanged;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _filter = string.IsNullOrWhiteSpace(CompanyQuery) ? null : CompanyQuery;
+        // Chip changes only rewrite ?company=; the hub itself is already loaded.
+        if (_loading)
+        {
+            await LoadAsync();
+        }
+        else
+        {
+            NormalizeFilter();
+        }
+        await ApplyDeepLinkAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            // Without a connected account there is nothing account-scoped to load.
+            _signedIn = (await LocalState.LoadConnectionSettingsAsync()).IsConfigured;
+            _hub = _signedIn ? await HubClient.LoadCrafterHubAsync() : null;
+            if (!_signedIn)
+            {
+                _discordSignIn = await IsDiscordSignInEnabledAsync();
+            }
+            if (_hub != null)
+            {
+                await TradeAccess.ObserveHostAnswerAsync(_hub.CanOperate);
+            }
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"[CrafterHub] Hub unavailable. {exception.GetType().Name}: {exception.Message}");
+            Snackbar.Add("The Crafter hub could not be loaded.", Severity.Warning);
+        }
+        NormalizeFilter();
+        _loading = false;
+    }
+
+    private async Task<bool> IsDiscordSignInEnabledAsync()
+    {
+        try
+        {
+            return (await DiscordIdentityClient.GetSignInStatusAsync(ProfileHostClient.DefaultHostUrl)).Enabled;
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"[CrafterHub] Discord sign-in status unavailable. {exception.GetType().Name}: {exception.Message}");
+            return false;
+        }
+    }
+
+    private async Task SignInWithDiscordAsync()
+    {
+        _busy = true;
+        try
+        {
+            var uri = await DiscordIdentityClient.StartSignInAsync(
+                ProfileHostClient.DefaultHostUrl,
+                "/" + TradeWorkspaceAccessService.HubRoute);
+            Navigation.NavigateTo(uri.AbsoluteUri, true);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"[CrafterHub] Discord sign-in could not start. {exception.GetType().Name}: {exception.Message}");
+            Snackbar.Add("Discord sign-in could not start.", Severity.Warning);
+            _busy = false;
+        }
+    }
+
+    private async Task OpenAccountAsync()
+    {
+        _accountOpen = true;
+        try
+        {
+            var parameters = new DialogParameters
+            {
+                [nameof(SettingsDialog.InitialSection)] = SettingsSection.Profile
+            };
+            var options = new DialogOptions { CloseOnEscapeKey = false, MaxWidth = MaxWidth.ExtraLarge, FullWidth = true };
+            var dialog = await DialogService.ShowAsync<SettingsDialog>("Settings", parameters, options);
+            await dialog.Result;
+        }
+        finally
+        {
+            _accountOpen = false;
+        }
+    }
+
+    private void OnConnectionChanged() =>
+        _ = InvokeAsync(async () =>
+        {
+            await LoadAsync();
+            StateHasChanged();
+        });
+
+    public void Dispose() => ProfileSync.ConnectionChanged -= OnConnectionChanged;
+
+    // ?company= accepts a company id or slug; anything the hub does not list shows all.
+    private void NormalizeFilter()
+    {
+        _filter = _filter == null
+            ? null
+            : Companies.FirstOrDefault(item =>
+                string.Equals(item.CompanyId, _filter, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(item.Slug, _filter, StringComparison.OrdinalIgnoreCase))?.CompanyId;
+    }
+
+    // A denied or revoked relationship keeps its own claims but carries no badge.
+    private bool IsFreelancerIn(string companyId) =>
+        Companies.Any(item => item.CompanyId == companyId && item.IsFreelancer);
+
+    private IReadOnlyList<T> Filtered<T>(IReadOnlyList<T>? items, Func<T, string> companyId) =>
+        _filter == null
+            ? items ?? []
+            : (items ?? []).Where(item => companyId(item) == _filter).ToArray();
+
+    private void SetFilter(string? companyId)
+    {
+        _filter = companyId;
+        var target = companyId == null
+            ? TradeWorkspaceAccessService.HubRoute
+            : $"{TradeWorkspaceAccessService.HubRoute}?company={Uri.EscapeDataString(companyId)}";
+        Navigation.NavigateTo(target, replace: true);
+    }
+
+    // Linked commissions open where the account works them; anything else stays on the hub.
+    private async Task ApplyDeepLinkAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CommissionIdQuery) || _appliedDeepLink == CommissionIdQuery || _hub == null)
+        {
+            return;
+        }
+        _appliedDeepLink = CommissionIdQuery;
+        var work = _hub.MyWork.FirstOrDefault(item => item.Commission.CommissionId == CommissionIdQuery);
+        if (work != null && WorkspaceTarget(work) != null)
+        {
+            await OpenWorkAsync(work);
+            return;
+        }
+        var open = _hub.OpenCommissions.FirstOrDefault(item => item.Commission.CommissionId == CommissionIdQuery);
+        if (!string.IsNullOrWhiteSpace(open?.PublicUrl))
+        {
+            Navigation.NavigateTo(ClaimUrl(open), forceLoad: true);
+        }
+    }
+
+    // The hub only lists open commissions the account may claim (members, and freelancers
+    // the company shares them with), so the claim page takes the signed-in account as
+    // its authority; the host re-checks eligibility when the claim is sent.
+    private static string ClaimUrl(CrafterHubOpenCommission open) =>
+        $"{open.PublicUrl}&claim=account";
+
+    // Members work claims in their company's in-app workspace; freelancers cannot see
+    // that page and work from the commission page instead.
+    private string? WorkspaceTarget(CrafterHubWork work)
+    {
+        if (!work.IsFreelance)
+        {
+            var company = Companies.FirstOrDefault(item => item.CompanyId == work.CompanyId);
+            if (company != null)
+            {
+                return $"companies/{Uri.EscapeDataString(company.Slug)}?view=company&commissionId={Uri.EscapeDataString(work.Commission.CommissionId)}";
+            }
+        }
+        return work.WorkspaceUrl;
+    }
+
+    private async Task OpenWorkAsync(CrafterHubWork work)
+    {
+        var target = WorkspaceTarget(work);
+        if (target == null)
+        {
+            return;
+        }
+        if (work.Commission.UnreadCommissionerUpdate != null)
+        {
+            try
+            {
+                await HubClient.MarkCommissionReadAsync(
+                    work.CompanyId,
+                    work.Commission.CommissionId,
+                    work.Commission.ProjectionRevision);
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(
+                    $"[CrafterHub] Read mark failed for commission {work.Commission.CommissionId}. {exception.GetType().Name}: {exception.Message}");
+            }
+        }
+        // The commission page is a static page outside the Blazor router.
+        Navigation.NavigateTo(target, forceLoad: !IsAppRoute(target));
+    }
+
+    private static bool IsAppRoute(string target) =>
+        target.StartsWith("companies/", StringComparison.Ordinal) ||
+        target.StartsWith("trade/", StringComparison.Ordinal);
+
+    private async Task RequestMembershipAsync(CrafterHubCompany company)
+    {
+        await RunAsync(() => HubClient.RequestMembershipAsync(company.CompanyId, null));
+    }
+
+    private async Task AcceptInvitationAsync(CrafterHubCompany company, Guid invitationId)
+    {
+        if (await RunAsync(() => HubClient.AcceptCrafterHubInvitationAsync(invitationId)))
+        {
+            TradeAccess.Refresh();
+        }
+    }
+
+    private async Task DeclineInvitationAsync(Guid invitationId)
+    {
+        await RunAsync(() => HubClient.DeclineCrafterHubInvitationAsync(invitationId));
+    }
+
+    private async Task<bool> RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        try
+        {
+            await action();
+            return true;
+        }
+        catch (CompanyHubRequestException exception)
+        {
+            Snackbar.Add(exception.Message, Severity.Warning);
+            return false;
+        }
+        finally
+        {
+            await LoadAsync();
+            _busy = false;
+        }
+    }
+
+    private async Task OnCompanyNameKeyAsync(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter" && !string.IsNullOrWhiteSpace(_newCompanyName))
+        {
+            await CreateCompanyAsync();
+        }
+        else if (args.Key == "Escape")
+        {
+            _creatingCompany = false;
+        }
+    }
+
+    // A new company starts as a local workspace and is hosted by the next profile sync,
+    // exactly like a company created from the Orders workspace.
+    private async Task CreateCompanyAsync()
+    {
+        var name = _newCompanyName.Trim();
+        if (name.Length == 0 || _busy)
+        {
+            return;
+        }
+        _busy = true;
+        try
+        {
+            var profile = TradeCompanyProfile.CreateLocal(name, DateTime.UtcNow);
+            if (!await TradeOperationsPersistence.SaveCompanyProfileAsync(profile))
+            {
+                Snackbar.Add("The company could not be saved in this browser.", Severity.Error);
+                return;
+            }
+            await TradeOperationsPersistence.SelectCompanyProfileAsync(profile.Id);
+            try
+            {
+                await ProfileSync.QueueLocalSaveAsync(
+                    ProfileSyncCollections.TradeCompanyProfiles,
+                    profile.Id.ToString("D"));
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(
+                    $"[CrafterHub] New company {profile.Id:D} saved locally; hosting will retry on the next sync. {exception.GetType().Name}: {exception.Message}");
+            }
+            TradeAccess.Refresh();
+            Navigation.NavigateTo("trade/orders");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string CompanyPageUrl(CrafterHubCompany company) =>
+        company.Role != null
+            ? $"companies/{Uri.EscapeDataString(company.Slug)}?view=company"
+            : $"companies/{Uri.EscapeDataString(company.Slug)}";
+
+    private static string OutputSummary(CompanyHubCommission commission) =>
+        commission.Outputs.Count switch
+        {
+            0 => "No items",
+            1 => $"{commission.Outputs[0].Name} ×{commission.Outputs[0].Quantity:N0}",
+            _ => $"{commission.Outputs.Count} items"
+        };
+
+    private static string StatusLabel(string status) => status switch
+    {
+        "in_progress" => "In progress",
+        "awaiting_review" => "Awaiting review",
+        "needs_attention" => "Needs attention",
+        "awaiting_payment" => "Awaiting payment",
+        _ => "Claimed"
+    };
+
+    private static string StatusTone(string status) => status switch
+    {
+        "in_progress" or "awaiting_review" => "blue",
+        "needs_attention" or "awaiting_payment" => "amber",
+        _ => "green"
+    };
+
+    private static string Initial(string name) =>
+        string.IsNullOrWhiteSpace(name) ? "?" : name.Trim()[..1].ToUpperInvariant();
+
+    private static string RelativeTime(DateTime utc)
+    {
+        var elapsed = DateTime.UtcNow - DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+        if (elapsed < TimeSpan.FromMinutes(1)) return "just now";
+        if (elapsed < TimeSpan.FromHours(1)) return $"{(int)elapsed.TotalMinutes}m ago";
+        if (elapsed < TimeSpan.FromDays(1)) return $"{(int)elapsed.TotalHours}h ago";
+        if (elapsed < TimeSpan.FromDays(2)) return "yesterday";
+        return DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToLocalTime().ToString("MMM d");
+    }
+
+    private static string AccentColor(string? token) => token switch
+    {
+        "crimson" => "#b34a58",
+        "gold" => "#b88a35",
+        "emerald" => "#3f9673",
+        "violet" => "#8065b3",
+        "amber" => "#c27d32",
+        "teal" => "#398f92",
+        "rose" => "#b75f82",
+        "slate" => "#718096",
+        "ivory" => "#8f876f",
+        _ => "#3d5a85"
+    };
+}
