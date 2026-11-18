@@ -157,6 +157,16 @@ public sealed partial class CompanyHubService
                     cancellationToken))
                 .GroupBy(item => item.CompanyId.Value)
                 .ToDictionary(group => group.Key, group => group.First());
+        // A legacy claim committed through this account's Discord user before the account
+        // existed has no lookup row and no binding yet. Its company stays in scope so
+        // committed Discord discovery in ResolveScopeAsync can bind and find it.
+        var contactCompanies = identity == null
+            ? new HashSet<Guid>()
+            : (await notifications.LoadClaimContactCompaniesAsync(
+                    identity.DiscordUserId,
+                    cancellationToken))
+                .Select(item => item.Value)
+                .ToHashSet();
 
         var canOperate = false;
         var companyRows = new List<(int Rank, CrafterHubCompanyResponse Row)>();
@@ -169,7 +179,8 @@ public sealed partial class CompanyHubService
             var isHost = company.HostProfileId == account.ProfileId;
             current.TryGetValue(companyGuid, out var membership);
             var bound = boundCompanies.Contains(companyGuid);
-            var projected = projectedCompanies.Contains(companyGuid);
+            var projected = projectedCompanies.Contains(companyGuid) ||
+                contactCompanies.Contains(companyGuid);
             invitations.TryGetValue(companyGuid, out var invitation);
             if (!isHost && membership == null && !bound && !projected && invitation == null)
             {

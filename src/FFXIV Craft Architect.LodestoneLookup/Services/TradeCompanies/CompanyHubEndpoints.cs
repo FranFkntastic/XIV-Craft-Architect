@@ -304,6 +304,7 @@ public sealed partial class CompanyHubService(
     LegacyCrafterAccountResolver crafterAccounts,
     ProfileHostChangeSignal changes,
     SqliteDiscordIdentityStore identities,
+    SqliteDiscordNotificationStore notifications,
     CommissionBriefOptions briefOptions,
     TimeProvider timeProvider)
 {
