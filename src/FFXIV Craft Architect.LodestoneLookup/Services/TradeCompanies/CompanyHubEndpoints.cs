@@ -508,7 +508,12 @@ public sealed partial class CompanyHubService(
             updated.FreelancerOpenCommissions = freelancers;
         }
         updated.UpdatedAtUtc = DateTime.UtcNow;
-        return await SaveProfileAsync(company, updated, body.ExpectedProfileRevision, cancellationToken);
+        return await SaveProfileAsync(
+            company,
+            updated,
+            body.ExpectedProfileRevision,
+            cancellationToken,
+            updateFreelancerOpenCommissions: body.FreelancerOpenCommissions.HasValue);
     }
 
     public async Task<CompanyHubMutationResult> UpdateThemeAsync(
@@ -638,7 +643,8 @@ public sealed partial class CompanyHubService(
         TradeCompanyProfile updated,
         long expectedProfileRevision,
         CancellationToken cancellationToken,
-        bool updateMarginItems = false)
+        bool updateMarginItems = false,
+        bool updateFreelancerOpenCommissions = false)
     {
         var result = await profiles.PutObjectAsync(
             company.HostProfileId.ToString("D"),
@@ -648,7 +654,8 @@ public sealed partial class CompanyHubService(
             expectedProfileRevision,
             cancellationToken,
             allowCompanyCollection: true,
-            updateMarginItems: updateMarginItems);
+            updateMarginItems: updateMarginItems,
+            updateFreelancerOpenCommissions: updateFreelancerOpenCommissions);
         return result.Success
             ? new CompanyHubMutationResult(
                 CompanyHubMutationStatus.Applied,

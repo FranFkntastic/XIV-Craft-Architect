@@ -679,7 +679,8 @@ public sealed partial class ProfileHostedTradeCompanyService(
             expectedRevision.Value,
             cancellationToken,
             allowCompanyCollection: true,
-            updateMarginItems: updateMarginItems);
+            updateMarginItems: updateMarginItems,
+            updateFreelancerOpenCommissions: freelancerOpenCommissions.HasValue);
         var appliedRevision = put.Object?.Revision ?? put.RemoteObject?.Revision;
         return put.Success && appliedRevision.HasValue
             ? new CompanyHubMutationResult(

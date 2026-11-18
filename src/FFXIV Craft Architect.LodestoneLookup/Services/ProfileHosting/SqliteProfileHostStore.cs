@@ -1768,7 +1768,8 @@ public sealed partial class SqliteProfileHostStore
         CancellationToken ct,
         bool allowCompanyCollection = false,
         long? expectedServerRevision = null,
-        bool updateMarginItems = false)
+        bool updateMarginItems = false,
+        bool updateFreelancerOpenCommissions = false)
     {
         if (!allowCompanyCollection)
         {
@@ -1851,6 +1852,21 @@ public sealed partial class SqliteProfileHostStore
                     marginObject["marginItems"] = previousMargins?.DeepClone() ??
                         new System.Text.Json.Nodes.JsonArray();
                     payloadJson = marginObject.ToJsonString();
+                }
+                // Only the explicit company settings commands own the freelancer
+                // visibility switch. Whole-profile sync, including older clients that
+                // never knew the field, carries the stored value forward.
+                if (!updateFreelancerOpenCommissions && existing != null &&
+                    incoming is System.Text.Json.Nodes.JsonObject freelancerObject)
+                {
+                    var previousFreelancers =
+                        System.Text.Json.Nodes.JsonNode.Parse(existing.PayloadJson, nodeOptions)?["freelancerOpenCommissions"];
+                    freelancerObject.Remove("freelancerOpenCommissions");
+                    if (previousFreelancers != null)
+                    {
+                        freelancerObject["freelancerOpenCommissions"] = previousFreelancers.DeepClone();
+                    }
+                    payloadJson = freelancerObject.ToJsonString();
                 }
                 if (existing != null && incoming is System.Text.Json.Nodes.JsonObject incomingObject &&
                     !incomingObject.ContainsKey("commissionPricingScope"))
