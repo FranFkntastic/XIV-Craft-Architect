@@ -17,7 +17,7 @@ public sealed record CommissionBriefMaterial(
 public sealed record CommissionBriefPayment(
     string ContractLabel,
     decimal MaterialReimbursement,
-    [property: System.Text.Json.Serialization.JsonPropertyName("materialBonus"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    [property: System.Text.Json.Serialization.JsonPropertyName("materialBonus")]
     decimal HistoricalAmount,
     decimal CraftLabor,
     decimal Total,

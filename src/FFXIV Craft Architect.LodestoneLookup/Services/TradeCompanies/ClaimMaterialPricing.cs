@@ -129,7 +129,6 @@ public sealed class ClaimMaterialPricing(
             PricingEvidence = terms.PricingEvidence with { MaterialQuote = quote, CapturedAtUtc = now },
             Payment = terms.Payment with
             {
-                HistoricalAmount = 0,
                 MaterialReimbursement = reimbursement,
                 Total = terms.Payment.CraftLabor + reimbursement
             }

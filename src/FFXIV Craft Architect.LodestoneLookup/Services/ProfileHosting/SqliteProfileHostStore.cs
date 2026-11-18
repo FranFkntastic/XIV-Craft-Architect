@@ -28,9 +28,20 @@ public sealed partial class SqliteProfileHostStore
         bool changed = false;
         if (obj["paymentPolicyOverride"] is System.Text.Json.Nodes.JsonObject policy)
         {
-            obj["paymentPolicyOverride"] = JsonSerializer.SerializeToNode(
-                TradePaymentPolicyNormalizer.Normalize(policy.Deserialize<TradePaymentPolicy>(PaymentJson)!), PaymentJson);
-            changed = true;
+            try
+            {
+                var normalized = JsonSerializer.SerializeToNode(
+                    TradePaymentPolicyNormalizer.Normalize(policy.Deserialize<TradePaymentPolicy>(PaymentJson)!), PaymentJson);
+                if (!System.Text.Json.Nodes.JsonNode.DeepEquals(policy, normalized))
+                {
+                    obj["paymentPolicyOverride"] = normalized;
+                    changed = true;
+                }
+            }
+            catch (JsonException)
+            {
+                // Leave an unreadable override as the client sent it; readers already tolerate it.
+            }
         }
         if (obj["companyCommission"] is System.Text.Json.Nodes.JsonObject commission)
         {

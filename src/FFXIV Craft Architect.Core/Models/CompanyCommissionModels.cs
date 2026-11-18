@@ -140,7 +140,7 @@ public sealed record CompanyCommissionPaymentTerms(
     CompanyCommissionPaymentSchedule Schedule,
     string ContractLabel,
     decimal MaterialReimbursement,
-    [property: System.Text.Json.Serialization.JsonPropertyName("materialAdjustment"), System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    [property: System.Text.Json.Serialization.JsonPropertyName("materialAdjustment")]
     decimal HistoricalAmount,
     decimal CraftLabor,
     decimal Total,

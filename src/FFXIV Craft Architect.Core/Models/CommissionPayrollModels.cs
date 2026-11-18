@@ -63,11 +63,24 @@ public enum TradePaymentContractMode
     LaborStandard = 1
 }
 
+/// <summary>Older stored policies expressed the labor rate as a benchmark payout over a synth count.</summary>
+public sealed record StoredLaborBenchmark
+{
+    public decimal BenchmarkLaborPayout { get; init; }
+
+    public int BenchmarkSynthCount { get; init; }
+}
+
 public sealed record TradePaymentPolicy(
     TradePaymentContractMode ActiveContract,
-    decimal LaborGilPerSynth = TradePaymentPolicy.DefaultLaborGilPerSynth)
+    decimal LaborGilPerSynth)
 {
     public const decimal DefaultLaborGilPerSynth = 200m;
+
+    // Read only: the normalizer turns it into LaborGilPerSynth and it is never written back.
+    [System.Text.Json.Serialization.JsonPropertyName("LaborStandard")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public StoredLaborBenchmark? StoredLaborBenchmark { get; init; }
 
     public static TradePaymentPolicy Default { get; } = new(
         TradePaymentContractMode.LaborStandard,

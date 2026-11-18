@@ -8,10 +8,18 @@ public static class TradePaymentPolicyNormalizer
     {
         ArgumentNullException.ThrowIfNull(policy);
 
+        var laborGilPerSynth = policy.LaborGilPerSynth;
+        if (laborGilPerSynth == 0 &&
+            policy.StoredLaborBenchmark is { BenchmarkLaborPayout: > 0, BenchmarkSynthCount: > 0 } benchmark)
+        {
+            laborGilPerSynth = benchmark.BenchmarkLaborPayout / benchmark.BenchmarkSynthCount;
+        }
+
         return policy with
         {
             ActiveContract = TradePaymentContractMode.LaborStandard,
-            LaborGilPerSynth = policy.LaborGilPerSynth == 0 ? TradePaymentPolicy.DefaultLaborGilPerSynth : policy.LaborGilPerSynth
+            LaborGilPerSynth = laborGilPerSynth == 0 ? TradePaymentPolicy.DefaultLaborGilPerSynth : laborGilPerSynth,
+            StoredLaborBenchmark = null
         };
     }
 }

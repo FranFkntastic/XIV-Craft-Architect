@@ -166,6 +166,7 @@
                     }
                     else
                     {
+                        <div><span>Crafter procures</span><strong>@FormatGil(CrafterMaterialTotal)</strong></div>
                         <MudAlert Severity="Severity.Warning" Dense="true">@PaymentUnavailableReason</MudAlert>
                     }
                     <MudButton FullWidth="true"
@@ -208,6 +209,9 @@
     private bool _hasLoaded;
     private WorkerTradeProjection? _activePlan;
     private TradePaymentContractBreakdown? _payment;
+    private decimal CrafterMaterialTotal => (_payroll?.Lines ?? [])
+        .Where(line => line.Responsibility == CommissionMaterialResponsibility.Crafter)
+        .Sum(line => line.EstimatedMaterialCost);
     private string PaymentUnavailableReason => _payment?.Warnings.FirstOrDefault() ?? "Payment evidence is unavailable.";
     private static readonly IReadOnlyList<CompactSelectOption> MaterialResponsibilityOptions =
     [
@@ -568,6 +572,7 @@
         }
         else
         {
+            summary.AppendLine($"Crafter procures: {FormatGil(CrafterMaterialTotal)}");
             summary.AppendLine(PaymentUnavailableReason);
         }
 
