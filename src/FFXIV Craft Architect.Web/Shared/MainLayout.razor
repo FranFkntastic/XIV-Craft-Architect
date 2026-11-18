@@ -4,6 +4,7 @@
 @using FFXIV_Craft_Architect.Core.Models
 @using FFXIV_Craft_Architect.Core.Services
 @using FFXIV_Craft_Architect.Core.Services.Interfaces
+@using FFXIV_Craft_Architect.Web.Services.TradeCompany
 @inject NavigationManager NavigationManager
 @inject AppState AppState
 @inject ISettingsService Settings
@@ -22,6 +23,7 @@
 @inject UniversalisService UniversalisService
 @inject NativePlanImportClassifier NativePlanImportClassifier
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
+@inject TradeWorkspaceAccessService TradeAccess
 @inject ILogger<MainLayout> Logger
 @implements IDisposable
 
@@ -82,7 +84,7 @@
                 <MudMenuItem OnClick="@(() => NavigateTo(""))" Icon="@Icons.Material.Filled.Build">
                     FFXIV Craft Architect
                 </MudMenuItem>
-                <MudMenuItem OnClick="@(() => NavigateTo("trade/orders"))" Icon="@Icons.Material.Filled.Payments">
+                <MudMenuItem OnClick="OpenTradeArchitectAsync" Icon="@Icons.Material.Filled.Payments">
                     FFXIV Trade Architect
                 </MudMenuItem>
             </ChildContent>
@@ -92,24 +94,33 @@
         <MudButtonGroup Size="Size.Small" Style="margin-right: 24px;">
             @if (IsTradeMode)
             {
-                <MudButton OnClick="@(() => NavigateTo("trade/orders"))"
-                           Color="@GetTabColor("orders")"
-                           Variant="@GetTabVariant("orders")"
-                           Style="@GetTabStyle("orders")">
-                    Orders
+                <MudButton OnClick="@(() => NavigateTo(TradeWorkspaceAccessService.HubRoute))"
+                           Color="@GetTabColor("hub")"
+                           Variant="@GetTabVariant("hub")"
+                           Style="@GetTabStyle("hub")">
+                    Hub
                 </MudButton>
-                <MudButton OnClick="@(() => NavigateTo("trade/crafters"))"
-                           Color="@GetTabColor("crafters")"
-                           Variant="@GetTabVariant("crafters")"
-                           Style="@GetTabStyle("crafters")">
-                    Crafters
-                </MudButton>
-                <MudButton OnClick="@(() => NavigateTo("trade/margins"))"
-                           Color="@GetTabColor("margins")"
-                           Variant="@GetTabVariant("margins")"
-                           Style="@GetTabStyle("margins")">
-                    Margins
-                </MudButton>
+                @if (TradeAccess.CanOperate == true)
+                {
+                    <MudButton OnClick="@(() => NavigateTo("trade/orders"))"
+                               Color="@GetTabColor("orders")"
+                               Variant="@GetTabVariant("orders")"
+                               Style="@GetTabStyle("orders")">
+                        Orders
+                    </MudButton>
+                    <MudButton OnClick="@(() => NavigateTo("trade/crafters"))"
+                               Color="@GetTabColor("crafters")"
+                               Variant="@GetTabVariant("crafters")"
+                               Style="@GetTabStyle("crafters")">
+                        Crafters
+                    </MudButton>
+                    <MudButton OnClick="@(() => NavigateTo("trade/margins"))"
+                               Color="@GetTabColor("margins")"
+                               Variant="@GetTabVariant("margins")"
+                               Style="@GetTabStyle("margins")">
+                        Margins
+                    </MudButton>
+                }
             }
             else
             {
@@ -136,10 +147,6 @@
                 </MudButton>
             }
         </MudButtonGroup>
-        @if (IsTradeMode)
-        {
-            <TradeCompanySwitcher HubLinkOnly="true" />
-        }
         
         <!-- Menu Bar using MudMenu -->
         <div style="display: flex; gap: 4px; flex-shrink: 0;">
@@ -304,6 +311,7 @@
         AppState.OnStateChanged += OnAppStateChanged;
         WebSettings.PortableSettingsApplied += OnPortableSettingsApplied;
         WorkerProjections.Changed += OnWorkerProjectionChanged;
+        TradeAccess.Changed += OnTradeAccessChanged;
     }
     
     protected override void OnAfterRender(bool firstRender)
@@ -329,6 +337,7 @@
 
         if (firstRender)
         {
+            _ = InvokeAsync(ApplyStartWorkspaceAsync);
             await StartupInitialization.InitializeAsync(new StartupInitializationSteps(
                 LoadSettingsAsync: _ => LoadSettingsAsync(),
                 BootstrapEngineSessionAsync: BootstrapEngineSessionAsync,
@@ -441,11 +450,60 @@
             : [legacyComparisonRegion];
     }
 
+    // "Open the app to" applies only to a bare app launch; deep links keep their target.
+    private async Task ApplyStartWorkspaceAsync()
+    {
+        try
+        {
+            var relative = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+            if (relative.Length == 0 && await TradeAccess.OpensToTradeAsync())
+            {
+                var landing = await TradeAccess.ResolveLandingAsync();
+                if (NavigationManager.ToBaseRelativePath(NavigationManager.Uri).Length == 0)
+                {
+                    NavigationManager.NavigateTo(landing, replace: true);
+                    return;
+                }
+            }
+            await RefreshTradeAccessAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning(exception, "Start workspace preference could not be applied.");
+        }
+    }
+
+    private async Task OpenTradeArchitectAsync()
+    {
+        NavigateTo(await TradeAccess.ResolveLandingAsync());
+    }
+
+    private void OnTradeAccessChanged() =>
+        _ = InvokeAsync(RefreshTradeAccessAsync);
+
+    // Operations pages do not apply to accounts that operate no company; send those
+    // visits (old bookmarks, pasted links) to the Crafter hub instead.
+    private async Task RefreshTradeAccessAsync()
+    {
+        if (_disposed || !IsTradeMode)
+        {
+            return;
+        }
+        var canOperate = await TradeAccess.CanOperateAsync();
+        if (!canOperate && _activeTab is "orders" or "crafters" or "margins")
+        {
+            NavigationManager.NavigateTo(TradeWorkspaceAccessService.HubRoute, replace: true);
+            return;
+        }
+        StateHasChanged();
+    }
+
     private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
     {
         if (_disposed) return;
         
         UpdateActiveTab(e.Location);
+        _ = InvokeAsync(RefreshTradeAccessAsync);
         _resetMainScrollAfterRender = true;
         _ = InvokeAsync(StateHasChanged);
     }
@@ -453,7 +511,9 @@
     private void UpdateActiveTab(string uri)
     {
         var uriLower = uri.ToLowerInvariant();
-        if (IsTradeRoute(uri) && uriLower.Contains("/trade/orders"))
+        if (IsTradeRoute(uri) && uriLower.Contains("/trade/hub"))
+            _activeTab = "hub";
+        else if (IsTradeRoute(uri) && uriLower.Contains("/trade/orders"))
             _activeTab = "orders";
         else if (IsTradeRoute(uri) && uriLower.Contains("/trade/margins"))
             _activeTab = "margins";
@@ -1000,6 +1060,7 @@
             AppState.OnStateChanged -= OnAppStateChanged;
             WebSettings.PortableSettingsApplied -= OnPortableSettingsApplied;
             WorkerProjections.Changed -= OnWorkerProjectionChanged;
+            TradeAccess.Changed -= OnTradeAccessChanged;
             
             _disposed = true;
         }

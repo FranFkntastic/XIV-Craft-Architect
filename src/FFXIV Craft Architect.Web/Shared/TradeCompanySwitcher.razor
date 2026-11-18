@@ -11,14 +11,7 @@
 @inject CompanyHubClient CompanyHubClient
 @implements IDisposable
 
-@if (HubLinkOnly)
-{
-    @if (_activeCompany?.IsHosted == true)
-    {
-        <MudButton Href="@CompanyHubUrl(_activeCompany)" Size="Size.Small" StartIcon="@Icons.Material.Filled.Home">Company hub</MudButton>
-    }
-}
-else if (_activeCompany != null)
+@if (_activeCompany != null)
 {
     <MudMenu Dense="true"
              AnchorOrigin="Origin.TopCenter"
@@ -76,7 +69,6 @@ else
 }
 
 @code {
-    [Parameter] public bool HubLinkOnly { get; set; }
     private WorkspaceCompanyContext? _activeCompany;
     private IReadOnlyList<WorkspaceCompanyContext> _companies = [];
     private bool _refreshQueued;
@@ -409,7 +401,7 @@ else
         companyId.ToString("N")[..6].ToUpperInvariant();
 
     private static string CompanyHubUrl(WorkspaceCompanyContext company) =>
-        $"/companies/{company.Slug}";
+        $"/companies/{company.Slug}?view=company";
 
     private bool IsCompanyRoute()
     {

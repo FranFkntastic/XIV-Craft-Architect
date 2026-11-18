@@ -306,6 +306,7 @@ else
     [SupplyParameterFromQuery(Name = "commissionId")] public string? CommissionId { get; set; }
     [SupplyParameterFromQuery(Name = "activityId")] public string? ActivityId { get; set; }
     [SupplyParameterFromQuery(Name = "invite")] public string? InviteToken { get; set; }
+    [SupplyParameterFromQuery(Name = "view")] public string? View { get; set; }
 
     private CompanyHubProjection? _hub;
     private ThemeDraft _draft = new();
@@ -337,6 +338,7 @@ else
     private string UpdateCountLabel => $"{_hub?.Updates?.Count ?? 0} {((_hub?.Updates?.Count ?? 0) == 1 ? "post" : "posts")}";
     private string AssignmentCountLabel => $"{_hub?.Assignments?.Count ?? 0} active {((_hub?.Assignments?.Count ?? 0) == 1 ? "assignment" : "assignments")}";
     private string OpenCountLabel => $"{_hub?.OpenCommissions?.Count ?? 0} available";
+    private string CrafterHubUrl => $"trade/hub?company={Uri.EscapeDataString(_hub!.CompanyId)}";
     private string OrdersUrl => $"trade/orders?company={Uri.EscapeDataString(_hub!.CompanyId)}";
     private string CraftersUrl => $"trade/crafters?company={Uri.EscapeDataString(_hub!.CompanyId)}";
     private CompanyHubUpdate? PinnedUpdate => _hub?.Updates?.FirstOrDefault(update => update.IsPinned);
@@ -357,6 +359,16 @@ else
             _signedIn = false;
         }
         await ReloadHubAsync(Slug);
+        // Members land in their Crafter hub filtered to this company; the company page
+        // itself stays reachable with ?view=company, and commission links keep working here.
+        if (_hub?.Kind == "hub" &&
+            !string.Equals(View, "company", StringComparison.OrdinalIgnoreCase) &&
+            string.IsNullOrWhiteSpace(InviteToken) &&
+            string.IsNullOrWhiteSpace(CommissionId))
+        {
+            Navigation.NavigateTo(CrafterHubUrl, replace: true);
+            return;
+        }
         _invitation = string.IsNullOrWhiteSpace(InviteToken)
             ? null
             : await HubClient.LoadMembershipInvitationAsync(InviteToken);
@@ -528,7 +540,7 @@ else
             await HubClient.AcceptMembershipInvitationAsync(InviteToken!);
             await ReloadHubAsync(_hub!.CompanyId);
             Snackbar.Add($"You joined {_hub.DisplayName}.", Severity.Success);
-            Navigation.NavigateTo($"companies/{Uri.EscapeDataString(_hub.CompanyId)}", replace: true);
+            Navigation.NavigateTo(CrafterHubUrl, replace: true);
         }
         catch (CompanyHubRequestException exception)
         {

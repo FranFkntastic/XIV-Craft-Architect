@@ -11,5 +11,6 @@ public enum SettingsSection
     Storage,
     Diagnostics,
     Appearance,
-    About
+    About,
+    General
 }
