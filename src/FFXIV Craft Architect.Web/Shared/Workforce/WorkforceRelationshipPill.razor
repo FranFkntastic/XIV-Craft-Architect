@@ -1,6 +1,6 @@
 @using FFXIV_Craft_Architect.Web.Services.TradeCompany
 
-<span class="workforce-pill @ToneClass">@Label</span>
+<span class="workforce-pill @ToneClass" title="@Title">@Label</span>
 
 @code {
     [Parameter, EditorRequired] public CompanyWorkforceRow Row { get; set; } = default!;
@@ -14,6 +14,10 @@
         CompanyWorkforceRelationship.Invited => "Invited",
         _ => "Freelancer"
     };
+
+    private string? Title => Label == "Freelancer"
+        ? "Works per commission. Not a member of this company."
+        : null;
 
     private string ToneClass => Row.Relationship switch
     {
