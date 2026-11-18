@@ -6,6 +6,8 @@
 @inject ISnackbar Snackbar
 
 @code {
+    [Parameter] public EventCallback SignedIn { get; set; }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -67,6 +69,7 @@
                     ConnectedProfileName = profile.DisplayName,
                     ConnectedProfileMetadataRevision = profile.MetadataRevision
                 });
+                await SignedIn.InvokeAsync();
             }
             else if (fragment.Kind == "error")
             {

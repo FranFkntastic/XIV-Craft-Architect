@@ -61,7 +61,11 @@ else
         @if (!string.IsNullOrWhiteSpace(InviteToken))
         {
             <section class="panel join invitation" aria-live="polite">
-                @if (_invitation == null || _invitation.CompanyId != _hub.CompanyId || _invitation.State != "active")
+                @if (_signedIn && _hub.Standing.State == "active" && _invitation?.LegacyCrafterId == null)
+                {
+                    <span>You're already a member of @(_hub.DisplayName).</span>
+                }
+                else if (_invitation == null || _invitation.CompanyId != _hub.CompanyId || _invitation.State != "active")
                 {
                     <h2>Invitation unavailable</h2><span>This invitation is expired, revoked, already used, or belongs to another company. Your current session is unchanged.</span>
                 }
@@ -547,14 +551,9 @@ else
 
     private async Task SignInAsync()
     {
-        var returnPath = $"/companies/{Uri.EscapeDataString(Slug)}";
-        if (!string.IsNullOrWhiteSpace(InviteToken))
-        {
-            returnPath += $"?invite={Uri.EscapeDataString(InviteToken)}";
-        }
         var uri = await DiscordIdentityClient.StartSignInAsync(
             ProfileHostClient.DefaultHostUrl,
-            returnPath);
+            Navigation.ToAbsoluteUri(Navigation.Uri).PathAndQuery);
         Navigation.NavigateTo(uri.AbsoluteUri, true);
     }
 

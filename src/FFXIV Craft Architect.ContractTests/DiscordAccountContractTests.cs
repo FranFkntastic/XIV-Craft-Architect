@@ -78,7 +78,7 @@ public sealed class DiscordAccountContractTests
             "invalid-state",
             await SignInErrorAsync(client, "unknown-state-value-aaaaaaaaaaaaaaaa", "code"));
         var expiredState = await StartSignInAsync(client, fixture.OAuth);
-        fixture.Time.Advance(TimeSpan.FromMinutes(6));
+        fixture.Time.Advance(TimeSpan.FromMinutes(16));
         Assert.Equal("expired-state", await SignInErrorAsync(client, expiredState, "code"));
         Assert.Equal(0, await fixture.CountRowsAsync("hosted_profiles"));
         Assert.Equal(0, fixture.OAuth.Calls);

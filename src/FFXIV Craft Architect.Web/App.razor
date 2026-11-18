@@ -2,7 +2,7 @@
     <Found Context="routeData">
         <ErrorBoundary @ref="_errorBoundary">
             <ChildContent>
-                <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
+                <RouteView @key="_signInRevision" RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
                 <FocusOnNavigate RouteData="@routeData" Selector="h1" />
             </ChildContent>
             <ErrorContent Context="exception">
@@ -50,10 +50,11 @@
 </Router>
 
 <EngineTransactionAcceptanceProbe />
-<HostedOrderSyncSession />
+<HostedOrderSyncSession SignedIn="@(() => _signInRevision++)" />
 
 @code {
     private ErrorBoundary? _errorBoundary;
+    private int _signInRevision;
 
     private void RecoverFromError()
     {
