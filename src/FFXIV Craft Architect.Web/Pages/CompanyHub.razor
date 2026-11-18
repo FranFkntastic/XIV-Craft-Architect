@@ -61,7 +61,7 @@ else
         @if (!string.IsNullOrWhiteSpace(InviteToken))
         {
             <section class="panel join invitation" aria-live="polite">
-                @if (_signedIn && _hub.Standing.State == "active")
+                @if (_signedIn && _hub.Standing.State == "active" && _invitation?.LegacyCrafterId == null)
                 {
                     <span>You're already a member of @(_hub.DisplayName).</span>
                 }
