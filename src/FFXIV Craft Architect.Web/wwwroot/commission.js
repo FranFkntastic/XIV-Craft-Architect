@@ -1022,6 +1022,17 @@ function canUseActiveParticipantMutations(projection) {
         brief.status !== "Completed";
 }
 
+// Final-payment settlement happens after delivery is accepted (status Completed), when
+// ordinary participant changes are closed; the host requires exactly that state.
+const SETTLEMENT_COMMANDS = new Set(["confirm-settlement-received", "retract-settlement"]);
+
+function canUseSettlementCommands(projection) {
+    const brief = projection.public;
+    return projection.kind === "participant" &&
+        brief.viewState === "Published" &&
+        brief.status === "Completed";
+}
+
 function canReleaseBeforeWork(projection) {
     const brief = projection.public;
     return canUseActiveParticipantMutations(projection) &&
@@ -2536,8 +2547,10 @@ async function submitComment(event) {
 }
 
 async function runParticipantCommand(command, payload, successMessage) {
-    if (!canUseActiveParticipantMutations(state.projection) ||
-        !state.access?.participantSecret) {
+    const allowed = SETTLEMENT_COMMANDS.has(command)
+        ? canUseSettlementCommands(state.projection)
+        : canUseActiveParticipantMutations(state.projection);
+    if (!allowed || !state.access?.participantSecret) {
         showNotice(
             "Participant action unavailable",
             "This browser lacks active participant authority, or the commission is no longer open to ordinary participant changes.");
