@@ -38,10 +38,12 @@ public sealed class AccountClaimProjectionService(
     ILogger<AccountClaimProjectionService> logger)
 {
     /// <summary>
-    /// Bumped whenever owner resolution changes, so hosts rebuild the lookup on start.
+    /// Bumped whenever owner resolution or the stored shape changes, so hosts rebuild the
+    /// lookup on start.
     /// 2: legacy claims resolve through their committed Discord claim contact.
+    /// 3: each commission records the canonical revision it was projected at.
     /// </summary>
-    public const int ProjectionVersion = 2;
+    public const int ProjectionVersion = 3;
 
     public async Task ProjectAsync(
         CompanyId companyId,
@@ -57,12 +59,25 @@ public sealed class AccountClaimProjectionService(
                     claim.ClaimId,
                     new DateTimeOffset(DateTime.SpecifyKind(claim.ClaimedAtUtc, DateTimeKind.Utc))))
                 .ToArray();
-        await memberships.SetCommissionClaimOwnersAsync(
-            companyId,
-            order.Id,
-            owners,
-            cancellationToken);
+        var revision = CommissionRevision(order);
+        if (!await memberships.SetCommissionClaimOwnersAsync(
+                companyId,
+                order.Id,
+                revision,
+                owners,
+                cancellationToken))
+        {
+            logger.LogDebug(
+                "Account claim projection for company {CompanyId} commission {CommissionId} at revision {Revision} was older than the stored projection and was ignored.",
+                companyId,
+                order.Id,
+                revision);
+        }
     }
+
+    // The canonical commission revision the order reflects (its latest activity event).
+    private static long CommissionRevision(TradeOrder order) =>
+        order.CompanyCommission?.Activity.LastOrDefault()?.CommissionRevision ?? 0;
 
     public async Task<AccountClaimProjectionReport> RebuildAsync(
         bool dryRun,
@@ -72,12 +87,17 @@ public sealed class AccountClaimProjectionService(
         var snapshotStartedAtUtc = DateTimeOffset.UtcNow;
         var directory = await hubs.LoadCommissionDirectoryAsync(cancellationToken);
         var expected = new List<AccountCommissionClaim>();
+        var revisions = new Dictionary<(CompanyId CompanyId, Guid CommissionId), long>();
         var activeClaims = 0;
         foreach (var company in directory)
         {
             var context = new CompanyOwnerContext();
             foreach (var order in company.Orders)
             {
+                if (order.CompanyCommission != null)
+                {
+                    revisions[(company.CompanyId, order.Id)] = CommissionRevision(order);
+                }
                 var claim = order.CompanyCommission?.ActiveClaim;
                 if (claim == null)
                 {
@@ -111,6 +131,7 @@ public sealed class AccountClaimProjectionService(
         {
             var applied = await memberships.ApplyAccountCommissionClaimRebuildAsync(
                 expected,
+                revisions,
                 snapshotStartedAtUtc,
                 ProjectionVersion,
                 cancellationToken);

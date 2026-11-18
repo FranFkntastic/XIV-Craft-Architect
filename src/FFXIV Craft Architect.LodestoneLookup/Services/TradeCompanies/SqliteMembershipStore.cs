@@ -2089,6 +2089,7 @@ public sealed partial class SqliteMembershipStore(
                     company_id TEXT NOT NULL,
                     commission_id TEXT NOT NULL,
                     projected_at_utc TEXT NOT NULL,
+                    commission_revision INTEGER NULL,
                     PRIMARY KEY(company_id, commission_id)
                 );
 
@@ -2123,6 +2124,11 @@ public sealed partial class SqliteMembershipStore(
             await AddMembershipColumnIfMissingAsync(
                 connection,
                 "notify_progress_status",
+                "INTEGER NULL",
+                cancellationToken);
+            await AddClaimMarkColumnIfMissingAsync(
+                connection,
+                "commission_revision",
                 "INTEGER NULL",
                 cancellationToken);
             await WidenCrafterBindingEvidenceAsync(connection, cancellationToken);
@@ -2249,6 +2255,30 @@ public sealed partial class SqliteMembershipStore(
             alter.CommandText = $"ALTER TABLE company_memberships ADD COLUMN {column} {definition};";
             await alter.ExecuteNonQueryAsync(cancellationToken);
         }
+    }
+
+    private static async Task AddClaimMarkColumnIfMissingAsync(
+        SqliteConnection connection,
+        string columnName,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        await using (var inspect = connection.CreateCommand())
+        {
+            inspect.CommandText = "PRAGMA table_info(account_commission_claim_marks);";
+            await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (string.Equals(reader.GetString(1), columnName, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE account_commission_claim_marks ADD COLUMN {columnName} {definition};";
+        await alter.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task AddInvitationColumnIfMissingAsync(

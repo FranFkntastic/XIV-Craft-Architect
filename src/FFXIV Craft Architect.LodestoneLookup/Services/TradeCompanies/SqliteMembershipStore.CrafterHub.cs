@@ -31,14 +31,17 @@ public sealed partial class SqliteMembershipStore
     private const string ProjectionVersionKey = "projection_version";
 
     /// <summary>
-    /// Replaces the projected owners of one commission. An empty owner list removes the
-    /// commission from every account's lookup (released, rejected, or cancelled claims).
-    /// The commission is marked as projected now, so a rebuild whose canonical snapshot
-    /// is older leaves it alone.
+    /// Replaces the projected owners of one commission as of the canonical
+    /// <paramref name="commissionRevision"/>. An empty owner list removes the commission
+    /// from every account's lookup (released, rejected, or cancelled claims). Post-commit
+    /// projections are not serialized across commands, so a write older than the
+    /// commission's recorded revision is ignored; an equal revision rewrites (same
+    /// canonical state, possibly newer owner resolution). Returns whether it applied.
     /// </summary>
-    public async Task SetCommissionClaimOwnersAsync(
+    public async Task<bool> SetCommissionClaimOwnersAsync(
         CompanyId companyId,
         Guid commissionId,
+        long commissionRevision,
         IReadOnlyCollection<AccountCommissionClaimOwner> owners,
         CancellationToken cancellationToken = default)
     {
@@ -52,6 +55,22 @@ public sealed partial class SqliteMembershipStore
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
+        await using (var stored = connection.CreateCommand())
+        {
+            stored.Transaction = transaction;
+            stored.CommandText = """
+                SELECT commission_revision FROM account_commission_claim_marks
+                WHERE company_id = $companyId AND commission_id = $commissionId;
+                """;
+            stored.Parameters.AddWithValue("$companyId", companyId.ToString());
+            stored.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
+            if (await stored.ExecuteScalarAsync(cancellationToken) is long storedRevision &&
+                storedRevision > commissionRevision)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return false;
+            }
+        }
         await ReplaceCommissionClaimOwnersAsync(
             connection,
             transaction,
@@ -59,20 +78,16 @@ public sealed partial class SqliteMembershipStore
             commissionId,
             owners,
             cancellationToken);
-        await using (var mark = connection.CreateCommand())
-        {
-            mark.Transaction = transaction;
-            mark.CommandText = """
-                INSERT INTO account_commission_claim_marks (company_id, commission_id, projected_at_utc)
-                VALUES ($companyId, $commissionId, $projectedAt)
-                ON CONFLICT(company_id, commission_id) DO UPDATE SET projected_at_utc = excluded.projected_at_utc;
-                """;
-            mark.Parameters.AddWithValue("$companyId", companyId.ToString());
-            mark.Parameters.AddWithValue("$commissionId", commissionId.ToString("D"));
-            mark.Parameters.AddWithValue("$projectedAt", DateTimeOffset.UtcNow.ToString("O"));
-            await mark.ExecuteNonQueryAsync(cancellationToken);
-        }
+        await UpsertCommissionClaimMarkAsync(
+            connection,
+            transaction,
+            companyId.ToString(),
+            commissionId.ToString("D"),
+            commissionRevision,
+            touchProjectedAt: true,
+            cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+        return true;
     }
 
     public async Task<IReadOnlyList<AccountCommissionClaim>> LoadAccountCommissionClaimsAsync(
@@ -123,13 +138,17 @@ public sealed partial class SqliteMembershipStore
 
     /// <summary>
     /// Brings the lookup in line with a full rebuild from canonical commissions read since
-    /// <paramref name="snapshotStartedAtUtc"/>. Only commissions whose owners differ are
-    /// rewritten; a commission projected by a live commit after the snapshot started is
-    /// newer than the rebuild's view and is left untouched. Records
-    /// <paramref name="projectionVersion"/> as the lookup's version.
+    /// <paramref name="snapshotStartedAtUtc"/>. <paramref name="snapshotRevisions"/> holds
+    /// the canonical revision of every commission the rebuild read. Only commissions whose
+    /// owners differ are rewritten; one already projected at a newer revision than the
+    /// rebuild read is left untouched (a commission the rebuild did not read falls back to
+    /// whether it was projected after the snapshot started). Every commission read is
+    /// marked at its snapshot revision so a delayed older projection cannot overwrite it.
+    /// Records <paramref name="projectionVersion"/> as the lookup's version.
     /// </summary>
     public async Task<AccountCommissionClaimRebuildResult> ApplyAccountCommissionClaimRebuildAsync(
         IReadOnlyCollection<AccountCommissionClaim> expected,
+        IReadOnlyDictionary<(CompanyId CompanyId, Guid CommissionId), long> snapshotRevisions,
         DateTimeOffset snapshotStartedAtUtc,
         int projectionVersion,
         CancellationToken cancellationToken = default)
@@ -140,25 +159,31 @@ public sealed partial class SqliteMembershipStore
             IsolationLevel.Serializable,
             cancellationToken);
 
-        var newer = new HashSet<(string, string)>();
-        await using (var marks = connection.CreateCommand())
+        var marks = new Dictionary<(string, string), (bool ProjectedSinceSnapshot, long? Revision)>();
+        await using (var markRows = connection.CreateCommand())
         {
-            marks.Transaction = transaction;
-            marks.CommandText = "SELECT company_id, commission_id, projected_at_utc FROM account_commission_claim_marks;";
-            await using var reader = await marks.ExecuteReaderAsync(cancellationToken);
+            markRows.Transaction = transaction;
+            markRows.CommandText = """
+                SELECT company_id, commission_id, projected_at_utc, commission_revision
+                FROM account_commission_claim_marks;
+                """;
+            await using var reader = await markRows.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                if (DateTimeOffset.TryParse(
+                var projectedSinceSnapshot = DateTimeOffset.TryParse(
                         reader.GetString(2),
                         CultureInfo.InvariantCulture,
                         DateTimeStyles.RoundtripKind,
                         out var projectedAt) &&
-                    projectedAt >= snapshotStartedAtUtc)
-                {
-                    newer.Add((reader.GetString(0), reader.GetString(1)));
-                }
+                    projectedAt >= snapshotStartedAtUtc;
+                marks[(reader.GetString(0), reader.GetString(1))] = (
+                    projectedSinceSnapshot,
+                    reader.IsDBNull(3) ? null : reader.GetInt64(3));
             }
         }
+        var revisions = snapshotRevisions.ToDictionary(
+            item => (item.Key.CompanyId.ToString(), item.Key.CommissionId.ToString("D")),
+            item => item.Value);
 
         var current = new Dictionary<(string, string), HashSet<(Guid, Guid)>>();
         await using (var rows = connection.CreateCommand())
@@ -181,18 +206,40 @@ public sealed partial class SqliteMembershipStore
             .GroupBy(item => (item.CompanyId.ToString(), item.CommissionId.ToString("D")))
             .ToDictionary(group => group.Key, group => group.ToArray());
         int added = 0, removed = 0, skipped = 0;
-        foreach (var key in wanted.Keys.Union(current.Keys).ToArray())
+        foreach (var key in wanted.Keys.Union(current.Keys).Union(revisions.Keys).ToArray())
         {
             var want = wanted.TryGetValue(key, out var items) ? items : [];
             var wantSet = want.Select(item => (item.AccountProfileId, item.ClaimId)).ToHashSet();
             var have = current.TryGetValue(key, out var existing) ? existing : [];
-            if (wantSet.SetEquals(have))
+            var hasMark = marks.TryGetValue(key, out var mark);
+            var hasRevision = revisions.TryGetValue(key, out var snapshotRevision);
+            // Projected at a newer canonical revision than the rebuild read (or, without
+            // comparable revisions, projected after the snapshot started): keep it.
+            var newer = hasMark &&
+                (hasRevision && mark.Revision is { } markRevision
+                    ? markRevision > snapshotRevision
+                    : mark.ProjectedSinceSnapshot);
+            if (newer)
             {
+                if (!wantSet.SetEquals(have))
+                {
+                    skipped++;
+                }
                 continue;
             }
-            if (newer.Contains(key))
+            if (hasRevision && !(hasMark && mark.Revision >= snapshotRevision))
             {
-                skipped++;
+                await UpsertCommissionClaimMarkAsync(
+                    connection,
+                    transaction,
+                    key.Item1,
+                    key.Item2,
+                    snapshotRevision,
+                    touchProjectedAt: false,
+                    cancellationToken);
+            }
+            if (wantSet.SetEquals(have))
+            {
                 continue;
             }
             added += wantSet.Count(item => !have.Contains(item));
@@ -223,6 +270,46 @@ public sealed partial class SqliteMembershipStore
         }
         await transaction.CommitAsync(cancellationToken);
         return new AccountCommissionClaimRebuildResult(added, removed, skipped);
+    }
+
+    // Records the canonical revision a commission's owners were projected at. A live
+    // projection also stamps the time, so a rebuild that did not read the commission
+    // (created after its snapshot started) leaves it alone; a rebuild only raises the
+    // revision and keeps any earlier stamp.
+    private static async Task UpsertCommissionClaimMarkAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string companyId,
+        string commissionId,
+        long commissionRevision,
+        bool touchProjectedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var mark = connection.CreateCommand();
+        mark.Transaction = transaction;
+        mark.CommandText = touchProjectedAt
+            ? """
+                INSERT INTO account_commission_claim_marks (
+                    company_id, commission_id, projected_at_utc, commission_revision)
+                VALUES ($companyId, $commissionId, $projectedAt, $revision)
+                ON CONFLICT(company_id, commission_id) DO UPDATE SET
+                    projected_at_utc = excluded.projected_at_utc,
+                    commission_revision = excluded.commission_revision;
+                """
+            : """
+                INSERT INTO account_commission_claim_marks (
+                    company_id, commission_id, projected_at_utc, commission_revision)
+                VALUES ($companyId, $commissionId, $projectedAt, $revision)
+                ON CONFLICT(company_id, commission_id) DO UPDATE SET
+                    commission_revision = excluded.commission_revision;
+                """;
+        mark.Parameters.AddWithValue("$companyId", companyId);
+        mark.Parameters.AddWithValue("$commissionId", commissionId);
+        mark.Parameters.AddWithValue(
+            "$projectedAt",
+            (touchProjectedAt ? DateTimeOffset.UtcNow : DateTimeOffset.MinValue).ToString("O"));
+        mark.Parameters.AddWithValue("$revision", commissionRevision);
+        await mark.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<CrafterAccountBinding>> LoadCrafterBindingsForAccountAsync(
