@@ -628,7 +628,8 @@ public sealed partial class ProfileHostedTradeCompanyService(
         TradeCompanyPricingScope? commissionPricingScope = null,
         bool updateCommissionPricingScope = false,
         IReadOnlyList<TradeMarginItem>? marginItems = null,
-        bool updateMarginItems = false)
+        bool updateMarginItems = false,
+        bool? freelancerOpenCommissions = null)
     {
         var snapshot = await LoadCompanyProfileSnapshotAsync(access, cancellationToken);
         if (snapshot == null)
@@ -662,6 +663,10 @@ public sealed partial class ProfileHostedTradeCompanyService(
         if (updateMarginItems)
         {
             updated.MarginItems = marginItems ?? [];
+        }
+        if (freelancerOpenCommissions is { } freelancers)
+        {
+            updated.FreelancerOpenCommissions = freelancers;
         }
         updated.UpdatedAtUtc = DateTime.UtcNow;
         updated.SyncState = TradeSyncState.Synced;

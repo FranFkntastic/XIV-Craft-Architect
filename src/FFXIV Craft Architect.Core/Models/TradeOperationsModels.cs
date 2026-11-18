@@ -48,6 +48,9 @@ public sealed class TradeCompanyProfile
     public TradePaymentPolicy PaymentPolicy { get; set; } = TradePaymentPolicy.Default;
     public TradeMaterialPricingPolicy MaterialPricingPolicy { get; set; } = TradeMaterialPricingPolicy.Default;
     public TradeCompanyPricingScope? CommissionPricingScope { get; set; }
+    // Returning freelancers (accounts bound to a company crafter without membership)
+    // see this company's open commissions in their Crafter hub while this is on.
+    public bool FreelancerOpenCommissions { get; set; } = true;
     public IReadOnlyList<TradeMarginItem> MarginItems { get; set; } = [];
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;

@@ -583,25 +583,57 @@ public sealed partial class SqliteMembershipStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task<MembershipInvitationConsumptionResult> ConsumeInvitationAsync(
+    public Task<MembershipInvitationConsumptionResult> ConsumeInvitationAsync(
         string token,
         Guid accountProfileId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        !IsValidInvitationToken(token) || accountProfileId == Guid.Empty
+            ? Task.FromResult(new MembershipInvitationConsumptionResult(
+                MembershipInvitationConsumptionStatus.Unavailable))
+            : ConsumeInvitationCoreAsync(
+                (connection, transaction, ct) => LoadInvitationAsync(
+                    connection,
+                    transaction,
+                    HashToken(token),
+                    ct),
+                accountProfileId,
+                cancellationToken);
+
+    /// <summary>
+    /// Accepts an invitation that was delivered on Discord to this account's linked
+    /// Discord user. The host-recorded recipient stands in for the link token, so the
+    /// invitee can accept from the Crafter hub without the original message.
+    /// </summary>
+    public Task<MembershipInvitationConsumptionResult> ConsumeInvitationForRecipientAsync(
+        Guid invitationId,
+        Guid accountProfileId,
+        string discordUserId,
+        CancellationToken cancellationToken = default) =>
+        invitationId == Guid.Empty || accountProfileId == Guid.Empty ||
+        string.IsNullOrWhiteSpace(discordUserId)
+            ? Task.FromResult(new MembershipInvitationConsumptionResult(
+                MembershipInvitationConsumptionStatus.Unavailable))
+            : ConsumeInvitationCoreAsync(
+                (connection, transaction, ct) => LoadRecipientInvitationAsync(
+                    connection,
+                    transaction,
+                    invitationId,
+                    discordUserId,
+                    ct),
+                accountProfileId,
+                cancellationToken);
+
+    private async Task<MembershipInvitationConsumptionResult> ConsumeInvitationCoreAsync(
+        Func<SqliteConnection, SqliteTransaction, CancellationToken, Task<CompanyMembershipInvitation?>> load,
+        Guid accountProfileId,
+        CancellationToken cancellationToken)
     {
-        if (!IsValidInvitationToken(token) || accountProfileId == Guid.Empty)
-        {
-            return new MembershipInvitationConsumptionResult(MembershipInvitationConsumptionStatus.Unavailable);
-        }
         await using var connection = await OpenAsync(cancellationToken);
         await EnsureSchemaAsync(connection, cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(
             IsolationLevel.Serializable,
             cancellationToken);
-        var invitation = await LoadInvitationAsync(
-            connection,
-            transaction,
-            HashToken(token),
-            cancellationToken);
+        var invitation = await load(connection, transaction, cancellationToken);
         var now = timeProvider.GetUtcNow();
         if (invitation == null || invitation.RevokedAtUtc != null || invitation.ExpiresAtUtc <= now)
         {
@@ -2039,6 +2071,19 @@ public sealed partial class SqliteMembershipStore(
                     merged_at_utc TEXT NOT NULL,
                     PRIMARY KEY(company_id, loser_crafter_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS account_commission_claims (
+                    account_profile_id TEXT NOT NULL,
+                    company_id TEXT NOT NULL,
+                    commission_id TEXT NOT NULL,
+                    claim_id TEXT NOT NULL,
+                    claimed_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    PRIMARY KEY(account_profile_id, company_id, commission_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_account_commission_claims_commission
+                    ON account_commission_claims(company_id, commission_id);
 
                 CREATE TABLE IF NOT EXISTS company_retirement_receipts (
                     company_id TEXT PRIMARY KEY,
