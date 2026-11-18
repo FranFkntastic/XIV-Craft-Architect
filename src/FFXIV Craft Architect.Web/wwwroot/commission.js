@@ -2205,6 +2205,9 @@ async function sendAuthorityExchange(command, access, authority, successMessage)
             }
             if (committed === false) {
                 console.warn("[Commission] claim_refused:", caught.code);
+                // A refused account claim (revoked, visibility off, slot taken) will keep
+                // failing; stop offering it until the page reloads its standing.
+                state.accountClaim = false;
                 state.store.discard();
                 state.membershipStore.discard();
                 state.access = null;
