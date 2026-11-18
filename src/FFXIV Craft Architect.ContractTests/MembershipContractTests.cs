@@ -17,6 +17,39 @@ namespace FFXIV_Craft_Architect.ContractTests;
 public sealed class MembershipContractTests
 {
     [Fact]
+    public async Task PublicInvitationPreviewEncodesCompanyAndConcealsDeadInvitations()
+    {
+        await using var fixture = await MembershipFixture.CreateAsync();
+        var owner = await fixture.CreateAccountAsync("Owner");
+        using var client = fixture.CreateClient(owner.Key);
+        var company = TradeCompanyProfile.CreateLocal("Gold & \"<Ink>\"", DateTime.UtcNow);
+        await PutCompanyAsync(client, company);
+        client.DefaultRequestHeaders.Remove("X-Profile-Key");
+        var companyId = new CompanyId(company.Id);
+        var invitation = await fixture.Memberships.IssueInvitationAsync(companyId, owner.ProfileId, null);
+        Assert.Matches("^[A-Za-z0-9_-]{16}$", invitation.Token!);
+        using var active = await client.GetAsync($"/join/{invitation.Token}");
+        Assert.Equal(HttpStatusCode.OK, active.StatusCode);
+        Assert.True(active.Headers.CacheControl?.NoStore);
+        Assert.Equal("no-referrer", Assert.Single(active.Headers.GetValues("Referrer-Policy")));
+        var html = await active.Content.ReadAsStringAsync();
+        Assert.Contains("Join Gold &amp; &quot;&lt;Ink&gt;&quot; on FFXIV Craft Architect", html);
+        Assert.Contains($"/companies/{company.Id:D}?invite={invitation.Token}", html);
+        var unknown = await client.GetStringAsync("/join/abcdefghijklmnop");
+        Assert.Contains("This invitation is no longer available", unknown);
+        Assert.DoesNotContain(company.Id.ToString("D"), unknown);
+        await fixture.Memberships.RevokeInvitationAsync(companyId, invitation.InvitationId, owner.ProfileId);
+        Assert.Equal(unknown, await client.GetStringAsync($"/join/{invitation.Token}"));
+        var expired = await fixture.Memberships.IssueInvitationAsync(companyId, owner.ProfileId, null);
+        await fixture.ExpireInvitationAsync(expired.InvitationId);
+        Assert.Equal(unknown, await client.GetStringAsync($"/join/{expired.Token}"));
+        var consumed = await fixture.Memberships.IssueInvitationAsync(companyId, owner.ProfileId, null);
+        var recipient = await fixture.CreateAccountAsync("Recipient");
+        await fixture.Memberships.ConsumeInvitationAsync(consumed.Token!, recipient.ProfileId);
+        Assert.Equal(unknown, await client.GetStringAsync($"/join/{consumed.Token}"));
+    }
+
+    [Fact]
     public async Task CompanyPutRefusesMismatchedIdentityAndCompetingFounder()
     {
         await using var fixture = await MembershipFixture.CreateAsync();
