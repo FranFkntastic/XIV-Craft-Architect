@@ -88,6 +88,7 @@ const activityLabels = {
     CommissionCanceled: "Commission canceled",
     ClaimResolutionRequired: "Company resolution required",
     CommissionReopened: "Commission reopened",
+    DeliveryHandoffRecorded: "Sent for delivery review",
     CommissionClosed: "Commission closed",
     CommissionPublicationRevoked: "Public brief revoked",
     ParticipantRecoveryIssued: "Recovery access issued",

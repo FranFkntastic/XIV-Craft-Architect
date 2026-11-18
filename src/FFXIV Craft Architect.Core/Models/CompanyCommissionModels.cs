@@ -80,7 +80,6 @@ public enum CompanyCommissionActivityKind
     CompanyMaterialsReceived,
     WorkClearanceAchieved,
     ProgressReported,
-    DeliveryHandoffRecorded,
     CommentAdded,
     DeliveryReadinessDeclared,
     DeliveryReadinessWithdrawn,
@@ -103,7 +102,10 @@ public enum CompanyCommissionActivityKind
     SettlementPaymentAttestationRetracted,
     DraftUpdated,
     ClaimResolutionRequired,
-    CommissionReopened
+    CommissionReopened,
+
+    // Stored and sent by number: new kinds go at the end, never in the middle.
+    DeliveryHandoffRecorded
 }
 
 public enum CompanyCommissionActivityVisibility

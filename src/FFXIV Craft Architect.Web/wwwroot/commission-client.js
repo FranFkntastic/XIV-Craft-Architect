@@ -63,7 +63,8 @@ const enumMaps = {
         "SettlementPaymentAttestationRetracted",
         "DraftUpdated",
         "ClaimResolutionRequired",
-        "CommissionReopened"
+        "CommissionReopened",
+        "DeliveryHandoffRecorded"
     ]
 };
 
