@@ -131,7 +131,9 @@ builder.Services.AddScoped<ILodestoneCrafterLookupService>(sp =>
 // Register IndexedDB service for browser persistence
 builder.Services.AddScoped<IndexedDbService>();
 
-await builder.Build().RunAsync();
+var host = builder.Build();
+BrowserConsoleErrorWriter.Install(host.Services);
+await host.RunAsync();
 
 static Uri ResolveLodestoneLookupBaseAddress(string? configuredBaseAddress, string hostBaseAddress)
 {
