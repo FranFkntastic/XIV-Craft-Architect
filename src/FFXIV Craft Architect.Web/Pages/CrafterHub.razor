@@ -6,6 +6,7 @@
 @inject TradeOperationsPersistenceService TradeOperationsPersistence
 @inject TradeWorkspaceAccessService TradeAccess
 @inject ProfileSyncService ProfileSync
+@inject ProfileSyncLocalStateService LocalState
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 
@@ -253,7 +254,10 @@
     {
         try
         {
-            _hub = await HubClient.LoadCrafterHubAsync();
+            // Without a connected account there is nothing account-scoped to load.
+            _hub = (await LocalState.LoadConnectionSettingsAsync()).IsConfigured
+                ? await HubClient.LoadCrafterHubAsync()
+                : null;
         }
         catch (Exception exception)
         {
